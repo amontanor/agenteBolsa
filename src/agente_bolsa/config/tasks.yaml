@@ -1,0 +1,42 @@
+daily_research:
+  description: "Actualizar datos, resumir contexto y generar observaciones medibles."
+  expected_output: "Lista de observaciones con simbolo, evidencia, fecha y nivel de confianza."
+  agents:
+    - market_data_researcher
+    - macro_news_researcher
+    - technical_analyst
+    - fundamental_analyst
+
+hypothesis_generation:
+  description: "Convertir observaciones en hipotesis falsables."
+  expected_output: "Hipotesis con reglas de entrada, salida, invalidacion y metricas objetivo."
+  agents:
+    - hypothesis_generator
+
+validation:
+  description: "Probar hipotesis con backtest, walk-forward, costes y fuera de muestra."
+  expected_output: "Reporte de metricas, riesgos, sesgos detectados y decision de promocion."
+  agents:
+    - quant_backtester
+    - risk_manager
+
+portfolio_decision:
+  description: "Seleccionar senales aprobadas, tamano de posicion y cartera objetivo."
+  expected_output: "Propuestas de orden con razon, riesgo y trazabilidad a hipotesis."
+  agents:
+    - portfolio_manager
+    - risk_manager
+
+execution:
+  description: "Ejecutar ordenes autorizadas en paper/live segun configuracion."
+  expected_output: "Ordenes enviadas, rechazadas o pendientes con identificadores auditables."
+  agents:
+    - execution_agent
+    - compliance_guardian
+
+post_mortem:
+  description: "Evaluar resultados y proponer mejoras controladas."
+  expected_output: "Lecciones aprendidas, cambios propuestos y tareas de investigacion futuras."
+  agents:
+    - post_trade_analyst
+    - self_improvement_engineer

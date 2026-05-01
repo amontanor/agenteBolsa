@@ -1,0 +1,995 @@
+"""APScheduler runtime jobs for the autonomous trading system."""
+
+from __future__ import annotations
+
+import logging
+import time
+from datetime import datetime
+from typing import Any
+from zoneinfo import ZoneInfo
+
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
+
+from .config import Settings
+from .cycle_runner import run_observable_cycle
+from .eventing import EventReporter
+from .logging_utils import log_system_event
+from .market_calendar import MarketCalendar
+from .models import new_id
+from .storage import Store
+from .tools.broker import BrokerClientFactory
+from .tools.breakout_scanner import build_breakout_scan, merge_breakout_universe
+from .tools.execution import submit_paper_order_plan
+from .tools.news_sentiment import analyze_news_sentiment_for_candidates
+from .tools.post_market_review import build_post_market_review
+from .tools.signal_learning import record_signal_candidates
+from .tools.technical_study import build_closed_market_technical_study
+from .tools.universe import resolve_study_universe
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _reporter(settings: Settings, store: Store, verbose: bool) -> EventReporter:
+    return EventReporter(store, verbose=verbose)
+
+
+def _candidate_limit_per_side(settings: Settings) -> int:
+    return max(1, settings.news_sentiment_top_n // 2)
+
+
+def _selected_candidates(report: dict[str, Any], settings: Settings) -> tuple[list[dict[str, Any]], list[str]]:
+    candidate_limit_per_side = _candidate_limit_per_side(settings)
+    candidates = [
+        *report["top_longs"][:candidate_limit_per_side],
+        *report["top_shorts"][:candidate_limit_per_side],
+    ]
+    symbols = sorted({str(item["symbol"]).upper() for item in candidates if item.get("symbol")})
+    return candidates, symbols
+
+
+def _compact_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    technical_state = candidate.get("technical_state", {}) or {}
+    chart_patterns = []
+    for pattern in (technical_state.get("chart_patterns", []) or [])[:5]:
+        chart_patterns.append(
+            {
+                "pattern": pattern.get("pattern"),
+                "label": pattern.get("label"),
+                "bias": pattern.get("bias"),
+                "status": pattern.get("status"),
+                "confidence": pattern.get("confidence"),
+            }
+        )
+    return {
+        "symbol": candidate.get("symbol"),
+        "direction": candidate.get("direction"),
+        "score": candidate.get("score"),
+        "setup_quality": candidate.get("setup_quality"),
+        "reasons": candidate.get("reasons", [])[:5],
+        "close": technical_state.get("close"),
+        "return_20d": technical_state.get("return_20d"),
+        "sma_20": technical_state.get("sma_20"),
+        "sma_50": technical_state.get("sma_50"),
+        "sma_200": technical_state.get("sma_200"),
+        "rsi_14": technical_state.get("rsi_14"),
+        "macd": technical_state.get("macd"),
+        "macd_signal": technical_state.get("macd_signal"),
+        "atr_14": technical_state.get("atr_14"),
+        "volume_zscore_20": technical_state.get("volume_zscore_20"),
+        "trend_positive": technical_state.get("trend_positive"),
+        "above_long_trend": technical_state.get("above_long_trend"),
+        "candlestick_patterns": technical_state.get("candlestick_patterns", [])[:5],
+        "chart_patterns": chart_patterns,
+        "risk_plan": candidate.get("risk_plan", {}),
+    }
+
+
+def _compact_scan_context(report: dict[str, Any], selected_candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "source": "intraday_technical_scan",
+        "run_id": report.get("run_id"),
+        "path": report.get("path"),
+        "symbols_scanned": report.get("symbols_scanned"),
+        "symbols_with_data": report.get("symbols_with_data"),
+        "selected_candidates": [_compact_candidate(item) for item in selected_candidates],
+        "top_longs": [_compact_candidate(item) for item in report.get("top_longs", [])[:5]],
+        "top_shorts": [_compact_candidate(item) for item in report.get("top_shorts", [])[:5]],
+        "analysis_plan_counts": report.get("analysis_plan_counts", {}),
+        "warnings": report.get("warnings", [])[:5],
+    }
+
+
+def _risk_exit_plan(
+    *,
+    symbol: str,
+    notional: float,
+    qty: float,
+    current_price: float,
+    trigger: str,
+    level: float,
+    source_plan: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "plan_id": new_id("risk_exit"),
+        "cycle_id": new_id("watch_exit"),
+        "symbol": symbol,
+        "side": "sell",
+        "notional": round(notional, 2),
+        "approved": True,
+        "dry_run": True,
+        "payload": {
+            "qty": qty,
+            "entry_price": current_price,
+            "stop_loss": source_plan.get("payload", {}).get("stop_loss", 0.0),
+            "take_profit": source_plan.get("payload", {}).get("take_profit", 0.0),
+            "recommendation": {
+                "symbol": symbol,
+                "action": "exit",
+                "confidence": 1.0,
+                "reason": f"Salida automatica por {trigger}: precio {current_price:.4f} vs nivel {level:.4f}.",
+                "entry_price": current_price,
+                "stop_loss": source_plan.get("payload", {}).get("stop_loss", 0.0),
+                "take_profit": source_plan.get("payload", {}).get("take_profit", 0.0),
+                "target_exposure_pct": 0.0,
+                "time_horizon": "inmediato",
+                "invalidation": f"{trigger} tocado",
+                "source": "risk_monitor",
+            },
+            "risk_decision": {
+                "approved": True,
+                "reason": f"Salida automatica aprobada por {trigger}.",
+                "checks": {
+                    "action": "exit",
+                    "trigger": trigger,
+                    "trigger_level": level,
+                    "current_price": current_price,
+                    "held_qty": qty,
+                    "notional": round(notional, 2),
+                    "source_plan_id": source_plan.get("plan_id"),
+                },
+            },
+            "dry_run": True,
+        },
+        "created_at": "",
+    }
+
+
+def _execute_stop_take_exits(
+    settings: Settings,
+    store: Store,
+    reporter: EventReporter,
+    run_id: str,
+    portfolio: Any,
+) -> list[dict[str, Any]]:
+    if not settings.auto_paper_trading or settings.require_human_approval:
+        return []
+    if settings.trading_mode != "paper" or not settings.alpaca_paper or settings.allow_live_trading:
+        return []
+
+    open_order_symbols = {order.symbol.upper() for order in portfolio.open_orders}
+    buy_plans = store.latest_executed_buy_plans_by_symbol()
+    exits = []
+    for position in portfolio.positions:
+        symbol = position.symbol.upper()
+        if symbol in open_order_symbols:
+            continue
+        source = buy_plans.get(symbol)
+        if not source:
+            continue
+        source_plan = source.get("plan", {}) or {}
+        payload = source_plan.get("payload", {}) or {}
+        stop_loss = float(payload.get("stop_loss") or 0)
+        take_profit = float(payload.get("take_profit") or 0)
+        trigger = None
+        level = 0.0
+        if stop_loss > 0 and position.current_price <= stop_loss:
+            trigger = "stop_loss"
+            level = stop_loss
+        elif take_profit > 0 and position.current_price >= take_profit:
+            trigger = "take_profit"
+            level = take_profit
+        if not trigger:
+            continue
+
+        plan = _risk_exit_plan(
+            symbol=symbol,
+            notional=position.market_value,
+            qty=position.qty,
+            current_price=position.current_price,
+            trigger=trigger,
+            level=level,
+            source_plan=source_plan,
+        )
+        try:
+            order = submit_paper_order_plan(
+                settings,
+                plan,
+                client_order_id=f"agente-{plan['plan_id'][:20]}",
+            )
+            store.save_broker_order(
+                broker_order_id=order["id"] or plan["plan_id"],
+                plan_id=plan["plan_id"],
+                cycle_id=run_id,
+                symbol=symbol,
+                side="sell",
+                status=order["status"],
+                payload={"plan": plan, "broker_order": order},
+            )
+            exits.append(
+                {
+                    "symbol": symbol,
+                    "trigger": trigger,
+                    "level": level,
+                    "current_price": position.current_price,
+                    "status": order["status"],
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - watch must stay alive.
+            exits.append(
+                {
+                    "symbol": symbol,
+                    "trigger": trigger,
+                    "level": level,
+                    "current_price": position.current_price,
+                    "error": str(exc),
+                }
+            )
+
+    if exits:
+        ok = [item for item in exits if "error" not in item]
+        failed = [item for item in exits if "error" in item]
+        ok_text = ", ".join(
+            f"{item['symbol']} por {item['trigger']} ({item['status']})" for item in ok
+        ) or "ninguna"
+        fail_text = "; fallos: " + ", ".join(
+            f"{item['symbol']} {item['trigger']}: {item['error']}" for item in failed
+        ) if failed else ""
+        reporter.emit(
+            "risk_manager",
+            "stop_take_exit_executed",
+            run_id,
+            f"Salidas automaticas stop/take: {ok_text}{fail_text}.",
+            {"exits": exits},
+        )
+    return exits
+
+
+def portfolio_watch_job(
+    settings: Settings,
+    store: Store,
+    verbose: bool = True,
+    *,
+    force_notify: bool = False,
+) -> None:
+    run_id = new_id("watch")
+    calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
+    status = calendar.status()
+    reporter = _reporter(settings, store, verbose)
+
+    if not status.is_open:
+        closed_key = status.next_open or status.reason
+        state_key = "portfolio_watch_last_closed_notification"
+        if not force_notify and store.get_runtime_value(state_key) == closed_key:
+            return
+        store.set_runtime_value(state_key, closed_key)
+        reporter.emit(
+            "portfolio_manager",
+            "portfolio_watch_sleeping",
+            run_id,
+            f"Mercado cerrado. Monitor intradia en espera hasta la proxima apertura: {status.next_open}.",
+            status.as_dict(),
+        )
+        return
+
+    portfolio = None
+    watch_message = f"Revisando cartera. Mercado abierto: {status.is_open}."
+    watch_payload: dict[str, Any] = status.as_dict()
+    has_activity = False
+    try:
+        portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
+        has_activity = bool(portfolio.positions or portfolio.open_orders)
+        watch_payload.update(
+            {
+                "cash": portfolio.cash,
+                "portfolio_value": portfolio.portfolio_value,
+                "positions_count": len(portfolio.positions),
+                "open_orders_count": len(portfolio.open_orders),
+            }
+        )
+        if has_activity:
+            symbols = sorted(
+                {
+                    *(position.symbol for position in portfolio.positions),
+                    *(order.symbol for order in portfolio.open_orders),
+                }
+            )
+            watch_message = (
+                "Cartera con actividad: "
+                f"{len(portfolio.positions)} posiciones, {len(portfolio.open_orders)} ordenes abiertas. "
+                f"Simbolos: {', '.join(symbols)}."
+            )
+    except Exception as exc:  # noqa: BLE001 - watch must keep scheduler alive.
+        has_activity = True
+        watch_message = f"No se pudo leer cartera Alpaca: {exc}"
+        watch_payload.update({"error": repr(exc)})
+
+    store.set_runtime_value("portfolio_watch_last_closed_notification", "")
+    event_type = "portfolio_watch_started" if has_activity else "portfolio_watch_heartbeat"
+    reporter.emit(
+        "portfolio_manager",
+        event_type,
+        run_id,
+        watch_message,
+        watch_payload,
+    )
+
+    risk_message = "Mercado abierto: cartera sin posiciones ni ordenes; sin accion intradia."
+    if has_activity:
+        risk_message = "Mercado abierto: se revisan posiciones, PnL, ordenes abiertas y limites."
+    reporter.emit(
+        "risk_manager",
+        "intraday_risk_check" if has_activity else "intraday_risk_heartbeat",
+        run_id,
+        risk_message,
+        {
+            **status.as_dict(),
+            "broker": settings.broker,
+            "configured": bool(settings.alpaca_api_key and settings.alpaca_secret_key),
+            "paper": settings.alpaca_paper,
+            "endpoint": settings.alpaca_endpoint,
+            "positions_count": len(portfolio.positions) if portfolio else 0,
+            "open_orders_count": len(portfolio.open_orders) if portfolio else 0,
+        },
+    )
+    if portfolio and portfolio.positions:
+        _execute_stop_take_exits(settings, store, reporter, run_id, portfolio)
+
+    reporter.emit(
+        "portfolio_manager",
+        "portfolio_watch_completed" if has_activity else "portfolio_watch_heartbeat_completed",
+        run_id,
+        "Monitor de cartera finalizado.",
+        status.as_dict(),
+    )
+
+
+def market_cycle_job(
+    settings: Settings,
+    store: Store,
+    *,
+    use_crew: bool,
+    verbose: bool = True,
+) -> None:
+    run_id = new_id("mkt")
+    calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
+    status = calendar.status()
+    reporter = _reporter(settings, store, verbose)
+
+    reporter.emit(
+        "orchestrator",
+        "scheduled_market_cycle_check",
+        run_id,
+        f"Comprobando ciclo de 15 minutos. Mercado abierto: {status.is_open}.",
+        status.as_dict(),
+    )
+    if not status.is_open:
+        reporter.emit(
+            "orchestrator",
+            "scheduled_market_cycle_skipped",
+            run_id,
+            f"Ciclo intradia omitido porque el mercado esta cerrado. {status.reason}",
+            status.as_dict(),
+        )
+        return
+
+    cycle_settings = settings
+    technical_context: dict[str, Any] | None = None
+    if settings.intraday_technical_scan_enabled:
+        universe_name = settings.intraday_technical_scan_universe or settings.closed_market_study_universe
+        max_symbols = settings.intraday_technical_scan_max_symbols or settings.closed_market_study_max_symbols
+        reporter.emit(
+            "technical_analyst",
+            "intraday_technical_scan_started",
+            run_id,
+            f"Escaneo tecnico intradia iniciado: {universe_name}, max {max_symbols} simbolos.",
+            {"universe": universe_name, "max_symbols": max_symbols},
+        )
+        symbols = resolve_study_universe(
+            universe_name,
+            settings.universe,
+            max_symbols,
+            settings.data_dir / "cache",
+        )
+        report = build_closed_market_technical_study(
+            symbols,
+            settings.data_dir / "reports",
+            run_id,
+        )
+        signals_saved = record_signal_candidates(store, report, source="intraday_scan")
+        selected_candidates, selected_symbols = _selected_candidates(report, settings)
+        top_longs = ", ".join(item["symbol"] for item in report["top_longs"][:5]) or "sin candidatos"
+        top_shorts = ", ".join(item["symbol"] for item in report["top_shorts"][:5]) or "sin candidatos"
+        reporter.emit(
+            "technical_analyst",
+            "intraday_technical_scan_completed",
+            run_id,
+            f"Escaneo tecnico listo. Largos: {top_longs}. Cortos: {top_shorts}.",
+            {
+                "path": report["path"],
+                "symbols_scanned": report["symbols_scanned"],
+                "symbols_with_data": report["symbols_with_data"],
+                "signals_saved": signals_saved,
+                "selected_symbols": selected_symbols,
+                "analysis_plan_counts": report["analysis_plan_counts"],
+            },
+        )
+        technical_context = _compact_scan_context(report, selected_candidates)
+
+        try:
+            breakout_symbols = merge_breakout_universe(symbols, settings.breakout_watchlist)
+            breakout_report = build_breakout_scan(
+                breakout_symbols,
+                settings.data_dir / "reports",
+                run_id,
+            )
+            confirmed = breakout_report.get("confirmed", [])
+            tradable = [item for item in confirmed if item.get("tradable")]
+            watch = breakout_report.get("watch", [])
+            blocked = breakout_report.get("blocked_or_failed", [])
+            confirmed_text = ", ".join(
+                f"{item['symbol']} ({item['risk_level']})" for item in confirmed[:5]
+            ) or "ninguna"
+            watch_text = ", ".join(item["symbol"] for item in watch[:5]) or "ninguna"
+            reporter.emit(
+                "technical_analyst",
+                "intraday_breakout_scan_completed",
+                run_id,
+                (
+                    "Rupturas revisadas. "
+                    f"Confirmadas: {confirmed_text}. Vigilancia: {watch_text}. "
+                    f"Operables conservadoras: {len(tradable)}; bloqueadas/fallidas: {len(blocked)}."
+                ),
+                {
+                    "path": breakout_report["path"],
+                    "symbols_scanned": breakout_report["symbols_scanned"],
+                    "confirmed": confirmed[:10],
+                    "watch": watch[:10],
+                    "tradable_symbols": [item["symbol"] for item in tradable[:10]],
+                    "blocked_or_failed_count": len(blocked),
+                    "warnings": breakout_report["warnings"][:10],
+                },
+            )
+            if technical_context is not None:
+                technical_context["breakout_scan_path"] = breakout_report["path"]
+                technical_context["breakout_confirmed"] = confirmed[:5]
+                technical_context["breakout_watch"] = watch[:5]
+        except Exception as exc:  # noqa: BLE001 - breakout scan must not block the cycle.
+            reporter.emit(
+                "technical_analyst",
+                "intraday_breakout_scan_failed",
+                run_id,
+                f"Escaneo de rupturas fallido: {exc}",
+                {"error": repr(exc)},
+            )
+
+        if settings.news_sentiment_enabled and settings.intraday_news_sentiment_enabled and use_crew and selected_candidates:
+            reporter.emit(
+                "macro_news_researcher",
+                "intraday_news_sentiment_started",
+                run_id,
+                f"Validando noticias intradia para {len(selected_candidates)} candidatos tecnicos.",
+                {
+                    "symbols": [item["symbol"] for item in selected_candidates],
+                    "news_items_per_symbol": settings.news_items_per_symbol,
+                },
+            )
+            sentiment_report = analyze_news_sentiment_for_candidates(
+                settings,
+                selected_candidates,
+                settings.data_dir / "reports",
+                run_id,
+                max_news_items=settings.news_items_per_symbol,
+            )
+            supportive = [
+                item["symbol"]
+                for item in sentiment_report["results"]
+                if item.get("sentiment", {}).get("supports_technical_setup")
+            ]
+            reporter.emit(
+                "macro_news_researcher",
+                "intraday_news_sentiment_completed",
+                run_id,
+                f"Noticias intradia listas. Apoyan tesis: {', '.join(supportive) or 'sin apoyos claros'}.",
+                {
+                    "path": sentiment_report["path"],
+                    "symbols_analyzed": sentiment_report["symbols_analyzed"],
+                    "supportive": supportive,
+                    "warnings": sentiment_report["warnings"][:10],
+                },
+            )
+            if technical_context is not None:
+                technical_context["news_sentiment_path"] = sentiment_report["path"]
+                technical_context["news_supportive_symbols"] = supportive
+
+        if selected_symbols:
+            cycle_settings = settings.model_copy(update={"default_universe": ",".join(selected_symbols)})
+            reporter.emit(
+                "orchestrator",
+                "intraday_candidate_universe_selected",
+                run_id,
+                f"Ciclo LLM usara candidatos tecnicos: {', '.join(selected_symbols)}.",
+                {"selected_symbols": selected_symbols},
+            )
+
+    run_observable_cycle(
+        cycle_settings,
+        store,
+        use_crew=use_crew,
+        verbose=verbose,
+        technical_context=technical_context,
+    )
+
+
+def closed_market_technical_study_job(
+    settings: Settings,
+    store: Store,
+    *,
+    use_crew: bool,
+    verbose: bool = True,
+    force: bool = False,
+) -> None:
+    run_id = new_id("closed")
+    calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
+    status = calendar.status()
+    if status.is_open:
+        return
+
+    study_key = "|".join(
+        [
+            status.next_open or status.now_market[:10],
+            settings.closed_market_study_universe,
+            str(settings.closed_market_study_max_symbols),
+            f"crew={use_crew}",
+        ]
+    )
+    state_key = "closed_market_technical_study_last_run"
+    if not force and store.get_runtime_value(state_key) == study_key:
+        return
+
+    reporter = _reporter(settings, store, verbose)
+    reporter.emit(
+        "technical_analyst",
+        "closed_market_study_started",
+        run_id,
+        "Mercado cerrado: lanzando estudio tecnico amplio para preparar posibles largos/cortos.",
+        status.as_dict(),
+    )
+
+    reporter.emit(
+        "market_data_researcher",
+        "closed_market_universe_loading",
+        run_id,
+        f"Cargando universo {settings.closed_market_study_universe}. Si es top por capitalizacion puede tardar.",
+        {
+            "universe": settings.closed_market_study_universe,
+            "max_symbols": settings.closed_market_study_max_symbols,
+        },
+    )
+    symbols = resolve_study_universe(
+        settings.closed_market_study_universe,
+        settings.universe,
+        settings.closed_market_study_max_symbols,
+        settings.data_dir / "cache",
+    )
+    reporter.emit(
+        "market_data_researcher",
+        "closed_market_universe_loaded",
+        run_id,
+        f"Universo de estudio cargado: {len(symbols)} simbolos.",
+        {"universe": settings.closed_market_study_universe, "symbols_count": len(symbols)},
+    )
+    reporter.emit(
+        "market_data_researcher",
+        "closed_market_download_started",
+        run_id,
+        "Descargando historico y preparando validacion tecnica profunda por simbolo.",
+        {"symbols_count": len(symbols)},
+    )
+
+    def _progress(done: int, total: int, with_data: int) -> None:
+        reporter.emit(
+            "technical_analyst",
+            "closed_market_study_progress",
+            run_id,
+            f"Analizados {done}/{total} simbolos. Con datos validos: {with_data}.",
+            {"done": done, "total": total, "with_data": with_data},
+        )
+
+    report = build_closed_market_technical_study(
+        symbols,
+        settings.data_dir / "reports",
+        run_id,
+        progress_callback=_progress,
+    )
+    signals_saved = record_signal_candidates(store, report, source="closed_market_study")
+    top_longs = ", ".join(item["symbol"] for item in report["top_longs"][:5]) or "sin candidatos"
+    top_shorts = ", ".join(item["symbol"] for item in report["top_shorts"][:5]) or "sin candidatos"
+    reporter.emit(
+        "technical_analyst",
+        "closed_market_study_completed",
+        run_id,
+        f"Estudio tecnico guardado. Largos: {top_longs}. Cortos: {top_shorts}.",
+        {
+            "path": report["path"],
+            "symbols_scanned": report["symbols_scanned"],
+            "symbols_with_data": report["symbols_with_data"],
+            "signals_saved": signals_saved,
+            "top_longs": report["top_longs"][:5],
+            "top_shorts": report["top_shorts"][:5],
+            "analysis_plan_counts": report["analysis_plan_counts"],
+            "warnings": report["warnings"][:10],
+            "tool_requests": report["tool_requests"][:10],
+        },
+    )
+    if report.get("tool_requests"):
+        reporter.emit(
+            "self_improvement_engineer",
+            "technical_tool_requests_created",
+            run_id,
+            f"El analista tecnico solicito {len(report['tool_requests'])} mejoras/herramientas.",
+            {"tool_requests": report["tool_requests"][:10]},
+        )
+
+    candidate_limit_per_side = max(1, settings.news_sentiment_top_n // 2)
+    selected_symbols = sorted(
+        {
+            item["symbol"]
+            for item in [
+                *report["top_longs"][:candidate_limit_per_side],
+                *report["top_shorts"][:candidate_limit_per_side],
+            ]
+        }
+    )
+    selected_candidates = [
+        *report["top_longs"][:candidate_limit_per_side],
+        *report["top_shorts"][:candidate_limit_per_side],
+    ]
+
+    if settings.news_sentiment_enabled and use_crew and selected_candidates:
+        reporter.emit(
+            "macro_news_researcher",
+            "news_sentiment_started",
+            run_id,
+            (
+                "Descargando ultimas noticias y validando sentimiento con LLM "
+                f"para {len(selected_candidates)} candidatos tecnicos."
+            ),
+            {
+                "symbols": [item["symbol"] for item in selected_candidates],
+                "news_items_per_symbol": settings.news_items_per_symbol,
+            },
+        )
+
+        def _sentiment_progress(done: int, total: int, symbol: str) -> None:
+            reporter.emit(
+                "macro_news_researcher",
+                "news_sentiment_progress",
+                run_id,
+                f"Sentimiento validado {done}/{total}: {symbol}.",
+                {"done": done, "total": total, "symbol": symbol},
+            )
+
+        sentiment_report = analyze_news_sentiment_for_candidates(
+            settings,
+            selected_candidates,
+            settings.data_dir / "reports",
+            run_id,
+            max_news_items=settings.news_items_per_symbol,
+            progress_callback=_sentiment_progress,
+        )
+        supportive = [
+            item["symbol"]
+            for item in sentiment_report["results"]
+            if item.get("sentiment", {}).get("supports_technical_setup")
+        ]
+        reporter.emit(
+            "macro_news_researcher",
+            "news_sentiment_completed",
+            run_id,
+            (
+                "Sentimiento guardado. "
+                f"Apoyan tesis tecnica: {', '.join(supportive) or 'sin apoyos claros'}."
+            ),
+            {
+                "path": sentiment_report["path"],
+                "symbols_analyzed": sentiment_report["symbols_analyzed"],
+                "supportive": supportive,
+                "warnings": sentiment_report["warnings"][:10],
+            },
+        )
+
+    if use_crew and selected_symbols:
+        reporter.emit(
+            "orchestrator",
+            "closed_market_crew_started",
+            run_id,
+            f"Lanzando CrewAI sobre candidatos filtrados: {', '.join(selected_symbols)}.",
+            {"selected_symbols": selected_symbols},
+        )
+        study_settings = settings.model_copy(
+            update={"default_universe": ",".join(selected_symbols)}
+        )
+        try:
+            run_observable_cycle(study_settings, store, use_crew=True, verbose=verbose)
+        except Exception as exc:  # noqa: BLE001 - scheduler must keep running after LLM failures.
+            reporter.emit(
+                "orchestrator",
+                "closed_market_crew_failed",
+                run_id,
+                f"CrewAI/LLM fallo durante el estudio cerrado: {exc}",
+                {"selected_symbols": selected_symbols, "error": repr(exc)},
+            )
+
+    store.set_runtime_value(state_key, study_key)
+
+
+def daily_study_job(
+    settings: Settings,
+    store: Store,
+    *,
+    use_crew: bool,
+    verbose: bool = True,
+) -> None:
+    run_id = new_id("daily")
+    calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
+    should_run, status = calendar.should_run_daily_study()
+    reporter = _reporter(settings, store, verbose)
+    reporter.emit(
+        "self_improvement_engineer",
+        "daily_study_check",
+        run_id,
+        f"Comprobando estudio diario. Debe ejecutarse: {should_run}.",
+        status.as_dict(),
+    )
+    if not should_run:
+        reporter.emit(
+            "self_improvement_engineer",
+            "daily_study_skipped",
+            run_id,
+            "Estudio diario omitido: no es dia de sesion cerrada o todavia esta abierto.",
+            status.as_dict(),
+        )
+        return
+
+    reporter.emit(
+        "self_improvement_engineer",
+        "daily_study_started",
+        run_id,
+        "Ejecutando estudio diario: revisar hipotesis, resultados, mejoras y backlog.",
+        status.as_dict(),
+    )
+    run_observable_cycle(settings, store, use_crew=use_crew, verbose=verbose)
+    reporter.emit(
+        "self_improvement_engineer",
+        "daily_study_completed",
+        run_id,
+        "Estudio diario finalizado.",
+        status.as_dict(),
+    )
+
+
+def post_market_review_job(
+    settings: Settings,
+    store: Store,
+    *,
+    use_llm: bool,
+    verbose: bool = True,
+    force: bool = False,
+) -> dict[str, Any] | None:
+    if not settings.post_market_review_enabled and not force:
+        return None
+
+    run_id = new_id("pmr")
+    calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
+    should_run, status = calendar.should_run_daily_study()
+    reporter = _reporter(settings, store, verbose)
+    if not should_run and not force:
+        return None
+
+    session_date = datetime.fromisoformat(status.now_market).date().isoformat()
+    state_key = "post_market_review_last_session"
+    if not force and store.get_runtime_value(state_key) == session_date:
+        return None
+
+    reporter.emit(
+        "post_market_review_agent",
+        "post_market_review_started",
+        run_id,
+        f"Revision post-mercado iniciada para {session_date}: operaciones, aciertos, errores y mejoras minimas.",
+        status.as_dict(),
+    )
+    try:
+        report = build_post_market_review(
+            settings,
+            settings.data_dir / "reports",
+            run_id,
+            session_date=session_date,
+            use_llm=use_llm and settings.post_market_review_use_llm,
+        )
+        store.set_runtime_value(state_key, session_date)
+        improvements = report.get("proposed_improvements", [])
+        reporter.emit(
+            "post_market_review_agent",
+            "post_market_review_completed",
+            run_id,
+            (
+                f"Revision post-mercado guardada. Trades evaluados: "
+                f"{report['summary']['trades_evaluated']}. Mejoras propuestas: {len(improvements)}."
+            ),
+            {
+                "path": report["path"],
+                "session_date": session_date,
+                "summary": report["summary"],
+                "proposed_improvements": improvements[:5],
+                "next_session_guidance": report.get("next_session_guidance", [])[:8],
+            },
+        )
+        return report
+    except Exception as exc:  # noqa: BLE001 - scheduler must keep running.
+        reporter.emit(
+            "post_market_review_agent",
+            "post_market_review_failed",
+            run_id,
+            f"Revision post-mercado fallida: {exc}",
+            {"error": repr(exc), "session_date": session_date},
+        )
+        return None
+
+
+def _daily_hour_minute(value: str) -> tuple[int, int]:
+    hour_text, minute_text = value.split(":", maxsplit=1)
+    return int(hour_text), int(minute_text)
+
+
+def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose: bool) -> BackgroundScheduler:
+    local_tz = ZoneInfo(settings.local_timezone)
+    scheduler = BackgroundScheduler(timezone=local_tz)
+    daily_hour, daily_minute = _daily_hour_minute(settings.daily_study_time_local)
+
+    scheduler.add_job(
+        portfolio_watch_job,
+        trigger=IntervalTrigger(seconds=settings.portfolio_watch_interval_seconds),
+        args=[settings, store, verbose],
+        id="portfolio_watch_1m",
+        name="Portfolio watch every minute",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        market_cycle_job,
+        trigger=IntervalTrigger(minutes=settings.market_cycle_interval_minutes),
+        args=[settings, store],
+        kwargs={"use_crew": use_crew, "verbose": verbose},
+        id="market_cycle_15m",
+        name="Market cycle every 15 minutes",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        closed_market_technical_study_job,
+        trigger=IntervalTrigger(minutes=settings.closed_market_study_interval_minutes),
+        args=[settings, store],
+        kwargs={"use_crew": use_crew, "verbose": verbose},
+        id="closed_market_technical_study",
+        name="Closed-market technical study",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        daily_study_job,
+        trigger=CronTrigger(hour=daily_hour, minute=daily_minute, timezone=local_tz),
+        args=[settings, store],
+        kwargs={"use_crew": use_crew, "verbose": verbose},
+        id="daily_study",
+        name="Daily study after US market close",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        post_market_review_job,
+        trigger=IntervalTrigger(minutes=settings.closed_market_study_interval_minutes),
+        args=[settings, store],
+        kwargs={"use_llm": use_crew, "verbose": verbose},
+        id="post_market_review",
+        name="Post-market trade review once per closed session",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    return scheduler
+
+
+def run_scheduler_forever(settings: Settings, store: Store, *, use_crew: bool, verbose: bool) -> None:
+    store.ensure_schema()
+    scheduler = build_scheduler(settings, store, use_crew=use_crew, verbose=verbose)
+    scheduler.start()
+    jobs = [{"id": job.id, "name": job.name, "next_run_time": str(job.next_run_time)} for job in scheduler.get_jobs()]
+    log_system_event(settings.logs_dir, "scheduler_started", {"jobs": jobs})
+    EventReporter(store, verbose=verbose).emit(
+        "orchestrator",
+        "scheduler_started",
+        new_id("sched"),
+        "Scheduler iniciado: vigilancia intradia, ciclos de mercado y estudio tecnico con mercado cerrado.",
+        {"jobs": jobs},
+    )
+    portfolio_watch_job(settings, store, verbose=verbose, force_notify=True)
+    bootstrap_status = MarketCalendar(settings.market_calendar, settings.local_timezone).status()
+    try:
+        if bootstrap_status.is_open:
+            market_cycle_job(settings, store, use_crew=use_crew, verbose=verbose)
+        else:
+            closed_market_technical_study_job(settings, store, use_crew=use_crew, verbose=verbose)
+            post_market_review_job(settings, store, use_llm=use_crew, verbose=verbose)
+    except Exception as exc:  # noqa: BLE001 - keep scheduler alive and visible.
+        EventReporter(store, verbose=verbose).emit(
+            "orchestrator",
+            "scheduler_bootstrap_failed",
+            new_id("sched"),
+            f"El trabajo inicial fallo, pero el scheduler sigue vivo: {exc}",
+            {"error": repr(exc)},
+        )
+    try:
+        while True:
+            time.sleep(1)
+    except (KeyboardInterrupt, SystemExit):
+        LOGGER.info("Deteniendo scheduler.")
+        scheduler.shutdown(wait=False)
+        log_system_event(settings.logs_dir, "scheduler_stopped", {})
+
+
+def scheduler_status(settings: Settings) -> dict[str, object]:
+    calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
+    market_status = calendar.status()
+    daily_hour, daily_minute = _daily_hour_minute(settings.daily_study_time_local)
+    now_local = datetime.now(ZoneInfo(settings.local_timezone))
+    return {
+        "market": market_status.as_dict(),
+        "jobs": [
+            {
+                "id": "portfolio_watch_1m",
+                "cadence": f"cada {settings.portfolio_watch_interval_seconds} segundos",
+                "market_behavior": "solo informa una vez si esta cerrado; cada minuto solo actua de verdad si NYSE esta abierto",
+            },
+            {
+                "id": "market_cycle_15m",
+                "cadence": f"cada {settings.market_cycle_interval_minutes} minutos",
+                "market_behavior": "solo ejecuta ciclo de mercado si NYSE esta abierto; incluye scan tecnico, rupturas y LLM",
+            },
+            {
+                "id": "closed_market_technical_study",
+                "cadence": f"cada {settings.closed_market_study_interval_minutes} minutos como comprobador",
+                "market_behavior": (
+                    "si NYSE esta cerrado, ejecuta un estudio tecnico amplio una sola vez por "
+                    "proxima apertura; incluye velas y sentimiento LLM sobre finalistas"
+                ),
+            },
+            {
+                "id": "daily_study",
+                "cadence": f"cada dia a las {daily_hour:02d}:{daily_minute:02d} {settings.local_timezone}",
+                "market_behavior": "solo ejecuta si fue dia de mercado y la sesion ya cerro",
+            },
+            {
+                "id": "post_market_review",
+                "cadence": f"cada {settings.closed_market_study_interval_minutes} minutos como comprobador",
+                "market_behavior": "tras cierre, una vez por sesion, revisa compras/ventas y genera aprendizaje",
+            },
+        ],
+        "now_local": now_local.isoformat(),
+    }

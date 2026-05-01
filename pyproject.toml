@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agente-bolsa"
+version = "0.1.0"
+description = "Sistema multiagente con CrewAI para investigar, simular y operar bolsa americana con controles de riesgo."
+requires-python = ">=3.10,<3.14"
+readme = "README.md"
+dependencies = [
+    "crewai>=1.14.0,<2.0.0",
+    "crewai-tools",
+    "openai>=1.13.3",
+    "alpaca-py>=0.43.0",
+    "yfinance>=0.2.50",
+    "pandas>=2.2.0",
+    "numpy>=1.26.0",
+    "ta>=0.11.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.2.0",
+    "python-dotenv>=1.0.1",
+    "PyYAML>=6.0.1",
+    "APScheduler>=3.10.4",
+    "pandas-market-calendars>=4.4.0",
+    "tenacity>=8.2.3",
+    "orjson>=3.10.0",
+    "streamlit>=1.37.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
