@@ -6,6 +6,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from agente_bolsa.config import Settings
+from agente_bolsa.tools.operational_health import load_operational_block_context
 from agente_bolsa.tools.broker import BrokerClientFactory
 
 
@@ -114,6 +115,14 @@ def submit_paper_order_plan(
 ) -> dict[str, Any]:
     if settings.trading_mode != "paper" or not settings.alpaca_paper:
         raise RuntimeError("La ejecucion automatica solo esta permitida en Alpaca paper.")
+    if (
+        settings.operational_kill_switch_enabled
+        and str(plan.get("side", "")).lower() == "buy"
+    ):
+        operational_block = load_operational_block_context(settings.data_dir)
+        if operational_block.get("block_buy_execution"):
+            reason = "; ".join(operational_block.get("reasons", [])[:3]) or "critical_operational_alerts_active"
+            raise RuntimeError(f"Compra bloqueada por operational kill switch: {reason}")
 
     client = BrokerClientFactory(settings).alpaca_trading_client()
     if _is_full_position_exit(plan):

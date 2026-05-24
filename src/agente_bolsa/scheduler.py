@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
-from datetime import datetime
+from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
+try:
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.triggers.cron import CronTrigger
+    from apscheduler.triggers.interval import IntervalTrigger
+except ModuleNotFoundError:  # pragma: no cover - exercised by import-only test environments.
+    BackgroundScheduler = None  # type: ignore[assignment]
+    CronTrigger = None  # type: ignore[assignment]
+    IntervalTrigger = None  # type: ignore[assignment]
 
 from .config import Settings
 from .cycle_runner import run_observable_cycle
@@ -22,29 +29,273 @@ from .storage import Store
 from .tools.broker import BrokerClientFactory
 from .tools.breakout_scanner import build_breakout_scan, merge_breakout_universe
 from .tools.execution import submit_paper_order_plan
+from .tools.daily_learning import build_learning_digest_report, load_daily_learning_context
 from .tools.news_sentiment import analyze_news_sentiment_for_candidates
+from .tools.operational_health import load_operational_response_context
+from .tools.pre_earnings import (
+    backfill_pending_pre_earnings_estimates,
+    build_pre_earnings_learning_digest,
+    build_pre_earnings_report,
+    build_pre_earnings_trade_operation,
+    build_pre_earnings_trade_recommendations,
+    enrich_report_with_local_analyst_revisions,
+    enrich_report_with_pre_earnings_score_v2,
+    record_pre_earnings_analyst_snapshots,
+    record_pre_earnings_predictions,
+    update_pre_earnings_outcomes,
+)
 from .tools.post_market_review import build_post_market_review
+from .tools.retention import cleanup_runtime_data
 from .tools.signal_learning import record_signal_candidates
 from .tools.technical_study import build_closed_market_technical_study
+from .tools.trade_decision import _annotate_technical_context_with_learning
 from .tools.universe import resolve_study_universe
 
 
 LOGGER = logging.getLogger(__name__)
 
 
+def _scheduler_lock_path(settings: Settings) -> Any:
+    return settings.state_dir / "scheduler.lock"
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _acquire_scheduler_lock(settings: Settings) -> tuple[bool, str]:
+    lock_path = _scheduler_lock_path(settings)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    current_pid = os.getpid()
+    if lock_path.exists():
+        raw = lock_path.read_text(encoding="utf-8").strip()
+        try:
+            existing_pid = int(raw)
+        except ValueError:
+            existing_pid = 0
+        if existing_pid and existing_pid != current_pid and _pid_is_running(existing_pid):
+            return False, f"Scheduler ya activo en PID {existing_pid}"
+        try:
+            lock_path.unlink()
+        except OSError:
+            return False, "No se pudo limpiar un lock antiguo del scheduler"
+    lock_path.write_text(str(current_pid), encoding="utf-8")
+    return True, ""
+
+
+def _release_scheduler_lock(settings: Settings) -> None:
+    lock_path = _scheduler_lock_path(settings)
+    try:
+        if lock_path.exists() and lock_path.read_text(encoding="utf-8").strip() == str(os.getpid()):
+            lock_path.unlink()
+    except OSError:
+        LOGGER.warning("No se pudo liberar scheduler.lock")
+
+
 def _reporter(settings: Settings, store: Store, verbose: bool) -> EventReporter:
     return EventReporter(store, verbose=verbose)
+
+
+def _session_start_utc_iso(settings: Settings) -> str:
+    now_local = datetime.now(ZoneInfo(settings.local_timezone))
+    start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start_local.astimezone(timezone.utc).isoformat()
+
+
+def _apply_daily_buy_limit(
+    settings: Settings,
+    store: Store,
+    reporter: EventReporter,
+    run_id: str,
+    plans: list[Any],
+) -> list[Any]:
+    if settings.max_daily_buy_orders <= 0:
+        return plans
+
+    used_buys = store.count_broker_orders(side="buy", since_iso=_session_start_utc_iso(settings))
+    remaining_buys = max(0, settings.max_daily_buy_orders - used_buys)
+    kept = []
+    blocked = []
+    for plan in plans:
+        if str(getattr(plan, "side", "")).lower() != "buy":
+            kept.append(plan)
+            continue
+        if remaining_buys > 0:
+            kept.append(plan)
+            remaining_buys -= 1
+        else:
+            blocked.append(plan)
+
+    if blocked:
+        reporter.emit(
+            "risk_manager",
+            "daily_buy_limit_applied",
+            run_id,
+            (
+                "Compras pre-earnings bloqueadas por limite diario: "
+                f"ya usadas {used_buys}/{settings.max_daily_buy_orders}; "
+                f"bloqueadas: {', '.join(plan.symbol for plan in blocked)}."
+            ),
+            {
+                "used_buy_orders_today": used_buys,
+                "max_daily_buy_orders": settings.max_daily_buy_orders,
+                "blocked_symbols": [plan.symbol for plan in blocked],
+                "source": "pre_earnings",
+            },
+        )
+    return kept
+
+
+def _run_pre_earnings_trade_operation(
+    settings: Settings,
+    store: Store,
+    reporter: EventReporter,
+    run_id: str,
+    report: dict[str, Any],
+) -> dict[str, Any]:
+    recommendations = build_pre_earnings_trade_recommendations(settings, report)
+    result: dict[str, Any] = {
+        "enabled": settings.pre_earnings_trade_enabled,
+        "recommendations": [asdict(item) for item in recommendations],
+        "buy_order_plans": [],
+        "submitted": [],
+        "failed": [],
+        "blocked": None,
+        "blocked_pending_symbols": [],
+    }
+    if not settings.pre_earnings_trade_enabled:
+        result["blocked"] = "pre_earnings_trade_disabled"
+        return result
+    if not recommendations:
+        return result
+
+    for recommendation in recommendations:
+        store.save_trade_recommendation(
+            recommendation_id=new_id("rec"),
+            cycle_id=run_id,
+            symbol=recommendation.symbol,
+            action=recommendation.action,
+            confidence=recommendation.confidence,
+            payload=asdict(recommendation),
+        )
+
+    try:
+        portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
+    except Exception as exc:  # noqa: BLE001 - diagnostics should continue even if broker is unavailable.
+        result["blocked"] = "portfolio_unavailable"
+        result["failed"].append({"stage": "portfolio_snapshot", "error": str(exc)})
+        return result
+    operation = build_pre_earnings_trade_operation(
+        settings,
+        portfolio,
+        report,
+        dry_run=True,
+    )
+    plans = list(operation.get("plans", []) or [])
+    pending_symbols = {
+        str(item.get("symbol") or "").upper()
+        for item in store.pending_order_plans(limit=max(20, settings.max_orders_per_cycle * 5))
+        if str(item.get("side") or "").lower() == "buy"
+    }
+    if pending_symbols:
+        blocked_pending = [plan.symbol for plan in plans if plan.symbol.upper() in pending_symbols]
+        if blocked_pending:
+            result["blocked_pending_symbols"] = blocked_pending
+            plans = [plan for plan in plans if plan.symbol.upper() not in pending_symbols]
+    plans = _apply_daily_buy_limit(settings, store, reporter, run_id, plans)
+    for plan in plans:
+        store.save_order_plan(
+            plan_id=new_id("plan"),
+            cycle_id=run_id,
+            symbol=plan.symbol,
+            side=plan.side,
+            notional=plan.notional,
+            approved=plan.risk_decision.approved,
+            dry_run=plan.dry_run,
+            payload=asdict(plan),
+        )
+    result["buy_order_plans"] = [asdict(plan) for plan in plans]
+    if not plans:
+        return result
+
+    if not settings.auto_paper_trading:
+        result["blocked"] = "auto_paper_trading_disabled"
+        return result
+    if settings.require_human_approval:
+        result["blocked"] = "REQUIRE_HUMAN_APPROVAL"
+        return result
+    if settings.trading_mode != "paper" or not settings.alpaca_paper or settings.allow_live_trading:
+        result["blocked"] = "paper_safety"
+        return result
+
+    pending_current = store.pending_order_plans(cycle_id=run_id, limit=settings.max_orders_per_cycle)
+    for plan in pending_current:
+        client_order_id = f"agente-{plan['plan_id'][:20]}"
+        try:
+            order = submit_paper_order_plan(settings, plan, client_order_id=client_order_id)
+            broker_order_id = order["id"] or client_order_id
+            store.save_broker_order(
+                broker_order_id=broker_order_id,
+                plan_id=plan["plan_id"],
+                cycle_id=run_id,
+                symbol=plan["symbol"],
+                side=plan["side"],
+                status=order["status"],
+                payload={"plan": plan, "broker_order": order},
+            )
+            result["submitted"].append(
+                {
+                    "symbol": plan["symbol"],
+                    "side": plan["side"],
+                    "notional": plan["notional"],
+                    "status": order["status"],
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - one failed order should not hide the rest.
+            result["failed"].append({"symbol": plan["symbol"], "side": plan["side"], "error": str(exc)})
+    return result
 
 
 def _candidate_limit_per_side(settings: Settings) -> int:
     return max(1, settings.news_sentiment_top_n // 2)
 
 
+def _setup_name(candidate: dict[str, Any]) -> str:
+    technical_state = candidate.get("technical_state", {}) or {}
+    if technical_state.get("event_momentum_long"):
+        return "event_momentum"
+    if technical_state.get("momentum_shakeout_hold_long"):
+        return "momentum_shakeout"
+    chart_patterns = technical_state.get("chart_patterns", []) or []
+    if any(item.get("bias") == "bullish" and item.get("status") == "confirmed" for item in chart_patterns):
+        return "confirmed_pattern"
+    volume_z = technical_state.get("volume_zscore_20")
+    return_20d = technical_state.get("return_20d")
+    if isinstance(volume_z, (int, float)) and isinstance(return_20d, (int, float)) and volume_z >= 1.0 and return_20d > 0:
+        return "trend_volume"
+    return "baseline_trend"
+
+
 def _selected_candidates(report: dict[str, Any], settings: Settings) -> tuple[list[dict[str, Any]], list[str]]:
     candidate_limit_per_side = _candidate_limit_per_side(settings)
+    daily_learning_digest = load_daily_learning_context(settings.data_dir)
+    operational_context = load_operational_response_context(settings.data_dir)
+    ranked_report = _annotate_technical_context_with_learning(
+        report,
+        daily_learning_digest,
+        operational_context,
+    )
+    top_longs = list(ranked_report.get("top_longs", []) or [])
+    top_shorts = list(ranked_report.get("top_shorts", []) or [])
     candidates = [
-        *report["top_longs"][:candidate_limit_per_side],
-        *report["top_shorts"][:candidate_limit_per_side],
+        *top_longs[:candidate_limit_per_side],
+        *top_shorts[:candidate_limit_per_side],
     ]
     symbols = sorted({str(item["symbol"]).upper() for item in candidates if item.get("symbol")})
     return candidates, symbols
@@ -67,6 +318,12 @@ def _compact_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         "symbol": candidate.get("symbol"),
         "direction": candidate.get("direction"),
         "score": candidate.get("score"),
+        "setup_name": _setup_name(candidate),
+        "setup_edge_3d": candidate.get("setup_edge_3d"),
+        "rank_priority_score": candidate.get("rank_priority_score"),
+        "rank_priority_reason": candidate.get("rank_priority_reason"),
+        "operational_penalty": candidate.get("operational_penalty", 0.0),
+        "operational_notes": candidate.get("operational_notes", [])[:2],
         "setup_quality": candidate.get("setup_quality"),
         "reasons": candidate.get("reasons", [])[:5],
         "close": technical_state.get("close"),
@@ -100,6 +357,34 @@ def _compact_scan_context(report: dict[str, Any], selected_candidates: list[dict
         "analysis_plan_counts": report.get("analysis_plan_counts", {}),
         "warnings": report.get("warnings", [])[:5],
     }
+
+
+def _job_state_key(job_name: str) -> str:
+    return f"scheduler_job_status:{job_name}"
+
+
+def _set_job_status(
+    store: Store,
+    job_name: str,
+    *,
+    status: str,
+    run_id: str,
+    started_at: datetime,
+    detail: str = "",
+    extra: dict[str, Any] | None = None,
+) -> None:
+    finished_at = datetime.now(timezone.utc)
+    payload = {
+        "job": job_name,
+        "status": status,
+        "run_id": run_id,
+        "started_at": started_at.isoformat(),
+        "finished_at": finished_at.isoformat(),
+        "duration_seconds": round((finished_at - started_at).total_seconds(), 3),
+        "detail": detail,
+        "extra": extra or {},
+    }
+    store.set_runtime_value(_job_state_key(job_name), payload)
 
 
 def _risk_exit_plan(
@@ -257,6 +542,143 @@ def _execute_stop_take_exits(
     return exits
 
 
+def _position_news_candidates(portfolio: Any) -> list[dict[str, Any]]:
+    candidates = []
+    for position in portfolio.positions:
+        candidates.append(
+            {
+                "symbol": position.symbol.upper(),
+                "direction": "long" if position.side == "long" else position.side,
+                "score": None,
+                "reasons": [
+                    "posicion abierta",
+                    f"unrealized_plpc={position.unrealized_plpc:.4f}",
+                ],
+                "technical_state": {
+                    "close": position.current_price,
+                    "unrealized_pl": position.unrealized_pl,
+                    "unrealized_plpc": position.unrealized_plpc,
+                    "avg_entry_price": position.avg_entry_price,
+                },
+            }
+        )
+    return candidates
+
+
+def _open_position_news_guard_due(settings: Settings, store: Store, symbols: list[str]) -> bool:
+    if settings.open_position_news_guard_interval_minutes <= 0:
+        return True
+    key = "open_position_news_guard_last_run"
+    last = store.get_runtime_value(key)
+    fingerprint = ",".join(sorted(symbols))
+    if isinstance(last, dict) and last.get("symbols") == fingerprint:
+        try:
+            last_run = datetime.fromisoformat(str(last.get("at")))
+            if datetime.now(timezone.utc) - last_run < timedelta(
+                minutes=settings.open_position_news_guard_interval_minutes
+            ):
+                return False
+        except ValueError:
+            pass
+    store.set_runtime_value(
+        key,
+        {
+            "at": datetime.now(timezone.utc).isoformat(),
+            "symbols": fingerprint,
+        },
+    )
+    return True
+
+
+def _run_open_position_news_guard(
+    settings: Settings,
+    store: Store,
+    reporter: EventReporter,
+    run_id: str,
+    portfolio: Any,
+) -> dict[str, Any] | None:
+    if not (
+        settings.news_sentiment_enabled
+        and settings.open_position_news_guard_enabled
+        and portfolio.positions
+    ):
+        return None
+
+    candidates = _position_news_candidates(portfolio)
+    symbols = [item["symbol"] for item in candidates]
+    if not _open_position_news_guard_due(settings, store, symbols):
+        reporter.emit(
+            "macro_news_researcher",
+            "open_position_news_guard_blocked",
+            run_id,
+            (
+                "Guardia de noticias de posiciones omitida por intervalo. "
+                f"Simbolos: {', '.join(symbols)}."
+            ),
+            {
+                "symbols": symbols,
+                "interval_minutes": settings.open_position_news_guard_interval_minutes,
+            },
+        )
+        return None
+
+    reporter.emit(
+        "macro_news_researcher",
+        "open_position_news_guard_started",
+        run_id,
+        f"Validando noticias para posiciones abiertas: {', '.join(symbols)}.",
+        {
+            "symbols": symbols,
+            "news_items_per_symbol": settings.news_items_per_symbol,
+        },
+    )
+    try:
+        report = analyze_news_sentiment_for_candidates(
+            settings,
+            candidates,
+            settings.data_dir / "reports",
+            run_id,
+            max_news_items=settings.news_items_per_symbol,
+        )
+    except Exception as exc:  # noqa: BLE001 - portfolio watch must keep running.
+        reporter.emit(
+            "macro_news_researcher",
+            "open_position_news_guard_failed",
+            run_id,
+            f"Guardia de noticias de posiciones fallida: {exc}",
+            {"symbols": symbols, "error": repr(exc)},
+        )
+        return None
+    material = [
+        item["symbol"]
+        for item in report.get("results", [])
+        if item.get("material_risk", {}).get("material")
+    ]
+    unknown = [
+        item["symbol"]
+        for item in report.get("results", [])
+        if item.get("material_risk", {}).get("unknown")
+    ]
+    reporter.emit(
+        "macro_news_researcher",
+        "open_position_news_guard_completed",
+        run_id,
+        (
+            "Noticias de posiciones revisadas. "
+            f"Riesgo material: {', '.join(material) or 'ninguno'}. "
+            f"Riesgo desconocido: {', '.join(unknown) or 'ninguno'}."
+        ),
+        {
+            "path": report.get("path"),
+            "symbols_analyzed": report.get("symbols_analyzed"),
+            "material_risk_symbols": material,
+            "unknown_risk_symbols": unknown,
+            "warnings": report.get("warnings", [])[:10],
+        },
+    )
+    return report
+
+
 def portfolio_watch_job(
     settings: Settings,
     store: Store,
@@ -265,6 +687,7 @@ def portfolio_watch_job(
     force_notify: bool = False,
 ) -> None:
     run_id = new_id("watch")
+    started_at = datetime.now(timezone.utc)
     calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
     status = calendar.status()
     reporter = _reporter(settings, store, verbose)
@@ -273,6 +696,7 @@ def portfolio_watch_job(
         closed_key = status.next_open or status.reason
         state_key = "portfolio_watch_last_closed_notification"
         if not force_notify and store.get_runtime_value(state_key) == closed_key:
+            _set_job_status(store, "portfolio_watch", status="skipped", run_id=run_id, started_at=started_at, detail="mercado cerrado; notificacion ya emitida")
             return
         store.set_runtime_value(state_key, closed_key)
         reporter.emit(
@@ -282,6 +706,7 @@ def portfolio_watch_job(
             f"Mercado cerrado. Monitor intradia en espera hasta la proxima apertura: {status.next_open}.",
             status.as_dict(),
         )
+        _set_job_status(store, "portfolio_watch", status="completed", run_id=run_id, started_at=started_at, detail="mercado cerrado; monitor en espera", extra={"market_open": False})
         return
 
     portfolio = None
@@ -345,6 +770,7 @@ def portfolio_watch_job(
         },
     )
     if portfolio and portfolio.positions:
+        _run_open_position_news_guard(settings, store, reporter, run_id, portfolio)
         _execute_stop_take_exits(settings, store, reporter, run_id, portfolio)
 
     reporter.emit(
@@ -353,6 +779,15 @@ def portfolio_watch_job(
         run_id,
         "Monitor de cartera finalizado.",
         status.as_dict(),
+    )
+    _set_job_status(
+        store,
+        "portfolio_watch",
+        status="completed",
+        run_id=run_id,
+        started_at=started_at,
+        detail="monitor de cartera finalizado",
+        extra={"market_open": True, "has_activity": has_activity},
     )
 
 
@@ -364,6 +799,7 @@ def market_cycle_job(
     verbose: bool = True,
 ) -> None:
     run_id = new_id("mkt")
+    started_at = datetime.now(timezone.utc)
     calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
     status = calendar.status()
     reporter = _reporter(settings, store, verbose)
@@ -383,6 +819,7 @@ def market_cycle_job(
             f"Ciclo intradia omitido porque el mercado esta cerrado. {status.reason}",
             status.as_dict(),
         )
+        _set_job_status(store, "market_cycle", status="skipped", run_id=run_id, started_at=started_at, detail="mercado cerrado")
         return
 
     cycle_settings = settings
@@ -407,6 +844,7 @@ def market_cycle_job(
             symbols,
             settings.data_dir / "reports",
             run_id,
+            benchmark_symbol=settings.benchmark_symbol,
         )
         signals_saved = record_signal_candidates(store, report, source="intraday_scan")
         selected_candidates, selected_symbols = _selected_candidates(report, settings)
@@ -524,13 +962,37 @@ def market_cycle_job(
                 {"selected_symbols": selected_symbols},
             )
 
-    run_observable_cycle(
-        cycle_settings,
-        store,
-        use_crew=use_crew,
-        verbose=verbose,
-        technical_context=technical_context,
-    )
+    try:
+        run_observable_cycle(
+            cycle_settings,
+            store,
+            use_crew=use_crew,
+            verbose=verbose,
+            technical_context=technical_context,
+        )
+        _set_job_status(
+            store,
+            "market_cycle",
+            status="completed",
+            run_id=run_id,
+            started_at=started_at,
+            detail="ciclo de mercado ejecutado",
+            extra={
+                "selected_symbols": [item.get("symbol") for item in (technical_context.get("selected_candidates", []) if technical_context else [])],
+                "technical_report": technical_context.get("path") if technical_context else None,
+            },
+        )
+    except Exception as exc:
+        _set_job_status(
+            store,
+            "market_cycle",
+            status="failed",
+            run_id=run_id,
+            started_at=started_at,
+            detail=str(exc),
+            extra={"error_type": type(exc).__name__},
+        )
+        raise
 
 
 def closed_market_technical_study_job(
@@ -542,9 +1004,11 @@ def closed_market_technical_study_job(
     force: bool = False,
 ) -> None:
     run_id = new_id("closed")
+    started_at = datetime.now(timezone.utc)
     calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
     status = calendar.status()
     if status.is_open:
+        _set_job_status(store, "closed_market_technical_study", status="skipped", run_id=run_id, started_at=started_at, detail="mercado abierto")
         return
 
     study_key = "|".join(
@@ -557,6 +1021,7 @@ def closed_market_technical_study_job(
     )
     state_key = "closed_market_technical_study_last_run"
     if not force and store.get_runtime_value(state_key) == study_key:
+        _set_job_status(store, "closed_market_technical_study", status="skipped", run_id=run_id, started_at=started_at, detail="estudio ya ejecutado para la sesion objetivo")
         return
 
     reporter = _reporter(settings, store, verbose)
@@ -613,6 +1078,7 @@ def closed_market_technical_study_job(
         settings.data_dir / "reports",
         run_id,
         progress_callback=_progress,
+        benchmark_symbol=settings.benchmark_symbol,
     )
     signals_saved = record_signal_candidates(store, report, source="closed_market_study")
     top_longs = ", ".join(item["symbol"] for item in report["top_longs"][:5]) or "sin candidatos"
@@ -734,6 +1200,15 @@ def closed_market_technical_study_job(
             )
 
     store.set_runtime_value(state_key, study_key)
+    _set_job_status(
+        store,
+        "closed_market_technical_study",
+        status="completed",
+        run_id=run_id,
+        started_at=started_at,
+        detail="estudio tecnico cerrado completado",
+        extra={"report_path": report.get("path"), "signals_saved": signals_saved},
+    )
 
 
 def daily_study_job(
@@ -744,6 +1219,7 @@ def daily_study_job(
     verbose: bool = True,
 ) -> None:
     run_id = new_id("daily")
+    started_at = datetime.now(timezone.utc)
     calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
     should_run, status = calendar.should_run_daily_study()
     reporter = _reporter(settings, store, verbose)
@@ -762,6 +1238,7 @@ def daily_study_job(
             "Estudio diario omitido: no es dia de sesion cerrada o todavia esta abierto.",
             status.as_dict(),
         )
+        _set_job_status(store, "daily_study", status="skipped", run_id=run_id, started_at=started_at, detail="no corresponde ejecutar estudio diario")
         return
 
     reporter.emit(
@@ -771,7 +1248,11 @@ def daily_study_job(
         "Ejecutando estudio diario: revisar hipotesis, resultados, mejoras y backlog.",
         status.as_dict(),
     )
-    run_observable_cycle(settings, store, use_crew=use_crew, verbose=verbose)
+    try:
+        run_observable_cycle(settings, store, use_crew=use_crew, verbose=verbose)
+    except Exception as exc:
+        _set_job_status(store, "daily_study", status="failed", run_id=run_id, started_at=started_at, detail=str(exc), extra={"error_type": type(exc).__name__})
+        raise
     reporter.emit(
         "self_improvement_engineer",
         "daily_study_completed",
@@ -779,6 +1260,7 @@ def daily_study_job(
         "Estudio diario finalizado.",
         status.as_dict(),
     )
+    _set_job_status(store, "daily_study", status="completed", run_id=run_id, started_at=started_at, detail="estudio diario finalizado")
 
 
 def post_market_review_job(
@@ -793,15 +1275,18 @@ def post_market_review_job(
         return None
 
     run_id = new_id("pmr")
+    started_at = datetime.now(timezone.utc)
     calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
     should_run, status = calendar.should_run_daily_study()
     reporter = _reporter(settings, store, verbose)
     if not should_run and not force:
+        _set_job_status(store, "post_market_review", status="skipped", run_id=run_id, started_at=started_at, detail="mercado aun no apto para review")
         return None
 
     session_date = datetime.fromisoformat(status.now_market).date().isoformat()
     state_key = "post_market_review_last_session"
     if not force and store.get_runtime_value(state_key) == session_date:
+        _set_job_status(store, "post_market_review", status="skipped", run_id=run_id, started_at=started_at, detail="review ya ejecutado para la sesion")
         return None
 
     reporter.emit(
@@ -837,6 +1322,7 @@ def post_market_review_job(
                 "next_session_guidance": report.get("next_session_guidance", [])[:8],
             },
         )
+        _set_job_status(store, "post_market_review", status="completed", run_id=run_id, started_at=started_at, detail="review post-mercado completado", extra={"report_path": report.get("path")})
         return report
     except Exception as exc:  # noqa: BLE001 - scheduler must keep running.
         reporter.emit(
@@ -846,6 +1332,7 @@ def post_market_review_job(
             f"Revision post-mercado fallida: {exc}",
             {"error": repr(exc), "session_date": session_date},
         )
+        _set_job_status(store, "post_market_review", status="failed", run_id=run_id, started_at=started_at, detail=str(exc), extra={"error_type": type(exc).__name__})
         return None
 
 
@@ -854,7 +1341,174 @@ def _daily_hour_minute(value: str) -> tuple[int, int]:
     return int(hour_text), int(minute_text)
 
 
-def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose: bool) -> BackgroundScheduler:
+def _pre_earnings_run_time_reached(settings: Settings, status: Any) -> bool:
+    now_utc_raw = getattr(status, "now_utc", None)
+    close_raw = getattr(status, "market_close", None) or getattr(status, "next_close", None)
+    if now_utc_raw and close_raw and settings.pre_earnings_before_close_minutes >= 0:
+        try:
+            now_utc = datetime.fromisoformat(str(now_utc_raw)).astimezone(timezone.utc)
+            market_close = datetime.fromisoformat(str(close_raw)).astimezone(timezone.utc)
+            return now_utc >= market_close - timedelta(minutes=settings.pre_earnings_before_close_minutes)
+        except ValueError:
+            pass
+
+    now_market = datetime.fromisoformat(status.now_market)
+    run_hour, run_minute = _daily_hour_minute(settings.pre_earnings_time_market)
+    run_time = now_market.replace(hour=run_hour, minute=run_minute, second=0, microsecond=0)
+    return now_market >= run_time
+
+
+def pre_earnings_job(
+    settings: Settings,
+    store: Store,
+    *,
+    verbose: bool = True,
+    force: bool = False,
+) -> dict[str, Any] | None:
+    if not settings.pre_earnings_enabled and not force:
+        return None
+
+    run_id = new_id("preearn")
+    started_at = datetime.now(timezone.utc)
+    calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
+    status = calendar.status()
+    reporter = _reporter(settings, store, verbose)
+
+    if not status.is_open and not force:
+        _set_job_status(store, "pre_earnings", status="skipped", run_id=run_id, started_at=started_at, detail="mercado cerrado")
+        return None
+
+    if not _pre_earnings_run_time_reached(settings, status) and not force:
+        _set_job_status(store, "pre_earnings", status="skipped", run_id=run_id, started_at=started_at, detail="ventana temporal aun no alcanzada")
+        return None
+
+    now_market = datetime.fromisoformat(status.now_market)
+    session_date = status.session_date or now_market.date().isoformat()
+    universe_name = settings.pre_earnings_universe or settings.closed_market_study_universe
+    max_symbols = settings.pre_earnings_max_symbols or settings.closed_market_study_max_symbols
+    state_key = "pre_earnings_last_session"
+    study_key = "|".join([session_date, universe_name, str(max_symbols), str(settings.pre_earnings_days)])
+    if not force and store.get_runtime_value(state_key) == study_key:
+        _set_job_status(store, "pre_earnings", status="skipped", run_id=run_id, started_at=started_at, detail="estudio pre-earnings ya ejecutado para la sesion")
+        return None
+
+    reporter.emit(
+        "market_data_researcher",
+        "pre_earnings_started",
+        run_id,
+        (
+            "Estudio pre-earnings informativo iniciado antes del cierre. "
+            f"Universo {universe_name}, max {max_symbols}, dias {settings.pre_earnings_days}. "
+            f"Disparo: {settings.pre_earnings_before_close_minutes} min antes del cierre."
+        ),
+        {**status.as_dict(), "universe": universe_name, "max_symbols": max_symbols},
+    )
+    try:
+        symbols = resolve_study_universe(
+            universe_name,
+            settings.universe,
+            max_symbols,
+            settings.data_dir / "cache",
+        )
+        report = build_pre_earnings_report(
+            symbols=symbols,
+            output_dir=settings.data_dir / "reports",
+            run_id=run_id,
+            calendar_name=settings.market_calendar,
+            local_timezone=settings.local_timezone,
+            session_count=settings.pre_earnings_days,
+            cache_dir=settings.data_dir / "cache",
+            fmp_api_key=settings.fmp_api_key,
+        )
+        tracking_update = update_pre_earnings_outcomes(store)
+        local_analyst_revisions = enrich_report_with_local_analyst_revisions(store, report)
+        score_v2_items_updated = enrich_report_with_pre_earnings_score_v2(store, report)
+        predictions_saved = record_pre_earnings_predictions(store, report)
+        analyst_snapshots_saved = record_pre_earnings_analyst_snapshots(store, report)
+        estimates_backfill = backfill_pending_pre_earnings_estimates(
+            store,
+            settings.data_dir / "reports",
+            f"{run_id}_backfill",
+            api_key=settings.fmp_api_key,
+        )
+        learning_digest = build_pre_earnings_learning_digest(
+            store,
+            settings.data_dir / "reports",
+            f"{run_id}_digest",
+            since_date="2026-04-01",
+        )
+        build_learning_digest_report(
+            store,
+            settings.data_dir / "reports",
+            new_id("learn_digest_refresh"),
+        )
+        trading_operation = _run_pre_earnings_trade_operation(
+            settings,
+            store,
+            reporter,
+            run_id,
+            report,
+        )
+        store.set_runtime_value(state_key, study_key)
+        summary = report.get("summary", {}) or {}
+        success = summary.get("success_rate")
+        success_text = "sin datos" if success is None else f"{success:.2%}"
+        report["mode"] = (
+            "operativo_pre_earnings" if settings.pre_earnings_trade_enabled else "informativo_no_operativo"
+        )
+        report["operation_allowed"] = settings.pre_earnings_trade_enabled
+        report["trading_operation"] = trading_operation
+        reporter.emit(
+            "market_data_researcher",
+            "pre_earnings_completed",
+            run_id,
+            (
+                "Estudio pre-earnings guardado. "
+                f"Eventos: {summary.get('total_events', 0)}; pendientes: {summary.get('pending_count', 0)}; "
+                f"exito historico visible: {success_text}; "
+                f"senales operativas: {len(trading_operation.get('recommendations', []))}; "
+                f"planes buy: {len(trading_operation.get('buy_order_plans', []))}."
+            ),
+            {
+                "path": report["path"],
+                "session_date": report.get("session_date"),
+                "session_count": report.get("session_count"),
+                "summary": summary,
+                "operation_allowed": report.get("operation_allowed"),
+                "predictions_saved": predictions_saved,
+                "analyst_snapshots_saved": analyst_snapshots_saved,
+                "local_analyst_revisions": local_analyst_revisions,
+                "score_v2_items_updated": score_v2_items_updated,
+                "estimates_backfill": estimates_backfill,
+                "tracking_update": tracking_update,
+                "learning_digest_path": learning_digest.get("path"),
+                "trading_operation": trading_operation,
+            },
+        )
+        report["tracking_update"] = tracking_update
+        report["local_analyst_revisions"] = local_analyst_revisions
+        report["score_v2_items_updated"] = score_v2_items_updated
+        report["predictions_saved"] = predictions_saved
+        report["analyst_snapshots_saved"] = analyst_snapshots_saved
+        report["estimates_backfill"] = estimates_backfill
+        report["learning_digest"] = learning_digest
+        _set_job_status(store, "pre_earnings", status="completed", run_id=run_id, started_at=started_at, detail="estudio pre-earnings completado", extra={"report_path": report.get("path")})
+        return report
+    except Exception as exc:  # noqa: BLE001 - scheduler must keep running.
+        reporter.emit(
+            "market_data_researcher",
+            "pre_earnings_failed",
+            run_id,
+            f"Estudio pre-earnings fallido: {exc}",
+            {"error": repr(exc), **status.as_dict()},
+        )
+        _set_job_status(store, "pre_earnings", status="failed", run_id=run_id, started_at=started_at, detail=str(exc), extra={"error_type": type(exc).__name__})
+        return None
+
+
+def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose: bool) -> Any:
+    if BackgroundScheduler is None or CronTrigger is None or IntervalTrigger is None:
+        raise RuntimeError("APScheduler no esta instalado. Instala las dependencias del proyecto para usar schedule.")
     local_tz = ZoneInfo(settings.local_timezone)
     scheduler = BackgroundScheduler(timezone=local_tz)
     daily_hour, daily_minute = _daily_hour_minute(settings.daily_study_time_local)
@@ -913,11 +1567,33 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         coalesce=True,
         replace_existing=True,
     )
+    scheduler.add_job(
+        pre_earnings_job,
+        trigger=IntervalTrigger(minutes=settings.closed_market_study_interval_minutes),
+        args=[settings, store],
+        kwargs={"verbose": verbose},
+        id="pre_earnings_daily",
+        name="Pre-earnings informative study before US close",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
     return scheduler
 
 
 def run_scheduler_forever(settings: Settings, store: Store, *, use_crew: bool, verbose: bool) -> None:
     store.ensure_schema()
+    cleanup_runtime_data(settings)
+    acquired, reason = _acquire_scheduler_lock(settings)
+    if not acquired:
+        EventReporter(store, verbose=verbose).emit(
+            "orchestrator",
+            "scheduler_already_running",
+            new_id("sched"),
+            reason,
+            {"lock_path": str(_scheduler_lock_path(settings))},
+        )
+        return
     scheduler = build_scheduler(settings, store, use_crew=use_crew, verbose=verbose)
     scheduler.start()
     jobs = [{"id": job.id, "name": job.name, "next_run_time": str(job.next_run_time)} for job in scheduler.get_jobs()]
@@ -926,13 +1602,14 @@ def run_scheduler_forever(settings: Settings, store: Store, *, use_crew: bool, v
         "orchestrator",
         "scheduler_started",
         new_id("sched"),
-        "Scheduler iniciado: vigilancia intradia, ciclos de mercado y estudio tecnico con mercado cerrado.",
+        "Scheduler iniciado: vigilancia intradia, pre-earnings, ciclos de mercado y estudios con mercado cerrado.",
         {"jobs": jobs},
     )
     portfolio_watch_job(settings, store, verbose=verbose, force_notify=True)
     bootstrap_status = MarketCalendar(settings.market_calendar, settings.local_timezone).status()
     try:
         if bootstrap_status.is_open:
+            pre_earnings_job(settings, store, verbose=verbose)
             market_cycle_job(settings, store, use_crew=use_crew, verbose=verbose)
         else:
             closed_market_technical_study_job(settings, store, use_crew=use_crew, verbose=verbose)
@@ -952,6 +1629,8 @@ def run_scheduler_forever(settings: Settings, store: Store, *, use_crew: bool, v
         LOGGER.info("Deteniendo scheduler.")
         scheduler.shutdown(wait=False)
         log_system_event(settings.logs_dir, "scheduler_stopped", {})
+    finally:
+        _release_scheduler_lock(settings)
 
 
 def scheduler_status(settings: Settings) -> dict[str, object]:
@@ -959,6 +1638,19 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
     market_status = calendar.status()
     daily_hour, daily_minute = _daily_hour_minute(settings.daily_study_time_local)
     now_local = datetime.now(ZoneInfo(settings.local_timezone))
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    job_runtime = {
+        job_name: store.get_runtime_value(_job_state_key(job_name))
+        for job_name in [
+            "portfolio_watch",
+            "market_cycle",
+            "closed_market_technical_study",
+            "daily_study",
+            "post_market_review",
+            "pre_earnings",
+        ]
+    }
     return {
         "market": market_status.as_dict(),
         "jobs": [
@@ -990,6 +1682,16 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
                 "cadence": f"cada {settings.closed_market_study_interval_minutes} minutos como comprobador",
                 "market_behavior": "tras cierre, una vez por sesion, revisa compras/ventas y genera aprendizaje",
             },
+            {
+                "id": "pre_earnings_daily",
+                "cadence": f"cada {settings.closed_market_study_interval_minutes} minutos como comprobador",
+                "market_behavior": (
+                    "si NYSE esta abierto y faltan "
+                    f"{settings.pre_earnings_before_close_minutes} minutos o menos para el cierre, "
+                    "ejecuta una vez por sesion el estudio pre-earnings informativo"
+                ),
+            },
         ],
         "now_local": now_local.isoformat(),
+        "job_runtime": job_runtime,
     }

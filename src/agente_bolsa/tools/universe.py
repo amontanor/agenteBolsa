@@ -154,6 +154,62 @@ def load_sp500_top_by_market_cap(limit: int = 300, cache_dir: Path | None = None
     return [item["symbol"] for item in results[:limit]]
 
 
+def _merge_recent_overlay(base_symbols: list[str], cache_dir: Path | None, *, report_name: str) -> list[str]:
+    reports_dir = ((cache_dir or Path("data/cache")).parent / "reports")
+    overlay_path = reports_dir / report_name
+    if not overlay_path.exists():
+        return base_symbols
+    try:
+        payload = json.loads(overlay_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return base_symbols
+    extras: list[str] = []
+    for key in ("confirmed", "watch", "top_longs"):
+        for item in payload.get(key, [])[:25]:
+            symbol = str((item or {}).get("symbol") or "").upper().strip()
+            if symbol:
+                extras.append(symbol)
+    result = []
+    seen: set[str] = set()
+    for symbol in [*base_symbols, *extras]:
+        if symbol and symbol not in seen:
+            seen.add(symbol)
+            result.append(symbol)
+    return result
+
+
+def _merge_recent_overlays(
+    base_symbols: list[str],
+    cache_dir: Path | None,
+    *,
+    report_names: list[str],
+    prepend_extras: bool = False,
+) -> list[str]:
+    extras: list[str] = []
+    reports_dir = ((cache_dir or Path("data/cache")).parent / "reports")
+    for report_name in report_names:
+        overlay_path = reports_dir / report_name
+        if not overlay_path.exists():
+            continue
+        try:
+            payload = json.loads(overlay_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for key in ("confirmed", "watch", "top_longs", "alerts"):
+            for item in payload.get(key, [])[:25]:
+                symbol = str((item or {}).get("symbol") or "").upper().strip()
+                if symbol:
+                    extras.append(symbol)
+    ordered = [*extras, *base_symbols] if prepend_extras else [*base_symbols, *extras]
+    result: list[str] = []
+    seen: set[str] = set()
+    for symbol in ordered:
+        if symbol and symbol not in seen:
+            seen.add(symbol)
+            result.append(symbol)
+    return result
+
+
 def resolve_study_universe(
     config_value: str,
     default_symbols: list[str],
@@ -169,6 +225,24 @@ def resolve_study_universe(
         symbols = load_sp500_top_by_market_cap(limit=max_symbols or 300, cache_dir=cache_dir)
     elif value == "sp500":
         symbols = load_sp500_symbols()
+    elif value in {"sp500_plus_recent_breakouts", "sp500+recent_breakouts"}:
+        symbols = _merge_recent_overlay(load_sp500_symbols(), cache_dir, report_name="latest_breakout_scan.json")
+    elif value in {"sp500_plus_recent_leaders", "sp500+recent_leaders"}:
+        symbols = _merge_recent_overlay(
+            load_sp500_symbols(),
+            cache_dir,
+            report_name="latest_closed_market_technical_study.json",
+        )
+    elif value in {"sp500_plus_intraday_focus", "sp500+intraday_focus", "intraday_focus"}:
+        symbols = _merge_recent_overlays(
+            load_sp500_symbols(),
+            cache_dir,
+            report_names=[
+                "latest_breakout_scan.json",
+                "latest_closed_market_technical_study.json",
+            ],
+            prepend_extras=True,
+        )
     else:
         symbols = [symbol.strip().upper() for symbol in config_value.split(",") if symbol.strip()]
 

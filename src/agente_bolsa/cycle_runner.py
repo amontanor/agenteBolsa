@@ -22,9 +22,11 @@ from .tools.broker import BrokerClientFactory
 from .tools.costs import TransactionCostModel
 from .tools.execution import submit_paper_order_plan
 from .tools.market_snapshot import build_market_snapshot, compact_snapshot_for_prompt
+from .tools.operational_health import load_operational_block_context
 from .tools.portfolio_optimizer import build_portfolio_rebalance_context
 from .tools.signal_learning import update_signal_decisions
 from .tools.trade_decision import (
+    _compact_technical_context_for_prompt,
     build_order_plans,
     filter_entry_quality,
     load_latest_sentiment,
@@ -253,6 +255,9 @@ def _apply_daily_buy_limit(
 
 
 def _backtest_gate_decision(settings: Settings, report: dict[str, Any]) -> tuple[bool, str]:
+    validation_gate = ((report.get("validation") or {}).get("gate")) or {}
+    if validation_gate:
+        return bool(validation_gate.get("approved")), str(validation_gate.get("reason") or "backtest evaluado")
     metrics = report.get("metrics", {}) or {}
     trades = int(metrics.get("trades") or 0)
     hit_rate = float(metrics.get("hit_rate") or 0)
@@ -291,6 +296,19 @@ def _apply_backtest_gate(
                 settings.data_dir / "reports",
                 new_id("btgate"),
                 start=start,
+                benchmark_symbol=settings.benchmark_symbol,
+                provider=settings.market_data_provider,
+                fmp_api_key=settings.fmp_api_key,
+                gate_config={
+                    "min_trades": settings.backtest_gate_min_trades,
+                    "min_hit_rate": settings.backtest_gate_min_hit_rate,
+                    "min_profit_factor": settings.backtest_gate_min_profit_factor,
+                    "max_drawdown": settings.backtest_gate_max_drawdown,
+                    "min_alpha_vs_benchmark": settings.backtest_gate_min_alpha_vs_benchmark,
+                    "min_trade_window_alpha": settings.backtest_gate_min_trade_window_alpha,
+                    "min_regime_trades": settings.backtest_gate_min_regime_trades,
+                    "max_negative_regimes": settings.backtest_gate_max_negative_regimes,
+                },
             )
             approved, reason = _backtest_gate_decision(settings, report)
             metrics = report.get("metrics", {})
@@ -384,6 +402,7 @@ def _record_trade_summary(
     auto_result: dict[str, Any] | None = None,
 ) -> None:
     auto_result = auto_result or {}
+    operational_kill_switch = load_operational_block_context(settings.data_dir)
     submitted = auto_result.get("submitted", [])
     if submitted:
         buys = [item for item in submitted if str(item.get("side", "")).lower() == "buy"]
@@ -398,6 +417,7 @@ def _record_trade_summary(
             {
                 "auto_paper_trading": settings.auto_paper_trading,
                 "require_human_approval": settings.require_human_approval,
+                "operational_kill_switch": operational_kill_switch,
                 "submitted": submitted,
                 "failed": auto_result.get("failed", []),
                 "backtest_gate": auto_result.get("backtest_gate", []),
@@ -416,6 +436,7 @@ def _record_trade_summary(
             {
                 "auto_paper_trading": settings.auto_paper_trading,
                 "require_human_approval": settings.require_human_approval,
+                "operational_kill_switch": operational_kill_switch,
                 "failed": failed,
                 "backtest_gate": auto_result.get("backtest_gate", []),
                 "entry_quality_gate": auto_result.get("entry_quality_gate", []),
@@ -425,6 +446,8 @@ def _record_trade_summary(
 
     if auto_result:
         recommendations = auto_result.get("recommendations", [])
+        approved_buys = auto_result.get("approved_buys", [])
+        rejected_order_plans = auto_result.get("rejected_order_plans", [])
         if recommendations:
             actions = ", ".join(
                 f"{item.get('symbol')}:{item.get('action')}:{float(item.get('confidence', 0)):.2f}"
@@ -436,6 +459,21 @@ def _record_trade_summary(
             )
         else:
             message = "No compra ni vende en este ciclo. Auto paper activo, sin plan aprobado nuevo."
+        if approved_buys and rejected_order_plans:
+            approved_text = ", ".join(approved_buys[:5])
+            rejection_text = "; ".join(
+                f"{item.get('symbol')} {item.get('stage')}:{item.get('reason')}"
+                for item in rejected_order_plans[:3]
+            )
+            message = (
+                "No compra ni vende en este ciclo. "
+                f"Compras aprobadas por señal: {approved_text}, "
+                f"pero sin envío por restricciones posteriores: {rejection_text}."
+            )
+        if auto_result.get("blocked") == "operational_kill_switch":
+            reasons = operational_kill_switch.get("reasons", [])
+            detail = "; ".join(reasons[:2]) if reasons else "alertas criticas activas"
+            message = f"No compra ni vende en este ciclo. Operational kill switch activo: {detail}."
         reporter.emit(
             "execution_agent",
             "trade_execution_summary",
@@ -444,9 +482,12 @@ def _record_trade_summary(
             {
                 "auto_paper_trading": settings.auto_paper_trading,
                 "require_human_approval": settings.require_human_approval,
+                "operational_kill_switch": operational_kill_switch,
                 "recommendations": recommendations,
+                "approved_buys": approved_buys,
                 "submitted": [],
                 "failed": [],
+                "rejected_order_plans": rejected_order_plans,
                 "backtest_gate": auto_result.get("backtest_gate", []),
                 "entry_quality_gate": auto_result.get("entry_quality_gate", []),
             },
@@ -479,6 +520,7 @@ def _record_trade_summary(
         {
             "auto_paper_trading": settings.auto_paper_trading,
             "require_human_approval": settings.require_human_approval,
+            "operational_kill_switch": operational_kill_switch,
             "pending_plans": len(pending_plans),
             "pending_buys": [
                 {"symbol": plan["symbol"], "notional": plan["notional"], "cycle_id": plan["cycle_id"]}
@@ -523,6 +565,21 @@ def _auto_paper_trade(
             },
         )
         return {"submitted": [], "failed": [], "blocked": "paper_safety"}
+    operational_kill_switch = load_operational_block_context(settings.data_dir)
+    if settings.operational_kill_switch_enabled and operational_kill_switch.get("block_buy_execution"):
+        reporter.emit(
+            "execution_agent",
+            "paper_auto_trade_blocked",
+            run_id,
+            "Auto paper trading bloqueado por operational kill switch: alertas criticas activas.",
+            operational_kill_switch,
+        )
+        return {
+            "submitted": [],
+            "failed": [],
+            "blocked": "operational_kill_switch",
+            "operational_kill_switch": operational_kill_switch,
+        }
 
     market_status = MarketCalendar(settings.market_calendar, settings.local_timezone).status()
     if not market_status.is_open:
@@ -613,7 +670,9 @@ def _auto_paper_trade(
             f"Aprendizaje actualizado con {learned_decisions} decision(es) de senal.",
             {"source_run_id": decision_context.get("run_id"), "updated": learned_decisions},
         )
-    plans = build_order_plans(settings, portfolio, gated_recommendations, dry_run=True)
+    rejected_order_plans: list[dict[str, Any]] = []
+    plans = build_order_plans(settings, portfolio, gated_recommendations, dry_run=True, rejected=rejected_order_plans)
+    approved_buys = sorted({item.symbol for item in gated_recommendations if str(item.action).lower() == "buy"})
     plans = _apply_daily_buy_limit(settings, store, reporter, run_id, plans)
     for plan in plans:
         plan_id = new_id("plan")
@@ -642,6 +701,8 @@ def _auto_paper_trade(
                 "entry_quality_gate": entry_quality_gate,
                 "backtest_gate": backtest_gate,
                 "rebalance_context": rebalance_context,
+                "approved_buys": approved_buys,
+                "rejected_order_plans": rejected_order_plans,
                 "submitted": [],
             },
         )
@@ -651,6 +712,8 @@ def _auto_paper_trade(
             "recommendations": [asdict(item) for item in recommendations],
             "entry_quality_gate": entry_quality_gate,
             "backtest_gate": backtest_gate,
+            "approved_buys": approved_buys,
+            "rejected_order_plans": rejected_order_plans,
         }
 
     submitted = []
@@ -708,6 +771,7 @@ def _auto_paper_trade(
             "failed": failed,
             "entry_quality_gate": entry_quality_gate,
             "backtest_gate": backtest_gate,
+            "rejected_order_plans": rejected_order_plans,
         },
     )
     return {
@@ -715,6 +779,7 @@ def _auto_paper_trade(
         "failed": failed,
         "entry_quality_gate": entry_quality_gate,
         "backtest_gate": backtest_gate,
+        "rejected_order_plans": rejected_order_plans,
     }
 
 
@@ -752,7 +817,10 @@ def run_observable_cycle(
 
     market_snapshot: dict[str, Any] | None = None
     market_snapshot_prompt = "{}"
-    technical_context_prompt = json.dumps(technical_context or {}, ensure_ascii=True)
+    technical_context_prompt = json.dumps(
+        _compact_technical_context_for_prompt(technical_context or {}) if technical_context else {},
+        ensure_ascii=True,
+    )
     try:
         reporter.emit(
             "market_data_researcher",
@@ -765,8 +833,10 @@ def run_observable_cycle(
             settings.benchmark_symbol,
             settings.data_dir / "reports",
             run_id,
+            provider=settings.market_data_provider,
+            fmp_api_key=settings.fmp_api_key,
         )
-        market_snapshot_prompt = compact_snapshot_for_prompt(market_snapshot)
+        market_snapshot_prompt = compact_snapshot_for_prompt(market_snapshot, max_chars=2500)
         reporter.emit(
             "market_data_researcher",
             "market_snapshot_completed",
@@ -825,10 +895,9 @@ def run_observable_cycle(
                 "orchestrator",
                 "crew_failed",
                 run_id,
-                f"CrewAI fallo: {exc}",
-                {"error": str(exc)},
+                f"CrewAI fallo: {exc}. Se continua con decision LLM directa para no perder el ciclo.",
+                {"error": str(exc), "fallback": "direct_llm_decision"},
             )
-            raise
     else:
         reporter.emit(
             "orchestrator",

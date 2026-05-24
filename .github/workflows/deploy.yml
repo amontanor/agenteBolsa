@@ -1,0 +1,42 @@
+# .github/workflows/deploy.yml - Automatización de Despliegue en Fly.io (CI/CD)
+
+name: Despliegue en Fly.io
+
+on:
+  push:
+    branches:
+      - main # Se dispara automáticamente al hacer push a la rama principal (main o master)
+
+jobs:
+  deploy:
+    name: Desplegar aplicación
+    runs-on: ubuntu-latest
+    concurrency: deploy-group # Evita colisiones si se hacen múltiples subidas seguidas
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Validar tests clave
+        run: |
+          pytest -q tests/test_reporting_and_universe.py tests/test_market_data.py
+
+      - name: Configurar flyctl (CLI oficial de Fly.io)
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Lanzar despliegue en la nube
+        # --remote-only delega la compilación de la imagen Docker a los servidores de Fly.io,
+        # lo que acelera el despliegue y ahorra minutos de ejecución en GitHub Actions.
+        run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

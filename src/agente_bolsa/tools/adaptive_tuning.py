@@ -14,17 +14,23 @@ from .signal_learning import build_learning_status
 
 
 ADAPTIVE_PARAMETERS = {
+    "ENTRY_QUALITY_MIN_SCORE": {
+        "settings_attr": "entry_quality_min_score",
+        "min": 10,
+        "max": 18,
+        "direction": "balanced",
+    },
     "ENTRY_QUALITY_MAX_RSI": {
         "settings_attr": "entry_quality_max_rsi",
         "min": 75.0,
         "max": 90.0,
-        "direction": "conservative_decrease",
+        "direction": "balanced",
     },
     "ENTRY_QUALITY_MAX_SMA20_DISTANCE": {
         "settings_attr": "entry_quality_max_sma20_distance",
         "min": 0.06,
         "max": 0.20,
-        "direction": "conservative_decrease",
+        "direction": "balanced",
     },
     "MAX_DAILY_BUY_ORDERS": {
         "settings_attr": "max_daily_buy_orders",
@@ -122,7 +128,7 @@ def _bounded_value(name: str, value: Any) -> Any | None:
     except (TypeError, ValueError):
         return None
     numeric = max(float(meta["min"]), min(float(meta["max"]), numeric))
-    if name in {"MAX_DAILY_BUY_ORDERS", "MAX_ORDERS_PER_CYCLE"}:
+    if name in {"ENTRY_QUALITY_MIN_SCORE", "MAX_DAILY_BUY_ORDERS", "MAX_ORDERS_PER_CYCLE"}:
         return int(numeric)
     return numeric
 
@@ -172,6 +178,78 @@ def _proposal(
         "expires_after_sessions": 5,
         "auto_apply": False,
     }
+
+
+def _latest_entry_quality_calibration(store: Store) -> dict[str, Any]:
+    latest = store.latest_learning_daily_summary(kind="daily_learning")
+    payload = (latest or {}).get("payload", {}) or {}
+    digest = payload.get("digest", {}) or {}
+    calibration = digest.get("entry_quality_filter_calibration_3d", {}) or {}
+    return {
+        "session_date": (latest or {}).get("session_date"),
+        "calibration": calibration,
+    }
+
+
+def _entry_quality_calibration_proposals(settings: Settings, store: Store) -> list[dict[str, Any]]:
+    latest = _latest_entry_quality_calibration(store)
+    calibration = latest.get("calibration", {}) or {}
+    matured = int(calibration.get("matured") or 0)
+    missed_winners = int(calibration.get("missed_winners") or 0)
+    avoided_losers = int(calibration.get("avoided_losers") or 0)
+    avg_return = calibration.get("avg_return")
+    try:
+        avg_return_value = float(avg_return)
+    except (TypeError, ValueError):
+        avg_return_value = None
+    if matured < 3 or avg_return_value is None:
+        return []
+
+    evidence = {
+        "source": "daily_learning.entry_quality_filter_calibration_3d",
+        "session_date": latest.get("session_date"),
+        "calibration": calibration,
+    }
+    proposals = []
+    if missed_winners > avoided_losers and avg_return_value > 0:
+        proposals.append(
+            _proposal(
+                name="ENTRY_QUALITY_MAX_RSI",
+                settings=settings,
+                proposed=float(settings.entry_quality_max_rsi) + 2.0,
+                reason="Entry-quality esta vetando mas ganadores maduros que perdedores; relajar RSI maximo en shadow.",
+                evidence=evidence,
+            )
+        )
+        proposals.append(
+            _proposal(
+                name="ENTRY_QUALITY_MAX_SMA20_DISTANCE",
+                settings=settings,
+                proposed=float(settings.entry_quality_max_sma20_distance) + 0.02,
+                reason="Entry-quality muestra coste de oportunidad positivo; probar mas tolerancia de extension SMA20 en shadow.",
+                evidence=evidence,
+            )
+        )
+    elif avoided_losers > missed_winners and avg_return_value < 0:
+        proposals.append(
+            _proposal(
+                name="ENTRY_QUALITY_MAX_RSI",
+                settings=settings,
+                proposed=float(settings.entry_quality_max_rsi) - 2.0,
+                reason="Entry-quality esta evitando mas perdedores que ganadores; probar RSI maximo mas estricto en shadow.",
+                evidence=evidence,
+            )
+        )
+        proposals.append(
+            _proposal(
+                name="ENTRY_QUALITY_MAX_SMA20_DISTANCE",
+                settings=settings,
+                proposed=float(settings.entry_quality_max_sma20_distance) - 0.02,
+                reason="Entry-quality evita perdedores en entradas bloqueadas; probar extension SMA20 maxima mas estricta en shadow.",
+                evidence=evidence,
+            )
+        )
+    return proposals
 
 
 def propose_adaptive_parameters(
@@ -233,6 +311,8 @@ def propose_adaptive_parameters(
                 },
             )
         )
+
+    proposals.extend(_entry_quality_calibration_proposals(settings, store))
 
     return {
         "since_date": since_date,

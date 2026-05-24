@@ -14,26 +14,57 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-import altair as alt
 import pandas as pd
-import streamlit as st
-import streamlit.components.v1 as components
+try:
+    import altair as alt
+except ModuleNotFoundError:  # pragma: no cover - import-only test environments may omit dashboard extras.
+    alt = None  # type: ignore[assignment]
+try:
+    import streamlit as st
+except ModuleNotFoundError:  # pragma: no cover - import-only test environments may omit dashboard extras.
+    class _MissingStreamlit:
+        def __getattr__(self, name: str):
+            raise RuntimeError("Streamlit no esta instalado. Instala las dependencias del dashboard para usar web.")
+
+    st = _MissingStreamlit()  # type: ignore[assignment]
 
 from agente_bolsa.config import get_settings
+from agente_bolsa.eventing import EventReporter
 from agente_bolsa.market_calendar import MarketCalendar
+from agente_bolsa.scheduler import _run_pre_earnings_trade_operation
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.adaptive_tuning import adaptive_status, update_adaptive_config
 from agente_bolsa.tools.backtest import build_symbol_backtest
 from agente_bolsa.tools.broker import BrokerClientFactory
 from agente_bolsa.tools.command_catalog import available_command_catalog
+from agente_bolsa.tools.daily_learning import build_learning_digest_report, load_daily_learning_context
 from agente_bolsa.tools.operational_learning import build_operational_learning_review
+from agente_bolsa.tools.pre_earnings import (
+    backfill_pending_pre_earnings_estimates,
+    build_pre_earnings_event_study,
+    build_pre_earnings_estimation_history,
+    build_pre_earnings_learning_digest,
+    build_pre_earnings_report,
+    build_pre_earnings_resolved_history,
+    build_pre_earnings_score_study,
+    build_pre_earnings_tracking_status,
+    enrich_report_with_local_analyst_revisions,
+    enrich_report_with_pre_earnings_score_v2,
+    record_pre_earnings_analyst_snapshots,
+    record_pre_earnings_predictions,
+    target_after_close_session,
+    update_pre_earnings_outcomes,
+)
+from agente_bolsa.tools.retention import cleanup_runtime_data
 from agente_bolsa.tools.signal_learning import build_learning_status, update_signal_outcomes
 from agente_bolsa.tools.trade_history import build_trade_history
+from agente_bolsa.tools.universe import resolve_study_universe
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_START_DATE = "2026-04-01"
 PORTFOLIO_CHART_START_DATE = "2026-04-28"
+PRE_EARNINGS_CONFIDENCE_THRESHOLD = 0.80
 
 
 def _settings():
@@ -42,6 +73,7 @@ def _settings():
 
 def _store() -> Store:
     settings = _settings()
+    cleanup_runtime_data(settings)
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()
     return store
@@ -318,6 +350,48 @@ def _signals_dataframe(signals: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _latest_learning_digest() -> dict[str, Any]:
+    return load_daily_learning_context(_settings().data_dir)
+
+
+def _learning_compact_summary(digest: dict[str, Any]) -> dict[str, Any]:
+    top_setup = ((digest or {}).get("setup_stats_3d", []) or [{}])[0]
+    calibration = ((digest or {}).get("confidence_calibration_3d", []) or [])
+    best_conf = None
+    if calibration:
+        best_conf = max(
+            calibration,
+            key=lambda item: (
+                float(item.get("avg_return") or -999),
+                float(item.get("win_rate") or -1),
+            ),
+        )
+    worst_accuracy = ((digest or {}).get("prior_accuracy_3d", []) or [{}])[0]
+    return {
+        "top_setup": top_setup if isinstance(top_setup, dict) else {},
+        "best_confidence_bucket": best_conf if isinstance(best_conf, dict) else {},
+        "worst_accuracy": worst_accuracy if isinstance(worst_accuracy, dict) else {},
+    }
+
+
+def _bar_chart(data: list[dict[str, Any]], x: str, y: str, color_field: str | None = None, *, height: int = 220):
+    frame = pd.DataFrame(data)
+    if frame.empty or x not in frame.columns or y not in frame.columns:
+        st.info("Todavia no hay datos suficientes.")
+        return
+    if alt is None:
+        st.dataframe(frame, use_container_width=True)
+        return
+    chart = alt.Chart(frame).mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
+        x=alt.X(f"{x}:N", sort="-y", title=""),
+        y=alt.Y(f"{y}:Q", title=""),
+        tooltip=list(frame.columns),
+    )
+    if color_field and color_field in frame.columns:
+        chart = chart.encode(color=alt.Color(f"{color_field}:N", legend=None))
+    st.altair_chart(chart.properties(height=height), use_container_width=True)
+
+
 def _orders_dataframe(orders: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(
         [
@@ -344,6 +418,31 @@ def _load_json_cell(value: Any) -> dict[str, Any]:
         return json.loads(value or "{}")
     except (TypeError, json.JSONDecodeError):
         return {}
+
+
+def _llm_daily_usage_dataframe(store: Store, *, limit: int = 1000) -> pd.DataFrame:
+    settings = _settings()
+    totals: dict[str, dict[str, Any]] = {}
+    for row in store.latest_llm_usage(limit):
+        created_at = _local_dt(row.get("created_at"), settings.local_timezone)
+        date_key = created_at.date().isoformat() if created_at else str(row.get("created_at") or "")[:10]
+        if not date_key:
+            continue
+        day = totals.setdefault(
+            date_key,
+            {
+                "fecha": date_key,
+                "peticiones": 0,
+                "tokens": 0,
+                "tokens_prompt": 0,
+                "tokens_respuesta": 0,
+            },
+        )
+        day["peticiones"] += int(row.get("request_count") or 0)
+        day["tokens"] += int(row.get("total_tokens") or 0)
+        day["tokens_prompt"] += int(row.get("prompt_tokens") or 0)
+        day["tokens_respuesta"] += int(row.get("completion_tokens") or 0)
+    return pd.DataFrame(sorted(totals.values(), key=lambda item: item["fecha"], reverse=True))
 
 
 def _latest_order_details(limit: int = 50, start_date: str = DEFAULT_START_DATE) -> list[dict[str, Any]]:
@@ -687,40 +786,64 @@ def _portfolio_value_series_from_alpaca(
     return pd.DataFrame(rows)
 
 
+def _trim_portfolio_chart_range(df: pd.DataFrame, *, days: int) -> pd.DataFrame:
+    if df.empty:
+        return df
+    window = max(int(days), 1)
+    trimmed = df.sort_values("fecha").tail(window).reset_index(drop=True)
+    return trimmed
+
+
+def _portfolio_chart_visible_summary(df: pd.DataFrame) -> dict[str, float | int | None]:
+    if df.empty:
+        return {"days": 0, "pl": None, "pl_pct": None}
+    ordered = df.sort_values("fecha").reset_index(drop=True)
+    first_value = _num(ordered.iloc[0].get("valor_cartera"))
+    last_value = _num(ordered.iloc[-1].get("valor_cartera"))
+    if first_value is None or last_value is None:
+        return {"days": int(len(ordered)), "pl": None, "pl_pct": None}
+    pl = round(last_value - first_value, 2)
+    pl_pct = round((pl / first_value), 6) if first_value else 0.0
+    return {"days": int(len(ordered)), "pl": pl, "pl_pct": pl_pct}
+
+
 def _estimated_portfolio_value_series(
     history: dict[str, Any],
     current_equity: float | None,
     *,
-    start_date: str = PORTFOLIO_CHART_START_DATE,
+    days: int = 7,
 ) -> pd.DataFrame:
     if current_equity is None:
         return pd.DataFrame(columns=["fecha", "valor_cartera", "P/L dia", "% dia", "label", "fuente"])
-    daily_by_date: dict[str, float] = {}
+    timezone_name = _settings().local_timezone
+    today = datetime.now(ZoneInfo(timezone_name)).date()
+    history_dates = []
+    for day in history.get("days", []):
+        date_text = str(day.get("date") or "")[:10]
+        if not date_text:
+            continue
+        try:
+            history_dates.append(datetime.fromisoformat(date_text).date())
+        except ValueError:
+            continue
+    anchor = max((item for item in history_dates if item <= today), default=today)
+    start = anchor - pd.Timedelta(days=max(int(days), 1) - 1)
+    daily_by_date: dict[str, dict[str, float]] = {}
     for day in history.get("days", []):
         date = str(day.get("date") or "")
-        if not date or date < start_date:
+        if not date or date < start.isoformat() or date > anchor.isoformat():
             continue
         day_pl = round((_num(day.get("realized_pl")) or 0.0) + (_num(day.get("open_unrealized_pl")) or 0.0), 2)
-        daily_by_date[date] = round(daily_by_date.get(date, 0.0) + day_pl, 2)
-    daily_rows = [
-        {"fecha": date, "P/L dia": day_pl}
-        for date, day_pl in sorted(daily_by_date.items(), key=lambda item: item[0])
-    ]
+        denominator = _num(day.get("sell_notional")) or _num(day.get("buy_notional")) or 0.0
+        item = daily_by_date.setdefault(date, {"P/L dia": 0.0, "denominador": 0.0})
+        item["P/L dia"] = round(item["P/L dia"] + day_pl, 2)
+        item["denominador"] = max(item["denominador"], float(denominator or 0.0))
+    daily_rows = []
+    for offset in range(max(int(days), 1)):
+        date = (start + pd.Timedelta(days=offset)).isoformat()
+        item = daily_by_date.get(date, {"P/L dia": 0.0, "denominador": 0.0})
+        daily_rows.append({"fecha": date, **item})
     total_pl = round(sum(item["P/L dia"] for item in daily_rows), 2)
-    if not daily_rows:
-        today = datetime.now(ZoneInfo(_settings().local_timezone)).date().isoformat()
-        return pd.DataFrame(
-            [
-                {
-                    "fecha": today,
-                    "valor_cartera": round(current_equity, 2),
-                    "P/L dia": 0.0,
-                    "% dia": 0.0,
-                    "label": f"{_money(current_equity)} ({_pct_signed(0.0)})",
-                    "fuente": "estimado",
-                }
-            ]
-        )
 
     baseline = float(current_equity) - total_pl
     running = baseline
@@ -728,7 +851,8 @@ def _estimated_portfolio_value_series(
     for item in daily_rows:
         previous_equity = running
         running += item["P/L dia"]
-        day_pct = round(item["P/L dia"] / previous_equity, 6) if previous_equity else 0.0
+        denominator = item["denominador"] or previous_equity
+        day_pct = round(item["P/L dia"] / denominator, 6) if denominator else 0.0
         rounded_equity = round(running, 2)
         rows.append(
             {
@@ -747,16 +871,26 @@ def _portfolio_value_chart(
     history: dict[str, Any],
     current_equity: float | None,
     portfolio_history: dict[str, Any] | None = None,
-) -> None:
+    *,
+    days: int = 7,
+) -> dict[str, float | int | None]:
     df = _portfolio_value_series_from_alpaca(portfolio_history or {}, current_equity)
     used_estimate = False
+    if not df.empty:
+        df = _trim_portfolio_chart_range(df, days=days)
     if df.empty:
-        df = _estimated_portfolio_value_series(history, current_equity)
-        used_estimate = True
+        df = _estimated_portfolio_value_series(history, current_equity, days=days)
+        used_estimate = not df.empty
     if df.empty:
         st.markdown("<div class='empty-box'>Sin datos suficientes para graficar la cartera.</div>", unsafe_allow_html=True)
-        return
+        return {"days": 0, "pl": None, "pl_pct": None}
     chart_df = df.copy()
+    visible_summary = _portfolio_chart_visible_summary(chart_df)
+    if alt is None:
+        st.line_chart(chart_df.set_index("fecha")["valor_cartera"])
+        if used_estimate:
+            st.caption("Grafico estimado desde operaciones/P/L del agente para cuadrar con los valores de cabecera.")
+        return visible_summary
     min_value = float(chart_df["valor_cartera"].min())
     max_value = float(chart_df["valor_cartera"].max())
     padding = max((max_value - min_value) * 0.28, 90.0)
@@ -798,7 +932,8 @@ def _portfolio_value_chart(
     )
     st.altair_chart((line + points + labels).properties(height=292), use_container_width=True)
     if used_estimate:
-        st.caption("Grafico estimado desde operaciones/P/L porque no se pudo leer portfolio history de Alpaca.")
+        st.caption("Grafico estimado desde operaciones/P/L del agente para cuadrar con los valores de cabecera.")
+    return visible_summary
 
 
 def _positions_table(rows: list[dict[str, Any]]) -> None:
@@ -910,7 +1045,7 @@ def _latest_relevant_events(store: Store, limit: int = 8) -> list[dict[str, Any]
     return rows
 
 
-def _auto_refresh_control() -> None:
+def _auto_refresh_control() -> int:
     options = [0, 10, 30, 60, 120, 300, 600]
     preferences = _load_web_preferences()
     saved_interval = preferences.get("refresh_interval_seconds", 30)
@@ -928,17 +1063,20 @@ def _auto_refresh_control() -> None:
     if preferences.get("refresh_interval_seconds") != interval:
         preferences["refresh_interval_seconds"] = int(interval)
         _save_web_preferences(preferences)
-    if interval:
-        components.html(
-            f"""
-            <script>
-            setTimeout(function() {{
-                window.parent.location.reload();
-            }}, {int(interval) * 1000});
-            </script>
-            """,
-            height=0,
-        )
+    return int(interval)
+
+
+def _render_refreshable_page(page_func: Any, refresh_interval_seconds: int) -> None:
+    if refresh_interval_seconds and hasattr(st, "fragment"):
+
+        @st.fragment(run_every=f"{refresh_interval_seconds}s")
+        def _live_page_values() -> None:
+            page_func()
+
+        _live_page_values()
+        return
+
+    page_func()
 
 
 def _page_header(title: str, subtitle: str) -> None:
@@ -955,6 +1093,16 @@ def _screen_help(title: str, body: str) -> None:
             st.markdown(body)
 
 
+def _info_icon(title: str, body: str) -> None:
+    if hasattr(st, "popover"):
+        with st.popover("i"):
+            st.markdown(f"**{title}**")
+            st.markdown(body)
+    else:
+        with st.expander(f"i {title}", expanded=False):
+            st.markdown(body)
+
+
 def _metric_card(label: str, value: Any, delta: Any | None = None) -> None:
     st.metric(label, value, delta=delta)
 
@@ -964,7 +1112,7 @@ def _setup_page() -> None:
     st.markdown(
         """
         <style>
-        .block-container {padding-top: 1.2rem; padding-bottom: 2rem; max-width: 1500px;}
+        .block-container {padding-top: 3.25rem; padding-bottom: 2rem; max-width: 1500px;}
         div[data-testid="stMetric"] {
             background: #ffffff;
             border: 1px solid #e5e7eb;
@@ -982,6 +1130,7 @@ def _setup_page() -> None:
             padding: 10px 0 18px 0;
             border-bottom: 1px solid #e5e7eb;
             margin-bottom: 16px;
+            margin-top: 0.25rem;
         }
         .dashboard-title {font-size: 1.65rem; font-weight: 750; color:#111827; line-height:1.15;}
         .dashboard-subtitle {color:#6b7280; margin-top:4px; font-size:0.96rem;}
@@ -1310,6 +1459,8 @@ def page_dashboard() -> None:
     )
 
     latest_orders = _latest_order_details(limit=12)
+    learning_digest = _latest_learning_digest()
+    learning_summary = _learning_compact_summary(learning_digest)
     buys = [item for item in latest_orders if item.get("side") == "buy"]
     sells = [item for item in latest_orders if item.get("side") == "sell"]
     last_order = latest_orders[0] if latest_orders else None
@@ -1337,15 +1488,40 @@ def page_dashboard() -> None:
 
         st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
         with st.container(border=True):
-            _section_title("Valor de cartera", "Evolucion diaria desde 2026-04-28. Las etiquetas muestran el valor total.")
-            _portfolio_value_chart(history, portfolio.portfolio_value if portfolio else None, portfolio_history)
-            p1, p2, p3 = st.columns(3)
+            chart_title, chart_control = st.columns([3, 1])
+            with chart_title:
+                _section_title("Valor de cartera", "Evolucion diaria. Las etiquetas muestran valor total y % del dia.")
+            with chart_control:
+                chart_days = st.selectbox(
+                    "Rango",
+                    [7, 15, 30],
+                    format_func=lambda value: f"Ultimos {value} dias",
+                    key="portfolio_chart_days",
+                    label_visibility="collapsed",
+                )
+            visible_range_summary = _portfolio_value_chart(
+                history,
+                portfolio.portfolio_value if portfolio else None,
+                portfolio_history,
+                days=int(chart_days),
+            )
+            p1, p2, p3, p4 = st.columns(4)
             with p1:
                 _compact_metric("P/L desde abril", _money(stats.get("total_pl")), _pct(stats.get("total_plpc_on_equity")), total_tone)
             with p2:
+                visible_pl = _num((visible_range_summary or {}).get("pl"))
+                visible_pct = _num((visible_range_summary or {}).get("pl_pct"))
+                visible_tone = "good" if (visible_pl or 0.0) > 0 else "bad" if (visible_pl or 0.0) < 0 else "neutral"
+                _compact_metric(
+                    f"P/L ultimos {int(chart_days)}d",
+                    _money(visible_pl),
+                    _pct(visible_pct) if visible_pct is not None else None,
+                    visible_tone,
+                )
+            with p3:
                 open_pl = _num(stats.get("unrealized_pl")) if stats else 0.0
                 _compact_metric("P/L abierto", _money(open_pl), tone="good" if open_pl > 0 else "bad" if open_pl < 0 else "neutral")
-            with p3:
+            with p4:
                 realized_pl = _num(stats.get("realized_pl")) if stats else 0.0
                 _compact_metric("P/L realizado", _money(realized_pl), tone="good" if realized_pl > 0 else "bad" if realized_pl < 0 else "neutral")
 
@@ -1372,6 +1548,36 @@ def page_dashboard() -> None:
                 st.dataframe(pd.DataFrame(relevant_events), width="stretch", hide_index=True)
             else:
                 st.markdown("<div class='empty-box'>Sin eventos relevantes recientes.</div>", unsafe_allow_html=True)
+
+        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            _section_title("Aprendizaje reciente", "Una vista minima de edge, confianza y error de estimacion.")
+            top_setup = learning_summary.get("top_setup", {}) or {}
+            best_conf = learning_summary.get("best_confidence_bucket", {}) or {}
+            worst_accuracy = learning_summary.get("worst_accuracy", {}) or {}
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                _compact_metric(
+                    "Setup 3d",
+                    str(top_setup.get("setup") or "-"),
+                    _pct_signed(top_setup.get("avg_return")) if top_setup.get("avg_return") is not None else "-",
+                    "good" if (_num(top_setup.get("avg_return")) or 0.0) > 0 else "neutral",
+                )
+            with c2:
+                _compact_metric(
+                    "Confianza",
+                    str(best_conf.get("bucket") or "-"),
+                    _pct_signed(best_conf.get("avg_return")) if best_conf.get("avg_return") is not None else "-",
+                    "good" if (_num(best_conf.get("avg_return")) or 0.0) > 0 else "neutral",
+                )
+            with c3:
+                error_value = _num(worst_accuracy.get("avg_abs_error"))
+                _compact_metric(
+                    "Error prior",
+                    _pct(error_value) if error_value is not None else "-",
+                    str(worst_accuracy.get("setup") or "-"),
+                    "bad" if (error_value or 0.0) >= 0.04 else "neutral",
+                )
 
     with st.expander("Ver log completo reciente"):
         st.caption(
@@ -1728,6 +1934,7 @@ def page_learning() -> None:
             st.warning(result["warnings"])
 
     report = build_learning_status(store, since_date=since)
+    digest = _latest_learning_digest()
     c1, c2, c3 = st.columns(3)
     with c1:
         _metric_card("Senales", report.get("signals", 0))
@@ -1749,6 +1956,47 @@ def page_learning() -> None:
     st.dataframe(pd.DataFrame(report.get("best_indicators", [])), use_container_width=True, hide_index=True)
     st.subheader("Indicadores que peor funcionan")
     st.dataframe(pd.DataFrame(report.get("worst_indicators", [])), use_container_width=True, hide_index=True)
+
+    st.markdown("")
+    _section_title("Aprendizaje diario reciente", "Sin cambiar de pantalla: edge por setup, calibracion de confianza y error de estimacion.")
+    s1, s2, s3, s4 = st.columns(4)
+    summary = (digest or {}).get("summary", {}) or {}
+    with s1:
+        _metric_card("Canonicas", summary.get("canonical_observations", 0))
+    with s2:
+        _metric_card("Ejecutadas", summary.get("executed_observations", 0))
+    with s3:
+        _metric_card("Duplicadas", _pct(summary.get("duplicate_ratio")))
+    with s4:
+        _metric_card("Cobertura 3d", (summary.get("horizon_coverage", {}) or {}).get("3d", 0))
+
+    top_row = st.columns(3)
+    with top_row[0]:
+        st.caption("Setup edge 3d")
+        _bar_chart((digest or {}).get("setup_stats_3d", [])[:6], "setup", "avg_return")
+    with top_row[1]:
+        st.caption("Confianza reciente")
+        _bar_chart((digest or {}).get("confidence_calibration_3d", []), "bucket", "avg_return")
+    with top_row[2]:
+        st.caption("Error de estimacion")
+        _bar_chart((digest or {}).get("prior_accuracy_3d", [])[:6], "profile_key", "avg_abs_error")
+
+    lower_left, lower_right = st.columns(2)
+    with lower_left:
+        st.subheader("Perfiles con mejor expectativa")
+        st.dataframe(
+            pd.DataFrame((digest or {}).get("setup_priors_3d", [])[:8]),
+            use_container_width=True,
+            hide_index=True,
+        )
+    with lower_right:
+        st.subheader("Guidance activo")
+        guidance = (digest or {}).get("guidance", []) or []
+        if guidance:
+            for item in guidance[:6]:
+                st.markdown(f"- {item}")
+        else:
+            st.info("Todavia no hay guidance diario.")
 
 
 def page_adaptive() -> None:
@@ -2140,6 +2388,1110 @@ def page_backtest() -> None:
             st.dataframe(trades, use_container_width=True, hide_index=True)
 
 
+def _pre_earnings_history_panel(events: list[dict[str, Any]]) -> None:
+    if not events:
+        return
+
+    def tone_for(hypothesis: str) -> tuple[str, str]:
+        if hypothesis == "subida_probable":
+            return "green", "alcista fuerte"
+        if hypothesis == "neutral_alcista":
+            return "blue", "sesgo positivo"
+        return "gray", "sin ventaja"
+
+    for event in events:
+        item = event["item"]
+        history = event["history"]
+        rows = history.get("rows", []) or []
+        if not rows:
+            continue
+        symbol = str(item.get("symbol") or "")
+        earnings_date = str(item.get("earnings_date") or item.get("session_date") or "")
+        earnings_session = str(item.get("earnings_session") or "")
+        official_id = history.get("official_prediction_id")
+        official = next((row for row in rows if row.get("prediction_id") == official_id), rows[-1])
+        first = rows[0]
+        change = float(official.get("score") or 0) - float(first.get("score") or 0)
+        change_text = f"+{change:.0f}" if change > 0 else f"{change:.0f}"
+        first_hypothesis = history.get("first_hypothesis") or first.get("hypothesis")
+        official_hypothesis = history.get("official_hypothesis") or official.get("hypothesis")
+        headline = (
+            f"{first_hypothesis} sin cambio"
+            if first_hypothesis == official_hypothesis
+            else f"{first_hypothesis} -> {official_hypothesis}"
+        )
+
+        with st.container(border=True):
+            h1, h2, h3 = st.columns([1.2, 2, 1])
+            with h1:
+                st.markdown(f"**{symbol}**")
+                st.caption(f"{earnings_date} · {earnings_session}")
+            with h2:
+                st.caption("Evolución")
+                st.markdown(f"`{headline}`")
+            with h3:
+                st.metric("Cambio score", change_text)
+
+            if len(rows) > 5:
+                st.caption("Mostrando las últimas 5 estimaciones.")
+                visible_rows = rows[-5:]
+            else:
+                visible_rows = rows
+            cols = st.columns(max(min(len(visible_rows), 5), 1))
+
+            previous_score = None
+            for col, row in zip(cols, visible_rows, strict=False):
+                hypothesis = str(row.get("hypothesis") or "")
+                score = float(row.get("score") or 0)
+                max_score = int(row.get("max_score") or 0)
+                diff_text = ""
+                if previous_score is not None:
+                    diff = score - previous_score
+                    if diff:
+                        sign = "+" if diff > 0 else ""
+                        diff_text = f" ({sign}{diff:.0f})"
+                previous_score = score
+                tone, label = tone_for(hypothesis)
+                official_text = " · oficial" if row.get("prediction_id") == official_id else ""
+                reason = str(row.get("reason") or "Sin motivo registrado.")
+                short_reason = reason if len(reason) <= 180 else f"{reason[:177]}..."
+                with col:
+                    with st.container(border=True):
+                        st.caption(f"{row.get('prediction_date')}{official_text}")
+                        st.markdown(f"**{hypothesis}**")
+                        st.metric("Score", f"{score:.0f}/{max_score}", diff_text or None)
+                        st.caption(label)
+                        st.caption(f"Motivo: {short_reason}")
+
+
+def _score_percent(score: Any, max_score: Any) -> float | None:
+    try:
+        score_value = float(score)
+        max_value = float(max_score)
+    except (TypeError, ValueError):
+        return None
+    if max_value <= 0:
+        return None
+    return score_value / max_value
+
+
+def _pre_earnings_event_key(item: dict[str, Any]) -> str:
+    return "|".join(
+        [
+            str(item.get("symbol") or "").upper(),
+            str(item.get("earnings_date") or item.get("session_date") or "")[:10],
+            str(item.get("earnings_session") or "post-market"),
+        ]
+    )
+
+
+def _pre_earnings_score_text(score: Any, max_score: Any) -> str:
+    try:
+        return f"{int(float(score or 0))}/{int(float(max_score or 0))}"
+    except (TypeError, ValueError):
+        return "sin datos"
+
+
+def _pre_earnings_prediction_line(row: dict[str, Any]) -> str:
+    features = row.get("features") or {}
+    v2 = features.get("pre_earnings_score_v2")
+    v2_label = features.get("score_v2_label")
+    v2_text = f" | v2 {v2_label} {float(v2):.1f}/100" if v2 is not None and v2_label else ""
+    return (
+        f"{str(row.get('prediction_date') or '-')}: "
+        f"{row.get('hypothesis') or 'sin_datos'} "
+        f"{_pre_earnings_score_text(row.get('score'), row.get('max_score'))}"
+        f"{v2_text}"
+    )
+
+
+def _pre_earnings_official_from_history(
+    item: dict[str, Any],
+    history: dict[str, Any],
+) -> dict[str, Any]:
+    rows = history.get("rows", []) or []
+    official_id = history.get("official_prediction_id")
+    official = next((row for row in rows if row.get("prediction_id") == official_id), None)
+    if official:
+        return official
+    return {
+        "prediction_date": item.get("estimated_on") or item.get("session_date"),
+        "hypothesis": item.get("hypothesis"),
+        "score": item.get("score"),
+        "max_score": item.get("max_score"),
+        "reason": item.get("reason"),
+        "outcome": item.get("outcome") or {},
+        "features": {
+            "pre_earnings_score_v2": item.get("pre_earnings_score_v2"),
+            "score_v2_label": item.get("score_v2_label"),
+            "high_conviction_pre_earnings_long": item.get("high_conviction_pre_earnings_long"),
+            "high_conviction_pre_earnings_reason": item.get("high_conviction_pre_earnings_reason"),
+            "score_v2_components": item.get("score_v2_components"),
+            "score_v2_drivers": item.get("score_v2_drivers"),
+        },
+    }
+
+
+def _pre_earnings_result_label(hypothesis: Any, return_pct: Any, confidence_pct: Any) -> str:
+    if return_pct is None:
+        return "pendiente"
+    try:
+        if confidence_pct is None or float(confidence_pct) < PRE_EARNINGS_CONFIDENCE_THRESHOLD:
+            return "azar"
+    except (TypeError, ValueError):
+        return "azar"
+    if hypothesis not in {"subida_probable", "neutral_alcista"}:
+        return "no era alcista"
+    try:
+        return "acierto" if float(return_pct) > 0 else "fallo"
+    except (TypeError, ValueError):
+        return "pendiente"
+
+
+def _pre_earnings_event_groups(store: Store) -> dict[str, list[dict[str, Any]]]:
+    predictions = store.pre_earnings_predictions(limit=5000)
+    by_event: dict[str, list[dict[str, Any]]] = {}
+    for prediction in predictions:
+        features = prediction.get("features") or {}
+        key = "|".join(
+            [
+                str(prediction.get("symbol") or "").upper(),
+                str(features.get("earnings_date") or prediction.get("earnings_datetime") or "")[:10],
+                str(features.get("earnings_session") or "post-market"),
+            ]
+        )
+        by_event.setdefault(key, []).append(prediction)
+    for event_rows in by_event.values():
+        event_rows.sort(key=lambda row: (str(row.get("prediction_date") or ""), str(row.get("created_at") or "")))
+    return by_event
+
+
+def _pre_earnings_confident_metrics(store: Store) -> dict[str, Any]:
+    resolved_count = 0
+    confident_count = 0
+    hits = 0
+    misses = 0
+    random_count = 0
+    for event_rows in _pre_earnings_event_groups(store).values():
+        resolved = [row for row in event_rows if (row.get("outcome") or {}).get("return_pct") is not None]
+        if not resolved:
+            continue
+        official = resolved[-1]
+        outcome = official.get("outcome") or {}
+        result = _pre_earnings_result_label(
+            official.get("hypothesis"),
+            outcome.get("return_pct"),
+            _score_percent(official.get("score"), official.get("max_score")),
+        )
+        resolved_count += 1
+        if result == "acierto":
+            hits += 1
+            confident_count += 1
+        elif result == "fallo":
+            misses += 1
+            confident_count += 1
+        elif result == "azar":
+            random_count += 1
+    success_rate = (hits / confident_count) if confident_count else None
+    return {
+        "resolved_count": resolved_count,
+        "confident_count": confident_count,
+        "success_rate": success_rate,
+        "hits": hits,
+        "misses": misses,
+        "random_count": random_count,
+    }
+
+
+def _pre_earnings_next_day_block(
+    sessions: list[dict[str, Any]],
+    estimation_history: dict[str, dict[str, Any]],
+) -> None:
+    if not sessions:
+        return
+    session = sessions[0]
+    session_date = str(session.get("session_date") or "-")
+    rows = []
+    details: list[dict[str, Any]] = []
+    for item in session.get("items", []) or []:
+        event_key = _pre_earnings_event_key(item)
+        history = estimation_history.get(event_key, {})
+        official = _pre_earnings_official_from_history(item, history)
+        score = official.get("score")
+        max_score = official.get("max_score")
+        pct = _score_percent(score, max_score)
+        official_features = official.get("features") or {}
+        v2_score = official_features.get("pre_earnings_score_v2") or item.get("pre_earnings_score_v2")
+        v2_label = official_features.get("score_v2_label") or item.get("score_v2_label")
+        timeline_rows = history.get("rows", []) or [official]
+        outcome = item.get("outcome", {}) or official.get("outcome", {}) or {}
+        result_text = _pre_earnings_result_label(official.get("hypothesis"), outcome.get("return_pct"), pct)
+        rows.append(
+            {
+                "simbolo": item.get("symbol"),
+                "earnings": (
+                    f"{item.get('earnings_date') or item.get('session_date')} "
+                    f"{item.get('earnings_session') or 'post-market'} "
+                    f"{item.get('earnings_time') or str(item.get('earnings_datetime') or '')[11:16]}"
+                ),
+                "estimaciones diarias": " -> ".join(_pre_earnings_prediction_line(row) for row in timeline_rows),
+                "valor final": official.get("hypothesis"),
+                "score final": _pre_earnings_score_text(score, max_score),
+                "% final": pct,
+                "valor v2": v2_label,
+                "score v2": v2_score,
+                "fecha final": official.get("prediction_date"),
+                "resultado": result_text,
+            }
+        )
+        details.append({"item": item, "history": history, "official": official, "timeline_rows": timeline_rows})
+
+    st.subheader(f"1. Siguiente dia de earnings ({session_date})")
+    st.caption("Incluye los resultados de hoy post-market y los de la siguiente sesion pre-market.")
+    if not rows:
+        st.info("No hay earnings detectados para el siguiente dia de estimacion.")
+        return
+
+    frame = pd.DataFrame(rows)
+
+    def color_estimation(value: float | None) -> str:
+        if value is None:
+            return ""
+        color = "#047857" if value >= 0.8 else "#b45309" if value >= 0.5 else "#b91c1c"
+        background = "#ecfdf5" if value >= 0.8 else "#fffbeb" if value >= 0.5 else "#fef2f2"
+        return f"color: {color}; background-color: {background}; font-weight: 700;"
+
+    styled = (
+        frame.style.format(
+            {
+                "% final": lambda value: "sin datos" if pd.isna(value) else f"{value:.1%}",
+                "score v2": lambda value: "sin datos" if pd.isna(value) else f"{value:.1f}/100",
+            }
+        )
+        .map(color_estimation, subset=["% final"])
+    )
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+    with st.expander("Ver estimaciones diarias por simbolo", expanded=False):
+        for detail in details:
+            item = detail["item"]
+            symbol = str(item.get("symbol") or "")
+            st.markdown(f"**{symbol}**")
+            timeline = []
+            official_id = (detail.get("history") or {}).get("official_prediction_id")
+            for row in detail["timeline_rows"]:
+                pct = _score_percent(row.get("score"), row.get("max_score"))
+                timeline.append(
+                    {
+                        "fecha estimacion": row.get("prediction_date"),
+                        "hipotesis": row.get("hypothesis"),
+                        "score": _pre_earnings_score_text(row.get("score"), row.get("max_score")),
+                        "%": pct,
+                        "valor v2": (row.get("features") or {}).get("score_v2_label"),
+                        "score v2": (row.get("features") or {}).get("pre_earnings_score_v2"),
+                        "final": "si" if row.get("prediction_id") == official_id else "",
+                        "motivo": row.get("reason") or item.get("reason"),
+                    }
+                )
+            st.dataframe(
+                pd.DataFrame(timeline).style.format(
+                    {
+                        "%": lambda value: "sin datos" if pd.isna(value) else f"{value:.1%}",
+                        "score v2": lambda value: "sin datos" if pd.isna(value) else f"{value:.1f}/100",
+                    }
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+
+def _pre_earnings_previous_events_block(store: Store) -> None:
+    rows_by_date: dict[str, list[dict[str, Any]]] = {}
+    details_by_date: dict[str, list[dict[str, Any]]] = {}
+    for key, event_rows in _pre_earnings_event_groups(store).items():
+        resolved = [row for row in event_rows if (row.get("outcome") or {}).get("return_pct") is not None]
+        if not resolved:
+            continue
+        official = resolved[-1]
+        features = official.get("features") or {}
+        outcome = official.get("outcome") or {}
+        return_pct = outcome.get("return_pct")
+        score_pct = _score_percent(official.get("score"), official.get("max_score"))
+        result_text = _pre_earnings_result_label(official.get("hypothesis"), return_pct, score_pct)
+        timeline = " -> ".join(_pre_earnings_prediction_line(row) for row in event_rows)
+        earnings_date = str(features.get("earnings_date") or str(official.get("earnings_datetime") or "")[:10])
+        row = {
+            "simbolo": official.get("symbol"),
+            "sesion": features.get("earnings_session") or "post-market",
+            "evolucion": timeline,
+            "valor final": official.get("hypothesis"),
+            "score final": _pre_earnings_score_text(official.get("score"), official.get("max_score")),
+            "% final": score_pct,
+            "fecha final": official.get("prediction_date"),
+            "resultado real": _pct_signed(return_pct),
+            "evaluacion": result_text,
+        }
+        detail = {"key": key, "rows": event_rows, "official": official, "outcome": outcome}
+        rows_by_date.setdefault(earnings_date, []).append(row)
+        details_by_date.setdefault(earnings_date, []).append(detail)
+
+    st.subheader("2. Earnings anteriores: evolucion, final y resultado real")
+    if not rows_by_date:
+        st.info("Todavia no hay earnings anteriores resueltos con predicciones guardadas.")
+        return
+
+    def color_result(value: str) -> str:
+        if value == "acierto":
+            return "color: #047857; background-color: #ecfdf5; font-weight: 700;"
+        if value == "fallo":
+            return "color: #b91c1c; background-color: #fef2f2; font-weight: 700;"
+        if value == "azar":
+            return "color: #92400e; background-color: #fffbeb; font-weight: 700;"
+        return "color: #6b7280; background-color: #f9fafb;"
+
+    for earnings_date in sorted(rows_by_date.keys(), reverse=True):
+        date_rows = sorted(
+            rows_by_date[earnings_date],
+            key=lambda item: (
+                -float(item.get("% final") or 0),
+                str(item.get("simbolo") or ""),
+            ),
+        )
+        with st.expander(f"{earnings_date} ({len(date_rows)} simbolos)", expanded=False):
+            frame = pd.DataFrame(date_rows)
+            styled = (
+                frame.style.format({"% final": lambda value: "sin datos" if pd.isna(value) else f"{value:.1%}"})
+                .map(color_result, subset=["evaluacion"])
+            )
+            st.dataframe(styled, use_container_width=True, hide_index=True)
+
+            with st.expander("Detalle de predicciones de este dia", expanded=False):
+                for detail in details_by_date.get(earnings_date, [])[:50]:
+                    official = detail["official"]
+                    st.markdown(f"**{official.get('symbol')}**")
+                    rows_detail = []
+                    official_id = official.get("prediction_id")
+                    for row in detail["rows"]:
+                        rows_detail.append(
+                            {
+                                "fecha estimacion": row.get("prediction_date"),
+                                "hipotesis": row.get("hypothesis"),
+                                "score": _pre_earnings_score_text(row.get("score"), row.get("max_score")),
+                                "%": _score_percent(row.get("score"), row.get("max_score")),
+                                "final": "si" if row.get("prediction_id") == official_id else "",
+                                "motivo": row.get("reason"),
+                            }
+                        )
+                    st.dataframe(
+                        pd.DataFrame(rows_detail).style.format(
+                            {"%": lambda value: "sin datos" if pd.isna(value) else f"{value:.1%}"}
+                        ),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+
+def _pre_earnings_previous_events_block_old(store: Store) -> None:
+    predictions = store.pre_earnings_predictions(limit=5000)
+    by_event: dict[str, list[dict[str, Any]]] = {}
+    for prediction in predictions:
+        features = prediction.get("features") or {}
+        key = "|".join(
+            [
+                str(prediction.get("symbol") or "").upper(),
+                str(features.get("earnings_date") or prediction.get("earnings_datetime") or "")[:10],
+                str(features.get("earnings_session") or "post-market"),
+            ]
+        )
+        by_event.setdefault(key, []).append(prediction)
+
+    rows = []
+    details = []
+    for key, event_rows in by_event.items():
+        event_rows.sort(key=lambda row: (str(row.get("prediction_date") or ""), str(row.get("created_at") or "")))
+        resolved = [row for row in event_rows if (row.get("outcome") or {}).get("return_pct") is not None]
+        if not resolved:
+            continue
+        official = resolved[-1]
+        features = official.get("features") or {}
+        outcome = official.get("outcome") or {}
+        return_pct = outcome.get("return_pct")
+        score_pct = _score_percent(official.get("score"), official.get("max_score"))
+        result_text = _pre_earnings_result_label(official.get("hypothesis"), return_pct, score_pct)
+        timeline = " -> ".join(_pre_earnings_prediction_line(row) for row in event_rows)
+        rows.append(
+            {
+                "simbolo": official.get("symbol"),
+                "earnings": (
+                    f"{features.get('earnings_date') or str(official.get('earnings_datetime') or '')[:10]} "
+                    f"{features.get('earnings_session') or 'post-market'}"
+                ),
+                "evolucion": timeline,
+                "valor final": official.get("hypothesis"),
+                "score final": _pre_earnings_score_text(official.get("score"), official.get("max_score")),
+                "% final": score_pct,
+                "fecha final": official.get("prediction_date"),
+                "resultado real": _pct_signed(return_pct),
+                "evaluacion": result_text,
+            }
+        )
+        details.append({"key": key, "rows": event_rows, "official": official, "outcome": outcome})
+
+    st.subheader("2. Earnings anteriores: evolucion, final y resultado real")
+    if not rows:
+        st.info("Todavia no hay earnings anteriores resueltos con predicciones guardadas.")
+        return
+
+    frame = pd.DataFrame(rows).sort_values(["earnings", "simbolo"], ascending=[False, True])
+
+    def color_result(value: str) -> str:
+        if value == "acierto":
+            return "color: #047857; background-color: #ecfdf5; font-weight: 700;"
+        if value == "fallo":
+            return "color: #b91c1c; background-color: #fef2f2; font-weight: 700;"
+        if value == "azar":
+            return "color: #92400e; background-color: #fffbeb; font-weight: 700;"
+        return "color: #6b7280; background-color: #f9fafb;"
+
+    styled = (
+        frame.style.format({"% final": lambda value: "sin datos" if pd.isna(value) else f"{value:.1%}"})
+        .map(color_result, subset=["evaluacion"])
+    )
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+    with st.expander("Ver detalle de predicciones anteriores", expanded=False):
+        for detail in details[:50]:
+            official = detail["official"]
+            st.markdown(f"**{official.get('symbol')}**")
+            rows_detail = []
+            official_id = official.get("prediction_id")
+            for row in detail["rows"]:
+                rows_detail.append(
+                    {
+                        "fecha estimacion": row.get("prediction_date"),
+                        "hipotesis": row.get("hypothesis"),
+                        "score": _pre_earnings_score_text(row.get("score"), row.get("max_score")),
+                        "%": _score_percent(row.get("score"), row.get("max_score")),
+                        "final": "si" if row.get("prediction_id") == official_id else "",
+                        "motivo": row.get("reason"),
+                    }
+                )
+            st.dataframe(
+                pd.DataFrame(rows_detail).style.format(
+                    {"%": lambda value: "sin datos" if pd.isna(value) else f"{value:.1%}"}
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+
+def _pre_earnings_next_day_block_old(
+    sessions: list[dict[str, Any]],
+    estimation_history: dict[str, dict[str, Any]],
+) -> None:
+    if not sessions:
+        return
+    session = sessions[0]
+    session_date = str(session.get("session_date") or "-")
+    rows = []
+    for item in session.get("items", []) or []:
+        event_key = _pre_earnings_event_key(item)
+        history = estimation_history.get(event_key, {})
+        score = history.get("official_score", item.get("score"))
+        max_score = history.get("official_max_score", item.get("max_score"))
+        pct = _score_percent(score, max_score)
+        rows.append(
+            {
+                "simbolo": item.get("symbol"),
+                "fecha earnings": item.get("earnings_date") or item.get("session_date"),
+                "sesion": item.get("earnings_session") or "post-market",
+                "hora": item.get("earnings_time") or str(item.get("earnings_datetime") or "")[11:16],
+                "hipotesis": history.get("official_hypothesis") or item.get("hypothesis"),
+                "score": f"{int(float(score or 0))}/{int(float(max_score or 0))}",
+                "% estimacion": pct,
+                "estado": ">= 80%" if pct is not None and pct >= 0.8 else "< 80%",
+            }
+        )
+
+    st.subheader(f"Earnings próximo día ({session_date})")
+    if not rows:
+        st.info("No hay earnings detectados para el próximo día de estimación.")
+        return
+
+    frame = pd.DataFrame(rows)
+
+    def color_estimation(value: float | None) -> str:
+        if value is None:
+            return ""
+        color = "#047857" if value >= 0.8 else "#b91c1c"
+        background = "#ecfdf5" if value >= 0.8 else "#fef2f2"
+        return f"color: {color}; background-color: {background}; font-weight: 700;"
+
+    styled = frame.style.format({"% estimacion": lambda value: "sin datos" if pd.isna(value) else f"{value:.1%}"}).map(
+        color_estimation,
+        subset=["% estimacion"],
+    )
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+
+def _pre_earnings_target_session(settings: Any) -> str:
+    calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
+    return target_after_close_session(calendar).isoformat()
+
+
+def _is_stale_pre_earnings_report(report: dict[str, Any], settings: Any) -> bool:
+    session_date = str(report.get("session_date") or "")
+    if not session_date:
+        return True
+    return session_date < _pre_earnings_target_session(settings)
+
+
+def _latest_pre_earnings_report(settings: Any) -> dict[str, Any] | None:
+    files = sorted(
+        [
+            path
+            for path in (settings.data_dir / "reports").glob("pre_earnings_*.json")
+            if not path.name.startswith("pre_earnings_event_study_")
+        ],
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    if not files:
+        return None
+    try:
+        report = json.loads(files[0].read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    report["path"] = str(files[0])
+    return report
+
+
+def _format_pre_earnings_dt(value: str | None, settings: Any) -> str:
+    if not value:
+        return "sin datos"
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return str(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=ZoneInfo(settings.local_timezone))
+    return parsed.astimezone(ZoneInfo(settings.local_timezone)).strftime("%Y-%m-%d %H:%M")
+
+
+def _next_pre_earnings_run_text(settings: Any) -> str:
+    calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
+    now_utc = datetime.now(ZoneInfo("UTC"))
+    minutes = int(settings.pre_earnings_before_close_minutes)
+    calendar_obj = getattr(calendar, "_calendar", None)
+    if calendar_obj is not None:
+        start = now_utc.astimezone(calendar.market_tz).date().isoformat()
+        end = (now_utc.astimezone(calendar.market_tz).date() + pd.Timedelta(days=14)).isoformat()
+        schedule = calendar_obj.schedule(start_date=start, end_date=end)
+        for _, row in schedule.iterrows():
+            close_utc = row["market_close"].to_pydatetime().astimezone(ZoneInfo("UTC"))
+            run_utc = close_utc - pd.Timedelta(minutes=minutes)
+            if run_utc > now_utc:
+                return run_utc.astimezone(ZoneInfo(settings.local_timezone)).strftime("%Y-%m-%d %H:%M")
+
+    status = calendar.status()
+    close_raw = status.market_close or status.next_close
+    if not close_raw:
+        return "sin proxima sesion"
+    try:
+        close_dt = datetime.fromisoformat(close_raw)
+    except ValueError:
+        return "sin datos"
+    run_dt = close_dt - pd.Timedelta(minutes=minutes)
+    return run_dt.astimezone(ZoneInfo(settings.local_timezone)).strftime("%Y-%m-%d %H:%M")
+
+
+def _pre_earnings_top_summary(settings: Any) -> None:
+    latest = _latest_pre_earnings_report(settings)
+    next_run = _next_pre_earnings_run_text(settings)
+    col1, col2 = st.columns(2)
+    with col1:
+        if latest:
+            summary = latest.get("summary", {}) or {}
+            st.metric(
+                "Ultimo analisis pre-earnings",
+                _format_pre_earnings_dt(latest.get("as_of"), settings),
+                f"Sesion {latest.get('session_date') or '-'} | {summary.get('total_events', latest.get('events_found', 0))} eventos",
+            )
+            st.caption(f"Archivo: {latest.get('path')}")
+        else:
+            st.metric("Ultimo analisis pre-earnings", "sin informe")
+            st.caption("Se creara automaticamente cuando llegue la ventana programada.")
+    with col2:
+        st.metric(
+            "Siguiente analisis automatico",
+            next_run,
+            f"{settings.pre_earnings_before_close_minutes} min antes del cierre NYSE",
+        )
+        st.caption("El scheduler lo ejecuta una vez por sesion si esta activo.")
+
+
+def _pre_earnings_resolved_history_block(store: Store) -> None:
+    rows = []
+    for item in build_pre_earnings_resolved_history(store, limit=5000)[:100]:
+        rows.append(
+            {
+                "simbolo": item.get("symbol"),
+                "fecha earnings": item.get("earnings_date"),
+                "sesion": item.get("earnings_session"),
+                "fecha oficial": item.get("official_prediction_date"),
+                "hipotesis": item.get("hypothesis"),
+                "% estimacion": item.get("score_pct"),
+                "resultado": item.get("status"),
+                "% subida real": item.get("return_pct"),
+                "estimaciones": item.get("predictions_count"),
+            }
+        )
+
+    st.subheader("Histórico evaluado")
+    if not rows:
+        st.info("Todavía no hay earnings ya resueltos que hubieran sido evaluados previamente.")
+        return
+
+    frame = pd.DataFrame(rows)
+
+    def color_result(value: str) -> str:
+        if value == "acierto":
+            return "color: #047857; background-color: #ecfdf5; font-weight: 700;"
+        if value == "fallo":
+            return "color: #b91c1c; background-color: #fef2f2; font-weight: 700;"
+        return "color: #6b7280; background-color: #f9fafb;"
+
+    def color_return(value: float | None) -> str:
+        if value is None or pd.isna(value):
+            return ""
+        color = "#047857" if value > 0 else "#b91c1c"
+        background = "#ecfdf5" if value > 0 else "#fef2f2"
+        return f"color: {color}; background-color: {background}; font-weight: 700;"
+
+    styled = (
+        frame.style.format(
+            {
+                "% estimacion": lambda value: "sin datos" if pd.isna(value) else f"{value:.1%}",
+                "% subida real": lambda value: "sin datos" if pd.isna(value) else f"{value:+.2%}",
+            }
+        )
+        .map(color_result, subset=["resultado"])
+        .map(color_return, subset=["% subida real"])
+    )
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+
+def _pre_earnings_score_v2_block(settings: Any, store: Store) -> None:
+    with st.expander("Estudio Score V2", expanded=False):
+        st.caption(
+            "Analiza las predicciones pre-earnings guardadas, subidas >5%, falsos positivos y score V2. "
+            "No usa informacion posterior para puntuar eventos futuros."
+        )
+        c1, c2, c3 = st.columns([1, 1, 1])
+        with c1:
+            since = st.text_input("Desde prediccion", "", key="pre_earnings_score_since")
+        with c2:
+            limit = st.number_input(
+                "Limite predicciones",
+                min_value=100,
+                max_value=50000,
+                value=10000,
+                step=100,
+                key="pre_earnings_score_limit",
+            )
+        with c3:
+            run_score = st.button("Calcular Score V2", key="pre_earnings_score_run")
+        if not run_score:
+            st.info("Ejecuta el estudio para ver captura de subidas >5%, falsos positivos y score V2 diario.")
+            return
+
+        with st.spinner("Calculando estudio Score V2..."):
+            study = build_pre_earnings_score_study(
+                store,
+                settings.data_dir / "reports",
+                f"web-score-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
+                since_date=since.strip() or None,
+                limit=int(limit),
+            )
+
+        metrics = study.get("metrics", {}) or {}
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
+        with m1:
+            _metric_card("Eventos resueltos", metrics.get("resolved_events", 0))
+        with m2:
+            _metric_card("Subidas >5%", metrics.get("big_winners_gt_5", 0))
+        with m3:
+            rate = metrics.get("legacy_big_winner_capture_rate")
+            _metric_card("Captura antigua", _pct(rate) if rate is not None else "sin datos")
+        with m4:
+            rate = metrics.get("v2_big_winner_capture_rate")
+            _metric_card("Captura V2", _pct(rate) if rate is not None else "sin datos")
+        with m5:
+            rate = metrics.get("v2_false_positive_rate")
+            _metric_card("FP V2", _pct(rate) if rate is not None else "sin datos")
+        with m6:
+            rate = metrics.get("v2_high_conviction_capture_rate")
+            _metric_card("Alta conviccion", _pct(rate) if rate is not None else "sin datos")
+        st.caption(f"Informe: {study.get('path')}")
+
+        winners = study.get("big_winners", []) or []
+        if winners:
+            rows = [
+                {
+                    "simbolo": item.get("symbol"),
+                    "fecha earnings": item.get("earnings_date"),
+                    "retorno": item.get("return_pct"),
+                    "valor antiguo": item.get("legacy_hypothesis"),
+                    "score antiguo": item.get("legacy_score_pct"),
+                    "valor v2": item.get("final_label_v2"),
+                    "score v2": item.get("final_score_v2"),
+                    "alta conviccion": item.get("high_conviction_pre_earnings_long"),
+                    "accionable": item.get("actionable_pre_earnings_long"),
+                    "fallo/acierto": item.get("classification"),
+                    "diagnostico": item.get("failure_analysis"),
+                }
+                for item in winners
+            ]
+            frame = pd.DataFrame(rows)
+            st.dataframe(
+                frame.style.format(
+                    {
+                        "retorno": lambda value: "sin datos" if pd.isna(value) else f"{value:+.2%}",
+                        "score antiguo": lambda value: "sin datos" if pd.isna(value) else f"{value:.1f}",
+                        "score v2": lambda value: "sin datos" if pd.isna(value) else f"{value:.1f}",
+                    }
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+        false_positive = study.get("false_positive_bullish", []) or []
+        blocked_big_winners = study.get("blocked_big_winners", []) or []
+        if blocked_big_winners:
+            with st.expander("Ganadores fuertes vetados por actionable"):
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            {
+                                "simbolo": item.get("symbol"),
+                                "fecha earnings": item.get("earnings_date"),
+                                "retorno": item.get("return_pct"),
+                                "valor v2": item.get("final_label_v2"),
+                                "score v2": item.get("final_score_v2"),
+                                "motivo veto": item.get("actionable_pre_earnings_reason"),
+                                "diagnostico": item.get("failure_analysis"),
+                            }
+                            for item in blocked_big_winners
+                        ]
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+        if false_positive:
+            with st.expander("Falsos positivos alcistas"):
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            {
+                                "simbolo": item.get("symbol"),
+                                "fecha earnings": item.get("earnings_date"),
+                                "retorno": item.get("return_pct"),
+                                "valor antiguo": item.get("legacy_hypothesis"),
+                                "valor v2": item.get("final_label_v2"),
+                                "score v2": item.get("final_score_v2"),
+                                "diagnostico": item.get("failure_analysis"),
+                            }
+                            for item in false_positive
+                        ]
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+
+def _build_and_store_pre_earnings_report(
+    settings: Any,
+    store: Store,
+    universe_name: str,
+    max_symbols: int,
+    days: int,
+) -> dict[str, Any]:
+    symbols = resolve_study_universe(
+        universe_name,
+        settings.universe,
+        int(max_symbols),
+        settings.data_dir / "cache",
+    )
+    report = build_pre_earnings_report(
+        symbols=symbols,
+        output_dir=settings.data_dir / "reports",
+        run_id=f"web-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
+        calendar_name=settings.market_calendar,
+        local_timezone=settings.local_timezone,
+        session_count=int(days),
+        cache_dir=settings.data_dir / "cache",
+        fmp_api_key=settings.fmp_api_key,
+    )
+    report["tracking_update"] = update_pre_earnings_outcomes(store)
+    report["local_analyst_revisions"] = enrich_report_with_local_analyst_revisions(store, report)
+    report["score_v2_items_updated"] = enrich_report_with_pre_earnings_score_v2(store, report)
+    report["predictions_saved"] = record_pre_earnings_predictions(store, report)
+    report["analyst_snapshots_saved"] = record_pre_earnings_analyst_snapshots(store, report)
+    report["estimates_backfill"] = backfill_pending_pre_earnings_estimates(
+        store,
+        settings.data_dir / "reports",
+        f"{report['run_id']}_backfill",
+        api_key=settings.fmp_api_key,
+    )
+    report["learning_digest"] = build_pre_earnings_learning_digest(
+        store,
+        settings.data_dir / "reports",
+        f"{report['run_id']}_digest",
+    )
+    build_learning_digest_report(store, settings.data_dir / "reports", f"{report['run_id']}_learn_refresh")
+    report["mode"] = (
+        "operativo_pre_earnings" if settings.pre_earnings_trade_enabled else "informativo_no_operativo"
+    )
+    report["operation_allowed"] = settings.pre_earnings_trade_enabled
+    report["trading_operation"] = _run_pre_earnings_trade_operation(
+        settings,
+        store,
+        EventReporter(store, verbose=False),
+        report["run_id"],
+        report,
+    )
+    return report
+
+
+def page_pre_earnings() -> None:
+    settings = _settings()
+    store = _store()
+    tracking_update = update_pre_earnings_outcomes(store)
+    _page_header(
+        "Pre-earnings",
+        "Acciones que presentan resultados en el proximo cierre de mercado. Solo informativo, sin compras.",
+    )
+    _screen_help(
+        "Pre-earnings",
+        (
+            "Esta pantalla es solo informativa: no compra, no crea planes y no envia ordenes.\n\n"
+            "**Controles**\n\n"
+            "- `Universo`: grupo de simbolos a revisar, por ejemplo `sp500_top300`, `default` o `AAPL,MSFT,NVDA`.\n"
+            "- `Max simbolos`: limite de empresas consultadas.\n"
+            "- `Dias`: cuantos dias futuros se calculan, aunque la vista principal muestra el siguiente.\n"
+            "- `Actualizar`: recalcula el informe.\n\n"
+            "**1. Siguiente dia de earnings**\n\n"
+            "Muestra una fila por simbolo. Junta los earnings de hoy `post-market` y los de la siguiente sesion "
+            "`pre-market`, porque ambos se pueden valorar con la informacion disponible antes del cierre. "
+            "`estimaciones diarias` muestra todas las valoraciones guardadas para ese mismo earnings. "
+            "`valor final` es la ultima valoracion guardada antes de la publicacion.\n\n"
+            "**2. Earnings anteriores**\n\n"
+            "Muestra eventos ya resueltos. Para cada simbolo se ve la evolucion de la prediccion, el valor final, "
+            "el retorno real tras el earnings y la evaluacion. Solo cuenta como acierto o fallo si el valor final "
+            "supero el 80%; por debajo se marca como azar."
+        ),
+    )
+    st.warning("Este apartado no genera recomendaciones operativas, planes de orden ni compras paper/live.")
+    _pre_earnings_top_summary(settings)
+    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+    with col1:
+        universe_name = st.text_input(
+            "Universo",
+            settings.pre_earnings_universe or settings.closed_market_study_universe,
+        )
+    with col2:
+        max_symbols = st.number_input(
+            "Max simbolos",
+            min_value=1,
+            max_value=505,
+            value=int(settings.pre_earnings_max_symbols or settings.closed_market_study_max_symbols),
+        )
+    with col3:
+        days = st.number_input("Dias", min_value=1, max_value=15, value=int(settings.pre_earnings_days))
+    with col4:
+        run = st.button("Actualizar")
+
+    latest_files = sorted(
+        [
+            path
+            for path in (settings.data_dir / "reports").glob("pre_earnings_*.json")
+            if not path.name.startswith("pre_earnings_event_study_")
+        ],
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    report: dict[str, Any] | None = None
+    if run:
+        with st.spinner("Buscando earnings AMC y calculando hipotesis..."):
+            report = _build_and_store_pre_earnings_report(
+                settings,
+                store,
+                universe_name,
+                int(max_symbols),
+                int(days),
+            )
+        st.success("Informe actualizado.")
+    elif latest_files:
+        try:
+            report = json.loads(latest_files[0].read_text(encoding="utf-8"))
+            report["path"] = str(latest_files[0])
+            if _is_stale_pre_earnings_report(report, settings):
+                with st.spinner("El informe pre-earnings estaba caducado. Recalculando automaticamente..."):
+                    report = _build_and_store_pre_earnings_report(
+                        settings,
+                        store,
+                        universe_name,
+                        int(max_symbols),
+                        int(days),
+                    )
+                st.info("Informe pre-earnings recalculado automaticamente.")
+        except (OSError, json.JSONDecodeError):
+            report = None
+
+    if not report:
+        with st.spinner("No habia informe pre-earnings disponible. Creandolo automaticamente..."):
+            report = _build_and_store_pre_earnings_report(
+                settings,
+                store,
+                universe_name,
+                int(max_symbols),
+                int(days),
+            )
+        st.info("Informe pre-earnings creado automaticamente.")
+
+    summary = report.get("summary", {}) or {}
+    total_events = summary.get("total_events", report.get("events_found", 0))
+    tracking = build_pre_earnings_tracking_status(store)
+    confident_metrics = _pre_earnings_confident_metrics(store)
+    success_rate = confident_metrics.get("success_rate")
+    success_value = _pct(success_rate) if success_rate is not None else "sin datos"
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    trading_operation = report.get("trading_operation", {}) or {}
+    with c1:
+        _metric_card("Exito >=80%", success_value)
+    with c2:
+        _metric_card("Aciertos >=80%", confident_metrics.get("hits", 0))
+    with c3:
+        _metric_card("Fallos >=80%", confident_metrics.get("misses", 0))
+    with c4:
+        _metric_card("Azar <80%", confident_metrics.get("random_count", 0))
+    with c5:
+        _metric_card("Eventos", total_events)
+    with c6:
+        operable = "SI" if report.get("operation_allowed") else "NO"
+        if report.get("operation_allowed"):
+            operable = f"SI ({len(trading_operation.get('buy_order_plans', []))})"
+        _metric_card("Operable", operable)
+    st.caption(f"Informe: {report.get('path')}")
+    if report.get("operation_allowed"):
+        st.caption(
+            "Operacion pre-earnings activa: "
+            f"recomendaciones {len(trading_operation.get('recommendations', []))} | "
+            f"planes buy {len(trading_operation.get('buy_order_plans', []))} | "
+            f"enviadas {len(trading_operation.get('submitted', []))}"
+        )
+    quality = report.get("data_quality", {}) or {}
+    if quality:
+        st.caption(
+            "Datos: "
+            f"fuente {quality.get('calendar_source')} | "
+            f"cache {quality.get('cache_hits', 0)} | "
+            f"consultas {quality.get('yfinance_calls', 0)} | "
+            f"errores {quality.get('calendar_errors', 0)}"
+        )
+        if quality.get("analyst_source") != "none":
+            st.caption(
+                "Analistas: "
+                f"fuente {quality.get('analyst_source')} | "
+                f"cache {quality.get('analyst_cache_hits', 0)} | "
+                f"consultas {quality.get('analyst_calls', 0)} | "
+                f"errores {quality.get('analyst_errors', 0)}"
+    )
+    if tracking.get("total_predictions"):
+        st.caption(
+            "Seguimiento persistente: "
+            f"hipotesis guardadas {tracking.get('total_predictions', 0)} | "
+            f"resueltas {tracking.get('resolved_count', 0)} | "
+            f"pendientes {tracking.get('pending_count', 0)} | "
+            f"evaluables >=80% {confident_metrics.get('confident_count', 0)} | "
+            f"azar <80% {confident_metrics.get('random_count', 0)} | "
+            f"exito >=80% {success_value} | "
+            f"actualizadas ahora {tracking_update.get('updated', 0)}"
+        )
+
+    sessions = report.get("sessions") or [
+        {
+            "session_date": report.get("session_date"),
+            "events_found": report.get("events_found", 0),
+            "items": report.get("items", []) or [],
+        }
+    ]
+    estimation_history = build_pre_earnings_estimation_history(store, report)
+    _pre_earnings_next_day_block(sessions, estimation_history)
+    _pre_earnings_previous_events_block(store)
+    _pre_earnings_score_v2_block(settings, store)
+    if report.get("warnings"):
+        with st.expander("Avisos"):
+            st.json(report["warnings"])
+
+    with st.expander("Event-study historico"):
+        st.caption("Analisis historico de hipotesis pre-earnings AMC. Sirve para validar scoring, no para ejecutar compras pasadas.")
+        b1, b2, b3, b4 = st.columns([1, 2, 1, 1])
+        with b1:
+            start = st.text_input("Desde", "2025-01-01", key="pre_earnings_backtest_start")
+        with b2:
+            bt_universe = st.text_input("Universo backtest", universe_name, key="pre_earnings_backtest_universe")
+        with b3:
+            bt_max_symbols = st.number_input(
+                "Max backtest",
+                min_value=1,
+                max_value=505,
+                value=int(max_symbols),
+                key="pre_earnings_backtest_max",
+            )
+        with b4:
+            run_backtest = st.button("Medir", key="pre_earnings_backtest_run")
+        if run_backtest:
+            symbols = resolve_study_universe(
+                bt_universe,
+                settings.universe,
+                int(bt_max_symbols),
+                settings.data_dir / "cache",
+            )
+            with st.spinner("Ejecutando event-study pre-earnings..."):
+                study = build_pre_earnings_event_study(
+                    symbols=symbols,
+                    output_dir=settings.data_dir / "reports",
+                    run_id=f"web-bt-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
+                    start=start,
+                    calendar_name=settings.market_calendar,
+                    local_timezone=settings.local_timezone,
+                    cache_dir=settings.data_dir / "cache",
+                    fmp_api_key=settings.fmp_api_key,
+                )
+            metrics = study.get("metrics", {}) or {}
+            m1, m2, m3, m4, m5 = st.columns(5)
+            with m1:
+                _metric_card("Eventos hist.", metrics.get("events", 0))
+            with m2:
+                _metric_card("Resueltos", metrics.get("resolved", 0))
+            with m3:
+                rate = metrics.get("success_rate")
+                _metric_card("Exito alcista", _pct(rate) if rate is not None else "sin datos")
+            with m4:
+                avg = metrics.get("avg_return")
+                _metric_card("Ret medio", _pct_signed(avg) if avg is not None else "sin datos")
+            with m5:
+                bull_avg = metrics.get("bullish_avg_return")
+                _metric_card("Ret alcista", _pct_signed(bull_avg) if bull_avg is not None else "sin datos")
+            st.caption(f"Informe: {study.get('path')}")
+            by_hypothesis = metrics.get("by_hypothesis", {}) or {}
+            if by_hypothesis:
+                rows = [{"hipotesis": name, **values} for name, values in by_hypothesis.items()]
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            else:
+                st.info("No hay eventos historicos resueltos para ese filtro.")
+
+
 def _cycle_summaries(store: Store, *, since_date: str, limit: int) -> list[dict[str, Any]]:
     since_dt = f"{since_date}T00:00:00"
     with store.connect() as conn:
@@ -2354,6 +3706,28 @@ def page_logs() -> None:
         st.info("No hay eventos.")
 
 
+def page_llm() -> None:
+    store = _store()
+    settings = _settings()
+    _page_header("LLM", "Contador diario de peticiones y tokens registrados.")
+    limit = st.slider("Registros leidos", 100, 5000, 1000, 100)
+    daily = _llm_daily_usage_dataframe(store, limit=int(limit))
+    today = datetime.now(ZoneInfo(settings.local_timezone)).date().isoformat()
+    today_row = daily[daily["fecha"] == today].iloc[0].to_dict() if not daily.empty and today in set(daily["fecha"]) else {}
+
+    col1, col2 = st.columns(2)
+    with col1:
+        _metric_card("Peticiones hoy", int(today_row.get("peticiones") or 0))
+    with col2:
+        _metric_card("Tokens hoy", f"{int(today_row.get('tokens') or 0):,}")
+
+    if daily.empty:
+        st.info("Todavia no hay uso LLM registrado.")
+        return
+
+    st.dataframe(daily, use_container_width=True, hide_index=True)
+
+
 def page_commands() -> None:
     _page_header("Comandos", "Lanzar o consultar las mismas acciones disponibles por consola.")
     status = _schedule_process_status()
@@ -2433,28 +3807,36 @@ def main() -> None:
     _setup_page()
     st.sidebar.title("Agente Bolsa")
     st.sidebar.caption("Panel local")
-    _auto_refresh_control()
+    refresh_interval_seconds = _auto_refresh_control()
+    page_names = [
+        "Dashboard",
+        "Cartera",
+        "Compras/Ventas",
+        "Decisiones",
+        "Rupturas",
+        "Pre-earnings",
+        "Historico",
+        "Senales",
+        "Aprendizaje",
+        "Diario aprendizaje",
+        "Aprendizaje operativo",
+        "Adaptativo",
+        "Backtest",
+        "LLM",
+        "Logs",
+        "Comandos",
+        "Configuracion",
+    ]
+    if "selected_page" not in st.session_state or st.session_state.selected_page not in page_names:
+        st.session_state.selected_page = "Dashboard"
     page = st.sidebar.radio(
         "Vista",
-        [
-            "Dashboard",
-            "Cartera",
-            "Compras/Ventas",
-            "Decisiones",
-            "Rupturas",
-            "Historico",
-            "Senales",
-            "Aprendizaje",
-            "Diario aprendizaje",
-            "Aprendizaje operativo",
-            "Adaptativo",
-            "Backtest",
-            "Logs",
-            "Comandos",
-            "Configuracion",
-        ],
+        page_names,
+        index=page_names.index(st.session_state.selected_page),
+        key="selected_page",
     )
     if st.sidebar.button("Refrescar"):
+        st.session_state.selected_page = page
         st.rerun()
 
     pages = {
@@ -2463,6 +3845,7 @@ def main() -> None:
         "Compras/Ventas": page_recent_trades,
         "Decisiones": page_cycle_decisions,
         "Rupturas": page_breakouts,
+        "Pre-earnings": page_pre_earnings,
         "Historico": page_history,
         "Senales": page_signals,
         "Aprendizaje": page_learning,
@@ -2470,11 +3853,12 @@ def main() -> None:
         "Aprendizaje operativo": page_operational_learning,
         "Adaptativo": page_adaptive,
         "Backtest": page_backtest,
+        "LLM": page_llm,
         "Logs": page_logs,
         "Comandos": page_commands,
         "Configuracion": page_config,
     }
-    pages[page]()
+    _render_refreshable_page(pages[page], refresh_interval_seconds)
 
 
 if __name__ == "__main__":

@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-from .market_data import download_daily_prices
+from .market_data import download_daily_prices_with_metadata
+from .reporting import write_json_report
 from .technical_analysis import add_basic_technical_features
 
 
@@ -73,6 +73,8 @@ def classify_breakout(symbol: str, features: pd.DataFrame) -> dict[str, Any] | N
     return_20d = _num(latest.get("return_20d"), 4)
     sma20_distance = _safe_pct(close - sma20, sma20) if sma20 else None
     atr_pct = _safe_pct(atr, close)
+    daily_range = high - low
+    close_position = ((close - low) / daily_range) if daily_range > 0 else None
 
     status = ""
     reasons: list[str] = []
@@ -98,6 +100,30 @@ def classify_breakout(symbol: str, features: pd.DataFrame) -> dict[str, Any] | N
         or distance_to_resistance > 0.06
         or (rsi is not None and rsi > 88)
     )
+    range_expansion_breakout = bool(
+        status == "confirmed_breakout"
+        and distance_to_resistance >= 0.015
+        and volume_z is not None
+        and volume_z >= 1.0
+        and close_position is not None
+        and close_position >= 0.75
+        and rsi is not None
+        and 50 <= rsi <= 78
+        and sma20_distance is not None
+        and sma20_distance <= 0.22
+    )
+    orderly_breakout = bool(
+        status == "confirmed_breakout"
+        and distance_to_resistance >= 0.01
+        and volume_z is not None
+        and volume_z >= 0.25
+        and close_position is not None
+        and close_position >= 0.80
+        and rsi is not None
+        and 52 <= rsi <= 74
+        and sma20_distance is not None
+        and sma20_distance <= 0.22
+    )
     if too_extended:
         reasons.append("precio extendido: no perseguir sin retesteo")
     if atr_pct is not None and atr_pct > 0.08:
@@ -119,7 +145,17 @@ def classify_breakout(symbol: str, features: pd.DataFrame) -> dict[str, Any] | N
             take_profit = close + (2.0 * risk_per_share)
             reward_risk = 2.0
         risk_pct = _safe_pct(risk_per_share, close)
-        if too_extended or (volume_z is not None and volume_z < 1.0) or (risk_pct is not None and risk_pct > 0.06):
+        if range_expansion_breakout and (risk_pct is None or risk_pct <= 0.09):
+            risk_level = "moderate"
+            tradable = True
+            entry_style = "entrada reducida si mantiene ruptura y cierre fuerte"
+            reasons.append("range expansion breakout operable con tamano conservador")
+        elif orderly_breakout and (risk_pct is None or risk_pct <= 0.09):
+            risk_level = "moderate"
+            tradable = True
+            entry_style = "entrada reducida si confirma ruptura ordenada y cierre fuerte"
+            reasons.append("orderly breakout operable aunque el volumen no sea explosivo")
+        elif too_extended or (volume_z is not None and volume_z < 1.0) or (risk_pct is not None and risk_pct > 0.06):
             risk_level = "high"
             entry_style = "esperar retesteo; no perseguir vela vertical"
         else:
@@ -155,6 +191,9 @@ def classify_breakout(symbol: str, features: pd.DataFrame) -> dict[str, Any] | N
         "sma20_distance": _num(sma20_distance, 4),
         "atr_14": atr,
         "atr_pct": _num(atr_pct, 4),
+        "close_position_in_range": _num(close_position, 4),
+        "range_expansion_breakout": range_expansion_breakout,
+        "orderly_breakout": orderly_breakout,
         "stop_loss": _num(stop_loss),
         "take_profit": _num(take_profit),
         "reward_risk": reward_risk,
@@ -170,7 +209,11 @@ def build_breakout_scan(
 ) -> dict[str, Any]:
     end = datetime.now(timezone.utc).date() + timedelta(days=1)
     start = end - timedelta(days=lookback_days)
-    data = download_daily_prices(symbols, start=start.isoformat(), end=end.isoformat())
+    data, market_data_meta = download_daily_prices_with_metadata(
+        symbols,
+        start=start.isoformat(),
+        end=end.isoformat(),
+    )
     multi_symbol = isinstance(data.columns, pd.MultiIndex)
 
     alerts: list[dict[str, Any]] = []
@@ -205,6 +248,7 @@ def build_breakout_scan(
         "as_of": datetime.now(timezone.utc).isoformat(),
         "symbols_scanned": len(symbols),
         "symbols_with_data": with_data,
+        "market_data": market_data_meta,
         "alerts": alerts,
         "confirmed": [item for item in alerts if item["status"] == "confirmed_breakout"],
         "watch": [item for item in alerts if item["status"] == "watch_breakout"],
@@ -212,11 +256,11 @@ def build_breakout_scan(
         "warnings": warnings[:100],
     }
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"breakout_scan_{run_id}.json"
-    latest_path = output_dir / "latest_breakout_scan.json"
-    output_path.write_text(json.dumps(report, indent=2, ensure_ascii=True), encoding="utf-8")
-    latest_path.write_text(json.dumps(report, indent=2, ensure_ascii=True), encoding="utf-8")
-    report["path"] = str(output_path)
-    report["latest_path"] = str(latest_path)
-    return report
+    return write_json_report(
+        report,
+        output_dir,
+        "breakout_scan",
+        run_id,
+        latest_filename="latest_breakout_scan.json",
+        manifest={"market_data": market_data_meta},
+    )

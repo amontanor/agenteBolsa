@@ -61,12 +61,66 @@ def choose_analysis_plan(
     high_55 = _num(latest, "high_55")
     low_55 = _num(latest, "low_55")
     rsi = _num(latest, "rsi_14", 50)
+    ret_5 = _num(latest, "return_5d")
     pct_b = _num(latest, "bollinger_pct_b_20", 0.5)
     atr = _num(latest, "atr_14")
     volume_z = _num(latest, "volume_zscore_20")
+    gap_pct = _num(latest, "gap_pct")
+    close_position = _num(latest, "close_position_in_range", 0.5)
+    prev_high_55 = _num(latest, "prev_high_55")
+    breakout_continuation = (
+        volume_z >= 1.0
+        and close_position >= 0.60
+        and (not prev_high_55 or close >= prev_high_55 * 1.003)
+    )
+    range_expansion_breakout = (
+        gap_pct >= 0.03
+        and volume_z >= 1.0
+        and close_position >= 0.75
+        and 50 <= rsi <= 78
+        and bool(prev_high_55)
+        and close >= prev_high_55 * 1.015
+    )
+    orderly_breakout = (
+        close_position >= 0.80
+        and volume_z >= 0.25
+        and 52 <= rsi <= 74
+        and bool(prev_high_55)
+        and close >= prev_high_55 * 1.015
+    )
+    breakout_failure_risk = (
+        bool(prev_high_55)
+        and _num(latest, "High") >= prev_high_55 * 1.003
+        and close < prev_high_55
+        and volume_z >= 1.0
+    )
+    momentum_shakeout_hold = (
+        gap_pct <= -0.02
+        and ret_5 >= 0.08
+        and volume_z >= 1.5
+        and close_position >= 0.70
+        and bool(latest.get("above_long_trend"))
+    )
 
     if high_55 and close >= high_55 * 0.98:
         plan.append("breakout_continuation")
+    if (
+        gap_pct >= 0.07
+        and volume_z >= 2.0
+        and close_position >= 0.65
+        and (not prev_high_55 or close >= prev_high_55 * 1.02)
+    ):
+        plan.append("event_momentum_continuation")
+    elif breakout_continuation:
+        plan.append("breakout_follow_through")
+    if range_expansion_breakout:
+        plan.append("range_expansion_breakout")
+    if orderly_breakout and not range_expansion_breakout:
+        plan.append("orderly_breakout")
+    if momentum_shakeout_hold:
+        plan.append("momentum_shakeout_hold")
+    if breakout_failure_risk:
+        plan.append("breakout_failure_risk")
     if low_55 and close <= low_55 * 1.02:
         plan.append("breakdown_or_reversal")
     if rsi >= 70 or pct_b >= 0.9:
@@ -101,6 +155,51 @@ def validate_symbol_technical_state(symbol: str, features: pd.DataFrame) -> dict
     macd = _num(latest, "macd")
     macd_signal = _num(latest, "macd_signal")
     pct_b = _num(latest, "bollinger_pct_b_20", 0.5)
+    gap_pct = _num(latest, "gap_pct")
+    close_position = _num(latest, "close_position_in_range", 0.5)
+    prev_high_55 = _num(latest, "prev_high_55")
+    breakout_continuation_long = (
+        volume_z >= 1.0
+        and close_position >= 0.60
+        and ret_20 > 0
+        and (not prev_high_55 or close >= prev_high_55 * 1.003)
+    )
+    range_expansion_breakout_long = (
+        gap_pct >= 0.03
+        and volume_z >= 1.0
+        and close_position >= 0.75
+        and 50 <= rsi <= 78
+        and ret_20 > 0
+        and bool(prev_high_55)
+        and close >= prev_high_55 * 1.015
+    )
+    orderly_breakout_long = (
+        close_position >= 0.80
+        and volume_z >= 0.25
+        and 52 <= rsi <= 74
+        and ret_20 > 0
+        and bool(prev_high_55)
+        and close >= prev_high_55 * 1.015
+    )
+    breakout_failure_risk = (
+        bool(prev_high_55)
+        and _num(latest, "High") >= prev_high_55 * 1.003
+        and close < prev_high_55
+        and volume_z >= 1.0
+    )
+    event_momentum_long = (
+        gap_pct >= 0.07
+        and volume_z >= 2.0
+        and close_position >= 0.65
+        and (not prev_high_55 or close >= prev_high_55 * 1.02)
+    )
+    momentum_shakeout_hold_long = (
+        gap_pct <= -0.02
+        and ret_5 >= 0.08
+        and volume_z >= 1.5
+        and close_position >= 0.70
+        and bool(latest.get("above_long_trend"))
+    )
     candle_patterns = _candle_patterns(latest)
     chart_patterns = analyze_chart_patterns(features)
 
@@ -168,6 +267,27 @@ def validate_symbol_technical_state(symbol: str, features: pd.DataFrame) -> dict
     elif pct_b <= 0.1:
         short_score += 1
         short_reasons.append("cierre cerca de banda inferior")
+
+    if event_momentum_long:
+        long_score += 3
+        long_reasons.append("repricing alcista: gap fuerte, volumen anormal y cierre firme sobre rango previo")
+    elif range_expansion_breakout_long:
+        long_score += 3
+        long_reasons.append("range expansion breakout: gap moderado, ruptura 55d, volumen y cierre fuerte")
+    elif orderly_breakout_long:
+        long_score += 3
+        long_reasons.append("orderly breakout: ruptura 55d con cierre muy fuerte, volumen positivo y extension controlada")
+    elif breakout_continuation_long:
+        long_score += 2
+        long_reasons.append("continuacion de ruptura: mantiene nivel roto con volumen y cierre util")
+    if momentum_shakeout_hold_long:
+        long_score += 2
+        long_reasons.append("shakeout alcista: pullback con volumen que cierra fuerte y mantiene momentum")
+    if breakout_failure_risk:
+        short_score += 2
+        short_reasons.append("fallo de ruptura: rompio resistencia intradia pero no la sostuvo al cierre")
+        long_score -= 1
+        long_reasons.append("riesgo de fallo de ruptura: mejor esperar nueva confirmacion")
 
     if _flag(latest, "candle_bullish_signal"):
         long_score += 1
@@ -264,6 +384,15 @@ def validate_symbol_technical_state(symbol: str, features: pd.DataFrame) -> dict
             "realized_vol_20": _round(_num(latest, "realized_vol_20")),
             "volume_zscore_20": _round(volume_z, 2),
             "bollinger_pct_b_20": _round(pct_b, 2),
+            "gap_pct": _round(gap_pct),
+            "close_position_in_range": _round(close_position, 3),
+            "prev_high_55": _round(prev_high_55),
+            "breakout_continuation_long": breakout_continuation_long,
+            "range_expansion_breakout_long": range_expansion_breakout_long,
+            "orderly_breakout_long": orderly_breakout_long,
+            "breakout_failure_risk": breakout_failure_risk,
+            "event_momentum_long": event_momentum_long,
+            "momentum_shakeout_hold_long": momentum_shakeout_hold_long,
             "candle_patterns": candle_patterns,
             "candle_body_pct": _round(_num(latest, "candle_body_pct"), 3),
             "bullish_candle_signal": _flag(latest, "candle_bullish_signal"),

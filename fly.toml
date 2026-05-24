@@ -1,0 +1,45 @@
+# fly.toml - Configuración para el despliegue automático en Fly.io
+
+app = "agente-bolsa"
+primary_region = "mad" # Región de Madrid, ideal para la zona horaria del usuario
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  DATA_DIR = "/data"
+  LOCAL_TIMEZONE = "Europe/Madrid"
+  MARKET_CALENDAR = "XNYS"
+  OPENAI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
+  OPENAI_MODEL_NAME = "gemini-3.5-flash"
+  LLM_TEMPERATURE = "0.2"
+  LLM_MAX_TOKENS = "8000"
+  LLM_TIMEOUT_SECONDS = "180"
+  RETENTION_ENABLED = "true"
+  REPORT_RETENTION_DAYS = "30"
+  LOG_RETENTION_DAYS = "30"
+  CACHE_RETENTION_DAYS = "7"
+  DISABLED_REPORT_PREFIXES = "postmortem_signals,missed_opportunities,decision_compare,walk_forward_validation,session_retrospective"
+
+# Definir el volumen persistente SSD para salvaguardar la base de datos SQLite y reportes
+[[mounts]]
+  source = "agente_bolsa_data"
+  destination = "/data"
+  initial_size = "1GB" # Capacidad inicial gratuita de 1 GB (suficiente para años de registros)
+
+# Configuración del servicio HTTP público para Streamlit
+[http_service]
+  internal_port = 8080
+  force_https = true # Redirección automática de http a https seguro
+  
+  # CRÍTICO: Desactivar auto_stop_machines para que el planificador y bot corran 24/7 
+  # incluso cuando no estés visitando la página web de Streamlit.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+[vm]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "512mb"

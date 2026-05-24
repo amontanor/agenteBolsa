@@ -71,6 +71,10 @@ copy .env.example .env
 
 Rellena `.env` con tus claves. Para empezar, deja `TRADING_MODE=paper` y `ALLOW_LIVE_TRADING=false`.
 
+Runbook operativo de arranque y verificaciones:
+
+- [docs/startup_runbook.md](docs/startup_runbook.md)
+
 ## Alpaca paper trading
 
 La conexion con Alpaca queda preparada en modo paper. Edita `.env` y rellena:
@@ -177,7 +181,7 @@ python -m agente_bolsa.main job-once daily --skip-crew
 
 El scheduler usa calendario `XNYS` para bolsa americana y muestra las horas en `Europe/Madrid`.
 
-Con mercado cerrado, el monitor de cartera no repite mensajes cada minuto. Se queda en espera y lanza un estudio tecnico amplio una sola vez por proxima apertura. Por defecto estudia las `250` mayores empresas del S&P 500 por capitalizacion, calcula candidatos largos/cortos y guarda el informe en:
+Con mercado cerrado, el monitor de cartera no repite mensajes cada minuto. Se queda en espera y lanza un estudio tecnico amplio una sola vez por proxima apertura. Por defecto estudia el `S&P 500` completo, calcula candidatos largos/cortos y guarda el informe en:
 
 ```text
 data/reports/closed_market_technical_study_<run_id>.json
@@ -186,8 +190,15 @@ data/reports/closed_market_technical_study_<run_id>.json
 Puedes cambiar el universo en `.env`:
 
 ```env
-CLOSED_MARKET_STUDY_UNIVERSE=sp500_top250
-CLOSED_MARKET_STUDY_MAX_SYMBOLS=250
+CLOSED_MARKET_STUDY_UNIVERSE=sp500
+CLOSED_MARKET_STUDY_MAX_SYMBOLS=500
+```
+
+Tambien se aceptan overlays conservadores de cobertura:
+
+```env
+CLOSED_MARKET_STUDY_UNIVERSE=sp500_plus_recent_breakouts
+CLOSED_MARKET_STUDY_UNIVERSE=sp500_plus_recent_leaders
 ```
 
 Este estudio puede tardar bastante. Primero carga/rankea el universo y despues valida el estado tecnico de cada simbolo con la herramienta `technical_state_validator`.

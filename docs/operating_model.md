@@ -78,7 +78,7 @@ Objetivo:
 
 - Solo corre si NYSE esta cerrado.
 - Se ejecuta una sola vez por proxima apertura.
-- Escanea el universo configurado (`sp500_top250` por defecto: 250 mayores companias del S&P 500 por capitalizacion).
+- Escanea el universo configurado (`sp500` por defecto: cobertura completa del S&P 500).
 - Genera candidatos largos y cortos.
 - Calcula entrada teorica, stop loss, take profit, ATR, momentum, volumen, tendencia y patrones de velas.
 - Para los finalistas tecnicos, descarga noticias recientes y valida sentimiento con el LLM local.

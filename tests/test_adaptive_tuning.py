@@ -141,3 +141,33 @@ def test_promote_post_market_improvements_activates_conservative_overrides(tmp_p
     assert overrides["entry_quality_extended_sma20_distance"] == 0.08
     assert overrides["entry_quality_extended_min_relative_return"] == 0.02
     assert overrides["entry_quality_extended_min_volume_z"] == 0.0
+
+
+def test_adaptive_tune_uses_entry_quality_filter_calibration(tmp_path):
+    settings = Settings(DATA_DIR=tmp_path / "data", ENTRY_QUALITY_MAX_RSI=85, ENTRY_QUALITY_MAX_SMA20_DISTANCE=0.12)
+    settings.ensure_runtime_dirs()
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    store.upsert_learning_daily_summary(
+        summary_id="daily:2026-05-13",
+        session_date="2026-05-13",
+        kind="daily_learning",
+        payload={
+            "digest": {
+                "entry_quality_filter_calibration_3d": {
+                    "matured": 5,
+                    "missed_winners": 4,
+                    "avoided_losers": 1,
+                    "avg_return": 0.025,
+                }
+            }
+        },
+    )
+
+    result = update_adaptive_config(settings, store, min_resolved=10)
+    params = result["config"]["parameters"]
+
+    assert params["ENTRY_QUALITY_MAX_RSI"]["status"] == "shadow"
+    assert params["ENTRY_QUALITY_MAX_RSI"]["proposed"] == 87.0
+    assert params["ENTRY_QUALITY_MAX_SMA20_DISTANCE"]["status"] == "shadow"
+    assert round(params["ENTRY_QUALITY_MAX_SMA20_DISTANCE"]["proposed"], 4) == 0.14

@@ -1,5 +1,6 @@
 import sys
 import types
+import pytest
 
 from agente_bolsa.config import Settings
 from agente_bolsa.tools.broker import BrokerClientFactory
@@ -188,3 +189,30 @@ def test_full_exit_uses_alpaca_close_position(monkeypatch):
     assert captured["closed"] == "AMZN"
     assert result["id"] == "order-1"
     assert result["side"] == "sell"
+
+
+def test_buy_execution_is_blocked_by_operational_kill_switch(tmp_path):
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "latest_operational_health.json").write_text(
+        '{"alerts":[{"severity":"critical","kind":"job_failed","job":"market_cycle","detail":"broker sync timeout"}]}',
+        encoding="utf-8",
+    )
+    plan = {
+        "symbol": "AAPL",
+        "side": "buy",
+        "notional": 200.0,
+        "payload": {
+            "qty": 2,
+            "entry_price": 100.0,
+            "stop_loss": 95.0,
+            "take_profit": 110.0,
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="operational kill switch"):
+        submit_paper_order_plan(
+            Settings(TRADING_MODE="paper", ALPACA_PAPER=True, DATA_DIR=tmp_path),
+            plan,
+            client_order_id="agente-plan",
+        )

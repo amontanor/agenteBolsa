@@ -15,15 +15,17 @@ from typing import Any
 from .agent_registry import AGENTS
 from .config import get_settings
 from .cycle_runner import run_observable_cycle
-from .eventing import PrettyLogPrinter, print_raw_tail_line
+from .eventing import EventReporter, PrettyLogPrinter, print_raw_tail_line
 from .logging_utils import configure_logging, log_system_event
 from .market_calendar import MarketCalendar
 from .models import AgentEvent, Hypothesis, new_id
 from .scheduler import (
+    _run_pre_earnings_trade_operation,
     closed_market_technical_study_job,
     daily_study_job,
     market_cycle_job,
     post_market_review_job,
+    pre_earnings_job,
     portfolio_watch_job,
     run_scheduler_forever,
     scheduler_status,
@@ -34,6 +36,22 @@ from .tools.backtest import build_symbol_backtest
 from .tools.broker import BrokerClientFactory
 from .tools.breakout_scanner import build_breakout_scan, merge_breakout_universe
 from .tools.command_catalog import available_command_catalog, command_cheatsheet
+from .tools.counterfactual_analysis import (
+    DEFAULT_RETROSPECTIVE_SESSIONS,
+    build_decision_compare_report,
+    build_missed_opportunities_report,
+    build_session_retrospective_report,
+    build_signal_postmortem_report,
+    build_walk_forward_validation_report,
+)
+from .tools.daily_learning import (
+    DEFAULT_DAILY_LEARNING_START,
+    build_learning_daily_run,
+    build_learning_digest_report,
+    build_learning_health_report,
+    build_learning_promotions_report,
+    build_policy_candidates_report,
+)
 from .tools.trade_decision import (
     build_order_plans,
     filter_entry_quality,
@@ -42,9 +60,24 @@ from .tools.trade_decision import (
     request_trade_recommendations,
 )
 from .tools.execution import submit_paper_order_plan
+from .tools.live_readiness import build_live_readiness_report
 from .tools.operational_learning import build_operational_learning_review
+from .tools.operational_health import build_operational_health_report
 from .tools.portfolio_optimizer import build_portfolio_rebalance_context
+from .tools.pre_earnings import (
+    backfill_pending_pre_earnings_estimates,
+    build_pre_earnings_event_study,
+    build_pre_earnings_learning_digest,
+    build_pre_earnings_report,
+    build_pre_earnings_score_study,
+    enrich_report_with_local_analyst_revisions,
+    enrich_report_with_pre_earnings_score_v2,
+    record_pre_earnings_analyst_snapshots,
+    record_pre_earnings_predictions,
+    update_pre_earnings_outcomes,
+)
 from .tools.post_market_review import build_post_market_review
+from .tools.retention import cleanup_runtime_data
 from .tools.signal_learning import (
     build_learning_status,
     record_signal_candidates,
@@ -249,9 +282,218 @@ def _print_backtest_report(report: dict[str, Any]) -> None:
             )
 
 
+def _print_counterfactual_summary(title: str, report: dict[str, Any]) -> None:
+    print(title)
+    print(f"Informe: {report.get('path')}")
+    period = report.get("period", {}) or {}
+    if period:
+        print(f"Periodo: {period.get('from')} -> {period.get('to')}")
+    summary = report.get("summary", {}) or {}
+    if "cohorts" in summary:
+        print(
+            f"Senales={summary.get('signals', 0)} | maduras={summary.get('matured', 0)} | "
+            f"missed={summary.get('missed_opportunities', 0)} | duplicados ejecutados={summary.get('executed_duplicates', 0)}"
+        )
+        print(f"Cohortes: {summary.get('cohorts', {})}")
+        print(f"Flags: {summary.get('flags', {})}")
+        rank_shadow = summary.get("rank_shadow", {}) or {}
+        if rank_shadow:
+            print(
+                "Ranking shadow: "
+                f"reemplazos={rank_shadow.get('candidate_replacements', 0)} | "
+                f"delta={rank_shadow.get('delta_net_opportunity')}"
+            )
+        return
+    if "current" in summary and "proposed" in summary:
+        print(
+            f"Actual ejecutadas={summary.get('current', {}).get('executed', 0)} | "
+            f"Propuesta ejecutadas={summary.get('proposed', {}).get('executed', 0)} | "
+            f"bloqueadas={summary.get('blocked_by_policy', 0)} | "
+            f"delta neto={summary.get('delta_net_opportunity')}"
+        )
+        rank_shadow = summary.get("rank_shadow", {}) or {}
+        if rank_shadow:
+            print(
+                "Ranking shadow: "
+                f"reemplazos={rank_shadow.get('candidate_replacements', 0)} | "
+                f"delta={rank_shadow.get('delta_net_opportunity')}"
+            )
+        return
+    if "sessions" in summary:
+        print(
+            f"Sesiones={summary.get('sessions', 0)} | "
+            f"delta agregado={summary.get('aggregate_delta_net_opportunity')} | "
+            f"duplicados bloqueados={summary.get('aggregate_blocked_duplicates', 0)} | "
+            f"ranking shadow delta={summary.get('aggregate_rank_shadow_delta')}"
+        )
+        best = summary.get("best_day") or {}
+        worst = summary.get("worst_day") or {}
+        if best:
+            print(f"Mejor dia: {best.get('session_date')} delta={best.get('delta_net_opportunity')}")
+        if worst:
+            print(f"Peor dia: {worst.get('session_date')} delta={worst.get('delta_net_opportunity')}")
+        return
+    if "windows" in report:
+        print(
+            f"Ventanas={summary.get('windows', 0)} | "
+            f"ventanas estables={summary.get('stable_windows', 0)}"
+        )
+
+
+def _print_pre_earnings_report(report: dict[str, Any]) -> None:
+    summary = report.get("summary", {}) or {}
+    success_rate = summary.get("success_rate")
+    success_text = "sin datos" if success_rate is None else _pct(success_rate)
+    trading_operation = report.get("trading_operation", {}) or {}
+    operation_allowed = bool(report.get("operation_allowed"))
+    print("PRE-EARNINGS")
+    if operation_allowed:
+        print("Modo: operativo conservador; genera recomendaciones buy y planes de orden para oportunidades actionable.")
+    else:
+        print("Modo: solo informativo; no genera compras ni planes de orden.")
+    print(f"Informe: {report.get('path')}")
+    print(
+        "Resumen: "
+        f"exito={success_text} | "
+        f"aciertos={summary.get('bullish_hits', 0)} | "
+        f"fallos={summary.get('bullish_misses', 0)} | "
+        f"resueltos={summary.get('resolved_count', 0)} | "
+        f"pendientes={summary.get('pending_count', 0)} | "
+        f"eventos={summary.get('total_events', report.get('events_found', 0))} | "
+        f"universo={report.get('universe_size', 0)}"
+    )
+    quality = report.get("data_quality", {}) or {}
+    if quality:
+        print(
+            "Datos: "
+            f"fuente={quality.get('calendar_source')} | "
+            f"cache={quality.get('cache_hits', 0)} | "
+            f"consultas={quality.get('yfinance_calls', 0)} | "
+            f"errores={quality.get('calendar_errors', 0)}"
+        )
+    if "predictions_saved" in report or "tracking_update" in report:
+        tracking = report.get("tracking_update", {}) or {}
+        print(
+            "Seguimiento: "
+            f"hipotesis guardadas={report.get('predictions_saved', 0)} | "
+            f"resultados actualizados={tracking.get('updated', 0)}"
+        )
+    if operation_allowed:
+        print(
+            "Operacion: "
+            f"recomendaciones={len(trading_operation.get('recommendations', []))} | "
+            f"planes buy={len(trading_operation.get('buy_order_plans', []))} | "
+            f"enviadas={len(trading_operation.get('submitted', []))}"
+        )
+        if trading_operation.get("blocked"):
+            print(f"Bloqueo ejecucion: {trading_operation.get('blocked')}")
+    sessions = report.get("sessions") or [{"session_date": report.get("session_date"), "items": report.get("items", [])}]
+    for session in sessions:
+        items = session.get("items", []) or []
+        print("")
+        print(f"Sesion AMC {session.get('session_date')} | eventos={len(items)}")
+        if not items:
+            print("  sin earnings AMC detectados")
+            continue
+        for item in items:
+            outcome = item.get("outcome", {}) or {}
+            ret = outcome.get("return_pct")
+            ret_text = "pendiente" if ret is None else _pct(ret)
+            print(
+                "  - "
+                f"{item.get('symbol')} | {item.get('earnings_datetime')} | "
+                f"hipotesis={item.get('hypothesis')} score={item.get('score')}/{item.get('max_score')} | "
+                f"v2={item.get('score_v2_label', 'sin_datos')} {item.get('pre_earnings_score_v2', '-')}/100 | "
+                f"resultado={ret_text} ({outcome.get('status')})"
+            )
+            reason = item.get("reason")
+            if reason:
+                print(f"    {reason}")
+
+
+def _print_pre_earnings_event_study(report: dict[str, Any]) -> None:
+    metrics = report.get("metrics", {}) or {}
+    success_rate = metrics.get("success_rate")
+    success_text = "sin datos" if success_rate is None else _pct(success_rate)
+    print("PRE-EARNINGS EVENT-STUDY INFORMATIVO")
+    print("Modo: solo analisis historico; no genera compras ni planes de orden.")
+    print(f"Periodo: {report.get('period', {}).get('from')} -> {report.get('period', {}).get('to')}")
+    print(f"Informe: {report.get('path')}")
+    print(
+        "Metricas: "
+        f"eventos={metrics.get('events', 0)} | "
+        f"resueltos={metrics.get('resolved', 0)} | "
+        f"alcistas={metrics.get('bullish_predictions', 0)} | "
+        f"aciertos={metrics.get('bullish_hits', 0)} | "
+        f"fallos={metrics.get('bullish_misses', 0)} | "
+        f"exito={success_text} | "
+        f"ret medio={_pct(metrics.get('avg_return')) if metrics.get('avg_return') is not None else 'sin datos'} | "
+        f"ret medio alcista={_pct(metrics.get('bullish_avg_return')) if metrics.get('bullish_avg_return') is not None else 'sin datos'}"
+    )
+    by_hypothesis = metrics.get("by_hypothesis", {}) or {}
+    if by_hypothesis:
+        print("")
+        print("Por hipotesis:")
+        for name, item in by_hypothesis.items():
+            rate = item.get("positive_rate")
+            avg = item.get("avg_return")
+            print(
+                "  - "
+                f"{name}: eventos={item.get('events', 0)} | resueltos={item.get('resolved', 0)} | "
+                f"positivos={_pct(rate) if rate is not None else 'sin datos'} | "
+                f"ret medio={_pct(avg) if avg is not None else 'sin datos'}"
+            )
+
+
+def _print_pre_earnings_score_study(report: dict[str, Any]) -> None:
+    metrics = report.get("metrics", {}) or {}
+    print("PRE-EARNINGS SCORE V2 STUDY")
+    print("Modo: estudio informativo; no genera compras ni planes de orden.")
+    print(f"Informe: {report.get('path')}")
+    print(
+        "Metricas: "
+        f"predicciones={metrics.get('predictions', 0)} | "
+        f"eventos={metrics.get('events', 0)} | "
+        f"resueltos={metrics.get('resolved_events', 0)} | "
+        f"subidas>5={metrics.get('big_winners_gt_5', 0)} | "
+        f"captura antigua={_pct(metrics.get('legacy_big_winner_capture_rate')) if metrics.get('legacy_big_winner_capture_rate') is not None else 'sin datos'} | "
+        f"captura v2={_pct(metrics.get('v2_big_winner_capture_rate')) if metrics.get('v2_big_winner_capture_rate') is not None else 'sin datos'} | "
+        f"captura alta conviccion={_pct(metrics.get('v2_high_conviction_capture_rate')) if metrics.get('v2_high_conviction_capture_rate') is not None else 'sin datos'} | "
+        f"FP antigua={_pct(metrics.get('legacy_false_positive_rate')) if metrics.get('legacy_false_positive_rate') is not None else 'sin datos'} | "
+        f"FP v2={_pct(metrics.get('v2_false_positive_rate')) if metrics.get('v2_false_positive_rate') is not None else 'sin datos'} | "
+        f"FP alta conviccion={_pct(metrics.get('v2_high_conviction_false_positive_rate')) if metrics.get('v2_high_conviction_false_positive_rate') is not None else 'sin datos'}"
+    )
+    big_winners = report.get("big_winners", []) or []
+    if big_winners:
+        print("")
+        print("Subidas >5%:")
+        for item in big_winners[:20]:
+            print(
+                "  - "
+                f"{item.get('symbol')} {item.get('earnings_date')} | "
+                f"ret={_pct(item.get('return_pct'))} | "
+                f"antes={item.get('legacy_hypothesis')} {item.get('legacy_score')}/{item.get('legacy_max_score')} | "
+                f"v2={item.get('final_label_v2')} {item.get('final_score_v2')}/100"
+            )
+            print(f"    {item.get('failure_analysis')}")
+    blocked = report.get("blocked_big_winners", []) or []
+    if blocked:
+        print("")
+        print("Ganadores fuertes vetados por la capa actionable:")
+        for item in blocked[:20]:
+            print(
+                "  - "
+                f"{item.get('symbol')} {item.get('earnings_date')} | "
+                f"ret={_pct(item.get('return_pct'))} | "
+                f"v2={item.get('final_label_v2')} {item.get('final_score_v2')}/100 | "
+                f"motivo={item.get('actionable_pre_earnings_reason')}"
+            )
+
+
 def init_store() -> Store:
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
+    cleanup_runtime_data(settings)
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()
     return store
@@ -303,6 +545,11 @@ def command_status(_: argparse.Namespace) -> None:
             "intraday_technical_scan_max_symbols": settings.intraday_technical_scan_max_symbols,
             "breakout_extra_symbols": settings.breakout_watchlist,
             "breakout_scan": "enabled in market cycle and available via breakout-scan",
+            "pre_earnings_enabled": settings.pre_earnings_enabled,
+            "pre_earnings_days": settings.pre_earnings_days,
+            "pre_earnings_time_market": settings.pre_earnings_time_market,
+            "pre_earnings_universe": settings.pre_earnings_universe or settings.closed_market_study_universe,
+            "pre_earnings_max_symbols": settings.pre_earnings_max_symbols or settings.closed_market_study_max_symbols,
         },
         "universe": settings.universe,
         "database": store.status(),
@@ -312,8 +559,34 @@ def command_status(_: argparse.Namespace) -> None:
             "agent_logs": str(settings.agent_logs_dir),
             "checkpoints": str(settings.checkpoints_dir),
         },
+        "retention": {
+            "enabled": settings.retention_enabled,
+            "report_retention_days": settings.report_retention_days,
+            "log_retention_days": settings.log_retention_days,
+            "cache_retention_days": settings.cache_retention_days,
+            "disabled_report_prefixes": settings.disabled_report_prefix_list,
+        },
     }
     _print_json(payload)
+
+
+def command_retention_cleanup(_: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    summary = cleanup_runtime_data(settings)
+    _print_json(
+        {
+            "ok": True,
+            "retention": {
+                "enabled": settings.retention_enabled,
+                "report_retention_days": settings.report_retention_days,
+                "log_retention_days": settings.log_retention_days,
+                "cache_retention_days": settings.cache_retention_days,
+                "disabled_report_prefixes": settings.disabled_report_prefix_list,
+            },
+            "summary": summary.as_dict(),
+        }
+    )
 
 
 def command_broker_status(_: argparse.Namespace) -> None:
@@ -566,6 +839,19 @@ def command_backtest(args: argparse.Namespace) -> None:
         min_score=args.min_score,
         setup_quality=args.setup_quality,
         max_holding_days=args.max_holding_days,
+        benchmark_symbol=settings.benchmark_symbol,
+        provider=settings.market_data_provider,
+        fmp_api_key=settings.fmp_api_key,
+        gate_config={
+            "min_trades": settings.backtest_gate_min_trades,
+            "min_hit_rate": settings.backtest_gate_min_hit_rate,
+            "min_profit_factor": settings.backtest_gate_min_profit_factor,
+            "max_drawdown": settings.backtest_gate_max_drawdown,
+            "min_alpha_vs_benchmark": settings.backtest_gate_min_alpha_vs_benchmark,
+            "min_trade_window_alpha": settings.backtest_gate_min_trade_window_alpha,
+            "min_regime_trades": settings.backtest_gate_min_regime_trades,
+            "max_negative_regimes": settings.backtest_gate_max_negative_regimes,
+        },
     )
     if args.json:
         _print_json({"ok": True, **report})
@@ -664,6 +950,7 @@ def command_scan_technical(args: argparse.Namespace) -> None:
         run_id,
         top_n=args.top_n,
         progress_callback=_progress,
+        benchmark_symbol=settings.benchmark_symbol,
     )
     signals_saved = record_signal_candidates(store, report, source="manual_scan")
     elapsed_seconds = round(time.perf_counter() - started, 2)
@@ -745,6 +1032,178 @@ def command_breakout_scan(args: argparse.Namespace) -> None:
         _print_json({"ok": True, **report, "elapsed_seconds": elapsed_seconds})
         return
     _print_json(payload)
+
+
+def command_pre_earnings(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    universe_name = args.universe or settings.pre_earnings_universe or settings.closed_market_study_universe
+    max_symbols = args.max_symbols or settings.pre_earnings_max_symbols or settings.closed_market_study_max_symbols
+    symbols = resolve_study_universe(
+        universe_name,
+        settings.universe,
+        max_symbols,
+        settings.data_dir / "cache",
+    )
+    report = build_pre_earnings_report(
+        symbols=symbols,
+        output_dir=settings.data_dir / "reports",
+        run_id=new_id("preearn"),
+        calendar_name=settings.market_calendar,
+        local_timezone=settings.local_timezone,
+        session_count=args.days or settings.pre_earnings_days,
+        cache_dir=settings.data_dir / "cache",
+        fmp_api_key=settings.fmp_api_key,
+    )
+    report["tracking_update"] = update_pre_earnings_outcomes(store)
+    report["local_analyst_revisions"] = enrich_report_with_local_analyst_revisions(store, report)
+    report["score_v2_items_updated"] = enrich_report_with_pre_earnings_score_v2(store, report)
+    report["predictions_saved"] = record_pre_earnings_predictions(store, report)
+    report["analyst_snapshots_saved"] = record_pre_earnings_analyst_snapshots(store, report)
+    report["estimates_backfill"] = backfill_pending_pre_earnings_estimates(
+        store,
+        settings.data_dir / "reports",
+        f"{report['run_id']}_backfill",
+        api_key=settings.fmp_api_key,
+    )
+    report["learning_digest"] = build_pre_earnings_learning_digest(
+        store,
+        settings.data_dir / "reports",
+        f"{report['run_id']}_digest",
+    )
+    build_learning_digest_report(store, settings.data_dir / "reports", new_id("learn_digest_refresh"))
+    report["mode"] = (
+        "operativo_pre_earnings" if settings.pre_earnings_trade_enabled else "informativo_no_operativo"
+    )
+    report["operation_allowed"] = settings.pre_earnings_trade_enabled
+    report["trading_operation"] = _run_pre_earnings_trade_operation(
+        settings,
+        store,
+        EventReporter(store, verbose=False),
+        report["run_id"],
+        report,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    _print_pre_earnings_report(report)
+
+
+def command_pre_earnings_backtest(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    universe_name = args.universe or settings.pre_earnings_universe or settings.closed_market_study_universe
+    max_symbols = args.max_symbols or settings.pre_earnings_max_symbols or settings.closed_market_study_max_symbols
+    symbols = resolve_study_universe(
+        universe_name,
+        settings.universe,
+        max_symbols,
+        settings.data_dir / "cache",
+    )
+    report = build_pre_earnings_event_study(
+        symbols=symbols,
+        output_dir=settings.data_dir / "reports",
+        run_id=new_id("preearn_bt"),
+        start=args.start,
+        end=args.end,
+        calendar_name=settings.market_calendar,
+        local_timezone=settings.local_timezone,
+        cache_dir=settings.data_dir / "cache",
+        fmp_api_key=settings.fmp_api_key,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    _print_pre_earnings_event_study(report)
+
+
+def command_pre_earnings_score_study(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    update_result = update_pre_earnings_outcomes(store)
+    report = build_pre_earnings_score_study(
+        store,
+        settings.data_dir / "reports",
+        new_id("preearn_score"),
+        since_date=args.since,
+        limit=args.limit,
+    )
+    report["tracking_update"] = update_result
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    _print_pre_earnings_score_study(report)
+
+
+def command_pre_earnings_learning_digest(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    report = build_pre_earnings_learning_digest(
+        store,
+        settings.data_dir / "reports",
+        new_id("preearn_learn"),
+        since_date=args.since,
+        limit=args.limit,
+    )
+    build_learning_digest_report(
+        store,
+        settings.data_dir / "reports",
+        new_id("learn_digest_refresh"),
+        since_date=args.since or DEFAULT_DAILY_LEARNING_START,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    print("PRE-EARNINGS LEARNING DIGEST")
+    print(f"Informe: {report.get('path')}")
+    print(f"Metricas: {report.get('metrics', {})}")
+    print("Guidance:")
+    for item in (report.get("digest", {}) or {}).get("guidance", []):
+        print(f"  - {item}")
+
+
+def command_pre_earnings_backfill_estimates(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    backfill = backfill_pending_pre_earnings_estimates(
+        store,
+        settings.data_dir / "reports",
+        new_id("preearn_backfill"),
+        limit=args.limit,
+        api_key=settings.fmp_api_key,
+    )
+    digest = build_pre_earnings_learning_digest(
+        store,
+        settings.data_dir / "reports",
+        new_id("preearn_learn"),
+        since_date=args.since,
+        limit=max(args.limit, 10000),
+    )
+    build_learning_digest_report(
+        store,
+        settings.data_dir / "reports",
+        new_id("learn_digest_refresh"),
+        since_date=args.since or DEFAULT_DAILY_LEARNING_START,
+    )
+    payload = {"backfill": backfill, "learning_digest": digest}
+    if args.json:
+        _print_json({"ok": True, **payload})
+        return
+    print("PRE-EARNINGS BACKFILL")
+    print(f"Backfill: {backfill.get('path')}")
+    print(
+        f"actualizadas={backfill.get('updated_predictions', 0)} | "
+        f"elegibles={backfill.get('eligible_predictions', 0)} | "
+        f"omitidas_por_seguridad={backfill.get('skipped_temporal_safety', 0)}"
+    )
 
 
 def command_learning_status(args: argparse.Namespace) -> None:
@@ -955,6 +1414,7 @@ def command_post_market_review(args: argparse.Namespace) -> None:
                 "trade_evaluations": report["trade_evaluations"],
                 "proposed_improvements": report["proposed_improvements"],
                 "next_session_guidance": report["next_session_guidance"],
+                "daily_learning": report.get("daily_learning", {}),
                 "llm_review": report.get("llm_review", {}),
             }
         )
@@ -962,11 +1422,317 @@ def command_post_market_review(args: argparse.Namespace) -> None:
     _print_post_market_review(report)
 
 
+def command_learning_postmortem(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    report = build_signal_postmortem_report(
+        settings,
+        store,
+        settings.data_dir / "reports",
+        new_id("pm_signals"),
+        since_date=args.start,
+        end_date=args.end,
+        full=args.full,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    _print_counterfactual_summary("POST-MORTEM DE SENALES", report)
+
+
+def command_missed_opportunities(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    report = build_missed_opportunities_report(
+        settings,
+        store,
+        settings.data_dir / "reports",
+        new_id("missed"),
+        since_date=args.start,
+        end_date=args.end,
+        top=args.top,
+        full=args.full,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    _print_counterfactual_summary("MISSED OPPORTUNITIES", report)
+
+
+def command_decision_compare(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    report = build_decision_compare_report(
+        settings,
+        store,
+        settings.data_dir / "reports",
+        new_id("compare"),
+        since_date=args.start,
+        end_date=args.end,
+        policy=args.policy,
+        full=args.full,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    _print_counterfactual_summary("COMPARACION OLD VS NEW", report)
+
+
+def command_walk_forward_validate(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    report = build_walk_forward_validation_report(
+        settings,
+        store,
+        settings.data_dir / "reports",
+        new_id("wf"),
+        since_date=args.start,
+        end_date=args.end,
+        policy=args.policy,
+        train_days=args.train_days,
+        test_days=args.test_days,
+        full=args.full,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    _print_counterfactual_summary("VALIDACION WALK-FORWARD", report)
+
+
+def command_live_readiness(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    report = build_live_readiness_report(
+        settings,
+        store,
+        settings.data_dir / "reports",
+        new_id("live_ready"),
+        since_date=args.start,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    summary = report.get("summary", {}) or {}
+    print("LIVE READINESS")
+    print(f"Informe: {report.get('path')}")
+    print(
+        f"ready={summary.get('ready_for_live')} | "
+        f"bloqueos={summary.get('blocks', 0)} | avisos={summary.get('warnings', 0)}"
+    )
+    for item in report.get("required_before_live", [])[:10]:
+        print(f"  - BLOCK {item.get('key')}: {item.get('detail')}")
+    for item in report.get("warnings", [])[:5]:
+        print(f"  - WARN {item.get('key')}: {item.get('detail')}")
+
+
+def command_session_retrospective(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    report = build_session_retrospective_report(
+        settings,
+        store,
+        settings.data_dir / "reports",
+        new_id("retro"),
+        since_date=args.start,
+        end_date=args.end,
+        sessions=args.sessions,
+        policy=args.policy,
+        full=args.full,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    _print_counterfactual_summary("RETROSPECTIVA POR SESION", report)
+
+
 def command_commands(args: argparse.Namespace) -> None:
     if args.json:
         _print_json({"commands": available_command_catalog()})
         return
     print(command_cheatsheet())
+
+
+def command_learning_daily_run(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    report = build_learning_daily_run(
+        settings,
+        store,
+        settings.data_dir / "reports",
+        new_id("learn_daily"),
+        since_date=args.start,
+        end_date=args.end,
+        compact=not args.full,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    print("LEARNING DAILY RUN")
+    print(f"Periodo: {report['period']['from']} -> {report['period']['to']}")
+    print(f"Observaciones canónicas: {report['observations_summary']['observations']}")
+    print(f"Duplicados eliminados: {report['observations_summary']['duplicates_removed']}")
+    print(f"Ejecutadas: {report['health']['executed_observations']}")
+    print(f"Bloqueos: {len(report['health'].get('blockers', []))}")
+
+
+def command_learning_health(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    report = build_learning_health_report(
+        store,
+        settings.data_dir / "reports",
+        new_id("learn_health"),
+        since_date=args.start,
+        end_date=args.end,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    health = report["health"]
+    print("LEARNING HEALTH")
+    print(
+        f"raw={health['signals_raw']} | canonicas={health['canonical_observations']} | "
+        f"duplicadas={health['duplicate_signals']} ({_pct(health['duplicate_ratio'])})"
+    )
+    print(f"outcomes disponibles={health['outcomes_available']} | ejecutadas={health['executed_observations']}")
+    print(f"Cobertura: {health['horizon_coverage']}")
+    for blocker in health.get("blockers", []):
+        print(f"  - [{blocker['severity']}] {blocker['kind']}: {blocker['detail']}")
+
+
+def command_learning_digest(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    report = build_learning_digest_report(
+        store,
+        settings.data_dir / "reports",
+        new_id("learn_digest"),
+        since_date=args.start,
+        end_date=args.end,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    digest = report["digest"]
+    print("LEARNING DIGEST")
+    print(f"Resumen: {digest['summary']}")
+    if (digest.get("pre_earnings") or {}).get("available"):
+        print(f"Pre-earnings: {(digest.get('pre_earnings') or {}).get('summary', {})}")
+    print("Guidance:")
+    for item in digest.get("guidance", []):
+        print(f"  - {item}")
+
+
+def command_policy_candidates(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    report = build_policy_candidates_report(store, settings.data_dir / "reports", new_id("policy"))
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    print("POLICY CANDIDATES")
+    for item in report.get("policies", []):
+        print(
+            f"  - [{item['status']}] {item['policy_id']} | {item['name']} | "
+            f"auto={item['auto_activatable']} | metrics={item.get('metrics', {})}"
+        )
+
+
+def command_learning_promotions(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    report = build_learning_promotions_report(store, settings.data_dir / "reports", new_id("promotions"))
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    print("LEARNING PROMOTIONS")
+    for item in report.get("policies", []):
+        print(f"  - [{item['status']}] {item['policy_id']} | promoted_at={item.get('promoted_at') or '-'}")
+
+
+def command_operational_health(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    report = build_operational_health_report(
+        settings,
+        store,
+        settings.data_dir / "reports",
+        new_id("ops_health"),
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    print("OPERATIONAL HEALTH")
+    print(f"Estado general: {report['summary']['overall_status']}")
+    print(
+        f"Alertas: {report['summary']['alerts']} | severidad={report['summary']['severity_counts']} | "
+        f"responses={report['summary'].get('responses', 0)}"
+    )
+    for item in report.get("alerts", [])[:12]:
+        scope = item.get("job") or item.get("scope") or "-"
+        print(f"  - [{item['severity']}] {item['kind']} | {scope} | {item['detail']}")
+    if report.get("responses"):
+        print("Respuestas operativas:")
+        for item in report["responses"][:8]:
+            print(
+                f"  - [{item['status']}] {item['action']} | {item.get('scope', '-')} | "
+                f"{item.get('detail', '')}"
+            )
+
+
+def command_operational_responses(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    report = build_operational_health_report(
+        settings,
+        store,
+        settings.data_dir / "reports",
+        new_id("ops_resp"),
+    )
+    payload = {
+        "run_id": report.get("run_id"),
+        "as_of": report.get("as_of"),
+        "summary": report.get("summary", {}),
+        "responses": report.get("responses", []),
+        "alerts": report.get("alerts", []),
+        "path": report.get("path"),
+    }
+    if args.json:
+        _print_json({"ok": True, **payload})
+        return
+    print("OPERATIONAL RESPONSES")
+    print(f"Estado general: {payload['summary'].get('overall_status')}")
+    print(f"Respuestas: {len(payload.get('responses', []))}")
+    for item in payload.get("responses", [])[:12]:
+        print(
+            f"  - [{item['status']}] {item['action']} | {item.get('scope', '-')} | "
+            f"{item.get('detail', '')}"
+        )
 
 
 def command_agents(_: argparse.Namespace) -> None:
@@ -1073,6 +1839,16 @@ def command_job_once(args: argparse.Namespace) -> None:
         if report and not args.quiet:
             print()
             _print_post_market_review(report)
+    elif args.job == "pre-earnings":
+        report = pre_earnings_job(
+            settings,
+            store,
+            verbose=not args.quiet,
+            force=args.force,
+        )
+        if report and not args.quiet:
+            print()
+            _print_pre_earnings_report(report)
 
 
 def command_log(args: argparse.Namespace) -> None:
@@ -1139,6 +1915,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = subparsers.add_parser("status", help="Muestra estado basico.")
     status.set_defaults(func=command_status)
+
+    retention_cleanup = subparsers.add_parser(
+        "retention-cleanup",
+        help="Aplica la politica de retencion sobre reports, logs y cache.",
+    )
+    retention_cleanup.set_defaults(func=command_retention_cleanup)
 
     broker_status = subparsers.add_parser(
         "broker-status",
@@ -1241,6 +2023,174 @@ def build_parser() -> argparse.ArgumentParser:
     learning_review.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     learning_review.set_defaults(func=command_learning_review)
 
+    learning_daily = subparsers.add_parser(
+        "learning-daily-run",
+        help="Ejecuta el ledger incremental diario con deduplicacion, digest y candidatos de politica.",
+    )
+    learning_daily.add_argument(
+        "--from",
+        dest="start",
+        default=DEFAULT_DAILY_LEARNING_START,
+        help=f"Fecha inicial YYYY-MM-DD. Por defecto {DEFAULT_DAILY_LEARNING_START}.",
+    )
+    learning_daily.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
+    learning_daily.add_argument("--full", action="store_true", help="Incluye observaciones y filas detalladas.")
+    learning_daily.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    learning_daily.set_defaults(func=command_learning_daily_run)
+
+    learning_health = subparsers.add_parser(
+        "learning-health",
+        help="Muestra bloqueos del aprendizaje: duplicados, cobertura de outcomes y volumen real.",
+    )
+    learning_health.add_argument(
+        "--from",
+        dest="start",
+        default=DEFAULT_DAILY_LEARNING_START,
+        help=f"Fecha inicial YYYY-MM-DD. Por defecto {DEFAULT_DAILY_LEARNING_START}.",
+    )
+    learning_health.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
+    learning_health.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    learning_health.set_defaults(func=command_learning_health)
+
+    learning_digest = subparsers.add_parser(
+        "learning-digest",
+        help="Imprime el digest determinista que consume la siguiente decision de trading.",
+    )
+    learning_digest.add_argument(
+        "--from",
+        dest="start",
+        default=DEFAULT_DAILY_LEARNING_START,
+        help=f"Fecha inicial YYYY-MM-DD. Por defecto {DEFAULT_DAILY_LEARNING_START}.",
+    )
+    learning_digest.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
+    learning_digest.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    learning_digest.set_defaults(func=command_learning_digest)
+
+    policy_candidates = subparsers.add_parser(
+        "policy-candidates",
+        help="Lista reglas shadow/candidate/guarded-active/active y su evidencia.",
+    )
+    policy_candidates.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    policy_candidates.set_defaults(func=command_policy_candidates)
+
+    learning_promotions = subparsers.add_parser(
+        "learning-promotions",
+        help="Audita que reglas se promovieron, cuando y con que evidencia.",
+    )
+    learning_promotions.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    learning_promotions.set_defaults(func=command_learning_promotions)
+
+    operational_health = subparsers.add_parser(
+        "operational-health",
+        help="Combina salud de jobs, reportes recientes y degradacion por setup.",
+    )
+    operational_health.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    operational_health.set_defaults(func=command_operational_health)
+
+    operational_responses = subparsers.add_parser(
+        "operational-responses",
+        help="Deriva respuestas operativas conservadoras a partir de la salud reciente.",
+    )
+    operational_responses.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    operational_responses.set_defaults(func=command_operational_responses)
+
+    learning_postmortem = subparsers.add_parser(
+        "learning-postmortem",
+        help="Reconstruye cohortes de senales, explicaciones y fallos contrafactuales.",
+    )
+    learning_postmortem.add_argument(
+        "--from",
+        dest="start",
+        default=DEFAULT_HISTORY_START_DATE,
+        help=f"Fecha inicial YYYY-MM-DD. Por defecto {DEFAULT_HISTORY_START_DATE}.",
+    )
+    learning_postmortem.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
+    learning_postmortem.add_argument("--full", action="store_true", help="Incluye todas las filas reconstruidas.")
+    learning_postmortem.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    learning_postmortem.set_defaults(func=command_learning_postmortem)
+
+    missed_opportunities = subparsers.add_parser(
+        "missed-opportunities",
+        help="Lista senales no ejecutadas que luego tuvieron buen resultado forward.",
+    )
+    missed_opportunities.add_argument(
+        "--from",
+        dest="start",
+        default=DEFAULT_HISTORY_START_DATE,
+        help=f"Fecha inicial YYYY-MM-DD. Por defecto {DEFAULT_HISTORY_START_DATE}.",
+    )
+    missed_opportunities.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
+    missed_opportunities.add_argument("--top", type=int, default=20, help="Numero maximo de ejemplos por categoria.")
+    missed_opportunities.add_argument("--full", action="store_true", help="Incluye todas las oportunidades detectadas.")
+    missed_opportunities.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    missed_opportunities.set_defaults(func=command_missed_opportunities)
+
+    decision_compare = subparsers.add_parser(
+        "decision-compare",
+        help="Compara la politica actual frente a la propuesta sobre el historico de senales.",
+    )
+    decision_compare.add_argument(
+        "--from",
+        dest="start",
+        default=DEFAULT_HISTORY_START_DATE,
+        help=f"Fecha inicial YYYY-MM-DD. Por defecto {DEFAULT_HISTORY_START_DATE}.",
+    )
+    decision_compare.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
+    decision_compare.add_argument(
+        "--policy",
+        choices=["current", "proposed"],
+        default="proposed",
+        help="Politica a comparar contra la actual.",
+    )
+    decision_compare.add_argument("--full", action="store_true", help="Incluye filas historicas usadas en la comparacion.")
+    decision_compare.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    decision_compare.set_defaults(func=command_decision_compare)
+
+    walk_forward = subparsers.add_parser(
+        "walk-forward-validate",
+        help="Evalua la politica propuesta con ventanas train/test cronologicas.",
+    )
+    walk_forward.add_argument(
+        "--from",
+        dest="start",
+        default=DEFAULT_HISTORY_START_DATE,
+        help=f"Fecha inicial YYYY-MM-DD. Por defecto {DEFAULT_HISTORY_START_DATE}.",
+    )
+    walk_forward.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
+    walk_forward.add_argument(
+        "--policy",
+        choices=["current", "proposed"],
+        default="proposed",
+        help="Politica evaluada en las ventanas de test.",
+    )
+    walk_forward.add_argument("--train-days", type=int, default=5, help="Numero de sesiones en train.")
+    walk_forward.add_argument("--test-days", type=int, default=3, help="Numero de sesiones en test.")
+    walk_forward.add_argument("--full", action="store_true", help="Incluye las filas historicas de soporte.")
+    walk_forward.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    walk_forward.set_defaults(func=command_walk_forward_validate)
+
+    session_retrospective = subparsers.add_parser(
+        "session-retrospective",
+        help="Resume por sesion cerrada que habria pasado con la politica nueva.",
+    )
+    session_retrospective.add_argument("--from", dest="start", help="Fecha inicial YYYY-MM-DD.")
+    session_retrospective.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
+    session_retrospective.add_argument(
+        "--sessions",
+        type=int,
+        default=DEFAULT_RETROSPECTIVE_SESSIONS,
+        help=f"Numero de sesiones cerradas si no se pasa --from. Por defecto {DEFAULT_RETROSPECTIVE_SESSIONS}.",
+    )
+    session_retrospective.add_argument(
+        "--policy",
+        choices=["current", "proposed"],
+        default="proposed",
+        help="Politica evaluada para la retrospectiva.",
+    )
+    session_retrospective.add_argument("--full", action="store_true", help="Incluye filas historicas de soporte.")
+    session_retrospective.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    session_retrospective.set_defaults(func=command_session_retrospective)
+
     adaptive_status_parser = subparsers.add_parser(
         "adaptive-status",
         help="Muestra propuestas/overrides adaptativos de parametros.",
@@ -1266,6 +2216,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     adaptive_tune.add_argument("--json", action="store_true", help="Devuelve el resultado en JSON.")
     adaptive_tune.set_defaults(func=command_adaptive_tune)
+
+    live_readiness = subparsers.add_parser(
+        "live-readiness",
+        help="Checklist previo a live trading: seguridad, datos, aprendizaje, trazabilidad y gates.",
+    )
+    live_readiness.add_argument(
+        "--from",
+        dest="start",
+        default=DEFAULT_HISTORY_START_DATE,
+        help=f"Fecha inicial para auditar trazabilidad. Por defecto {DEFAULT_HISTORY_START_DATE}.",
+    )
+    live_readiness.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    live_readiness.set_defaults(func=command_live_readiness)
 
     backtest = subparsers.add_parser(
         "backtest",
@@ -1327,7 +2290,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-symbols",
         type=int,
         default=0,
-        help="Limite de simbolos. Por defecto usa CLOSED_MARKET_STUDY_MAX_SYMBOLS.",
+        help="Limite de simbolos. Por defecto usa PRE_EARNINGS_MAX_SYMBOLS o CLOSED_MARKET_STUDY_MAX_SYMBOLS.",
     )
     scan_technical.add_argument(
         "--top-n",
@@ -1362,6 +2325,105 @@ def build_parser() -> argparse.ArgumentParser:
     )
     breakout_scan.add_argument("--json", action="store_true", help="Devuelve el informe completo en JSON.")
     breakout_scan.set_defaults(func=command_breakout_scan)
+
+    pre_earnings = subparsers.add_parser(
+        "pre-earnings",
+        help="Apartado informativo: acciones con earnings en el proximo cierre AMC, hipotesis y resultado si existe.",
+    )
+    pre_earnings.add_argument(
+        "--universe",
+        help=(
+            "Universo a revisar. Por defecto usa CLOSED_MARKET_STUDY_UNIVERSE. "
+            "Ejemplos: sp500_top300, sp500, default, AAPL,MSFT,NVDA."
+        ),
+    )
+    pre_earnings.add_argument(
+        "--max-symbols",
+        type=int,
+        default=0,
+        help="Limite de simbolos. Por defecto usa CLOSED_MARKET_STUDY_MAX_SYMBOLS.",
+    )
+    pre_earnings.add_argument(
+        "--days",
+        type=int,
+        default=0,
+        help="Numero de cierres de mercado AMC a mostrar. Por defecto PRE_EARNINGS_DAYS.",
+    )
+    pre_earnings.add_argument("--json", action="store_true", help="Devuelve el informe completo en JSON.")
+    pre_earnings.set_defaults(func=command_pre_earnings)
+
+    pre_earnings_backtest = subparsers.add_parser(
+        "pre-earnings-backtest",
+        help="Event-study historico informativo de hipotesis pre-earnings AMC; no compra.",
+    )
+    pre_earnings_backtest.add_argument("--from", dest="start", required=True, help="Fecha inicial YYYY-MM-DD.")
+    pre_earnings_backtest.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD. Por defecto hoy.")
+    pre_earnings_backtest.add_argument(
+        "--universe",
+        help=(
+            "Universo a revisar. Por defecto usa PRE_EARNINGS_UNIVERSE o CLOSED_MARKET_STUDY_UNIVERSE. "
+            "Ejemplos: sp500_top300, default, AAPL,MSFT,NVDA."
+        ),
+    )
+    pre_earnings_backtest.add_argument(
+        "--max-symbols",
+        type=int,
+        default=0,
+        help="Limite de simbolos. Por defecto PRE_EARNINGS_MAX_SYMBOLS o CLOSED_MARKET_STUDY_MAX_SYMBOLS.",
+    )
+    pre_earnings_backtest.add_argument("--json", action="store_true", help="Devuelve el informe completo en JSON.")
+    pre_earnings_backtest.set_defaults(func=command_pre_earnings_backtest)
+
+    pre_earnings_score = subparsers.add_parser(
+        "pre-earnings-score-study",
+        help="Estudia predicciones pre-earnings guardadas y calcula score V2 por dia y final.",
+    )
+    pre_earnings_score.add_argument(
+        "--since",
+        help="Fecha minima de prediccion YYYY-MM-DD. Por defecto usa todo el historico guardado.",
+    )
+    pre_earnings_score.add_argument(
+        "--limit",
+        type=int,
+        default=10000,
+        help="Maximo de predicciones persistidas a analizar.",
+    )
+    pre_earnings_score.add_argument("--json", action="store_true", help="Devuelve el informe completo en JSON.")
+    pre_earnings_score.set_defaults(func=command_pre_earnings_score_study)
+
+    pre_earnings_learning = subparsers.add_parser(
+        "pre-earnings-learning-digest",
+        help="Resume aprendizaje historico pre-earnings, vetos por riesgo y cobertura de estimaciones.",
+    )
+    pre_earnings_learning.add_argument(
+        "--since",
+        help="Fecha minima de prediccion YYYY-MM-DD. Por defecto usa todo el historico guardado.",
+    )
+    pre_earnings_learning.add_argument(
+        "--limit",
+        type=int,
+        default=10000,
+        help="Maximo de predicciones persistidas a analizar.",
+    )
+    pre_earnings_learning.add_argument("--json", action="store_true", help="Devuelve el informe completo en JSON.")
+    pre_earnings_learning.set_defaults(func=command_pre_earnings_learning_digest)
+
+    pre_earnings_backfill = subparsers.add_parser(
+        "pre-earnings-backfill-estimates",
+        help="Enriquece solo predicciones pending/futuras con estimaciones de analistas sin fuga temporal.",
+    )
+    pre_earnings_backfill.add_argument(
+        "--since",
+        help="Fecha minima para refrescar el digest posterior. Por defecto usa todo el historico del digest.",
+    )
+    pre_earnings_backfill.add_argument(
+        "--limit",
+        type=int,
+        default=2000,
+        help="Maximo de predicciones persistidas a inspeccionar.",
+    )
+    pre_earnings_backfill.add_argument("--json", action="store_true", help="Devuelve el informe completo en JSON.")
+    pre_earnings_backfill.set_defaults(func=command_pre_earnings_backfill_estimates)
 
     study_symbol = subparsers.add_parser(
         "study-symbol",
@@ -1456,7 +2518,7 @@ def build_parser() -> argparse.ArgumentParser:
     job_once = subparsers.add_parser("job-once", help="Ejecuta manualmente un job del scheduler.")
     job_once.add_argument(
         "job",
-        choices=["portfolio", "market", "closed-study", "daily", "post-market-review"],
+        choices=["portfolio", "market", "closed-study", "daily", "post-market-review", "pre-earnings"],
     )
     job_once.add_argument(
         "--skip-crew",

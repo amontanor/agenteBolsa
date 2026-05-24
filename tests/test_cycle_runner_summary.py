@@ -58,6 +58,43 @@ def test_auto_summary_does_not_show_stale_pending_manual_plans():
     assert "Planes paper pendientes" not in emitted["message"]
 
 
+def test_auto_summary_explains_approved_buy_not_sent_due_to_rejections():
+    emitted = {}
+
+    class FakeStore:
+        def pending_order_plans(self, limit=20):  # pragma: no cover - should not be called here.
+            raise AssertionError("pending plans should not be queried")
+
+    class FakeReporter:
+        def emit(self, agent, event_type, cycle_id, message, payload=None):
+            emitted["message"] = message
+            emitted["payload"] = payload or {}
+
+    _record_trade_summary(
+        Settings(AUTO_PAPER_TRADING=True, REQUIRE_HUMAN_APPROVAL=False),
+        FakeStore(),
+        FakeReporter(),
+        "cycle",
+        {
+            "submitted": [],
+            "failed": [],
+            "recommendations": [{"symbol": "STX", "action": "buy", "confidence": 0.85}],
+            "approved_buys": ["STX"],
+            "rejected_order_plans": [
+                {
+                    "symbol": "STX",
+                    "stage": "position_sizing",
+                    "reason": "below_min_order_notional",
+                }
+            ],
+        },
+    )
+
+    assert "Compras aprobadas por señal: STX" in emitted["message"]
+    assert "position_sizing:below_min_order_notional" in emitted["message"]
+    assert emitted["payload"]["approved_buys"] == ["STX"]
+
+
 def test_backtest_gate_approves_when_metrics_pass_thresholds():
     settings = Settings(
         BACKTEST_GATE_MIN_TRADES=10,

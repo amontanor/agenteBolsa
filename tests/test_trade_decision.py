@@ -1,7 +1,20 @@
+import json
+from pathlib import Path
+
 from agente_bolsa.config import Settings
+from agente_bolsa.storage import Store
 from agente_bolsa.models import PortfolioSnapshot, PositionSnapshot, TradeRecommendation
 from agente_bolsa.tools.trade_decision import (
+    _compact_sentiment_for_prompt,
+    _compact_technical_context_for_prompt,
+    _candidate_learning_features,
+    _candidate_learning_prior,
+    _annotate_technical_context_with_learning,
+    _build_decision_learning_context,
+    _sizing_adjustment_for_recommendation,
     _floor_qty,
+    _latest_report,
+    _prior_profile_key,
     _recommendation_from_dict,
     build_order_plans,
     validate_entry_quality,
@@ -24,6 +37,99 @@ def test_recommendation_normalizes_percent_exposure_to_fraction():
 
     assert recommendation is not None
     assert recommendation.target_exposure_pct == 0.05
+
+
+def test_latest_report_ignores_manifest_files(tmp_path: Path):
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    report = reports_dir / "closed_market_technical_study_real.json"
+    manifest = reports_dir / "closed_market_technical_study_real.manifest.json"
+    report.write_text("{}", encoding="utf-8")
+    manifest.write_text("{}", encoding="utf-8")
+    manifest.touch()
+
+    selected = _latest_report(tmp_path, "closed_market_technical_study")
+
+    assert selected == report
+
+
+def test_compact_technical_context_for_prompt_drops_large_all_candidates_payload():
+    technical_context = {
+        "source": "intraday",
+        "selected_candidates": [
+            {
+                "symbol": "AAPL",
+                "direction": "long",
+                "score": 16,
+                "setup_name": "orderly_breakout",
+                "rank_priority_score": 0.08,
+                "rank_priority_reason": "recent_edge,volume_confirmation",
+                "setup_edge_3d": 0.03,
+                "effective_setup_edge_3d": 0.03,
+                "setup_win_rate_3d": 0.62,
+                "setup_matured_3d": 18,
+                "operational_penalty": 0.0,
+                "reasons": ["breakout", "volume"],
+                "technical_state": {
+                    "close": 100.0,
+                    "rsi_14": 64.0,
+                    "sma_20": 94.0,
+                    "sma_50": 90.0,
+                    "sma_200": 80.0,
+                    "volume_zscore_20": 1.4,
+                    "candlestick_patterns": ["strong_close"] * 10,
+                    "chart_patterns": [{"pattern": "flag"}] * 10,
+                },
+                "risk_plan": {"entry_price": 100.0, "stop_loss": 95.0, "take_profit": 112.0},
+            }
+        ],
+        "all_candidates": [{"symbol": f"SYM{i}", "score": i} for i in range(200)],
+    }
+
+    compact = _compact_technical_context_for_prompt(technical_context)
+
+    assert "all_candidates" not in compact
+    assert len(compact["selected_candidates"]) == 1
+    assert len(compact["selected_candidates"][0]["technical_state"]["candlestick_patterns"]) == 3
+    assert len(compact["selected_candidates"][0]["technical_state"]["chart_patterns"]) == 3
+
+
+def test_compact_sentiment_for_prompt_keeps_only_candidate_symbols_and_short_news():
+    technical_context = {"selected_candidates": [{"symbol": "AAPL"}]}
+    sentiment_context = {
+        "results": [
+            {
+                "symbol": "AAPL",
+                "technical_direction": "long",
+                "technical_score": 15,
+                "news_count": 4,
+                "material_risk": False,
+                "sentiment": {
+                    "supports_technical_setup": True,
+                    "sentiment_score": 0.7,
+                    "summary": "positivo",
+                    "catalysts": ["earnings", "guidance", "buyback"],
+                    "risks": ["valuation"],
+                },
+                "news": [{"title": f"headline {i}", "publisher": "pub", "published_at": "2026-05-12"} for i in range(5)],
+            },
+            {
+                "symbol": "MSFT",
+                "technical_direction": "long",
+                "technical_score": 14,
+                "news_count": 1,
+                "material_risk": False,
+                "sentiment": {"supports_technical_setup": True},
+                "news": [{"title": "ignore", "publisher": "pub", "published_at": "2026-05-12"}],
+            },
+        ]
+    }
+
+    compact = _compact_sentiment_for_prompt(sentiment_context, technical_context)
+
+    assert len(compact["results"]) == 1
+    assert compact["results"][0]["symbol"] == "AAPL"
+    assert len(compact["results"][0]["news"]) == 2
 
 
 def test_floor_qty_never_rounds_fractional_position_up():
@@ -76,6 +182,57 @@ def test_build_order_plans_uses_whole_share_qty_for_bracket_buys():
     assert plans[0].risk_decision.checks["execution_sizing"]["execution_sizing"] == "whole_share_bracket"
 
 
+def test_build_order_plans_records_rejection_reason_when_no_plan_is_created():
+    portfolio = PortfolioSnapshot(
+        account_id="paper",
+        status="ACTIVE",
+        currency="USD",
+        cash=10_000,
+        portfolio_value=20_000,
+        buying_power=20_000,
+        positions=[],
+        open_orders=[],
+    )
+    recommendation = TradeRecommendation(
+        symbol="AAPL",
+        action="buy",
+        confidence=0.9,
+        reason="test",
+        entry_price=100.0,
+        stop_loss=95.0,
+        take_profit=110.0,
+        target_exposure_pct=0.05,
+    )
+    rejected = []
+
+    plans = build_order_plans(
+        Settings(USE_BRACKET_ORDERS=True, MIN_ORDER_NOTIONAL=2_000),
+        portfolio,
+        [recommendation],
+        rejected=rejected,
+    )
+
+    assert plans == []
+    assert rejected == [
+        {
+            "symbol": "AAPL",
+            "action": "buy",
+            "stage": "position_sizing",
+            "reason": "below_min_order_notional",
+            "checks": {
+                "reason": "below_min_order_notional",
+                "calculated_notional": 1000.0,
+                "min_order_notional": 2000.0,
+                "current_notional": 0,
+                "available_position_room": 1000.0,
+                "size_multiplier": 1.0,
+                "target_notional": 1000.0,
+                "adjusted_target_notional": 1000.0,
+            },
+        }
+    ]
+
+
 def test_build_order_plans_skips_bracket_buy_if_whole_share_too_expensive():
     portfolio = PortfolioSnapshot(
         account_id="paper",
@@ -101,6 +258,230 @@ def test_build_order_plans_skips_bracket_buy_if_whole_share_too_expensive():
     plans = build_order_plans(Settings(USE_BRACKET_ORDERS=True), portfolio, [recommendation])
 
     assert plans == []
+
+
+def test_build_order_plans_blocks_duplicate_buy_symbol_within_same_cycle():
+    portfolio = PortfolioSnapshot(
+        account_id="paper",
+        status="ACTIVE",
+        currency="USD",
+        cash=10_000,
+        portfolio_value=20_000,
+        buying_power=20_000,
+        positions=[],
+        open_orders=[],
+    )
+    first = TradeRecommendation(
+        symbol="AAPL",
+        action="buy",
+        confidence=0.9,
+        reason="entrada 1",
+        entry_price=100.0,
+        stop_loss=95.0,
+        take_profit=110.0,
+        target_exposure_pct=0.05,
+    )
+    second = TradeRecommendation(
+        symbol="AAPL",
+        action="buy",
+        confidence=0.92,
+        reason="entrada 2",
+        entry_price=101.0,
+        stop_loss=96.0,
+        take_profit=112.0,
+        target_exposure_pct=0.05,
+    )
+
+    plans = build_order_plans(Settings(), portfolio, [first, second])
+
+    assert len(plans) == 1
+    assert plans[0].symbol == "AAPL"
+    assert plans[0].risk_decision.checks["duplicate_symbol_cycle_guard"]["blocked_additional_same_symbol_buys"] is True
+
+
+def test_build_order_plans_blocks_existing_position_add_when_disabled():
+    portfolio = PortfolioSnapshot(
+        account_id="paper",
+        status="ACTIVE",
+        currency="USD",
+        cash=10_000,
+        portfolio_value=20_000,
+        buying_power=20_000,
+        positions=[
+            PositionSnapshot(
+                symbol="AAPL",
+                qty=10,
+                market_value=500,
+                avg_entry_price=90,
+                current_price=100,
+                unrealized_pl=100,
+                unrealized_plpc=0.1,
+            )
+        ],
+        open_orders=[],
+    )
+    recommendation = TradeRecommendation(
+        symbol="AAPL",
+        action="buy",
+        confidence=0.9,
+        reason="entrada adicional",
+        entry_price=100.0,
+        stop_loss=95.0,
+        take_profit=110.0,
+        target_exposure_pct=0.05,
+    )
+
+    plans = build_order_plans(Settings(ALLOW_POSITION_ADDS=False), portfolio, [recommendation])
+
+    assert plans == []
+
+
+def test_build_order_plans_allows_existing_position_add_when_enabled():
+    portfolio = PortfolioSnapshot(
+        account_id="paper",
+        status="ACTIVE",
+        currency="USD",
+        cash=10_000,
+        portfolio_value=20_000,
+        buying_power=20_000,
+        positions=[
+            PositionSnapshot(
+                symbol="AAPL",
+                qty=10,
+                market_value=500,
+                avg_entry_price=90,
+                current_price=100,
+                unrealized_pl=100,
+                unrealized_plpc=0.1,
+            )
+        ],
+        open_orders=[],
+    )
+    recommendation = TradeRecommendation(
+        symbol="AAPL",
+        action="buy",
+        confidence=0.9,
+        reason="entrada adicional",
+        entry_price=100.0,
+        stop_loss=95.0,
+        take_profit=110.0,
+        target_exposure_pct=0.05,
+    )
+
+    plans = build_order_plans(Settings(ALLOW_POSITION_ADDS=True), portfolio, [recommendation])
+
+    assert len(plans) == 1
+    assert plans[0].symbol == "AAPL"
+
+
+def test_build_order_plans_blocks_buys_when_operational_kill_switch_is_active(tmp_path: Path):
+    settings = Settings(DATA_DIR=tmp_path)
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "latest_operational_health.json").write_text(
+        json.dumps(
+            {
+                "alerts": [
+                    {
+                        "severity": "critical",
+                        "kind": "job_failed",
+                        "job": "market_cycle",
+                        "detail": "broker sync timeout",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    portfolio = PortfolioSnapshot(
+        account_id="paper",
+        status="ACTIVE",
+        currency="USD",
+        cash=10_000,
+        portfolio_value=20_000,
+        buying_power=20_000,
+        positions=[],
+        open_orders=[],
+    )
+    recommendation = TradeRecommendation(
+        symbol="AAPL",
+        action="buy",
+        confidence=0.9,
+        reason="test",
+        entry_price=100.0,
+        stop_loss=95.0,
+        take_profit=110.0,
+        target_exposure_pct=0.05,
+    )
+    rejected = []
+
+    plans = build_order_plans(settings, portfolio, [recommendation], rejected=rejected)
+
+    assert plans == []
+    assert rejected[0]["stage"] == "operational_kill_switch"
+
+
+def test_build_order_plans_uses_existing_stop_data_for_aggregate_open_risk(tmp_path: Path):
+    settings = Settings(DATA_DIR=tmp_path, MAX_TOTAL_OPEN_RISK=0.01)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    store.save_broker_order(
+        broker_order_id="bo_aapl",
+        plan_id="plan_aapl",
+        cycle_id="cycle_1",
+        symbol="AAPL",
+        side="buy",
+        status="filled",
+        payload={
+            "plan": {
+                "symbol": "AAPL",
+                "side": "buy",
+                "notional": 5000.0,
+                "payload": {
+                    "entry_price": 100.0,
+                    "stop_loss": 96.0,
+                    "take_profit": 110.0,
+                },
+            }
+        },
+    )
+    portfolio = PortfolioSnapshot(
+        account_id="paper",
+        status="ACTIVE",
+        currency="USD",
+        cash=10_000,
+        portfolio_value=20_000,
+        buying_power=20_000,
+        positions=[
+            PositionSnapshot(
+                symbol="AAPL",
+                qty=50,
+                market_value=5000,
+                avg_entry_price=100,
+                current_price=100,
+                unrealized_pl=0,
+                unrealized_plpc=0,
+            )
+        ],
+        open_orders=[],
+    )
+    recommendation = TradeRecommendation(
+        symbol="MSFT",
+        action="buy",
+        confidence=0.9,
+        reason="test",
+        entry_price=100.0,
+        stop_loss=95.0,
+        take_profit=110.0,
+        target_exposure_pct=0.05,
+    )
+    rejected = []
+
+    plans = build_order_plans(settings, portfolio, [recommendation], rejected=rejected)
+
+    assert plans == []
+    assert rejected[0]["stage"] == "risk_manager"
+    assert "riesgo agregado abierto" in rejected[0]["reason"]
 
 
 def test_build_order_plans_can_exit_existing_long_position():
@@ -395,9 +776,262 @@ def test_entry_quality_gate_blocks_overextended_sma20_distance():
     assert checks["sma20_distance"] == 0.2
 
 
-def test_entry_quality_gate_blocks_extended_entry_without_relative_strength():
+def test_entry_quality_gate_allows_confirmed_event_momentum_extension():
+    approved, reason, checks = validate_entry_quality(
+        Settings(ENTRY_QUALITY_MAX_SMA20_DISTANCE=0.12),
+        _quality_recommendation(),
+        _quality_context(
+            score=18,
+            technical_state={
+                "close": 147.0,
+                "return_20d": 0.6,
+                "sma_20": 103.0,
+                "rsi_14": 87.0,
+                "macd": 5.0,
+                "macd_signal": 1.0,
+                "volume_zscore_20": 3.5,
+                "gap_pct": 0.24,
+                "close_position_in_range": 0.88,
+                "event_momentum_long": True,
+                "chart_patterns": [{"bias": "bullish", "status": "confirmed"}],
+            },
+        ),
+        {"results": []},
+    )
+
+    assert approved is True
+    assert reason == "entry-quality aprobado"
+    assert checks["event_momentum_exception"]["min_volume_zscore_20"] == 2.0
+
+
+def test_entry_quality_gate_blocks_event_momentum_without_strong_close():
+    approved, reason, checks = validate_entry_quality(
+        Settings(ENTRY_QUALITY_MAX_SMA20_DISTANCE=0.12),
+        _quality_recommendation(),
+        _quality_context(
+            score=18,
+            technical_state={
+                "close": 147.0,
+                "return_20d": 0.6,
+                "sma_20": 103.0,
+                "rsi_14": 87.0,
+                "macd": 5.0,
+                "macd_signal": 1.0,
+                "volume_zscore_20": 3.5,
+                "event_momentum_long": True,
+                "close_position_in_range": 0.4,
+                "chart_patterns": [{"bias": "bullish", "status": "confirmed"}],
+            },
+        ),
+        {"results": []},
+    )
+
+    assert approved is False
+    assert "cierre firme" in reason
+    assert checks["event_momentum_long"] is True
+
+
+def test_entry_quality_gate_allows_range_expansion_breakout_extension():
+    approved, reason, checks = validate_entry_quality(
+        Settings(ENTRY_QUALITY_MAX_SMA20_DISTANCE=0.12),
+        _quality_recommendation(),
+        _quality_context(
+            score=17,
+            relative_return_20d=0.08,
+            technical_state={
+                "close": 117.0,
+                "return_20d": 0.18,
+                "sma_20": 100.0,
+                "rsi_14": 67.0,
+                "macd": 4.0,
+                "macd_signal": 1.0,
+                "volume_zscore_20": 1.2,
+                "gap_pct": 0.05,
+                "close_position_in_range": 0.82,
+                "range_expansion_breakout_long": True,
+                "chart_patterns": [{"bias": "bullish", "status": "confirmed"}],
+            },
+        ),
+        {"results": []},
+    )
+
+    assert approved is True
+    assert reason == "entry-quality aprobado"
+    assert checks["range_expansion_breakout_exception"]["max_sma20_distance"] == 0.22
+
+
+def test_entry_quality_gate_blocks_range_expansion_with_extreme_rsi():
+    approved, reason, checks = validate_entry_quality(
+        Settings(ENTRY_QUALITY_MAX_SMA20_DISTANCE=0.12),
+        _quality_recommendation(),
+        _quality_context(
+            score=17,
+            relative_return_20d=0.08,
+            technical_state={
+                "close": 117.0,
+                "return_20d": 0.18,
+                "sma_20": 100.0,
+                "rsi_14": 82.0,
+                "macd": 4.0,
+                "macd_signal": 1.0,
+                "volume_zscore_20": 1.2,
+                "gap_pct": 0.05,
+                "close_position_in_range": 0.82,
+                "range_expansion_breakout_long": True,
+                "chart_patterns": [{"bias": "bullish", "status": "confirmed"}],
+            },
+        ),
+        {"results": []},
+    )
+
+    assert approved is False
+    assert "RSI demasiado extremo" in reason
+    assert checks["range_expansion_breakout_long"] is True
+
+
+def test_entry_quality_gate_allows_orderly_breakout_extension():
+    approved, reason, checks = validate_entry_quality(
+        Settings(ENTRY_QUALITY_MAX_SMA20_DISTANCE=0.12),
+        _quality_recommendation(),
+        _quality_context(
+            score=14,
+            relative_return_20d=0.06,
+            technical_state={
+                "close": 121.0,
+                "return_20d": 0.14,
+                "sma_20": 100.0,
+                "rsi_14": 69.0,
+                "macd": 4.0,
+                "macd_signal": 1.0,
+                "volume_zscore_20": 0.4,
+                "close_position_in_range": 0.84,
+                "orderly_breakout_long": True,
+                "chart_patterns": [{"bias": "bullish", "status": "confirmed"}],
+            },
+        ),
+        {"results": []},
+    )
+
+    assert approved is True
+    assert reason == "entry-quality aprobado"
+    assert checks["orderly_breakout_exception"]["max_rsi"] == 74.0
+    assert checks["orderly_breakout_exception"]["min_score"] == 14
+
+
+def test_entry_quality_gate_blocks_orderly_breakout_with_extreme_rsi():
+    approved, reason, checks = validate_entry_quality(
+        Settings(ENTRY_QUALITY_MAX_SMA20_DISTANCE=0.12),
+        _quality_recommendation(),
+        _quality_context(
+            score=16,
+            relative_return_20d=0.06,
+            technical_state={
+                "close": 121.0,
+                "return_20d": 0.14,
+                "sma_20": 100.0,
+                "rsi_14": 78.0,
+                "macd": 4.0,
+                "macd_signal": 1.0,
+                "volume_zscore_20": 0.4,
+                "close_position_in_range": 0.84,
+                "orderly_breakout_long": True,
+                "chart_patterns": [{"bias": "bullish", "status": "confirmed"}],
+            },
+        ),
+        {"results": []},
+    )
+
+    assert approved is False
+    assert "RSI demasiado extremo" in reason
+    assert checks["orderly_breakout_long"] is True
+
+
+def test_entry_quality_gate_allows_momentum_shakeout_extension():
+    approved, reason, checks = validate_entry_quality(
+        Settings(ENTRY_QUALITY_MAX_SMA20_DISTANCE=0.12),
+        _quality_recommendation(),
+        _quality_context(
+            score=15,
+            technical_state={
+                "close": 116.0,
+                "return_20d": 0.06,
+                "sma_20": 100.0,
+                "rsi_14": 77.0,
+                "macd": 2.5,
+                "macd_signal": -0.2,
+                "volume_zscore_20": 1.7,
+                "gap_pct": -0.04,
+                "close_position_in_range": 0.86,
+                "momentum_shakeout_hold_long": True,
+                "chart_patterns": [{"bias": "bullish", "status": "confirmed"}],
+            },
+        ),
+        {"results": []},
+    )
+
+    assert approved is True
+    assert reason == "entry-quality aprobado"
+    assert checks["momentum_shakeout_exception"]["max_sma20_distance"] == 0.20
+
+
+def test_entry_quality_gate_allows_confirmed_momentum_extension():
+    approved, reason, checks = validate_entry_quality(
+        Settings(ENTRY_QUALITY_MAX_SMA20_DISTANCE=0.12),
+        _quality_recommendation(),
+        _quality_context(
+            score=16,
+            relative_return_20d=0.07,
+            technical_state={
+                "close": 120.6,
+                "return_20d": 0.34,
+                "sma_20": 100.0,
+                "rsi_14": 81.6,
+                "macd": 4.0,
+                "macd_signal": 1.0,
+                "volume_zscore_20": 3.4,
+                "close_position_in_range": 0.96,
+                "chart_patterns": [{"bias": "bullish", "status": "confirmed"}],
+            },
+        ),
+        {"results": []},
+    )
+
+    assert approved is True
+    assert reason == "entry-quality aprobado"
+    assert checks["momentum_confirmation_long"] is True
+    assert checks["momentum_confirmation_exception"]["max_rsi"] == 84.0
+
+
+def test_entry_quality_gate_blocks_confirmed_momentum_with_extreme_rsi():
+    approved, reason, checks = validate_entry_quality(
+        Settings(ENTRY_QUALITY_MAX_SMA20_DISTANCE=0.12),
+        _quality_recommendation(),
+        _quality_context(
+            score=16,
+            relative_return_20d=0.07,
+            technical_state={
+                "close": 120.6,
+                "return_20d": 0.34,
+                "sma_20": 100.0,
+                "rsi_14": 88.5,
+                "macd": 4.0,
+                "macd_signal": 1.0,
+                "volume_zscore_20": 3.4,
+                "close_position_in_range": 0.96,
+                "chart_patterns": [{"bias": "bullish", "status": "confirmed"}],
+            },
+        ),
+        {"results": []},
+    )
+
+    assert approved is False
+    assert "RSI demasiado extremo" in reason
+    assert checks["momentum_confirmation_long"] is True
+
+
+def test_entry_quality_gate_blocks_extended_entry_without_relative_strength(tmp_path):
     approved, reason, _checks = validate_entry_quality(
-        Settings(ENTRY_QUALITY_EXTENDED_SMA20_DISTANCE=0.08),
+        Settings(DATA_DIR=tmp_path, ENTRY_QUALITY_EXTENDED_SMA20_DISTANCE=0.08),
         _quality_recommendation(),
         _quality_context(
             technical_state={
@@ -418,7 +1052,7 @@ def test_entry_quality_gate_blocks_extended_entry_without_relative_strength():
     assert "fuerza relativa" in reason
 
 
-def test_entry_quality_gate_allows_extended_entry_with_confirmations():
+def test_entry_quality_gate_allows_extended_entry_with_confirmations(tmp_path):
     context = _quality_context(
         relative_return_20d=0.04,
         technical_state={
@@ -434,7 +1068,7 @@ def test_entry_quality_gate_allows_extended_entry_with_confirmations():
     )
 
     approved, reason, checks = validate_entry_quality(
-        Settings(ENTRY_QUALITY_EXTENDED_SMA20_DISTANCE=0.08),
+        Settings(DATA_DIR=tmp_path, ENTRY_QUALITY_EXTENDED_SMA20_DISTANCE=0.08),
         _quality_recommendation(),
         context,
         {"results": []},
@@ -443,6 +1077,66 @@ def test_entry_quality_gate_allows_extended_entry_with_confirmations():
     assert approved is True
     assert reason == "entry-quality aprobado"
     assert checks["extended_entry_filter"]["min_relative_return_20d"] == 0.02
+
+
+def test_entry_quality_gate_allows_confirmed_breakout_when_relative_strength_missing(tmp_path):
+    context = _quality_context(
+        score=18,
+        technical_state={
+            "close": 111.1,
+            "return_20d": 0.31,
+            "sma_20": 100.0,
+            "rsi_14": 72.0,
+            "macd": 2.0,
+            "macd_signal": 1.0,
+            "volume_zscore_20": 1.01,
+            "close_position_in_range": 0.98,
+            "orderly_breakout_long": True,
+            "chart_patterns": [{"bias": "bullish", "status": "confirmed"}],
+        },
+    )
+
+    approved, reason, checks = validate_entry_quality(
+        Settings(DATA_DIR=tmp_path, ENTRY_QUALITY_EXTENDED_SMA20_DISTANCE=0.08),
+        _quality_recommendation(),
+        context,
+        {"results": []},
+    )
+
+    assert approved is True
+    assert reason == "entry-quality aprobado"
+    assert checks["relative_return_20d"] is None
+    assert checks["relative_strength_missing_exception"]["allowed"] is True
+
+
+def test_entry_quality_gate_allows_confirmed_momentum_when_relative_strength_missing(tmp_path):
+    context = _quality_context(
+        score=18,
+        technical_state={
+            "close": 111.1,
+            "return_20d": 0.31,
+            "sma_20": 100.0,
+            "rsi_14": 72.0,
+            "macd": 2.0,
+            "macd_signal": 1.0,
+            "volume_zscore_20": 1.01,
+            "chart_patterns": [{"bias": "bullish", "status": "confirmed"}],
+        },
+    )
+
+    approved, reason, checks = validate_entry_quality(
+        Settings(DATA_DIR=tmp_path, ENTRY_QUALITY_EXTENDED_SMA20_DISTANCE=0.08),
+        _quality_recommendation(),
+        context,
+        {"results": []},
+    )
+
+    assert approved is True
+    assert reason == "entry-quality aprobado"
+    assert checks["relative_return_20d"] is None
+    assert checks["relative_strength_missing_exception"]["allowed"] is True
+    assert checks["relative_strength_missing_exception"]["reason"] == "confirmed_momentum_with_volume_and_pattern"
+    assert checks["relative_strength_missing_exception"]["confirmed_momentum_exception"]["allowed"] is True
 
 
 def test_entry_quality_gate_blocks_negative_confirmed_sentiment():
@@ -463,3 +1157,613 @@ def test_entry_quality_gate_blocks_negative_confirmed_sentiment():
     assert approved is False
     assert "sentimiento negativo" in reason
     assert checks["sentiment_score"] == -0.8
+
+
+def test_entry_quality_gate_blocks_sentiment_failure_by_default():
+    approved, reason, checks = validate_entry_quality(
+        Settings(),
+        _quality_recommendation(),
+        _quality_context(),
+        {
+            "results": [
+                {
+                    "symbol": "AAPL",
+                    "sentiment": {"risk_flags": ["sentiment_failed"]},
+                }
+            ]
+        },
+    )
+
+    assert approved is False
+    assert "sentimiento no validado" in reason
+    assert checks["sentiment_flags"] == ["sentiment_failed"]
+
+
+def test_annotate_technical_context_with_learning_adds_setup_edge_and_penalty():
+    technical_context = {
+        "top_longs": [
+            {
+                "symbol": "EDGE",
+                "score": 15,
+                "technical_state": {"event_momentum_long": True, "return_20d": 0.25, "volume_zscore_20": 3.0},
+            },
+            {
+                "symbol": "BASE",
+                "score": 17,
+                "technical_state": {"return_20d": 0.05, "volume_zscore_20": 0.1, "chart_patterns": []},
+            },
+        ]
+    }
+    daily_learning_digest = {
+        "setup_stats_3d": [
+            {"setup": "event_momentum", "avg_return": 0.08, "win_rate": 0.75, "matured": 8},
+            {"setup": "baseline_trend", "avg_return": 0.01, "win_rate": 0.45, "matured": 12},
+        ]
+    }
+    operational_context = {
+        "responses": [
+            {
+                "status": "guarded_active",
+                "action": "deprioritize_setup_before_llm",
+                "scope": "baseline_trend",
+                "candidate_priority_penalty": 0.05,
+                "detail": "baseline_trend degradado",
+            }
+        ],
+        "setup_penalties": {"baseline_trend": 0.05},
+        "response_notes": {"baseline_trend": ["baseline_trend degradado"]},
+    }
+
+    annotated = _annotate_technical_context_with_learning(
+        technical_context,
+        daily_learning_digest,
+        operational_context,
+    )
+
+    assert annotated["top_longs"][0]["setup_name"] == "event_momentum"
+    assert annotated["top_longs"][0]["effective_setup_edge_3d"] == 0.08
+    assert annotated["top_longs"][1]["setup_name"] == "baseline_trend"
+    assert annotated["top_longs"][1]["operational_penalty"] == 0.05
+    assert annotated["top_longs"][1]["effective_setup_edge_3d"] == -0.04
+    assert annotated["top_longs"][1]["operational_notes"] == ["baseline_trend degradado"]
+
+
+def test_build_decision_learning_context_surfaces_guidance_and_active_responses():
+    daily_learning_digest = {
+        "summary": {"executed_observations": 12},
+        "guidance": ["Priorizar setups con edge 3d positivo.", "Evitar duplicados intradia."],
+        "setup_stats_3d": [
+            {"setup": "event_momentum", "avg_return": 0.08, "win_rate": 0.75},
+            {"setup": "baseline_trend", "avg_return": -0.02, "win_rate": 0.25},
+        ],
+    }
+    operational_context = {
+        "responses": [
+            {
+                "status": "guarded_active",
+                "action": "deprioritize_setup_before_llm",
+                "scope": "baseline_trend",
+                "detail": "Reducir prioridad del setup baseline_trend.",
+                "mode": "ranking_only",
+            },
+            {
+                "status": "shadow",
+                "action": "pause_recent_universe_overlays",
+                "scope": "technical_study",
+                "detail": "Solo shadow",
+                "mode": "shadow_only",
+            },
+        ]
+    }
+
+    context = _build_decision_learning_context(daily_learning_digest, operational_context)
+
+    assert context["guidance"] == ["Priorizar setups con edge 3d positivo.", "Evitar duplicados intradia."]
+    assert context["top_setups_3d"][0]["setup"] == "event_momentum"
+    assert context["weak_setups_3d"][0]["setup"] == "baseline_trend"
+    assert context["active_operational_responses"] == [
+        {
+            "action": "deprioritize_setup_before_llm",
+            "scope": "baseline_trend",
+            "detail": "Reducir prioridad del setup baseline_trend.",
+            "mode": "ranking_only",
+        }
+    ]
+
+
+def test_candidate_learning_prior_prefers_profile_and_applies_penalty():
+    candidate = {
+        "symbol": "BASE",
+        "score": 17,
+        "technical_state": {
+            "close": 100.0,
+            "sma_20": 95.0,
+            "rsi_14": 72.0,
+            "macd": 2.0,
+            "macd_signal": 1.0,
+            "volume_zscore_20": 0.1,
+            "return_20d": 0.05,
+            "chart_patterns": [],
+        },
+    }
+    features = _candidate_learning_features(candidate)
+    digest = {
+        "setup_stats_3d": [{"setup": "baseline_trend", "avg_return": 0.01, "win_rate": 0.45, "matured": 12}],
+        "setup_priors_3d": [
+            {
+                "profile_key": _prior_profile_key(features),
+                "setup": "baseline_trend",
+                "expected_edge": 0.03,
+                "win_rate": 0.6,
+                "matured": 8,
+                "confidence_weight": 1.0,
+            }
+        ],
+    }
+    operational_context = {"setup_penalties": {"baseline_trend": 0.05}}
+
+    prior = _candidate_learning_prior(candidate, digest, operational_context)
+
+    assert prior["matched_on"] == "profile"
+    assert prior["expected_edge_3d"] == -0.02
+    assert prior["sample_size_3d"] == 8
+    assert prior["confidence_weight_3d"] == 1.0
+
+
+def test_annotate_technical_context_ranks_recent_edge_above_raw_score():
+    strong = {
+        "symbol": "STRONG",
+        "direction": "long",
+        "score": 14,
+        "setup_quality": "strong",
+        "relative_return_20d": 0.12,
+        "technical_state": {
+            "close": 100.0,
+            "return_20d": 0.08,
+            "sma_20": 95.0,
+            "rsi_14": 70.0,
+            "macd": 2.0,
+            "macd_signal": 1.0,
+            "volume_zscore_20": 1.3,
+            "chart_patterns": [{"bias": "bullish", "status": "confirmed", "label": "breakout"}],
+        },
+    }
+    weak = {
+        "symbol": "WEAK",
+        "direction": "long",
+        "score": 18,
+        "setup_quality": "strong",
+        "relative_return_20d": 0.01,
+        "technical_state": {
+            "close": 100.0,
+            "return_20d": 0.04,
+            "sma_20": 96.0,
+            "rsi_14": 66.0,
+            "macd": 1.8,
+            "macd_signal": 1.0,
+            "volume_zscore_20": -0.3,
+            "chart_patterns": [],
+        },
+    }
+    strong_key = _prior_profile_key(_candidate_learning_features(strong))
+    weak_key = _prior_profile_key(_candidate_learning_features(weak))
+    digest = {
+        "setup_stats_3d": [{"setup": "confirmed_pattern", "avg_return": 0.02, "win_rate": 0.6, "matured": 12}],
+        "setup_priors_3d": [
+            {"profile_key": strong_key, "setup": "confirmed_pattern", "expected_edge": 0.03, "win_rate": 0.65, "matured": 8, "confidence_weight": 1.0},
+            {"profile_key": weak_key, "setup": "baseline_trend", "expected_edge": 0.005, "win_rate": 0.45, "matured": 8, "confidence_weight": 1.0},
+        ],
+        "prior_accuracy_3d": [
+            {"profile_key": strong_key, "avg_abs_error": 0.01, "matured": 7},
+            {"profile_key": weak_key, "avg_abs_error": 0.05, "matured": 7},
+        ],
+    }
+
+    annotated = _annotate_technical_context_with_learning(
+        {"top_longs": [weak, strong], "top_shorts": [], "selected_candidates": [weak, strong]},
+        digest,
+        {},
+    )
+
+    assert annotated["top_longs"][0]["symbol"] == "STRONG"
+    assert annotated["selected_candidates"][0]["symbol"] == "STRONG"
+    assert annotated["top_longs"][0]["rank_priority_score"] > annotated["top_longs"][1]["rank_priority_score"]
+
+
+def test_annotate_technical_context_rewards_breakout_follow_through():
+    breakout = {
+        "symbol": "BRK",
+        "direction": "long",
+        "score": 14,
+        "setup_quality": "strong",
+        "relative_return_20d": 0.08,
+        "technical_state": {
+            "close": 100.0,
+            "return_20d": 0.08,
+            "sma_20": 95.0,
+            "rsi_14": 68.0,
+            "macd": 2.0,
+            "macd_signal": 1.0,
+            "volume_zscore_20": 1.2,
+            "breakout_continuation_long": True,
+            "breakout_failure_risk": False,
+            "chart_patterns": [],
+        },
+    }
+    failing = {
+        "symbol": "FAIL",
+        "direction": "long",
+        "score": 15,
+        "setup_quality": "strong",
+        "relative_return_20d": 0.08,
+        "technical_state": {
+            "close": 100.0,
+            "return_20d": 0.08,
+            "sma_20": 95.0,
+            "rsi_14": 68.0,
+            "macd": 2.0,
+            "macd_signal": 1.0,
+            "volume_zscore_20": 1.2,
+            "breakout_continuation_long": False,
+            "breakout_failure_risk": True,
+            "chart_patterns": [],
+        },
+    }
+
+    annotated = _annotate_technical_context_with_learning(
+        {"top_longs": [failing, breakout], "top_shorts": [], "selected_candidates": [failing, breakout]},
+        {},
+        {},
+    )
+
+    assert annotated["top_longs"][0]["symbol"] == "BRK"
+    assert "breakout_follow_through" in annotated["top_longs"][0]["rank_priority_reason"]
+    assert "breakout_failure_penalty" in annotated["top_longs"][1]["rank_priority_reason"]
+
+
+def test_annotate_technical_context_rewards_orderly_breakout():
+    orderly = {
+        "symbol": "ORDR",
+        "direction": "long",
+        "score": 15,
+        "setup_quality": "strong",
+        "relative_return_20d": 0.07,
+        "technical_state": {
+            "close": 100.0,
+            "return_20d": 0.09,
+            "sma_20": 95.0,
+            "rsi_14": 69.0,
+            "macd": 2.0,
+            "macd_signal": 1.0,
+            "volume_zscore_20": 0.4,
+            "orderly_breakout_long": True,
+            "chart_patterns": [{"bias": "bullish", "status": "confirmed"}],
+        },
+    }
+    baseline = {
+        "symbol": "BASE",
+        "direction": "long",
+        "score": 15,
+        "setup_quality": "strong",
+        "relative_return_20d": 0.07,
+        "technical_state": {
+            "close": 100.0,
+            "return_20d": 0.09,
+            "sma_20": 95.0,
+            "rsi_14": 69.0,
+            "macd": 2.0,
+            "macd_signal": 1.0,
+            "volume_zscore_20": 0.1,
+            "chart_patterns": [],
+        },
+    }
+
+    annotated = _annotate_technical_context_with_learning(
+        {"top_longs": [baseline, orderly], "top_shorts": [], "selected_candidates": [baseline, orderly]},
+        {},
+        {},
+    )
+
+    assert annotated["top_longs"][0]["symbol"] == "ORDR"
+    assert "orderly_breakout" in annotated["top_longs"][0]["rank_priority_reason"]
+
+
+def test_annotate_technical_context_keeps_missing_prior_as_null_edge():
+    candidate = {
+        "symbol": "NEW",
+        "direction": "long",
+        "score": 18,
+        "setup_quality": "strong",
+        "relative_return_20d": 0.12,
+        "technical_state": {
+            "close": 100.0,
+            "return_20d": 0.16,
+            "sma_20": 95.0,
+            "rsi_14": 66.0,
+            "macd": 2.0,
+            "macd_signal": 1.0,
+            "volume_zscore_20": 1.1,
+            "chart_patterns": [{"bias": "bullish", "status": "confirmed"}],
+        },
+    }
+
+    annotated = _annotate_technical_context_with_learning(
+        {"top_longs": [candidate], "top_shorts": [], "selected_candidates": [candidate]},
+        {},
+        {},
+    )
+
+    row = annotated["top_longs"][0]
+    assert row["setup_edge_3d"] is None
+    assert row["effective_setup_edge_3d"] is None
+    assert row["learning_prior"]["matched_on"] == "none"
+    assert "no_recent_edge_history" in row["rank_priority_reason"]
+
+
+def test_entry_quality_gate_blocks_negative_recent_prior(tmp_path):
+    settings = Settings(DATA_DIR=tmp_path)
+    candidate = _quality_context(
+        technical_state={
+            "close": 100.0,
+            "return_20d": 0.08,
+            "sma_20": 95.0,
+            "rsi_14": 72.0,
+            "macd": 2.0,
+            "macd_signal": 1.0,
+            "volume_zscore_20": 0.5,
+            "chart_patterns": [],
+        }
+    )["top_longs"][0]
+    features = _candidate_learning_features(candidate)
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "latest_daily_learning_digest.json").write_text(
+        json.dumps(
+            {
+                "setup_stats_3d": [{"setup": "baseline_trend", "avg_return": -0.01, "win_rate": 0.35, "matured": 10}],
+                "setup_priors_3d": [
+                    {
+                        "profile_key": _prior_profile_key(features),
+                        "setup": "baseline_trend",
+                        "expected_edge": -0.03,
+                        "win_rate": 0.3,
+                        "matured": 8,
+                        "confidence_weight": 1.0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    approved, reason, checks = validate_entry_quality(
+        settings,
+        _quality_recommendation(),
+        {"top_longs": [candidate], "top_shorts": []},
+        {"results": []},
+    )
+
+    assert approved is False
+    assert "prior reciente desfavorable" in reason
+    assert checks["learning_prior"]["expected_edge_3d"] == -0.03
+
+
+def test_entry_quality_gate_blocks_weak_rsi_with_weak_volume(tmp_path):
+    settings = Settings(DATA_DIR=tmp_path)
+    candidate = _quality_context(
+        technical_state={
+            "close": 100.0,
+            "return_20d": 0.08,
+            "sma_20": 96.0,
+            "rsi_14": 58.0,
+            "macd": 2.0,
+            "macd_signal": 1.0,
+            "volume_zscore_20": -0.4,
+            "chart_patterns": [],
+        }
+    )["top_longs"][0]
+
+    approved, reason, checks = validate_entry_quality(
+        settings,
+        _quality_recommendation(),
+        {"top_longs": [candidate], "top_shorts": []},
+        {"results": []},
+    )
+
+    assert approved is False
+    assert "RSI flojo con volumen relativo debil" in reason
+    assert checks["rsi_14"] == 58.0
+    assert checks["volume_zscore_20"] == -0.4
+
+
+def test_entry_quality_gate_blocks_high_prior_estimation_error(tmp_path):
+    settings = Settings(DATA_DIR=tmp_path)
+    candidate = _quality_context(
+        technical_state={
+            "close": 100.0,
+            "return_20d": 0.08,
+            "sma_20": 96.0,
+            "rsi_14": 67.0,
+            "macd": 2.0,
+            "macd_signal": 1.0,
+            "volume_zscore_20": 0.3,
+            "chart_patterns": [],
+        }
+    )["top_longs"][0]
+    features = _candidate_learning_features(candidate)
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "latest_daily_learning_digest.json").write_text(
+        json.dumps(
+            {
+                "setup_stats_3d": [{"setup": "baseline_trend", "avg_return": 0.01, "win_rate": 0.45, "matured": 10}],
+                "setup_priors_3d": [
+                    {
+                        "profile_key": _prior_profile_key(features),
+                        "setup": "baseline_trend",
+                        "expected_edge": 0.015,
+                        "win_rate": 0.45,
+                        "matured": 8,
+                        "confidence_weight": 1.0,
+                    }
+                ],
+                "prior_accuracy_3d": [
+                    {
+                        "profile_key": _prior_profile_key(features),
+                        "setup": "baseline_trend",
+                        "matured": 7,
+                        "expected_edge": 0.015,
+                        "realized_avg_return": -0.01,
+                        "avg_error": 0.025,
+                        "avg_abs_error": 0.05,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    approved, reason, checks = validate_entry_quality(
+        settings,
+        _quality_recommendation(),
+        {"top_longs": [candidate], "top_shorts": []},
+        {"results": []},
+    )
+
+    assert approved is False
+    assert "sobreestima el edge" in reason
+    assert checks["prior_accuracy"]["avg_abs_error"] == 0.05
+
+
+def test_entry_quality_gate_keeps_strong_prior_even_with_error_signal(tmp_path):
+    settings = Settings(DATA_DIR=tmp_path)
+    candidate = _quality_context(
+        technical_state={
+            "close": 100.0,
+            "return_20d": 0.08,
+            "sma_20": 96.0,
+            "rsi_14": 67.0,
+            "macd": 2.0,
+            "macd_signal": 1.0,
+            "volume_zscore_20": 0.3,
+            "chart_patterns": [],
+        }
+    )["top_longs"][0]
+    features = _candidate_learning_features(candidate)
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "latest_daily_learning_digest.json").write_text(
+        json.dumps(
+            {
+                "setup_stats_3d": [{"setup": "baseline_trend", "avg_return": 0.03, "win_rate": 0.6, "matured": 10}],
+                "setup_priors_3d": [
+                    {
+                        "profile_key": _prior_profile_key(features),
+                        "setup": "baseline_trend",
+                        "expected_edge": 0.03,
+                        "win_rate": 0.6,
+                        "matured": 8,
+                        "confidence_weight": 1.0,
+                    }
+                ],
+                "prior_accuracy_3d": [
+                    {
+                        "profile_key": _prior_profile_key(features),
+                        "setup": "baseline_trend",
+                        "matured": 7,
+                        "expected_edge": 0.03,
+                        "realized_avg_return": 0.0,
+                        "avg_error": 0.03,
+                        "avg_abs_error": 0.05,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    approved, reason, checks = validate_entry_quality(
+        settings,
+        _quality_recommendation(),
+        {"top_longs": [candidate], "top_shorts": []},
+        {"results": []},
+    )
+
+    assert approved is True
+    assert reason == "entry-quality aprobado"
+    assert checks["learning_prior"]["expected_edge_3d"] == 0.03
+
+
+def test_sizing_adjustment_for_recommendation_reflects_prior_and_calibration():
+    recommendation = TradeRecommendation(
+        symbol="AAPL",
+        action="buy",
+        confidence=0.92,
+        reason="test",
+        entry_price=100.0,
+        stop_loss=95.0,
+        take_profit=115.0,
+        target_exposure_pct=0.05,
+    )
+    candidate = _quality_context()["top_longs"][0]
+    candidate["learning_prior"] = {
+        "expected_edge_3d": 0.04,
+        "sample_size_3d": 8,
+        "confidence_weight_3d": 1.0,
+    }
+    technical_context = {"top_longs": [candidate], "top_shorts": []}
+    digest = {
+        "confidence_calibration_3d": [
+            {"bucket": "gte0_90", "avg_return": 0.03, "win_rate": 0.6, "matured": 9}
+        ]
+    }
+
+    adjustment = _sizing_adjustment_for_recommendation(
+        recommendation,
+        technical_context,
+        digest,
+        {},
+    )
+
+    assert adjustment["size_multiplier"] == 1.15
+    assert "strong_recent_prior" in adjustment["reason"]
+    assert "strong_confidence_calibration" in adjustment["reason"]
+
+
+def test_sizing_adjustment_penalizes_high_prior_estimation_error():
+    recommendation = TradeRecommendation(
+        symbol="AAPL",
+        action="buy",
+        confidence=0.92,
+        reason="test",
+        entry_price=100.0,
+        stop_loss=95.0,
+        take_profit=115.0,
+        target_exposure_pct=0.05,
+    )
+    candidate = _quality_context()["top_longs"][0]
+    candidate["learning_prior"] = {
+        "profile_key": "baseline_trend|score:12_14",
+        "expected_edge_3d": 0.04,
+        "sample_size_3d": 8,
+        "confidence_weight_3d": 1.0,
+    }
+    technical_context = {"top_longs": [candidate], "top_shorts": []}
+    digest = {
+        "confidence_calibration_3d": [
+            {"bucket": "gte0_90", "avg_return": 0.03, "win_rate": 0.6, "matured": 9}
+        ],
+        "prior_accuracy_3d": [
+            {"profile_key": "baseline_trend|score:12_14", "avg_abs_error": 0.05, "matured": 7}
+        ],
+    }
+
+    adjustment = _sizing_adjustment_for_recommendation(
+        recommendation,
+        technical_context,
+        digest,
+        {},
+    )
+
+    assert adjustment["size_multiplier"] == 0.924
+    assert "high_prior_estimation_error" in adjustment["reason"]

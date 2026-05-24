@@ -10,18 +10,358 @@ from pathlib import Path
 from typing import Any
 
 from agente_bolsa.config import Settings
+from agente_bolsa.llm_usage import record_llm_response
 from agente_bolsa.models import OrderPlan, PortfolioSnapshot, RiskDecision, TradeRecommendation
+from agente_bolsa.storage import Store
 from agente_bolsa.tools.position_sizing import recommended_notional
+from agente_bolsa.tools.daily_learning import load_daily_learning_context
+from agente_bolsa.tools.operational_health import load_operational_block_context, load_operational_response_context
 from agente_bolsa.tools.operational_learning import load_operational_learning_context
 from agente_bolsa.tools.post_market_review import load_post_market_learning_context
+from agente_bolsa.tools.retention import latest_report_path
 from agente_bolsa.tools.risk import OrderProposal, RiskManager
+from agente_bolsa.tools.signal_learning import _indicator_tags
 
 
 VALID_ACTIONS = {"buy", "sell", "hold", "reduce", "exit"}
 
 
+def _buy_plan_risk_amount(plan: dict[str, Any]) -> float:
+    payload = plan.get("payload", {}) or {}
+    entry_price = _float(payload.get("entry_price"))
+    stop_loss = _float(payload.get("stop_loss"))
+    notional = _float(plan.get("notional"))
+    if notional is None:
+        notional = _float(payload.get("notional"))
+    if notional is None or notional <= 0 or entry_price is None or entry_price <= 0 or stop_loss is None:
+        return 0.0
+    if stop_loss >= entry_price:
+        return 0.0
+    return notional * ((entry_price - stop_loss) / entry_price)
+
+
+def _position_risk_amount(position: Any, source_plan: dict[str, Any] | None) -> float:
+    if source_plan is None:
+        return 0.0
+    payload = source_plan.get("payload", {}) or {}
+    stop_loss = _float(payload.get("stop_loss"))
+    current_price = _float(getattr(position, "current_price", None))
+    qty = _float(getattr(position, "qty", None))
+    if stop_loss is None or stop_loss <= 0 or current_price is None or current_price <= 0 or qty is None or qty <= 0:
+        return 0.0
+    if stop_loss >= current_price:
+        return 0.0
+    return qty * (current_price - stop_loss)
+
+
+def _portfolio_risk_context(
+    settings: Settings,
+    portfolio: PortfolioSnapshot,
+) -> dict[str, float]:
+    portfolio_value = float(portfolio.portfolio_value or 0.0)
+    current_portfolio_exposure = (
+        sum(
+            float(position.market_value)
+            for position in portfolio.positions
+            if str(position.side or "long").lower() == "long" and float(position.qty or 0.0) > 0
+        )
+        / portfolio_value
+        if portfolio_value > 0
+        else 0.0
+    )
+
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    latest_buy_plans = store.latest_executed_buy_plans_by_symbol()
+    existing_open_risk_amount = sum(
+        _position_risk_amount(position, (latest_buy_plans.get(position.symbol.upper()) or {}).get("plan"))
+        for position in portfolio.positions
+        if str(position.side or "long").lower() == "long" and float(position.qty or 0.0) > 0
+    )
+    pending_buy_plans = [
+        item
+        for item in store.pending_order_plans(limit=max(50, settings.max_orders_per_cycle * 10))
+        if str(item.get("side") or "").lower() == "buy"
+    ]
+    pending_portfolio_exposure = (
+        sum(float(item.get("notional") or 0.0) for item in pending_buy_plans) / portfolio_value
+        if portfolio_value > 0
+        else 0.0
+    )
+    pending_open_risk_amount = sum(_buy_plan_risk_amount(item) for item in pending_buy_plans)
+    return {
+        "current_portfolio_exposure": current_portfolio_exposure,
+        "pending_portfolio_exposure": pending_portfolio_exposure,
+        "existing_open_risk_amount": existing_open_risk_amount,
+        "pending_open_risk_amount": pending_open_risk_amount,
+    }
+
+
+def _compact_portfolio_for_prompt(portfolio: PortfolioSnapshot) -> dict[str, Any]:
+    return {
+        "account_id": portfolio.account_id,
+        "status": portfolio.status,
+        "currency": portfolio.currency,
+        "cash": round(float(portfolio.cash), 2),
+        "portfolio_value": round(float(portfolio.portfolio_value), 2),
+        "buying_power": round(float(portfolio.buying_power), 2),
+        "positions": [
+            {
+                "symbol": item.symbol,
+                "qty": round(float(item.qty), 4),
+                "market_value": round(float(item.market_value), 2),
+                "avg_entry_price": round(float(item.avg_entry_price), 4),
+                "current_price": round(float(item.current_price), 4),
+                "unrealized_pl": round(float(item.unrealized_pl), 2),
+                "unrealized_plpc": round(float(item.unrealized_plpc), 4),
+                "side": item.side,
+            }
+            for item in portfolio.positions[:12]
+        ],
+        "open_orders": [
+            {
+                "symbol": item.symbol,
+                "side": item.side,
+                "qty": item.qty,
+                "notional": item.notional,
+                "order_type": item.order_type,
+                "status": item.status,
+            }
+            for item in portfolio.open_orders[:12]
+        ],
+    }
+
+
+def _compact_candidate_for_prompt(candidate: dict[str, Any]) -> dict[str, Any]:
+    learning_prior = candidate.get("learning_prior", {}) or {}
+    technical_state = candidate.get("technical_state", {}) or {}
+    risk_plan = candidate.get("risk_plan", {}) or {}
+    return {
+        "symbol": candidate.get("symbol"),
+        "direction": candidate.get("direction"),
+        "score": candidate.get("score"),
+        "setup_name": candidate.get("setup_name") or _setup_name(candidate),
+        "rank_priority_score": candidate.get("rank_priority_score"),
+        "rank_priority_reason": candidate.get("rank_priority_reason"),
+        "setup_edge_3d": candidate.get("setup_edge_3d"),
+        "effective_setup_edge_3d": candidate.get("effective_setup_edge_3d"),
+        "setup_win_rate_3d": candidate.get("setup_win_rate_3d"),
+        "setup_matured_3d": candidate.get("setup_matured_3d"),
+        "operational_penalty": candidate.get("operational_penalty", 0.0),
+        "operational_notes": list(candidate.get("operational_notes", []) or [])[:2],
+        "reasons": list(candidate.get("reasons", []) or [])[:4],
+        "learning_prior": {
+            "matched_on": learning_prior.get("matched_on"),
+            "expected_edge_1d": learning_prior.get("expected_edge_1d"),
+            "expected_edge_3d": learning_prior.get("expected_edge_3d"),
+            "sample_size_3d": learning_prior.get("sample_size_3d"),
+            "confidence_weight_3d": learning_prior.get("confidence_weight_3d"),
+        },
+        "technical_state": {
+            "close": technical_state.get("close"),
+            "return_20d": technical_state.get("return_20d"),
+            "relative_return_20d": candidate.get("relative_return_20d"),
+            "rsi_14": technical_state.get("rsi_14"),
+            "sma_20": technical_state.get("sma_20"),
+            "sma_50": technical_state.get("sma_50"),
+            "sma_200": technical_state.get("sma_200"),
+            "volume_zscore_20": technical_state.get("volume_zscore_20"),
+            "trend_positive": technical_state.get("trend_positive"),
+            "above_long_trend": technical_state.get("above_long_trend"),
+            "event_momentum_long": technical_state.get("event_momentum_long"),
+            "momentum_shakeout_hold_long": technical_state.get("momentum_shakeout_hold_long"),
+            "range_expansion_breakout_long": technical_state.get("range_expansion_breakout_long"),
+            "orderly_breakout_long": technical_state.get("orderly_breakout_long"),
+            "breakout_continuation_long": technical_state.get("breakout_continuation_long"),
+            "breakout_failure_risk": technical_state.get("breakout_failure_risk"),
+            "candlestick_patterns": list(technical_state.get("candlestick_patterns", []) or [])[:3],
+            "chart_patterns": list(technical_state.get("chart_patterns", []) or [])[:3],
+        },
+        "risk_plan": {
+            "entry_price": risk_plan.get("entry_price"),
+            "stop_loss": risk_plan.get("stop_loss"),
+            "take_profit": risk_plan.get("take_profit"),
+        },
+    }
+
+
+def _compact_technical_context_for_prompt(technical_context: dict[str, Any]) -> dict[str, Any]:
+    selected = [
+        _compact_candidate_for_prompt(item)
+        for item in list(technical_context.get("selected_candidates", []) or [])[:6]
+        if isinstance(item, dict)
+    ]
+    top_longs = [
+        _compact_candidate_for_prompt(item)
+        for item in list(technical_context.get("top_longs", []) or [])[:5]
+        if isinstance(item, dict)
+    ]
+    top_shorts = [
+        _compact_candidate_for_prompt(item)
+        for item in list(technical_context.get("top_shorts", []) or [])[:3]
+        if isinstance(item, dict)
+    ]
+    return {
+        "source": technical_context.get("source"),
+        "run_id": technical_context.get("run_id"),
+        "as_of": technical_context.get("as_of"),
+        "selected_candidates": selected,
+        "top_longs": top_longs,
+        "top_shorts": top_shorts,
+        "analysis_plan_counts": technical_context.get("analysis_plan_counts", {}),
+        "breakout_confirmed": list(technical_context.get("breakout_confirmed", []) or [])[:5],
+        "breakout_watch": list(technical_context.get("breakout_watch", []) or [])[:5],
+        "news_supportive_symbols": list(technical_context.get("news_supportive_symbols", []) or [])[:8],
+        "warnings": list(technical_context.get("warnings", []) or [])[:4],
+    }
+
+
+def _candidate_symbols(technical_context: dict[str, Any]) -> set[str]:
+    return {
+        str(item.get("symbol", "")).upper()
+        for item in _candidate_items(technical_context)
+        if str(item.get("symbol", "")).strip()
+    }
+
+
+def _compact_sentiment_for_prompt(sentiment_context: dict[str, Any], technical_context: dict[str, Any]) -> dict[str, Any]:
+    candidate_symbols = _candidate_symbols(technical_context)
+    rows = []
+    for item in list(sentiment_context.get("results", []) or []):
+        symbol = str(item.get("symbol", "")).upper()
+        if candidate_symbols and symbol not in candidate_symbols:
+            continue
+        sentiment = item.get("sentiment", {}) or {}
+        news_rows = []
+        for news in list(item.get("news", []) or [])[:2]:
+            news_rows.append(
+                {
+                    "title": news.get("title"),
+                    "publisher": news.get("publisher"),
+                    "published_at": news.get("published_at"),
+                }
+            )
+        rows.append(
+            {
+                "symbol": symbol,
+                "technical_direction": item.get("technical_direction"),
+                "technical_score": item.get("technical_score"),
+                "news_count": item.get("news_count"),
+                "sentiment": {
+                    "supports_technical_setup": sentiment.get("supports_technical_setup"),
+                    "sentiment_score": sentiment.get("sentiment_score"),
+                    "summary": sentiment.get("summary"),
+                    "catalysts": list(sentiment.get("catalysts", []) or [])[:3],
+                    "risks": list(sentiment.get("risks", []) or [])[:3],
+                },
+                "material_risk": item.get("material_risk"),
+                "news": news_rows,
+            }
+        )
+        if len(rows) >= 8:
+            break
+    return {
+        "path": sentiment_context.get("path"),
+        "run_id": sentiment_context.get("run_id"),
+        "as_of": sentiment_context.get("as_of"),
+        "results": rows,
+    }
+
+
+def _compact_daily_learning_for_prompt(digest: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "available": digest.get("available"),
+        "as_of": digest.get("as_of"),
+        "summary": digest.get("summary", {}),
+        "guidance": list(digest.get("guidance", []) or [])[:6],
+        "setup_stats_3d": list(digest.get("setup_stats_3d", []) or [])[:8],
+        "weak_buckets_3d": list(digest.get("weak_buckets_3d", []) or [])[:6],
+        "strong_buckets_3d": list(digest.get("strong_buckets_3d", []) or [])[:6],
+        "confidence_calibration_3d": list(digest.get("confidence_calibration_3d", []) or [])[:6],
+        "prior_accuracy_3d": list(digest.get("prior_accuracy_3d", []) or [])[:6],
+        "pre_earnings": digest.get("pre_earnings", {"available": False}),
+    }
+
+
+def _compact_operational_learning_for_prompt(context: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "available": context.get("available"),
+        "as_of": context.get("as_of"),
+        "summary": context.get("summary", {}),
+        "active_rules": list(context.get("active_rules", []) or [])[:6],
+        "shadow_rules": list(context.get("shadow_rules", []) or [])[:6],
+        "decision_summary": list(context.get("decision_summary", []) or [])[:8],
+        "learning_journal": list(context.get("learning_journal", []) or [])[:6],
+        "llm_review": context.get("llm_review", {}),
+    }
+
+
+def _compact_post_market_learning_for_prompt(context: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "available": context.get("available"),
+        "as_of": context.get("as_of"),
+        "session_date": context.get("session_date"),
+        "summary": context.get("summary", {}),
+        "active_guidance": list(context.get("active_guidance", []) or [])[:6],
+        "proposed_improvements": list(context.get("proposed_improvements", []) or [])[:6],
+    }
+
+
+def _llm_prompt_payload(
+    settings: Settings,
+    portfolio: PortfolioSnapshot,
+    technical_context: dict[str, Any],
+    sentiment_context: dict[str, Any],
+    rebalance_context: dict[str, Any] | None,
+    daily_learning_digest: dict[str, Any],
+    decision_learning_context: dict[str, Any],
+    operational_response_context: dict[str, Any],
+    *,
+    compact: bool,
+) -> dict[str, Any]:
+    return {
+        "portfolio": _compact_portfolio_for_prompt(portfolio) if compact else asdict(portfolio),
+        "technical_candidates": _compact_technical_context_for_prompt(technical_context) if compact else technical_context,
+        "news_sentiment": _compact_sentiment_for_prompt(sentiment_context, technical_context) if compact else sentiment_context,
+        "portfolio_rebalance": rebalance_context or {},
+        "daily_learning_digest": _compact_daily_learning_for_prompt(daily_learning_digest) if compact else daily_learning_digest,
+        "decision_learning_context": decision_learning_context,
+        "operational_responses": list((operational_response_context.get("responses", []) if isinstance(operational_response_context, dict) else []) or [])[:8],
+        "post_market_learning": _compact_post_market_learning_for_prompt(load_post_market_learning_context(settings.data_dir))
+        if compact
+        else load_post_market_learning_context(settings.data_dir),
+        "operational_learning": _compact_operational_learning_for_prompt(load_operational_learning_context(settings.data_dir))
+        if compact
+        else load_operational_learning_context(settings.data_dir),
+        "risk_limits": {
+            "max_portfolio_exposure": settings.max_portfolio_exposure,
+            "max_position_exposure": settings.max_position_exposure,
+            "max_risk_per_trade": settings.max_risk_per_trade,
+            "max_orders_per_cycle": settings.max_orders_per_cycle,
+            "max_daily_buy_orders": settings.max_daily_buy_orders,
+            "min_order_notional": settings.min_order_notional,
+            "allow_position_adds": settings.allow_position_adds,
+            "min_confidence_to_trade": settings.min_llm_confidence_to_trade,
+            "allow_short_selling": settings.allow_short_selling,
+        },
+    }
+
+
 def _latest_report(data_dir: Path, prefix: str) -> Path | None:
-    reports = list((data_dir / "reports").glob(f"{prefix}_*.json"))
+    latest_name = {
+        "closed_market_technical_study": "latest_closed_market_technical_study.json",
+        "news_sentiment": "latest_news_sentiment.json",
+    }.get(prefix)
+    if latest_name:
+        path = latest_report_path(data_dir, prefix, latest_name)
+        if path is not None:
+            return path
+
+    reports = [
+        path
+        for path in (data_dir / "reports").glob(f"{prefix}_*.json")
+        if not path.name.endswith(".manifest.json")
+    ]
     if not reports:
         return None
     return max(reports, key=lambda path: path.stat().st_mtime)
@@ -167,6 +507,392 @@ def _sentiment_for_symbol(sentiment_context: dict[str, Any] | None, symbol: str)
     return {}
 
 
+def _setup_name(candidate: dict[str, Any]) -> str:
+    technical_state = candidate.get("technical_state", {}) or {}
+    if technical_state.get("event_momentum_long") or candidate.get("event_momentum_long"):
+        return "event_momentum"
+    if technical_state.get("range_expansion_breakout_long") or candidate.get("range_expansion_breakout_long"):
+        return "range_expansion_breakout"
+    if technical_state.get("orderly_breakout_long") or candidate.get("orderly_breakout_long"):
+        return "orderly_breakout"
+    if technical_state.get("momentum_shakeout_hold_long") or candidate.get("momentum_shakeout_hold_long"):
+        return "momentum_shakeout"
+    if technical_state.get("breakout_continuation_long") or candidate.get("breakout_continuation_long"):
+        return "breakout_continuation"
+    chart_patterns = technical_state.get("chart_patterns", []) or candidate.get("chart_patterns", []) or []
+    if isinstance(chart_patterns, dict):
+        if int(chart_patterns.get("bullish_confirmed_count") or 0) > 0:
+            return "confirmed_pattern"
+    elif any(item.get("bias") == "bullish" and item.get("status") == "confirmed" for item in chart_patterns):
+        return "confirmed_pattern"
+    volume_z = _technical_value(candidate, "volume_zscore_20")
+    return_20d = _technical_value(candidate, "return_20d")
+    if isinstance(volume_z, (int, float)) and isinstance(return_20d, (int, float)) and volume_z >= 1.0 and return_20d > 0:
+        return "trend_volume"
+    return "baseline_trend"
+
+
+def _setup_stats_map(digest: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    rows = digest.get("setup_stats_3d", []) if isinstance(digest, dict) else []
+    return {
+        str(item.get("setup") or "").strip(): item
+        for item in rows or []
+        if str(item.get("setup") or "").strip()
+    }
+
+
+def _prior_profile_key(features: dict[str, Any]) -> str:
+    feature_tags = _indicator_tags({"features": features})
+    selected = []
+    for prefix in ("score:", "rsi:", "sma20_dist:", "volume_z:", "chart_confirmed:"):
+        for tag in feature_tags:
+            if tag.startswith(prefix):
+                selected.append(tag)
+                break
+    return "|".join([_setup_name(features), *selected])
+
+
+def _candidate_learning_features(candidate: dict[str, Any]) -> dict[str, Any]:
+    technical_state = candidate.get("technical_state", {}) or {}
+    close = _float(technical_state.get("close"))
+    sma20 = _float(technical_state.get("sma_20"))
+    macd = _float(technical_state.get("macd"))
+    macd_signal = _float(technical_state.get("macd_signal"))
+    chart_patterns = technical_state.get("chart_patterns", []) or candidate.get("chart_patterns", []) or []
+    confirmed_bullish = sum(
+        1 for item in chart_patterns if item.get("bias") == "bullish" and item.get("status") == "confirmed"
+    )
+    return {
+        "score": candidate.get("score"),
+        "rsi_14": _technical_value(candidate, "rsi_14"),
+        "distance_sma20": ((close - sma20) / sma20) if close and sma20 else None,
+        "volume_zscore_20": _technical_value(candidate, "volume_zscore_20"),
+        "macd_diff": (macd - macd_signal) if macd is not None and macd_signal is not None else None,
+        "chart_patterns": {"bullish_confirmed_count": confirmed_bullish},
+        "breakout_continuation_long": bool(_technical_value(candidate, "breakout_continuation_long")),
+        "range_expansion_breakout_long": bool(_technical_value(candidate, "range_expansion_breakout_long")),
+        "orderly_breakout_long": bool(_technical_value(candidate, "orderly_breakout_long")),
+        "breakout_failure_risk": bool(_technical_value(candidate, "breakout_failure_risk")),
+        "event_momentum_long": bool(_technical_value(candidate, "event_momentum_long")),
+        "momentum_shakeout_hold_long": bool(_technical_value(candidate, "momentum_shakeout_hold_long")),
+        "return_20d": _technical_value(candidate, "return_20d"),
+    }
+
+
+def _setup_prior_maps(digest: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    priors_3d = {
+        str(item.get("profile_key") or "").strip(): item
+        for item in (digest.get("setup_priors_3d", []) if isinstance(digest, dict) else []) or []
+        if str(item.get("profile_key") or "").strip()
+    }
+    priors_1d = {
+        str(item.get("profile_key") or "").strip(): item
+        for item in (digest.get("setup_priors_1d", []) if isinstance(digest, dict) else []) or []
+        if str(item.get("profile_key") or "").strip()
+    }
+    setup_stats = _setup_stats_map(digest)
+    return priors_1d, priors_3d, setup_stats
+
+
+def _candidate_learning_prior(
+    candidate: dict[str, Any],
+    daily_learning_digest: dict[str, Any],
+    operational_response_context: dict[str, Any],
+) -> dict[str, Any]:
+    features = _candidate_learning_features(candidate)
+    profile_key = _prior_profile_key(features)
+    priors_1d, priors_3d, setup_stats = _setup_prior_maps(daily_learning_digest)
+    setup_name = _setup_name(candidate)
+    profile_1d = priors_1d.get(profile_key)
+    profile_3d = priors_3d.get(profile_key)
+    setup_row = setup_stats.get(setup_name, {})
+    setup_penalty = 0.0
+    if isinstance(operational_response_context, dict):
+        penalty_map = operational_response_context.get("setup_penalties", {}) or {}
+        setup_penalty = _float(penalty_map.get(setup_name)) or 0.0
+    matched_on = "profile" if profile_3d or profile_1d else "setup" if setup_row else "none"
+    expected_edge_1d = _float((profile_1d or {}).get("expected_edge"))
+    expected_edge_3d = _float((profile_3d or {}).get("expected_edge"))
+    if expected_edge_3d is None and setup_row:
+        expected_edge_3d = _float(setup_row.get("avg_return"))
+    if expected_edge_3d is not None:
+        expected_edge_3d = round(expected_edge_3d - setup_penalty, 4)
+    return {
+        "setup": setup_name,
+        "profile_key": profile_key,
+        "matched_on": matched_on,
+        "expected_edge_1d": expected_edge_1d,
+        "expected_edge_3d": expected_edge_3d,
+        "win_rate_recent_3d": _float((profile_3d or setup_row).get("win_rate")),
+        "sample_size_3d": int((profile_3d or setup_row).get("matured") or 0),
+        "confidence_weight_3d": _float((profile_3d or {}).get("confidence_weight")) if profile_3d else 0.35 if setup_row else 0.0,
+        "operational_penalty": round(setup_penalty, 4),
+    }
+
+
+def _candidate_rank_priority(
+    candidate: dict[str, Any],
+    daily_learning_digest: dict[str, Any],
+    operational_response_context: dict[str, Any],
+) -> dict[str, Any]:
+    learning_prior = candidate.get("learning_prior") or _candidate_learning_prior(
+        candidate,
+        daily_learning_digest,
+        operational_response_context,
+    )
+    prior_accuracy = _prior_accuracy_map(daily_learning_digest).get(str(learning_prior.get("profile_key") or "").strip(), {})
+    score = _float(candidate.get("score")) or 0.0
+    volume_z = _float(_technical_value(candidate, "volume_zscore_20")) or 0.0
+    relative_return_20d = _float(candidate.get("relative_return_20d")) or 0.0
+    expected_edge_3d_raw = _float(learning_prior.get("expected_edge_3d"))
+    expected_edge_3d = expected_edge_3d_raw or 0.0
+    operational_penalty = _float(learning_prior.get("operational_penalty")) or 0.0
+    matched_on = str(learning_prior.get("matched_on") or "")
+    prior_avg_abs_error = _float(prior_accuracy.get("avg_abs_error")) or 0.0
+    confirmed_patterns = len(_confirmed_bullish_patterns(candidate))
+    breakout_continuation = bool(_technical_value(candidate, "breakout_continuation_long"))
+    range_expansion_breakout = bool(_technical_value(candidate, "range_expansion_breakout_long"))
+    orderly_breakout = bool(_technical_value(candidate, "orderly_breakout_long"))
+    breakout_failure_risk = bool(_technical_value(candidate, "breakout_failure_risk"))
+    score_component = min(0.04, max(0.0, score / 1000.0))
+    relative_strength_component = min(0.03, max(-0.01, relative_return_20d * 0.25))
+    volume_component = 0.01 if volume_z >= 1.0 else -0.01 if volume_z < 0 else 0.0
+    pattern_component = min(0.02, confirmed_patterns * 0.01)
+    continuation_component = (
+        0.025
+        if range_expansion_breakout
+        else 0.02
+        if orderly_breakout
+        else 0.015
+        if breakout_continuation
+        else 0.0
+    )
+    failure_penalty = 0.02 if breakout_failure_risk else 0.0
+    prior_error_penalty = min(0.06, prior_avg_abs_error * 0.5)
+    priority_score = (
+        expected_edge_3d
+        - operational_penalty
+        - prior_error_penalty
+        - failure_penalty
+        + score_component
+        + relative_strength_component
+        + volume_component
+        + pattern_component
+        + continuation_component
+    )
+    reasons = []
+    if expected_edge_3d > 0:
+        reasons.append("recent_edge")
+    elif matched_on == "none":
+        reasons.append("no_recent_edge_history")
+    if prior_avg_abs_error >= 0.04:
+        reasons.append("estimation_error_penalty")
+    if volume_component > 0:
+        reasons.append("volume_confirmation")
+    if pattern_component > 0:
+        reasons.append("confirmed_pattern")
+    if breakout_continuation:
+        reasons.append("breakout_follow_through")
+    if range_expansion_breakout:
+        reasons.append("range_expansion_breakout")
+    if orderly_breakout:
+        reasons.append("orderly_breakout")
+    if breakout_failure_risk:
+        reasons.append("breakout_failure_penalty")
+    if relative_strength_component > 0:
+        reasons.append("relative_strength")
+    return {
+        "rank_priority_score": round(priority_score, 4),
+        "rank_priority_components": {
+            "expected_edge_3d": round(expected_edge_3d, 4),
+            "operational_penalty": round(operational_penalty, 4),
+            "prior_error_penalty": round(prior_error_penalty, 4),
+            "score_component": round(score_component, 4),
+            "relative_strength_component": round(relative_strength_component, 4),
+            "volume_component": round(volume_component, 4),
+            "pattern_component": round(pattern_component, 4),
+            "continuation_component": round(continuation_component, 4),
+            "failure_penalty": round(failure_penalty, 4),
+        },
+        "rank_priority_reason": ",".join(reasons) if reasons else "baseline",
+    }
+
+
+def _annotate_technical_context_with_learning(
+    technical_context: dict[str, Any],
+    daily_learning_digest: dict[str, Any],
+    operational_response_context: dict[str, Any],
+) -> dict[str, Any]:
+    notes = (
+        operational_response_context.get("response_notes", {})
+        if isinstance(operational_response_context, dict)
+        else {}
+    )
+
+    def annotate(candidate: dict[str, Any]) -> dict[str, Any]:
+        setup_name = _setup_name(candidate)
+        prior = _candidate_learning_prior(candidate, daily_learning_digest, operational_response_context)
+        priority = _candidate_rank_priority(
+            {**candidate, "learning_prior": prior},
+            daily_learning_digest,
+            operational_response_context,
+        )
+        setup_edge = _float(prior.get("expected_edge_3d"))
+        penalty = _float(prior.get("operational_penalty")) or 0.0
+        return {
+            **candidate,
+            "setup_name": candidate.get("setup_name") or setup_name,
+            "setup_edge_3d": round(setup_edge, 4) if setup_edge is not None else None,
+            "operational_penalty": round(penalty, 4),
+            "effective_setup_edge_3d": round(setup_edge, 4) if setup_edge is not None else None,
+            "setup_win_rate_3d": prior.get("win_rate_recent_3d"),
+            "setup_matured_3d": prior.get("sample_size_3d"),
+            "learning_prior": prior,
+            "operational_notes": notes.get(setup_name, []),
+            "rank_priority_score": priority.get("rank_priority_score"),
+            "rank_priority_components": priority.get("rank_priority_components"),
+            "rank_priority_reason": priority.get("rank_priority_reason"),
+        }
+
+    annotated = dict(technical_context)
+    for key in ("selected_candidates", "top_longs", "top_shorts", "all_candidates"):
+        rows = technical_context.get(key, []) or []
+        if isinstance(rows, list):
+            items = [annotate(item) if isinstance(item, dict) else item for item in rows]
+            if key != "top_shorts":
+                items = sorted(
+                    items,
+                    key=lambda item: (
+                        float(item.get("rank_priority_score") or 0.0),
+                        float(item.get("score") or 0.0),
+                    ),
+                    reverse=True,
+                )
+            annotated[key] = items
+    return annotated
+
+
+def _build_decision_learning_context(
+    daily_learning_digest: dict[str, Any],
+    operational_response_context: dict[str, Any],
+) -> dict[str, Any]:
+    setup_rows = list((daily_learning_digest or {}).get("setup_stats_3d", []) or [])
+    ranked = [
+        item
+        for item in setup_rows
+        if isinstance(item, dict) and isinstance(item.get("avg_return"), (int, float))
+    ]
+    ranked.sort(key=lambda item: (float(item.get("avg_return") or 0.0), float(item.get("win_rate") or 0.0)), reverse=True)
+    active_responses = []
+    for item in (operational_response_context.get("responses", []) if isinstance(operational_response_context, dict) else []):
+        if str(item.get("status") or "") in {"guarded_active", "active"}:
+            active_responses.append(
+                {
+                    "action": item.get("action"),
+                    "scope": item.get("scope"),
+                    "detail": item.get("detail"),
+                    "mode": item.get("mode"),
+                }
+            )
+    return {
+        "guidance": list((daily_learning_digest or {}).get("guidance", []) or [])[:8],
+        "top_setups_3d": ranked[:5],
+        "weak_setups_3d": list(reversed(ranked[-5:]))[:5],
+        "active_operational_responses": active_responses[:8],
+        "confidence_calibration_3d": list((daily_learning_digest or {}).get("confidence_calibration_3d", []) or [])[:8],
+        "prior_accuracy_3d": list((daily_learning_digest or {}).get("prior_accuracy_3d", []) or [])[:8],
+        "summary": (daily_learning_digest or {}).get("summary", {}),
+    }
+
+
+def _confidence_bucket(value: Any) -> str:
+    number = _float(value)
+    if number is None:
+        return "unknown"
+    if number < 0.60:
+        return "lt0_60"
+    if number < 0.75:
+        return "0_60_0_74"
+    if number < 0.90:
+        return "0_75_0_89"
+    return "gte0_90"
+
+
+def _confidence_calibration_map(digest: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    rows = digest.get("confidence_calibration_3d", []) if isinstance(digest, dict) else []
+    return {
+        str(item.get("bucket") or "").strip(): item
+        for item in rows or []
+        if str(item.get("bucket") or "").strip()
+    }
+
+
+def _prior_accuracy_map(digest: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    rows = digest.get("prior_accuracy_3d", []) if isinstance(digest, dict) else []
+    return {
+        str(item.get("profile_key") or "").strip(): item
+        for item in rows or []
+        if str(item.get("profile_key") or "").strip()
+    }
+
+
+def _sizing_adjustment_for_recommendation(
+    recommendation: TradeRecommendation,
+    technical_context: dict[str, Any],
+    daily_learning_digest: dict[str, Any],
+    operational_response_context: dict[str, Any],
+) -> dict[str, Any]:
+    candidate = _candidate_for_symbol(technical_context, recommendation.symbol) or {}
+    learning_prior = candidate.get("learning_prior") or _candidate_learning_prior(
+        candidate,
+        daily_learning_digest,
+        operational_response_context,
+    )
+    calibration = _confidence_calibration_map(daily_learning_digest).get(_confidence_bucket(recommendation.confidence), {})
+    prior_accuracy = _prior_accuracy_map(daily_learning_digest).get(str(learning_prior.get("profile_key") or "").strip(), {})
+    prior_edge = _float(learning_prior.get("expected_edge_3d"))
+    prior_sample = int(learning_prior.get("sample_size_3d") or 0)
+    prior_confidence = _float(learning_prior.get("confidence_weight_3d")) or 0.0
+    calibration_edge = _float(calibration.get("avg_return"))
+    calibration_win_rate = _float(calibration.get("win_rate"))
+    calibration_sample = int(calibration.get("matured") or 0)
+    prior_avg_abs_error = _float(prior_accuracy.get("avg_abs_error"))
+    prior_accuracy_sample = int(prior_accuracy.get("matured") or 0)
+
+    multiplier = 1.0
+    reasons = []
+    if prior_edge is not None and prior_sample >= 6 and prior_confidence >= 0.5:
+        if prior_edge <= 0:
+            multiplier *= 0.75
+            reasons.append("negative_recent_prior")
+        elif prior_edge >= 0.03:
+            multiplier *= 1.10
+            reasons.append("strong_recent_prior")
+    if calibration_edge is not None and calibration_sample >= 5:
+        if calibration_edge <= 0 or ((calibration_win_rate or 0.0) < 0.45):
+            multiplier *= 0.85
+            reasons.append("weak_confidence_calibration")
+        elif calibration_edge >= 0.02 and (calibration_win_rate or 0.0) >= 0.55:
+            multiplier *= 1.05
+            reasons.append("strong_confidence_calibration")
+    if prior_avg_abs_error is not None and prior_accuracy_sample >= 5:
+        if prior_avg_abs_error >= 0.04:
+            multiplier *= 0.80
+            reasons.append("high_prior_estimation_error")
+        elif prior_avg_abs_error <= 0.015:
+            multiplier *= 1.03
+            reasons.append("stable_prior_estimation")
+    multiplier = min(1.15, max(0.50, multiplier))
+    return {
+        "size_multiplier": round(multiplier, 4),
+        "reason": ",".join(reasons) if reasons else "baseline",
+        "learning_prior": learning_prior,
+        "confidence_bucket": _confidence_bucket(recommendation.confidence),
+        "confidence_calibration": calibration,
+        "prior_accuracy": prior_accuracy,
+    }
+
+
 def validate_entry_quality(
     settings: Settings,
     recommendation: TradeRecommendation,
@@ -190,11 +916,36 @@ def validate_entry_quality(
     macd_signal = _float(_technical_value(candidate, "macd_signal"))
     return_20d = _float(_technical_value(candidate, "return_20d"))
     volume_z = _float(_technical_value(candidate, "volume_zscore_20"))
+    gap_pct = _float(_technical_value(candidate, "gap_pct"))
+    close_position = _float(_technical_value(candidate, "close_position_in_range"))
+    event_momentum_long = bool(_technical_value(candidate, "event_momentum_long"))
+    range_expansion_breakout_long = bool(_technical_value(candidate, "range_expansion_breakout_long"))
+    orderly_breakout_long = bool(_technical_value(candidate, "orderly_breakout_long"))
+    momentum_shakeout_hold_long = bool(_technical_value(candidate, "momentum_shakeout_hold_long"))
     relative_return_20d = _float(candidate.get("relative_return_20d"))
     confirmed_patterns = _confirmed_bullish_patterns(candidate)
+    momentum_confirmation_long = (
+        not event_momentum_long
+        and not range_expansion_breakout_long
+        and not orderly_breakout_long
+        and not momentum_shakeout_hold_long
+        and bool(confirmed_patterns)
+        and (return_20d is not None and return_20d >= settings.entry_quality_momentum_confirmation_min_return_20d)
+        and (volume_z is not None and volume_z >= settings.entry_quality_momentum_confirmation_min_volume_z)
+        and (close_position is not None and close_position >= 0.75)
+    )
     sentiment = _sentiment_for_symbol(sentiment_context, recommendation.symbol)
     sentiment_score = _float(sentiment.get("sentiment_score"))
     sentiment_confidence = _float(sentiment.get("confidence")) or 0.0
+    sentiment_flags = [str(flag) for flag in sentiment.get("risk_flags", [])]
+    daily_learning_digest = load_daily_learning_context(settings.data_dir)
+    operational_response_context = load_operational_response_context(settings.data_dir)
+    learning_prior = candidate.get("learning_prior") or _candidate_learning_prior(
+        candidate,
+        daily_learning_digest,
+        operational_response_context,
+    )
+    prior_accuracy = _prior_accuracy_map(daily_learning_digest).get(str(learning_prior.get("profile_key") or "").strip(), {})
 
     checks = {
         "score": score,
@@ -208,10 +959,20 @@ def validate_entry_quality(
         "macd_signal": macd_signal,
         "return_20d": return_20d,
         "volume_zscore_20": volume_z,
+        "gap_pct": gap_pct,
+        "close_position_in_range": close_position,
+        "event_momentum_long": event_momentum_long,
+        "range_expansion_breakout_long": range_expansion_breakout_long,
+        "orderly_breakout_long": orderly_breakout_long,
+        "momentum_shakeout_hold_long": momentum_shakeout_hold_long,
+        "momentum_confirmation_long": momentum_confirmation_long,
         "relative_return_20d": relative_return_20d,
         "confirmed_bullish_patterns": len(confirmed_patterns),
         "sentiment_score": sentiment_score,
         "sentiment_confidence": sentiment_confidence,
+        "sentiment_flags": sentiment_flags,
+        "learning_prior": learning_prior,
+        "prior_accuracy": prior_accuracy,
     }
 
     if direction != "long":
@@ -226,22 +987,156 @@ def validate_entry_quality(
         return False, f"fuerza relativa 20d negativa vs benchmark ({relative_return_20d:.2%})", checks
     if macd is not None and macd_signal is not None and macd <= macd_signal:
         return False, "MACD no confirma momentum alcista", checks
+    if settings.news_sentiment_fail_closed_for_buys and "sentiment_failed" in sentiment_flags:
+        return False, "sentimiento no validado; compra bloqueada por fallo de noticias", checks
     if sentiment_score is not None and sentiment_confidence >= 0.5 and sentiment_score <= -0.5:
         return False, f"sentimiento negativo confirmado ({sentiment_score})", checks
+    if (
+        rsi is not None
+        and rsi < settings.entry_quality_weak_rsi_max
+        and volume_z is not None
+        and volume_z < settings.entry_quality_weak_volume_max
+        and not event_momentum_long
+        and not range_expansion_breakout_long
+        and not orderly_breakout_long
+        and not momentum_shakeout_hold_long
+    ):
+        return False, "RSI flojo con volumen relativo debil", checks
+    prior_edge_3d = _float(learning_prior.get("expected_edge_3d"))
+    prior_sample_3d = int(learning_prior.get("sample_size_3d") or 0)
+    prior_confidence = _float(learning_prior.get("confidence_weight_3d")) or 0.0
+    prior_avg_abs_error = _float(prior_accuracy.get("avg_abs_error"))
+    prior_accuracy_sample = int(prior_accuracy.get("matured") or 0)
+    if prior_edge_3d is not None and prior_sample_3d >= 6 and prior_confidence >= 0.5:
+        if (
+            prior_edge_3d <= -0.02
+            and not event_momentum_long
+            and not range_expansion_breakout_long
+            and not orderly_breakout_long
+            and not momentum_shakeout_hold_long
+            and not momentum_confirmation_long
+        ):
+            return False, f"setup prior reciente desfavorable ({prior_edge_3d:.2%})", checks
+        if prior_edge_3d < 0 and score < settings.entry_quality_min_score + 2 and not confirmed_patterns:
+            return False, "setup prior reciente debil sin confirmacion suficiente", checks
+    if (
+        prior_avg_abs_error is not None
+        and prior_accuracy_sample >= settings.entry_quality_prior_error_min_samples
+        and prior_avg_abs_error >= settings.entry_quality_max_prior_avg_abs_error
+        and (prior_edge_3d is None or prior_edge_3d < 0.02)
+        and not event_momentum_long
+        and not range_expansion_breakout_long
+        and not orderly_breakout_long
+        and not momentum_shakeout_hold_long
+        and not momentum_confirmation_long
+    ):
+        return False, "perfil reciente sobreestima el edge con demasiada frecuencia", checks
 
     if close and sma20:
         sma20_distance = (close - sma20) / sma20
         checks["sma20_distance"] = round(sma20_distance, 4)
-        if sma20_distance > settings.entry_quality_max_sma20_distance:
+        if (
+            sma20_distance > settings.entry_quality_max_sma20_distance
+            and not event_momentum_long
+            and not range_expansion_breakout_long
+            and not orderly_breakout_long
+            and not momentum_shakeout_hold_long
+            and not momentum_confirmation_long
+        ):
             return (
                 False,
                 f"precio demasiado extendido sobre SMA20 ({sma20_distance:.2%})",
                 checks,
             )
-        extended = (
-            sma20_distance > settings.entry_quality_extended_sma20_distance
-            or (rsi is not None and rsi > settings.entry_quality_max_rsi)
-        )
+        if sma20_distance > settings.entry_quality_max_sma20_distance and event_momentum_long:
+            checks["event_momentum_exception"] = {
+                "min_score": settings.entry_quality_extreme_rsi_min_score,
+                "min_volume_zscore_20": 2.0,
+                "min_close_position_in_range": 0.65,
+            }
+            if score < settings.entry_quality_extreme_rsi_min_score:
+                return False, "repricing alcista sin score suficiente para excepcion de extension", checks
+            if volume_z is None or volume_z < 2.0:
+                return False, "repricing alcista sin volumen anormal suficiente", checks
+            if close_position is None or close_position < 0.65:
+                return False, "repricing alcista sin cierre firme en el rango diario", checks
+            extended = False
+        elif sma20_distance > settings.entry_quality_max_sma20_distance and range_expansion_breakout_long:
+            checks["range_expansion_breakout_exception"] = {
+                "max_sma20_distance": settings.entry_quality_range_expansion_max_sma20_distance,
+                "max_rsi": settings.entry_quality_range_expansion_max_rsi,
+                "min_score": settings.entry_quality_extreme_rsi_min_score,
+                "min_volume_zscore_20": 1.0,
+                "min_close_position_in_range": 0.75,
+            }
+            if sma20_distance > settings.entry_quality_range_expansion_max_sma20_distance:
+                return False, "range expansion demasiado extendido sobre SMA20", checks
+            if rsi is not None and rsi > settings.entry_quality_range_expansion_max_rsi:
+                return False, "range expansion con RSI demasiado extremo", checks
+            if score < settings.entry_quality_extreme_rsi_min_score:
+                return False, "range expansion sin score suficiente", checks
+            if volume_z is None or volume_z < 1.0:
+                return False, "range expansion sin volumen relativo suficiente", checks
+            if close_position is None or close_position < 0.75:
+                return False, "range expansion sin cierre fuerte en el rango diario", checks
+            extended = False
+        elif sma20_distance > settings.entry_quality_max_sma20_distance and orderly_breakout_long:
+            checks["orderly_breakout_exception"] = {
+                "max_sma20_distance": settings.entry_quality_orderly_breakout_max_sma20_distance,
+                "max_rsi": settings.entry_quality_orderly_breakout_max_rsi,
+                "min_score": settings.entry_quality_orderly_breakout_min_score,
+                "min_volume_zscore_20": settings.entry_quality_orderly_breakout_min_volume_z,
+                "min_close_position_in_range": 0.80,
+            }
+            if sma20_distance > settings.entry_quality_orderly_breakout_max_sma20_distance:
+                return False, "orderly breakout demasiado extendido sobre SMA20", checks
+            if rsi is not None and rsi > settings.entry_quality_orderly_breakout_max_rsi:
+                return False, "orderly breakout con RSI demasiado extremo", checks
+            if score < settings.entry_quality_orderly_breakout_min_score:
+                return False, "orderly breakout sin score suficiente", checks
+            if volume_z is None or volume_z < settings.entry_quality_orderly_breakout_min_volume_z:
+                return False, "orderly breakout sin volumen relativo suficiente", checks
+            if close_position is None or close_position < 0.80:
+                return False, "orderly breakout sin cierre muy fuerte en el rango diario", checks
+            extended = False
+        elif sma20_distance > settings.entry_quality_max_sma20_distance and momentum_shakeout_hold_long:
+            checks["momentum_shakeout_exception"] = {
+                "max_sma20_distance": 0.20,
+                "min_score": settings.entry_quality_extreme_rsi_min_score,
+                "min_volume_zscore_20": 1.5,
+                "min_close_position_in_range": 0.70,
+            }
+            if sma20_distance > 0.20:
+                return False, "shakeout alcista demasiado extendido sobre SMA20", checks
+            if score < settings.entry_quality_extreme_rsi_min_score:
+                return False, "shakeout alcista sin score suficiente", checks
+            if volume_z is None or volume_z < 1.5:
+                return False, "shakeout alcista sin volumen suficiente", checks
+            if close_position is None or close_position < 0.70:
+                return False, "shakeout alcista sin cierre fuerte en el rango diario", checks
+            extended = False
+        elif sma20_distance > settings.entry_quality_max_sma20_distance and momentum_confirmation_long:
+            checks["momentum_confirmation_exception"] = {
+                "max_sma20_distance": settings.entry_quality_momentum_confirmation_max_sma20_distance,
+                "max_rsi": settings.entry_quality_momentum_confirmation_max_rsi,
+                "min_score": settings.entry_quality_momentum_confirmation_min_score,
+                "min_volume_zscore_20": settings.entry_quality_momentum_confirmation_min_volume_z,
+                "min_return_20d": settings.entry_quality_momentum_confirmation_min_return_20d,
+                "min_close_position_in_range": 0.75,
+                "confirmed_bullish_patterns": len(confirmed_patterns),
+            }
+            if sma20_distance > settings.entry_quality_momentum_confirmation_max_sma20_distance:
+                return False, "momentum confirmado demasiado extendido sobre SMA20", checks
+            if rsi is not None and rsi > settings.entry_quality_momentum_confirmation_max_rsi:
+                return False, "momentum confirmado con RSI demasiado extremo", checks
+            if score < settings.entry_quality_momentum_confirmation_min_score:
+                return False, "momentum confirmado sin score suficiente", checks
+            extended = False
+        else:
+            extended = (
+                sma20_distance > settings.entry_quality_extended_sma20_distance
+                or (rsi is not None and rsi > settings.entry_quality_max_rsi)
+            )
         if extended:
             checks["extended_entry_filter"] = {
                 "sma20_distance_threshold": settings.entry_quality_extended_sma20_distance,
@@ -249,8 +1144,58 @@ def validate_entry_quality(
                 "min_volume_zscore_20": settings.entry_quality_extended_min_volume_z,
             }
             if relative_return_20d is None:
-                return False, "entrada extendida sin fuerza relativa 20d disponible", checks
-            if relative_return_20d < settings.entry_quality_extended_min_relative_return:
+                confirmed_breakout_exception = bool(
+                    (range_expansion_breakout_long or orderly_breakout_long)
+                    and score >= settings.entry_quality_extreme_rsi_min_score
+                    and volume_z is not None
+                    and volume_z >= 1.0
+                    and close_position is not None
+                    and close_position >= 0.80
+                    and rsi is not None
+                    and rsi <= settings.entry_quality_range_expansion_max_rsi
+                    and confirmed_patterns
+                )
+                confirmed_momentum_exception = bool(
+                    not (event_momentum_long or range_expansion_breakout_long or orderly_breakout_long)
+                    and score >= settings.entry_quality_momentum_confirmation_min_score
+                    and return_20d is not None
+                    and return_20d >= settings.entry_quality_momentum_confirmation_min_return_20d
+                    and volume_z is not None
+                    and volume_z >= settings.entry_quality_momentum_confirmation_min_volume_z
+                    and rsi is not None
+                    and rsi <= settings.entry_quality_momentum_confirmation_max_rsi
+                    and sma20_distance <= settings.entry_quality_momentum_confirmation_max_sma20_distance
+                    and confirmed_patterns
+                )
+                checks["relative_strength_missing_exception"] = {
+                    "allowed": confirmed_breakout_exception or confirmed_momentum_exception,
+                    "reason": (
+                        "confirmed_breakout_with_volume_and_strong_close"
+                        if confirmed_breakout_exception
+                        else "confirmed_momentum_with_volume_and_pattern"
+                        if confirmed_momentum_exception
+                        else "missing_relative_strength_without_exception"
+                    ),
+                    "min_score": settings.entry_quality_extreme_rsi_min_score,
+                    "min_volume_zscore_20": 1.0,
+                    "min_close_position_in_range": 0.80,
+                    "max_rsi": settings.entry_quality_range_expansion_max_rsi,
+                    "confirmed_bullish_patterns": len(confirmed_patterns),
+                    "confirmed_momentum_exception": {
+                        "allowed": confirmed_momentum_exception,
+                        "min_score": settings.entry_quality_momentum_confirmation_min_score,
+                        "min_return_20d": settings.entry_quality_momentum_confirmation_min_return_20d,
+                        "min_volume_zscore_20": settings.entry_quality_momentum_confirmation_min_volume_z,
+                        "max_rsi": settings.entry_quality_momentum_confirmation_max_rsi,
+                        "max_sma20_distance": settings.entry_quality_momentum_confirmation_max_sma20_distance,
+                    },
+                }
+                if not (confirmed_breakout_exception or confirmed_momentum_exception):
+                    return False, "entrada extendida sin fuerza relativa 20d disponible", checks
+            if (
+                relative_return_20d is not None
+                and relative_return_20d < settings.entry_quality_extended_min_relative_return
+            ):
                 return (
                     False,
                     "entrada extendida sin fuerza relativa suficiente "
@@ -345,68 +1290,107 @@ def request_trade_recommendations(
     except ImportError as exc:
         raise RuntimeError("Instala openai con `pip install -r requirements.txt`.") from exc
 
-    prompt = {
-        "portfolio": asdict(portfolio),
-        "technical_candidates": technical_context,
-        "news_sentiment": sentiment_context,
-        "portfolio_rebalance": rebalance_context or {},
-        "post_market_learning": load_post_market_learning_context(settings.data_dir),
-        "operational_learning": load_operational_learning_context(settings.data_dir),
-        "risk_limits": {
-            "max_portfolio_exposure": settings.max_portfolio_exposure,
-            "max_position_exposure": settings.max_position_exposure,
-            "max_risk_per_trade": settings.max_risk_per_trade,
-            "max_orders_per_cycle": settings.max_orders_per_cycle,
-            "max_daily_buy_orders": settings.max_daily_buy_orders,
-            "min_order_notional": settings.min_order_notional,
-            "allow_position_adds": settings.allow_position_adds,
-            "min_confidence_to_trade": settings.min_llm_confidence_to_trade,
-            "allow_short_selling": settings.allow_short_selling,
-        },
-    }
+    daily_learning_digest = load_daily_learning_context(settings.data_dir)
+    operational_response_context = load_operational_response_context(settings.data_dir)
+    annotated_technical_context = _annotate_technical_context_with_learning(
+        technical_context,
+        daily_learning_digest,
+        operational_response_context,
+    )
+    decision_learning_context = _build_decision_learning_context(
+        daily_learning_digest,
+        operational_response_context,
+    )
+    prompt = _llm_prompt_payload(
+        settings,
+        portfolio,
+        annotated_technical_context,
+        sentiment_context,
+        rebalance_context,
+        daily_learning_digest,
+        decision_learning_context,
+        operational_response_context,
+        compact=True,
+    )
     client = OpenAI(
         api_key=settings.openai_api_key or "local-llama",
         base_url=settings.openai_api_base,
         timeout=settings.llm_timeout_seconds,
     )
     decision_max_tokens = max(settings.llm_max_tokens or 0, 3000)
-    response = client.chat.completions.create(
-        model=settings.openai_model,
-        temperature=settings.llm_temperature,
-        max_tokens=decision_max_tokens,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Eres un gestor de cartera experto. Usa solo los datos recibidos. "
-                    "No inventes precios ni posiciones. Devuelve solo JSON valido con "
-                    "la clave recommendations, una lista de objetos con: symbol, action "
-                    "(buy|sell|hold|reduce|exit), confidence 0-1, reason, entry_price, "
-                    "stop_loss, take_profit, target_exposure_pct como fraccion decimal "
-                    "(0.03 significa 3%), time_horizon, invalidation. "
-                    "Debes comparar posiciones actuales contra candidatos nuevos usando "
-                    "score tecnico, fuerza relativa, sentimiento, riesgo, drawdown, "
-                    "beneficio/perdida actual y coste estimado de rotacion. "
-                    "Respeta las reglas activas de operational_learning. Usa las reglas shadow "
-                    "solo como contexto: no son obligatorias, pero debes comentar si una decision "
-                    "las contradice. "
-                    "Regla de salida: por defecto una posicion abierta se mantiene hasta "
-                    "tocar stop_loss o take_profit. No recomiendes sell/exit solo porque "
-                    "exista otro candidato con mejor score. Solo puedes recomendar sell/exit "
-                    "de forma excepcional si hay noticia negativa material, riesgo extraordinario "
-                    "o deterioro cuantificable severo. El sistema bloqueara salidas LLM ordinarias "
-                    "si no hay stop/take tocado, confianza muy alta y evidencia objetiva. "
-                    "No recomiendes ampliar una posicion existente salvo que allow_position_adds=true. "
-                    "Respeta max_daily_buy_orders y max_orders_per_cycle: pocas entradas de alta calidad. "
-                    "No compres solo porque haya cash. "
-                    "Si falta evidencia suficiente, action debe ser hold. "
-                    "Devuelve como maximo 3 recomendaciones. Usa razones breves. "
-                    "No uses markdown. Cierra siempre el JSON."
-                ),
-            },
-            {"role": "user", "content": json.dumps(prompt, ensure_ascii=True)},
-        ],
+    system_prompt = (
+        "Eres un gestor de cartera experto. Usa solo los datos recibidos. "
+        "No inventes precios ni posiciones. Devuelve solo JSON valido con "
+        "la clave recommendations, una lista de objetos con: symbol, action "
+        "(buy|sell|hold|reduce|exit), confidence 0-1, reason, entry_price, "
+        "stop_loss, take_profit, target_exposure_pct como fraccion decimal "
+        "(0.03 significa 3%), time_horizon, invalidation. "
+        "Debes comparar posiciones actuales contra candidatos nuevos usando "
+        "score tecnico, fuerza relativa, sentimiento, riesgo, drawdown, "
+        "beneficio/perdida actual y coste estimado de rotacion. "
+        "Usa decision_learning_context y los campos rank_priority_score, effective_setup_edge_3d, "
+        "setup_edge_3d, setup_win_rate_3d y operational_penalty para priorizar setups con evidencia reciente. "
+        "Si learning_prior.matched_on es 'none' o sample_size_3d es 0, trata la ausencia de historial "
+        "como neutral, no como edge negativo implicito; en ese caso decide por tecnico, riesgo y contexto actual. "
+        "Si effective_setup_edge_3d es negativo o existe una respuesta operativa activa de "
+        "deprioritize_setup_before_llm para ese setup, evita comprarlo salvo evidencia excepcional "
+        "y debes explicarlo de forma concreta. "
+        "Respeta las reglas activas de operational_learning. Usa las reglas shadow "
+        "solo como contexto: no son obligatorias, pero debes comentar si una decision "
+        "las contradice. "
+        "Regla de salida: por defecto una posicion abierta se mantiene hasta "
+        "tocar stop_loss o take_profit. No recomiendes sell/exit solo porque "
+        "exista otro candidato con mejor score. Solo puedes recomendar sell/exit "
+        "de forma excepcional si hay noticia negativa material, riesgo extraordinario "
+        "o deterioro cuantificable severo. El sistema bloqueara salidas LLM ordinarias "
+        "si no hay stop/take tocado, confianza muy alta y evidencia objetiva. "
+        "No recomiendes ampliar una posicion existente salvo que allow_position_adds=true. "
+        "Respeta max_daily_buy_orders y max_orders_per_cycle: pocas entradas de alta calidad. "
+        "No compres solo porque haya cash. "
+        "Si falta evidencia suficiente, action debe ser hold. "
+        "Devuelve como maximo 3 recomendaciones. Usa razones breves. "
+        "No uses markdown. Cierra siempre el JSON."
     )
+
+    def _create_completion(payload: dict[str, Any], max_tokens: int):
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=True)},
+        ]
+        return client.chat.completions.create(
+            model=settings.openai_model,
+            temperature=settings.llm_temperature,
+            max_tokens=max_tokens,
+            messages=messages,
+        ), messages
+
+    try:
+        response, messages = _create_completion(prompt, decision_max_tokens)
+        record_llm_response(settings, "trade_decision", response, prompt=messages)
+    except Exception as exc:
+        message = str(exc).lower()
+        if "timeout" not in message and "timed out" not in message and "read operation" not in message:
+            raise
+        fallback_prompt = _llm_prompt_payload(
+            settings,
+            portfolio,
+            annotated_technical_context,
+            sentiment_context,
+            rebalance_context,
+            daily_learning_digest,
+            decision_learning_context,
+            operational_response_context,
+            compact=True,
+        )
+        fallback_prompt["decision_learning_context"] = {
+            "guidance": list(decision_learning_context.get("guidance", []) or [])[:4],
+            "top_setups_3d": list(decision_learning_context.get("top_setups_3d", []) or [])[:3],
+            "weak_setups_3d": list(decision_learning_context.get("weak_setups_3d", []) or [])[:3],
+            "active_operational_responses": list(decision_learning_context.get("active_operational_responses", []) or [])[:4],
+        }
+        response, messages = _create_completion(fallback_prompt, min(decision_max_tokens, 1800))
+        record_llm_response(settings, "trade_decision_fallback", response, prompt=messages)
+        prompt = fallback_prompt
     content = response.choices[0].message.content or "{}"
     parsed = _extract_json_object(content)
     recommendations = [
@@ -429,25 +1413,140 @@ def build_buy_order_plans(
     recommendations: list[TradeRecommendation],
     *,
     dry_run: bool = True,
+    rejected: list[dict[str, Any]] | None = None,
 ) -> list[OrderPlan]:
     """Build risk-checked buy plans. Sell/reduce/exit are kept as recommendations for now."""
 
     plans: list[OrderPlan] = []
     risk_manager = RiskManager(settings)
     open_order_symbols = {order.symbol.upper() for order in portfolio.open_orders}
+    existing_position_symbols = {
+        position.symbol.upper()
+        for position in portfolio.positions
+        if str(position.side or "long").lower() == "long" and position.qty > 0
+    }
+    planned_buy_symbols: set[str] = set()
+    daily_learning_digest = load_daily_learning_context(settings.data_dir)
+    operational_response_context = load_operational_response_context(settings.data_dir)
+    operational_block_context = load_operational_block_context(settings.data_dir)
+    latest_technical_context = _annotate_technical_context_with_learning(
+        load_latest_technical_candidates(settings.data_dir, per_side=50),
+        daily_learning_digest,
+        operational_response_context,
+    )
+    portfolio_risk_context = _portfolio_risk_context(settings, portfolio)
+    planned_buy_exposure = 0.0
+    planned_buy_risk_amount = 0.0
 
     for recommendation in recommendations:
         if len(plans) >= settings.max_orders_per_cycle:
+            if rejected is not None and recommendation.action == "buy":
+                rejected.append(
+                    {
+                        "symbol": recommendation.symbol,
+                        "action": recommendation.action,
+                        "stage": "cycle_order_limit",
+                        "reason": "max_orders_per_cycle_reached",
+                        "checks": {"max_orders_per_cycle": settings.max_orders_per_cycle},
+                    }
+                )
             break
         if recommendation.action != "buy":
             continue
+        if settings.operational_kill_switch_enabled and operational_block_context.get("block_new_buys"):
+            if rejected is not None:
+                rejected.append(
+                    {
+                        "symbol": recommendation.symbol,
+                        "action": recommendation.action,
+                        "stage": "operational_kill_switch",
+                        "reason": "critical_operational_alerts_active",
+                        "checks": {
+                            "kill_switch_active": True,
+                            "blocking_alerts": operational_block_context.get("blocking_alerts", []),
+                            "reasons": operational_block_context.get("reasons", []),
+                        },
+                    }
+                )
+            continue
         if recommendation.confidence < settings.min_llm_confidence_to_trade:
+            if rejected is not None:
+                rejected.append(
+                    {
+                        "symbol": recommendation.symbol,
+                        "action": recommendation.action,
+                        "stage": "llm_confidence",
+                        "reason": "below_min_llm_confidence_to_trade",
+                        "checks": {
+                            "confidence": recommendation.confidence,
+                            "min_llm_confidence_to_trade": settings.min_llm_confidence_to_trade,
+                        },
+                    }
+                )
             continue
         if recommendation.symbol in open_order_symbols:
+            if rejected is not None:
+                rejected.append(
+                    {
+                        "symbol": recommendation.symbol,
+                        "action": recommendation.action,
+                        "stage": "open_order_guard",
+                        "reason": "symbol_has_open_order",
+                        "checks": {"open_order_symbols": sorted(open_order_symbols)},
+                    }
+                )
+            continue
+        if recommendation.symbol in existing_position_symbols and not settings.allow_position_adds:
+            if rejected is not None:
+                rejected.append(
+                    {
+                        "symbol": recommendation.symbol,
+                        "action": recommendation.action,
+                        "stage": "position_add_guard",
+                        "reason": "position_adds_disabled",
+                        "checks": {
+                            "allow_position_adds": settings.allow_position_adds,
+                            "existing_position_symbols": sorted(existing_position_symbols),
+                        },
+                    }
+                )
+            continue
+        if recommendation.symbol in planned_buy_symbols:
+            if rejected is not None:
+                rejected.append(
+                    {
+                        "symbol": recommendation.symbol,
+                        "action": recommendation.action,
+                        "stage": "duplicate_symbol_cycle_guard",
+                        "reason": "symbol_already_has_buy_plan_in_cycle",
+                        "checks": {"planned_buy_symbols": sorted(planned_buy_symbols)},
+                    }
+                )
             continue
 
-        notional, sizing_checks = recommended_notional(settings, portfolio, recommendation)
+        sizing_adjustment = _sizing_adjustment_for_recommendation(
+            recommendation,
+            latest_technical_context,
+            daily_learning_digest,
+            operational_response_context,
+        )
+        notional, sizing_checks = recommended_notional(
+            settings,
+            portfolio,
+            recommendation,
+            sizing_adjustment=sizing_adjustment,
+        )
         if notional <= 0:
+            if rejected is not None:
+                rejected.append(
+                    {
+                        "symbol": recommendation.symbol,
+                        "action": recommendation.action,
+                        "stage": "position_sizing",
+                        "reason": sizing_checks.get("reason") or "non_positive_notional",
+                        "checks": sizing_checks,
+                    }
+                )
             continue
 
         entry = recommendation.entry_price or 0.0
@@ -458,14 +1557,33 @@ def build_buy_order_plans(
             side="buy",
             notional=notional,
             portfolio_equity=portfolio.portfolio_value,
-            strategy_name="llm_portfolio_decision",
+            strategy_name=(
+                f"{recommendation.source}_decision"
+                if recommendation.source and recommendation.source != "llm"
+                else "llm_portfolio_decision"
+            ),
             entry_price=entry,
             stop_loss=stop,
             take_profit=take,
+            current_portfolio_exposure=portfolio_risk_context["current_portfolio_exposure"],
+            pending_portfolio_exposure=portfolio_risk_context["pending_portfolio_exposure"] + planned_buy_exposure,
+            existing_open_risk_amount=portfolio_risk_context["existing_open_risk_amount"],
+            pending_open_risk_amount=portfolio_risk_context["pending_open_risk_amount"] + planned_buy_risk_amount,
         )
         decision = risk_manager.validate_order(proposal)
         decision.checks["position_sizing"] = sizing_checks
+        decision.checks["sizing_adjustment"] = sizing_adjustment
         if not decision.approved:
+            if rejected is not None:
+                rejected.append(
+                    {
+                        "symbol": recommendation.symbol,
+                        "action": recommendation.action,
+                        "stage": "risk_manager",
+                        "reason": decision.reason,
+                        "checks": decision.checks,
+                    }
+                )
             continue
 
         qty, execution_notional, execution_checks = _buy_qty_and_notional_for_execution(
@@ -474,8 +1592,29 @@ def build_buy_order_plans(
             entry_price=entry,
         )
         if qty is None or execution_notional < settings.min_order_notional:
+            if rejected is not None:
+                rejected.append(
+                    {
+                        "symbol": recommendation.symbol,
+                        "action": recommendation.action,
+                        "stage": "execution_sizing",
+                        "reason": "below_min_order_notional_after_execution_sizing"
+                        if execution_notional < settings.min_order_notional
+                        else "invalid_execution_quantity",
+                        "checks": {
+                            **execution_checks,
+                            "execution_notional": execution_notional,
+                            "min_order_notional": settings.min_order_notional,
+                        },
+                    }
+                )
             continue
         decision.checks["execution_sizing"] = execution_checks
+        decision.checks["duplicate_symbol_cycle_guard"] = {
+            "blocked_additional_same_symbol_buys": True,
+            "allow_position_adds": settings.allow_position_adds,
+            "blocked_existing_position_add": recommendation.symbol in existing_position_symbols and not settings.allow_position_adds,
+        }
         plans.append(
             OrderPlan(
                 symbol=recommendation.symbol,
@@ -490,6 +1629,12 @@ def build_buy_order_plans(
                 dry_run=dry_run,
             )
         )
+        planned_buy_symbols.add(recommendation.symbol)
+        if float(portfolio.portfolio_value or 0.0) > 0:
+            planned_buy_exposure += execution_notional / float(portfolio.portfolio_value)
+        proposed_risk_amount = decision.checks.get("proposed_trade_risk_amount")
+        if isinstance(proposed_risk_amount, (int, float)):
+            planned_buy_risk_amount += float(proposed_risk_amount)
 
     return plans
 
@@ -660,10 +1805,11 @@ def build_order_plans(
     recommendations: list[TradeRecommendation],
     *,
     dry_run: bool = True,
+    rejected: list[dict[str, Any]] | None = None,
 ) -> list[OrderPlan]:
     """Build buy and long-position sell/reduce/exit plans."""
 
-    plans = build_buy_order_plans(settings, portfolio, recommendations, dry_run=dry_run)
+    plans = build_buy_order_plans(settings, portfolio, recommendations, dry_run=dry_run, rejected=rejected)
     open_order_symbols = {order.symbol.upper() for order in portfolio.open_orders}
 
     for recommendation in recommendations:

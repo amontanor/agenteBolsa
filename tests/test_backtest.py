@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from agente_bolsa.tools.backtest import backtest_technical_long_rule
+from agente_bolsa.tools.backtest import backtest_technical_long_rule, build_symbol_backtest
 
 
 def _trend_frame(rows: int = 340) -> pd.DataFrame:
@@ -61,3 +61,66 @@ def test_backtest_returns_empty_metrics_when_no_signal():
     assert report["metrics"]["trades"] == 0
     assert report["metrics"]["hit_rate"] == 0.0
     assert report["trades"] == []
+
+
+def test_backtest_report_includes_costs_exit_reasons_and_regime_summary():
+    report = backtest_technical_long_rule(
+        "AAPL",
+        _trend_frame(),
+        min_score=5,
+        setup_quality="",
+        warmup_days=260,
+        max_holding_days=10,
+    )
+
+    assert "total_cost" in report["metrics"]
+    assert "avg_holding_days" in report["metrics"]
+    assert "exit_reasons" in report["metrics"]
+    assert "regime_summary" in report
+
+
+def test_build_symbol_backtest_attaches_market_data_and_gate_validation(monkeypatch, tmp_path):
+    import agente_bolsa.tools.backtest as backtest_module
+
+    prices = pd.concat(
+        {"AAPL": _trend_frame(), "SPY": _trend_frame()},
+        axis=1,
+    )
+
+    def fake_download(symbols, start, end, **_kwargs):
+        return prices, {
+            "source": "fmp",
+            "requested_count": len(symbols),
+            "symbols_with_data": ["AAPL", "SPY"],
+            "missing_symbols_count": 0,
+        }
+
+    monkeypatch.setattr(backtest_module, "download_daily_prices_with_metadata", fake_download)
+
+    report = build_symbol_backtest(
+        "AAPL",
+        tmp_path,
+        "bt_test",
+        start="2024-01-01",
+        end="2025-12-31",
+        min_score=5,
+        setup_quality="",
+        benchmark_symbol="SPY",
+        gate_config={
+            "min_trades": 1,
+            "min_hit_rate": 0.0,
+            "min_profit_factor": 0.0,
+            "max_drawdown": 1.0,
+            "min_alpha_vs_benchmark": -10.0,
+            "min_trade_window_alpha": -10.0,
+            "min_regime_trades": 1,
+            "max_negative_regimes": 99,
+        },
+    )
+
+    assert report["backtest_context"]["data_source"] == "fmp"
+    assert report["backtest_context"]["market_data"]["symbols_with_data"] == ["AAPL", "SPY"]
+    assert report["backtest_context"]["benchmark_symbol"] == "SPY"
+    assert report["benchmark"]["symbol"] == "SPY"
+    assert report["benchmark"]["available"] is True
+    assert report["validation"]["gate"]["approved"] is True

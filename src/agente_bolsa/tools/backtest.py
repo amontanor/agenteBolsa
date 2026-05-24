@@ -11,7 +11,7 @@ from typing import Any
 import pandas as pd
 
 from .costs import TransactionCostModel
-from .market_data import download_daily_prices
+from .market_data import download_daily_prices_with_metadata
 from .technical_analysis import add_basic_technical_features
 from .technical_state_validator import validate_symbol_technical_state
 
@@ -37,6 +37,15 @@ def _symbol_frame(data: pd.DataFrame, symbol: str) -> pd.DataFrame:
     if isinstance(data.columns, pd.MultiIndex):
         return data[symbol].copy().dropna(how="all")
     return data.copy().dropna(how="all")
+
+
+def _price_on_or_after(frame: pd.DataFrame, date_text: str, column: str) -> float | None:
+    if frame.empty:
+        return None
+    matches = frame.loc[frame.index.astype(str).str[:10] >= date_text]
+    if matches.empty:
+        return None
+    return _safe_float(matches.iloc[0].get(column), default=float("nan"))
 
 
 def _signal_from_window(
@@ -82,6 +91,27 @@ def _exit_trade(
         if high >= take_profit:
             return last_date, "take_profit", take_profit, hold
     return last_date, "time_stop", last_close, hold
+
+
+def _entry_regime(signal: dict[str, Any], window: pd.DataFrame) -> tuple[str, str]:
+    technical_state = signal.get("technical_state", {}) or {}
+    above_long = technical_state.get("above_long_trend")
+    recent_return = technical_state.get("return_20d")
+    if above_long is True:
+        trend = "bull_trend"
+    elif above_long is False:
+        trend = "bear_trend"
+    else:
+        trend = "unknown_trend"
+    if isinstance(recent_return, (int, float)) and recent_return > 0.05:
+        momentum = "strong_momentum"
+    elif isinstance(recent_return, (int, float)) and recent_return > 0:
+        momentum = "positive_momentum"
+    elif isinstance(recent_return, (int, float)):
+        momentum = "negative_momentum"
+    else:
+        momentum = "unknown_momentum"
+    return trend, momentum
 
 
 def backtest_technical_long_rule(
@@ -134,6 +164,7 @@ def backtest_technical_long_rule(
         if not (0 < stop_loss < entry_price < take_profit):
             index += 1
             continue
+        regime_trend, regime_momentum = _entry_regime(signal, window)
 
         notional = min(equity * position_exposure, equity)
         qty = math.floor(notional / entry_price)
@@ -174,6 +205,8 @@ def backtest_technical_long_rule(
                 "net_return": round(net_return, 6),
                 "signal_score": signal.get("score"),
                 "signal_reasons": signal.get("reasons", [])[:6],
+                "regime_trend": regime_trend,
+                "regime_momentum": regime_momentum,
             }
         )
         equity_curve.append({"date": exit_date, "equity": round(equity, 2)})
@@ -243,7 +276,25 @@ def _build_report(
         "profit_factor": round(gross_profit / gross_loss, 4) if gross_loss > 0 else None,
         "max_drawdown": round(_max_drawdown(equity_curve), 4),
         "sharpe": round(_sharpe(returns), 4) if _sharpe(returns) is not None else None,
+        "total_cost": round(sum(float(trade["cost"]) for trade in trades), 2),
+        "avg_holding_days": round(sum(int(trade["holding_days"]) for trade in trades) / len(trades), 2) if trades else 0.0,
+        "exit_reasons": dict(pd.Series([trade["exit_reason"] for trade in trades]).value_counts()) if trades else {},
     }
+    regime_summary: dict[str, dict[str, Any]] = {}
+    for trade in trades:
+        key = f"{trade.get('regime_trend')}|{trade.get('regime_momentum')}"
+        bucket = regime_summary.setdefault(
+            key,
+            {"trades": 0, "wins": 0, "avg_return": 0.0, "total_return": 0.0},
+        )
+        bucket["trades"] += 1
+        if float(trade["net_pl"]) > 0:
+            bucket["wins"] += 1
+        bucket["total_return"] += float(trade["net_return"])
+    for bucket in regime_summary.values():
+        bucket["win_rate"] = round(bucket["wins"] / bucket["trades"], 4) if bucket["trades"] else None
+        bucket["avg_return"] = round(bucket["total_return"] / bucket["trades"], 6) if bucket["trades"] else None
+        bucket.pop("total_return", None)
     return {
         "symbol": symbol,
         "as_of": datetime.now(timezone.utc).isoformat(),
@@ -260,9 +311,144 @@ def _build_report(
             },
         },
         "metrics": metrics,
+        "regime_summary": regime_summary,
         "equity_curve": equity_curve,
         "trades": trades,
     }
+
+
+def _benchmark_report(
+    benchmark_symbol: str,
+    benchmark_prices: pd.DataFrame,
+    trades: list[dict[str, Any]],
+    period: dict[str, str],
+    strategy_total_return: float | None,
+) -> dict[str, Any]:
+    benchmark_symbol = benchmark_symbol.upper().strip()
+    if benchmark_prices.empty:
+        return {
+            "symbol": benchmark_symbol,
+            "available": False,
+            "reason": "benchmark sin datos",
+            "metrics": {},
+        }
+
+    close = benchmark_prices.dropna(subset=["Close"]).copy()
+    if close.empty:
+        return {
+            "symbol": benchmark_symbol,
+            "available": False,
+            "reason": "benchmark sin cierres validos",
+            "metrics": {},
+        }
+
+    start_close = _safe_float(close.iloc[0].get("Close"), default=float("nan"))
+    end_close = _safe_float(close.iloc[-1].get("Close"), default=float("nan"))
+    total_return = ((end_close / start_close) - 1.0) if start_close and end_close else None
+
+    window_returns: list[float] = []
+    beat_count = 0
+    for trade in trades:
+        entry_price = _price_on_or_after(close, str(trade.get("entry_date") or ""), "Open")
+        if not entry_price or pd.isna(entry_price):
+            entry_price = _price_on_or_after(close, str(trade.get("entry_date") or ""), "Close")
+        exit_price = _price_on_or_after(close, str(trade.get("exit_date") or ""), "Close")
+        if not entry_price or not exit_price or pd.isna(entry_price) or pd.isna(exit_price):
+            continue
+        benchmark_return = (exit_price - entry_price) / entry_price
+        window_returns.append(float(benchmark_return))
+        if float(trade.get("net_return") or 0.0) > benchmark_return:
+            beat_count += 1
+
+    avg_trade_window_return = sum(window_returns) / len(window_returns) if window_returns else None
+    trade_window_alpha = None
+    if window_returns and trades:
+        strategy_avg = sum(float(trade.get("net_return") or 0.0) for trade in trades) / len(trades)
+        trade_window_alpha = strategy_avg - avg_trade_window_return
+
+    return {
+        "symbol": benchmark_symbol,
+        "available": True,
+        "period": period,
+        "metrics": {
+            "benchmark_total_return": round(total_return, 4) if total_return is not None else None,
+            "benchmark_avg_trade_window_return": round(avg_trade_window_return, 6)
+            if avg_trade_window_return is not None
+            else None,
+            "trade_windows_compared": len(window_returns),
+            "trades_beating_benchmark": beat_count,
+            "beat_rate": round(beat_count / len(window_returns), 4) if window_returns else None,
+            "alpha_vs_benchmark": round(strategy_total_return - total_return, 4)
+            if strategy_total_return is not None and total_return is not None
+            else None,
+            "trade_window_alpha": round(trade_window_alpha, 6) if trade_window_alpha is not None else None,
+        },
+    }
+
+
+def evaluate_backtest_gate(
+    report: dict[str, Any],
+    *,
+    min_trades: int,
+    min_hit_rate: float,
+    min_profit_factor: float,
+    max_drawdown: float,
+    min_alpha_vs_benchmark: float | None = None,
+    min_trade_window_alpha: float | None = None,
+    min_regime_trades: int = 0,
+    max_negative_regimes: int | None = None,
+) -> dict[str, Any]:
+    metrics = report.get("metrics", {}) or {}
+    benchmark = ((report.get("benchmark") or {}).get("metrics")) or {}
+    trades = int(metrics.get("trades") or 0)
+    hit_rate = float(metrics.get("hit_rate") or 0.0)
+    profit_factor = metrics.get("profit_factor")
+    observed_drawdown = float(metrics.get("max_drawdown") or 0.0)
+    if trades < min_trades:
+        return {"approved": False, "reason": f"trades {trades} < minimo {min_trades}"}
+    if hit_rate < min_hit_rate:
+        return {"approved": False, "reason": f"hit-rate {hit_rate:.2%} < minimo {min_hit_rate:.2%}"}
+    if profit_factor is None and min_profit_factor > 0:
+        return {"approved": False, "reason": f"profit-factor {profit_factor} < minimo {min_profit_factor}"}
+    if profit_factor is not None and float(profit_factor) < min_profit_factor:
+        return {"approved": False, "reason": f"profit-factor {profit_factor} < minimo {min_profit_factor}"}
+    if observed_drawdown < -max_drawdown:
+        return {"approved": False, "reason": f"max drawdown {observed_drawdown:.2%} excede {max_drawdown:.2%}"}
+    trade_window_alpha = _safe_float(benchmark.get("trade_window_alpha"), default=float("nan"))
+    if min_trade_window_alpha is not None and not pd.isna(trade_window_alpha) and trade_window_alpha < min_trade_window_alpha:
+        return {
+            "approved": False,
+            "reason": f"trade-window alpha {trade_window_alpha:.2%} < minimo {min_trade_window_alpha:.2%}",
+        }
+    alpha_vs_benchmark = _safe_float(benchmark.get("alpha_vs_benchmark"), default=float("nan"))
+    trade_window_compared = int(benchmark.get("trade_windows_compared") or 0)
+    use_period_alpha_as_guardrail = trade_window_compared <= 0 or pd.isna(trade_window_alpha)
+    if (
+        use_period_alpha_as_guardrail
+        and min_alpha_vs_benchmark is not None
+        and not pd.isna(alpha_vs_benchmark)
+        and alpha_vs_benchmark < min_alpha_vs_benchmark
+    ):
+        return {
+            "approved": False,
+            "reason": f"alpha vs benchmark {alpha_vs_benchmark:.2%} < minimo {min_alpha_vs_benchmark:.2%}",
+        }
+    if min_regime_trades > 0 and max_negative_regimes is not None:
+        negative_regimes = 0
+        for bucket in (report.get("regime_summary") or {}).values():
+            bucket_trades = int(bucket.get("trades") or 0)
+            bucket_avg = _safe_float(bucket.get("avg_return"), default=float("nan"))
+            if bucket_trades >= min_regime_trades and not pd.isna(bucket_avg) and bucket_avg < 0:
+                negative_regimes += 1
+        if negative_regimes > max_negative_regimes:
+            return {
+                "approved": False,
+                "reason": (
+                    f"regimenes negativos {negative_regimes} > maximo {max_negative_regimes} "
+                    f"con minimo {min_regime_trades} trades"
+                ),
+            }
+    return {"approved": True, "reason": "backtest aprobado"}
 
 
 def build_symbol_backtest(
@@ -275,9 +461,23 @@ def build_symbol_backtest(
     min_score: int = 7,
     setup_quality: str = "strong",
     max_holding_days: int = 10,
+    benchmark_symbol: str | None = None,
+    provider: str | None = None,
+    fmp_api_key: str | None = None,
+    gate_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     end_value = end or (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
-    data = download_daily_prices([symbol], start=start, end=end_value)
+    universe = [symbol]
+    benchmark_value = (benchmark_symbol or "").upper().strip()
+    if benchmark_value and benchmark_value != symbol.upper():
+        universe.append(benchmark_value)
+    data, market_data_meta = download_daily_prices_with_metadata(
+        universe,
+        start=start,
+        end=end_value,
+        provider=provider,
+        fmp_api_key=fmp_api_key,
+    )
     frame = _symbol_frame(data, symbol.upper())
     report = backtest_technical_long_rule(
         symbol,
@@ -287,6 +487,57 @@ def build_symbol_backtest(
         max_holding_days=max_holding_days,
     )
     report["period"] = {"from": start, "to": end_value}
+    if benchmark_value and benchmark_value != symbol.upper():
+        try:
+            benchmark_frame = _symbol_frame(data, benchmark_value)
+        except KeyError:
+            benchmark_frame = pd.DataFrame()
+        total_return = _safe_float((report.get("metrics") or {}).get("total_return"), default=float("nan"))
+        report["benchmark"] = _benchmark_report(
+            benchmark_value,
+            benchmark_frame,
+            report.get("trades", []),
+            report["period"],
+            None if pd.isna(total_return) else total_return,
+        )
+    elif benchmark_value:
+        report["benchmark"] = {
+            "symbol": benchmark_value,
+            "available": False,
+            "reason": "benchmark coincide con simbolo principal",
+            "metrics": {},
+        }
+    report["backtest_context"] = {
+        "universe": [item.upper() for item in universe],
+        "window": {"from": start, "to": end_value},
+        "benchmark_symbol": benchmark_value or None,
+        "data_source": market_data_meta.get("source"),
+        "market_data": market_data_meta,
+        "walk_forward": {"enabled": False, "status": "not_run"},
+    }
+    if gate_config:
+        report["validation"] = {
+            "gate": {
+                **gate_config,
+                **evaluate_backtest_gate(
+                    report,
+                    min_trades=int(gate_config.get("min_trades") or 0),
+                    min_hit_rate=float(gate_config.get("min_hit_rate") or 0.0),
+                    min_profit_factor=float(gate_config.get("min_profit_factor") or 0.0),
+                    max_drawdown=float(gate_config.get("max_drawdown") or 0.0),
+                    min_alpha_vs_benchmark=_safe_float(gate_config.get("min_alpha_vs_benchmark"), default=float("nan"))
+                    if gate_config.get("min_alpha_vs_benchmark") is not None
+                    else None,
+                    min_trade_window_alpha=_safe_float(gate_config.get("min_trade_window_alpha"), default=float("nan"))
+                    if gate_config.get("min_trade_window_alpha") is not None
+                    else None,
+                    min_regime_trades=int(gate_config.get("min_regime_trades") or 0),
+                    max_negative_regimes=int(gate_config.get("max_negative_regimes"))
+                    if gate_config.get("max_negative_regimes") is not None
+                    else None,
+                ),
+            }
+        }
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"backtest_{symbol.upper()}_{run_id}.json"
     report["path"] = str(path)

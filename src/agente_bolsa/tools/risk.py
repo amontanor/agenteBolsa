@@ -19,6 +19,10 @@ class OrderProposal:
     stop_loss: float | None = None
     take_profit: float | None = None
     hypothesis_id: str | None = None
+    current_portfolio_exposure: float = 0.0
+    pending_portfolio_exposure: float = 0.0
+    existing_open_risk_amount: float = 0.0
+    pending_open_risk_amount: float = 0.0
 
 
 class RiskManager:
@@ -29,7 +33,9 @@ class RiskManager:
         checks = {
             "trading_mode": self.settings.trading_mode,
             "allow_live_trading": self.settings.allow_live_trading,
+            "max_portfolio_exposure": self.settings.max_portfolio_exposure,
             "max_position_exposure": self.settings.max_position_exposure,
+            "max_total_open_risk": self.settings.max_total_open_risk,
             "proposal_notional": proposal.notional,
             "portfolio_equity": proposal.portfolio_equity,
         }
@@ -42,9 +48,16 @@ class RiskManager:
 
         position_exposure = proposal.notional / proposal.portfolio_equity
         checks["position_exposure"] = position_exposure
+        checks["current_portfolio_exposure"] = proposal.current_portfolio_exposure
+        checks["pending_portfolio_exposure"] = proposal.pending_portfolio_exposure
+        checks["projected_portfolio_exposure"] = (
+            proposal.current_portfolio_exposure + proposal.pending_portfolio_exposure + position_exposure
+        )
 
         if position_exposure > self.settings.max_position_exposure:
             return RiskDecision(False, "La posicion supera el limite por activo.", checks)
+        if checks["projected_portfolio_exposure"] > self.settings.max_portfolio_exposure:
+            return RiskDecision(False, "La cartera supera el limite de exposicion agregada.", checks)
 
         if proposal.side.lower() not in {"buy", "sell"}:
             return RiskDecision(False, "Lado de orden no permitido.", checks)
@@ -89,5 +102,20 @@ class RiskManager:
         checks["reward_risk"] = reward_risk
         if reward_risk + 1e-9 < 1.5:
             return RiskDecision(False, "Ratio beneficio/riesgo inferior a 1.5.", checks)
+
+        proposed_trade_risk_amount = proposal.notional * (downside / proposal.entry_price)
+        checks["existing_open_risk_amount"] = proposal.existing_open_risk_amount
+        checks["pending_open_risk_amount"] = proposal.pending_open_risk_amount
+        checks["proposed_trade_risk_amount"] = proposed_trade_risk_amount
+        checks["projected_total_open_risk_amount"] = (
+            proposal.existing_open_risk_amount + proposal.pending_open_risk_amount + proposed_trade_risk_amount
+        )
+        checks["projected_total_open_risk_pct"] = (
+            checks["projected_total_open_risk_amount"] / proposal.portfolio_equity
+            if proposal.portfolio_equity > 0
+            else 0.0
+        )
+        if checks["projected_total_open_risk_pct"] > self.settings.max_total_open_risk:
+            return RiskDecision(False, "El riesgo agregado abierto supera el limite de cartera.", checks)
 
         return RiskDecision(True, "Orden aprobada por limites iniciales.", checks)

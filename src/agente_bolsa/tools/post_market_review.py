@@ -6,18 +6,22 @@ import json
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
+import time
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from openai import OpenAI
 
 from agente_bolsa.config import Settings
+from agente_bolsa.llm_usage import record_llm_response
 from agente_bolsa.models import PortfolioSnapshot
 from agente_bolsa.storage import Store
 
 from .broker import BrokerClientFactory
 from .adaptive_tuning import promote_post_market_improvements
+from .daily_learning import build_learning_daily_run
 from .operational_learning import build_operational_learning_review
+from .reporting import write_json_report
 from .signal_learning import build_learning_status, update_signal_outcomes, write_learning_report
 from .trade_history import build_trade_history
 
@@ -204,6 +208,8 @@ def _llm_review(settings: Settings, report: dict[str, Any]) -> dict[str, Any]:
         "session_date": report["session_date"],
         "summary": report["summary"],
         "trade_evaluations": report["trade_evaluations"][:40],
+        "trade_decisions": (report.get("operational_learning", {}) or {}).get("trade_decisions", [])[:30],
+        "learning_journal": (report.get("operational_learning", {}) or {}).get("learning_journal", []),
         "proposed_improvements": report["proposed_improvements"],
         "constraints": [
             "No propongas cambios grandes.",
@@ -212,23 +218,25 @@ def _llm_review(settings: Settings, report: dict[str, Any]) -> dict[str, Any]:
             "Las mejoras deben ser concretas, medibles y reversibles.",
         ],
     }
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Eres un analista post-mercado. Evalua si las entradas/salidas fueron "
+                "buenas decisiones con los datos dados. Devuelve solo JSON con: "
+                "assessment, mistakes, what_worked, next_session_guidance, "
+                "minimal_improvements. No inventes precios."
+            ),
+        },
+        {"role": "user", "content": json.dumps(prompt, ensure_ascii=True)},
+    ]
     response = client.chat.completions.create(
         model=settings.openai_model,
         temperature=0.1,
         max_tokens=max(settings.llm_max_tokens or 0, 1800),
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Eres un analista post-mercado. Evalua si las entradas/salidas fueron "
-                    "buenas decisiones con los datos dados. Devuelve solo JSON con: "
-                    "assessment, mistakes, what_worked, next_session_guidance, "
-                    "minimal_improvements. No inventes precios."
-                ),
-            },
-            {"role": "user", "content": json.dumps(prompt, ensure_ascii=True)},
-        ],
+        messages=messages,
     )
+    record_llm_response(settings, "post_market_review", response, prompt=messages)
     text = response.choices[0].message.content or "{}"
     start = text.find("{")
     end = text.rfind("}")
@@ -242,6 +250,43 @@ def _llm_review(settings: Settings, report: dict[str, Any]) -> dict[str, Any]:
     return {"assessment": _short(text, 1200), "parse_warning": "LLM no devolvio JSON valido."}
 
 
+def _build_trade_evaluations(
+    portfolio: PortfolioSnapshot,
+    history: dict[str, Any],
+    target_date: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    local_orders = _latest_local_orders_by_symbol(history)
+    positions = _position_by_symbol(portfolio)
+    trades = [item for item in history.get("trades", []) if item.get("date") == target_date]
+    evaluations = [
+        _evaluate_trade(item, portfolio_positions=positions, local_orders=local_orders)
+        for item in trades
+    ]
+    day = next((item for item in history.get("days", []) if item.get("date") == target_date), {})
+    return evaluations, day
+
+
+def _build_learning_pipeline(
+    settings: Settings,
+    store: Store,
+    reports_dir: Path,
+    run_id: str,
+    target_date: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    signal_update = update_signal_outcomes(settings, store, since_date="2026-04-01", limit=200000)
+    signal_learning = build_learning_status(store, since_date="2026-04-01", limit=200000)
+    daily_learning = build_learning_daily_run(
+        settings,
+        store,
+        reports_dir,
+        f"{run_id}_daily",
+        since_date="2026-04-01",
+        end_date=target_date,
+        compact=True,
+    )
+    return signal_update, signal_learning, daily_learning
+
+
 def build_post_market_review(
     settings: Settings,
     reports_dir: Path,
@@ -251,23 +296,33 @@ def build_post_market_review(
     use_llm: bool = True,
 ) -> dict[str, Any]:
     reports_dir.mkdir(parents=True, exist_ok=True)
+    timings: dict[str, float] = {}
+
+    started = time.perf_counter()
     portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
+    timings["portfolio_snapshot_seconds"] = round(time.perf_counter() - started, 3)
+
+    started = time.perf_counter()
     history = build_trade_history(settings, limit=100)
+    timings["trade_history_seconds"] = round(time.perf_counter() - started, 3)
     today = datetime.now(ZoneInfo(settings.local_timezone)).date().isoformat()
     target_date = session_date or today
-    local_orders = _latest_local_orders_by_symbol(history)
-    positions = _position_by_symbol(portfolio)
-    trades = [item for item in history.get("trades", []) if item.get("date") == target_date]
-    evaluations = [
-        _evaluate_trade(item, portfolio_positions=positions, local_orders=local_orders)
-        for item in trades
-    ]
-    day = next((item for item in history.get("days", []) if item.get("date") == target_date), {})
+
+    started = time.perf_counter()
+    evaluations, day = _build_trade_evaluations(portfolio, history, target_date)
+    timings["trade_evaluation_seconds"] = round(time.perf_counter() - started, 3)
     proposed = _learning_candidates(evaluations, day, portfolio)
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()
-    signal_update = update_signal_outcomes(settings, store, since_date="2026-04-01")
-    signal_learning = build_learning_status(store, since_date="2026-04-01")
+    started = time.perf_counter()
+    signal_update, signal_learning, daily_learning = _build_learning_pipeline(
+        settings,
+        store,
+        reports_dir,
+        run_id,
+        target_date,
+    )
+    timings["learning_pipeline_seconds"] = round(time.perf_counter() - started, 3)
     summary = {
         "trades_evaluated": len(evaluations),
         "buys": sum(1 for item in evaluations if item["side"] == "buy"),
@@ -289,16 +344,25 @@ def build_post_market_review(
         "proposed_improvements": proposed,
         "signal_learning": signal_learning,
         "signal_update": signal_update,
+        "daily_learning": {
+            "path": daily_learning.get("path"),
+            "health": daily_learning.get("health", {}),
+            "digest": daily_learning.get("digest", {}),
+            "policy_candidates": daily_learning.get("policy_candidates", []),
+        },
         "next_session_guidance": [
             "Mantener posiciones hasta stop_loss/take_profit salvo deterioro excepcional.",
             "No rotar por score superior si la posicion no invalido la tesis.",
             "Evitar ampliar una posicion si ya esta cerca del limite por activo.",
         ],
+        "pipeline_steps": timings,
         "llm_review": {},
     }
     if use_llm:
         try:
+            started = time.perf_counter()
             llm = _llm_review(settings, report)
+            timings["llm_review_seconds"] = round(time.perf_counter() - started, 3)
             report["llm_review"] = llm
             if isinstance(llm.get("next_session_guidance"), list):
                 report["next_session_guidance"] = [
@@ -317,12 +381,26 @@ def build_post_market_review(
         use_llm=use_llm,
     )
     report["auto_promotions"] = promote_post_market_improvements(settings, report)
+    report["next_session_guidance"] = [
+        *report["next_session_guidance"],
+        *[
+            str(item)
+            for item in ((daily_learning.get("digest", {}) or {}).get("guidance", []) or [])[:5]
+        ],
+    ]
 
-    path = reports_dir / f"post_market_review_{target_date}_{run_id}.json"
-    latest_path = reports_dir / "latest_post_market_learning.json"
-    report["path"] = str(path)
-    path.write_text(json.dumps(report, indent=2, ensure_ascii=True, default=str), encoding="utf-8")
-    latest_path.write_text(json.dumps(report, indent=2, ensure_ascii=True, default=str), encoding="utf-8")
+    report = write_json_report(
+        report,
+        reports_dir,
+        f"post_market_review_{target_date}",
+        run_id,
+        latest_filename="latest_post_market_learning.json",
+        manifest={
+            "pipeline_steps": timings,
+            "signal_update": signal_update,
+            "daily_learning_path": daily_learning.get("path"),
+        },
+    )
     write_learning_report(
         {
             "as_of": report["as_of"],

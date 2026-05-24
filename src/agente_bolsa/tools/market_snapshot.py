@@ -34,16 +34,26 @@ def build_market_snapshot(
     output_dir: Path,
     cycle_id: str,
     lookback_days: int = 420,
+    *,
+    provider: str | None = None,
+    fmp_api_key: str | None = None,
 ) -> dict[str, Any]:
     end = datetime.now(timezone.utc).date() + timedelta(days=1)
     start = end - timedelta(days=lookback_days)
     unique_symbols = sorted(set(symbols + [benchmark_symbol]))
-    data = download_daily_prices(unique_symbols, start=start.isoformat(), end=end.isoformat())
+    data = download_daily_prices(
+        unique_symbols,
+        start=start.isoformat(),
+        end=end.isoformat(),
+        provider=provider,
+        fmp_api_key=fmp_api_key,
+    )
 
     multi_symbol = isinstance(data.columns, pd.MultiIndex)
     snapshot: dict[str, Any] = {
         "as_of": date.today().isoformat(),
         "benchmark": benchmark_symbol,
+        "provider": provider or "default",
         "symbols": {},
         "warnings": [],
     }

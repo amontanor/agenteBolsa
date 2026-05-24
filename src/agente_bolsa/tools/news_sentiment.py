@@ -8,9 +8,39 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agente_bolsa.config import Settings
+from agente_bolsa.llm_usage import record_llm_response
+from .reporting import write_json_report
 
 
 ProgressCallback = Callable[[int, int, str], None]
+
+
+MATERIAL_NEGATIVE_TERMS = (
+    "amazon logistics",
+    "competitor",
+    "competition",
+    "rival",
+    "downgrade",
+    "guidance cut",
+    "profit warning",
+    "earnings miss",
+    "lawsuit",
+    "investigation",
+    "regulatory",
+    "sec investigation",
+    "fraud",
+    "bankruptcy",
+    "halted",
+    "recall",
+    "data breach",
+    "antitrust",
+    "margin pressure",
+    "cuts outlook",
+    "slumps",
+    "slides",
+    "plunges",
+    "sinks",
+)
 
 
 def _clean_text(value: Any) -> str:
@@ -119,30 +149,89 @@ def _llm_sentiment(settings: Settings, symbol: str, candidate: dict[str, Any], n
         "technical_state": candidate.get("technical_state", {}),
         "news": news,
     }
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Eres un analista de sentimiento financiero. Usa solo las noticias recibidas. "
+                "No recomiendes comprar ni vender. Devuelve solo JSON valido con estas claves: "
+                "sentiment (positive|neutral|negative|mixed|no_news), sentiment_score (-2 a 2), "
+                "supports_technical_setup (boolean), confidence (0 a 1), summary, risk_flags."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(prompt, ensure_ascii=True),
+        },
+    ]
     response = client.chat.completions.create(
         model=settings.openai_model,
         temperature=settings.llm_temperature,
         max_tokens=settings.llm_max_tokens,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Eres un analista de sentimiento financiero. Usa solo las noticias recibidas. "
-                    "No recomiendes comprar ni vender. Devuelve solo JSON valido con estas claves: "
-                    "sentiment (positive|neutral|negative|mixed|no_news), sentiment_score (-2 a 2), "
-                    "supports_technical_setup (boolean), confidence (0 a 1), summary, risk_flags."
-                ),
-            },
-            {
-                "role": "user",
-                "content": json.dumps(prompt, ensure_ascii=True),
-            },
-        ],
+        messages=messages,
     )
+    record_llm_response(settings, "news_sentiment", response, prompt=messages)
     content = response.choices[0].message.content or "{}"
     result = _extract_json_object(content)
     result["raw_response_preview"] = content[:1000]
     return result
+
+
+def assess_material_news_risk(
+    symbol: str,
+    news: list[dict[str, Any]],
+    sentiment: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Flag material news risk without relying on the LLM path."""
+
+    sentiment = sentiment or {}
+    matched_terms: list[str] = []
+    matched_titles: list[str] = []
+    for item in news:
+        text = " ".join(
+            [
+                str(item.get("title") or ""),
+                str(item.get("summary") or ""),
+                str(item.get("publisher") or ""),
+            ]
+        ).lower()
+        item_terms = [term for term in MATERIAL_NEGATIVE_TERMS if term in text]
+        if item_terms:
+            matched_terms.extend(item_terms)
+            title = _clean_text(item.get("title"))
+            if title:
+                matched_titles.append(title)
+
+    risk_flags = [str(flag) for flag in sentiment.get("risk_flags", [])]
+    sentiment_score = sentiment.get("sentiment_score")
+    confidence = sentiment.get("confidence") or 0
+    negative_sentiment = (
+        isinstance(sentiment_score, (int, float))
+        and float(confidence) >= 0.5
+        and float(sentiment_score) <= -0.5
+    )
+    failed = "sentiment_failed" in risk_flags
+
+    severity = "none"
+    if matched_terms or negative_sentiment:
+        severity = "material"
+    elif failed:
+        severity = "unknown"
+    elif not news:
+        severity = "no_news"
+
+    return {
+        "symbol": symbol.upper(),
+        "severity": severity,
+        "material": severity == "material",
+        "unknown": severity == "unknown",
+        "matched_terms": sorted(set(matched_terms)),
+        "matched_titles": matched_titles[:5],
+        "sentiment_failed": failed,
+        "sentiment_score": sentiment_score,
+        "sentiment_confidence": confidence,
+        "risk_flags": risk_flags,
+    }
 
 
 def analyze_news_sentiment_for_candidates(
@@ -161,9 +250,34 @@ def analyze_news_sentiment_for_candidates(
         symbol = str(candidate.get("symbol", "")).upper()
         if not symbol:
             continue
+        news: list[dict[str, Any]] = []
         try:
             news = fetch_symbol_news(symbol, max_items=max_news_items)
-            sentiment = _llm_sentiment(settings, symbol, candidate, news)
+        except Exception as exc:  # noqa: BLE001 - one symbol must not block the study.
+            warnings.append(f"{symbol}: news fetch failed: {exc}")
+            sentiment = {
+                "sentiment": "unknown",
+                "sentiment_score": 0,
+                "supports_technical_setup": False,
+                "confidence": 0,
+                "summary": f"No se pudieron descargar noticias: {exc}",
+                "risk_flags": ["news_fetch_failed", "sentiment_failed"],
+            }
+        else:
+            try:
+                sentiment = _llm_sentiment(settings, symbol, candidate, news)
+            except Exception as exc:  # noqa: BLE001 - keep fetched news for deterministic guards.
+                warnings.append(f"{symbol}: sentiment failed: {exc}")
+                sentiment = {
+                    "sentiment": "unknown",
+                    "sentiment_score": 0,
+                    "supports_technical_setup": False,
+                    "confidence": 0,
+                    "summary": f"No se pudo validar sentimiento: {exc}",
+                    "risk_flags": ["sentiment_failed"],
+                }
+        try:
+            material_risk = assess_material_news_risk(symbol, news, sentiment)
             results.append(
                 {
                     "symbol": symbol,
@@ -172,6 +286,7 @@ def analyze_news_sentiment_for_candidates(
                     "news_count": len(news),
                     "news": news,
                     "sentiment": sentiment,
+                    "material_risk": material_risk,
                 }
             )
         except Exception as exc:  # noqa: BLE001 - one symbol must not block the study.
@@ -191,6 +306,16 @@ def analyze_news_sentiment_for_candidates(
                         "summary": f"No se pudo validar sentimiento: {exc}",
                         "risk_flags": ["sentiment_failed"],
                     },
+                    "material_risk": {
+                        "symbol": symbol,
+                        "severity": "unknown",
+                        "material": False,
+                        "unknown": True,
+                        "matched_terms": [],
+                        "matched_titles": [],
+                        "sentiment_failed": True,
+                        "risk_flags": ["sentiment_failed"],
+                    },
                 }
             )
         if progress_callback:
@@ -200,11 +325,14 @@ def analyze_news_sentiment_for_candidates(
         "run_id": run_id,
         "as_of": datetime.now(timezone.utc).isoformat(),
         "symbols_analyzed": len(results),
+        "candidate_symbols": [item.get("symbol") for item in candidates if item.get("symbol")],
         "results": results,
         "warnings": warnings[:100],
     }
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"news_sentiment_{run_id}.json"
-    output_path.write_text(json.dumps(report, indent=2, ensure_ascii=True), encoding="utf-8")
-    report["path"] = str(output_path)
-    return report
+    return write_json_report(
+        report,
+        output_dir,
+        "news_sentiment",
+        run_id,
+        latest_filename="latest_news_sentiment.json",
+    )

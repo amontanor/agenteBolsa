@@ -30,6 +30,8 @@ def add_basic_technical_features(frame: pd.DataFrame) -> pd.DataFrame:
     result["low_20"] = result["Low"].rolling(20).min()
     result["high_55"] = result["High"].rolling(55).max()
     result["low_55"] = result["Low"].rolling(55).min()
+    result["prev_high_55"] = result["high_55"].shift(1)
+    result["prev_low_55"] = result["low_55"].shift(1)
     result["high_252"] = result["High"].rolling(252).max()
     result["low_252"] = result["Low"].rolling(252).min()
     result["volume_mean_20"] = result["Volume"].rolling(20).mean()
@@ -82,6 +84,7 @@ def add_basic_technical_features(frame: pd.DataFrame) -> pd.DataFrame:
     safe_range = result["candle_range"].replace(0, float("nan"))
     safe_body = result["candle_body_abs"].replace(0, float("nan"))
     result["candle_body_pct"] = result["candle_body_abs"] / safe_range
+    result["close_position_in_range"] = (result["Close"] - result["Low"]) / safe_range
     result["candle_doji"] = result["candle_body_pct"] <= 0.10
     result["candle_hammer"] = (
         (result["lower_shadow"] >= 2 * safe_body)

@@ -1,0 +1,300 @@
+//@version=6
+strategy(
+     "Dashboard tecnico aproximado",
+     overlay=true,
+     max_labels_count=500,
+     process_orders_on_close=true,
+     initial_capital=100000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10,
+     pyramiding=0)
+
+// ---------------------------------------------------------------------------
+// Estrategia general aproximada del dashboard para TradingView.
+//
+// Que replica:
+// - Estado tecnico long/short: SMA20/SMA50/SMA200, momentum, MACD, RSI,
+//   volumen relativo, Bollinger y rupturas de rango.
+// - Filtro de calidad de entrada: direccion long, setup fuerte, fuerza relativa
+//   positiva contra SPY, no demasiado extendido y confirmacion de momentum.
+// - Plan de riesgo base: stop a 2 ATR, objetivo a 3 ATR y salida por tiempo.
+//
+// Que NO puede replicar Pine:
+// - Scanner multiaccion del dashboard.
+// - Sentimiento/noticias, cartera real, ordenes del broker, aprendizaje operativo
+//   y validacion LLM.
+// - Patrones chartistas avanzados del backend; aqui se aproximan con rupturas.
+//
+// Uso recomendado:
+// - Aplicarlo a un simbolo concreto en grafico diario.
+// - Usarlo como test tecnico aproximado, no como sistema automatico completo.
+// ---------------------------------------------------------------------------
+
+// Inputs principales.
+tradeLongs = input.bool(true, "Permitir largos")
+tradeShorts = input.bool(false, "Permitir cortos")
+strictDashboardGate = input.bool(true, "Filtro estricto tipo dashboard")
+minScoreStrong = input.int(7, "Score minimo setup fuerte", minval=1, maxval=20)
+minScoreStrict = input.int(10, "Score minimo filtro estricto", minval=1, maxval=20)
+benchmarkSymbol = input.symbol("AMEX:SPY", "Benchmark fuerza relativa")
+
+// Riesgo y ejecucion.
+atrStopMult = input.float(2.0, "Stop ATR", minval=0.5, step=0.25)
+atrTargetMult = input.float(3.0, "Objetivo ATR", minval=0.5, step=0.25)
+timeStopBars = input.int(10, "Salida por tiempo barras", minval=1, maxval=60)
+maxSma20Distance = input.float(12.0, "Max extension sobre SMA20 (%)", minval=1.0, step=0.5) / 100.0
+extendedSma20Distance = input.float(8.0, "Extension elevada sobre SMA20 (%)", minval=1.0, step=0.5) / 100.0
+maxRsi = input.float(82.0, "RSI maximo normal", minval=50.0, maxval=100.0, step=1.0)
+confirmedPatternRsi = input.float(75.0, "RSI exige ruptura desde", minval=50.0, maxval=100.0, step=1.0)
+
+// Visual.
+showLabels = input.bool(true, "Mostrar etiquetas")
+showPanel = input.bool(true, "Mostrar panel")
+showRiskLines = input.bool(true, "Mostrar stop/objetivo")
+colorBars = input.bool(false, "Colorear velas")
+
+// Indicadores base.
+sma20 = ta.sma(close, 20)
+sma50 = ta.sma(close, 50)
+sma200 = ta.sma(close, 200)
+atr14 = ta.atr(14)
+rsi14 = ta.rsi(close, 14)
+[macdLine, macdSignal, _] = ta.macd(close, 12, 26, 9)
+
+ret5 = close / close[5] - 1.0
+ret20 = close / close[20] - 1.0
+ret60 = close / close[60] - 1.0
+
+benchmarkClose = request.security(benchmarkSymbol, timeframe.period, close)
+benchmarkRet20 = benchmarkClose / benchmarkClose[20] - 1.0
+relativeRet20 = ret20 - benchmarkRet20
+
+volMean20 = ta.sma(volume, 20)
+volStd20 = ta.stdev(volume, 20)
+volZ20 = volStd20 > 0 ? (volume - volMean20) / volStd20 : 0.0
+
+bbMid = ta.sma(close, 20)
+bbStd = ta.stdev(close, 20)
+bbUpper = bbMid + 2.0 * bbStd
+bbLower = bbMid - 2.0 * bbStd
+bbPctB = bbUpper != bbLower ? (close - bbLower) / (bbUpper - bbLower) : 0.5
+
+high55Prev = ta.highest(high, 55)[1]
+low55Prev = ta.lowest(low, 55)[1]
+breakout55 = close > high55Prev
+breakdown55 = close < low55Prev
+nearHigh55 = close >= high55Prev * 0.98
+nearLow55 = close <= low55Prev * 1.02
+
+// Velas simples, como aproximacion al bloque de candlesticks.
+body = math.abs(close - open)
+barRange = math.max(high - low, syminfo.mintick)
+upperWick = high - math.max(open, close)
+lowerWick = math.min(open, close) - low
+doji = body <= barRange * 0.10
+hammer = lowerWick >= body * 2.0 and upperWick <= body and close > open
+shootingStar = upperWick >= body * 2.0 and lowerWick <= body and close < open
+bullishEngulfing = close > open and close[1] < open[1] and close >= open[1] and open <= close[1]
+bearishEngulfing = close < open and close[1] > open[1] and close <= open[1] and open >= close[1]
+bullishCandle = hammer or bullishEngulfing
+bearishCandle = shootingStar or bearishEngulfing
+
+// Score tecnico long/short inspirado en technical_state_validator.py.
+longScore = 0
+shortScore = 0
+
+if close > sma200
+    longScore += 2
+else
+    shortScore += 2
+
+if sma20 > sma50
+    longScore += 2
+else
+    shortScore += 2
+
+if ret20 > 0.05
+    longScore += 2
+else if ret20 < -0.05
+    shortScore += 2
+
+if ret60 > 0.08
+    longScore += 1
+else if ret60 < -0.08
+    shortScore += 1
+
+if macdLine > macdSignal
+    longScore += 1
+else
+    shortScore += 1
+
+if rsi14 >= 75
+    shortScore += 1
+else if rsi14 <= 25
+    longScore += 1
+else if rsi14 >= 45 and rsi14 <= 68
+    longScore += 1
+
+if volZ20 >= 1.5
+    if ret5 >= 0
+        longScore += 1
+    else
+        shortScore += 1
+
+if bbPctB >= 0.9
+    longScore += 1
+else if bbPctB <= 0.1
+    shortScore += 1
+
+if bullishCandle
+    longScore += 1
+if bearishCandle
+    shortScore += 1
+if doji
+    longScore -= 1
+    shortScore -= 1
+
+// Aproximacion a patrones chartistas confirmados.
+if breakout55
+    longScore += 3
+else if nearHigh55
+    longScore += 1
+
+if breakdown55
+    shortScore += 3
+else if nearLow55
+    shortScore += 1
+
+longScore := math.max(longScore, 0)
+shortScore := math.max(shortScore, 0)
+directionLong = longScore >= shortScore
+score = directionLong ? longScore : shortScore
+scoreGap = math.abs(longScore - shortScore)
+setupQuality = scoreGap <= 1 ? "mixed" : score >= minScoreStrong ? "strong" : score >= 5 ? "watchlist" : "weak"
+
+// Filtros de entrada tipo dashboard.
+sma20Distance = sma20 > 0 ? (close - sma20) / sma20 : na
+isExtended = sma20Distance > extendedSma20Distance or rsi14 > maxRsi
+hasBullishPattern = breakout55 or bullishCandle
+hasBearishPattern = breakdown55 or bearishCandle
+
+baseLongGate = directionLong and setupQuality == "strong" and score >= minScoreStrong
+strictLongGate =
+     close > sma200 and
+     ret20 > 0 and
+     relativeRet20 > 0 and
+     macdLine > macdSignal and
+     sma20Distance <= maxSma20Distance and
+     (rsi14 < confirmedPatternRsi or hasBullishPattern) and
+     (not isExtended or (relativeRet20 >= 0.03 and volZ20 >= 0.5 and hasBullishPattern))
+
+baseShortGate = not directionLong and setupQuality == "strong" and score >= minScoreStrong
+strictShortGate =
+     close < sma200 and
+     ret20 < 0 and
+     relativeRet20 < 0 and
+     macdLine < macdSignal and
+     (rsi14 > 25 or hasBearishPattern)
+
+longSignal = tradeLongs and baseLongGate and (not strictDashboardGate or (score >= minScoreStrict and strictLongGate))
+shortSignal = tradeShorts and baseShortGate and (not strictDashboardGate or (score >= minScoreStrict and strictShortGate))
+
+// Plan de riesgo.
+longStop = close - atrStopMult * atr14
+longTarget = close + atrTargetMult * atr14
+shortStop = close + atrStopMult * atr14
+shortTarget = close - atrTargetMult * atr14
+
+if longSignal and strategy.position_size <= 0
+    strategy.entry("Long", strategy.long, comment="dashboard-long")
+
+if shortSignal and strategy.position_size >= 0
+    strategy.entry("Short", strategy.short, comment="dashboard-short")
+
+strategy.exit("Long risk", "Long", stop=longStop, limit=longTarget)
+strategy.exit("Short risk", "Short", stop=shortStop, limit=shortTarget)
+
+// Salida por tiempo desde la entrada.
+var int entryBar = na
+if strategy.position_size != 0 and strategy.position_size[1] == 0
+    entryBar := bar_index
+if strategy.position_size == 0
+    entryBar := na
+
+timeExit = strategy.position_size != 0 and not na(entryBar) and bar_index - entryBar >= timeStopBars
+if timeExit
+    strategy.close_all(comment="time-stop")
+
+// Visual principal.
+plot(sma20, "SMA20", color=color.new(color.teal, 0), linewidth=1)
+plot(sma50, "SMA50", color=color.new(color.orange, 0), linewidth=1)
+plot(sma200, "SMA200", color=color.new(color.gray, 0), linewidth=2)
+
+plot(showRiskLines and strategy.position_size > 0 ? longStop : na, "Stop long", color=color.new(color.red, 0), style=plot.style_linebr)
+plot(showRiskLines and strategy.position_size > 0 ? longTarget : na, "Objetivo long", color=color.new(color.green, 0), style=plot.style_linebr)
+plot(showRiskLines and strategy.position_size < 0 ? shortStop : na, "Stop short", color=color.new(color.red, 0), style=plot.style_linebr)
+plot(showRiskLines and strategy.position_size < 0 ? shortTarget : na, "Objetivo short", color=color.new(color.green, 0), style=plot.style_linebr)
+
+barcolor(colorBars ? longSignal ? color.new(color.green, 35) : shortSignal ? color.new(color.red, 35) : na : na)
+bgcolor(longSignal ? color.new(color.green, 90) : shortSignal ? color.new(color.red, 90) : na)
+
+plotshape(longSignal, title="Long dashboard", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 0), size=size.small, text="LONG")
+plotshape(shortSignal, title="Short dashboard", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.small, text="SHORT")
+
+if showLabels and longSignal
+    label.new(
+         bar_index,
+         low,
+         "LONG\nscore " + str.tostring(longScore) + "/" + str.tostring(shortScore) + "\nSL " + str.tostring(longStop, format.mintick) + "\nTP " + str.tostring(longTarget, format.mintick),
+         style=label.style_label_up,
+         textcolor=color.white,
+         color=color.new(color.green, 0))
+
+if showLabels and shortSignal
+    label.new(
+         bar_index,
+         high,
+         "SHORT\nscore " + str.tostring(shortScore) + "/" + str.tostring(longScore) + "\nSL " + str.tostring(shortStop, format.mintick) + "\nTP " + str.tostring(shortTarget, format.mintick),
+         style=label.style_label_down,
+         textcolor=color.white,
+         color=color.new(color.red, 0))
+
+// Alertas.
+alertcondition(longSignal, "Dashboard long", "Senal long aproximada del dashboard tecnico")
+alertcondition(shortSignal, "Dashboard short", "Senal short aproximada del dashboard tecnico")
+
+// Panel de lectura.
+var table panel = table.new(position.top_right, 2, 13, border_width=1)
+if showPanel and barstate.islast
+    dirText = directionLong ? "LONG" : "SHORT"
+    dirColor = directionLong ? color.new(color.green, 0) : color.new(color.red, 0)
+    setupColor = setupQuality == "strong" ? color.new(color.green, 0) : setupQuality == "mixed" ? color.new(color.orange, 0) : color.new(color.gray, 0)
+    gateText = longSignal ? "LONG activo" : shortSignal ? "SHORT activo" : "sin entrada"
+    gateColor = longSignal ? color.new(color.green, 0) : shortSignal ? color.new(color.red, 0) : color.new(color.gray, 0)
+
+    table.cell(panel, 0, 0, "Dashboard tecnico", bgcolor=color.new(color.black, 0), text_color=color.white)
+    table.cell(panel, 1, 0, syminfo.ticker, bgcolor=color.new(color.black, 0), text_color=color.white)
+    table.cell(panel, 0, 1, "Direccion")
+    table.cell(panel, 1, 1, dirText, text_color=dirColor)
+    table.cell(panel, 0, 2, "Setup")
+    table.cell(panel, 1, 2, setupQuality, text_color=setupColor)
+    table.cell(panel, 0, 3, "Score L/S")
+    table.cell(panel, 1, 3, str.tostring(longScore) + " / " + str.tostring(shortScore))
+    table.cell(panel, 0, 4, "Entrada")
+    table.cell(panel, 1, 4, gateText, text_color=gateColor)
+    table.cell(panel, 0, 5, "Ret 20d")
+    table.cell(panel, 1, 5, str.tostring(ret20 * 100.0, "+#.0;-#.0") + "%")
+    table.cell(panel, 0, 6, "Rel vs bench")
+    table.cell(panel, 1, 6, str.tostring(relativeRet20 * 100.0, "+#.0;-#.0") + "%")
+    table.cell(panel, 0, 7, "RSI")
+    table.cell(panel, 1, 7, str.tostring(rsi14, "#.0"))
+    table.cell(panel, 0, 8, "MACD")
+    table.cell(panel, 1, 8, macdLine > macdSignal ? "confirma" : "no confirma")
+    table.cell(panel, 0, 9, "Vol z20")
+    table.cell(panel, 1, 9, str.tostring(volZ20, "#.00"))
+    table.cell(panel, 0, 10, "Ext SMA20")
+    table.cell(panel, 1, 10, str.tostring(sma20Distance * 100.0, "+#.0;-#.0") + "%")
+    table.cell(panel, 0, 11, "Ruptura 55d")
+    table.cell(panel, 1, 11, breakout55 ? "alcista" : breakdown55 ? "bajista" : "no")
+    table.cell(panel, 0, 12, "Riesgo")
+    table.cell(panel, 1, 12, "SL 2ATR / TP 3ATR")
