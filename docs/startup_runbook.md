@@ -203,6 +203,8 @@ Consideramos que el proyecto esta realmente arriba cuando se cumplen estas 4 con
 .\.venv\Scripts\python.exe -m agente_bolsa.main status
 .\.venv\Scripts\python.exe -m agente_bolsa.main schedule-status
 .\.venv\Scripts\python.exe -m agente_bolsa.main live-readiness
+.\.venv\Scripts\python.exe -m agente_bolsa.main market-data-quality --json
+.\.venv\Scripts\python.exe -m agente_bolsa.main backup-db
 ```
 
 ### Decision LLM en seco

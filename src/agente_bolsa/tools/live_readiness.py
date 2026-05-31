@@ -165,4 +165,4 @@ def build_live_readiness_report(
         "required_before_live": [item for item in checks if item["status"] == "block"],
         "warnings": warnings,
     }
-    return write_json_report(report, reports_dir, "live_readiness", run_id)
+    return write_json_report(report, reports_dir, "live_readiness", run_id, latest_filename="latest_live_readiness.json")

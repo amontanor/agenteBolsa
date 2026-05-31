@@ -128,6 +128,24 @@ CREATE TABLE IF NOT EXISTS broker_orders (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS opportunity_snapshots (
+    snapshot_id TEXT PRIMARY KEY,
+    session_date TEXT NOT NULL,
+    slot_time TEXT NOT NULL,
+    run_id TEXT,
+    report_path TEXT,
+    opportunities_json TEXT NOT NULL,
+    summary_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_opportunity_snapshots_unique
+ON opportunity_snapshots(session_date, slot_time);
+
+CREATE INDEX IF NOT EXISTS idx_opportunity_snapshots_date_time
+ON opportunity_snapshots(session_date DESC, slot_time DESC);
+
 CREATE TABLE IF NOT EXISTS signal_outcomes (
     signal_id TEXT PRIMARY KEY,
     source_run_id TEXT NOT NULL,
@@ -325,6 +343,275 @@ CREATE TABLE IF NOT EXISTS pre_earnings_analyst_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_pre_earnings_analyst_snapshots_symbol_date
 ON pre_earnings_analyst_snapshots(symbol, snapshot_date);
+
+CREATE TABLE IF NOT EXISTS continuous_improvement_cycles (
+    cycle_id TEXT PRIMARY KEY,
+    trace_id TEXT NOT NULL,
+    job_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    dry_run INTEGER NOT NULL,
+    dedupe_key TEXT UNIQUE,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    context_json TEXT NOT NULL,
+    evaluation_json TEXT NOT NULL,
+    llm_call_id TEXT,
+    llm_status TEXT,
+    error_json TEXT NOT NULL,
+    report_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ci_cycles_status_updated
+ON continuous_improvement_cycles(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS continuous_improvement_llm_responses (
+    llm_call_id TEXT PRIMARY KEY,
+    cycle_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    status TEXT NOT NULL,
+    request_json TEXT NOT NULL,
+    response_json TEXT NOT NULL,
+    raw_response TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(cycle_id) REFERENCES continuous_improvement_cycles(cycle_id)
+);
+
+CREATE TABLE IF NOT EXISTS continuous_improvement_proposals (
+    proposal_id TEXT PRIMARY KEY,
+    cycle_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL UNIQUE,
+    proposal_type TEXT NOT NULL,
+    target_component TEXT NOT NULL,
+    target_identifier TEXT NOT NULL,
+    status TEXT NOT NULL,
+    priority TEXT NOT NULL,
+    risk_level TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    guard_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(cycle_id) REFERENCES continuous_improvement_cycles(cycle_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ci_proposals_status_updated
+ON continuous_improvement_proposals(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS continuous_improvement_validations (
+    validation_id TEXT PRIMARY KEY,
+    proposal_id TEXT NOT NULL,
+    cycle_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    validation_type TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(proposal_id) REFERENCES continuous_improvement_proposals(proposal_id),
+    FOREIGN KEY(cycle_id) REFERENCES continuous_improvement_cycles(cycle_id)
+);
+
+CREATE TABLE IF NOT EXISTS continuous_improvement_decisions (
+    decision_id TEXT PRIMARY KEY,
+    proposal_id TEXT NOT NULL,
+    cycle_id TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(proposal_id) REFERENCES continuous_improvement_proposals(proposal_id),
+    FOREIGN KEY(cycle_id) REFERENCES continuous_improvement_cycles(cycle_id)
+);
+
+CREATE TABLE IF NOT EXISTS continuous_improvement_events (
+    event_id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    status TEXT NOT NULL,
+    source TEXT NOT NULL,
+    priority TEXT NOT NULL,
+    fingerprint TEXT NOT NULL UNIQUE,
+    payload_json TEXT NOT NULL,
+    cooldown_until TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ci_events_status_updated
+ON continuous_improvement_events(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS continuous_improvement_agent_tasks (
+    task_id TEXT PRIMARY KEY,
+    cycle_id TEXT,
+    event_id TEXT NOT NULL,
+    agent_name TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    status TEXT NOT NULL,
+    priority TEXT NOT NULL,
+    dependency_ids_json TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    error_json TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    FOREIGN KEY(event_id) REFERENCES continuous_improvement_events(event_id),
+    FOREIGN KEY(cycle_id) REFERENCES continuous_improvement_cycles(cycle_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ci_tasks_status_updated
+ON continuous_improvement_agent_tasks(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS continuous_improvement_memories (
+    memory_key TEXT PRIMARY KEY,
+    domain TEXT NOT NULL,
+    summary_text TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    source_event_id TEXT,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(source_event_id) REFERENCES continuous_improvement_events(event_id)
+);
+
+CREATE TABLE IF NOT EXISTS continuous_improvement_hypotheses (
+    hypothesis_id TEXT PRIMARY KEY,
+    cycle_id TEXT,
+    event_id TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    status TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    fingerprint TEXT NOT NULL UNIQUE,
+    summary_text TEXT NOT NULL,
+    evidence_json TEXT NOT NULL,
+    source_task_ids_json TEXT NOT NULL,
+    proposal_ids_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(event_id) REFERENCES continuous_improvement_events(event_id),
+    FOREIGN KEY(cycle_id) REFERENCES continuous_improvement_cycles(cycle_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ci_hypotheses_status_updated
+ON continuous_improvement_hypotheses(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS continuous_improvement_proposal_artifacts (
+    artifact_id TEXT PRIMARY KEY,
+    proposal_id TEXT NOT NULL,
+    artifact_type TEXT NOT NULL,
+    content_text TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(proposal_id) REFERENCES continuous_improvement_proposals(proposal_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ci_artifacts_proposal
+ON continuous_improvement_proposal_artifacts(proposal_id, updated_at);
+
+CREATE TABLE IF NOT EXISTS continuous_improvement_runtime_state (
+    runtime_name TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    heartbeat_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS continuous_improvement_initiatives (
+    initiative_id TEXT PRIMARY KEY,
+    initiative_key TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    status TEXT NOT NULL,
+    owner_agent TEXT NOT NULL,
+    priority TEXT NOT NULL,
+    target_metric TEXT NOT NULL,
+    baseline_value REAL,
+    current_value REAL,
+    expected_impact TEXT NOT NULL,
+    risk_level TEXT NOT NULL,
+    evidence_json TEXT NOT NULL,
+    linked_event_ids_json TEXT NOT NULL,
+    linked_task_ids_json TEXT NOT NULL,
+    linked_hypothesis_ids_json TEXT NOT NULL,
+    linked_proposal_ids_json TEXT NOT NULL,
+    linked_validation_ids_json TEXT NOT NULL,
+    latest_decision_json TEXT NOT NULL,
+    next_action TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ci_initiatives_status_updated
+ON continuous_improvement_initiatives(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS continuous_improvement_initiative_messages (
+    message_id TEXT PRIMARY KEY,
+    initiative_id TEXT NOT NULL,
+    cycle_id TEXT,
+    event_id TEXT,
+    task_id TEXT,
+    agent_name TEXT NOT NULL,
+    role TEXT NOT NULL,
+    message_type TEXT NOT NULL,
+    content_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(initiative_id) REFERENCES continuous_improvement_initiatives(initiative_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ci_initiative_messages_initiative_created
+ON continuous_improvement_initiative_messages(initiative_id, created_at);
+
+CREATE TABLE IF NOT EXISTS continuous_improvement_experiments (
+    experiment_id TEXT PRIMARY KEY,
+    initiative_id TEXT,
+    proposal_id TEXT,
+    cycle_id TEXT,
+    experiment_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    input_json TEXT NOT NULL,
+    period_json TEXT NOT NULL,
+    metrics_json TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    artifact_path TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(initiative_id) REFERENCES continuous_improvement_initiatives(initiative_id),
+    FOREIGN KEY(proposal_id) REFERENCES continuous_improvement_proposals(proposal_id),
+    FOREIGN KEY(cycle_id) REFERENCES continuous_improvement_cycles(cycle_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ci_experiments_status_updated
+ON continuous_improvement_experiments(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS continuous_improvement_applied_changes (
+    applied_change_id TEXT PRIMARY KEY,
+    initiative_id TEXT,
+    proposal_id TEXT,
+    cycle_id TEXT,
+    status TEXT NOT NULL,
+    change_type TEXT NOT NULL,
+    target_key TEXT NOT NULL,
+    before_json TEXT NOT NULL,
+    after_json TEXT NOT NULL,
+    rollback_json TEXT NOT NULL,
+    decision_json TEXT NOT NULL,
+    validation_ids_json TEXT NOT NULL,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(initiative_id) REFERENCES continuous_improvement_initiatives(initiative_id),
+    FOREIGN KEY(proposal_id) REFERENCES continuous_improvement_proposals(proposal_id),
+    FOREIGN KEY(cycle_id) REFERENCES continuous_improvement_cycles(cycle_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ci_applied_changes_status_updated
+ON continuous_improvement_applied_changes(status, updated_at);
 """
 
 
@@ -334,6 +621,28 @@ def _utc_iso() -> str:
 
 def _dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=True, default=str)
+
+
+def _num(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _bullish_confirmed_count(features: dict[str, Any]) -> int:
+    chart_patterns = features.get("chart_patterns", {}) or {}
+    if isinstance(chart_patterns, dict):
+        return int(chart_patterns.get("bullish_confirmed_count") or 0)
+    if isinstance(chart_patterns, list):
+        return sum(
+            1
+            for item in chart_patterns
+            if item.get("bias") == "bullish" and item.get("status") == "confirmed"
+        )
+    return 0
 
 
 class Store:
@@ -687,6 +996,99 @@ class Store:
                     _utc_iso(),
                 ),
             )
+
+    def upsert_opportunity_snapshot(
+        self,
+        *,
+        snapshot_id: str,
+        session_date: str,
+        slot_time: str,
+        run_id: str | None,
+        report_path: str | None,
+        opportunities: list[dict[str, Any]],
+        summary: dict[str, Any],
+    ) -> None:
+        now = _utc_iso()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO opportunity_snapshots (
+                    snapshot_id, session_date, slot_time, run_id, report_path,
+                    opportunities_json, summary_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_date, slot_time) DO UPDATE SET
+                    snapshot_id=excluded.snapshot_id,
+                    run_id=excluded.run_id,
+                    report_path=excluded.report_path,
+                    opportunities_json=excluded.opportunities_json,
+                    summary_json=excluded.summary_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    snapshot_id,
+                    session_date,
+                    slot_time,
+                    run_id,
+                    report_path,
+                    _dumps(opportunities),
+                    _dumps(summary),
+                    now,
+                    now,
+                ),
+            )
+
+    def opportunity_snapshots(
+        self,
+        *,
+        session_date: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        query = """
+            SELECT snapshot_id, session_date, slot_time, run_id, report_path,
+                   opportunities_json, summary_json, created_at, updated_at
+            FROM opportunity_snapshots
+            WHERE 1 = 1
+        """
+        params: list[Any] = []
+        if session_date:
+            query += " AND session_date = ?"
+            params.append(session_date)
+        query += " ORDER BY session_date DESC, slot_time DESC LIMIT ?"
+        params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "snapshot_id": row["snapshot_id"],
+                "session_date": row["session_date"],
+                "slot_time": row["slot_time"],
+                "run_id": row["run_id"],
+                "report_path": row["report_path"],
+                "opportunities": json.loads(row["opportunities_json"] or "[]"),
+                "summary": json.loads(row["summary_json"] or "{}"),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
+    def latest_opportunity_snapshot(self) -> dict[str, Any] | None:
+        rows = self.opportunity_snapshots(limit=1)
+        return rows[0] if rows else None
+
+    def opportunity_snapshot_dates(self, limit: int = 60) -> list[str]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT session_date
+                FROM opportunity_snapshots
+                ORDER BY session_date DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [str(row["session_date"]) for row in rows]
 
     def save_signal_outcome(
         self,
@@ -1530,6 +1932,73 @@ class Store:
             for row in rows
         ]
 
+    def same_session_intraday_signal_summary(
+        self,
+        *,
+        session_date: str,
+        symbols: list[str] | None = None,
+        source: str = "intraday_scan",
+    ) -> dict[str, dict[str, Any]]:
+        query = """
+            SELECT symbol, decision, features_json, created_at
+            FROM signal_outcomes
+            WHERE signal_date = ?
+              AND source = ?
+        """
+        params: list[Any] = [session_date, source]
+        normalized_symbols = sorted({str(symbol).upper() for symbol in (symbols or []) if str(symbol).strip()})
+        if normalized_symbols:
+            placeholders = ",".join("?" for _ in normalized_symbols)
+            query += f" AND symbol IN ({placeholders})"
+            params.extend(normalized_symbols)
+        query += " ORDER BY symbol ASC, created_at ASC"
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            symbol = str(row["symbol"]).upper()
+            grouped.setdefault(symbol, []).append(
+                {
+                    "decision": row["decision"],
+                    "features": json.loads(row["features_json"] or "{}"),
+                    "created_at": row["created_at"],
+                }
+            )
+
+        result: dict[str, dict[str, Any]] = {}
+        for symbol, items in grouped.items():
+            if not items:
+                continue
+            first = items[0]
+            latest = items[-1]
+            first_features = first.get("features", {}) or {}
+            latest_features = latest.get("features", {}) or {}
+            direction = str(latest_features.get("direction") or first_features.get("direction") or "long").lower()
+            first_entry = _num(first_features.get("entry_price") or first_features.get("close"))
+            latest_entry = _num(latest_features.get("entry_price") or latest_features.get("close"))
+            same_session_return = None
+            if first_entry and latest_entry:
+                if direction == "short":
+                    same_session_return = (first_entry - latest_entry) / first_entry
+                else:
+                    same_session_return = (latest_entry - first_entry) / first_entry
+            result[symbol] = {
+                "symbol": symbol,
+                "observations": len(items),
+                "same_session_return": round(same_session_return, 4) if same_session_return is not None else None,
+                "selected_for_llm": any(bool((item.get("features", {}) or {}).get("selected_for_llm")) for item in items),
+                "latest_decision": latest.get("decision"),
+                "latest_score": _num(latest_features.get("score")),
+                "latest_rsi_14": _num(latest_features.get("rsi_14")),
+                "latest_volume_zscore_20": _num(latest_features.get("volume_zscore_20")),
+                "latest_distance_sma20": _num(latest_features.get("distance_sma20")),
+                "latest_bullish_confirmed_patterns": _bullish_confirmed_count(latest_features),
+                "first_seen_at": first.get("created_at"),
+                "last_seen_at": latest.get("created_at"),
+            }
+        return result
+
     def latest_executed_buy_plans_by_symbol(self) -> dict[str, dict[str, Any]]:
         """Return latest locally registered buy order plan per symbol."""
 
@@ -1578,6 +2047,1438 @@ class Store:
             row = conn.execute(query, params).fetchone()
         return int(row["count"] or 0)
 
+    def create_continuous_improvement_cycle(self, item: dict[str, Any]) -> None:
+        now = _utc_iso()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO continuous_improvement_cycles (
+                    cycle_id, trace_id, job_id, status, mode, dry_run, dedupe_key,
+                    started_at, finished_at, context_json, evaluation_json, llm_call_id,
+                    llm_status, error_json, report_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item["cycle_id"],
+                    item["trace_id"],
+                    item["job_id"],
+                    item.get("status", "PENDING"),
+                    item.get("mode", "manual"),
+                    int(bool(item.get("dry_run", True))),
+                    item.get("dedupe_key"),
+                    item.get("started_at") or now,
+                    item.get("finished_at"),
+                    _dumps(item.get("context", {})),
+                    _dumps(item.get("evaluation", {})),
+                    item.get("llm_call_id"),
+                    item.get("llm_status"),
+                    _dumps(item.get("error", {})),
+                    _dumps(item.get("report", {})),
+                    now,
+                    now,
+                ),
+            )
+
+    def update_continuous_improvement_cycle(self, cycle_id: str, **updates: Any) -> None:
+        allowed = {
+            "status": "status",
+            "finished_at": "finished_at",
+            "dedupe_key": "dedupe_key",
+            "context": "context_json",
+            "evaluation": "evaluation_json",
+            "llm_call_id": "llm_call_id",
+            "llm_status": "llm_status",
+            "error": "error_json",
+            "report": "report_json",
+        }
+        assignments = []
+        values: list[Any] = []
+        for key, column in allowed.items():
+            if key not in updates:
+                continue
+            assignments.append(f"{column} = ?")
+            value = updates[key]
+            if column.endswith("_json"):
+                value = _dumps(value or {})
+            values.append(value)
+        if not assignments:
+            return
+        assignments.append("updated_at = ?")
+        values.append(_utc_iso())
+        values.append(cycle_id)
+        with self.connect() as conn:
+            conn.execute(
+                f"""
+                UPDATE continuous_improvement_cycles
+                SET {", ".join(assignments)}
+                WHERE cycle_id = ?
+                """,
+                values,
+            )
+
+    def continuous_improvement_cycle_by_dedupe_key(self, dedupe_key: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT cycle_id, trace_id, job_id, status, mode, dry_run, dedupe_key,
+                       started_at, finished_at, context_json, evaluation_json,
+                       llm_call_id, llm_status, error_json, report_json, created_at, updated_at
+                FROM continuous_improvement_cycles
+                WHERE dedupe_key = ?
+                """,
+                (dedupe_key,),
+            ).fetchone()
+        return self._continuous_improvement_cycle_from_row(row) if row else None
+
+    def latest_continuous_improvement_cycle(self) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT cycle_id, trace_id, job_id, status, mode, dry_run, dedupe_key,
+                       started_at, finished_at, context_json, evaluation_json,
+                       llm_call_id, llm_status, error_json, report_json, created_at, updated_at
+                FROM continuous_improvement_cycles
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        return self._continuous_improvement_cycle_from_row(row) if row else None
+
+    def continuous_improvement_cycles(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT cycle_id, trace_id, job_id, status, mode, dry_run, dedupe_key,
+                       started_at, finished_at, context_json, evaluation_json,
+                       llm_call_id, llm_status, error_json, report_json, created_at, updated_at
+                FROM continuous_improvement_cycles
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [self._continuous_improvement_cycle_from_row(row) for row in rows]
+
+    def continuous_improvement_cycle(self, cycle_id: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT cycle_id, trace_id, job_id, status, mode, dry_run, dedupe_key,
+                       started_at, finished_at, context_json, evaluation_json,
+                       llm_call_id, llm_status, error_json, report_json, created_at, updated_at
+                FROM continuous_improvement_cycles
+                WHERE cycle_id = ?
+                """,
+                (cycle_id,),
+            ).fetchone()
+        if not row:
+            return None
+        cycle = self._continuous_improvement_cycle_from_row(row)
+        cycle["proposals"] = self.continuous_improvement_proposals(cycle_id=cycle_id, limit=500)
+        cycle["validations"] = self.continuous_improvement_validations(cycle_id=cycle_id)
+        return cycle
+
+    def _continuous_improvement_cycle_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "cycle_id": row["cycle_id"],
+            "trace_id": row["trace_id"],
+            "job_id": row["job_id"],
+            "status": row["status"],
+            "mode": row["mode"],
+            "dry_run": bool(row["dry_run"]),
+            "dedupe_key": row["dedupe_key"],
+            "started_at": row["started_at"],
+            "finished_at": row["finished_at"],
+            "context": json.loads(row["context_json"] or "{}"),
+            "evaluation": json.loads(row["evaluation_json"] or "{}"),
+            "llm_call_id": row["llm_call_id"],
+            "llm_status": row["llm_status"],
+            "error": json.loads(row["error_json"] or "{}"),
+            "report": json.loads(row["report_json"] or "{}"),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def save_continuous_improvement_llm_response(self, item: dict[str, Any]) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO continuous_improvement_llm_responses (
+                    llm_call_id, cycle_id, provider, model, status, request_json,
+                    response_json, raw_response, error, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item["llm_call_id"],
+                    item["cycle_id"],
+                    item.get("provider", ""),
+                    item.get("model", ""),
+                    item.get("status", "unknown"),
+                    _dumps(item.get("request", {})),
+                    _dumps(item.get("response", {})),
+                    item.get("raw_response"),
+                    item.get("error"),
+                    item.get("created_at") or _utc_iso(),
+                ),
+            )
+
+    def upsert_continuous_improvement_proposal(self, item: dict[str, Any]) -> tuple[str, bool]:
+        now = _utc_iso()
+        with self.connect() as conn:
+            existing = conn.execute(
+                """
+                SELECT proposal_id
+                FROM continuous_improvement_proposals
+                WHERE fingerprint = ?
+                """,
+                (item["fingerprint"],),
+            ).fetchone()
+            if existing:
+                return str(existing["proposal_id"]), False
+            conn.execute(
+                """
+                INSERT INTO continuous_improvement_proposals (
+                    proposal_id, cycle_id, fingerprint, proposal_type, target_component,
+                    target_identifier, status, priority, risk_level, payload_json,
+                    guard_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item["proposal_id"],
+                    item["cycle_id"],
+                    item["fingerprint"],
+                    item.get("proposal_type", "MONITORING_CHANGE"),
+                    item.get("target_component", ""),
+                    item.get("target_identifier", ""),
+                    item.get("status", "PENDING"),
+                    item.get("priority", "MEDIUM"),
+                    item.get("risk_level", "MEDIUM"),
+                    _dumps(item.get("payload", {})),
+                    _dumps(item.get("guard", {})),
+                    item.get("created_at") or now,
+                    now,
+                ),
+            )
+        return item["proposal_id"], True
+
+    def update_continuous_improvement_proposal_status(
+        self,
+        proposal_id: str,
+        *,
+        status: str,
+        actor: str,
+        reason: str,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        now = _utc_iso()
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT cycle_id FROM continuous_improvement_proposals WHERE proposal_id = ?",
+                (proposal_id,),
+            ).fetchone()
+            if not row:
+                raise KeyError(proposal_id)
+            conn.execute(
+                """
+                UPDATE continuous_improvement_proposals
+                SET status = ?, updated_at = ?
+                WHERE proposal_id = ?
+                """,
+                (status, now, proposal_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO continuous_improvement_decisions (
+                    decision_id, proposal_id, cycle_id, decision, reason, actor,
+                    payload_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"ci_decision_{proposal_id}_{now}",
+                    proposal_id,
+                    row["cycle_id"],
+                    status,
+                    reason,
+                    actor,
+                    _dumps(payload or {}),
+                    now,
+                ),
+            )
+
+    def save_continuous_improvement_decision(self, item: dict[str, Any]) -> None:
+        now = _utc_iso()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO continuous_improvement_decisions (
+                    decision_id, proposal_id, cycle_id, decision, reason, actor,
+                    payload_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item.get("decision_id") or f"ci_decision_{item['proposal_id']}_{now}",
+                    item["proposal_id"],
+                    item["cycle_id"],
+                    item["decision"],
+                    item.get("reason") or "",
+                    item.get("actor") or "system",
+                    _dumps(item.get("payload", {})),
+                    item.get("created_at") or now,
+                ),
+            )
+
+    def continuous_improvement_decisions(
+        self,
+        *,
+        proposal_id: str | None = None,
+        cycle_id: str | None = None,
+        actor: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        query = """
+            SELECT decision_id, proposal_id, cycle_id, decision, reason, actor,
+                   payload_json, created_at
+            FROM continuous_improvement_decisions
+            WHERE 1 = 1
+        """
+        params: list[Any] = []
+        if proposal_id:
+            query += " AND proposal_id = ?"
+            params.append(proposal_id)
+        if cycle_id:
+            query += " AND cycle_id = ?"
+            params.append(cycle_id)
+        if actor:
+            query += " AND actor = ?"
+            params.append(actor)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "decision_id": row["decision_id"],
+                "proposal_id": row["proposal_id"],
+                "cycle_id": row["cycle_id"],
+                "decision": row["decision"],
+                "reason": row["reason"],
+                "actor": row["actor"],
+                "payload": json.loads(row["payload_json"] or "{}"),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def continuous_improvement_proposals(
+        self,
+        *,
+        cycle_id: str | None = None,
+        status: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        query = """
+            SELECT proposal_id, cycle_id, fingerprint, proposal_type, target_component,
+                   target_identifier, status, priority, risk_level, payload_json,
+                   guard_json, created_at, updated_at
+            FROM continuous_improvement_proposals
+            WHERE 1 = 1
+        """
+        params: list[Any] = []
+        if cycle_id:
+            query += " AND cycle_id = ?"
+            params.append(cycle_id)
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "proposal_id": row["proposal_id"],
+                "cycle_id": row["cycle_id"],
+                "fingerprint": row["fingerprint"],
+                "proposal_type": row["proposal_type"],
+                "target_component": row["target_component"],
+                "target_identifier": row["target_identifier"],
+                "status": row["status"],
+                "priority": row["priority"],
+                "risk_level": row["risk_level"],
+                "payload": json.loads(row["payload_json"] or "{}"),
+                "guard": json.loads(row["guard_json"] or "{}"),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
+    def continuous_improvement_proposal(self, proposal_id: str) -> dict[str, Any] | None:
+        rows = self.continuous_improvement_proposals(limit=10000)
+        for row in rows:
+            if row["proposal_id"] == proposal_id:
+                row["validations"] = self.continuous_improvement_validations(proposal_id=proposal_id)
+                return row
+        return None
+
+    def save_continuous_improvement_validation(self, item: dict[str, Any]) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO continuous_improvement_validations (
+                    validation_id, proposal_id, cycle_id, status, validation_type,
+                    payload_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item["validation_id"],
+                    item["proposal_id"],
+                    item["cycle_id"],
+                    item.get("status", "PENDING"),
+                    item.get("validation_type", "deterministic"),
+                    _dumps(item.get("payload", {})),
+                    item.get("created_at") or _utc_iso(),
+                ),
+            )
+
+    def continuous_improvement_validations(
+        self,
+        *,
+        proposal_id: str | None = None,
+        cycle_id: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        query = """
+            SELECT validation_id, proposal_id, cycle_id, status, validation_type,
+                   payload_json, created_at
+            FROM continuous_improvement_validations
+            WHERE 1 = 1
+        """
+        params: list[Any] = []
+        if proposal_id:
+            query += " AND proposal_id = ?"
+            params.append(proposal_id)
+        if cycle_id:
+            query += " AND cycle_id = ?"
+            params.append(cycle_id)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "validation_id": row["validation_id"],
+                "proposal_id": row["proposal_id"],
+                "cycle_id": row["cycle_id"],
+                "status": row["status"],
+                "validation_type": row["validation_type"],
+                "payload": json.loads(row["payload_json"] or "{}"),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def upsert_continuous_improvement_event(self, item: dict[str, Any]) -> tuple[str, bool]:
+        now = _utc_iso()
+        with self.connect() as conn:
+            existing = conn.execute(
+                """
+                SELECT event_id
+                FROM continuous_improvement_events
+                WHERE fingerprint = ?
+                """,
+                (item["fingerprint"],),
+            ).fetchone()
+            if existing:
+                return str(existing["event_id"]), False
+            conn.execute(
+                """
+                INSERT INTO continuous_improvement_events (
+                    event_id, event_type, domain, status, source, priority, fingerprint,
+                    payload_json, cooldown_until, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item["event_id"],
+                    item["event_type"],
+                    item.get("domain", "software"),
+                    item.get("status", "DISCOVERED"),
+                    item.get("source", "runtime"),
+                    item.get("priority", "MEDIUM"),
+                    item["fingerprint"],
+                    _dumps(item.get("payload", {})),
+                    item.get("cooldown_until"),
+                    item.get("created_at") or now,
+                    now,
+                ),
+            )
+        return item["event_id"], True
+
+    def update_continuous_improvement_event(self, event_id: str, **updates: Any) -> None:
+        allowed = {
+            "status": "status",
+            "cooldown_until": "cooldown_until",
+            "payload": "payload_json",
+        }
+        assignments = []
+        values: list[Any] = []
+        for key, column in allowed.items():
+            if key not in updates:
+                continue
+            assignments.append(f"{column} = ?")
+            value = updates[key]
+            if column.endswith("_json"):
+                value = _dumps(value or {})
+            values.append(value)
+        if not assignments:
+            return
+        assignments.append("updated_at = ?")
+        values.append(_utc_iso())
+        values.append(event_id)
+        with self.connect() as conn:
+            conn.execute(
+                f"""
+                UPDATE continuous_improvement_events
+                SET {", ".join(assignments)}
+                WHERE event_id = ?
+                """,
+                values,
+            )
+
+    def continuous_improvement_events(
+        self,
+        *,
+        statuses: list[str] | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        query = """
+            SELECT event_id, event_type, domain, status, source, priority, fingerprint,
+                   payload_json, cooldown_until, created_at, updated_at
+            FROM continuous_improvement_events
+            WHERE 1 = 1
+        """
+        params: list[Any] = []
+        if statuses:
+            placeholders = ",".join("?" for _ in statuses)
+            query += f" AND status IN ({placeholders})"
+            params.extend(statuses)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "event_id": row["event_id"],
+                "event_type": row["event_type"],
+                "domain": row["domain"],
+                "status": row["status"],
+                "source": row["source"],
+                "priority": row["priority"],
+                "fingerprint": row["fingerprint"],
+                "payload": json.loads(row["payload_json"] or "{}"),
+                "cooldown_until": row["cooldown_until"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
+    def continuous_improvement_event(self, event_id: str) -> dict[str, Any] | None:
+        rows = self.continuous_improvement_events(limit=10000)
+        for row in rows:
+            if row["event_id"] == event_id:
+                return row
+        return None
+
+    def create_continuous_improvement_task(self, item: dict[str, Any]) -> None:
+        now = _utc_iso()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO continuous_improvement_agent_tasks (
+                    task_id, cycle_id, event_id, agent_name, domain, status, priority,
+                    dependency_ids_json, payload_json, result_json, error_json,
+                    attempt_count, created_at, updated_at, started_at, finished_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item["task_id"],
+                    item.get("cycle_id"),
+                    item["event_id"],
+                    item["agent_name"],
+                    item.get("domain", "software"),
+                    item.get("status", "DISCOVERED"),
+                    item.get("priority", "MEDIUM"),
+                    _dumps(item.get("dependency_ids", [])),
+                    _dumps(item.get("payload", {})),
+                    _dumps(item.get("result", {})),
+                    _dumps(item.get("error", {})),
+                    int(item.get("attempt_count") or 0),
+                    item.get("created_at") or now,
+                    now,
+                    item.get("started_at"),
+                    item.get("finished_at"),
+                ),
+            )
+
+    def update_continuous_improvement_task(self, task_id: str, **updates: Any) -> None:
+        allowed = {
+            "cycle_id": "cycle_id",
+            "status": "status",
+            "payload": "payload_json",
+            "result": "result_json",
+            "error": "error_json",
+            "attempt_count": "attempt_count",
+            "started_at": "started_at",
+            "finished_at": "finished_at",
+        }
+        assignments = []
+        values: list[Any] = []
+        for key, column in allowed.items():
+            if key not in updates:
+                continue
+            assignments.append(f"{column} = ?")
+            value = updates[key]
+            if column.endswith("_json"):
+                value = _dumps(value or {})
+            values.append(value)
+        if not assignments:
+            return
+        assignments.append("updated_at = ?")
+        values.append(_utc_iso())
+        values.append(task_id)
+        with self.connect() as conn:
+            conn.execute(
+                f"""
+                UPDATE continuous_improvement_agent_tasks
+                SET {", ".join(assignments)}
+                WHERE task_id = ?
+                """,
+                values,
+            )
+
+    def continuous_improvement_tasks(
+        self,
+        *,
+        event_id: str | None = None,
+        statuses: list[str] | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        query = """
+            SELECT task_id, cycle_id, event_id, agent_name, domain, status, priority,
+                   dependency_ids_json, payload_json, result_json, error_json,
+                   attempt_count, created_at, updated_at, started_at, finished_at
+            FROM continuous_improvement_agent_tasks
+            WHERE 1 = 1
+        """
+        params: list[Any] = []
+        if event_id:
+            query += " AND event_id = ?"
+            params.append(event_id)
+        if statuses:
+            placeholders = ",".join("?" for _ in statuses)
+            query += f" AND status IN ({placeholders})"
+            params.extend(statuses)
+        query += " ORDER BY created_at ASC LIMIT ?"
+        params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "task_id": row["task_id"],
+                "cycle_id": row["cycle_id"],
+                "event_id": row["event_id"],
+                "agent_name": row["agent_name"],
+                "domain": row["domain"],
+                "status": row["status"],
+                "priority": row["priority"],
+                "dependency_ids": json.loads(row["dependency_ids_json"] or "[]"),
+                "payload": json.loads(row["payload_json"] or "{}"),
+                "result": json.loads(row["result_json"] or "{}"),
+                "error": json.loads(row["error_json"] or "{}"),
+                "attempt_count": int(row["attempt_count"] or 0),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "started_at": row["started_at"],
+                "finished_at": row["finished_at"],
+            }
+            for row in rows
+        ]
+
+    def continuous_improvement_task(self, task_id: str) -> dict[str, Any] | None:
+        rows = self.continuous_improvement_tasks(limit=10000)
+        for row in rows:
+            if row["task_id"] == task_id:
+                return row
+        return None
+
+    def upsert_continuous_improvement_memory(
+        self,
+        *,
+        memory_key: str,
+        domain: str,
+        summary_text: str,
+        payload: dict[str, Any],
+        source_event_id: str | None = None,
+    ) -> None:
+        now = _utc_iso()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO continuous_improvement_memories (
+                    memory_key, domain, summary_text, payload_json, source_event_id, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(memory_key) DO UPDATE SET
+                    domain=excluded.domain,
+                    summary_text=excluded.summary_text,
+                    payload_json=excluded.payload_json,
+                    source_event_id=excluded.source_event_id,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    memory_key,
+                    domain,
+                    summary_text,
+                    _dumps(payload),
+                    source_event_id,
+                    now,
+                ),
+            )
+
+    def continuous_improvement_memories(self, domain: str | None = None) -> list[dict[str, Any]]:
+        query = """
+            SELECT memory_key, domain, summary_text, payload_json, source_event_id, updated_at
+            FROM continuous_improvement_memories
+            WHERE 1 = 1
+        """
+        params: list[Any] = []
+        if domain:
+            query += " AND domain = ?"
+            params.append(domain)
+        query += " ORDER BY updated_at DESC"
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "memory_key": row["memory_key"],
+                "domain": row["domain"],
+                "summary_text": row["summary_text"],
+                "payload": json.loads(row["payload_json"] or "{}"),
+                "source_event_id": row["source_event_id"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
+    def upsert_continuous_improvement_hypothesis(self, item: dict[str, Any]) -> tuple[str, bool]:
+        now = _utc_iso()
+        with self.connect() as conn:
+            existing = conn.execute(
+                """
+                SELECT hypothesis_id
+                FROM continuous_improvement_hypotheses
+                WHERE fingerprint = ?
+                """,
+                (item["fingerprint"],),
+            ).fetchone()
+            if existing:
+                return str(existing["hypothesis_id"]), False
+            conn.execute(
+                """
+                INSERT INTO continuous_improvement_hypotheses (
+                    hypothesis_id, cycle_id, event_id, domain, subject, status, confidence,
+                    fingerprint, summary_text, evidence_json, source_task_ids_json,
+                    proposal_ids_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item["hypothesis_id"],
+                    item.get("cycle_id"),
+                    item["event_id"],
+                    item.get("domain", "software"),
+                    item["subject"],
+                    item.get("status", "OPEN"),
+                    item.get("confidence", "LOW"),
+                    item["fingerprint"],
+                    item.get("summary_text", ""),
+                    _dumps(item.get("evidence", [])),
+                    _dumps(item.get("source_task_ids", [])),
+                    _dumps(item.get("proposal_ids", [])),
+                    item.get("created_at") or now,
+                    now,
+                ),
+            )
+        return item["hypothesis_id"], True
+
+    def continuous_improvement_hypotheses(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        query = """
+            SELECT hypothesis_id, cycle_id, event_id, domain, subject, status, confidence,
+                   fingerprint, summary_text, evidence_json, source_task_ids_json,
+                   proposal_ids_json, created_at, updated_at
+            FROM continuous_improvement_hypotheses
+            WHERE 1 = 1
+        """
+        params: list[Any] = []
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "hypothesis_id": row["hypothesis_id"],
+                "cycle_id": row["cycle_id"],
+                "event_id": row["event_id"],
+                "domain": row["domain"],
+                "subject": row["subject"],
+                "status": row["status"],
+                "confidence": row["confidence"],
+                "fingerprint": row["fingerprint"],
+                "summary_text": row["summary_text"],
+                "evidence": json.loads(row["evidence_json"] or "[]"),
+                "source_task_ids": json.loads(row["source_task_ids_json"] or "[]"),
+                "proposal_ids": json.loads(row["proposal_ids_json"] or "[]"),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
+    def save_continuous_improvement_proposal_artifact(self, item: dict[str, Any]) -> None:
+        now = _utc_iso()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO continuous_improvement_proposal_artifacts (
+                    artifact_id, proposal_id, artifact_type, content_text, payload_json,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item["artifact_id"],
+                    item["proposal_id"],
+                    item.get("artifact_type", "text"),
+                    item.get("content_text", ""),
+                    _dumps(item.get("payload", {})),
+                    item.get("created_at") or now,
+                    now,
+                ),
+            )
+
+    def continuous_improvement_proposal_artifact(self, proposal_id: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT artifact_id, proposal_id, artifact_type, content_text, payload_json,
+                       created_at, updated_at
+                FROM continuous_improvement_proposal_artifacts
+                WHERE proposal_id = ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (proposal_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "artifact_id": row["artifact_id"],
+            "proposal_id": row["proposal_id"],
+            "artifact_type": row["artifact_type"],
+            "content_text": row["content_text"],
+            "payload": json.loads(row["payload_json"] or "{}"),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def upsert_continuous_improvement_runtime_state(
+        self,
+        *,
+        runtime_name: str,
+        status: str,
+        heartbeat_at: str,
+        payload: dict[str, Any],
+    ) -> None:
+        now = _utc_iso()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO continuous_improvement_runtime_state (
+                    runtime_name, status, heartbeat_at, payload_json, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(runtime_name) DO UPDATE SET
+                    status=excluded.status,
+                    heartbeat_at=excluded.heartbeat_at,
+                    payload_json=excluded.payload_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    runtime_name,
+                    status,
+                    heartbeat_at,
+                    _dumps(payload),
+                    now,
+                ),
+            )
+
+    def continuous_improvement_runtime_state(self, runtime_name: str = "lab") -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT runtime_name, status, heartbeat_at, payload_json, updated_at
+                FROM continuous_improvement_runtime_state
+                WHERE runtime_name = ?
+                """,
+                (runtime_name,),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "runtime_name": row["runtime_name"],
+            "status": row["status"],
+            "heartbeat_at": row["heartbeat_at"],
+            "payload": json.loads(row["payload_json"] or "{}"),
+            "updated_at": row["updated_at"],
+        }
+
+    def upsert_continuous_improvement_initiative(self, item: dict[str, Any]) -> tuple[str, bool]:
+        now = _utc_iso()
+        evidence = item.get("evidence", []) or []
+        with self.connect() as conn:
+            existing = conn.execute(
+                """
+                SELECT initiative_id, evidence_json, linked_event_ids_json, linked_task_ids_json,
+                       linked_hypothesis_ids_json, linked_proposal_ids_json, linked_validation_ids_json
+                FROM continuous_improvement_initiatives
+                WHERE initiative_key = ?
+                """,
+                (item["initiative_key"],),
+            ).fetchone()
+            if existing:
+                merged_evidence = self._merge_json_list(existing["evidence_json"], evidence)
+                linked_event_ids = self._merge_json_list(existing["linked_event_ids_json"], item.get("linked_event_ids", []))
+                linked_task_ids = self._merge_json_list(existing["linked_task_ids_json"], item.get("linked_task_ids", []))
+                linked_hypothesis_ids = self._merge_json_list(existing["linked_hypothesis_ids_json"], item.get("linked_hypothesis_ids", []))
+                linked_proposal_ids = self._merge_json_list(existing["linked_proposal_ids_json"], item.get("linked_proposal_ids", []))
+                linked_validation_ids = self._merge_json_list(existing["linked_validation_ids_json"], item.get("linked_validation_ids", []))
+                conn.execute(
+                    """
+                    UPDATE continuous_improvement_initiatives
+                    SET title = ?,
+                        domain = ?,
+                        status = ?,
+                        owner_agent = ?,
+                        priority = ?,
+                        target_metric = ?,
+                        baseline_value = ?,
+                        current_value = ?,
+                        expected_impact = ?,
+                        risk_level = ?,
+                        evidence_json = ?,
+                        linked_event_ids_json = ?,
+                        linked_task_ids_json = ?,
+                        linked_hypothesis_ids_json = ?,
+                        linked_proposal_ids_json = ?,
+                        linked_validation_ids_json = ?,
+                        latest_decision_json = ?,
+                        next_action = ?,
+                        updated_at = ?
+                    WHERE initiative_id = ?
+                    """,
+                    (
+                        item.get("title", ""),
+                        item.get("domain", "trading"),
+                        item.get("status", "OPEN"),
+                        item.get("owner_agent", ""),
+                        item.get("priority", "MEDIUM"),
+                        item.get("target_metric", ""),
+                        item.get("baseline_value"),
+                        item.get("current_value"),
+                        item.get("expected_impact", ""),
+                        item.get("risk_level", "MEDIUM"),
+                        _dumps(merged_evidence),
+                        _dumps(linked_event_ids),
+                        _dumps(linked_task_ids),
+                        _dumps(linked_hypothesis_ids),
+                        _dumps(linked_proposal_ids),
+                        _dumps(linked_validation_ids),
+                        _dumps(item.get("latest_decision", {})),
+                        item.get("next_action", ""),
+                        now,
+                        existing["initiative_id"],
+                    ),
+                )
+                return str(existing["initiative_id"]), False
+            conn.execute(
+                """
+                INSERT INTO continuous_improvement_initiatives (
+                    initiative_id, initiative_key, title, domain, status, owner_agent,
+                    priority, target_metric, baseline_value, current_value, expected_impact,
+                    risk_level, evidence_json, linked_event_ids_json, linked_task_ids_json,
+                    linked_hypothesis_ids_json, linked_proposal_ids_json, linked_validation_ids_json,
+                    latest_decision_json, next_action, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item["initiative_id"],
+                    item["initiative_key"],
+                    item.get("title", ""),
+                    item.get("domain", "trading"),
+                    item.get("status", "OPEN"),
+                    item.get("owner_agent", ""),
+                    item.get("priority", "MEDIUM"),
+                    item.get("target_metric", ""),
+                    item.get("baseline_value"),
+                    item.get("current_value"),
+                    item.get("expected_impact", ""),
+                    item.get("risk_level", "MEDIUM"),
+                    _dumps(evidence),
+                    _dumps(item.get("linked_event_ids", [])),
+                    _dumps(item.get("linked_task_ids", [])),
+                    _dumps(item.get("linked_hypothesis_ids", [])),
+                    _dumps(item.get("linked_proposal_ids", [])),
+                    _dumps(item.get("linked_validation_ids", [])),
+                    _dumps(item.get("latest_decision", {})),
+                    item.get("next_action", ""),
+                    item.get("created_at") or now,
+                    now,
+                ),
+            )
+        return item["initiative_id"], True
+
+    def update_continuous_improvement_initiative(self, initiative_id: str, **updates: Any) -> None:
+        allowed = {
+            "title": "title",
+            "domain": "domain",
+            "status": "status",
+            "owner_agent": "owner_agent",
+            "priority": "priority",
+            "target_metric": "target_metric",
+            "baseline_value": "baseline_value",
+            "current_value": "current_value",
+            "expected_impact": "expected_impact",
+            "risk_level": "risk_level",
+            "evidence": "evidence_json",
+            "linked_event_ids": "linked_event_ids_json",
+            "linked_task_ids": "linked_task_ids_json",
+            "linked_hypothesis_ids": "linked_hypothesis_ids_json",
+            "linked_proposal_ids": "linked_proposal_ids_json",
+            "linked_validation_ids": "linked_validation_ids_json",
+            "latest_decision": "latest_decision_json",
+            "next_action": "next_action",
+        }
+        assignments = []
+        values: list[Any] = []
+        for key, column in allowed.items():
+            if key not in updates:
+                continue
+            assignments.append(f"{column} = ?")
+            value = updates[key]
+            if column.endswith("_json"):
+                value = _dumps(value or {})
+            values.append(value)
+        if not assignments:
+            return
+        assignments.append("updated_at = ?")
+        values.append(_utc_iso())
+        values.append(initiative_id)
+        with self.connect() as conn:
+            conn.execute(
+                f"""
+                UPDATE continuous_improvement_initiatives
+                SET {", ".join(assignments)}
+                WHERE initiative_id = ?
+                """,
+                values,
+            )
+
+    def continuous_improvement_initiatives(
+        self,
+        *,
+        statuses: list[str] | None = None,
+        domain: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        query = """
+            SELECT initiative_id, initiative_key, title, domain, status, owner_agent,
+                   priority, target_metric, baseline_value, current_value, expected_impact,
+                   risk_level, evidence_json, linked_event_ids_json, linked_task_ids_json,
+                   linked_hypothesis_ids_json, linked_proposal_ids_json, linked_validation_ids_json,
+                   latest_decision_json, next_action, created_at, updated_at
+            FROM continuous_improvement_initiatives
+            WHERE 1 = 1
+        """
+        params: list[Any] = []
+        if statuses:
+            placeholders = ",".join("?" for _ in statuses)
+            query += f" AND status IN ({placeholders})"
+            params.extend(statuses)
+        if domain:
+            query += " AND domain = ?"
+            params.append(domain)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [self._continuous_improvement_initiative_from_row(row) for row in rows]
+
+    def continuous_improvement_initiative(self, initiative_id: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT initiative_id, initiative_key, title, domain, status, owner_agent,
+                       priority, target_metric, baseline_value, current_value, expected_impact,
+                       risk_level, evidence_json, linked_event_ids_json, linked_task_ids_json,
+                       linked_hypothesis_ids_json, linked_proposal_ids_json, linked_validation_ids_json,
+                       latest_decision_json, next_action, created_at, updated_at
+                FROM continuous_improvement_initiatives
+                WHERE initiative_id = ?
+                """,
+                (initiative_id,),
+            ).fetchone()
+        if not row:
+            return None
+        initiative = self._continuous_improvement_initiative_from_row(row)
+        initiative["messages"] = self.continuous_improvement_initiative_messages(initiative_id=initiative_id)
+        return initiative
+
+    def continuous_improvement_initiative_by_key(self, initiative_key: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT initiative_id, initiative_key, title, domain, status, owner_agent,
+                       priority, target_metric, baseline_value, current_value, expected_impact,
+                       risk_level, evidence_json, linked_event_ids_json, linked_task_ids_json,
+                       linked_hypothesis_ids_json, linked_proposal_ids_json, linked_validation_ids_json,
+                       latest_decision_json, next_action, created_at, updated_at
+                FROM continuous_improvement_initiatives
+                WHERE initiative_key = ?
+                """,
+                (initiative_key,),
+            ).fetchone()
+        return self._continuous_improvement_initiative_from_row(row) if row else None
+
+    def _continuous_improvement_initiative_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "initiative_id": row["initiative_id"],
+            "initiative_key": row["initiative_key"],
+            "title": row["title"],
+            "domain": row["domain"],
+            "status": row["status"],
+            "owner_agent": row["owner_agent"],
+            "priority": row["priority"],
+            "target_metric": row["target_metric"],
+            "baseline_value": row["baseline_value"],
+            "current_value": row["current_value"],
+            "expected_impact": row["expected_impact"],
+            "risk_level": row["risk_level"],
+            "evidence": json.loads(row["evidence_json"] or "[]"),
+            "linked_event_ids": json.loads(row["linked_event_ids_json"] or "[]"),
+            "linked_task_ids": json.loads(row["linked_task_ids_json"] or "[]"),
+            "linked_hypothesis_ids": json.loads(row["linked_hypothesis_ids_json"] or "[]"),
+            "linked_proposal_ids": json.loads(row["linked_proposal_ids_json"] or "[]"),
+            "linked_validation_ids": json.loads(row["linked_validation_ids_json"] or "[]"),
+            "latest_decision": json.loads(row["latest_decision_json"] or "{}"),
+            "next_action": row["next_action"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def save_continuous_improvement_initiative_message(self, item: dict[str, Any]) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO continuous_improvement_initiative_messages (
+                    message_id, initiative_id, cycle_id, event_id, task_id, agent_name,
+                    role, message_type, content_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item["message_id"],
+                    item["initiative_id"],
+                    item.get("cycle_id"),
+                    item.get("event_id"),
+                    item.get("task_id"),
+                    item.get("agent_name", ""),
+                    item.get("role", "agent"),
+                    item.get("message_type", "note"),
+                    _dumps(item.get("content", {})),
+                    item.get("created_at") or _utc_iso(),
+                ),
+            )
+
+    def continuous_improvement_initiative_messages(
+        self,
+        *,
+        initiative_id: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        query = """
+            SELECT message_id, initiative_id, cycle_id, event_id, task_id, agent_name,
+                   role, message_type, content_json, created_at
+            FROM continuous_improvement_initiative_messages
+            WHERE 1 = 1
+        """
+        params: list[Any] = []
+        if initiative_id:
+            query += " AND initiative_id = ?"
+            params.append(initiative_id)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "message_id": row["message_id"],
+                "initiative_id": row["initiative_id"],
+                "cycle_id": row["cycle_id"],
+                "event_id": row["event_id"],
+                "task_id": row["task_id"],
+                "agent_name": row["agent_name"],
+                "role": row["role"],
+                "message_type": row["message_type"],
+                "content": json.loads(row["content_json"] or "{}"),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def append_continuous_improvement_initiative_links(
+        self,
+        initiative_id: str,
+        *,
+        event_ids: list[str] | None = None,
+        task_ids: list[str] | None = None,
+        hypothesis_ids: list[str] | None = None,
+        proposal_ids: list[str] | None = None,
+        validation_ids: list[str] | None = None,
+    ) -> None:
+        initiative = self.continuous_improvement_initiative(initiative_id)
+        if not initiative:
+            return
+        self.update_continuous_improvement_initiative(
+            initiative_id,
+            linked_event_ids=self._merge_list_values(initiative.get("linked_event_ids", []), event_ids or []),
+            linked_task_ids=self._merge_list_values(initiative.get("linked_task_ids", []), task_ids or []),
+            linked_hypothesis_ids=self._merge_list_values(initiative.get("linked_hypothesis_ids", []), hypothesis_ids or []),
+            linked_proposal_ids=self._merge_list_values(initiative.get("linked_proposal_ids", []), proposal_ids or []),
+            linked_validation_ids=self._merge_list_values(initiative.get("linked_validation_ids", []), validation_ids or []),
+        )
+
+    def save_continuous_improvement_experiment(self, item: dict[str, Any]) -> None:
+        now = _utc_iso()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO continuous_improvement_experiments (
+                    experiment_id, initiative_id, proposal_id, cycle_id, experiment_type, status,
+                    input_json, period_json, metrics_json, result_json, artifact_path, error,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item["experiment_id"],
+                    item.get("initiative_id"),
+                    item.get("proposal_id"),
+                    item.get("cycle_id"),
+                    item.get("experiment_type", "unknown"),
+                    item.get("status", "PENDING"),
+                    _dumps(item.get("input", {})),
+                    _dumps(item.get("period", {})),
+                    _dumps(item.get("metrics", {})),
+                    _dumps(item.get("result", {})),
+                    item.get("artifact_path"),
+                    item.get("error"),
+                    item.get("created_at") or now,
+                    now,
+                ),
+            )
+
+    def continuous_improvement_experiments(
+        self,
+        *,
+        initiative_id: str | None = None,
+        proposal_id: str | None = None,
+        statuses: list[str] | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        query = """
+            SELECT experiment_id, initiative_id, proposal_id, cycle_id, experiment_type, status,
+                   input_json, period_json, metrics_json, result_json, artifact_path, error,
+                   created_at, updated_at
+            FROM continuous_improvement_experiments
+            WHERE 1 = 1
+        """
+        params: list[Any] = []
+        if initiative_id:
+            query += " AND initiative_id = ?"
+            params.append(initiative_id)
+        if proposal_id:
+            query += " AND proposal_id = ?"
+            params.append(proposal_id)
+        if statuses:
+            placeholders = ",".join("?" for _ in statuses)
+            query += f" AND status IN ({placeholders})"
+            params.extend(statuses)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "experiment_id": row["experiment_id"],
+                "initiative_id": row["initiative_id"],
+                "proposal_id": row["proposal_id"],
+                "cycle_id": row["cycle_id"],
+                "experiment_type": row["experiment_type"],
+                "status": row["status"],
+                "input": json.loads(row["input_json"] or "{}"),
+                "period": json.loads(row["period_json"] or "{}"),
+                "metrics": json.loads(row["metrics_json"] or "{}"),
+                "result": json.loads(row["result_json"] or "{}"),
+                "artifact_path": row["artifact_path"],
+                "error": row["error"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
+    def save_continuous_improvement_applied_change(self, item: dict[str, Any]) -> None:
+        now = _utc_iso()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO continuous_improvement_applied_changes (
+                    applied_change_id, initiative_id, proposal_id, cycle_id, status, change_type,
+                    target_key, before_json, after_json, rollback_json, decision_json,
+                    validation_ids_json, error, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item["applied_change_id"],
+                    item.get("initiative_id"),
+                    item.get("proposal_id"),
+                    item.get("cycle_id"),
+                    item.get("status", "PENDING"),
+                    item.get("change_type", "CONFIG_CHANGE"),
+                    item.get("target_key", ""),
+                    _dumps(item.get("before", {})),
+                    _dumps(item.get("after", {})),
+                    _dumps(item.get("rollback", {})),
+                    _dumps(item.get("decision", {})),
+                    _dumps(item.get("validation_ids", [])),
+                    item.get("error"),
+                    item.get("created_at") or now,
+                    now,
+                ),
+            )
+
+    def continuous_improvement_applied_changes(
+        self,
+        *,
+        initiative_id: str | None = None,
+        proposal_id: str | None = None,
+        statuses: list[str] | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        query = """
+            SELECT applied_change_id, initiative_id, proposal_id, cycle_id, status, change_type,
+                   target_key, before_json, after_json, rollback_json, decision_json,
+                   validation_ids_json, error, created_at, updated_at
+            FROM continuous_improvement_applied_changes
+            WHERE 1 = 1
+        """
+        params: list[Any] = []
+        if initiative_id:
+            query += " AND initiative_id = ?"
+            params.append(initiative_id)
+        if proposal_id:
+            query += " AND proposal_id = ?"
+            params.append(proposal_id)
+        if statuses:
+            placeholders = ",".join("?" for _ in statuses)
+            query += f" AND status IN ({placeholders})"
+            params.extend(statuses)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "applied_change_id": row["applied_change_id"],
+                "initiative_id": row["initiative_id"],
+                "proposal_id": row["proposal_id"],
+                "cycle_id": row["cycle_id"],
+                "status": row["status"],
+                "change_type": row["change_type"],
+                "target_key": row["target_key"],
+                "before": json.loads(row["before_json"] or "{}"),
+                "after": json.loads(row["after_json"] or "{}"),
+                "rollback": json.loads(row["rollback_json"] or "{}"),
+                "decision": json.loads(row["decision_json"] or "{}"),
+                "validation_ids": json.loads(row["validation_ids_json"] or "[]"),
+                "error": row["error"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
+    def rollback_continuous_improvement_applied_change(self, applied_change_id: str, *, actor: str = "api") -> dict[str, Any] | None:
+        changes = self.continuous_improvement_applied_changes(limit=10000)
+        change = next((item for item in changes if item["applied_change_id"] == applied_change_id), None)
+        if not change:
+            return None
+        rollback = change.get("rollback") or {}
+        self.save_continuous_improvement_applied_change(
+            {
+                **change,
+                "status": "ROLLED_BACK",
+                "decision": {
+                    **(change.get("decision") or {}),
+                    "rollback_actor": actor,
+                    "rollback_at": _utc_iso(),
+                },
+                "after": rollback.get("restore", change.get("before", {})),
+            }
+        )
+        return self.continuous_improvement_applied_changes(limit=1)[0]
+
+    def _merge_json_list(self, current_json: str, extra_values: list[Any]) -> list[Any]:
+        return self._merge_list_values(json.loads(current_json or "[]"), extra_values)
+
+    def _merge_list_values(self, current: list[Any], extra: list[Any]) -> list[Any]:
+        merged: list[Any] = []
+        for value in [*current, *extra]:
+            if value is None:
+                continue
+            if value not in merged:
+                merged.append(value)
+        return merged
+
     def status(self) -> dict[str, Any]:
         self.ensure_schema()
         with self.connect() as conn:
@@ -1590,6 +3491,7 @@ class Store:
                 "trade_recommendations",
                 "order_plans",
                 "broker_orders",
+                "opportunity_snapshots",
                 "signal_outcomes",
                 "trade_memory",
                 "strategy_rules",
@@ -1600,6 +3502,21 @@ class Store:
                 "learning_policy_evaluations",
                 "pre_earnings_predictions",
                 "pre_earnings_analyst_snapshots",
+                "continuous_improvement_cycles",
+                "continuous_improvement_llm_responses",
+                "continuous_improvement_proposals",
+                "continuous_improvement_validations",
+                "continuous_improvement_decisions",
+                "continuous_improvement_events",
+                "continuous_improvement_agent_tasks",
+                "continuous_improvement_memories",
+                "continuous_improvement_hypotheses",
+                "continuous_improvement_proposal_artifacts",
+                "continuous_improvement_runtime_state",
+                "continuous_improvement_initiatives",
+                "continuous_improvement_initiative_messages",
+                "continuous_improvement_experiments",
+                "continuous_improvement_applied_changes",
             ):
                 row = conn.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()
                 tables[table] = row["count"]

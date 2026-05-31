@@ -27,6 +27,9 @@ from .tools.portfolio_optimizer import build_portfolio_rebalance_context
 from .tools.signal_learning import update_signal_decisions
 from .tools.trade_decision import (
     _compact_technical_context_for_prompt,
+    _effective_buy_plan_limit,
+    _effective_trade_recommendation_limit,
+    _effective_daily_buy_limit,
     build_order_plans,
     filter_entry_quality,
     load_latest_sentiment,
@@ -215,14 +218,15 @@ def _apply_daily_buy_limit(
     run_id: str,
     plans: list[Any],
 ) -> list[Any]:
-    if settings.max_daily_buy_orders <= 0:
+    daily_buy_limit = _effective_daily_buy_limit(settings, plans)
+    if daily_buy_limit <= 0:
         return plans
 
     used_buys = store.count_broker_orders(
         side="buy",
         since_iso=_session_start_utc_iso(settings),
     )
-    remaining_buys = max(0, settings.max_daily_buy_orders - used_buys)
+    remaining_buys = max(0, daily_buy_limit - used_buys)
     kept = []
     blocked = []
     for plan in plans:
@@ -242,12 +246,13 @@ def _apply_daily_buy_limit(
             run_id,
             (
                 "Compras bloqueadas por limite diario: "
-                f"ya usadas {used_buys}/{settings.max_daily_buy_orders}; "
+                f"ya usadas {used_buys}/{daily_buy_limit}; "
                 f"bloqueadas: {', '.join(plan.symbol for plan in blocked)}."
             ),
             {
                 "used_buy_orders_today": used_buys,
                 "max_daily_buy_orders": settings.max_daily_buy_orders,
+                "effective_max_daily_buy_orders": daily_buy_limit,
                 "blocked_symbols": [plan.symbol for plan in blocked],
             },
         )
@@ -592,26 +597,31 @@ def _auto_paper_trade(
         )
         return {"submitted": [], "failed": [], "blocked": "market_closed"}
 
-    reporter.emit(
-        "execution_agent",
-        "paper_auto_trade_started",
-        run_id,
-        "Auto paper trading activo: solicitando decision LLM estructurada y planes de orden.",
-        {"max_orders_per_cycle": settings.max_orders_per_cycle},
-    )
-
     try:
         portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
         decision_context = technical_context or load_latest_technical_candidates(
             settings.data_dir,
             per_side=max(1, settings.news_sentiment_top_n // 2),
         )
+        effective_recommendation_limit = _effective_trade_recommendation_limit(settings, decision_context)
         sentiment_context = load_latest_sentiment(settings.data_dir)
         rebalance_context = build_portfolio_rebalance_context(
             settings,
             portfolio,
             decision_context,
             sentiment_context,
+        )
+        reporter.emit(
+            "execution_agent",
+            "paper_auto_trade_started",
+            run_id,
+            "Auto paper trading activo: solicitando decision LLM estructurada y planes de orden.",
+            {
+                "max_orders_per_cycle": settings.max_orders_per_cycle,
+                "effective_max_orders_per_cycle": max(settings.max_orders_per_cycle, effective_recommendation_limit),
+                "max_daily_buy_orders": settings.max_daily_buy_orders,
+                "effective_max_daily_buy_orders": max(settings.max_daily_buy_orders, effective_recommendation_limit),
+            },
         )
         decision = request_trade_recommendations(
             settings,
@@ -672,6 +682,8 @@ def _auto_paper_trade(
         )
     rejected_order_plans: list[dict[str, Any]] = []
     plans = build_order_plans(settings, portfolio, gated_recommendations, dry_run=True, rejected=rejected_order_plans)
+    effective_plan_limit = _effective_buy_plan_limit(settings, gated_recommendations)
+    effective_daily_limit = _effective_daily_buy_limit(settings, plans)
     approved_buys = sorted({item.symbol for item in gated_recommendations if str(item.action).lower() == "buy"})
     plans = _apply_daily_buy_limit(settings, store, reporter, run_id, plans)
     for plan in plans:
@@ -702,6 +714,8 @@ def _auto_paper_trade(
                 "backtest_gate": backtest_gate,
                 "rebalance_context": rebalance_context,
                 "approved_buys": approved_buys,
+                "effective_max_orders_per_cycle": effective_plan_limit,
+                "effective_max_daily_buy_orders": effective_daily_limit,
                 "rejected_order_plans": rejected_order_plans,
                 "submitted": [],
             },
@@ -713,12 +727,14 @@ def _auto_paper_trade(
             "entry_quality_gate": entry_quality_gate,
             "backtest_gate": backtest_gate,
             "approved_buys": approved_buys,
+            "effective_max_orders_per_cycle": effective_plan_limit,
+            "effective_max_daily_buy_orders": effective_daily_limit,
             "rejected_order_plans": rejected_order_plans,
         }
 
     submitted = []
     failed = []
-    pending_current = store.pending_order_plans(cycle_id=run_id, limit=settings.max_orders_per_cycle)
+    pending_current = store.pending_order_plans(cycle_id=run_id, limit=max(len(plans), settings.max_orders_per_cycle))
     for plan in pending_current:
         client_order_id = f"agente-{plan['plan_id'][:20]}"
         try:
@@ -771,6 +787,8 @@ def _auto_paper_trade(
             "failed": failed,
             "entry_quality_gate": entry_quality_gate,
             "backtest_gate": backtest_gate,
+            "effective_max_orders_per_cycle": effective_plan_limit,
+            "effective_max_daily_buy_orders": effective_daily_limit,
             "rejected_order_plans": rejected_order_plans,
         },
     )
@@ -779,6 +797,8 @@ def _auto_paper_trade(
         "failed": failed,
         "entry_quality_gate": entry_quality_gate,
         "backtest_gate": backtest_gate,
+        "effective_max_orders_per_cycle": effective_plan_limit,
+        "effective_max_daily_buy_orders": effective_daily_limit,
         "rejected_order_plans": rejected_order_plans,
     }
 

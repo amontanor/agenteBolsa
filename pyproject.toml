@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agente-bolsa"
-version = "0.1.0"
 description = "Sistema multiagente con CrewAI para investigar, simular y operar bolsa americana con controles de riesgo."
 requires-python = ">=3.10,<3.14"
 readme = "README.md"
+dynamic = ["version"]
 dependencies = [
     "crewai>=1.14.0,<2.0.0",
     "crewai-tools",
@@ -30,6 +30,9 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "agente_bolsa.__version__"}
 
 [tool.ruff]
 line-length = 100

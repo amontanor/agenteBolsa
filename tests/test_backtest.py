@@ -76,7 +76,28 @@ def test_backtest_report_includes_costs_exit_reasons_and_regime_summary():
     assert "total_cost" in report["metrics"]
     assert "avg_holding_days" in report["metrics"]
     assert "exit_reasons" in report["metrics"]
+    assert "sortino" in report["metrics"]
+    assert "calmar" in report["metrics"]
+    assert "expectancy_per_trade" in report["metrics"]
+    assert "turnover" in report["metrics"]
+    assert "drawdown_windows" in report["metrics"]
     assert "regime_summary" in report
+    assert "setup_summary" in report
+
+
+def test_backtest_can_filter_specific_setup_names():
+    report = backtest_technical_long_rule(
+        "AAPL",
+        _trend_frame(),
+        min_score=5,
+        setup_quality="",
+        warmup_days=260,
+        max_holding_days=10,
+        allowed_setup_names={"trend_volume"},
+    )
+
+    assert report["strategy"]["allowed_setup_names"] == ["trend_volume"]
+    assert all(trade["setup_name"] == "trend_volume" for trade in report["trades"])
 
 
 def test_build_symbol_backtest_attaches_market_data_and_gate_validation(monkeypatch, tmp_path):

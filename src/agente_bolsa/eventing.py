@@ -207,6 +207,8 @@ def _format_time(value: str, local_timezone: str, use_utc: bool = False) -> str:
         return "--:--:--"
     try:
         dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
         if use_utc:
             return dt.astimezone(timezone.utc).strftime("%H:%M:%S UTC")
         return dt.astimezone(ZoneInfo(local_timezone)).strftime("%H:%M:%S")

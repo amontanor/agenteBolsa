@@ -11,9 +11,12 @@ from agente_bolsa.tools.trade_decision import (
     _candidate_learning_prior,
     _annotate_technical_context_with_learning,
     _build_decision_learning_context,
+    _llm_prompt_payload,
+    _select_deterministic_candidates,
     _sizing_adjustment_for_recommendation,
     _floor_qty,
     _latest_report,
+    load_latest_technical_candidates,
     _prior_profile_key,
     _recommendation_from_dict,
     build_order_plans,
@@ -92,6 +95,227 @@ def test_compact_technical_context_for_prompt_drops_large_all_candidates_payload
     assert len(compact["selected_candidates"]) == 1
     assert len(compact["selected_candidates"][0]["technical_state"]["candlestick_patterns"]) == 3
     assert len(compact["selected_candidates"][0]["technical_state"]["chart_patterns"]) == 3
+    assert "selection_metadata" in compact
+
+
+def test_llm_prompt_payload_hides_top_shorts_when_short_selling_disabled():
+    settings = Settings()
+    portfolio = PortfolioSnapshot(
+        account_id="acct",
+        status="ACTIVE",
+        currency="USD",
+        cash=10000,
+        portfolio_value=10000,
+        buying_power=10000,
+        positions=[],
+        open_orders=[],
+    )
+    selected = [{"symbol": f"LONG{i}", "direction": "long", "score": 16, "technical_state": {}, "risk_plan": {}} for i in range(12)]
+    technical_context = {
+        "selected_candidates": selected,
+        "top_longs": selected,
+        "top_shorts": [{"symbol": "TSLA", "direction": "short", "score": 14, "technical_state": {}, "risk_plan": {}}],
+    }
+
+    payload = _llm_prompt_payload(
+        settings,
+        portfolio,
+        technical_context,
+        {"results": []},
+        {},
+        {},
+        {},
+        {},
+        compact=True,
+    )
+
+    assert payload["risk_limits"]["allow_short_selling"] is False
+    assert payload["technical_candidates"]["top_shorts"] == []
+    assert payload["risk_limits"]["effective_max_orders_per_cycle"] == 5
+    assert payload["risk_limits"]["effective_max_daily_buy_orders"] == 5
+    assert payload["risk_limits"]["prefer_full_long_only_capacity"] is True
+
+
+def _selection_candidate(symbol: str, *, score: int, return_20d: float = 0.08, **technical_state):
+    state = {
+        "close": 100.0,
+        "return_20d": return_20d,
+        "sma_20": 95.0,
+        "rsi_14": 66.0,
+        "macd": 2.0,
+        "macd_signal": 1.0,
+        "volume_zscore_20": 0.2,
+        "chart_patterns": [],
+    }
+    state.update(technical_state)
+    return {
+        "symbol": symbol,
+        "direction": "long",
+        "score": score,
+        "setup_quality": "strong",
+        "relative_return_20d": 0.05,
+        "technical_state": state,
+        "risk_plan": {"entry_price": 100.0, "stop_loss": 95.0, "take_profit": 115.0},
+    }
+
+
+def test_select_deterministic_candidates_ranks_lower_score_with_better_edge_first():
+    strong = _selection_candidate(
+        "STRONG",
+        score=14,
+        chart_patterns=[{"bias": "bullish", "status": "confirmed"}],
+    )
+    weak = _selection_candidate("WEAK", score=19)
+    strong_key = _prior_profile_key(_candidate_learning_features(strong))
+    weak_key = _prior_profile_key(_candidate_learning_features(weak))
+    digest = {
+        "setup_stats_3d": [
+            {"setup": "confirmed_pattern", "avg_return": 0.02, "win_rate": 0.6, "matured": 40},
+            {"setup": "baseline_trend", "avg_return": -0.01, "win_rate": 0.35, "matured": 40},
+        ],
+        "setup_priors_3d": [
+            {"profile_key": strong_key, "setup": "confirmed_pattern", "expected_edge": 0.04, "matured": 35, "win_rate": 0.7},
+            {"profile_key": weak_key, "setup": "baseline_trend", "expected_edge": -0.01, "matured": 35, "win_rate": 0.35},
+        ],
+    }
+
+    selected, metadata = _select_deterministic_candidates([weak, strong], digest, {}, limit=2)
+
+    assert selected[0]["symbol"] == "STRONG"
+    assert selected[0]["selection_score"] > selected[1]["selection_score"]
+    assert metadata["promoted_over_score_rank"][0]["symbol"] == "STRONG"
+
+
+def test_select_deterministic_candidates_shrinks_small_sample_extreme_edge():
+    tiny = _selection_candidate("TINY", score=13)
+    stable = _selection_candidate(
+        "STABLE",
+        score=14,
+        chart_patterns=[{"bias": "bullish", "status": "confirmed"}],
+    )
+    tiny_key = _prior_profile_key(_candidate_learning_features(tiny))
+    stable_key = _prior_profile_key(_candidate_learning_features(stable))
+    digest = {
+        "setup_stats_3d": [
+            {"setup": "baseline_trend", "avg_return": 0.0, "win_rate": 0.45, "matured": 40},
+            {"setup": "confirmed_pattern", "avg_return": 0.02, "win_rate": 0.6, "matured": 40},
+        ],
+        "setup_priors_3d": [
+            {"profile_key": tiny_key, "setup": "baseline_trend", "expected_edge": 0.25, "matured": 3, "win_rate": 1.0},
+            {"profile_key": stable_key, "setup": "confirmed_pattern", "expected_edge": 0.03, "matured": 35, "win_rate": 0.65},
+        ],
+    }
+
+    selected, _metadata = _select_deterministic_candidates([tiny, stable], digest, {}, limit=2)
+
+    assert selected[0]["symbol"] == "STABLE"
+    assert selected[1]["symbol"] == "TINY"
+
+
+def test_select_deterministic_candidates_promotes_high_conviction_confirmed_momentum():
+    high_conviction = _selection_candidate(
+        "CSCO",
+        score=17,
+        rsi_14=71.4,
+        volume_zscore_20=2.75,
+        chart_patterns=[
+            {"bias": "bullish", "status": "confirmed"},
+            {"bias": "bullish", "status": "confirmed"},
+        ],
+    )
+    high_conviction["technical_state"]["close"] = 110.0
+    high_conviction["technical_state"]["sma_20"] = 100.0
+
+    weaker = _selection_candidate(
+        "WEAKER",
+        score=18,
+        rsi_14=68.0,
+        volume_zscore_20=-1.4,
+        chart_patterns=[],
+    )
+
+    digest = {
+        "setup_stats_3d": [
+            {"setup": "confirmed_pattern", "avg_return": 0.0, "win_rate": 0.5, "matured": 20},
+            {"setup": "baseline_trend", "avg_return": 0.0, "win_rate": 0.5, "matured": 20},
+        ]
+    }
+
+    selected, _metadata = _select_deterministic_candidates([weaker, high_conviction], digest, {}, limit=2)
+
+    assert selected[0]["symbol"] == "CSCO"
+    assert "high_conviction_confirmed_momentum" in selected[0]["selection_reason"]
+    assert selected[0]["selection_components"]["high_conviction_momentum_component"] > 0
+
+
+def test_load_latest_technical_candidates_builds_selected_candidates_from_all_candidates(tmp_path: Path):
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    weak = _selection_candidate("WEAK", score=18)
+    strong = _selection_candidate(
+        "STRONG",
+        score=14,
+        chart_patterns=[{"bias": "bullish", "status": "confirmed"}],
+    )
+    report = {
+        "run_id": "scan-test",
+        "as_of": "2026-05-22T20:00:00Z",
+        "top_longs": [weak, strong],
+        "top_shorts": [],
+        "all_candidates": [weak, strong],
+    }
+    (reports_dir / "latest_closed_market_technical_study.json").write_text(
+        json.dumps(report),
+        encoding="utf-8",
+    )
+    (reports_dir / "latest_daily_learning_digest.json").write_text(
+        json.dumps(
+            {
+                "setup_stats_3d": [
+                    {"setup": "confirmed_pattern", "avg_return": 0.02, "win_rate": 0.6, "matured": 40},
+                    {"setup": "baseline_trend", "avg_return": -0.01, "win_rate": 0.35, "matured": 40},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    context = load_latest_technical_candidates(tmp_path, per_side=1)
+
+    assert context["top_longs"][0]["symbol"] == "WEAK"
+    assert context["selected_candidates"][0]["symbol"] == "STRONG"
+    assert context["selection_metadata"]["eligible"] == 2
+
+
+def test_load_latest_technical_candidates_expands_long_only_selection_budget(tmp_path: Path):
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    candidates = [
+        _selection_candidate(
+            f"SYM{i}",
+            score=20 - i,
+            chart_patterns=[{"bias": "bullish", "status": "confirmed"}],
+            volume_zscore_20=1.0,
+        )
+        for i in range(12)
+    ]
+    report = {
+        "run_id": "scan-test",
+        "as_of": "2026-05-22T20:00:00Z",
+        "top_longs": candidates,
+        "top_shorts": [],
+        "all_candidates": candidates,
+    }
+    (reports_dir / "latest_closed_market_technical_study.json").write_text(
+        json.dumps(report),
+        encoding="utf-8",
+    )
+    (reports_dir / "latest_daily_learning_digest.json").write_text(json.dumps({}), encoding="utf-8")
+
+    context = load_latest_technical_candidates(tmp_path, per_side=1)
+
+    assert len(context["selected_candidates"]) == 12
+    assert context["selected_candidates"][0]["symbol"] == "SYM0"
 
 
 def test_compact_sentiment_for_prompt_keeps_only_candidate_symbols_and_short_news():
@@ -152,7 +376,7 @@ def test_recommendation_keeps_fractional_exposure():
     assert recommendation.target_exposure_pct == 0.03
 
 
-def test_build_order_plans_uses_whole_share_qty_for_bracket_buys():
+def test_build_order_plans_uses_whole_share_qty_for_bracket_buys(tmp_path: Path):
     portfolio = PortfolioSnapshot(
         account_id="paper",
         status="ACTIVE",
@@ -174,7 +398,7 @@ def test_build_order_plans_uses_whole_share_qty_for_bracket_buys():
         target_exposure_pct=0.05,
     )
 
-    plans = build_order_plans(Settings(USE_BRACKET_ORDERS=True), portfolio, [recommendation])
+    plans = build_order_plans(Settings(DATA_DIR=tmp_path, USE_BRACKET_ORDERS=True), portfolio, [recommendation])
 
     assert len(plans) == 1
     assert plans[0].qty == 3.0
@@ -182,7 +406,7 @@ def test_build_order_plans_uses_whole_share_qty_for_bracket_buys():
     assert plans[0].risk_decision.checks["execution_sizing"]["execution_sizing"] == "whole_share_bracket"
 
 
-def test_build_order_plans_records_rejection_reason_when_no_plan_is_created():
+def test_build_order_plans_records_rejection_reason_when_no_plan_is_created(tmp_path: Path):
     portfolio = PortfolioSnapshot(
         account_id="paper",
         status="ACTIVE",
@@ -206,7 +430,7 @@ def test_build_order_plans_records_rejection_reason_when_no_plan_is_created():
     rejected = []
 
     plans = build_order_plans(
-        Settings(USE_BRACKET_ORDERS=True, MIN_ORDER_NOTIONAL=2_000),
+        Settings(DATA_DIR=tmp_path, USE_BRACKET_ORDERS=True, MIN_ORDER_NOTIONAL=2_000),
         portfolio,
         [recommendation],
         rejected=rejected,
@@ -297,6 +521,37 @@ def test_build_order_plans_blocks_duplicate_buy_symbol_within_same_cycle():
     assert len(plans) == 1
     assert plans[0].symbol == "AAPL"
     assert plans[0].risk_decision.checks["duplicate_symbol_cycle_guard"]["blocked_additional_same_symbol_buys"] is True
+
+
+def test_build_order_plans_allows_five_long_only_buys_when_depth_is_available(tmp_path: Path):
+    portfolio = PortfolioSnapshot(
+        account_id="paper",
+        status="ACTIVE",
+        currency="USD",
+        cash=100_000,
+        portfolio_value=100_000,
+        buying_power=100_000,
+        positions=[],
+        open_orders=[],
+    )
+    recommendations = [
+        TradeRecommendation(
+            symbol=f"SYM{i}",
+            action="buy",
+            confidence=0.9,
+            reason="test",
+            entry_price=100.0,
+            stop_loss=95.0,
+            take_profit=110.0,
+            target_exposure_pct=0.05,
+        )
+        for i in range(5)
+    ]
+
+    plans = build_order_plans(Settings(DATA_DIR=tmp_path, MAX_ORDERS_PER_CYCLE=3), portfolio, recommendations)
+
+    assert len(plans) == 5
+    assert [plan.symbol for plan in plans] == [f"SYM{i}" for i in range(5)]
 
 
 def test_build_order_plans_blocks_existing_position_add_when_disabled():
@@ -831,7 +1086,7 @@ def test_entry_quality_gate_blocks_event_momentum_without_strong_close():
     assert checks["event_momentum_long"] is True
 
 
-def test_entry_quality_gate_allows_range_expansion_breakout_extension():
+def test_entry_quality_gate_blocks_range_expansion_breakout_as_shadow_only():
     approved, reason, checks = validate_entry_quality(
         Settings(ENTRY_QUALITY_MAX_SMA20_DISTANCE=0.12),
         _quality_recommendation(),
@@ -855,9 +1110,9 @@ def test_entry_quality_gate_allows_range_expansion_breakout_extension():
         {"results": []},
     )
 
-    assert approved is True
-    assert reason == "entry-quality aprobado"
-    assert checks["range_expansion_breakout_exception"]["max_sma20_distance"] == 0.22
+    assert approved is False
+    assert reason == "range_expansion_breakout_shadow_only"
+    assert checks["shadow_only_setup"] == "range_expansion_breakout"
 
 
 def test_entry_quality_gate_blocks_range_expansion_with_extreme_rsi():
@@ -885,7 +1140,7 @@ def test_entry_quality_gate_blocks_range_expansion_with_extreme_rsi():
     )
 
     assert approved is False
-    assert "RSI demasiado extremo" in reason
+    assert reason == "range_expansion_breakout_shadow_only"
     assert checks["range_expansion_breakout_long"] is True
 
 
@@ -1498,6 +1753,63 @@ def test_annotate_technical_context_keeps_missing_prior_as_null_edge():
     assert row["effective_setup_edge_3d"] is None
     assert row["learning_prior"]["matched_on"] == "none"
     assert "no_recent_edge_history" in row["rank_priority_reason"]
+
+
+def test_annotate_technical_context_promotes_same_session_intraday_momentum(tmp_path):
+    store = Store(tmp_path / "state" / "agente_bolsa.sqlite3", tmp_path / "logs" / "agents")
+    store.ensure_schema()
+    for idx, price in enumerate([100.0, 104.0, 108.0], start=1):
+        store.save_signal_outcome(
+            signal_id=f"scan{idx}:HOOD",
+            source_run_id=f"scan{idx}",
+            source="intraday_scan",
+            symbol="HOOD",
+            signal_date="2026-05-28",
+            decision="candidate",
+            features={
+                "direction": "long",
+                "score": 14,
+                "entry_price": price,
+                "selected_for_llm": False,
+                "rsi_14": 62.0,
+                "volume_zscore_20": 0.8,
+                "distance_sma20": 0.08,
+                "chart_patterns": {"bullish_confirmed_count": 2},
+            },
+            outcome={},
+        )
+
+    repeated = _selection_candidate(
+        "HOOD",
+        score=14,
+        rsi_14=62.0,
+        volume_zscore_20=0.8,
+        chart_patterns=[
+            {"bias": "bullish", "status": "confirmed"},
+            {"bias": "bullish", "status": "confirmed"},
+        ],
+    )
+    repeated["last_date"] = "2026-05-28"
+    baseline = _selection_candidate("BASE", score=15, volume_zscore_20=0.1, chart_patterns=[])
+    baseline["last_date"] = "2026-05-28"
+
+    annotated = _annotate_technical_context_with_learning(
+        {
+            "as_of": "2026-05-28T19:51:59+00:00",
+            "top_longs": [baseline, repeated],
+            "top_shorts": [],
+            "all_candidates": [baseline, repeated],
+        },
+        {},
+        {},
+        tmp_path,
+    )
+
+    row = annotated["selected_candidates"][0]
+    assert row["symbol"] == "HOOD"
+    assert "same_session_intraday_momentum" in row["selection_reason"]
+    assert row["same_session_intraday"]["observations"] == 3
+    assert row["same_session_intraday"]["same_session_return"] == 0.08
 
 
 def test_entry_quality_gate_blocks_negative_recent_prior(tmp_path):

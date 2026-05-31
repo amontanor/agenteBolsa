@@ -54,6 +54,7 @@ def _signal_from_window(
     *,
     min_score: int,
     setup_quality: str,
+    allowed_setup_names: set[str] | None = None,
 ) -> dict[str, Any] | None:
     state = validate_symbol_technical_state(symbol, window)
     if state.get("direction") != "long":
@@ -62,9 +63,13 @@ def _signal_from_window(
         return None
     if setup_quality and state.get("setup_quality") != setup_quality:
         return None
+    setup_name = _setup_name(state)
+    if allowed_setup_names and setup_name not in allowed_setup_names:
+        return None
     risk = state.get("risk_plan", {}) or {}
     if not risk.get("entry_price") or not risk.get("stop_loss") or not risk.get("take_profit"):
         return None
+    state["setup_name"] = setup_name
     return state
 
 
@@ -114,6 +119,28 @@ def _entry_regime(signal: dict[str, Any], window: pd.DataFrame) -> tuple[str, st
     return trend, momentum
 
 
+def _setup_name(signal: dict[str, Any]) -> str:
+    technical_state = signal.get("technical_state", {}) or {}
+    if technical_state.get("event_momentum_long"):
+        return "event_momentum"
+    if technical_state.get("range_expansion_breakout_long"):
+        return "range_expansion_breakout"
+    if technical_state.get("orderly_breakout_long"):
+        return "orderly_breakout"
+    if technical_state.get("momentum_shakeout_hold_long"):
+        return "momentum_shakeout_hold"
+    breakout_continuation = bool(technical_state.get("breakout_continuation_long"))
+    positive_trend = bool(technical_state.get("trend_positive")) and bool(technical_state.get("above_long_trend"))
+    positive_volume = _safe_float(technical_state.get("volume_zscore_20"), default=0.0) > 0
+    if breakout_continuation and not positive_volume:
+        return "momentum_confirmation"
+    if breakout_continuation:
+        return "trend_volume"
+    if positive_trend and positive_volume:
+        return "trend_volume"
+    return "baseline_trend"
+
+
 def backtest_technical_long_rule(
     symbol: str,
     prices: pd.DataFrame,
@@ -125,6 +152,7 @@ def backtest_technical_long_rule(
     initial_equity: float = 10_000.0,
     position_exposure: float = 0.05,
     costs: TransactionCostModel | None = None,
+    allowed_setup_names: set[str] | None = None,
 ) -> dict[str, Any]:
     """Backtest the current long setup: strong technical state + ATR stop/take."""
 
@@ -144,6 +172,7 @@ def backtest_technical_long_rule(
                 window,
                 min_score=min_score,
                 setup_quality=setup_quality,
+                allowed_setup_names=allowed_setup_names,
             )
         except Exception:
             signal = None
@@ -204,6 +233,7 @@ def backtest_technical_long_rule(
                 "net_pl": round(net_pl, 2),
                 "net_return": round(net_return, 6),
                 "signal_score": signal.get("score"),
+                "setup_name": signal.get("setup_name") or _setup_name(signal),
                 "signal_reasons": signal.get("reasons", [])[:6],
                 "regime_trend": regime_trend,
                 "regime_momentum": regime_momentum,
@@ -222,6 +252,7 @@ def backtest_technical_long_rule(
         setup_quality=setup_quality,
         max_holding_days=max_holding_days,
         costs=costs,
+        allowed_setup_names=allowed_setup_names,
     )
 
 
@@ -247,6 +278,41 @@ def _sharpe(returns: list[float]) -> float | None:
     return float(series.mean() / std * math.sqrt(252 / 10))
 
 
+def _sortino(returns: list[float]) -> float | None:
+    if len(returns) < 2:
+        return None
+    series = pd.Series(returns)
+    downside = series[series < 0]
+    if downside.empty:
+        return None
+    downside_std = float(downside.std())
+    if downside_std <= 0:
+        return None
+    return float(series.mean() / downside_std * math.sqrt(252 / 10))
+
+
+def _calmar(total_return: float, max_drawdown: float, trades: int, avg_holding_days: float) -> float | None:
+    if max_drawdown >= 0:
+        return None
+    periods = max(trades * max(avg_holding_days, 1.0), 1.0)
+    annualized_return = (1.0 + total_return) ** (252.0 / periods) - 1.0 if total_return > -1.0 else -1.0
+    denominator = abs(max_drawdown)
+    if denominator <= 0:
+        return None
+    return float(annualized_return / denominator)
+
+
+def _drawdown_windows(equity_curve: list[dict[str, Any]]) -> dict[str, float | None]:
+    windows = {"20d": 20, "60d": 60, "120d": 120}
+    result: dict[str, float | None] = {}
+    if len(equity_curve) < 2:
+        return {key: None for key in windows}
+    for label, size in windows.items():
+        points = equity_curve[-size:] if len(equity_curve) > size else equity_curve
+        result[label] = round(_max_drawdown(points), 4) if len(points) >= 2 else None
+    return result
+
+
 def _build_report(
     *,
     symbol: str,
@@ -258,28 +324,68 @@ def _build_report(
     setup_quality: str,
     max_holding_days: int,
     costs: TransactionCostModel,
+    allowed_setup_names: set[str] | None = None,
 ) -> dict[str, Any]:
     wins = [trade for trade in trades if trade["net_pl"] > 0]
     losses = [trade for trade in trades if trade["net_pl"] <= 0]
     gross_profit = sum(trade["net_pl"] for trade in wins)
     gross_loss = abs(sum(trade["net_pl"] for trade in losses))
     returns = [float(trade["net_return"]) for trade in trades]
+    avg_holding_days = (
+        round(sum(int(trade["holding_days"]) for trade in trades) / len(trades), 2) if trades else 0.0
+    )
+    total_return = round((final_equity - initial_equity) / initial_equity, 4) if initial_equity else 0.0
+    max_drawdown = round(_max_drawdown(equity_curve), 4)
+    avg_win_return = sum(float(trade["net_return"]) for trade in wins) / len(wins) if wins else 0.0
+    avg_loss_return = sum(float(trade["net_return"]) for trade in losses) / len(losses) if losses else 0.0
+    expectancy_return = (
+        (len(wins) / len(trades)) * avg_win_return - (len(losses) / len(trades)) * abs(avg_loss_return)
+        if trades
+        else 0.0
+    )
+    total_holding_days = sum(int(trade["holding_days"]) for trade in trades)
+    start_date = pd.to_datetime(equity_curve[0]["date"]) if equity_curve else None
+    end_date = pd.to_datetime(equity_curve[-1]["date"]) if equity_curve else None
+    period_days = max(int((end_date - start_date).days), 1) if start_date is not None and end_date is not None else 1
     metrics = {
         "trades": len(trades),
         "wins": len(wins),
         "losses": len(losses),
         "hit_rate": round(len(wins) / len(trades), 4) if trades else 0.0,
         "total_net_pl": round(final_equity - initial_equity, 2),
-        "total_return": round((final_equity - initial_equity) / initial_equity, 4) if initial_equity else 0.0,
+        "total_return": total_return,
         "avg_trade_return": round(sum(returns) / len(returns), 6) if returns else 0.0,
         "avg_profit": round(sum(trade["net_pl"] for trade in trades) / len(trades), 2) if trades else 0.0,
+        "expectancy_per_trade": round(sum(float(trade["net_pl"]) for trade in trades) / len(trades), 2) if trades else 0.0,
+        "expectancy_return": round(expectancy_return, 6),
         "profit_factor": round(gross_profit / gross_loss, 4) if gross_loss > 0 else None,
-        "max_drawdown": round(_max_drawdown(equity_curve), 4),
+        "max_drawdown": max_drawdown,
         "sharpe": round(_sharpe(returns), 4) if _sharpe(returns) is not None else None,
+        "sortino": round(_sortino(returns), 4) if _sortino(returns) is not None else None,
+        "calmar": round(_calmar(total_return, max_drawdown, len(trades), avg_holding_days), 4)
+        if _calmar(total_return, max_drawdown, len(trades), avg_holding_days) is not None
+        else None,
         "total_cost": round(sum(float(trade["cost"]) for trade in trades), 2),
-        "avg_holding_days": round(sum(int(trade["holding_days"]) for trade in trades) / len(trades), 2) if trades else 0.0,
+        "avg_holding_days": avg_holding_days,
+        "exposure_time_pct": round(min(total_holding_days / period_days, 1.0), 4) if trades else 0.0,
+        "turnover": round(sum(float(trade["notional"]) for trade in trades) / initial_equity, 4) if initial_equity else 0.0,
         "exit_reasons": dict(pd.Series([trade["exit_reason"] for trade in trades]).value_counts()) if trades else {},
+        "drawdown_windows": _drawdown_windows(equity_curve),
     }
+    setup_summary: dict[str, dict[str, Any]] = {}
+    for trade in trades:
+        key = str(trade.get("setup_name") or "unknown")
+        bucket = setup_summary.setdefault(key, {"trades": 0, "wins": 0, "total_return": 0.0, "total_pl": 0.0})
+        bucket["trades"] += 1
+        bucket["wins"] += int(float(trade["net_pl"]) > 0)
+        bucket["total_return"] += float(trade["net_return"])
+        bucket["total_pl"] += float(trade["net_pl"])
+    for bucket in setup_summary.values():
+        bucket["win_rate"] = round(bucket["wins"] / bucket["trades"], 4) if bucket["trades"] else None
+        bucket["avg_return"] = round(bucket["total_return"] / bucket["trades"], 6) if bucket["trades"] else None
+        bucket["avg_pl"] = round(bucket["total_pl"] / bucket["trades"], 2) if bucket["trades"] else None
+        bucket.pop("total_return", None)
+        bucket.pop("total_pl", None)
     regime_summary: dict[str, dict[str, Any]] = {}
     for trade in trades:
         key = f"{trade.get('regime_trend')}|{trade.get('regime_momentum')}"
@@ -304,6 +410,7 @@ def _build_report(
             "entry_rule": f"direction=long, setup_quality={setup_quality}, score>={min_score}",
             "exit_rule": "stop_loss or take_profit or time_stop",
             "max_holding_days": max_holding_days,
+            "allowed_setup_names": sorted(allowed_setup_names) if allowed_setup_names else [],
             "costs": {
                 "commission_bps": costs.commission_bps,
                 "slippage_bps": costs.slippage_bps,
@@ -311,6 +418,7 @@ def _build_report(
             },
         },
         "metrics": metrics,
+        "setup_summary": setup_summary,
         "regime_summary": regime_summary,
         "equity_curve": equity_curve,
         "trades": trades,
@@ -465,6 +573,7 @@ def build_symbol_backtest(
     provider: str | None = None,
     fmp_api_key: str | None = None,
     gate_config: dict[str, Any] | None = None,
+    allowed_setup_names: set[str] | None = None,
 ) -> dict[str, Any]:
     end_value = end or (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
     universe = [symbol]
@@ -485,6 +594,7 @@ def build_symbol_backtest(
         min_score=min_score,
         setup_quality=setup_quality,
         max_holding_days=max_holding_days,
+        allowed_setup_names=allowed_setup_names,
     )
     report["period"] = {"from": start, "to": end_value}
     if benchmark_value and benchmark_value != symbol.upper():

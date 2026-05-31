@@ -14,6 +14,10 @@ from typing import Any
 
 from .agent_registry import AGENTS
 from .config import get_settings
+from .continuous_improvement.api import run_api_server
+from .continuous_improvement.experiments import AutoApplyCodeAgent
+from .continuous_improvement.orchestrator import ContinuousImprovementOrchestrator
+from .continuous_improvement.runtime import ContinuousImprovementLabRuntime
 from .cycle_runner import run_observable_cycle
 from .eventing import EventReporter, PrettyLogPrinter, print_raw_tail_line
 from .logging_utils import configure_logging, log_system_event
@@ -22,8 +26,10 @@ from .models import AgentEvent, Hypothesis, new_id
 from .scheduler import (
     _run_pre_earnings_trade_operation,
     closed_market_technical_study_job,
+    continuous_improvement_job,
     daily_study_job,
     market_cycle_job,
+    opportunity_snapshot_job,
     post_market_review_job,
     pre_earnings_job,
     portfolio_watch_job,
@@ -51,8 +57,10 @@ from .tools.daily_learning import (
     build_learning_health_report,
     build_learning_promotions_report,
     build_policy_candidates_report,
+    load_daily_learning_context,
 )
 from .tools.trade_decision import (
+    _annotate_technical_context_with_learning,
     build_order_plans,
     filter_entry_quality,
     load_latest_sentiment,
@@ -61,8 +69,16 @@ from .tools.trade_decision import (
 )
 from .tools.execution import submit_paper_order_plan
 from .tools.live_readiness import build_live_readiness_report
+from .tools.opportunities import parse_opportunity_snapshot_times
 from .tools.operational_learning import build_operational_learning_review
 from .tools.operational_health import build_operational_health_report
+from .tools.operational_health import load_operational_response_context
+from .tools.ops_reports import (
+    backup_database,
+    build_market_data_quality_report,
+    build_selection_bandwidth_review,
+    build_weekly_trading_review,
+)
 from .tools.portfolio_optimizer import build_portfolio_rebalance_context
 from .tools.pre_earnings import (
     backfill_pending_pre_earnings_estimates,
@@ -267,7 +283,15 @@ def _print_backtest_report(report: dict[str, Any]) -> None:
         f"retorno={_pct(metrics.get('total_return'))} | "
         f"profit-factor={metrics.get('profit_factor')} | "
         f"max-DD={_pct(metrics.get('max_drawdown'))} | "
-        f"sharpe={metrics.get('sharpe')}"
+        f"sharpe={metrics.get('sharpe')} | "
+        f"sortino={metrics.get('sortino')} | "
+        f"calmar={metrics.get('calmar')}"
+    )
+    print(
+        "Riesgo/actividad: "
+        f"expectancy={_money(metrics.get('expectancy_per_trade'))} por trade | "
+        f"turnover={_pct(metrics.get('turnover'))} | "
+        f"exposure-time={_pct(metrics.get('exposure_time_pct'))}"
     )
     trades = report.get("trades", []) or []
     if trades:
@@ -842,6 +866,7 @@ def command_backtest(args: argparse.Namespace) -> None:
         benchmark_symbol=settings.benchmark_symbol,
         provider=settings.market_data_provider,
         fmp_api_key=settings.fmp_api_key,
+        allowed_setup_names={args.setup_name} if args.setup_name else None,
         gate_config={
             "min_trades": settings.backtest_gate_min_trades,
             "min_hit_rate": settings.backtest_gate_min_hit_rate,
@@ -857,6 +882,68 @@ def command_backtest(args: argparse.Namespace) -> None:
         _print_json({"ok": True, **report})
         return
     _print_backtest_report(report)
+
+
+def command_backtest_baseline(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    baseline_reports = []
+    for setup_name in (
+        "trend_volume",
+        "orderly_breakout",
+        "event_momentum",
+        "momentum_confirmation",
+        "momentum_shakeout_hold",
+        "range_expansion_breakout",
+    ):
+        report = build_symbol_backtest(
+            args.symbol,
+            settings.data_dir / "reports",
+            new_id(f"bt_{setup_name}"),
+            start=args.start,
+            end=args.end,
+            min_score=args.min_score,
+            setup_quality=args.setup_quality,
+            max_holding_days=args.max_holding_days,
+            benchmark_symbol=settings.benchmark_symbol,
+            provider=settings.market_data_provider,
+            fmp_api_key=settings.fmp_api_key,
+            allowed_setup_names={setup_name},
+            gate_config={
+                "min_trades": settings.backtest_gate_min_trades,
+                "min_hit_rate": settings.backtest_gate_min_hit_rate,
+                "min_profit_factor": settings.backtest_gate_min_profit_factor,
+                "max_drawdown": settings.backtest_gate_max_drawdown,
+                "min_alpha_vs_benchmark": settings.backtest_gate_min_alpha_vs_benchmark,
+                "min_trade_window_alpha": settings.backtest_gate_min_trade_window_alpha,
+                "min_regime_trades": settings.backtest_gate_min_regime_trades,
+                "max_negative_regimes": settings.backtest_gate_max_negative_regimes,
+            },
+        )
+        baseline_reports.append(
+            {
+                "setup_name": setup_name,
+                "path": report.get("path"),
+                "metrics": report.get("metrics", {}),
+                "validation": ((report.get("validation") or {}).get("gate")) or {},
+            }
+        )
+    payload = {"ok": True, "symbol": args.symbol.upper(), "baseline_reports": baseline_reports}
+    if args.json:
+        _print_json(payload)
+        return
+    print(f"BASELINE BACKTESTS {payload['symbol']}")
+    for item in baseline_reports:
+        metrics = item["metrics"]
+        gate = item["validation"]
+        print(
+            f"- {item['setup_name']}: "
+            f"trades={metrics.get('trades', 0)} | "
+            f"retorno={_pct(metrics.get('total_return'))} | "
+            f"sharpe={metrics.get('sharpe')} | "
+            f"sortino={metrics.get('sortino')} | "
+            f"aprobado={gate.get('approved')}"
+        )
 
 
 def command_execute_approved(args: argparse.Namespace) -> None:
@@ -952,6 +1039,14 @@ def command_scan_technical(args: argparse.Namespace) -> None:
         progress_callback=_progress,
         benchmark_symbol=settings.benchmark_symbol,
     )
+    annotated_report = _annotate_technical_context_with_learning(
+        report,
+        load_daily_learning_context(settings.data_dir),
+        load_operational_response_context(settings.data_dir),
+        settings.data_dir,
+    )
+    report["selected_candidates"] = annotated_report.get("selected_candidates", [])
+    report["selection_metadata"] = annotated_report.get("selection_metadata", {})
     signals_saved = record_signal_candidates(store, report, source="manual_scan")
     elapsed_seconds = round(time.perf_counter() - started, 2)
     top_longs = [item["symbol"] for item in report["top_longs"][:5]]
@@ -973,6 +1068,31 @@ def command_scan_technical(args: argparse.Namespace) -> None:
         "path": report["path"],
     }
     _print_json(payload)
+
+
+def command_opportunity_snapshot(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    slot_time = parse_opportunity_snapshot_times(args.slot)[0]
+    snapshot = opportunity_snapshot_job(
+        settings,
+        store,
+        slot_time=slot_time,
+        verbose=not args.quiet,
+        force=args.force,
+    )
+    _print_json(
+        {
+            "ok": True,
+            "session_date": snapshot.get("session_date"),
+            "slot_time": snapshot.get("slot_time"),
+            "run_id": snapshot.get("run_id"),
+            "report_path": snapshot.get("report_path"),
+            "summary": snapshot.get("summary", {}),
+        }
+    )
 
 
 def command_breakout_scan(args: argparse.Namespace) -> None:
@@ -1534,6 +1654,66 @@ def command_live_readiness(args: argparse.Namespace) -> None:
         print(f"  - WARN {item.get('key')}: {item.get('detail')}")
 
 
+def command_market_data_quality(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    report = build_market_data_quality_report(
+        settings,
+        settings.data_dir / "reports",
+        new_id("data_quality"),
+        universe_name=args.universe,
+        max_symbols=args.max_symbols if args.max_symbols > 0 else None,
+        start=args.start,
+        end=args.end,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    _print_json({"ok": True, **report})
+
+
+def command_weekly_review(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    report = build_weekly_trading_review(
+        settings,
+        store,
+        settings.data_dir / "reports",
+        new_id("weekly"),
+        since_date=args.start,
+        end_date=args.end,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    _print_json({"ok": True, **report})
+
+
+def command_selection_bandwidth_review(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    report = build_selection_bandwidth_review(
+        settings,
+        settings.data_dir / "reports",
+        new_id("selection_bandwidth"),
+        base_limit=args.base_limit,
+        shadow_limit=args.shadow_limit,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    _print_json({"ok": True, **report})
+
+
+def command_backup_db(_: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    report = backup_database(settings, settings.data_dir / "reports", new_id("db_backup"))
+    _print_json({"ok": True, **report})
+
+
 def command_session_retrospective(args: argparse.Namespace) -> None:
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
@@ -1735,6 +1915,135 @@ def command_operational_responses(args: argparse.Namespace) -> None:
         )
 
 
+def command_continuous_improvement(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    orchestrator = ContinuousImprovementOrchestrator(settings, store)
+    dedupe_key = args.dedupe_key
+    report = orchestrator.run_cycle(mode=args.mode, dedupe_key=dedupe_key, force=args.force)
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    print("MEJORA CONTINUA")
+    print(f"Ciclo: {report.get('cycle_id')} | estado={report.get('status')} | dry_run={report.get('dry_run')}")
+    print(f"LLM: {report.get('llm_status')} | call={report.get('llm_call_id')}")
+    proposals = report.get("proposals", []) or (report.get("report", {}) or {}).get("proposals", []) or []
+    new_count = len([item for item in proposals if not item.get("duplicate_existing")])
+    print(f"Propuestas: {len(proposals)} | nuevas: {new_count}")
+    for item in proposals[:10]:
+        payload = item.get("payload", {}) or {}
+        print(
+            "  - "
+            f"[{item.get('status')}] {item.get('proposal_type')} "
+            f"{item.get('target_component')}:{item.get('target_identifier')} | "
+            f"riesgo={item.get('risk_level')} | {payload.get('rationale', '')}"
+        )
+    if (report.get("report") or {}).get("path"):
+        print(f"Informe: {report['report']['path']}")
+
+
+def command_continuous_improvement_lab(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    runtime = ContinuousImprovementLabRuntime(settings, store)
+
+    if args.lab_command == "start":
+        runtime.run_forever(max_cycles=args.max_cycles)
+        return
+    if args.lab_command == "status":
+        _print_json(
+            {
+                "ok": True,
+                "runtime": store.continuous_improvement_runtime_state(),
+                "latest_cycle": store.latest_continuous_improvement_cycle(),
+                "events": store.continuous_improvement_events(limit=args.limit),
+                "tasks": store.continuous_improvement_tasks(limit=args.limit),
+                "hypotheses": store.continuous_improvement_hypotheses(limit=args.limit),
+            }
+        )
+        return
+    if args.lab_command == "run-once":
+        report = runtime.run_once(mode="manual", trigger_event_type="manual_trigger", trigger_payload={"source": "cli"})
+        if args.json:
+            _print_json({"ok": True, **report})
+        else:
+            print(f"LAB RUN-ONCE | ciclo={report.get('cycle_id')} | estado={report.get('status')}")
+        return
+    if args.lab_command == "enqueue":
+        payload = {}
+        if args.payload:
+            payload = json.loads(args.payload)
+        response = runtime.enqueue_event(
+            event_type=args.event_type,
+            source="cli",
+            domain=args.domain,
+            payload=payload,
+            force_unique=args.force_unique,
+        )
+        _print_json({"ok": True, **response})
+        return
+    if args.lab_command == "agents":
+        _print_json({"ok": True, "agents": runtime.describe_agents()})
+        return
+    if args.lab_command == "applied-changes":
+        statuses = args.status if args.status else None
+        _print_json(
+            {
+                "ok": True,
+                "applied_changes": store.continuous_improvement_applied_changes(
+                    statuses=statuses,
+                    limit=args.limit,
+                ),
+            }
+        )
+        return
+    if args.lab_command == "rollback":
+        change = AutoApplyCodeAgent().rollback(
+            settings=settings,
+            store=store,
+            applied_change_id=args.applied_change_id,
+            actor="cli",
+        )
+        _print_json({"ok": bool(change), "applied_change": change})
+        return
+    if args.lab_command == "autonomy-status":
+        committee_decisions = store.continuous_improvement_decisions(actor="DecisionCommitteeAgent", limit=1000)
+        decision_counts: dict[str, int] = {}
+        backlog_buckets: dict[str, int] = {}
+        for item in committee_decisions:
+            decision = str(item.get("decision") or "UNKNOWN")
+            decision_counts[decision] = decision_counts.get(decision, 0) + 1
+            bucket = str(((item.get("payload") or {}).get("committee_decision") or {}).get("backlog_bucket") or "UNKNOWN")
+            backlog_buckets[bucket] = backlog_buckets.get(bucket, 0) + 1
+        _print_json(
+            {
+                "ok": True,
+                "enabled": settings.continuous_improvement_enabled,
+                "dry_run": settings.improvement_dry_run,
+                "allow_auto_apply": settings.allow_auto_apply_improvements,
+                "require_human_approval_for_code_changes": settings.require_human_approval_for_code_changes,
+                "allow_live_trading": settings.allow_live_trading,
+                "workspace": str(settings.improvement_workspace_dir),
+                "ready_to_apply": len(store.continuous_improvement_proposals(status="READY_TO_APPLY", limit=1000)),
+                "applied": len(store.continuous_improvement_applied_changes(statuses=["APPLIED"], limit=1000)),
+                "blocked": len(store.continuous_improvement_applied_changes(statuses=["BLOCKED"], limit=1000)),
+                "rolled_back": len(store.continuous_improvement_applied_changes(statuses=["ROLLED_BACK"], limit=1000)),
+                "committee_decisions": decision_counts,
+                "backlog_buckets": backlog_buckets,
+            }
+        )
+        return
+    raise ValueError(f"Unknown lab command: {args.lab_command}")
+
+
+def command_continuous_improvement_api(args: argparse.Namespace) -> None:
+    run_api_server(host=args.host, port=args.port)
+
+
 def command_agents(_: argparse.Namespace) -> None:
     rows = [
         {
@@ -1849,6 +2158,18 @@ def command_job_once(args: argparse.Namespace) -> None:
         if report and not args.quiet:
             print()
             _print_pre_earnings_report(report)
+    elif args.job == "opportunity-snapshot":
+        opportunity_snapshot_job(
+            settings,
+            store,
+            slot_time=parse_opportunity_snapshot_times(args.slot)[0],
+            verbose=not args.quiet,
+            force=args.force,
+        )
+    elif args.job == "continuous-improvement":
+        report = continuous_improvement_job(settings, store, verbose=not args.quiet, force=True)
+        if report and not args.quiet:
+            _print_json({"ok": True, **report})
 
 
 def command_log(args: argparse.Namespace) -> None:
@@ -2094,6 +2415,64 @@ def build_parser() -> argparse.ArgumentParser:
     operational_responses.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     operational_responses.set_defaults(func=command_operational_responses)
 
+    continuous_improvement = subparsers.add_parser(
+        "continuous-improvement",
+        help="Ejecuta un ciclo manual de mejora continua en dry-run y con LLM externo configurable.",
+    )
+    continuous_improvement.add_argument("--mode", default="manual", choices=["manual", "scheduled", "api"])
+    continuous_improvement.add_argument("--dedupe-key", help="Clave opcional para no duplicar ciclos.")
+    continuous_improvement.add_argument("--force", action="store_true", help="Ignora dedupe-key si ya existe.")
+    continuous_improvement.add_argument("--json", action="store_true", help="Devuelve el ciclo completo en JSON.")
+    continuous_improvement.set_defaults(func=command_continuous_improvement)
+
+    continuous_improvement_api = subparsers.add_parser(
+        "continuous-improvement-api",
+        help="Sirve endpoints HTTP /api/continuous-improvement/*.",
+    )
+    continuous_improvement_api.add_argument("--host", default="127.0.0.1")
+    continuous_improvement_api.add_argument("--port", type=int, default=8765)
+    continuous_improvement_api.set_defaults(func=command_continuous_improvement_api)
+
+    continuous_improvement_lab = subparsers.add_parser(
+        "continuous-improvement-lab",
+        help="Servicio residente y utilidades del laboratorio multiagente de mejora continua.",
+    )
+    ci_lab_subparsers = continuous_improvement_lab.add_subparsers(dest="lab_command", required=True)
+
+    ci_lab_start = ci_lab_subparsers.add_parser("start", help="Arranca el runtime residente del laboratorio.")
+    ci_lab_start.add_argument("--max-cycles", type=int, help="Numero maximo de ticks antes de salir.")
+    ci_lab_start.set_defaults(func=command_continuous_improvement_lab)
+
+    ci_lab_status = ci_lab_subparsers.add_parser("status", help="Muestra runtime, eventos, tareas e hipotesis.")
+    ci_lab_status.add_argument("--limit", type=int, default=50)
+    ci_lab_status.set_defaults(func=command_continuous_improvement_lab)
+
+    ci_lab_run_once = ci_lab_subparsers.add_parser("run-once", help="Ejecuta un tick completo del laboratorio.")
+    ci_lab_run_once.add_argument("--json", action="store_true", help="Devuelve el resultado completo en JSON.")
+    ci_lab_run_once.set_defaults(func=command_continuous_improvement_lab)
+
+    ci_lab_enqueue = ci_lab_subparsers.add_parser("enqueue", help="Encola un evento manual para el laboratorio.")
+    ci_lab_enqueue.add_argument("--event-type", required=True)
+    ci_lab_enqueue.add_argument("--domain", default="software-improvement")
+    ci_lab_enqueue.add_argument("--payload", help="JSON compacto con el payload del evento.")
+    ci_lab_enqueue.add_argument("--force-unique", action="store_true")
+    ci_lab_enqueue.set_defaults(func=command_continuous_improvement_lab)
+
+    ci_lab_agents = ci_lab_subparsers.add_parser("agents", help="Lista agentes y capacidades del laboratorio.")
+    ci_lab_agents.set_defaults(func=command_continuous_improvement_lab)
+
+    ci_lab_applied = ci_lab_subparsers.add_parser("applied-changes", help="Lista cambios autonomos aplicados o bloqueados.")
+    ci_lab_applied.add_argument("--status", action="append", help="Filtra por estado; se puede repetir.")
+    ci_lab_applied.add_argument("--limit", type=int, default=50)
+    ci_lab_applied.set_defaults(func=command_continuous_improvement_lab)
+
+    ci_lab_rollback = ci_lab_subparsers.add_parser("rollback", help="Marca rollback de un cambio aplicado.")
+    ci_lab_rollback.add_argument("applied_change_id")
+    ci_lab_rollback.set_defaults(func=command_continuous_improvement_lab)
+
+    ci_lab_autonomy = ci_lab_subparsers.add_parser("autonomy-status", help="Muestra gates de autonomia de codigo.")
+    ci_lab_autonomy.set_defaults(func=command_continuous_improvement_lab)
+
     learning_postmortem = subparsers.add_parser(
         "learning-postmortem",
         help="Reconstruye cohortes de senales, explicaciones y fallos contrafactuales.",
@@ -2230,6 +2609,50 @@ def build_parser() -> argparse.ArgumentParser:
     live_readiness.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     live_readiness.set_defaults(func=command_live_readiness)
 
+    market_data_quality = subparsers.add_parser(
+        "market-data-quality",
+        help="Audita cobertura, simbolos faltantes y anomalias OHLCV del universo configurado.",
+    )
+    market_data_quality.add_argument("--universe", help="Universo a validar. Por defecto CLOSED_MARKET_STUDY_UNIVERSE.")
+    market_data_quality.add_argument("--max-symbols", type=int, default=0, help="Limite de simbolos a validar.")
+    market_data_quality.add_argument("--from", dest="start", help="Fecha inicial YYYY-MM-DD. Por defecto 30 dias atras.")
+    market_data_quality.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD. Por defecto manana UTC.")
+    market_data_quality.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    market_data_quality.set_defaults(func=command_market_data_quality)
+
+    weekly_review = subparsers.add_parser(
+        "weekly-review",
+        help="Consolida rendimiento, gates, bloqueos, benchmark y readiness de la ultima ventana semanal.",
+    )
+    weekly_review.add_argument(
+        "--from",
+        dest="start",
+        default=DEFAULT_HISTORY_START_DATE,
+        help=f"Fecha inicial YYYY-MM-DD. Por defecto {DEFAULT_HISTORY_START_DATE}.",
+    )
+    weekly_review.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
+    weekly_review.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    weekly_review.set_defaults(func=command_weekly_review)
+
+    selection_bandwidth_review = subparsers.add_parser(
+        "selection-bandwidth-review",
+        help="Compara en shadow el ancho actual de seleccion frente a un ancho mayor sin activarlo en trading.",
+    )
+    selection_bandwidth_review.add_argument(
+        "--base-limit",
+        type=int,
+        default=8,
+        help="Numero actual de candidatos seleccionados para el LLM. Por defecto 8.",
+    )
+    selection_bandwidth_review.add_argument(
+        "--shadow-limit",
+        type=int,
+        default=12,
+        help="Numero shadow de candidatos a comparar. Por defecto 12.",
+    )
+    selection_bandwidth_review.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    selection_bandwidth_review.set_defaults(func=command_selection_bandwidth_review)
+
     backtest = subparsers.add_parser(
         "backtest",
         help="Simula historicamente la regla tecnica long actual con stop/take y costes.",
@@ -2249,8 +2672,49 @@ def build_parser() -> argparse.ArgumentParser:
         default=10,
         help="Time stop maximo en sesiones.",
     )
+    backtest.add_argument(
+        "--setup-name",
+        choices=[
+            "trend_volume",
+            "orderly_breakout",
+            "event_momentum",
+            "momentum_confirmation",
+            "momentum_shakeout_hold",
+            "range_expansion_breakout",
+            "baseline_trend",
+        ],
+        help="Filtra el backtest a un setup concreto.",
+    )
     backtest.add_argument("--json", action="store_true", help="Devuelve el informe completo en JSON.")
     backtest.set_defaults(func=command_backtest)
+
+    backtest_baseline = subparsers.add_parser(
+        "backtest-baseline",
+        help="Ejecuta un baseline reproducible por setup principal sobre un simbolo.",
+    )
+    backtest_baseline.add_argument("--symbol", required=True, help="Ticker a simular, por ejemplo AAPL.")
+    backtest_baseline.add_argument("--from", dest="start", required=True, help="Fecha inicial YYYY-MM-DD.")
+    backtest_baseline.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
+    backtest_baseline.add_argument("--min-score", type=int, default=7, help="Score tecnico minimo.")
+    backtest_baseline.add_argument(
+        "--setup-quality",
+        default="strong",
+        help="Calidad requerida del setup tecnico. Por defecto strong.",
+    )
+    backtest_baseline.add_argument(
+        "--max-holding-days",
+        type=int,
+        default=10,
+        help="Time stop maximo en sesiones.",
+    )
+    backtest_baseline.add_argument("--json", action="store_true", help="Devuelve el informe consolidado en JSON.")
+    backtest_baseline.set_defaults(func=command_backtest_baseline)
+
+    backup_db = subparsers.add_parser(
+        "backup-db",
+        help="Crea una copia restaurable de la base SQLite y guarda instrucciones de restauracion.",
+    )
+    backup_db.set_defaults(func=command_backup_db)
 
     execute_approved = subparsers.add_parser(
         "execute-approved",
@@ -2305,6 +2769,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Aceptado por compatibilidad; el comando siempre ejecuta el escaneo.",
     )
     scan_technical.set_defaults(func=command_scan_technical)
+
+    opportunity_snapshot = subparsers.add_parser(
+        "opportunity-snapshot",
+        help="Genera y guarda un snapshot historico de oportunidades para una hora concreta.",
+    )
+    opportunity_snapshot.add_argument(
+        "--slot",
+        required=True,
+        help="Hora local del snapshot en formato HH:MM, por ejemplo 16:00.",
+    )
+    opportunity_snapshot.add_argument("--quiet", action="store_true", help="No imprime eventos en vivo.")
+    opportunity_snapshot.add_argument(
+        "--force",
+        action="store_true",
+        help="Regenera el snapshot aunque ya exista para esa fecha y hora.",
+    )
+    opportunity_snapshot.set_defaults(func=command_opportunity_snapshot)
 
     breakout_scan = subparsers.add_parser(
         "breakout-scan",
@@ -2518,8 +2999,18 @@ def build_parser() -> argparse.ArgumentParser:
     job_once = subparsers.add_parser("job-once", help="Ejecuta manualmente un job del scheduler.")
     job_once.add_argument(
         "job",
-        choices=["portfolio", "market", "closed-study", "daily", "post-market-review", "pre-earnings"],
+        choices=[
+            "portfolio",
+            "market",
+            "closed-study",
+            "daily",
+            "post-market-review",
+            "pre-earnings",
+            "opportunity-snapshot",
+            "continuous-improvement",
+        ],
     )
+    job_once.add_argument("--slot", default="16:00", help="Slot HH:MM usado por opportunity-snapshot.")
     job_once.add_argument(
         "--skip-crew",
         action="store_true",

@@ -17,6 +17,7 @@ from .errors import MarketDataFetchError, MarketDataValidationError
 
 
 _LAST_DOWNLOAD_METADATA: dict[str, Any] = {}
+MAX_REASONABLE_DAILY_GAP_PCT = 0.60
 
 
 def _date_text(value: str | datetime | None) -> str:
@@ -131,25 +132,75 @@ def _validate_market_data(data: pd.DataFrame, symbols: list[str]) -> dict[str, A
     delivered: list[str] = []
     missing: list[str] = []
     bars_by_symbol: dict[str, int] = {}
+    invalid_bars_by_symbol: dict[str, int] = {}
+    suspicious_gap_bars_by_symbol: dict[str, int] = {}
+    negative_volume_bars_by_symbol: dict[str, int] = {}
+    alerts: list[str] = []
     for symbol in normalized:
         frame = _symbol_frame(data, symbol, multi_symbol)
         if frame.empty or "Close" not in frame.columns or frame["Close"].dropna().empty:
             missing.append(symbol)
             continue
+        close = pd.to_numeric(frame.get("Close"), errors="coerce")
+        open_ = pd.to_numeric(frame.get("Open"), errors="coerce")
+        high = pd.to_numeric(frame.get("High"), errors="coerce")
+        low = pd.to_numeric(frame.get("Low"), errors="coerce")
+        volume = pd.to_numeric(frame.get("Volume"), errors="coerce")
+        invalid_mask = (
+            close.isna()
+            | open_.isna()
+            | high.isna()
+            | low.isna()
+            | (close <= 0)
+            | (open_ <= 0)
+            | (high <= 0)
+            | (low <= 0)
+            | (high < low)
+            | (high < close)
+            | (high < open_)
+            | (low > close)
+            | (low > open_)
+        )
+        volume_invalid_mask = volume.notna() & (volume < 0)
+        gap_reference = close.shift(1)
+        gap_mask = gap_reference.notna() & ((open_ - gap_reference).abs() / gap_reference.abs() > MAX_REASONABLE_DAILY_GAP_PCT)
+        invalid_count = int(invalid_mask.sum())
+        suspicious_gap_count = int(gap_mask.sum())
+        negative_volume_count = int(volume_invalid_mask.sum())
+        invalid_bars_by_symbol[symbol] = invalid_count
+        suspicious_gap_bars_by_symbol[symbol] = suspicious_gap_count
+        negative_volume_bars_by_symbol[symbol] = negative_volume_count
+        if invalid_count >= len(frame):
+            alerts.append(f"{symbol}: todas las barras son invalidas")
+            missing.append(symbol)
+            continue
         delivered.append(symbol)
         bars_by_symbol[symbol] = int(frame["Close"].dropna().shape[0])
+        if invalid_count:
+            alerts.append(f"{symbol}: {invalid_count} barras invalidas")
+        if suspicious_gap_count:
+            alerts.append(f"{symbol}: {suspicious_gap_count} gaps extremos")
+        if negative_volume_count:
+            alerts.append(f"{symbol}: {negative_volume_count} barras con volumen negativo")
 
     if not delivered:
         raise MarketDataValidationError("ningun simbolo solicitado tiene barras validas")
 
+    requested_count = len(normalized)
+    coverage_ratio = round(len(delivered) / requested_count, 4) if requested_count else 0.0
     return {
         "requested_symbols": normalized,
-        "requested_count": len(normalized),
+        "requested_count": requested_count,
         "symbols_with_data": delivered,
         "symbols_with_data_count": len(delivered),
         "missing_symbols": missing,
         "missing_symbols_count": len(missing),
         "bars_by_symbol": bars_by_symbol,
+        "coverage_ratio": coverage_ratio,
+        "invalid_bars_by_symbol": invalid_bars_by_symbol,
+        "suspicious_gap_bars_by_symbol": suspicious_gap_bars_by_symbol,
+        "negative_volume_bars_by_symbol": negative_volume_bars_by_symbol,
+        "validation_alerts": alerts,
         "multi_symbol": multi_symbol,
     }
 

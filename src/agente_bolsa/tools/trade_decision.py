@@ -143,6 +143,11 @@ def _compact_candidate_for_prompt(candidate: dict[str, Any]) -> dict[str, Any]:
         "setup_name": candidate.get("setup_name") or _setup_name(candidate),
         "rank_priority_score": candidate.get("rank_priority_score"),
         "rank_priority_reason": candidate.get("rank_priority_reason"),
+        "selection_score": candidate.get("selection_score"),
+        "selection_rank": candidate.get("selection_rank"),
+        "selection_reason": candidate.get("selection_reason"),
+        "blocked_auto_buy": candidate.get("blocked_auto_buy"),
+        "blocked_auto_buy_reason": candidate.get("blocked_auto_buy_reason"),
         "setup_edge_3d": candidate.get("setup_edge_3d"),
         "effective_setup_edge_3d": candidate.get("effective_setup_edge_3d"),
         "setup_win_rate_3d": candidate.get("setup_win_rate_3d"),
@@ -155,6 +160,7 @@ def _compact_candidate_for_prompt(candidate: dict[str, Any]) -> dict[str, Any]:
             "expected_edge_1d": learning_prior.get("expected_edge_1d"),
             "expected_edge_3d": learning_prior.get("expected_edge_3d"),
             "sample_size_3d": learning_prior.get("sample_size_3d"),
+            "setup_sample_size_3d": learning_prior.get("setup_sample_size_3d"),
             "confidence_weight_3d": learning_prior.get("confidence_weight_3d"),
         },
         "technical_state": {
@@ -188,7 +194,7 @@ def _compact_candidate_for_prompt(candidate: dict[str, Any]) -> dict[str, Any]:
 def _compact_technical_context_for_prompt(technical_context: dict[str, Any]) -> dict[str, Any]:
     selected = [
         _compact_candidate_for_prompt(item)
-        for item in list(technical_context.get("selected_candidates", []) or [])[:6]
+        for item in list(technical_context.get("selected_candidates", []) or [])[:12]
         if isinstance(item, dict)
     ]
     top_longs = [
@@ -208,6 +214,7 @@ def _compact_technical_context_for_prompt(technical_context: dict[str, Any]) -> 
         "selected_candidates": selected,
         "top_longs": top_longs,
         "top_shorts": top_shorts,
+        "selection_metadata": technical_context.get("selection_metadata", {}),
         "analysis_plan_counts": technical_context.get("analysis_plan_counts", {}),
         "breakout_confirmed": list(technical_context.get("breakout_confirmed", []) or [])[:5],
         "breakout_watch": list(technical_context.get("breakout_watch", []) or [])[:5],
@@ -222,6 +229,57 @@ def _candidate_symbols(technical_context: dict[str, Any]) -> set[str]:
         for item in _candidate_items(technical_context)
         if str(item.get("symbol", "")).strip()
     }
+
+
+def _can_expand_long_only_capacity(settings: Settings) -> bool:
+    return (
+        not settings.allow_short_selling
+        and (float(settings.max_position_exposure) * 4.0) <= float(settings.max_portfolio_exposure)
+    )
+
+
+def _effective_long_only_capacity(settings: Settings, selected_count: int) -> int:
+    if not _can_expand_long_only_capacity(settings):
+        return 3
+    if (
+        selected_count >= 12
+        and (float(settings.max_position_exposure) * 5.0) <= float(settings.max_portfolio_exposure)
+    ):
+        return 5
+    if selected_count >= 10:
+        return 4
+    return 3
+
+
+def _effective_trade_recommendation_limit(settings: Settings, technical_context: dict[str, Any]) -> int:
+    selected = list((technical_context or {}).get("selected_candidates", []) or [])
+    return _effective_long_only_capacity(settings, len(selected))
+
+
+def _effective_buy_plan_limit(settings: Settings, recommendations: list[TradeRecommendation]) -> int:
+    base_limit = max(1, int(settings.max_orders_per_cycle))
+    buy_count = sum(1 for item in recommendations if str(item.action).lower() == "buy")
+    if _can_expand_long_only_capacity(settings) and buy_count >= 5:
+        return max(base_limit, 5)
+    if _can_expand_long_only_capacity(settings) and buy_count >= 4:
+        return max(base_limit, 4)
+    return base_limit
+
+
+def _effective_daily_buy_limit(settings: Settings, plans: list[Any]) -> int:
+    base_limit = max(0, int(settings.max_daily_buy_orders))
+    buy_count = sum(1 for item in plans if str(getattr(item, "side", "")).lower() == "buy")
+    if _can_expand_long_only_capacity(settings) and buy_count >= 5:
+        return max(base_limit, 5)
+    if _can_expand_long_only_capacity(settings) and buy_count >= 4:
+        return max(base_limit, 4)
+    return base_limit
+
+
+def _deterministic_selection_limit(settings: Settings) -> int:
+    if settings.allow_short_selling:
+        return 8
+    return max(12, int(settings.news_sentiment_top_n))
 
 
 def _compact_sentiment_for_prompt(sentiment_context: dict[str, Any], technical_context: dict[str, Any]) -> dict[str, Any]:
@@ -319,9 +377,18 @@ def _llm_prompt_payload(
     *,
     compact: bool,
 ) -> dict[str, Any]:
+    technical_candidates = _compact_technical_context_for_prompt(technical_context) if compact else technical_context
+    effective_recommendation_limit = _effective_trade_recommendation_limit(settings, technical_context)
+    selected_count = len(list((technical_context or {}).get("selected_candidates", []) or []))
+    prefer_full_long_only_capacity = effective_recommendation_limit >= 4 and selected_count >= 10
+    if not settings.allow_short_selling and isinstance(technical_candidates, dict):
+        technical_candidates = {
+            **technical_candidates,
+            "top_shorts": [],
+        }
     return {
         "portfolio": _compact_portfolio_for_prompt(portfolio) if compact else asdict(portfolio),
-        "technical_candidates": _compact_technical_context_for_prompt(technical_context) if compact else technical_context,
+        "technical_candidates": technical_candidates,
         "news_sentiment": _compact_sentiment_for_prompt(sentiment_context, technical_context) if compact else sentiment_context,
         "portfolio_rebalance": rebalance_context or {},
         "daily_learning_digest": _compact_daily_learning_for_prompt(daily_learning_digest) if compact else daily_learning_digest,
@@ -339,6 +406,9 @@ def _llm_prompt_payload(
             "max_risk_per_trade": settings.max_risk_per_trade,
             "max_orders_per_cycle": settings.max_orders_per_cycle,
             "max_daily_buy_orders": settings.max_daily_buy_orders,
+            "effective_max_orders_per_cycle": max(int(settings.max_orders_per_cycle), effective_recommendation_limit),
+            "effective_max_daily_buy_orders": max(int(settings.max_daily_buy_orders), effective_recommendation_limit),
+            "prefer_full_long_only_capacity": prefer_full_long_only_capacity,
             "min_order_notional": settings.min_order_notional,
             "allow_position_adds": settings.allow_position_adds,
             "min_confidence_to_trade": settings.min_llm_confidence_to_trade,
@@ -377,13 +447,27 @@ def load_latest_technical_candidates(
         return {"path": None, "top_longs": [], "top_shorts": [], "all_candidates": []}
 
     report = json.loads(path.read_text(encoding="utf-8"))
+    all_candidates = report.get("all_candidates", []) or []
+    daily_learning_digest = load_daily_learning_context(data_dir)
+    operational_response_context = load_operational_response_context(data_dir)
+    settings = Settings(DATA_DIR=data_dir)
+    selected_candidates, selection_metadata = _select_deterministic_candidates(
+        all_candidates,
+        daily_learning_digest,
+        operational_response_context,
+        limit=max(_deterministic_selection_limit(settings), per_side),
+        same_session_context=_same_session_intraday_context(data_dir, report),
+        settings=settings,
+    )
     return {
         "path": str(path),
         "run_id": report.get("run_id"),
         "as_of": report.get("as_of"),
         "top_longs": report.get("top_longs", [])[:per_side],
         "top_shorts": report.get("top_shorts", [])[:per_side],
-        "all_candidates": report.get("all_candidates", []),
+        "selected_candidates": selected_candidates,
+        "selection_metadata": selection_metadata,
+        "all_candidates": all_candidates,
         "analysis_plan_counts": report.get("analysis_plan_counts", {}),
     }
 
@@ -497,6 +581,83 @@ def _confirmed_bullish_patterns(candidate: dict[str, Any]) -> list[dict[str, Any
     ]
 
 
+def _session_date_from_technical_context(technical_context: dict[str, Any]) -> str | None:
+    for key in ("session_date", "as_of"):
+        value = technical_context.get(key)
+        if value:
+            return str(value)[:10]
+    for candidate in _candidate_items(technical_context):
+        value = candidate.get("last_date") or _technical_value(candidate, "last_date")
+        if value:
+            return str(value)[:10]
+    return None
+
+
+def _same_session_intraday_context(
+    data_dir: Path | None,
+    technical_context: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    if data_dir is None:
+        return {}
+    session_date = _session_date_from_technical_context(technical_context)
+    if not session_date:
+        return {}
+    symbols = sorted(_candidate_symbols(technical_context))
+    if not symbols:
+        return {}
+    settings = Settings(DATA_DIR=data_dir)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    return store.same_session_intraday_signal_summary(session_date=session_date, symbols=symbols)
+
+
+def _same_session_intraday_momentum_bonus(
+    candidate: dict[str, Any],
+    same_session_context: dict[str, dict[str, Any]],
+    settings: Settings | None,
+) -> tuple[str | None, dict[str, Any]]:
+    symbol = str(candidate.get("symbol") or "").upper().strip()
+    if not symbol or not same_session_context:
+        return None, {}
+    defaults = settings or Settings()
+    if not defaults.intraday_same_session_momentum_enabled:
+        return None, {}
+    summary = same_session_context.get(symbol) or {}
+    if not summary or summary.get("selected_for_llm"):
+        return None, summary
+    observations = int(summary.get("observations") or 0)
+    same_session_return = _float(summary.get("same_session_return")) or 0.0
+    score = _float(candidate.get("score")) or 0.0
+    rsi = _float(_technical_value(candidate, "rsi_14"))
+    volume_z = _float(_technical_value(candidate, "volume_zscore_20"))
+    distance_sma20 = _float(_candidate_learning_features(candidate).get("distance_sma20"))
+    confirmed_patterns = len(_confirmed_bullish_patterns(candidate))
+    leader_qualified = (
+        observations >= defaults.intraday_same_session_leader_min_observations
+        and same_session_return >= defaults.intraday_same_session_leader_min_return
+        and score >= defaults.intraday_same_session_leader_min_score
+        and confirmed_patterns >= defaults.intraday_same_session_leader_min_bullish_patterns
+        and (distance_sma20 is None or distance_sma20 <= defaults.intraday_same_session_leader_max_sma20_distance)
+        and (rsi is None or rsi <= defaults.intraday_same_session_leader_max_rsi)
+    )
+    if observations < defaults.intraday_same_session_min_observations:
+        return "same_session_intraday_leader" if leader_qualified else None, summary
+    if same_session_return < defaults.intraday_same_session_min_return:
+        return "same_session_intraday_leader" if leader_qualified else None, summary
+    if score < defaults.intraday_same_session_min_score:
+        return "same_session_intraday_leader" if leader_qualified else None, summary
+    if distance_sma20 is not None and distance_sma20 > defaults.intraday_same_session_max_sma20_distance:
+        return "same_session_intraday_leader" if leader_qualified else None, summary
+    if rsi is not None and rsi > defaults.intraday_same_session_max_rsi:
+        return "same_session_intraday_leader" if leader_qualified else None, summary
+    if (
+        volume_z is not None
+        and volume_z >= defaults.intraday_same_session_min_volume_z
+    ) or confirmed_patterns >= defaults.intraday_same_session_min_bullish_patterns:
+        return "same_session_intraday_momentum", summary
+    return ("same_session_intraday_leader", summary) if leader_qualified else (None, summary)
+
+
 def _sentiment_for_symbol(sentiment_context: dict[str, Any] | None, symbol: str) -> dict[str, Any]:
     if not sentiment_context:
         return {}
@@ -606,6 +767,8 @@ def _candidate_learning_prior(
     profile_1d = priors_1d.get(profile_key)
     profile_3d = priors_3d.get(profile_key)
     setup_row = setup_stats.get(setup_name, {})
+    setup_sample_3d = int(setup_row.get("matured") or 0)
+    setup_edge_3d = _float(setup_row.get("avg_return"))
     setup_penalty = 0.0
     if isinstance(operational_response_context, dict):
         penalty_map = operational_response_context.get("setup_penalties", {}) or {}
@@ -625,15 +788,289 @@ def _candidate_learning_prior(
         "expected_edge_3d": expected_edge_3d,
         "win_rate_recent_3d": _float((profile_3d or setup_row).get("win_rate")),
         "sample_size_3d": int((profile_3d or setup_row).get("matured") or 0),
+        "setup_sample_size_3d": setup_sample_3d,
+        "setup_edge_3d_raw": setup_edge_3d,
         "confidence_weight_3d": _float((profile_3d or {}).get("confidence_weight")) if profile_3d else 0.35 if setup_row else 0.0,
         "operational_penalty": round(setup_penalty, 4),
     }
+
+
+def _valid_risk_plan(candidate: dict[str, Any]) -> bool:
+    risk = candidate.get("risk_plan", {}) or {}
+    entry = _float(risk.get("entry_price"))
+    stop = _float(risk.get("stop_loss"))
+    take = _float(risk.get("take_profit"))
+    return bool(entry and stop and take and 0 < stop < entry < take)
+
+
+def _selection_eligible(candidate: dict[str, Any]) -> tuple[bool, str]:
+    direction = str(candidate.get("direction") or "").lower()
+    setup_quality = str(candidate.get("setup_quality") or "").lower()
+    return_20d = _float(_technical_value(candidate, "return_20d"))
+    if direction != "long":
+        return False, "direction_not_long"
+    if setup_quality != "strong":
+        return False, "setup_not_strong"
+    if return_20d is None or return_20d <= 0:
+        return False, "return_20d_not_positive"
+    if not _valid_risk_plan(candidate):
+        return False, "invalid_risk_plan"
+    return True, "eligible"
+
+
+def _shrunk_selection_edge(learning_prior: dict[str, Any]) -> tuple[float, dict[str, Any], list[str]]:
+    profile_edge = _float(learning_prior.get("expected_edge_3d"))
+    setup_edge = _float(learning_prior.get("setup_edge_3d_raw"))
+    profile_n = int(learning_prior.get("sample_size_3d") or 0)
+    setup_n = int(learning_prior.get("setup_sample_size_3d") or 0)
+    reasons: list[str] = []
+
+    if profile_edge is not None and profile_n >= 30:
+        edge = (0.75 * profile_edge) + (0.25 * (setup_edge or 0.0))
+        sample_penalty = 0.0
+        reasons.append("profile_edge_high_sample")
+    elif profile_edge is not None and profile_n >= 8:
+        edge = (0.45 * profile_edge) + (0.55 * (setup_edge or 0.0))
+        sample_penalty = 0.006
+        reasons.append("profile_edge_shrunk")
+    elif setup_edge is not None and setup_n >= 30:
+        edge = 0.65 * setup_edge
+        sample_penalty = 0.006
+        reasons.append("setup_edge_high_sample")
+    elif setup_edge is not None and setup_n >= 8:
+        edge = 0.35 * setup_edge
+        sample_penalty = 0.012
+        reasons.append("setup_edge_shrunk")
+    else:
+        edge = 0.0
+        sample_penalty = 0.018
+        reasons.append("insufficient_edge_sample")
+
+    return edge, {
+        "profile_edge_3d": profile_edge,
+        "profile_sample_3d": profile_n,
+        "setup_edge_3d": setup_edge,
+        "setup_sample_3d": setup_n,
+        "sample_penalty": sample_penalty,
+    }, reasons
+
+
+def _selection_score_for_candidate(
+    candidate: dict[str, Any],
+    daily_learning_digest: dict[str, Any],
+    operational_response_context: dict[str, Any],
+    same_session_context: dict[str, dict[str, Any]] | None = None,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    learning_prior = candidate.get("learning_prior") or _candidate_learning_prior(
+        candidate,
+        daily_learning_digest,
+        operational_response_context,
+    )
+    setup_name = _setup_name(candidate)
+    score = _float(candidate.get("score")) or 0.0
+    relative_return_20d = _float(candidate.get("relative_return_20d")) or 0.0
+    volume_z = _float(_technical_value(candidate, "volume_zscore_20")) or 0.0
+    rsi = _float(_technical_value(candidate, "rsi_14")) or 0.0
+    distance_sma20 = _float(_candidate_learning_features(candidate).get("distance_sma20"))
+    confirmed_patterns = len(_confirmed_bullish_patterns(candidate))
+    breakout_failure_risk = bool(_technical_value(candidate, "breakout_failure_risk"))
+    orderly_breakout = bool(_technical_value(candidate, "orderly_breakout_long"))
+    breakout_continuation = bool(_technical_value(candidate, "breakout_continuation_long"))
+    range_expansion = setup_name == "range_expansion_breakout"
+    high_conviction_confirmed_momentum = bool(
+        score >= 17.0
+        and volume_z >= 1.25
+        and confirmed_patterns >= 2
+        and not breakout_failure_risk
+        and distance_sma20 is not None
+        and 0.04 <= distance_sma20 <= 0.20
+        and 65.0 <= rsi <= 82.0
+    )
+    same_session_intraday_rule, same_session_summary = _same_session_intraday_momentum_bonus(
+        candidate,
+        same_session_context or {},
+        settings,
+    )
+
+    edge, edge_components, reasons = _shrunk_selection_edge(learning_prior)
+    sample_penalty = float(edge_components["sample_penalty"])
+    score_component = min(0.025, max(0.0, score / 1200.0))
+    relative_strength_component = min(0.020, max(-0.010, relative_return_20d * 0.20))
+    volume_component = 0.006 if volume_z >= 1.0 else -0.006 if volume_z < 0 else 0.0
+    pattern_component = min(0.010, confirmed_patterns * 0.005)
+    continuation_component = 0.012 if orderly_breakout else 0.008 if breakout_continuation else 0.0
+    high_conviction_momentum_component = 0.018 if high_conviction_confirmed_momentum else 0.0
+    if same_session_intraday_rule == "same_session_intraday_leader":
+        same_session_momentum_component = float((settings or Settings()).intraday_same_session_leader_selection_bonus)
+    elif same_session_intraday_rule == "same_session_intraday_momentum":
+        same_session_momentum_component = float((settings or Settings()).intraday_same_session_selection_bonus)
+    else:
+        same_session_momentum_component = 0.0
+    failure_penalty = 0.020 if breakout_failure_risk else 0.0
+    setup_risk_penalty = 0.080 if range_expansion else 0.0
+    operational_penalty = _float(learning_prior.get("operational_penalty")) or 0.0
+
+    selection_score = (
+        edge
+        + score_component
+        + relative_strength_component
+        + volume_component
+        + pattern_component
+        + continuation_component
+        + high_conviction_momentum_component
+        + same_session_momentum_component
+        - sample_penalty
+        - failure_penalty
+        - setup_risk_penalty
+        - operational_penalty
+    )
+    if volume_component > 0:
+        reasons.append("volume_confirmation")
+    elif volume_component < 0:
+        reasons.append("weak_volume_penalty")
+    if pattern_component > 0:
+        reasons.append("confirmed_pattern")
+    if orderly_breakout:
+        reasons.append("orderly_breakout")
+    if breakout_continuation:
+        reasons.append("breakout_follow_through")
+    if high_conviction_confirmed_momentum:
+        reasons.append("high_conviction_confirmed_momentum")
+    if same_session_intraday_rule:
+        reasons.append(same_session_intraday_rule)
+    if breakout_failure_risk:
+        reasons.append("breakout_failure_penalty")
+    if range_expansion:
+        reasons.append("range_expansion_shadow_only")
+    if relative_strength_component > 0:
+        reasons.append("relative_strength")
+
+    return {
+        "selection_score": round(selection_score, 4),
+        "selection_reason": ",".join(reasons) if reasons else "baseline",
+        "selection_components": {
+            **{key: round(value, 4) if isinstance(value, float) else value for key, value in edge_components.items()},
+            "shrunk_edge_3d": round(edge, 4),
+            "score_component": round(score_component, 4),
+            "relative_strength_component": round(relative_strength_component, 4),
+            "volume_component": round(volume_component, 4),
+            "pattern_component": round(pattern_component, 4),
+            "continuation_component": round(continuation_component, 4),
+            "high_conviction_momentum_component": round(high_conviction_momentum_component, 4),
+            "same_session_momentum_component": round(same_session_momentum_component, 4),
+            "failure_penalty": round(failure_penalty, 4),
+            "setup_risk_penalty": round(setup_risk_penalty, 4),
+            "operational_penalty": round(operational_penalty, 4),
+            "same_session_observations": int(same_session_summary.get("observations") or 0),
+            "same_session_return": _float(same_session_summary.get("same_session_return")),
+        },
+        "blocked_auto_buy": range_expansion,
+        "blocked_auto_buy_reason": "range_expansion_breakout_shadow_only" if range_expansion else None,
+        "learning_prior": learning_prior,
+    }
+
+
+def _select_deterministic_candidates(
+    candidates: list[dict[str, Any]],
+    daily_learning_digest: dict[str, Any],
+    operational_response_context: dict[str, Any],
+    *,
+    limit: int = 8,
+    same_session_context: dict[str, dict[str, Any]] | None = None,
+    settings: Settings | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    annotated: list[dict[str, Any]] = []
+    rejected: dict[str, int] = {}
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        eligible, reason = _selection_eligible(candidate)
+        if not eligible:
+            rejected[reason] = rejected.get(reason, 0) + 1
+            continue
+        selection = _selection_score_for_candidate(
+            candidate,
+            daily_learning_digest,
+            operational_response_context,
+            same_session_context=same_session_context,
+            settings=settings,
+        )
+        annotated.append(
+            {
+                **candidate,
+                "setup_name": candidate.get("setup_name") or _setup_name(candidate),
+                **selection,
+            }
+        )
+
+    score_ranked = sorted(
+        annotated,
+        key=lambda item: (float(item.get("score") or 0.0), float(item.get("selection_score") or -999.0)),
+        reverse=True,
+    )
+    score_rank_by_symbol = {
+        str(item.get("symbol") or "").upper(): index
+        for index, item in enumerate(score_ranked, start=1)
+        if str(item.get("symbol") or "").strip()
+    }
+    selected = sorted(
+        annotated,
+        key=lambda item: (float(item.get("selection_score") or -999.0), float(item.get("score") or 0.0)),
+        reverse=True,
+    )
+    for index, item in enumerate(selected, start=1):
+        item["selection_rank"] = index
+        item["score_rank"] = score_rank_by_symbol.get(str(item.get("symbol") or "").upper())
+
+    selected = selected[:limit]
+    metadata = {
+        "method": "selection_score_with_shrunk_learning_prior",
+        "eligible": len(annotated),
+        "selected": len(selected),
+        "rejected": rejected,
+        "shadow_only_setups": ["range_expansion_breakout"],
+        "promoted_over_score_rank": [
+            {
+                "symbol": item.get("symbol"),
+                "selection_rank": item.get("selection_rank"),
+                "score_rank": item.get("score_rank"),
+                "selection_score": item.get("selection_score"),
+                "selection_reason": item.get("selection_reason"),
+            }
+            for item in selected
+            if item.get("score_rank") and item.get("selection_rank") and int(item["score_rank"]) > int(item["selection_rank"])
+        ][:10],
+        "top_by_score": [
+            {
+                "symbol": item.get("symbol"),
+                "score": item.get("score"),
+                "selection_score": item.get("selection_score"),
+                "setup_name": item.get("setup_name"),
+            }
+            for item in score_ranked[: min(limit, 10)]
+        ],
+        "same_session_intraday_promotions": [
+            {
+                "symbol": item.get("symbol"),
+                "selection_rank": item.get("selection_rank"),
+                "selection_score": item.get("selection_score"),
+                "same_session_return": (item.get("selection_components", {}) or {}).get("same_session_return"),
+                "observations": (item.get("selection_components", {}) or {}).get("same_session_observations"),
+            }
+            for item in selected
+            if "same_session_intraday_momentum" in str(item.get("selection_reason") or "")
+        ][:10],
+    }
+    return selected, metadata
 
 
 def _candidate_rank_priority(
     candidate: dict[str, Any],
     daily_learning_digest: dict[str, Any],
     operational_response_context: dict[str, Any],
+    same_session_context: dict[str, dict[str, Any]] | None = None,
+    settings: Settings | None = None,
 ) -> dict[str, Any]:
     learning_prior = candidate.get("learning_prior") or _candidate_learning_prior(
         candidate,
@@ -643,6 +1080,8 @@ def _candidate_rank_priority(
     prior_accuracy = _prior_accuracy_map(daily_learning_digest).get(str(learning_prior.get("profile_key") or "").strip(), {})
     score = _float(candidate.get("score")) or 0.0
     volume_z = _float(_technical_value(candidate, "volume_zscore_20")) or 0.0
+    rsi = _float(_technical_value(candidate, "rsi_14")) or 0.0
+    distance_sma20 = _float(_candidate_learning_features(candidate).get("distance_sma20"))
     relative_return_20d = _float(candidate.get("relative_return_20d")) or 0.0
     expected_edge_3d_raw = _float(learning_prior.get("expected_edge_3d"))
     expected_edge_3d = expected_edge_3d_raw or 0.0
@@ -654,6 +1093,20 @@ def _candidate_rank_priority(
     range_expansion_breakout = bool(_technical_value(candidate, "range_expansion_breakout_long"))
     orderly_breakout = bool(_technical_value(candidate, "orderly_breakout_long"))
     breakout_failure_risk = bool(_technical_value(candidate, "breakout_failure_risk"))
+    high_conviction_confirmed_momentum = bool(
+        score >= 17.0
+        and volume_z >= 1.25
+        and confirmed_patterns >= 2
+        and not breakout_failure_risk
+        and distance_sma20 is not None
+        and 0.04 <= distance_sma20 <= 0.20
+        and 65.0 <= rsi <= 82.0
+    )
+    same_session_intraday_rule, same_session_summary = _same_session_intraday_momentum_bonus(
+        candidate,
+        same_session_context or {},
+        settings,
+    )
     score_component = min(0.04, max(0.0, score / 1000.0))
     relative_strength_component = min(0.03, max(-0.01, relative_return_20d * 0.25))
     volume_component = 0.01 if volume_z >= 1.0 else -0.01 if volume_z < 0 else 0.0
@@ -667,6 +1120,13 @@ def _candidate_rank_priority(
         if breakout_continuation
         else 0.0
     )
+    high_conviction_momentum_component = 0.015 if high_conviction_confirmed_momentum else 0.0
+    if same_session_intraday_rule == "same_session_intraday_leader":
+        same_session_momentum_component = float((settings or Settings()).intraday_same_session_leader_priority_bonus)
+    elif same_session_intraday_rule == "same_session_intraday_momentum":
+        same_session_momentum_component = float((settings or Settings()).intraday_same_session_priority_bonus)
+    else:
+        same_session_momentum_component = 0.0
     failure_penalty = 0.02 if breakout_failure_risk else 0.0
     prior_error_penalty = min(0.06, prior_avg_abs_error * 0.5)
     priority_score = (
@@ -679,6 +1139,8 @@ def _candidate_rank_priority(
         + volume_component
         + pattern_component
         + continuation_component
+        + high_conviction_momentum_component
+        + same_session_momentum_component
     )
     reasons = []
     if expected_edge_3d > 0:
@@ -697,6 +1159,10 @@ def _candidate_rank_priority(
         reasons.append("range_expansion_breakout")
     if orderly_breakout:
         reasons.append("orderly_breakout")
+    if high_conviction_confirmed_momentum:
+        reasons.append("high_conviction_confirmed_momentum")
+    if same_session_intraday_rule:
+        reasons.append(same_session_intraday_rule)
     if breakout_failure_risk:
         reasons.append("breakout_failure_penalty")
     if relative_strength_component > 0:
@@ -712,7 +1178,11 @@ def _candidate_rank_priority(
             "volume_component": round(volume_component, 4),
             "pattern_component": round(pattern_component, 4),
             "continuation_component": round(continuation_component, 4),
+            "high_conviction_momentum_component": round(high_conviction_momentum_component, 4),
+            "same_session_momentum_component": round(same_session_momentum_component, 4),
             "failure_penalty": round(failure_penalty, 4),
+            "same_session_observations": int(same_session_summary.get("observations") or 0),
+            "same_session_return": _float(same_session_summary.get("same_session_return")),
         },
         "rank_priority_reason": ",".join(reasons) if reasons else "baseline",
     }
@@ -722,7 +1192,24 @@ def _annotate_technical_context_with_learning(
     technical_context: dict[str, Any],
     daily_learning_digest: dict[str, Any],
     operational_response_context: dict[str, Any],
+    data_dir: Path | None = None,
 ) -> dict[str, Any]:
+    base_context = dict(technical_context)
+    settings = Settings(DATA_DIR=data_dir) if data_dir is not None else None
+    same_session_context = _same_session_intraday_context(data_dir, base_context)
+    if not base_context.get("selected_candidates") and isinstance(base_context.get("all_candidates"), list):
+        selection_limit = _deterministic_selection_limit(settings) if settings is not None else 8
+        selected, metadata = _select_deterministic_candidates(
+            base_context.get("all_candidates", []) or [],
+            daily_learning_digest,
+            operational_response_context,
+            limit=selection_limit,
+            same_session_context=same_session_context,
+            settings=settings,
+        )
+        base_context["selected_candidates"] = selected
+        base_context["selection_metadata"] = metadata
+
     notes = (
         operational_response_context.get("response_notes", {})
         if isinstance(operational_response_context, dict)
@@ -736,6 +1223,8 @@ def _annotate_technical_context_with_learning(
             {**candidate, "learning_prior": prior},
             daily_learning_digest,
             operational_response_context,
+            same_session_context=same_session_context,
+            settings=settings,
         )
         setup_edge = _float(prior.get("expected_edge_3d"))
         penalty = _float(prior.get("operational_penalty")) or 0.0
@@ -748,18 +1237,28 @@ def _annotate_technical_context_with_learning(
             "setup_win_rate_3d": prior.get("win_rate_recent_3d"),
             "setup_matured_3d": prior.get("sample_size_3d"),
             "learning_prior": prior,
+            "same_session_intraday": same_session_context.get(str(candidate.get("symbol") or "").upper(), {}),
             "operational_notes": notes.get(setup_name, []),
             "rank_priority_score": priority.get("rank_priority_score"),
             "rank_priority_components": priority.get("rank_priority_components"),
             "rank_priority_reason": priority.get("rank_priority_reason"),
         }
 
-    annotated = dict(technical_context)
+    annotated = dict(base_context)
     for key in ("selected_candidates", "top_longs", "top_shorts", "all_candidates"):
-        rows = technical_context.get(key, []) or []
+        rows = base_context.get(key, []) or []
         if isinstance(rows, list):
             items = [annotate(item) if isinstance(item, dict) else item for item in rows]
-            if key != "top_shorts":
+            if key == "selected_candidates":
+                items = sorted(
+                    items,
+                    key=lambda item: (
+                        float(item.get("selection_score") or item.get("rank_priority_score") or 0.0),
+                        float(item.get("score") or 0.0),
+                    ),
+                    reverse=True,
+                )
+            elif key != "top_shorts":
                 items = sorted(
                     items,
                     key=lambda item: (
@@ -979,6 +1478,9 @@ def validate_entry_quality(
         return False, f"direccion tecnica no es long ({direction or 'desconocida'})", checks
     if setup_quality != "strong":
         return False, f"setup no es strong ({setup_quality or 'desconocido'})", checks
+    if range_expansion_breakout_long:
+        checks["shadow_only_setup"] = "range_expansion_breakout"
+        return False, "range_expansion_breakout_shadow_only", checks
     if score < settings.entry_quality_min_score:
         return False, f"score {score} < minimo {settings.entry_quality_min_score}", checks
     if return_20d is not None and return_20d <= 0:
@@ -1296,11 +1798,13 @@ def request_trade_recommendations(
         technical_context,
         daily_learning_digest,
         operational_response_context,
+        settings.data_dir,
     )
     decision_learning_context = _build_decision_learning_context(
         daily_learning_digest,
         operational_response_context,
     )
+    recommendation_limit = _effective_trade_recommendation_limit(settings, annotated_technical_context)
     prompt = _llm_prompt_payload(
         settings,
         portfolio,
@@ -1330,6 +1834,9 @@ def request_trade_recommendations(
         "beneficio/perdida actual y coste estimado de rotacion. "
         "Usa decision_learning_context y los campos rank_priority_score, effective_setup_edge_3d, "
         "setup_edge_3d, setup_win_rate_3d y operational_penalty para priorizar setups con evidencia reciente. "
+        "Prioriza technical_candidates.selected_candidates; technical_candidates.top_longs es contexto secundario. "
+        "Usa selection_score, selection_reason, setup_sample_size_3d y expected_edge_3d para comparar entradas. "
+        "No recomiendes comprar candidatos con blocked_auto_buy=true; tratalos como shadow/watch. "
         "Si learning_prior.matched_on es 'none' o sample_size_3d es 0, trata la ausencia de historial "
         "como neutral, no como edge negativo implicito; en ese caso decide por tecnico, riesgo y contexto actual. "
         "Si effective_setup_edge_3d es negativo o existe una respuesta operativa activa de "
@@ -1346,9 +1853,12 @@ def request_trade_recommendations(
         "si no hay stop/take tocado, confianza muy alta y evidencia objetiva. "
         "No recomiendes ampliar una posicion existente salvo que allow_position_adds=true. "
         "Respeta max_daily_buy_orders y max_orders_per_cycle: pocas entradas de alta calidad. "
+        "Si allow_short_selling=false, ignora setups short como candidatos operables y no gastes recomendaciones en ellos. "
+        "Si risk_limits.prefer_full_long_only_capacity=true y hay varios largos claros en selected_candidates, "
+        "prioriza hasta llenar esa capacidad efectiva con compras distintas antes de devolver hold por exceso de conservadurismo. "
         "No compres solo porque haya cash. "
         "Si falta evidencia suficiente, action debe ser hold. "
-        "Devuelve como maximo 3 recomendaciones. Usa razones breves. "
+        f"Devuelve como maximo {recommendation_limit} recomendaciones. Usa razones breves. "
         "No uses markdown. Cierra siempre el JSON."
     )
 
@@ -1399,7 +1909,7 @@ def request_trade_recommendations(
         if isinstance(item, dict)
         for recommendation in [_recommendation_from_dict(item)]
         if recommendation is not None
-    ]
+    ][:recommendation_limit]
     return {
         "raw_response_preview": content[:2000],
         "recommendations": recommendations,
@@ -1418,6 +1928,7 @@ def build_buy_order_plans(
     """Build risk-checked buy plans. Sell/reduce/exit are kept as recommendations for now."""
 
     plans: list[OrderPlan] = []
+    buy_plan_limit = _effective_buy_plan_limit(settings, recommendations)
     risk_manager = RiskManager(settings)
     open_order_symbols = {order.symbol.upper() for order in portfolio.open_orders}
     existing_position_symbols = {
@@ -1433,13 +1944,14 @@ def build_buy_order_plans(
         load_latest_technical_candidates(settings.data_dir, per_side=50),
         daily_learning_digest,
         operational_response_context,
+        settings.data_dir,
     )
     portfolio_risk_context = _portfolio_risk_context(settings, portfolio)
     planned_buy_exposure = 0.0
     planned_buy_risk_amount = 0.0
 
     for recommendation in recommendations:
-        if len(plans) >= settings.max_orders_per_cycle:
+        if len(plans) >= buy_plan_limit:
             if rejected is not None and recommendation.action == "buy":
                 rejected.append(
                     {
@@ -1447,7 +1959,10 @@ def build_buy_order_plans(
                         "action": recommendation.action,
                         "stage": "cycle_order_limit",
                         "reason": "max_orders_per_cycle_reached",
-                        "checks": {"max_orders_per_cycle": settings.max_orders_per_cycle},
+                        "checks": {
+                            "max_orders_per_cycle": settings.max_orders_per_cycle,
+                            "effective_max_orders_per_cycle": buy_plan_limit,
+                        },
                     }
                 )
             break
@@ -1810,10 +2325,11 @@ def build_order_plans(
     """Build buy and long-position sell/reduce/exit plans."""
 
     plans = build_buy_order_plans(settings, portfolio, recommendations, dry_run=dry_run, rejected=rejected)
+    total_plan_limit = _effective_buy_plan_limit(settings, recommendations)
     open_order_symbols = {order.symbol.upper() for order in portfolio.open_orders}
 
     for recommendation in recommendations:
-        if len(plans) >= settings.max_orders_per_cycle:
+        if len(plans) >= total_plan_limit:
             break
         if recommendation.action not in {"sell", "reduce", "exit"}:
             continue

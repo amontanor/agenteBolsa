@@ -36,6 +36,10 @@ def test_record_signal_candidates_persists_features(tmp_path):
                     "chart_patterns": [{"bias": "bullish", "status": "confirmed", "label": "doble suelo"}],
                 },
                 "risk_plan": {"entry_price": 100, "stop_loss": 95, "take_profit": 115},
+                "setup_name": "confirmed_pattern",
+                "selection_score": 0.042,
+                "selection_rank": 1,
+                "selection_reason": "profile_edge_high_sample",
             }
         ],
     }
@@ -50,6 +54,9 @@ def test_record_signal_candidates_persists_features(tmp_path):
     assert rows[0]["features"]["source_rank"] == 1
     assert rows[0]["features"]["score_rank"] == 1
     assert rows[0]["features"]["score_rank_percentile"] == 1.0
+    assert rows[0]["features"]["selection_score"] == 0.042
+    assert rows[0]["features"]["selection_rank"] == 1
+    assert rows[0]["features"]["selection_reason"] == "profile_edge_high_sample"
 
 
 def test_record_signal_candidates_persists_score_rank_independent_of_source_order(tmp_path):
@@ -88,6 +95,44 @@ def test_record_signal_candidates_persists_score_rank_independent_of_source_orde
     assert rows["LOW"]["features"]["score_rank"] == 2
     assert rows["HIGH"]["features"]["source_rank"] == 2
     assert rows["HIGH"]["features"]["score_rank"] == 1
+
+
+def test_record_signal_candidates_marks_selected_for_llm_and_copies_selection_metadata(tmp_path):
+    from agente_bolsa.storage import Store
+
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    base_candidate = {
+        "symbol": "AAPL",
+        "direction": "long",
+        "score": 16,
+        "setup_quality": "strong",
+        "last_date": "2026-04-27",
+        "technical_state": {"close": 100, "sma_20": 95},
+        "risk_plan": {"entry_price": 100, "stop_loss": 95, "take_profit": 115},
+    }
+    report = {
+        "run_id": "scan-selected",
+        "selection_metadata": {"method": "selection_score_with_shrunk_learning_prior"},
+        "all_candidates": [base_candidate],
+        "selected_candidates": [
+            {
+                **base_candidate,
+                "selection_score": 0.081,
+                "selection_rank": 1,
+                "selection_reason": "high_conviction_confirmed_momentum",
+            }
+        ],
+    }
+
+    record_signal_candidates(store, report, source="test")
+    row = store.signal_outcomes()[0]
+
+    assert row["features"]["selected_for_llm"] is True
+    assert row["features"]["selection_score"] == 0.081
+    assert row["features"]["selection_rank"] == 1
+    assert row["features"]["selection_reason"] == "high_conviction_confirmed_momentum"
+    assert row["features"]["selection_method"] == "selection_score_with_shrunk_learning_prior"
 
 
 def test_update_signal_decisions_marks_blocked_entry_quality(tmp_path):

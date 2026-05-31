@@ -67,6 +67,12 @@ def _signal_features(candidate: dict[str, Any]) -> dict[str, Any]:
     return {
         "direction": candidate.get("direction"),
         "score": candidate.get("score"),
+        "setup_name": candidate.get("setup_name"),
+        "selection_score": _num(candidate.get("selection_score")),
+        "selection_rank": candidate.get("selection_rank"),
+        "selection_reason": candidate.get("selection_reason"),
+        "blocked_auto_buy": bool(candidate.get("blocked_auto_buy")),
+        "blocked_auto_buy_reason": candidate.get("blocked_auto_buy_reason"),
         "setup_quality": candidate.get("setup_quality"),
         "last_date": _date(candidate.get("last_date")),
         "close": close,
@@ -101,6 +107,12 @@ def record_signal_candidates(store: Store, report: dict[str, Any], *, source: st
         return 0
     count = 0
     candidates = list(report.get("all_candidates", []) or [])
+    selected_by_symbol = {
+        str(candidate.get("symbol", "")).upper(): candidate
+        for candidate in list(report.get("selected_candidates", []) or [])
+        if str(candidate.get("symbol", "")).strip()
+    }
+    selection_method = str((report.get("selection_metadata", {}) or {}).get("method") or "").strip() or None
     score_rank_by_symbol = {
         str(candidate.get("symbol", "")).upper(): index
         for index, candidate in enumerate(
@@ -119,6 +131,19 @@ def record_signal_candidates(store: Store, report: dict[str, Any], *, source: st
         if not symbol:
             continue
         features = _signal_features(candidate)
+        selected_candidate = selected_by_symbol.get(symbol)
+        if selected_candidate:
+            features["selected_for_llm"] = True
+            if features.get("selection_score") is None:
+                features["selection_score"] = _num(selected_candidate.get("selection_score"))
+            if features.get("selection_rank") is None:
+                features["selection_rank"] = selected_candidate.get("selection_rank")
+            if not features.get("selection_reason"):
+                features["selection_reason"] = selected_candidate.get("selection_reason")
+        else:
+            features["selected_for_llm"] = False
+        if selection_method:
+            features["selection_method"] = selection_method
         score_rank = score_rank_by_symbol.get(symbol)
         features["source_rank"] = original_index
         features["score_rank"] = score_rank

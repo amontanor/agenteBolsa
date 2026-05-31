@@ -179,6 +179,15 @@ python -m agente_bolsa.main job-once closed-study --skip-crew
 python -m agente_bolsa.main job-once daily --skip-crew
 ```
 
+Controles operativos utiles:
+
+```powershell
+python -m agente_bolsa.main market-data-quality --json
+python -m agente_bolsa.main weekly-review --from 2026-04-01 --json
+python -m agente_bolsa.main backup-db
+python -m agente_bolsa.main backtest-baseline --symbol AAPL --from 2024-01-01
+```
+
 El scheduler usa calendario `XNYS` para bolsa americana y muestra las horas en `Europe/Madrid`.
 
 Con mercado cerrado, el monitor de cartera no repite mensajes cada minuto. Se queda en espera y lanza un estudio tecnico amplio una sola vez por proxima apertura. Por defecto estudia el `S&P 500` completo, calcula candidatos largos/cortos y guarda el informe en:
@@ -235,6 +244,10 @@ python -m agente_bolsa.main job-once closed-study --force
 - Las validaciones incluyen un modelo inicial de costes: comision y slippage en puntos basicos.
 - Cualquier estrategia nueva pasa por backtest, costes, slippage, out-of-sample y paper trading.
 - El agente de mejora puede proponer codigo, pero no promoverlo a produccion sin validacion.
+
+Checklist de promocion de reglas, prompts y thresholds:
+
+- [docs/promotion_checklist.md](docs/promotion_checklist.md)
 
 ## Visibilidad en ejecucion
 

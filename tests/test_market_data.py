@@ -115,4 +115,37 @@ def test_market_data_can_use_fmp_provider(monkeypatch, tmp_path):
     assert calls
     assert meta["source"] == "fmp"
     assert meta["symbols_with_data"] == ["AAPL"]
+    assert meta["coverage_ratio"] == 1.0
     assert list(frame.columns)[:5] == ["Open", "High", "Low", "Close", "Adj Close"]
+
+
+def test_market_data_reports_invalid_bars(monkeypatch, tmp_path):
+    bad_frame = pd.DataFrame(
+        {
+            "Open": [100.0, -1.0, 102.0],
+            "High": [101.0, 102.0, 90.0],
+            "Low": [99.0, 100.0, 101.0],
+            "Close": [100.5, 101.5, 102.5],
+            "Volume": [1_000_000, -5.0, 1_200_000],
+        },
+        index=pd.date_range("2026-05-01", periods=3, freq="D"),
+    )
+
+    class FakeYF:
+        @staticmethod
+        def download(**_kwargs):
+            return bad_frame
+
+    monkeypatch.setitem(__import__("sys").modules, "yfinance", FakeYF)
+
+    _, meta = download_daily_prices_with_metadata(
+        ["AAPL"],
+        "2026-05-01",
+        "2026-05-10",
+        cache_dir=tmp_path / "cache",
+        max_retries=0,
+    )
+
+    assert meta["invalid_bars_by_symbol"]["AAPL"] >= 2
+    assert meta["negative_volume_bars_by_symbol"]["AAPL"] == 1
+    assert meta["validation_alerts"]

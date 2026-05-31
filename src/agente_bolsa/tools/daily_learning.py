@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -379,12 +379,104 @@ def _build_same_session_opportunity_ledger(
     }
 
 
+def _bullish_confirmed_count_from_features(features: dict[str, Any]) -> int:
+    chart_patterns = features.get("chart_patterns", {}) or {}
+    if isinstance(chart_patterns, dict):
+        return int(chart_patterns.get("bullish_confirmed_count") or 0)
+    if isinstance(chart_patterns, list):
+        return sum(
+            1
+            for item in chart_patterns
+            if item.get("bias") == "bullish" and item.get("status") == "confirmed"
+        )
+    return 0
+
+
+def _same_session_shadow_candidates(ledger: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Create shadow-only expansion candidates from repeated intraday misses."""
+
+    if not isinstance(ledger, dict):
+        return []
+    rows = []
+    for item in ledger.get("top_non_executed", []) or []:
+        if str(item.get("source") or "") != "intraday_scan":
+            continue
+        if str(item.get("reason_not_executed") or "") != "not_selected_by_llm":
+            continue
+        same_session_return = _num(item.get("same_session_return"))
+        max_score = _num(item.get("max_score"))
+        observations = int(item.get("observations") or 0)
+        features = item.get("latest_features", {}) or {}
+        volume_z = _num(features.get("volume_zscore_20"))
+        distance_sma20 = _num(features.get("distance_sma20"))
+        rsi = _num(features.get("rsi_14"))
+        bullish_patterns = _bullish_confirmed_count_from_features(features)
+        if same_session_return is None or max_score is None:
+            continue
+        if same_session_return < 0.04 or max_score < 14 or observations < 3:
+            continue
+        if distance_sma20 is not None and distance_sma20 > 0.30:
+            continue
+        if rsi is not None and rsi > 84:
+            continue
+        if (volume_z is None or volume_z < 0.50) and bullish_patterns < 2:
+            continue
+        rows.append(
+            {
+                "symbol": item.get("symbol"),
+                "same_session_return": _round(same_session_return, 4),
+                "max_score": _round(max_score, 2),
+                "observations": observations,
+                "volume_zscore_20": _round(volume_z, 2),
+                "distance_sma20": _round(distance_sma20, 4),
+                "rsi_14": _round(rsi, 2),
+                "bullish_confirmed_patterns": bullish_patterns,
+                "first_seen_at": item.get("first_seen_at"),
+                "last_seen_at": item.get("last_seen_at"),
+            }
+        )
+    if len(rows) < 2:
+        return []
+
+    rows = sorted(rows, key=lambda item: item["same_session_return"] or 0.0, reverse=True)
+    top3_capture = sum(float(item.get("same_session_return") or 0.0) * 0.05 for item in rows[:3])
+    return [
+        {
+            "policy_id": "shadow_intraday_same_session_momentum_promotion",
+            "name": "Shadow promotion for repeated intraday momentum not selected by LLM",
+            "policy_type": "intraday_selection_shadow",
+            "status": "shadow",
+            "scope": "intraday_scan",
+            "auto_activatable": False,
+            "evidence": {
+                "session_date": ledger.get("session_date"),
+                "selection_reason": "repeated intraday candidates moved materially while remaining not_selected_by_llm",
+            },
+            "metrics": {
+                "cases": len(rows),
+                "avg_same_session_return": _round(
+                    sum(float(item.get("same_session_return") or 0.0) for item in rows) / len(rows),
+                    4,
+                ),
+                "top3_portfolio_capture_at_5pct": _round(top3_capture, 4),
+                "examples": rows[:8],
+            },
+            "notes": (
+                "Shadow-only: study whether repeated intraday strength should promote candidates before LLM. "
+                "Do not auto-buy or relax risk gates without walk-forward evidence."
+            ),
+            "last_evaluated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    ]
+
+
 def _daily_guidance(
     health: dict[str, Any],
     candidates: list[dict[str, Any]],
     weak_tags: list[dict[str, Any]],
     pre_earnings_context: dict[str, Any] | None = None,
     entry_quality_filter_calibration: dict[str, Any] | None = None,
+    same_session_shadow_candidates: list[dict[str, Any]] | None = None,
 ) -> list[str]:
     guidance = []
     if health.get("duplicate_signals", 0) > 0:
@@ -403,6 +495,12 @@ def _daily_guidance(
         avoided_losers = int(entry_quality_filter_calibration.get("avoided_losers") or 0)
         if missed_winners > avoided_losers:
             guidance.append("Revisar entry-quality en shadow: esta vetando mas ganadores maduros de los perdedores que evita.")
+    if same_session_shadow_candidates:
+        metrics = same_session_shadow_candidates[0].get("metrics", {}) or {}
+        guidance.append(
+            "Estudiar en shadow promocion de momentum intradia repetido: "
+            f"captura teorica top3 al 5%={_round(metrics.get('top3_portfolio_capture_at_5pct'), 4)}."
+        )
     if pre_earnings_context and pre_earnings_context.get("available"):
         guidance.extend(list(pre_earnings_context.get("guidance", []) or [])[:2])
     return guidance[:8]
@@ -789,6 +887,39 @@ def _build_digest(
         flag_key="blocked_backtest",
         min_samples=3,
     )
+    same_session_shadow = _same_session_shadow_candidates(same_session_ledger)
+    active_runtime_policies = []
+    if same_session_shadow:
+        active_runtime_policies.append(
+            {
+                "policy_id": "intraday_same_session_momentum_promotion",
+                "name": "Promote repeated intraday momentum before LLM",
+                "status": "guarded_active",
+                "notes": (
+                    "Activa solo en ranking previo al LLM cuando hay repeticion intradia fuerte "
+                    "y no relaja entry-quality ni riesgo."
+                ),
+            }
+        )
+    shadow_candidates = [
+        {
+            "policy_id": item["policy_id"],
+            "name": item["name"],
+            "tag": (item.get("evidence") or {}).get("tag"),
+            "metrics": item.get("metrics", {}),
+        }
+        for item in candidates
+        if item["status"] == "shadow"
+    ]
+    shadow_candidates.extend(
+        {
+            "policy_id": item["policy_id"],
+            "name": item["name"],
+            "tag": "intraday_same_session_momentum",
+            "metrics": item.get("metrics", {}),
+        }
+        for item in same_session_shadow
+    )
     return {
         "as_of": datetime.now(timezone.utc).isoformat(),
         "summary": {
@@ -818,17 +949,9 @@ def _build_digest(
             }
             for item in candidates
             if item["status"] in {"active", "guarded_active"}
-        ],
-        "shadow_candidates": [
-            {
-                "policy_id": item["policy_id"],
-                "name": item["name"],
-                "tag": (item.get("evidence") or {}).get("tag"),
-                "metrics": item.get("metrics", {}),
-            }
-            for item in candidates
-            if item["status"] == "shadow"
-        ][:8],
+        ]
+        + active_runtime_policies,
+        "shadow_candidates": shadow_candidates[:8],
         "duplicate_symbols_recent": duplicate_symbols,
         "same_session_opportunity_ledger": same_session_ledger or {"available": False},
         "guidance": _daily_guidance(
@@ -837,6 +960,7 @@ def _build_digest(
             weak_tags,
             pre_earnings_context,
             entry_quality_filter_calibration_3d,
+            same_session_shadow,
         ),
     }
 

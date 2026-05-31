@@ -20,6 +20,8 @@ except ModuleNotFoundError:  # pragma: no cover - exercised by import-only test 
     IntervalTrigger = None  # type: ignore[assignment]
 
 from .config import Settings
+from .continuous_improvement.orchestrator import scheduled_dedupe_key
+from .continuous_improvement.runtime import ContinuousImprovementLabRuntime
 from .cycle_runner import run_observable_cycle
 from .eventing import EventReporter
 from .logging_utils import log_system_event
@@ -31,6 +33,7 @@ from .tools.breakout_scanner import build_breakout_scan, merge_breakout_universe
 from .tools.execution import submit_paper_order_plan
 from .tools.daily_learning import build_learning_digest_report, load_daily_learning_context
 from .tools.news_sentiment import analyze_news_sentiment_for_candidates
+from .tools.opportunities import build_opportunity_snapshot
 from .tools.operational_health import load_operational_response_context
 from .tools.pre_earnings import (
     backfill_pending_pre_earnings_estimates,
@@ -62,9 +65,20 @@ def _scheduler_lock_path(settings: Settings) -> Any:
 def _pid_is_running(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))
+            if handle:
+                ctypes.windll.kernel32.CloseHandle(handle)
+                return True
+            return False
+        except Exception:
+            return False
     try:
         os.kill(pid, 0)
-    except OSError:
+    except (OSError, SystemError):
         return False
     return True
 
@@ -266,6 +280,10 @@ def _candidate_limit_per_side(settings: Settings) -> int:
     return max(1, settings.news_sentiment_top_n // 2)
 
 
+def _long_only_candidate_limit(settings: Settings) -> int:
+    return max(12, int(settings.news_sentiment_top_n))
+
+
 def _setup_name(candidate: dict[str, Any]) -> str:
     technical_state = candidate.get("technical_state", {}) or {}
     if technical_state.get("event_momentum_long"):
@@ -290,13 +308,17 @@ def _selected_candidates(report: dict[str, Any], settings: Settings) -> tuple[li
         report,
         daily_learning_digest,
         operational_context,
+        settings.data_dir,
     )
-    top_longs = list(ranked_report.get("top_longs", []) or [])
+    selected = list(ranked_report.get("selected_candidates", []) or [])
     top_shorts = list(ranked_report.get("top_shorts", []) or [])
-    candidates = [
-        *top_longs[:candidate_limit_per_side],
-        *top_shorts[:candidate_limit_per_side],
-    ]
+    if settings.allow_short_selling:
+        candidates = [
+            *selected[:candidate_limit_per_side],
+            *top_shorts[:candidate_limit_per_side],
+        ]
+    else:
+        candidates = selected[: _long_only_candidate_limit(settings)]
     symbols = sorted({str(item["symbol"]).upper() for item in candidates if item.get("symbol")})
     return candidates, symbols
 
@@ -846,8 +868,9 @@ def market_cycle_job(
             run_id,
             benchmark_symbol=settings.benchmark_symbol,
         )
-        signals_saved = record_signal_candidates(store, report, source="intraday_scan")
         selected_candidates, selected_symbols = _selected_candidates(report, settings)
+        report["selected_candidates"] = selected_candidates
+        signals_saved = record_signal_candidates(store, report, source="intraday_scan")
         top_longs = ", ".join(item["symbol"] for item in report["top_longs"][:5]) or "sin candidatos"
         top_shorts = ", ".join(item["symbol"] for item in report["top_shorts"][:5]) or "sin candidatos"
         reporter.emit(
@@ -1080,6 +1103,8 @@ def closed_market_technical_study_job(
         progress_callback=_progress,
         benchmark_symbol=settings.benchmark_symbol,
     )
+    selected_candidates, selected_symbols = _selected_candidates(report, settings)
+    report["selected_candidates"] = selected_candidates
     signals_saved = record_signal_candidates(store, report, source="closed_market_study")
     top_longs = ", ".join(item["symbol"] for item in report["top_longs"][:5]) or "sin candidatos"
     top_shorts = ", ".join(item["symbol"] for item in report["top_shorts"][:5]) or "sin candidatos"
@@ -1108,21 +1133,6 @@ def closed_market_technical_study_job(
             f"El analista tecnico solicito {len(report['tool_requests'])} mejoras/herramientas.",
             {"tool_requests": report["tool_requests"][:10]},
         )
-
-    candidate_limit_per_side = max(1, settings.news_sentiment_top_n // 2)
-    selected_symbols = sorted(
-        {
-            item["symbol"]
-            for item in [
-                *report["top_longs"][:candidate_limit_per_side],
-                *report["top_shorts"][:candidate_limit_per_side],
-            ]
-        }
-    )
-    selected_candidates = [
-        *report["top_longs"][:candidate_limit_per_side],
-        *report["top_shorts"][:candidate_limit_per_side],
-    ]
 
     if settings.news_sentiment_enabled and use_crew and selected_candidates:
         reporter.emit(
@@ -1209,6 +1219,117 @@ def closed_market_technical_study_job(
         detail="estudio tecnico cerrado completado",
         extra={"report_path": report.get("path"), "signals_saved": signals_saved},
     )
+
+
+def opportunity_snapshot_job(
+    settings: Settings,
+    store: Store,
+    *,
+    slot_time: str,
+    verbose: bool = True,
+    force: bool = False,
+) -> dict[str, Any]:
+    run_id = new_id("opp")
+    started_at = datetime.now(timezone.utc)
+    slot_key = slot_time.replace(":", "")
+    job_name = f"opportunity_snapshot_{slot_key}"
+    snapshot_local = datetime.now(ZoneInfo(settings.local_timezone))
+    session_date = snapshot_local.date().isoformat()
+    existing = None if force else next(
+        (
+            item
+            for item in store.opportunity_snapshots(session_date=session_date, limit=10)
+            if str(item.get("slot_time") or "") == slot_time
+        ),
+        None,
+    )
+    if existing and not force:
+        _set_job_status(
+            store,
+            job_name,
+            status="skipped",
+            run_id=run_id,
+            started_at=started_at,
+            detail=f"snapshot ya generado para {session_date} {slot_time}",
+        )
+        return existing
+
+    reporter = _reporter(settings, store, verbose)
+    reporter.emit(
+        "technical_analyst",
+        "opportunity_snapshot_started",
+        run_id,
+        f"Generando snapshot de oportunidades para {slot_time}.",
+        {"slot_time": slot_time, "session_date": session_date},
+    )
+    symbols = resolve_study_universe(
+        settings.closed_market_study_universe,
+        settings.universe,
+        settings.closed_market_study_max_symbols,
+        settings.data_dir / "cache",
+    )
+    report = build_closed_market_technical_study(
+        symbols,
+        settings.data_dir / "reports",
+        run_id,
+        top_n=20,
+        benchmark_symbol=settings.benchmark_symbol,
+    )
+    annotated_report = _annotate_technical_context_with_learning(
+        report,
+        load_daily_learning_context(settings.data_dir),
+        load_operational_response_context(settings.data_dir),
+        settings.data_dir,
+    )
+    report["selected_candidates"] = annotated_report.get("selected_candidates", [])
+    report["selection_metadata"] = annotated_report.get("selection_metadata", {})
+    record_signal_candidates(store, report, source="opportunity_snapshot")
+    snapshot = build_opportunity_snapshot(
+        settings,
+        store,
+        report,
+        slot_time=slot_time,
+        snapshot_dt=snapshot_local,
+        limit=20,
+    )
+    snapshot_id = f"opp_{session_date.replace('-', '')}_{slot_key}"
+    store.upsert_opportunity_snapshot(
+        snapshot_id=snapshot_id,
+        session_date=snapshot["session_date"],
+        slot_time=snapshot["slot_time"],
+        run_id=snapshot.get("run_id"),
+        report_path=snapshot.get("report_path"),
+        opportunities=snapshot.get("opportunities", []),
+        summary=snapshot.get("summary", {}),
+    )
+    reporter.emit(
+        "technical_analyst",
+        "opportunity_snapshot_completed",
+        run_id,
+        f"Snapshot de oportunidades guardado para {slot_time}.",
+        {
+            "slot_time": slot_time,
+            "session_date": session_date,
+            "report_path": snapshot.get("report_path"),
+            "best_puntuacion": (snapshot.get("summary") or {}).get("best_puntuacion"),
+            "opportunities_count": (snapshot.get("summary") or {}).get("opportunities_count"),
+        },
+    )
+    _set_job_status(
+        store,
+        job_name,
+        status="completed",
+        run_id=run_id,
+        started_at=started_at,
+        detail=f"snapshot {slot_time} completado",
+        extra={
+            "slot_time": slot_time,
+            "session_date": session_date,
+            "report_path": snapshot.get("report_path"),
+            "opportunities_count": (snapshot.get("summary") or {}).get("opportunities_count"),
+        },
+    )
+    return snapshot
 
 
 def daily_study_job(
@@ -1339,6 +1460,66 @@ def post_market_review_job(
 def _daily_hour_minute(value: str) -> tuple[int, int]:
     hour_text, minute_text = value.split(":", maxsplit=1)
     return int(hour_text), int(minute_text)
+
+
+def continuous_improvement_job(
+    settings: Settings,
+    store: Store,
+    *,
+    verbose: bool = True,
+    force: bool = False,
+) -> dict[str, Any] | None:
+    if not settings.continuous_improvement_enabled:
+        return None
+    if not settings.continuous_improvement_schedule_enabled and not force:
+        return None
+
+    run_id = new_id("ci_sched")
+    started_at = datetime.now(timezone.utc)
+    dedupe_key = scheduled_dedupe_key(settings)
+    _set_job_status(
+        store,
+        "continuous_improvement",
+        status="running",
+        run_id=run_id,
+        started_at=started_at,
+        detail="ciclo de mejora continua iniciado",
+    )
+    try:
+        runtime = ContinuousImprovementLabRuntime(settings, store)
+        report = runtime.tick() if not force else runtime.run_once(mode="scheduled", trigger_event_type="scheduled_forced")
+        if dedupe_key and report.get("cycle_id"):
+            store.update_continuous_improvement_cycle(report["cycle_id"], dedupe_key=dedupe_key)
+            report = store.continuous_improvement_cycle(report["cycle_id"]) or report
+        _set_job_status(
+            store,
+            "continuous_improvement",
+            status="completed",
+            run_id=run_id,
+            started_at=started_at,
+            detail=f"estado={report.get('status')}",
+            extra={"cycle_id": report.get("cycle_id"), "deduped": report.get("deduped", False)},
+        )
+        if verbose:
+            EventReporter(store, verbose=True).emit(
+                "continuous_improvement_orchestrator",
+                "continuous_improvement_completed",
+                report.get("cycle_id") or run_id,
+                f"Mejora continua completada: estado {report.get('status')}.",
+                {"dedupe_key": dedupe_key, "deduped": report.get("deduped", False)},
+            )
+        return report
+    except Exception as exc:  # noqa: BLE001 - scheduler must keep running.
+        _set_job_status(
+            store,
+            "continuous_improvement",
+            status="failed",
+            run_id=run_id,
+            started_at=started_at,
+            detail=str(exc),
+            extra={"error_type": type(exc).__name__},
+        )
+        return None
 
 
 def _pre_earnings_run_time_reached(settings: Settings, status: Any) -> bool:
@@ -1578,6 +1759,31 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         coalesce=True,
         replace_existing=True,
     )
+    if settings.continuous_improvement_schedule_enabled:
+        scheduler.add_job(
+            continuous_improvement_job,
+            trigger=IntervalTrigger(seconds=settings.continuous_improvement_runtime_interval_seconds),
+            args=[settings, store],
+            kwargs={"verbose": verbose},
+            id="continuous_improvement_lab",
+            name="Continuous improvement resident lab tick",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+    for slot_time in settings.opportunity_snapshot_times:
+        hour_text, minute_text = slot_time.split(":")
+        scheduler.add_job(
+            opportunity_snapshot_job,
+            trigger=CronTrigger(hour=int(hour_text), minute=int(minute_text), timezone=local_tz),
+            args=[settings, store],
+            kwargs={"slot_time": slot_time, "verbose": verbose},
+            id=f"opportunity_snapshot_{slot_time.replace(':', '')}",
+            name=f"Opportunity snapshot {slot_time}",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
     return scheduler
 
 
@@ -1649,6 +1855,8 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
             "daily_study",
             "post_market_review",
             "pre_earnings",
+            "continuous_improvement",
+            *[f"opportunity_snapshot_{slot.replace(':', '')}" for slot in settings.opportunity_snapshot_times],
         ]
     }
     return {
@@ -1691,6 +1899,23 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
                     "ejecuta una vez por sesion el estudio pre-earnings informativo"
                 ),
             },
+            {
+                "id": "continuous_improvement_lab",
+                "cadence": (
+                    f"cada {settings.continuous_improvement_runtime_interval_seconds} segundos"
+                    if settings.continuous_improvement_schedule_enabled
+                    else "desactivado"
+                ),
+                "market_behavior": "runtime residente en dry-run; coordina eventos, tareas, hipotesis y propuestas.",
+            },
+            *[
+                {
+                    "id": f"opportunity_snapshot_{slot.replace(':', '')}",
+                    "cadence": f"cada dia a las {slot} {settings.local_timezone}",
+                    "market_behavior": "genera un escaneo tecnico nuevo y guarda el top historico de oportunidades.",
+                }
+                for slot in settings.opportunity_snapshot_times
+            ],
         ],
         "now_local": now_local.isoformat(),
         "job_runtime": job_runtime,

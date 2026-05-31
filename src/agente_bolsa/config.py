@@ -169,6 +169,62 @@ class Settings(BaseSettings):
         alias="LLM_EXIT_EXCEPTION_MIN_DRAWDOWN",
     )
 
+    continuous_improvement_enabled: bool = Field(default=True, alias="CONTINUOUS_IMPROVEMENT_ENABLED")
+    improvement_llm_enabled: bool = Field(default=False, alias="IMPROVEMENT_LLM_ENABLED")
+    improvement_llm_provider: str = Field(default="mimo", alias="IMPROVEMENT_LLM_PROVIDER")
+    improvement_llm_base_url: str = Field(
+        default="https://api.xiaomimimo.com/v1",
+        alias="IMPROVEMENT_LLM_BASE_URL",
+    )
+    improvement_llm_api_key: str | None = Field(default=None, alias="IMPROVEMENT_LLM_API_KEY")
+    improvement_llm_model: str = Field(default="mimo-v2.5", alias="IMPROVEMENT_LLM_MODEL")
+    improvement_llm_orchestrator_model: str = Field(
+        default="mimo-v2.5-pro",
+        alias="IMPROVEMENT_LLM_ORCHESTRATOR_MODEL",
+    )
+    improvement_llm_temperature: float = Field(default=0.2, alias="IMPROVEMENT_LLM_TEMPERATURE")
+    improvement_llm_max_tokens: int = Field(default=6000, alias="IMPROVEMENT_LLM_MAX_TOKENS")
+    improvement_llm_timeout_seconds: int = Field(default=120, alias="IMPROVEMENT_LLM_TIMEOUT_SECONDS")
+    improvement_llm_retries: int = Field(default=2, alias="IMPROVEMENT_LLM_RETRIES")
+    improvement_dry_run: bool = Field(default=True, alias="IMPROVEMENT_DRY_RUN")
+    allow_auto_apply_improvements: bool = Field(default=False, alias="ALLOW_AUTO_APPLY_IMPROVEMENTS")
+    require_human_approval_for_code_changes: bool = Field(
+        default=True,
+        alias="REQUIRE_HUMAN_APPROVAL_FOR_CODE_CHANGES",
+    )
+    require_human_approval_for_high_risk: bool = Field(
+        default=True,
+        alias="REQUIRE_HUMAN_APPROVAL_FOR_HIGH_RISK",
+    )
+    continuous_improvement_schedule_enabled: bool = Field(
+        default=False,
+        alias="CONTINUOUS_IMPROVEMENT_SCHEDULE_ENABLED",
+    )
+    continuous_improvement_time_local: str = Field(
+        default="23:30",
+        alias="CONTINUOUS_IMPROVEMENT_TIME_LOCAL",
+    )
+    continuous_improvement_runtime_interval_seconds: int = Field(
+        default=60,
+        alias="CONTINUOUS_IMPROVEMENT_RUNTIME_INTERVAL_SECONDS",
+    )
+    continuous_improvement_event_cooldown_seconds: int = Field(
+        default=1800,
+        alias="CONTINUOUS_IMPROVEMENT_EVENT_COOLDOWN_SECONDS",
+    )
+    continuous_improvement_runtime_loop_sleep_seconds: int = Field(
+        default=15,
+        alias="CONTINUOUS_IMPROVEMENT_RUNTIME_LOOP_SLEEP_SECONDS",
+    )
+    continuous_improvement_max_proposals_per_cycle: int = Field(
+        default=5,
+        alias="CONTINUOUS_IMPROVEMENT_MAX_PROPOSALS_PER_CYCLE",
+    )
+    continuous_improvement_workspace_dir: Path | None = Field(
+        default=None,
+        alias="CONTINUOUS_IMPROVEMENT_WORKSPACE_DIR",
+    )
+
     run_interval_seconds: int = Field(default=900, alias="RUN_INTERVAL_SECONDS")
     portfolio_watch_interval_seconds: int = Field(
         default=60,
@@ -190,6 +246,78 @@ class Settings(BaseSettings):
     intraday_technical_scan_enabled: bool = Field(default=True, alias="INTRADAY_TECHNICAL_SCAN_ENABLED")
     intraday_technical_scan_universe: str = Field(default="sp500_plus_intraday_focus", alias="INTRADAY_TECHNICAL_SCAN_UNIVERSE")
     intraday_technical_scan_max_symbols: int = Field(default=0, alias="INTRADAY_TECHNICAL_SCAN_MAX_SYMBOLS")
+    intraday_same_session_momentum_enabled: bool = Field(
+        default=True,
+        alias="INTRADAY_SAME_SESSION_MOMENTUM_ENABLED",
+    )
+    intraday_same_session_min_observations: int = Field(
+        default=3,
+        alias="INTRADAY_SAME_SESSION_MIN_OBSERVATIONS",
+    )
+    intraday_same_session_min_score: int = Field(
+        default=14,
+        alias="INTRADAY_SAME_SESSION_MIN_SCORE",
+    )
+    intraday_same_session_min_return: float = Field(
+        default=0.04,
+        alias="INTRADAY_SAME_SESSION_MIN_RETURN",
+    )
+    intraday_same_session_min_volume_z: float = Field(
+        default=0.50,
+        alias="INTRADAY_SAME_SESSION_MIN_VOLUME_Z",
+    )
+    intraday_same_session_min_bullish_patterns: int = Field(
+        default=2,
+        alias="INTRADAY_SAME_SESSION_MIN_BULLISH_PATTERNS",
+    )
+    intraday_same_session_max_sma20_distance: float = Field(
+        default=0.30,
+        alias="INTRADAY_SAME_SESSION_MAX_SMA20_DISTANCE",
+    )
+    intraday_same_session_max_rsi: float = Field(
+        default=84.0,
+        alias="INTRADAY_SAME_SESSION_MAX_RSI",
+    )
+    intraday_same_session_selection_bonus: float = Field(
+        default=0.03,
+        alias="INTRADAY_SAME_SESSION_SELECTION_BONUS",
+    )
+    intraday_same_session_priority_bonus: float = Field(
+        default=0.025,
+        alias="INTRADAY_SAME_SESSION_PRIORITY_BONUS",
+    )
+    intraday_same_session_leader_min_observations: int = Field(
+        default=5,
+        alias="INTRADAY_SAME_SESSION_LEADER_MIN_OBSERVATIONS",
+    )
+    intraday_same_session_leader_min_score: int = Field(
+        default=11,
+        alias="INTRADAY_SAME_SESSION_LEADER_MIN_SCORE",
+    )
+    intraday_same_session_leader_min_return: float = Field(
+        default=0.05,
+        alias="INTRADAY_SAME_SESSION_LEADER_MIN_RETURN",
+    )
+    intraday_same_session_leader_min_bullish_patterns: int = Field(
+        default=2,
+        alias="INTRADAY_SAME_SESSION_LEADER_MIN_BULLISH_PATTERNS",
+    )
+    intraday_same_session_leader_max_sma20_distance: float = Field(
+        default=0.22,
+        alias="INTRADAY_SAME_SESSION_LEADER_MAX_SMA20_DISTANCE",
+    )
+    intraday_same_session_leader_max_rsi: float = Field(
+        default=82.0,
+        alias="INTRADAY_SAME_SESSION_LEADER_MAX_RSI",
+    )
+    intraday_same_session_leader_selection_bonus: float = Field(
+        default=0.028,
+        alias="INTRADAY_SAME_SESSION_LEADER_SELECTION_BONUS",
+    )
+    intraday_same_session_leader_priority_bonus: float = Field(
+        default=0.022,
+        alias="INTRADAY_SAME_SESSION_LEADER_PRIORITY_BONUS",
+    )
     breakout_extra_symbols: str = Field(default="", alias="BREAKOUT_EXTRA_SYMBOLS")
     intraday_news_sentiment_enabled: bool = Field(default=False, alias="INTRADAY_NEWS_SENTIMENT_ENABLED")
     news_sentiment_enabled: bool = Field(default=True, alias="NEWS_SENTIMENT_ENABLED")
@@ -218,6 +346,10 @@ class Settings(BaseSettings):
     )
     fmp_api_key: str | None = Field(default=None, alias="FMP_API_KEY")
     daily_study_time_local: str = Field(default="23:00", alias="DAILY_STUDY_TIME_LOCAL")
+    opportunity_snapshot_times_local: str = Field(
+        default="16:00,19:00,21:00",
+        alias="OPPORTUNITY_SNAPSHOT_TIMES_LOCAL",
+    )
     post_market_review_enabled: bool = Field(default=True, alias="POST_MARKET_REVIEW_ENABLED")
     post_market_review_use_llm: bool = Field(default=True, alias="POST_MARKET_REVIEW_USE_LLM")
     local_timezone: str = Field(default="Europe/Madrid", alias="LOCAL_TIMEZONE")
@@ -245,6 +377,12 @@ class Settings(BaseSettings):
         return [symbol.strip().upper() for symbol in self.breakout_extra_symbols.split(",") if symbol.strip()]
 
     @property
+    def opportunity_snapshot_times(self) -> list[str]:
+        from .tools.opportunities import parse_opportunity_snapshot_times
+
+        return parse_opportunity_snapshot_times(self.opportunity_snapshot_times_local)
+
+    @property
     def state_dir(self) -> Path:
         return self.data_dir / "state"
 
@@ -267,6 +405,10 @@ class Settings(BaseSettings):
     @property
     def adaptive_config_path(self) -> Path:
         return self.state_dir / "adaptive_config.json"
+
+    @property
+    def improvement_workspace_dir(self) -> Path:
+        return (self.continuous_improvement_workspace_dir or self.data_dir.parent).resolve()
 
     @property
     def disabled_report_prefix_list(self) -> list[str]:

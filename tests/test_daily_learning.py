@@ -147,6 +147,73 @@ def test_learning_daily_run_includes_same_session_non_executed_ledger(tmp_path, 
     assert ledger["top_non_executed"][0]["reason_not_executed"] == "position_sizing: below_min_order_notional"
 
 
+def test_learning_daily_run_adds_intraday_momentum_shadow_candidate(tmp_path, monkeypatch):
+    monkeypatch.setattr("agente_bolsa.tools.daily_learning.update_signal_outcomes", lambda *args, **kwargs: {"updated": 0})
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    for symbol, first_entry, mid_entry, latest_entry in [("HOOD", 100.0, 103.0, 106.0), ("SMCI", 50.0, 51.5, 53.0)]:
+        store.save_signal_outcome(
+            signal_id=f"scan1:{symbol}",
+            source_run_id="scan1",
+            source="intraday_scan",
+            symbol=symbol,
+            signal_date="2026-05-28",
+            decision="candidate",
+            features={"direction": "long", "score": 15, "entry_price": first_entry},
+            outcome={},
+        )
+        store.save_signal_outcome(
+            signal_id=f"scan2:{symbol}",
+            source_run_id="scan2",
+            source="intraday_scan",
+            symbol=symbol,
+            signal_date="2026-05-28",
+            decision="candidate",
+            features={"direction": "long", "score": 15, "entry_price": mid_entry},
+            outcome={},
+        )
+        store.save_signal_outcome(
+            signal_id=f"scan3:{symbol}",
+            source_run_id="scan3",
+            source="intraday_scan",
+            symbol=symbol,
+            signal_date="2026-05-28",
+            decision="candidate",
+            features={
+                "direction": "long",
+                "score": 15,
+                "entry_price": latest_entry,
+                "rsi_14": 68.0,
+                "volume_zscore_20": 0.8,
+                "distance_sma20": 0.09,
+                "chart_patterns": {"bullish_confirmed_count": 2},
+            },
+            outcome={},
+        )
+
+    report = build_learning_daily_run(
+        Settings(DATA_DIR=tmp_path),
+        store,
+        tmp_path / "reports",
+        "shadow_intraday_test",
+        since_date="2026-05-28",
+        end_date="2026-05-28",
+    )
+
+    shadow = report["digest"]["shadow_candidates"]
+    intraday = next(item for item in shadow if item["policy_id"] == "shadow_intraday_same_session_momentum_promotion")
+    active = next(
+        item
+        for item in report["digest"]["active_or_guarded_policies"]
+        if item["policy_id"] == "intraday_same_session_momentum_promotion"
+    )
+    assert intraday["tag"] == "intraday_same_session_momentum"
+    assert intraday["metrics"]["cases"] == 2
+    assert intraday["metrics"]["top3_portfolio_capture_at_5pct"] == 0.006
+    assert active["status"] == "guarded_active"
+    assert "momentum intradia repetido" in report["digest"]["guidance"][-1]
+
+
 def test_learning_daily_run_is_incremental_on_repeated_runs(tmp_path, monkeypatch):
     monkeypatch.setattr("agente_bolsa.tools.daily_learning.update_signal_outcomes", lambda *args, **kwargs: {"updated": 0})
     store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")

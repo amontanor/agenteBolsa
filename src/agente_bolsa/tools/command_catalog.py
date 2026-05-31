@@ -85,9 +85,34 @@ def available_command_catalog() -> list[dict[str, Any]]:
             "description": "Convierte alertas recientes en respuestas conservadoras auditables; solo penaliza setups degradados y deja el resto en shadow.",
         },
         {
+            "group": "mejora continua",
+            "command": r".\.venv\Scripts\python.exe -m agente_bolsa.main continuous-improvement --json",
+            "description": "Ejecuta un ciclo dry-run auditable con LLM externo configurable; no aplica cambios ni opera en real.",
+        },
+        {
+            "group": "mejora continua",
+            "command": r".\.venv\Scripts\python.exe -m agente_bolsa.main continuous-improvement-api",
+            "description": "Sirve endpoints HTTP locales bajo /api/continuous-improvement/*.",
+        },
+        {
             "group": "estado",
             "command": r".\.venv\Scripts\python.exe -m agente_bolsa.main live-readiness",
             "description": "Checklist previo a live trading: seguridad, datos, gates, aprendizaje y trazabilidad fill-senal.",
+        },
+        {
+            "group": "estado",
+            "command": r".\.venv\Scripts\python.exe -m agente_bolsa.main market-data-quality --json",
+            "description": "Audita cobertura OHLCV, simbolos faltantes, anomalias y proveedor efectivo del universo configurado.",
+        },
+        {
+            "group": "estado",
+            "command": r".\.venv\Scripts\python.exe -m agente_bolsa.main weekly-review --from 2026-04-01 --json",
+            "description": "Consolida rendimiento semanal, bloqueos de gates, benchmark y readiness operativo en un solo informe.",
+        },
+        {
+            "group": "estado",
+            "command": r".\.venv\Scripts\python.exe -m agente_bolsa.main backup-db",
+            "description": "Crea una copia restaurable de la SQLite operativa y guarda instrucciones de restauracion.",
         },
         {
             "group": "aprendizaje",
@@ -196,6 +221,11 @@ def available_command_catalog() -> list[dict[str, Any]]:
         },
         {
             "group": "analisis",
+            "command": r".\.venv\Scripts\python.exe -m agente_bolsa.main backtest-baseline --symbol AAPL --from 2024-01-01",
+            "description": "Ejecuta el baseline reproducible por setup principal y shadow sobre un simbolo concreto.",
+        },
+        {
+            "group": "analisis",
             "command": r".\.venv\Scripts\python.exe -m agente_bolsa.main post-market-review",
             "description": "Revisa operaciones tras cierre, muestra resumen de aciertos/errores y guarda aprendizaje para la siguiente sesion.",
         },
@@ -289,6 +319,10 @@ def command_cheatsheet() -> str:
             "4b) Checklist antes de live trading",
             r"   .\.venv\Scripts\python.exe -m agente_bolsa.main live-readiness",
             "   Resume bloqueos, avisos y evidencias que deben revisarse antes de cambiar a real.",
+            r"   .\.venv\Scripts\python.exe -m agente_bolsa.main market-data-quality --json",
+            "   Audita cobertura OHLCV, simbolos faltantes y anomalias antes del siguiente scan operativo.",
+            r"   .\.venv\Scripts\python.exe -m agente_bolsa.main backup-db",
+            "   Crea una copia restaurable de SQLite con instrucciones de restauracion.",
             "",
             "5) Ver historico compra/venta y ganancias/perdidas",
             r"   .\.venv\Scripts\python.exe -m agente_bolsa.main trade-history",
@@ -344,6 +378,8 @@ def command_cheatsheet() -> str:
             "16) Backtest de la regla tecnica actual",
             r"   .\.venv\Scripts\python.exe -m agente_bolsa.main backtest --symbol AAPL --from 2024-01-01",
             "   Simula entradas long strong, stop/take por ATR, time stop, costes y slippage.",
+            r"   .\.venv\Scripts\python.exe -m agente_bolsa.main backtest-baseline --symbol AAPL --from 2024-01-01",
+            "   Ejecuta el baseline reproducible por setup principal y shadow para comparar edge por familia.",
             "",
             "17) Revision post-mercado y aprendizaje",
             r"   .\.venv\Scripts\python.exe -m agente_bolsa.main post-market-review",

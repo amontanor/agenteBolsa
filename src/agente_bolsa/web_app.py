@@ -28,9 +28,13 @@ except ModuleNotFoundError:  # pragma: no cover - import-only test environments 
 
     st = _MissingStreamlit()  # type: ignore[assignment]
 
+from agente_bolsa import __version__
 from agente_bolsa.config import get_settings
+from agente_bolsa.continuous_improvement.orchestrator import ContinuousImprovementOrchestrator
+from agente_bolsa.continuous_improvement.runtime import ContinuousImprovementLabRuntime
 from agente_bolsa.eventing import EventReporter
 from agente_bolsa.market_calendar import MarketCalendar
+from agente_bolsa.models import PortfolioSnapshot, TradeRecommendation, new_id
 from agente_bolsa.scheduler import _run_pre_earnings_trade_operation
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.adaptive_tuning import adaptive_status, update_adaptive_config
@@ -39,6 +43,8 @@ from agente_bolsa.tools.broker import BrokerClientFactory
 from agente_bolsa.tools.command_catalog import available_command_catalog
 from agente_bolsa.tools.daily_learning import build_learning_digest_report, load_daily_learning_context
 from agente_bolsa.tools.operational_learning import build_operational_learning_review
+from agente_bolsa.tools.opportunities import build_opportunity_snapshot, opportunity_assessment, opportunity_entry_risk
+from agente_bolsa.tools.operational_health import load_operational_response_context
 from agente_bolsa.tools.pre_earnings import (
     backfill_pending_pre_earnings_estimates,
     build_pre_earnings_event_study,
@@ -57,6 +63,11 @@ from agente_bolsa.tools.pre_earnings import (
 )
 from agente_bolsa.tools.retention import cleanup_runtime_data
 from agente_bolsa.tools.signal_learning import build_learning_status, update_signal_outcomes
+from agente_bolsa.tools.trade_decision import (
+    _annotate_technical_context_with_learning,
+    build_buy_order_plans,
+    load_latest_technical_candidates,
+)
 from agente_bolsa.tools.trade_history import build_trade_history
 from agente_bolsa.tools.universe import resolve_study_universe
 
@@ -77,6 +88,22 @@ def _store() -> Store:
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()
     return store
+
+
+def _sidebar_version_label() -> str:
+    return f"v{__version__}"
+
+
+def _render_sidebar_version() -> None:
+    st.sidebar.markdown(
+        (
+            "<div style='text-align: right; color: #4b5563; font-weight: 700; "
+            "font-size: 0.82rem; margin-top: 0.9rem; margin-bottom: 0.15rem;'>"
+            f"{escape(_sidebar_version_label())}"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
 
 
 def _money(value: Any) -> str:
@@ -210,17 +237,25 @@ def _is_pid_running(pid: int) -> bool:
 
 
 def _schedule_process_status() -> dict[str, Any]:
-    path = _pid_file()
-    if not path.exists():
-        return {"running": False, "pid": None}
-    try:
-        pid = int(path.read_text(encoding="utf-8").strip())
-    except ValueError:
-        return {"running": False, "pid": None}
-    running = _is_pid_running(pid)
-    if not running:
+    web_pid_path = _pid_file()
+    lock_path = _settings().state_dir / "scheduler.lock"
+    candidates: list[tuple[str, Path]] = [("web", web_pid_path), ("scheduler", lock_path)]
+    stale_paths: list[Path] = []
+    for source, path in candidates:
+        if not path.exists():
+            continue
+        try:
+            pid = int(path.read_text(encoding="utf-8").strip())
+        except ValueError:
+            stale_paths.append(path)
+            continue
+        running = _is_pid_running(pid)
+        if running:
+            return {"running": True, "pid": pid, "source": source}
+        stale_paths.append(path)
+    for path in stale_paths:
         path.unlink(missing_ok=True)
-    return {"running": running, "pid": pid if running else None}
+    return {"running": False, "pid": None, "source": None}
 
 
 def _start_schedule() -> dict[str, Any]:
@@ -420,6 +455,16 @@ def _load_json_cell(value: Any) -> dict[str, Any]:
         return {}
 
 
+def _latest_report_json(filename: str) -> dict[str, Any]:
+    path = _settings().data_dir / "reports" / filename
+    if not path.exists():
+        return {"available": False, "path": str(path)}
+    try:
+        return {"available": True, "path": str(path), "payload": json.loads(path.read_text(encoding="utf-8"))}
+    except (OSError, json.JSONDecodeError):
+        return {"available": False, "path": str(path)}
+
+
 def _llm_daily_usage_dataframe(store: Store, *, limit: int = 1000) -> pd.DataFrame:
     settings = _settings()
     totals: dict[str, dict[str, Any]] = {}
@@ -494,6 +539,369 @@ def _latest_order_details(limit: int = 50, start_date: str = DEFAULT_START_DATE)
             }
         )
     return result
+
+
+def _empty_portfolio_snapshot() -> PortfolioSnapshot:
+    return PortfolioSnapshot(
+        account_id="unavailable",
+        status="unavailable",
+        currency="USD",
+        cash=0.0,
+        portfolio_value=0.0,
+        buying_power=0.0,
+        positions=[],
+        open_orders=[],
+    )
+
+
+def _opportunity_sort_key(candidate: dict[str, Any]) -> tuple[float, float, float]:
+    return (
+        _num(candidate.get("selection_score")) or float("-inf"),
+        _num(candidate.get("rank_priority_score")) or float("-inf"),
+        _num(candidate.get("score")) or float("-inf"),
+    )
+
+
+def _opportunity_candidates(technical_context: dict[str, Any], *, limit: int = 20) -> list[dict[str, Any]]:
+    rows = []
+    seen: set[str] = set()
+    for candidate in [
+        *(technical_context.get("selected_candidates", []) or []),
+        *(technical_context.get("top_longs", []) or []),
+        *(technical_context.get("all_candidates", []) or []),
+    ]:
+        if not isinstance(candidate, dict):
+            continue
+        symbol = str(candidate.get("symbol") or "").upper().strip()
+        if not symbol or symbol in seen:
+            continue
+        if str(candidate.get("direction") or "").lower() != "long":
+            continue
+        rows.append(candidate)
+        seen.add(symbol)
+    rows.sort(key=_opportunity_sort_key, reverse=True)
+    return rows[:limit]
+
+
+def _opportunity_risk_plan(candidate: dict[str, Any]) -> dict[str, Any]:
+    risk_plan = candidate.get("risk_plan", {}) or {}
+    entry = _num(risk_plan.get("entry_price"))
+    close = _num((candidate.get("technical_state", {}) or {}).get("close"))
+    stop = _num(risk_plan.get("stop_loss"))
+    take = _num(risk_plan.get("take_profit"))
+    reward_risk = _num(risk_plan.get("reward_risk"))
+    if reward_risk is None and entry is not None and stop is not None and take is not None and entry > stop:
+        reward_risk = round((take - entry) / (entry - stop), 2)
+    return {
+        "entry_price": entry if entry is not None else close,
+        "current_price": close if close is not None else entry,
+        "stop_loss": stop,
+        "take_profit": take,
+        "reward_risk": reward_risk,
+        "invalidation": risk_plan.get("invalidation"),
+        "time_stop": risk_plan.get("time_stop"),
+    }
+
+
+def _opportunity_summary_row(candidate: dict[str, Any]) -> dict[str, Any]:
+    risk = _opportunity_risk_plan(candidate)
+    technical = candidate.get("technical_state", {}) or {}
+    assessment = opportunity_assessment(candidate)
+    entry_risk = opportunity_entry_risk(candidate)
+    score_value = _num(candidate.get("selection_score"))
+    if score_value is None:
+        score_value = _num(candidate.get("rank_priority_score"))
+    if score_value is None:
+        score_value = _num(candidate.get("score"))
+    return {
+        "simbolo": candidate.get("symbol"),
+        "ranking": candidate.get("selection_rank"),
+        "puntuacion": round(score_value, 4) if score_value is not None else None,
+        "score_compra": candidate.get("selection_score"),
+        "score_tecnico": candidate.get("score"),
+        "oportunidad": assessment["label"],
+        "riesgo_entrada": entry_risk["label"],
+        "lectura": assessment["summary"],
+        "setup": candidate.get("setup_name"),
+        "calidad": candidate.get("setup_quality"),
+        "precio_actual": risk.get("current_price"),
+        "entrada": risk.get("entry_price"),
+        "stop_loss": risk.get("stop_loss"),
+        "take_profit": risk.get("take_profit"),
+        "rr": risk.get("reward_risk"),
+        "rsi": technical.get("rsi_14"),
+        "ret_20d": technical.get("return_20d"),
+        "vol_z": technical.get("volume_zscore_20"),
+    }
+
+
+def _fallback_opportunity_snapshot(settings: Any, store: Store) -> dict[str, Any] | None:
+    technical_context = load_latest_technical_candidates(settings.data_dir, per_side=50)
+    if not technical_context.get("path"):
+        return None
+    snapshot = build_opportunity_snapshot(
+        settings,
+        store,
+        technical_context,
+        slot_time="sin_archivar",
+        limit=20,
+    )
+    snapshot["summary"]["archived"] = False
+    return snapshot
+
+
+def _group_snapshots_by_slot(snapshots: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for snapshot in snapshots:
+        slot_time = str(snapshot.get("slot_time") or "")
+        if slot_time:
+            grouped[slot_time] = snapshot
+    return grouped
+
+
+def _next_opportunity_snapshot_run_text(settings: Any, now_local: datetime | None = None) -> str:
+    local_tz = ZoneInfo(settings.local_timezone)
+    current = now_local.astimezone(local_tz) if now_local and now_local.tzinfo else now_local.replace(tzinfo=local_tz) if now_local else datetime.now(local_tz)
+    slots = []
+    for slot in settings.opportunity_snapshot_times:
+        hour_text, minute_text = str(slot).split(":")
+        candidate = current.replace(hour=int(hour_text), minute=int(minute_text), second=0, microsecond=0)
+        if candidate > current:
+            slots.append(candidate)
+    if slots:
+        return min(slots).strftime("%Y-%m-%d %H:%M")
+    first_slot = str(settings.opportunity_snapshot_times[0])
+    hour_text, minute_text = first_slot.split(":")
+    next_day = current + pd.Timedelta(days=1)
+    return next_day.replace(hour=int(hour_text), minute=int(minute_text), second=0, microsecond=0).strftime("%Y-%m-%d %H:%M")
+
+
+def _pending_buy_plans_by_symbol(store: Store) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for item in store.pending_order_plans(limit=500):
+        symbol = str(item.get("symbol") or "").upper().strip()
+        if symbol and symbol not in result:
+            result[symbol] = item
+    return result
+
+
+def _latest_llm_context_by_symbol(store: Store, symbols: list[str]) -> dict[str, dict[str, Any]]:
+    requested = {str(symbol or "").upper().strip() for symbol in symbols if str(symbol or "").strip()}
+    if not requested:
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    with store.connect() as conn:
+        for symbol in requested:
+            learning_row = conn.execute(
+                """
+                SELECT symbol, signal_date, decision, explanation, llm_considered,
+                       approved_buy, blocked_entry_quality, blocked_backtest,
+                       executed_buy, gate_json, updated_at
+                FROM learning_observations
+                WHERE symbol = ?
+                ORDER BY signal_date DESC, updated_at DESC
+                LIMIT 1
+                """,
+                (symbol,),
+            ).fetchone()
+            if learning_row:
+                gate = _load_json_cell(learning_row["gate_json"])
+                result[symbol] = {
+                    "symbol": symbol,
+                    "source": "learning_observations",
+                    "signal_date": learning_row["signal_date"],
+                    "decision": learning_row["decision"],
+                    "explanation": learning_row["explanation"],
+                    "llm_considered": bool(learning_row["llm_considered"]),
+                    "approved_buy": bool(learning_row["approved_buy"]),
+                    "blocked_entry_quality": bool(learning_row["blocked_entry_quality"]),
+                    "blocked_backtest": bool(learning_row["blocked_backtest"]),
+                    "executed_buy": bool(learning_row["executed_buy"]),
+                    "llm_gate": gate.get("llm", {}) if isinstance(gate, dict) else {},
+                    "updated_at": learning_row["updated_at"],
+                }
+                continue
+
+            signal_row = conn.execute(
+                """
+                SELECT symbol, signal_date, decision, gate_json, updated_at
+                FROM signal_outcomes
+                WHERE symbol = ?
+                ORDER BY signal_date DESC, updated_at DESC
+                LIMIT 1
+                """,
+                (symbol,),
+            ).fetchone()
+            if signal_row:
+                gate = _load_json_cell(signal_row["gate_json"])
+                llm_gate = gate.get("llm", {}) if isinstance(gate, dict) else {}
+                result[symbol] = {
+                    "symbol": symbol,
+                    "source": "signal_outcomes",
+                    "signal_date": signal_row["signal_date"],
+                    "decision": signal_row["decision"],
+                    "explanation": llm_gate.get("reason") or "",
+                    "llm_considered": bool(llm_gate),
+                    "approved_buy": str(signal_row["decision"] or "").lower() == "buy",
+                    "blocked_entry_quality": False,
+                    "blocked_backtest": False,
+                    "executed_buy": False,
+                    "llm_gate": llm_gate,
+                    "updated_at": signal_row["updated_at"],
+                }
+    return result
+
+
+def _llm_status_reason(llm_context: dict[str, Any] | None) -> tuple[str, str, str]:
+    if not llm_context:
+        return (
+            "neutral",
+            "Sin revision LLM",
+            "No hay una decision LLM reciente guardada para este simbolo.",
+        )
+    decision = str(llm_context.get("decision") or "").lower()
+    explanation = str(llm_context.get("explanation") or "").strip()
+    llm_gate = llm_context.get("llm_gate", {}) or {}
+    llm_reason = str(llm_gate.get("reason") or "").strip()
+    detail = explanation or llm_reason or "Sin explicacion LLM guardada."
+    if llm_context.get("approved_buy") or decision == "buy":
+        return ("good", "LLM aprobo compra", detail)
+    if llm_context.get("blocked_entry_quality"):
+        return ("bad", "LLM bloqueada calidad", detail)
+    if llm_context.get("blocked_backtest"):
+        return ("bad", "LLM bloqueada backtest", detail)
+    if decision in {"hold", "watch", "candidate"}:
+        return ("neutral", f"LLM {decision}", detail)
+    if decision:
+        return ("neutral", f"LLM {decision}", detail)
+    return ("neutral", "LLM sin dictamen", detail)
+
+
+def _manual_opportunity_recommendation(candidate: dict[str, Any], settings: Any) -> TradeRecommendation:
+    risk = _opportunity_risk_plan(candidate)
+    reason = "; ".join((candidate.get("reasons", []) or [])[:4]) or "oportunidad tecnica seleccionada manualmente"
+    return TradeRecommendation(
+        symbol=str(candidate.get("symbol") or "").upper(),
+        action="buy",
+        confidence=float(settings.min_llm_confidence_to_trade),
+        reason=reason,
+        entry_price=risk.get("entry_price"),
+        stop_loss=risk.get("stop_loss"),
+        take_profit=risk.get("take_profit"),
+        time_horizon=str((candidate.get("risk_plan", {}) or {}).get("time_stop") or "5-10 sesiones"),
+        invalidation=str((candidate.get("risk_plan", {}) or {}).get("invalidation") or "") or None,
+        source="manual_opportunity_screen",
+    )
+
+
+def _opportunity_status(
+    candidate: dict[str, Any],
+    *,
+    portfolio: PortfolioSnapshot,
+    pending_plans_by_symbol: dict[str, dict[str, Any]],
+    settings: Any,
+    llm_context: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    symbol = str(candidate.get("symbol") or "").upper()
+    open_order_symbols = {str(item.symbol or "").upper() for item in portfolio.open_orders}
+    position_symbols = {
+        str(item.symbol or "").upper()
+        for item in portfolio.positions
+        if str(item.side or "long").lower() == "long" and float(item.qty or 0.0) > 0
+    }
+    if symbol in pending_plans_by_symbol:
+        return {"tone": "neutral", "label": "Plan pendiente", "reason": "Ya existe un plan pendiente de ejecucion."}
+    if symbol in open_order_symbols:
+        return {"tone": "neutral", "label": "Orden abierta", "reason": "Ya hay una orden abierta en broker para este simbolo."}
+    if symbol in position_symbols:
+        return {"tone": "neutral", "label": "Posicion abierta", "reason": "Ya existe una posicion larga y no se deberia duplicar."}
+    if candidate.get("blocked_auto_buy"):
+        return {
+            "tone": "bad",
+            "label": "Bloqueada auto-compra",
+            "reason": str(candidate.get("blocked_auto_buy_reason") or "La configuracion marca este setup como shadow/watch."),
+        }
+    if not settings.auto_paper_trading:
+        return {
+            "tone": "neutral",
+            "label": "Manual por configuracion",
+            "reason": "AUTO_PAPER_TRADING=false: el sistema no compra automaticamente.",
+        }
+    if settings.require_human_approval:
+        return {
+            "tone": "neutral",
+            "label": "Requiere aprobacion",
+            "reason": "REQUIRE_HUMAN_APPROVAL=true: necesita confirmacion humana antes de ejecucion.",
+        }
+    tone, label, reason = _llm_status_reason(llm_context)
+    return {"tone": tone, "label": label, "reason": reason}
+
+
+def _create_manual_opportunity_plan(
+    *,
+    candidate: dict[str, Any],
+    settings: Any,
+    store: Store,
+    portfolio: PortfolioSnapshot,
+) -> dict[str, Any]:
+    symbol = str(candidate.get("symbol") or "").upper().strip()
+    pending = _pending_buy_plans_by_symbol(store)
+    if symbol in pending:
+        return {
+            "ok": False,
+            "reason": "Ya existe un plan pendiente para este simbolo.",
+            "code": "duplicate_pending_plan",
+            "plan_id": pending[symbol].get("plan_id"),
+        }
+
+    recommendation = _manual_opportunity_recommendation(candidate, settings)
+    rejected: list[dict[str, Any]] = []
+    plans = build_buy_order_plans(
+        settings,
+        portfolio,
+        [recommendation],
+        dry_run=True,
+        rejected=rejected,
+    )
+    if not plans:
+        rejected_item = rejected[0] if rejected else {}
+        return {
+            "ok": False,
+            "reason": rejected_item.get("reason") or "No se pudo crear el plan.",
+            "stage": rejected_item.get("stage"),
+            "checks": rejected_item.get("checks", {}),
+            "recommendation": asdict(recommendation),
+        }
+
+    plan = plans[0]
+    cycle_id = f"manual_opportunity_{datetime.now(ZoneInfo(settings.local_timezone)).strftime('%Y%m%d_%H%M%S')}"
+    recommendation_id = new_id("rec")
+    plan_id = new_id("plan")
+    store.save_trade_recommendation(
+        recommendation_id=recommendation_id,
+        cycle_id=cycle_id,
+        symbol=recommendation.symbol,
+        action=recommendation.action,
+        confidence=recommendation.confidence,
+        payload=asdict(recommendation),
+    )
+    store.save_order_plan(
+        plan_id=plan_id,
+        cycle_id=cycle_id,
+        symbol=plan.symbol,
+        side=plan.side,
+        notional=plan.notional,
+        approved=plan.risk_decision.approved,
+        dry_run=plan.dry_run,
+        payload=asdict(plan),
+    )
+    return {
+        "ok": True,
+        "plan_id": plan_id,
+        "cycle_id": cycle_id,
+        "recommendation_id": recommendation_id,
+        "plan": asdict(plan),
+    }
 
 
 def _order_cards(orders: list[dict[str, Any]], *, max_items: int = 8) -> None:
@@ -655,7 +1063,7 @@ def _dashboard_header(
             </div>
             <div class="dashboard-pills">
                 <span class="equity-pill">
-                    Equity hoy <strong>{equity_text}</strong>
+                    Equity actual <strong>{equity_text}</strong>
                     <em style="color:{today_color}; background:{today_bg}; border-color:{today_border};">{pct_text}</em>
                 </span>
                 <span style="color:{market_color}; background:{market_bg}; border-color:{market_border};">
@@ -807,6 +1215,27 @@ def _portfolio_chart_visible_summary(df: pd.DataFrame) -> dict[str, float | int 
     return {"days": int(len(ordered)), "pl": pl, "pl_pct": pl_pct}
 
 
+def _latest_daily_equity_change(
+    history: dict[str, Any],
+    current_equity: float | None,
+    portfolio_history: dict[str, Any] | None = None,
+) -> dict[str, float | str | None]:
+    df = _portfolio_value_series_from_alpaca(portfolio_history or {}, current_equity)
+    if df.empty:
+        df = _estimated_portfolio_value_series(history, current_equity, days=7)
+    if df.empty:
+        return {"date": None, "equity": current_equity, "pl": None, "pl_pct": None, "source": None}
+    ordered = df.sort_values("fecha").reset_index(drop=True)
+    latest = ordered.iloc[-1]
+    return {
+        "date": str(latest.get("fecha") or ""),
+        "equity": _num(latest.get("valor_cartera")),
+        "pl": _num(latest.get("P/L dia")),
+        "pl_pct": _num(latest.get("% dia")),
+        "source": str(latest.get("fuente") or ""),
+    }
+
+
 def _estimated_portfolio_value_series(
     history: dict[str, Any],
     current_equity: float | None,
@@ -851,7 +1280,7 @@ def _estimated_portfolio_value_series(
     for item in daily_rows:
         previous_equity = running
         running += item["P/L dia"]
-        denominator = item["denominador"] or previous_equity
+        denominator = previous_equity
         day_pct = round(item["P/L dia"] / denominator, 6) if denominator else 0.0
         rounded_equity = round(running, 2)
         rows.append(
@@ -1425,27 +1854,15 @@ def page_dashboard() -> None:
     if portfolio_error:
         st.warning(f"No se pudo leer cartera Alpaca: {portfolio_error}")
 
-    today_total = 0.0
-    today_pct = 0.0
-    if history:
-        today = datetime.now(ZoneInfo(settings.local_timezone)).date().isoformat()
-        today_row = next((item for item in history.get("days", []) if item.get("date") == today), {})
-        today_realized = _num(today_row.get("realized_pl")) or 0.0
-        today_open = _num(today_row.get("open_unrealized_pl")) or 0.0
-        today_total = round(today_realized + today_open, 2)
-        today_denominator = (
-            _num(today_row.get("sell_notional"))
-            or _num(today_row.get("buy_notional"))
-            or (portfolio.portfolio_value if portfolio else 0)
-        )
-        today_pct = round(today_total / today_denominator, 4) if today_denominator else 0.0
-
     exposure = stats.get("exposure") if stats else None
     exposure_pct = stats.get("exposure_pct") if stats else None
     total_pl = _num(stats.get("total_pl")) if stats else 0.0
     total_pct = _num(stats.get("total_plpc_on_equity")) if stats else 0.0
     current_equity = _num(portfolio.portfolio_value) if portfolio else _num(stats.get("equity"))
     current_cash = _num(portfolio.cash) if portfolio else _num(stats.get("cash"))
+    today_change = _latest_daily_equity_change(history, current_equity, portfolio_history)
+    today_total = _num(today_change.get("pl")) or 0.0
+    today_pct = _num(today_change.get("pl_pct")) or 0.0
     initial_equity = round(current_equity - total_pl, 2) if current_equity is not None and total_pl is not None else None
     today_tone = "good" if today_total > 0 else "bad" if today_total < 0 else "neutral"
     total_tone = "good" if (total_pl or 0) > 0 else "bad" if (total_pl or 0) < 0 else "neutral"
@@ -1461,6 +1878,9 @@ def page_dashboard() -> None:
     latest_orders = _latest_order_details(limit=12)
     learning_digest = _latest_learning_digest()
     learning_summary = _learning_compact_summary(learning_digest)
+    latest_quality = _latest_report_json("latest_market_data_quality.json")
+    latest_readiness = _latest_report_json("latest_live_readiness.json")
+    latest_weekly = _latest_report_json("latest_weekly_trading_review.json")
     buys = [item for item in latest_orders if item.get("side") == "buy"]
     sells = [item for item in latest_orders if item.get("side") == "sell"]
     last_order = latest_orders[0] if latest_orders else None
@@ -1548,6 +1968,35 @@ def page_dashboard() -> None:
                 st.dataframe(pd.DataFrame(relevant_events), width="stretch", hide_index=True)
             else:
                 st.markdown("<div class='empty-box'>Sin eventos relevantes recientes.</div>", unsafe_allow_html=True)
+
+        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            _section_title("Controles operativos", "Cobertura de datos, readiness y ultimo resumen semanal.")
+            q = (latest_quality.get("payload") or {}).get("summary", {}) if latest_quality.get("available") else {}
+            r = (latest_readiness.get("payload") or {}).get("summary", {}) if latest_readiness.get("available") else {}
+            w = (latest_weekly.get("payload") or {}).get("summary", {}) if latest_weekly.get("available") else {}
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                coverage = _num(q.get("coverage_ratio"))
+                _compact_metric(
+                    "Cobertura datos",
+                    _pct(coverage) if coverage is not None else "-",
+                    str(q.get("provider_used") or "sin informe"),
+                    "good" if (coverage or 0.0) >= 0.95 else "bad" if coverage is not None else "neutral",
+                )
+            with c2:
+                _compact_metric(
+                    "Live readiness",
+                    "OK" if r.get("ready_for_live") else "BLOCK" if latest_readiness.get("available") else "-",
+                    f"{r.get('blocks', 0)} blocks",
+                    "bad" if latest_readiness.get("available") and not r.get("ready_for_live") else "neutral",
+                )
+            with c3:
+                _compact_metric(
+                    "Bloqueos semana",
+                    int((w.get("blocked_entry_quality") or 0) + (w.get("blocked_backtest") or 0)) if w else "-",
+                    str(w.get("benchmark_symbol") or "-"),
+                )
 
         st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
         with st.container(border=True):
@@ -1744,6 +2193,227 @@ def page_recent_trades() -> None:
             st.dataframe(trades.sort_values("time", ascending=False), use_container_width=True, hide_index=True)
         else:
             st.info("No hay fills de Alpaca para el filtro actual.")
+
+
+def page_opportunities() -> None:
+    settings = _settings()
+    store = _store()
+    _page_header(
+        "Oportunidades",
+        "Snapshots historicos de oportunidades largas, organizados por dia y por hora de captura.",
+    )
+    _screen_help(
+        "Oportunidades de compra",
+        (
+            "Cada snapshot guarda un escaneo tecnico nuevo y su top 20. "
+            "Puedes navegar por fecha y hora, y crear planes de compra desde cualquier snapshot. "
+            "Si aun no existe historico, la pantalla cae temporalmente al ultimo estudio tecnico como vista no archivada."
+        ),
+    )
+
+    latest_snapshot = store.latest_opportunity_snapshot()
+    fallback_snapshot = None
+    archived_mode = latest_snapshot is not None
+    if latest_snapshot is None:
+        fallback_snapshot = _fallback_opportunity_snapshot(settings, store)
+        if fallback_snapshot is None:
+            st.info("Todavia no hay snapshots de oportunidades ni estudio tecnico reciente.")
+            st.code(r".\.venv\Scripts\python.exe -m agente_bolsa.main opportunity-snapshot --slot 16:00", language="powershell")
+            return
+
+    active_snapshot = latest_snapshot or fallback_snapshot
+    opportunities = list(active_snapshot.get("opportunities", []) or [])
+    if not opportunities:
+        st.info("No hay oportunidades disponibles para el snapshot seleccionado.")
+        return
+
+    portfolio = _empty_portfolio_snapshot()
+    portfolio_error = None
+    try:
+        portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
+    except Exception as exc:  # noqa: BLE001
+        portfolio_error = str(exc)
+        st.warning(f"No se pudo leer la cartera Alpaca. La compra quedara deshabilitada: {exc}")
+
+    pending_plans = _pending_buy_plans_by_symbol(store)
+    summary = active_snapshot.get("summary", {}) or {}
+
+    if archived_mode:
+        available_dates = store.opportunity_snapshot_dates(limit=60)
+        default_date = str(active_snapshot.get("session_date") or available_dates[0])
+        selected_date = st.selectbox(
+            "Dia",
+            available_dates,
+            index=available_dates.index(default_date) if default_date in available_dates else 0,
+            key="opportunity_snapshot_date",
+        )
+        day_snapshots = store.opportunity_snapshots(session_date=selected_date, limit=10)
+        snapshots_by_slot = _group_snapshots_by_slot(day_snapshots)
+        visible_slots = [slot for slot in settings.opportunity_snapshot_times if slot in snapshots_by_slot]
+        for slot in snapshots_by_slot:
+            if slot not in visible_slots:
+                visible_slots.append(slot)
+        if not visible_slots:
+            st.info("No hay snapshots guardados para el dia seleccionado.")
+            return
+        default_slot = str(active_snapshot.get("slot_time") or visible_slots[0])
+        selected_slot = st.selectbox(
+            "Listado horario",
+            visible_slots,
+            index=visible_slots.index(default_slot) if default_slot in visible_slots else 0,
+            key="opportunity_snapshot_slot",
+        )
+        active_snapshot = snapshots_by_slot[selected_slot]
+        opportunities = list(active_snapshot.get("opportunities", []) or [])
+        summary = active_snapshot.get("summary", {}) or {}
+    else:
+        st.caption("Vista temporal no archivada basada en el ultimo estudio tecnico disponible.")
+
+    summary_rows = []
+    for candidate in opportunities:
+        row = dict(candidate.get("summary_row") or _opportunity_summary_row(candidate))
+        ranking_value = row.get("ranking")
+        score_value = row.get("puntuacion")
+        ranking_text = f"#{int(ranking_value)}" if isinstance(ranking_value, (int, float)) else str(ranking_value or "-")
+        score_text = f"{float(score_value):.4f}" if isinstance(score_value, (int, float)) else "-"
+        row["ranking"] = f"{ranking_text} | {score_text}"
+        row.setdefault("riesgo_entrada", opportunity_entry_risk(candidate)["label"])
+        row["estado"] = ((candidate.get("operational_status") or {}).get("label") or "-")
+        summary_rows.append(row)
+
+    next_snapshot_run = _next_opportunity_snapshot_run_text(settings)
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    with m1:
+        _metric_card("Fecha", summary.get("session_date") or "-")
+    with m2:
+        _metric_card("Hora listado", summary.get("slot_time") or "-")
+    with m3:
+        _metric_card("Top oportunidades", summary.get("opportunities_count") if summary.get("opportunities_count") is not None else len(opportunities))
+    with m4:
+        _metric_card("Accionables", summary.get("actionable_count") if summary.get("actionable_count") is not None else "-")
+    with m5:
+        best_score = summary.get("best_puntuacion")
+        _metric_card("Mejor puntuacion", f"{float(best_score):.4f}" if isinstance(best_score, (int, float)) else "-")
+    with m6:
+        _metric_card("Siguiente ejecucion", next_snapshot_run)
+
+    st.subheader("Resumen")
+    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+    st.caption(
+        f"Fuente: {active_snapshot.get('report_path') or '-'} | "
+        f"as_of {_local_datetime(summary.get('as_of'))} | "
+        f"seleccion {summary.get('selection_method') or '-'} | "
+        f"{'archivado' if archived_mode else 'no archivado'}"
+    )
+
+    if portfolio_error:
+        st.caption("Sin cartera Alpaca no se puede calcular sizing/riesgo real; por eso el boton de crear plan queda deshabilitado.")
+
+    for index, candidate in enumerate(opportunities, start=1):
+        symbol = str(candidate.get("symbol") or "").upper()
+        risk = candidate.get("risk_snapshot") or _opportunity_risk_plan(candidate)
+        technical = candidate.get("technical_state", {}) or {}
+        status = candidate.get("operational_status") or _opportunity_status(
+            candidate,
+            portfolio=portfolio,
+            pending_plans_by_symbol=pending_plans,
+            settings=settings,
+            llm_context=(candidate.get("llm_context") or {}),
+        )
+        llm_context = candidate.get("llm_context", {})
+        assessment = candidate.get("assessment") or opportunity_assessment(candidate)
+        entry_risk = opportunity_entry_risk(candidate)
+        confirmed_patterns = [
+            str(item.get("label") or item.get("pattern"))
+            for item in (technical.get("chart_patterns", []) or [])
+            if isinstance(item, dict)
+        ]
+        score_value = candidate.get("puntuacion")
+        if not isinstance(score_value, (int, float)):
+            score_value = _num(candidate.get("selection_score"))
+        if not isinstance(score_value, (int, float)):
+            score_value = _num(candidate.get("rank_priority_score"))
+        title = (
+            f"{index}. {symbol} | {assessment['label']} | puntuacion {f'{float(score_value):.4f}' if isinstance(score_value, (int, float)) else '-'}"
+            f" | tecnico {candidate.get('score', '-')}"
+        )
+        with st.expander(title, expanded=index <= 3):
+            top_left, top_mid, top_right = st.columns([1.1, 1.2, 0.9])
+            with top_left:
+                _compact_metric("Lectura", assessment["label"], assessment["summary"], tone=assessment["tone"])
+                _compact_metric("Setup", candidate.get("setup_name") or "-", candidate.get("setup_quality") or "-")
+                _compact_metric("Estado", status["label"], tone=status["tone"])
+            with top_mid:
+                _compact_metric("Precio actual", _money(risk.get("current_price")))
+                _compact_metric("Entrada / stop / take", f"{_money(risk.get('entry_price'))} / {_money(risk.get('stop_loss'))} / {_money(risk.get('take_profit'))}")
+            with top_right:
+                _compact_metric("Reward/Risk", risk.get("reward_risk") if risk.get("reward_risk") is not None else "-")
+                _compact_metric("Riesgo entrada", entry_risk["label"], entry_risk["reason"], tone="bad" if entry_risk["level"] == "alto" else "neutral")
+                _compact_metric("Fuerza relativa 20d", _pct_signed(candidate.get("relative_return_20d")))
+
+            st.markdown(f"**Conclusion:** {assessment['summary']}")
+            st.markdown(f"**Por que:** {assessment['reason']}")
+
+            tech_a, tech_b, tech_c, tech_d = st.columns(4)
+            with tech_a:
+                _compact_metric("RSI", technical.get("rsi_14"))
+                _compact_metric("Vol z-score", technical.get("volume_zscore_20"))
+            with tech_b:
+                _compact_metric("Ret 5d", _pct_signed(technical.get("return_5d")))
+                _compact_metric("Ret 20d", _pct_signed(technical.get("return_20d")))
+            with tech_c:
+                _compact_metric("SMA20", _money(technical.get("sma_20")))
+                _compact_metric("SMA50", _money(technical.get("sma_50")))
+            with tech_d:
+                _compact_metric("SMA200", _money(technical.get("sma_200")))
+                _compact_metric("ATR14", _money(technical.get("atr_14")))
+
+            st.markdown(f"**Motivo de no compra automatica:** {status['reason']}")
+            st.markdown(
+                f"**Contexto LLM:** "
+                f"{status['label']} | decision {str(llm_context.get('decision') or '-')} | "
+                f"fecha {str(llm_context.get('signal_date') or '-')}"
+            )
+            if llm_context:
+                llm_reason = str(llm_context.get("explanation") or ((llm_context.get("llm_gate") or {}).get("reason")) or "").strip()
+                st.markdown(f"**Explicacion LLM:** {llm_reason or 'Sin explicacion guardada.'}")
+            st.markdown(f"**Invalidacion:** {risk.get('invalidation') or '-'}")
+            st.markdown(f"**Time stop:** {risk.get('time_stop') or '-'}")
+            st.markdown(f"**Razones tecnicas:** {'; '.join(candidate.get('reasons', []) or []) or '-'}")
+            st.markdown(
+                f"**Patrones / velas:** "
+                f"{', '.join(confirmed_patterns) if confirmed_patterns else '-'} | "
+                f"velas {', '.join(technical.get('candle_patterns', []) or []) or '-'}"
+            )
+            st.markdown(
+                f"**Riesgos detectados:** "
+                f"{'breakout_failure_risk' if technical.get('breakout_failure_risk') else 'sin riesgo de fallo de ruptura destacado'}"
+            )
+
+            button_disabled = portfolio_error is not None
+            if st.button("Crear plan de compra", key=f"create_opportunity_plan_{symbol}_{index}", disabled=button_disabled):
+                result = _create_manual_opportunity_plan(
+                    candidate=candidate,
+                    settings=settings,
+                    store=store,
+                    portfolio=portfolio,
+                )
+                if result.get("ok"):
+                    plan = (result.get("plan") or {})
+                    st.success(
+                        "Plan creado: "
+                        f"{plan.get('symbol')} | qty {plan.get('qty')} | "
+                        f"notional {_money(plan.get('notional'))} | "
+                        f"entrada {_money(plan.get('entry_price'))} | "
+                        f"stop {_money(plan.get('stop_loss'))} | take {_money(plan.get('take_profit'))}"
+                    )
+                else:
+                    stage = result.get("stage")
+                    suffix = f" [{stage}]" if stage else ""
+                    st.error(f"No se pudo crear el plan{suffix}: {result.get('reason')}")
+                    checks = result.get("checks")
+                    if checks:
+                        st.json(checks)
 
 
 def page_signals() -> None:
@@ -2356,11 +3026,15 @@ def page_backtest() -> None:
     settings = _settings()
     _page_header("Backtest", "Prueba historica de la regla tecnica actual con stop, take, costes y slippage.")
     with st.form("backtest_form"):
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
         symbol = col1.text_input("Simbolo", "AAPL").upper()
         start = col2.text_input("Desde", "2024-01-01")
         min_score = col3.number_input("Score minimo", min_value=1, max_value=30, value=7)
         max_holding = col4.number_input("Max dias", min_value=1, max_value=60, value=10)
+        setup_name = col5.selectbox(
+            "Setup",
+            ["todos", "trend_volume", "orderly_breakout", "event_momentum", "momentum_confirmation", "momentum_shakeout_hold", "range_expansion_breakout"],
+        )
         submitted = st.form_submit_button("Ejecutar backtest")
     if submitted:
         with st.spinner(f"Ejecutando backtest de {symbol}..."):
@@ -2371,9 +3045,10 @@ def page_backtest() -> None:
                 start=start,
                 min_score=int(min_score),
                 max_holding_days=int(max_holding),
+                allowed_setup_names=None if setup_name == "todos" else {setup_name},
             )
         metrics = result.get("metrics", {})
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
         with c1:
             _metric_card("Trades", metrics.get("trades"))
         with c2:
@@ -2382,6 +3057,17 @@ def page_backtest() -> None:
             _metric_card("Hit rate", _pct(metrics.get("hit_rate")))
         with c4:
             _metric_card("Sharpe", metrics.get("sharpe"))
+        with c5:
+            _metric_card("Sortino", metrics.get("sortino"))
+        with c6:
+            _metric_card("Calmar", metrics.get("calmar"))
+        d1, d2, d3 = st.columns(3)
+        with d1:
+            _metric_card("Expectancy", _money(metrics.get("expectancy_per_trade")))
+        with d2:
+            _metric_card("Turnover", _pct(metrics.get("turnover")))
+        with d3:
+            _metric_card("Exposure time", _pct(metrics.get("exposure_time_pct")))
         st.json(metrics)
         trades = pd.DataFrame(result.get("trades", []))
         if not trades.empty:
@@ -3690,6 +4376,705 @@ def page_cycle_decisions() -> None:
         st.json(cycle)
 
 
+def _ci_proposals_dataframe(proposals: list[dict[str, Any]]) -> pd.DataFrame:
+    rows = []
+    for item in proposals:
+        payload = item.get("payload") or {}
+        rows.append(
+            {
+                "estado": item.get("status"),
+                "tipo": item.get("proposal_type"),
+                "riesgo": item.get("risk_level"),
+                "componente": item.get("target_component"),
+                "objetivo": item.get("target_identifier"),
+                "propuesta": _short(payload.get("proposed_value"), 120),
+                "motivo": _short(payload.get("rationale"), 160),
+                "proposal_id": item.get("proposal_id"),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _ci_agent_activity(events: list[dict[str, Any]], *, cycle_id: str | None = None, limit: int = 200) -> pd.DataFrame:
+    rows = []
+    filtered = []
+    for item in events:
+        current_cycle_id = str(item.get("cycle_id") or "")
+        if cycle_id:
+            if current_cycle_id != cycle_id:
+                continue
+        elif not current_cycle_id.startswith("ci_cycle_"):
+            continue
+        filtered.append(item)
+    for item in filtered[:limit]:
+        payload = _load_json_cell(item.get("payload_json"))
+        rows.append(
+            {
+                "hora": _local_datetime(item.get("created_at")),
+                "agente": item.get("agent"),
+                "evento": item.get("event_type"),
+                "mensaje": _short(
+                    payload.get("summary")
+                    or payload.get("message")
+                    or payload.get("status")
+                    or payload.get("event_type")
+                    or payload.get("error")
+                    or "",
+                    160,
+                ),
+                "detalle": payload,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _ci_task_activity(
+    events: list[dict[str, Any]],
+    tasks: list[dict[str, Any]],
+    *,
+    cycle_id: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    task_index = {str(item.get("task_id") or ""): item for item in tasks}
+    grouped: dict[str, dict[str, Any]] = {}
+    seen_order: list[str] = []
+    for item in events:
+        current_cycle_id = str(item.get("cycle_id") or "")
+        if cycle_id and current_cycle_id != cycle_id:
+            continue
+        if not cycle_id and not current_cycle_id.startswith("ci_cycle_"):
+            continue
+        payload = _load_json_cell(item.get("payload_json"))
+        task_id = str(payload.get("task_id") or "")
+        task = task_index.get(task_id, {})
+        event_id = str(payload.get("event_id") or task.get("event_id") or "")
+        initiative_id = (
+            str(payload.get("initiative_id") or "")
+            or str((task.get("payload") or {}).get("initiative_id") or "")
+            or str((task.get("payload") or {}).get("initiative_key") or "")
+            or event_id
+            or task_id
+            or f"misc:{item.get('event_id')}"
+        )
+        if initiative_id not in grouped:
+            group_label = (
+                (task.get("payload") or {}).get("initiative_title")
+                or (task.get("payload") or {}).get("focus")
+                or payload.get("focus")
+                or payload.get("event_type")
+                or payload.get("target_component")
+                or "actividad"
+            )
+            grouped[initiative_id] = {
+                "initiative_id": initiative_id,
+                "initiative_key": (task.get("payload") or {}).get("initiative_key") or payload.get("initiative_key"),
+                "initiative_title": (task.get("payload") or {}).get("initiative_title") or payload.get("initiative_title"),
+                "task_ids": [],
+                "agent_names": [],
+                "status": task.get("status") or payload.get("status") or "-",
+                "focus": str(group_label),
+                "event_id": event_id or "-",
+                "event_type": payload.get("event_type") or item.get("event_type") or "-",
+                "messages": [],
+                "updated_at": item.get("created_at"),
+            }
+            seen_order.append(initiative_id)
+        group = grouped[initiative_id]
+        if task_id and task_id not in group["task_ids"]:
+            group["task_ids"].append(task_id)
+        agent_name = str(task.get("agent_name") or item.get("agent") or "-")
+        if agent_name not in group["agent_names"]:
+            group["agent_names"].append(agent_name)
+        group["status"] = task_index.get(task_id, {}).get("status") or payload.get("status") or group["status"]
+        group["updated_at"] = item.get("created_at")
+        group["messages"].append(
+            {
+                "hora": _local_datetime(item.get("created_at")),
+                "agente": item.get("agent"),
+                "evento": item.get("event_type"),
+                "mensaje": _short(
+                    payload.get("summary")
+                    or payload.get("message")
+                    or payload.get("status")
+                    or payload.get("error")
+                    or payload.get("reason")
+                    or "",
+                    180,
+                ),
+                "payload": payload,
+            }
+        )
+    items = [grouped[key] for key in reversed(seen_order)]
+    return items[:limit]
+
+
+def _ci_agent_color(agent_name: str) -> str:
+    palette = {
+        "MarketEstimatorAgent": "#0f766e",
+        "MarketRegimeAgent": "#0f766e",
+        "TechnicalAnalystAgent": "#b45309",
+        "TechnicalEdgeAgent": "#d97706",
+        "SentimentAnalystAgent": "#9d174d",
+        "StrategyEvaluatorAgent": "#1d4ed8",
+        "ProgrammerAgent": "#6d28d9",
+        "SoftwareReliabilityAgent": "#6d28d9",
+        "PreEarningsSpecialistAgent": "#be123c",
+        "RiskCapitalAgent": "#c2410c",
+        "DataQualityAgent": "#047857",
+        "ExperimentDesignerAgent": "#7c3aed",
+        "DecisionCommitteeAgent": "#334155",
+        "ChiefInvestmentOrchestratorAgent": "#be123c",
+        "ImprovementStrategistAgent": "#be123c",
+        "RiskGuardAgent": "#c2410c",
+        "ValidationAgent": "#047857",
+        "ReportAgent": "#475569",
+        "OrchestratorAgent": "#0f172a",
+    }
+    return palette.get(str(agent_name), "#475569")
+
+
+def _ci_initiative_summary(initiative: dict[str, Any] | None) -> dict[str, Any]:
+    initiative = initiative or {}
+    evidence = initiative.get("evidence") or []
+    latest_decision = initiative.get("latest_decision") or {}
+    return {
+        "title": initiative.get("title") or "-",
+        "status": initiative.get("status") or "-",
+        "owner_agent": initiative.get("owner_agent") or "-",
+        "risk_level": initiative.get("risk_level") or "-",
+        "target_metric": initiative.get("target_metric") or "-",
+        "latest_decision": latest_decision.get("decision") or "-",
+        "decision_reason": latest_decision.get("reason") or latest_decision.get("source") or "-",
+        "next_action": initiative.get("next_action") or "-",
+        "evidence_count": len(evidence),
+    }
+
+
+def _render_ci_live_chat_panels(
+    task_groups: list[dict[str, Any]],
+    *,
+    initiative_lookup: dict[str, dict[str, Any]] | None = None,
+    validation_lookup: dict[str, dict[str, Any]] | None = None,
+    max_panels: int = 4,
+) -> None:
+    if not task_groups:
+        st.info("Todavia no hay actividad del laboratorio para mostrar en directo.")
+        return
+    st.markdown(
+        """
+        <style>
+        .ci-chat-panel { border: 1px solid rgba(15,23,42,0.12); border-radius: 8px; padding: 12px; min-height: 420px; background: linear-gradient(180deg, rgba(248,250,252,0.98), rgba(241,245,249,0.96)); }
+        .ci-chat-header { margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid rgba(15,23,42,0.10); }
+        .ci-chat-title { font-size: 0.98rem; font-weight: 700; color: #0f172a; }
+        .ci-chat-meta { font-size: 0.76rem; color: #475569; }
+        .ci-chat-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.68rem; font-weight: 700; margin-left: 8px; color: white; vertical-align: middle; }
+        .ci-chat-pill { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 0.68rem; font-weight: 700; margin-right: 6px; color: #0f172a; background: rgba(255,255,255,0.72); }
+        .ci-chat-message { margin: 0 0 10px 0; padding: 10px 12px; border-radius: 8px; color: white; }
+        .ci-chat-message-meta { font-size: 0.72rem; opacity: 0.92; margin-bottom: 4px; }
+        .ci-chat-message-body { font-size: 0.84rem; line-height: 1.35; white-space: pre-wrap; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    panel_groups = task_groups[:max_panels]
+    columns = st.columns(2)
+    for index, group in enumerate(panel_groups):
+        column = columns[index % 2]
+        title = escape(str(group.get("initiative_title") or group.get("focus") or "actividad"))
+        status = escape(str(group.get("status") or "-"))
+        event_type = escape(str(group.get("event_type") or "-"))
+        updated_at = escape(_local_datetime(group.get("updated_at")))
+        agents = escape(", ".join(group.get("agent_names") or []) or "-")
+        initiative_key = str(group.get("initiative_key") or group.get("initiative_id") or "")
+        initiative_summary = _ci_initiative_summary((initiative_lookup or {}).get(initiative_key) or (initiative_lookup or {}).get(str(group.get("initiative_id") or "")))
+        validation_summary = (validation_lookup or {}).get(initiative_key) or {}
+        latest = group.get("messages", [])[-1]["payload"] if group.get("messages") else {}
+        latest_state = escape(str((latest.get("objective_status") or latest.get("status") or group.get("status") or "-")))
+        badge_color = "#0f766e" if latest_state in {"PASSED", "READY_TO_APPLY"} else "#b45309" if latest_state == "VALIDATING" else "#334155"
+        objective = escape(str(validation_summary.get("objective_status") or validation_summary.get("status") or latest_state))
+        header = (
+            f"<div class='ci-chat-header'>"
+            f"<div class='ci-chat-title'>{title}<span class='ci-chat-badge' style='background:{badge_color};'>{latest_state}</span></div>"
+            f"<div class='ci-chat-meta'>{status} | {event_type} | {updated_at}</div>"
+            f"<div class='ci-chat-meta'>Agentes: {agents}</div>"
+            f"<div class='ci-chat-meta'>Iniciativa: {escape(str(initiative_key or '-'))}</div>"
+            f"<div class='ci-chat-meta'>"
+            f"<span class='ci-chat-pill'>Meta: {escape(str(initiative_summary['target_metric']))}</span>"
+            f"<span class='ci-chat-pill'>Riesgo: {escape(str(initiative_summary['risk_level']))}</span>"
+            f"<span class='ci-chat-pill'>Owner: {escape(str(initiative_summary['owner_agent']))}</span>"
+            f"<span class='ci-chat-pill'>Decision: {escape(str(initiative_summary['latest_decision']))}</span>"
+            f"<span class='ci-chat-pill'>Objetivo: {objective}</span>"
+            f"</div>"
+            f"</div>"
+        )
+        messages_html = []
+        for message in group.get("messages", [])[-10:]:
+            agent_name = str(message.get("agente") or "-")
+            color = _ci_agent_color(agent_name)
+            meta = escape(f"{message.get('hora')} | {agent_name} | {message.get('evento')}")
+            body = escape(str(message.get("mensaje") or message.get("evento") or "-"))
+            messages_html.append(
+                f"<div class='ci-chat-message' style='background:{color};'>"
+                f"<div class='ci-chat-message-meta'>{meta}</div>"
+                f"<div class='ci-chat-message-body'>{body}</div>"
+                f"</div>"
+            )
+        with column:
+            st.markdown(
+                "<div class='ci-chat-panel'>" + header + "".join(messages_html or [
+                    "<div class='ci-chat-message' style='background:#475569;'><div class='ci-chat-message-body'>Sin mensajes todavia.</div></div>"
+                ]) + "</div>",
+                unsafe_allow_html=True,
+            )
+            with st.expander(f"Detalle {group.get('initiative_id')}"):
+                st.caption(f"Evento: {group.get('event_id')} | Tareas: {', '.join(group.get('task_ids') or ['-'])}")
+                if initiative_summary["title"] != "-":
+                    st.caption(
+                        f"Owner: {initiative_summary['owner_agent']} | "
+                        f"Meta: {initiative_summary['target_metric']} | "
+                        f"Riesgo: {initiative_summary['risk_level']} | "
+                        f"Decision: {initiative_summary['latest_decision']} | "
+                        f"Evidencias: {initiative_summary['evidence_count']}"
+                    )
+                    st.caption(f"Proxima accion: {initiative_summary['next_action']}")
+                if validation_summary:
+                    st.caption(
+                        f"Validacion: {validation_summary.get('status') or '-'} | "
+                        f"Objetivo: {validation_summary.get('objective_status') or '-'} | "
+                        f"Resumen: {_short(validation_summary.get('objective_summary') or validation_summary.get('summary') or '', 160)}"
+                    )
+                if latest:
+                    st.json(latest)
+
+
+def _render_ci_live_task_groups(task_groups: list[dict[str, Any]]) -> None:
+    if not task_groups:
+        st.info("Todavia no hay actividad del laboratorio para mostrar en directo.")
+        return
+    for group in task_groups:
+        title = (
+            f"{', '.join(group.get('agent_names') or ['-'])} | {group['focus']} | "
+            f"{group['status']} | {_local_datetime(group['updated_at'])}"
+        )
+        with st.expander(title, expanded=group.get("status") not in {"COMPLETED", "FAILED", "CANCELLED"}):
+            st.caption(f"Iniciativa: {group.get('initiative_id')} | Evento: {group['event_id']}")
+            feed = pd.DataFrame(
+                [
+                    {
+                        "hora": item["hora"],
+                        "agente": item["agente"],
+                        "evento": item["evento"],
+                        "mensaje": item["mensaje"],
+                    }
+                    for item in group["messages"]
+                ]
+            )
+            st.dataframe(feed, use_container_width=True, hide_index=True)
+            latest_payload = group["messages"][-1]["payload"] if group["messages"] else {}
+            if latest_payload:
+                st.json(latest_payload)
+
+
+def _latest_ci_llm_failure(events: list[dict[str, Any]]) -> str | None:
+    latest_completed = None
+    for item in events:
+        current_cycle_id = str(item.get("cycle_id") or "")
+        if not current_cycle_id.startswith("ci_cycle_"):
+            continue
+        if item.get("agent") not in {"ImprovementStrategistAgent", "ChiefInvestmentOrchestratorAgent"}:
+            continue
+        if item.get("event_type") != "lab_llm_call_completed":
+            continue
+        latest_completed = item
+        break
+    if latest_completed:
+        payload = _load_json_cell(latest_completed.get("payload_json"))
+        if str(payload.get("status") or "").lower() == "failed":
+            return str(payload.get("error") or "LLM call failed")
+    return None
+
+
+def _latest_ci_llm_result(events: list[dict[str, Any]]) -> dict[str, Any]:
+    for item in events:
+        current_cycle_id = str(item.get("cycle_id") or "")
+        if not current_cycle_id.startswith("ci_cycle_"):
+            continue
+        if item.get("agent") not in {"ImprovementStrategistAgent", "ChiefInvestmentOrchestratorAgent"}:
+            continue
+        if item.get("event_type") != "lab_llm_call_completed":
+            continue
+        payload = _load_json_cell(item.get("payload_json"))
+        return {
+            "status": str(payload.get("status") or "").lower(),
+            "error": payload.get("error"),
+            "created_at": item.get("created_at"),
+        }
+    return {}
+
+
+def _ci_api_connection_status(
+    settings: Any,
+    latest_cycle: dict[str, Any] | None,
+    latest_llm_failure: str | None,
+    latest_llm_result: dict[str, Any] | None = None,
+) -> tuple[str, str]:
+    if not settings.improvement_llm_enabled:
+        return ("off", "LLM externo desactivado")
+    if not settings.improvement_llm_api_key:
+        return ("sin token", "Falta IMPROVEMENT_LLM_API_KEY")
+    if latest_llm_failure:
+        return ("error", _short(latest_llm_failure, 120))
+    if (latest_llm_result or {}).get("status") == "ok":
+        return ("conectada", f"Ultima llamada LLM correcta: {_local_datetime((latest_llm_result or {}).get('created_at'))}")
+    llm_status = str((latest_cycle or {}).get("llm_status") or "").strip().lower()
+    if llm_status == "ok":
+        return ("conectada", "Ultima llamada LLM completada")
+    if llm_status == "failed":
+        return ("error", "Ultima llamada LLM fallida")
+    return ("pendiente", "Aun no hay handshake confirmado con la API")
+
+
+def page_continuous_improvement() -> None:
+    settings = _settings()
+    store = _store()
+    runtime = ContinuousImprovementLabRuntime(settings, store)
+    _page_header("Mejora continua", "Laboratorio multiagente residente: eventos, tareas, hipotesis, propuestas y validaciones.")
+
+    latest = store.latest_continuous_improvement_cycle()
+    runtime_state = store.continuous_improvement_runtime_state()
+    proposals = store.continuous_improvement_proposals(limit=200)
+    pending = [item for item in proposals if item.get("status") == "PENDING"]
+    review = [item for item in proposals if item.get("status") in {"REQUIRES_HUMAN_REVIEW", "WAITING_HUMAN_REVIEW"}]
+    hypotheses = store.continuous_improvement_hypotheses(limit=200)
+    events = store.continuous_improvement_events(limit=200)
+    tasks = store.continuous_improvement_tasks(limit=200)
+    validations = store.continuous_improvement_validations(limit=200)
+    initiatives = store.continuous_improvement_initiatives(limit=200)
+    initiative_lookup = {
+        str(item.get("initiative_key") or item.get("initiative_id") or ""): item for item in initiatives
+    }
+    initiative_lookup.update({str(item.get("initiative_id") or ""): item for item in initiatives})
+    validation_lookup: dict[str, dict[str, Any]] = {}
+    for item in validations:
+        initiative_id = str(item.get("initiative_id") or item.get("payload", {}).get("initiative_id") or "")
+        initiative_key = str(item.get("payload", {}).get("initiative_key") or "")
+        if initiative_id:
+            validation_lookup[initiative_id] = item
+        if initiative_key:
+            validation_lookup[initiative_key] = item
+    recent_agent_events = store.latest_events(400)
+    ci_activity = _ci_agent_activity(recent_agent_events, cycle_id=(latest or {}).get("cycle_id"), limit=200)
+    ci_task_groups = _ci_task_activity(recent_agent_events, tasks, cycle_id=(latest or {}).get("cycle_id"), limit=100)
+    latest_llm_failure = _latest_ci_llm_failure(recent_agent_events)
+    latest_llm_result = _latest_ci_llm_result(recent_agent_events)
+    schedule_status = _schedule_process_status()
+    api_status, api_detail = _ci_api_connection_status(settings, latest, latest_llm_failure, latest_llm_result)
+    refresh_interval_seconds = int(st.session_state.get("refresh_interval_seconds", 30) or 0)
+
+    c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
+    with c1:
+        _metric_card("Sistema", "activo" if settings.continuous_improvement_enabled else "off")
+    with c2:
+        _metric_card("Arrancado", "si" if schedule_status.get("running") else "no")
+    with c3:
+        _metric_card("API", api_status)
+    with c4:
+        _metric_card("Runtime", (runtime_state or {}).get("status") or "IDLE")
+    with c5:
+        _metric_card("Dry-run", "si" if settings.improvement_dry_run else "no")
+    with c6:
+        _metric_card("Auto", "on" if settings.continuous_improvement_schedule_enabled else "off")
+    with c7:
+        _metric_card("Eventos", len([item for item in events if item.get("status") in {"DISCOVERED", "PLANNED"}]))
+    with c8:
+        _metric_card("Tareas", len([item for item in tasks if item.get("status") not in {"COMPLETED", "CANCELLED"}]))
+
+    c9, c10 = st.columns(2)
+    with c9:
+        _metric_card("Revision", len(review))
+    with c10:
+        _metric_card("Pendientes", len(pending))
+    c11, c12 = st.columns(2)
+    with c11:
+        _metric_card("Listas para aplicar", len([item for item in initiatives if item.get("status") == "READY_TO_APPLY"]))
+    with c12:
+        _metric_card("Validaciones objetivas", len([item for item in validations if (item.get("payload") or {}).get("objective_status")]))
+
+    st.caption(f"API LLM: {api_detail}")
+
+    if settings.allow_live_trading:
+        st.error("ALLOW_LIVE_TRADING=true. El laboratorio no aplicara cambios ni activara trading real.")
+    if settings.allow_auto_apply_improvements:
+        st.warning("ALLOW_AUTO_APPLY_IMPROVEMENTS=true, pero los cambios siguen bloqueados o en revision humana.")
+    if not settings.continuous_improvement_schedule_enabled:
+        st.warning("El laboratorio autonomo esta desactivado: CONTINUOUS_IMPROVEMENT_SCHEDULE_ENABLED=false.")
+    if not schedule_status.get("running"):
+        st.warning("No hay proceso schedule gestionado desde la web. El laboratorio no se esta ejecutando de forma residente.")
+    if latest_llm_failure:
+        st.error(f"El LLM externo esta fallando: {latest_llm_failure}")
+
+    left, right = st.columns([1.1, 2])
+    with left:
+        st.subheader("Control")
+        st.write(f"Proveedor: {settings.improvement_llm_provider}")
+        st.write(f"Modelo especialistas: {settings.improvement_llm_model}")
+        st.write(f"Modelo orquestador: {settings.improvement_llm_orchestrator_model}")
+        st.write(f"Heartbeat: {_local_datetime((runtime_state or {}).get('heartbeat_at'))}")
+        st.write(f"Autogestionado: {'activo' if settings.continuous_improvement_schedule_enabled else 'desactivado'}")
+        st.write(f"Scheduler web: {'activo' if schedule_status.get('running') else 'parado'}")
+        if st.button("Run once", disabled=not settings.continuous_improvement_enabled):
+            with st.spinner("Ejecutando tick del laboratorio..."):
+                result = runtime.run_once(mode="manual", trigger_event_type="manual_trigger", trigger_payload={"source": "streamlit"})
+            st.success(f"Ciclo terminado: {result.get('status')}")
+            st.rerun()
+        if st.button("Encolar evento manual", disabled=not settings.continuous_improvement_enabled):
+            runtime.enqueue_event(
+                event_type="manual_ui_event",
+                source="streamlit",
+                domain="software-improvement",
+                payload={"requested_at": datetime.now(ZoneInfo("UTC")).isoformat()},
+                force_unique=True,
+            )
+            st.success("Evento encolado.")
+            st.rerun()
+        if st.button("Iniciar scheduler autonomo"):
+            result = _start_schedule()
+            st.success(f"Scheduler iniciado. PID: {result.get('pid')}")
+            st.rerun()
+        st.code(
+            r".\.venv\Scripts\python.exe -m agente_bolsa.main continuous-improvement-lab run-once --json",
+            language="powershell",
+        )
+    with right:
+        st.subheader("Ultimo ciclo")
+        if latest:
+            summary = (latest.get("evaluation") or {}).get("summary", {})
+            m1, m2, m3, m4 = st.columns(4)
+            with m1:
+                _metric_card("Estado", latest.get("status"))
+            with m2:
+                _metric_card("Senales", summary.get("signals", 0))
+            with m3:
+                _metric_card("Errores", summary.get("recent_errors", 0))
+            with m4:
+                _metric_card("LLM", latest.get("llm_status") or "-")
+            st.caption(f"Ciclo {latest.get('cycle_id')} | {_local_datetime(latest.get('updated_at') or latest.get('created_at'))}")
+        else:
+            st.info("Todavia no hay ciclos del laboratorio.")
+
+    artifact_paths = {
+        "backtest": settings.data_dir / "reports" / "latest_daily_learning_digest.json",
+        "walk_forward": settings.data_dir / "reports" / "latest_walk_forward_validation.json",
+        "session_retrospective": settings.data_dir / "reports" / "latest_session_retrospective.json",
+    }
+    artifact_rows = []
+    for name, path in artifact_paths.items():
+        payload = {}
+        if path.exists():
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                payload = {"available": False, "error": "json invalido"}
+        artifact_rows.append(
+            {
+                "artefacto": name,
+                "disponible": bool(payload),
+                "fecha": _local_datetime((payload or {}).get("as_of")),
+                "resumen": _short(str((payload or {}).get("summary") or (payload or {}).get("metrics") or ""), 120),
+            }
+        )
+
+    tab_runtime, tab_live, tab_queue, tab_hypotheses, tab_proposals, tab_report = st.tabs(
+        ["Runtime", "Directo", "Cola", "Hipotesis", "Propuestas", "Informe"]
+    )
+    with tab_runtime:
+        st.subheader("Agentes")
+        st.dataframe(pd.DataFrame(runtime.describe_agents()), use_container_width=True, hide_index=True)
+        st.subheader("Estado runtime")
+        st.json(runtime_state or {})
+        st.subheader("Artefactos de validacion")
+        st.dataframe(pd.DataFrame(artifact_rows), use_container_width=True, hide_index=True)
+        st.subheader("Validacion objetiva")
+        objective_rows = []
+        for item in validations[:12]:
+            payload = item.get("payload") or {}
+            evidence = payload.get("evidence")
+            artifact_preview = ""
+            if isinstance(evidence, dict):
+                artifact_preview = str(evidence.get("artifacts") or evidence.get("artifact") or "")
+            elif isinstance(evidence, list):
+                artifact_preview = ", ".join(str(entry) for entry in evidence[:3] if entry)
+            objective_rows.append(
+                {
+                    "iniciativa": item.get("initiative_id") or payload.get("initiative_key") or "-",
+                    "estado": item.get("status"),
+                    "objetivo": payload.get("objective_status") or "-",
+                    "resumen": _short(payload.get("objective_summary") or payload.get("summary") or "", 140),
+                    "artefacto": _short(artifact_preview, 110),
+                }
+            )
+        if objective_rows:
+            st.dataframe(pd.DataFrame(objective_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("No hay validaciones objetivas registradas todavia.")
+    with tab_live:
+        st.subheader("Conversacion y actividad")
+        if refresh_interval_seconds > 0:
+            st.caption(
+                f"Vista en directo activa. Se refresca cada {refresh_interval_seconds}s y agrupa mensajes por iniciativa."
+            )
+        else:
+            st.warning("El refresco automatico esta desactivado en la barra lateral. Activalo para ver nuevos mensajes en directo.")
+        active_tasks = [item for item in tasks if item.get("status") not in {"COMPLETED", "CANCELLED", "FAILED"}]
+        c_live_1, c_live_2, c_live_3 = st.columns(3)
+        with c_live_1:
+            _metric_card("Iniciativas activas", len([item for item in initiatives if item.get("status") not in {"CLOSED", "REJECTED"}]))
+        with c_live_2:
+            _metric_card("Mensajes", 0 if ci_activity.empty else len(ci_activity))
+        with c_live_3:
+            _metric_card("Ult. actualizacion", _local_time((runtime_state or {}).get("heartbeat_at")))
+        st.caption(
+            "Vista operacional: cada panel agrupa la conversacion de una iniciativa, "
+            "el estado objetivo y la evidencia de validacion mas reciente."
+        )
+        st.subheader("Grupos de trabajo en directo")
+        _render_ci_live_chat_panels(
+            ci_task_groups,
+            initiative_lookup=initiative_lookup,
+            validation_lookup=validation_lookup,
+        )
+        st.subheader("Tareas activas")
+        if active_tasks:
+            active_rows = []
+            for item in active_tasks:
+                active_rows.append(
+                    {
+                        "tarea": item.get("task_id"),
+                        "agente": item.get("agent_name"),
+                        "estado": item.get("status"),
+                        "foco": (item.get("payload") or {}).get("focus") or "-",
+                        "evento": item.get("event_id"),
+                        "inicio": _local_datetime(item.get("started_at") or item.get("created_at")),
+                    }
+                )
+            st.dataframe(pd.DataFrame(active_rows), use_container_width=True, hide_index=True)
+        else:
+            st.caption("No hay tareas activas en este momento.")
+        st.subheader("Iniciativas con estado")
+        if initiatives:
+            initiative_rows = []
+            for item in initiatives[:20]:
+                initiative_rows.append(
+                    {
+                        "iniciativa": item.get("title"),
+                        "estado": item.get("status"),
+                        "meta": item.get("target_metric"),
+                        "riesgo": item.get("risk_level"),
+                        "decision": (item.get("latest_decision") or {}).get("decision"),
+                        "proxima_accion": _short(item.get("next_action"), 80),
+                        "evidencias": len(item.get("evidence") or []),
+                    }
+                )
+            st.dataframe(pd.DataFrame(initiative_rows), use_container_width=True, hide_index=True)
+        else:
+            st.caption("Sin iniciativas activas.")
+        if initiatives:
+            initiative_status_rows = []
+            for item in initiatives[:20]:
+                initiative_status_rows.append(
+                    {
+                        "iniciativa": item.get("title"),
+                        "estado": item.get("status"),
+                        "responsable": item.get("owner_agent"),
+                        "meta": item.get("target_metric"),
+                        "riesgo": item.get("risk_level"),
+                        "decision": (item.get("latest_decision") or {}).get("decision"),
+                        "ultima_validacion": (validation_lookup.get(str(item.get("initiative_key") or item.get("initiative_id") or "")) or {}).get("status"),
+                        "siguiente": _short(item.get("next_action"), 90),
+                    }
+                )
+            st.dataframe(pd.DataFrame(initiative_status_rows), use_container_width=True, hide_index=True)
+        with st.expander("Linea temporal completa"):
+            if not ci_activity.empty:
+                st.dataframe(
+                    ci_activity[["hora", "agente", "evento", "mensaje"]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.info("Sin mensajes todavia.")
+    with tab_queue:
+        st.subheader("Eventos")
+        st.dataframe(pd.DataFrame(events), use_container_width=True, hide_index=True)
+        st.subheader("Tareas")
+        st.dataframe(pd.DataFrame(tasks), use_container_width=True, hide_index=True)
+        st.subheader("Iniciativas")
+        if initiatives:
+            initiative_table = []
+            for item in initiatives:
+                initiative_table.append(
+                    {
+                        "iniciativa": item.get("title"),
+                        "estado": item.get("status"),
+                        "responsable": item.get("owner_agent"),
+                        "meta": item.get("target_metric"),
+                        "riesgo": item.get("risk_level"),
+                        "decision": (item.get("latest_decision") or {}).get("decision"),
+                        "siguiente": _short(item.get("next_action"), 90),
+                    }
+                )
+            st.dataframe(pd.DataFrame(initiative_table), use_container_width=True, hide_index=True)
+        else:
+            st.info("No hay iniciativas guardadas.")
+    with tab_hypotheses:
+        if hypotheses:
+            st.dataframe(pd.DataFrame(hypotheses), use_container_width=True, hide_index=True)
+        else:
+            st.info("No hay hipotesis abiertas.")
+    with tab_proposals:
+        if proposals:
+            st.dataframe(_ci_proposals_dataframe(proposals), use_container_width=True, hide_index=True)
+            if review:
+                selected = st.selectbox(
+                    "Revision humana",
+                    [f"{item['proposal_id']} | {item['proposal_type']} | {item['target_component']}" for item in review],
+                )
+                item = review[[f"{p['proposal_id']} | {p['proposal_type']} | {p['target_component']}" for p in review].index(selected)]
+                artifact = store.continuous_improvement_proposal_artifact(item["proposal_id"])
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    if st.button("Aprobar propuesta"):
+                        store.update_continuous_improvement_proposal_status(
+                            item["proposal_id"],
+                            status="APPROVED",
+                            actor="web",
+                            reason="Aprobada manualmente desde Streamlit.",
+                        )
+                        st.rerun()
+                with col_b:
+                    if st.button("Rechazar propuesta"):
+                        store.update_continuous_improvement_proposal_status(
+                            item["proposal_id"],
+                            status="REJECTED",
+                            actor="web",
+                            reason="Rechazada manualmente desde Streamlit.",
+                        )
+                        st.rerun()
+                st.json(item)
+                if artifact:
+                    st.subheader("Artefacto sugerido")
+                    st.code(artifact.get("content_text") or "", language="markdown")
+        else:
+            st.info("No hay propuestas guardadas.")
+        st.subheader("Validaciones")
+        st.dataframe(pd.DataFrame(validations), use_container_width=True, hide_index=True)
+    with tab_report:
+        if latest and latest.get("report"):
+            st.json(latest["report"])
+        else:
+            st.info("No hay informe disponible.")
+
+
 def page_logs() -> None:
     store = _store()
     _page_header("Logs", "Eventos recientes sin el ruido de CrewAI ni mensajes minuto a minuto sin actividad.")
@@ -3698,7 +5083,10 @@ def page_logs() -> None:
     if events:
         st.dataframe(_events_dataframe(events), use_container_width=True, hide_index=True)
         with st.expander("Evento bruto"):
-            labels = [f"{item['created_at']} | {item['agent']} | {item['event_type']}" for item in events]
+            labels = [
+                f"{_local_datetime(item.get('created_at'))} | {item['agent']} | {item['event_type']}"
+                for item in events
+            ]
             selected = st.selectbox("Selecciona evento", labels)
             if selected:
                 st.json(events[labels.index(selected)])
@@ -3799,6 +5187,20 @@ def page_config() -> None:
         {"clave": "database", "valor": str(settings.database_path)},
     ]
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    latest_quality = _latest_report_json("latest_market_data_quality.json")
+    latest_readiness = _latest_report_json("latest_live_readiness.json")
+    latest_backup = _latest_report_json("latest_database_backup.json")
+    st.subheader("Controles recientes")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        summary = (latest_quality.get("payload") or {}).get("summary", {}) if latest_quality.get("available") else {}
+        _metric_card("Cobertura datos", _pct(summary.get("coverage_ratio")) if summary else "-")
+    with c2:
+        summary = (latest_readiness.get("payload") or {}).get("summary", {}) if latest_readiness.get("available") else {}
+        _metric_card("Live blocks", summary.get("blocks") if summary else "-")
+    with c3:
+        summary = (latest_backup.get("payload") or {}).get("summary", {}) if latest_backup.get("available") else {}
+        _metric_card("Backup SQLite", summary.get("size_bytes") if summary else "-")
     st.subheader("SQLite")
     st.json(store.status())
 
@@ -3812,6 +5214,7 @@ def main() -> None:
         "Dashboard",
         "Cartera",
         "Compras/Ventas",
+        "Oportunidades",
         "Decisiones",
         "Rupturas",
         "Pre-earnings",
@@ -3820,6 +5223,7 @@ def main() -> None:
         "Aprendizaje",
         "Diario aprendizaje",
         "Aprendizaje operativo",
+        "Mejora continua",
         "Adaptativo",
         "Backtest",
         "LLM",
@@ -3835,6 +5239,7 @@ def main() -> None:
         index=page_names.index(st.session_state.selected_page),
         key="selected_page",
     )
+    _render_sidebar_version()
     if st.sidebar.button("Refrescar"):
         st.session_state.selected_page = page
         st.rerun()
@@ -3843,6 +5248,7 @@ def main() -> None:
         "Dashboard": page_dashboard,
         "Cartera": page_portfolio,
         "Compras/Ventas": page_recent_trades,
+        "Oportunidades": page_opportunities,
         "Decisiones": page_cycle_decisions,
         "Rupturas": page_breakouts,
         "Pre-earnings": page_pre_earnings,
@@ -3851,6 +5257,7 @@ def main() -> None:
         "Aprendizaje": page_learning,
         "Diario aprendizaje": page_learning_diary,
         "Aprendizaje operativo": page_operational_learning,
+        "Mejora continua": page_continuous_improvement,
         "Adaptativo": page_adaptive,
         "Backtest": page_backtest,
         "LLM": page_llm,
