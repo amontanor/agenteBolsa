@@ -36,8 +36,8 @@ RUN mkdir -p /data
 # Definir la variable de entorno para que el bot use /data como su almacén persistente
 ENV DATA_DIR=/data
 
-# Hacer ejecutable el script de entrada
-RUN chmod +x /app/entrypoint.sh
+# Hacer ejecutable el script de entrada y normalizar CRLF para Linux
+RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 # Exponer el puerto predeterminado que usará Streamlit
 EXPOSE 8080
