@@ -1,7 +1,7 @@
 # fly.toml - Configuración para el despliegue automático en Fly.io
 
 app = "agente-bolsa"
-primary_region = "mad" # Región de Madrid, ideal para la zona horaria del usuario
+primary_region = "cdg" # Region europea cercana a Espana disponible en Fly.io
 
 [build]
   dockerfile = "Dockerfile"
