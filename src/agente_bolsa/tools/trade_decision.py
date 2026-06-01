@@ -191,10 +191,14 @@ def _compact_candidate_for_prompt(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _compact_technical_context_for_prompt(technical_context: dict[str, Any]) -> dict[str, Any]:
+def _compact_technical_context_for_prompt(
+    technical_context: dict[str, Any],
+    *,
+    selected_limit: int = 12,
+) -> dict[str, Any]:
     selected = [
         _compact_candidate_for_prompt(item)
-        for item in list(technical_context.get("selected_candidates", []) or [])[:12]
+        for item in list(technical_context.get("selected_candidates", []) or [])[: max(1, int(selected_limit))]
         if isinstance(item, dict)
     ]
     top_longs = [
@@ -279,7 +283,7 @@ def _effective_daily_buy_limit(settings: Settings, plans: list[Any]) -> int:
 def _deterministic_selection_limit(settings: Settings) -> int:
     if settings.allow_short_selling:
         return 8
-    return max(12, int(settings.news_sentiment_top_n))
+    return max(12, int(settings.news_sentiment_top_n), int(settings.trade_selection_top_n))
 
 
 def _compact_sentiment_for_prompt(sentiment_context: dict[str, Any], technical_context: dict[str, Any]) -> dict[str, Any]:
@@ -377,7 +381,14 @@ def _llm_prompt_payload(
     *,
     compact: bool,
 ) -> dict[str, Any]:
-    technical_candidates = _compact_technical_context_for_prompt(technical_context) if compact else technical_context
+    technical_candidates = (
+        _compact_technical_context_for_prompt(
+            technical_context,
+            selected_limit=_deterministic_selection_limit(settings),
+        )
+        if compact
+        else technical_context
+    )
     effective_recommendation_limit = _effective_trade_recommendation_limit(settings, technical_context)
     selected_count = len(list((technical_context or {}).get("selected_candidates", []) or []))
     prefer_full_long_only_capacity = effective_recommendation_limit >= 4 and selected_count >= 10

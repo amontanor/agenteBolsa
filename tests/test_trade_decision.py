@@ -98,6 +98,24 @@ def test_compact_technical_context_for_prompt_drops_large_all_candidates_payload
     assert "selection_metadata" in compact
 
 
+def test_compact_technical_context_for_prompt_uses_configurable_selected_limit():
+    selected = [
+        {
+            "symbol": f"LONG{i}",
+            "direction": "long",
+            "score": 16,
+            "technical_state": {},
+            "risk_plan": {},
+        }
+        for i in range(16)
+    ]
+
+    compact = _compact_technical_context_for_prompt({"selected_candidates": selected}, selected_limit=16)
+
+    assert len(compact["selected_candidates"]) == 16
+    assert compact["selected_candidates"][-1]["symbol"] == "LONG15"
+
+
 def test_llm_prompt_payload_hides_top_shorts_when_short_selling_disabled():
     settings = Settings()
     portfolio = PortfolioSnapshot(
@@ -316,6 +334,37 @@ def test_load_latest_technical_candidates_expands_long_only_selection_budget(tmp
 
     assert len(context["selected_candidates"]) == 12
     assert context["selected_candidates"][0]["symbol"] == "SYM0"
+
+
+def test_load_latest_technical_candidates_uses_trade_selection_top_n(tmp_path: Path):
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    candidates = [
+        _selection_candidate(
+            f"SYM{i}",
+            score=20 - i,
+            chart_patterns=[{"bias": "bullish", "status": "confirmed"}],
+            volume_zscore_20=1.0,
+        )
+        for i in range(16)
+    ]
+    report = {
+        "run_id": "scan-test",
+        "as_of": "2026-05-22T20:00:00Z",
+        "top_longs": candidates,
+        "top_shorts": [],
+        "all_candidates": candidates,
+    }
+    (reports_dir / "latest_closed_market_technical_study.json").write_text(
+        json.dumps(report),
+        encoding="utf-8",
+    )
+    (reports_dir / "latest_daily_learning_digest.json").write_text(json.dumps({}), encoding="utf-8")
+
+    context = load_latest_technical_candidates(tmp_path, per_side=1)
+
+    assert len(context["selected_candidates"]) == 16
+    assert context["selected_candidates"][-1]["symbol"] == "SYM15"
 
 
 def test_compact_sentiment_for_prompt_keeps_only_candidate_symbols_and_short_news():

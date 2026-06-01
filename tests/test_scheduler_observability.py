@@ -348,3 +348,38 @@ def test_selected_candidates_reuses_short_budget_for_longs_when_short_selling_di
     assert len(selected) == 12
     assert all(item["symbol"].startswith("LONG") for item in selected)
     assert symbols == sorted(f"LONG{i}" for i in range(12))
+
+
+def test_selected_candidates_uses_trade_selection_top_n_for_long_only(tmp_path):
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "latest_daily_learning_digest.json").write_text(json.dumps({}), encoding="utf-8")
+    (reports_dir / "latest_operational_health.json").write_text(json.dumps({"responses": []}), encoding="utf-8")
+    settings = Settings(DATA_DIR=tmp_path, NEWS_SENTIMENT_TOP_N=10, TRADE_SELECTION_TOP_N=16)
+    selected_longs = []
+    for idx in range(16):
+        selected_longs.append(
+            {
+                "symbol": f"LONG{idx}",
+                "direction": "long",
+                "score": 20 - idx,
+                "setup_quality": "strong",
+                "selection_score": 0.05 - (idx * 0.001),
+                "technical_state": {
+                    "return_20d": 0.08,
+                    "volume_zscore_20": 1.0,
+                    "chart_patterns": [{"bias": "bullish", "status": "confirmed"}],
+                },
+                "risk_plan": {"entry_price": 100.0, "stop_loss": 95.0, "take_profit": 112.0},
+            }
+        )
+    report = {
+        "selected_candidates": selected_longs,
+        "top_longs": selected_longs,
+        "top_shorts": [],
+    }
+
+    selected, symbols = _selected_candidates(report, settings)
+
+    assert len(selected) == 16
+    assert symbols == sorted(f"LONG{i}" for i in range(16))

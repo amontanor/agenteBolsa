@@ -322,6 +322,7 @@ class Settings(BaseSettings):
     intraday_news_sentiment_enabled: bool = Field(default=False, alias="INTRADAY_NEWS_SENTIMENT_ENABLED")
     news_sentiment_enabled: bool = Field(default=True, alias="NEWS_SENTIMENT_ENABLED")
     news_sentiment_top_n: int = Field(default=10, alias="NEWS_SENTIMENT_TOP_N")
+    trade_selection_top_n: int = Field(default=16, alias="TRADE_SELECTION_TOP_N")
     news_items_per_symbol: int = Field(default=5, alias="NEWS_ITEMS_PER_SYMBOL")
     news_sentiment_fail_closed_for_buys: bool = Field(
         default=True,

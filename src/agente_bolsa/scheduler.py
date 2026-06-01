@@ -281,7 +281,7 @@ def _candidate_limit_per_side(settings: Settings) -> int:
 
 
 def _long_only_candidate_limit(settings: Settings) -> int:
-    return max(12, int(settings.news_sentiment_top_n))
+    return max(12, int(settings.news_sentiment_top_n), int(settings.trade_selection_top_n))
 
 
 def _setup_name(candidate: dict[str, Any]) -> str:
