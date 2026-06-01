@@ -31,6 +31,7 @@ from .tools.trade_decision import (
     _effective_trade_recommendation_limit,
     _effective_daily_buy_limit,
     build_order_plans,
+    deterministic_trade_fallback_recommendations,
     filter_entry_quality,
     load_latest_sentiment,
     load_latest_technical_candidates,
@@ -631,14 +632,38 @@ def _auto_paper_trade(
             rebalance_context,
         )
     except Exception as exc:  # noqa: BLE001 - bad LLM JSON or broker read must not stop scheduler.
-        reporter.emit(
-            "execution_agent",
-            "paper_auto_trade_failed",
-            run_id,
-            f"No compra ni vende. Decision automatica fallida: {exc}",
-            {"error": repr(exc)},
-        )
-        return {"submitted": [], "failed": [{"stage": "decision", "error": str(exc)}]}
+        if settings.deterministic_trade_fallback_enabled and "portfolio" in locals() and "decision_context" in locals():
+            fallback_recommendations = deterministic_trade_fallback_recommendations(
+                settings,
+                portfolio,
+                decision_context,
+                limit=locals().get("effective_recommendation_limit"),
+            )
+            reporter.emit(
+                "execution_agent",
+                "paper_auto_trade_llm_fallback",
+                run_id,
+                (
+                    "Decision LLM no disponible; usando fallback determinista conservador "
+                    f"con {len(fallback_recommendations)} recomendacion(es)."
+                ),
+                {"error": str(exc), "recommendations": [asdict(item) for item in fallback_recommendations]},
+            )
+            decision = {
+                "recommendations": fallback_recommendations,
+                "raw_response_preview": "",
+                "prompt_context": {},
+                "fallback_error": str(exc),
+            }
+        else:
+            reporter.emit(
+                "execution_agent",
+                "paper_auto_trade_failed",
+                run_id,
+                f"No compra ni vende. Decision automatica fallida: {exc}",
+                {"error": repr(exc)},
+            )
+            return {"submitted": [], "failed": [{"stage": "decision", "error": str(exc)}]}
 
     recommendations = decision["recommendations"]
     for recommendation in recommendations:

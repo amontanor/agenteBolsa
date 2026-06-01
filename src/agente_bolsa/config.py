@@ -143,6 +143,10 @@ class Settings(BaseSettings):
     )
     auto_paper_trading: bool = Field(default=False, alias="AUTO_PAPER_TRADING")
     require_human_approval: bool = Field(default=True, alias="REQUIRE_HUMAN_APPROVAL")
+    deterministic_trade_fallback_enabled: bool = Field(
+        default=True,
+        alias="DETERMINISTIC_TRADE_FALLBACK_ENABLED",
+    )
     max_risk_per_trade: float = Field(default=0.01, alias="MAX_RISK_PER_TRADE")
     max_total_open_risk: float = Field(default=0.03, alias="MAX_TOTAL_OPEN_RISK")
     max_orders_per_cycle: int = Field(default=3, alias="MAX_ORDERS_PER_CYCLE")

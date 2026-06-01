@@ -1928,6 +1928,90 @@ def request_trade_recommendations(
     }
 
 
+def deterministic_trade_fallback_recommendations(
+    settings: Settings,
+    portfolio: PortfolioSnapshot,
+    technical_context: dict[str, Any],
+    *,
+    limit: int | None = None,
+) -> list[TradeRecommendation]:
+    """Conservative fallback for paper trading when the LLM decision layer is unavailable."""
+
+    existing_symbols = {
+        position.symbol.upper()
+        for position in portfolio.positions
+        if str(position.side or "long").lower() == "long" and float(position.qty or 0.0) > 0
+    }
+    open_order_symbols = {order.symbol.upper() for order in portfolio.open_orders}
+    recommendation_limit = max(1, int(limit or _effective_trade_recommendation_limit(settings, technical_context)))
+    eligible: list[dict[str, Any]] = []
+    for candidate in list((technical_context or {}).get("selected_candidates", []) or []):
+        if not isinstance(candidate, dict):
+            continue
+        symbol = str(candidate.get("symbol") or "").upper().strip()
+        if not symbol or symbol in open_order_symbols:
+            continue
+        if symbol in existing_symbols and not settings.allow_position_adds:
+            continue
+        if str(candidate.get("direction") or "").lower() != "long":
+            continue
+        if str(candidate.get("setup_quality") or "").lower() != "strong":
+            continue
+        if bool(candidate.get("blocked_auto_buy")):
+            continue
+        if not _valid_risk_plan(candidate):
+            continue
+        score = _float(candidate.get("score")) or 0.0
+        if score < max(float(settings.entry_quality_min_score), 14.0):
+            continue
+        risk = candidate.get("risk_plan", {}) or {}
+        eligible.append(
+            {
+                **candidate,
+                "symbol": symbol,
+                "entry_price": _float(risk.get("entry_price")),
+                "stop_loss": _float(risk.get("stop_loss")),
+                "take_profit": _float(risk.get("take_profit")),
+            }
+        )
+
+    eligible = sorted(
+        eligible,
+        key=lambda item: (
+            float(item.get("selection_score") or item.get("rank_priority_score") or -999.0),
+            float(item.get("score") or 0.0),
+        ),
+        reverse=True,
+    )
+    recommendations: list[TradeRecommendation] = []
+    for item in eligible[:recommendation_limit]:
+        selection_score = _float(item.get("selection_score"))
+        confidence = max(
+            float(settings.min_llm_confidence_to_trade),
+            min(0.78, 0.66 + max(0.0, selection_score or 0.0)),
+        )
+        recommendations.append(
+            TradeRecommendation(
+                symbol=str(item["symbol"]),
+                action="buy",
+                confidence=round(confidence, 2),
+                reason=(
+                    "Fallback determinista por fallo del LLM: candidato strong seleccionado "
+                    f"rank={item.get('selection_rank')}, score={item.get('score')}, "
+                    f"selection_score={item.get('selection_score')}."
+                ),
+                entry_price=item.get("entry_price"),
+                stop_loss=item.get("stop_loss"),
+                take_profit=item.get("take_profit"),
+                target_exposure_pct=float(settings.max_position_exposure),
+                time_horizon="3d",
+                invalidation="Stop loss o deterioro tecnico en el siguiente ciclo.",
+                source="deterministic_fallback",
+            )
+        )
+    return recommendations
+
+
 def build_buy_order_plans(
     settings: Settings,
     portfolio: PortfolioSnapshot,

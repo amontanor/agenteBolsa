@@ -11,6 +11,7 @@ from agente_bolsa.tools.trade_decision import (
     _candidate_learning_prior,
     _annotate_technical_context_with_learning,
     _build_decision_learning_context,
+    deterministic_trade_fallback_recommendations,
     _llm_prompt_payload,
     _select_deterministic_candidates,
     _sizing_adjustment_for_recommendation,
@@ -365,6 +366,65 @@ def test_load_latest_technical_candidates_uses_trade_selection_top_n(tmp_path: P
 
     assert len(context["selected_candidates"]) == 16
     assert context["selected_candidates"][-1]["symbol"] == "SYM15"
+
+
+def test_deterministic_trade_fallback_uses_selected_candidates_without_llm():
+    portfolio = PortfolioSnapshot(
+        account_id="paper",
+        status="ACTIVE",
+        currency="USD",
+        cash=20_000,
+        portfolio_value=20_000,
+        buying_power=20_000,
+        positions=[],
+        open_orders=[],
+    )
+    candidate = _selection_candidate("FSLR", score=18, volume_zscore_20=1.2)
+    candidate["selection_score"] = 0.04
+    candidate["selection_rank"] = 1
+    context = {"selected_candidates": [candidate]}
+
+    recommendations = deterministic_trade_fallback_recommendations(Settings(), portfolio, context)
+
+    assert len(recommendations) == 1
+    assert recommendations[0].symbol == "FSLR"
+    assert recommendations[0].action == "buy"
+    assert recommendations[0].source == "deterministic_fallback"
+    assert recommendations[0].confidence >= 0.65
+
+
+def test_deterministic_trade_fallback_skips_existing_positions_when_adds_disabled():
+    portfolio = PortfolioSnapshot(
+        account_id="paper",
+        status="ACTIVE",
+        currency="USD",
+        cash=20_000,
+        portfolio_value=20_000,
+        buying_power=20_000,
+        positions=[
+            PositionSnapshot(
+                symbol="FSLR",
+                qty=1,
+                market_value=100,
+                avg_entry_price=100,
+                current_price=100,
+                unrealized_pl=0,
+                unrealized_plpc=0,
+            )
+        ],
+        open_orders=[],
+    )
+    candidate = _selection_candidate("FSLR", score=18, volume_zscore_20=1.2)
+    candidate["selection_score"] = 0.04
+    context = {"selected_candidates": [candidate]}
+
+    recommendations = deterministic_trade_fallback_recommendations(
+        Settings(ALLOW_POSITION_ADDS=False),
+        portfolio,
+        context,
+    )
+
+    assert recommendations == []
 
 
 def test_compact_sentiment_for_prompt_keeps_only_candidate_symbols_and_short_news():
