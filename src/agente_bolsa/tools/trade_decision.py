@@ -1500,7 +1500,13 @@ def validate_entry_quality(
         return False, f"fuerza relativa 20d negativa vs benchmark ({relative_return_20d:.2%})", checks
     if macd is not None and macd_signal is not None and macd <= macd_signal:
         return False, "MACD no confirma momentum alcista", checks
-    if settings.news_sentiment_fail_closed_for_buys and "sentiment_failed" in sentiment_flags:
+    deterministic_fallback = recommendation.source == "deterministic_fallback"
+    checks["deterministic_fallback"] = deterministic_fallback
+    if (
+        settings.news_sentiment_fail_closed_for_buys
+        and "sentiment_failed" in sentiment_flags
+        and not deterministic_fallback
+    ):
         return False, "sentimiento no validado; compra bloqueada por fallo de noticias", checks
     if sentiment_score is not None and sentiment_confidence >= 0.5 and sentiment_score <= -0.5:
         return False, f"sentimiento negativo confirmado ({sentiment_score})", checks

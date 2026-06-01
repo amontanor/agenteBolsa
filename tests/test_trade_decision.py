@@ -1543,6 +1543,39 @@ def test_entry_quality_gate_blocks_sentiment_failure_by_default():
     assert checks["sentiment_flags"] == ["sentiment_failed"]
 
 
+def test_entry_quality_gate_allows_sentiment_failure_for_deterministic_fallback():
+    recommendation = TradeRecommendation(
+        symbol="AAPL",
+        action="buy",
+        confidence=0.9,
+        reason="test",
+        entry_price=100.0,
+        stop_loss=95.0,
+        take_profit=115.0,
+        target_exposure_pct=0.05,
+        source="deterministic_fallback",
+    )
+
+    approved, reason, checks = validate_entry_quality(
+        Settings(),
+        recommendation,
+        _quality_context(),
+        {
+            "results": [
+                {
+                    "symbol": "AAPL",
+                    "sentiment": {"risk_flags": ["sentiment_failed"]},
+                }
+            ]
+        },
+    )
+
+    assert approved is True
+    assert reason == "entry-quality aprobado"
+    assert checks["sentiment_flags"] == ["sentiment_failed"]
+    assert checks["deterministic_fallback"] is True
+
+
 def test_annotate_technical_context_with_learning_adds_setup_edge_and_penalty():
     technical_context = {
         "top_longs": [
