@@ -1988,13 +1988,32 @@ def deterministic_trade_fallback_recommendations(
         if score < max(float(settings.entry_quality_min_score), 14.0):
             continue
         risk = candidate.get("risk_plan", {}) or {}
+        candidate_recommendation = TradeRecommendation(
+            symbol=symbol,
+            action="buy",
+            confidence=float(settings.min_llm_confidence_to_trade),
+            reason="Fallback determinista: prevalidacion tecnica.",
+            entry_price=_float(risk.get("entry_price")),
+            stop_loss=_float(risk.get("stop_loss")),
+            take_profit=_float(risk.get("take_profit")),
+            target_exposure_pct=float(settings.max_position_exposure),
+            source="deterministic_fallback",
+        )
+        entry_approved, _entry_reason, _entry_checks = validate_entry_quality(
+            settings,
+            candidate_recommendation,
+            technical_context,
+            {"results": []},
+        )
+        if not entry_approved:
+            continue
         eligible.append(
             {
                 **candidate,
                 "symbol": symbol,
-                "entry_price": _float(risk.get("entry_price")),
-                "stop_loss": _float(risk.get("stop_loss")),
-                "take_profit": _float(risk.get("take_profit")),
+                "entry_price": candidate_recommendation.entry_price,
+                "stop_loss": candidate_recommendation.stop_loss,
+                "take_profit": candidate_recommendation.take_profit,
             }
         )
 
