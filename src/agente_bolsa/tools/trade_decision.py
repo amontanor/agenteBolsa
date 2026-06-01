@@ -1967,6 +1967,23 @@ def deterministic_trade_fallback_recommendations(
             continue
         if not _valid_risk_plan(candidate):
             continue
+        technical_state = candidate.get("technical_state", {}) or {}
+        close = _float(technical_state.get("close"))
+        sma20 = _float(technical_state.get("sma_20"))
+        if close and sma20:
+            sma20_distance = (close - sma20) / sma20
+            has_extension_exception = any(
+                bool(technical_state.get(flag))
+                for flag in (
+                    "event_momentum_long",
+                    "range_expansion_breakout_long",
+                    "orderly_breakout_long",
+                    "momentum_shakeout_hold_long",
+                    "momentum_confirmation_long",
+                )
+            )
+            if sma20_distance > settings.entry_quality_max_sma20_distance and not has_extension_exception:
+                continue
         score = _float(candidate.get("score")) or 0.0
         if score < max(float(settings.entry_quality_min_score), 14.0):
             continue

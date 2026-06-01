@@ -427,6 +427,29 @@ def test_deterministic_trade_fallback_skips_existing_positions_when_adds_disable
     assert recommendations == []
 
 
+def test_deterministic_trade_fallback_skips_plain_overextended_candidates():
+    portfolio = PortfolioSnapshot(
+        account_id="paper",
+        status="ACTIVE",
+        currency="USD",
+        cash=20_000,
+        portfolio_value=20_000,
+        buying_power=20_000,
+        positions=[],
+        open_orders=[],
+    )
+    extended = _selection_candidate("EXT", score=20, close=130.0, sma_20=100.0)
+    extended["selection_score"] = 0.10
+    valid = _selection_candidate("OK", score=17, close=100.0, sma_20=95.0)
+    valid["selection_score"] = 0.01
+    context = {"selected_candidates": [extended, valid]}
+
+    recommendations = deterministic_trade_fallback_recommendations(Settings(), portfolio, context, limit=1)
+
+    assert len(recommendations) == 1
+    assert recommendations[0].symbol == "OK"
+
+
 def test_compact_sentiment_for_prompt_keeps_only_candidate_symbols_and_short_news():
     technical_context = {"selected_candidates": [{"symbol": "AAPL"}]}
     sentiment_context = {
