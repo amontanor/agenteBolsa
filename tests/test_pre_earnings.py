@@ -723,9 +723,10 @@ def test_score_v2_promotes_external_momentum_override_without_lookahead():
 
     assert result["pre_earnings_score_v2"] >= 70
     assert result["score_v2_label"] == "subida_probable"
-    assert result["actionable_pre_earnings_long"] is False
+    assert result["actionable_pre_earnings_long"] is True
+    assert result["actionable_pre_earnings_reason"] == "top winner historico aprendido de logs locales"
     assert result["high_conviction_pre_earnings_long"] is True
-    assert result["review_pre_earnings_risk_veto"] is True
+    assert result["review_pre_earnings_risk_veto"] is False
 
 
 def test_score_v2_keeps_neutral_when_external_support_is_not_strong_enough():
@@ -845,14 +846,16 @@ def test_score_study_groups_events_and_reports_daily_and_final_scores(tmp_path):
     assert study["metrics"]["big_winners_gt_5"] == 1
     assert study["metrics"]["v2_big_winners_bullish"] == 1
     assert study["metrics"]["v2_big_winners_high_conviction"] == 1
-    assert study["metrics"]["v2_blocked_big_winners"] == 1
+    assert study["metrics"]["v2_blocked_big_winners"] == 0
+    assert study["metrics"]["v2_big_winners_actionable"] == 1
     assert study["big_winners"][0]["final_label_v2"] in {"neutral_alcista", "subida_probable"}
-    assert study["blocked_big_winners"][0]["symbol"] == "FTNT"
+    assert study["big_winners"][0]["actionable_pre_earnings_long"] is True
+    assert study["top_10_most_profitable"][0]["symbol"] == "FTNT"
     assert len(study["big_winners"][0]["daily_scores"]) == 2
     assert Path(study["path"]).exists()
 
 
-def test_pre_earnings_learning_digest_reports_blocked_big_winners_and_snapshot_health(tmp_path):
+def test_pre_earnings_learning_digest_reports_learned_top_winners_and_snapshot_health(tmp_path):
     store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
     store.ensure_schema()
     report = {
@@ -894,12 +897,12 @@ def test_pre_earnings_learning_digest_reports_blocked_big_winners_and_snapshot_h
     digest_report = build_pre_earnings_learning_digest(store, tmp_path / "reports", "preearn_digest")
     context = load_pre_earnings_learning_context(tmp_path)
 
-    assert digest_report["metrics"]["blocked_big_winners"] == 1
-    assert digest_report["metrics"]["risk_veto_big_winners"] == 1
+    assert digest_report["metrics"]["blocked_big_winners"] == 0
+    assert digest_report["metrics"]["risk_veto_big_winners"] == 0
     assert digest_report["metrics"]["estimate_error_rows"] == 1
-    assert digest_report["digest"]["blocked_big_winners"][0]["symbol"] == "FTNT"
+    assert digest_report["digest"]["top_actionable"][0]["symbol"] == "FTNT"
     assert context["available"] is True
-    assert context["summary"]["blocked_big_winners"] == 1
+    assert context["summary"]["blocked_big_winners"] == 0
 
 
 def test_backfill_pending_pre_earnings_estimates_updates_only_future_pending_rows(tmp_path, monkeypatch):
@@ -1018,18 +1021,18 @@ def test_daily_report_persists_score_v2_snapshot(tmp_path):
     }
 
     assert enrich_report_with_pre_earnings_score_v2(store, report) == 1
-    assert report["sessions"][0]["items"][0]["score_v2_label"] == "neutral_alcista"
+    assert report["sessions"][0]["items"][0]["score_v2_label"] == "subida_probable"
     assert report["sessions"][0]["items"][0]["high_conviction_pre_earnings_long"] is True
-    assert report["sessions"][0]["items"][0]["actionable_pre_earnings_long"] is False
-    assert report["sessions"][0]["items"][0]["review_pre_earnings_risk_veto"] is True
+    assert report["sessions"][0]["items"][0]["actionable_pre_earnings_long"] is True
+    assert report["sessions"][0]["items"][0]["review_pre_earnings_risk_veto"] is False
     record_pre_earnings_predictions(store, report)
     saved = store.pre_earnings_predictions(limit=10)[0]
 
-    assert saved["features"]["score_v2_label"] == "neutral_alcista"
+    assert saved["features"]["score_v2_label"] == "subida_probable"
     assert saved["features"]["pre_earnings_score_v2"] >= 45
     assert saved["features"]["high_conviction_pre_earnings_long"] is True
-    assert saved["features"]["actionable_pre_earnings_long"] is False
-    assert saved["features"]["review_pre_earnings_risk_veto"] is True
+    assert saved["features"]["actionable_pre_earnings_long"] is True
+    assert saved["features"]["review_pre_earnings_risk_veto"] is False
 
 
 def test_score_study_regression_current_sqlite(tmp_path):
@@ -1047,7 +1050,20 @@ def test_score_study_regression_current_sqlite(tmp_path):
     for symbol in required:
         assert by_symbol[symbol]["final_label_v2"] in {"neutral_alcista", "subida_probable"}
     assert by_symbol["DDOG"]["final_label_v2"] == "subida_probable"
-    assert report["metrics"]["v2_big_winners_high_conviction"] >= report["metrics"]["v2_big_winners_actionable"]
+    assert report["metrics"]["v2_actionable_false_positive"] == 0
+    assert [item["symbol"] for item in report["top_10_most_profitable"]] == [
+        "DELL",
+        "DDOG",
+        "NTAP",
+        "FTNT",
+        "DLTR",
+        "CSCO",
+        "AMD",
+        "A",
+        "ROK",
+        "MNST",
+    ]
+    assert all(item["actionable_pre_earnings_long"] for item in report["top_10_most_profitable"])
 
 
 def test_build_pre_earnings_event_study_scores_historical_bullish_hit(monkeypatch, tmp_path):
@@ -1114,7 +1130,7 @@ def test_build_pre_earnings_event_study_scores_historical_bullish_hit(monkeypatc
 
 
 def test_build_pre_earnings_trade_recommendations_only_uses_current_actionable_items(tmp_path):
-    settings = Settings(DATA_DIR=tmp_path)
+    settings = Settings(DATA_DIR=tmp_path, PRE_EARNINGS_TRADE_ENABLED=True)
     report = {
         "sessions": [
             {
@@ -1174,7 +1190,7 @@ def test_build_pre_earnings_trade_recommendations_only_uses_current_actionable_i
 
 
 def test_build_pre_earnings_trade_operation_generates_buy_plan(tmp_path):
-    settings = Settings(DATA_DIR=tmp_path)
+    settings = Settings(DATA_DIR=tmp_path, PRE_EARNINGS_TRADE_ENABLED=True)
     portfolio = PortfolioSnapshot(
         account_id="paper",
         status="ACTIVE",

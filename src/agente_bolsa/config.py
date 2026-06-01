@@ -339,7 +339,7 @@ class Settings(BaseSettings):
     pre_earnings_time_market: str = Field(default="15:00", alias="PRE_EARNINGS_TIME_MARKET")
     pre_earnings_universe: str = Field(default="", alias="PRE_EARNINGS_UNIVERSE")
     pre_earnings_max_symbols: int = Field(default=0, alias="PRE_EARNINGS_MAX_SYMBOLS")
-    pre_earnings_trade_enabled: bool = Field(default=True, alias="PRE_EARNINGS_TRADE_ENABLED")
+    pre_earnings_trade_enabled: bool = Field(default=False, alias="PRE_EARNINGS_TRADE_ENABLED")
     pre_earnings_trade_min_score_v2: float = Field(default=70.0, alias="PRE_EARNINGS_TRADE_MIN_SCORE_V2")
     pre_earnings_trade_target_exposure_pct: float = Field(
         default=0.025,

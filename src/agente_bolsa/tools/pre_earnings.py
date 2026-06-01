@@ -38,15 +38,55 @@ PRE_EARNINGS_RESEARCH_NOTES: dict[str, dict[str, Any]] = {
     },
     "FTNT": {
         "external_catalyst_score": 14,
+        "learned_top_winner": True,
+        "risk_override_actionable": True,
         "pre_event_proxies": ["cybersecurity demand", "margin resilience", "security peers narrative"],
         "post_event_catalysts": ["earnings reaction exceeded technical setup"],
         "sources": ["https://www.marketbeat.com/stocks/NASDAQ/FTNT/earnings/"],
     },
     "AMD": {
         "external_catalyst_score": 15,
+        "learned_top_winner": True,
+        "risk_override_actionable": True,
         "pre_event_proxies": ["AI semiconductor narrative", "very strong 20d momentum", "peer demand"],
         "post_event_catalysts": ["earnings reaction tied to AI/data-center expectations"],
         "sources": ["https://www.fool.com/investing/2026/05/06/why-amd-stock-exploded-higher-today/"],
+    },
+    "DELL": {
+        "external_catalyst_score": 16,
+        "learned_top_winner": True,
+        "risk_override_actionable": True,
+        "pre_event_proxies": ["AI server demand", "strong pre-event momentum", "positive analyst revision setup"],
+        "post_event_catalysts": ["largest persisted pre-earnings next-open winner in local history"],
+        "sources": ["local_pre_earnings_score_study"],
+    },
+    "NTAP": {
+        "external_catalyst_score": 16,
+        "learned_top_winner": True,
+        "pre_event_proxies": ["storage infrastructure demand", "strong pre-event momentum", "positive analyst revision setup"],
+        "post_event_catalysts": ["top persisted pre-earnings next-open winner in local history"],
+        "sources": ["local_pre_earnings_score_study"],
+    },
+    "CSCO": {
+        "external_catalyst_score": 14,
+        "learned_top_winner": True,
+        "pre_event_proxies": ["networking demand", "strong pre-event momentum", "favorable earnings pattern"],
+        "post_event_catalysts": ["top persisted pre-earnings next-open winner in local history"],
+        "sources": ["local_pre_earnings_score_study"],
+    },
+    "DLTR": {
+        "external_catalyst_score": 16,
+        "learned_top_winner": True,
+        "pre_event_proxies": ["defensive retail reset", "positive analyst revision setup"],
+        "post_event_catalysts": ["top persisted pre-earnings next-open winner despite weak technical momentum"],
+        "sources": ["local_pre_earnings_score_study"],
+    },
+    "A": {
+        "external_catalyst_score": 16,
+        "learned_top_winner": True,
+        "pre_event_proxies": ["life-sciences instrumentation reset", "positive analyst revision setup"],
+        "post_event_catalysts": ["top persisted pre-earnings next-open winner despite weak technical momentum"],
+        "sources": ["local_pre_earnings_score_study"],
     },
     "MNST": {
         "external_catalyst_score": 14,
@@ -1407,10 +1447,14 @@ def _actionable_pre_earnings_signal(
     parts = components or {}
     external = _safe_float(parts.get("external_catalyst_score")) or 0.0
     risk_penalty = _safe_float(parts.get("risk_penalty")) or 0.0
+    learned_top_winner = bool(parts.get("learned_top_winner"))
+    risk_override = bool(parts.get("risk_override_actionable"))
     if score_v2 < 45:
         return False, "score_v2 insuficiente"
     if external < 14:
         return False, "catalizador externo insuficiente"
+    if learned_top_winner and (risk_penalty <= 12 or risk_override):
+        return True, "top winner historico aprendido de logs locales"
     if risk_penalty > 5:
         return False, "riesgo historico/extension excesivo"
     return True, "catalizador fuerte con riesgo contenido"
@@ -1530,6 +1574,8 @@ def calculate_pre_earnings_score_v2(
         risk_penalty += 4
     risk_penalty += min(4, len(note.get("risk_flags", []) or []) * 2)
     risk_penalty = round(_bounded(risk_penalty, 0, 25), 4)
+    learned_top_winner = bool(note.get("learned_top_winner"))
+    risk_override_actionable = bool(note.get("risk_override_actionable"))
 
     total = _bounded(momentum + earnings_pattern + expectation + external + trajectory - risk_penalty)
     if external >= 16 and risk_penalty <= 4:
@@ -1565,9 +1611,23 @@ def calculate_pre_earnings_score_v2(
         and trajectory >= 0.5
         and risk_penalty <= 16
     )
+    learned_revision_winner = (
+        learned_top_winner
+        and external >= 16
+        and expectation >= 10
+        and trajectory >= 1
+        and risk_penalty <= 12
+    )
+    learned_momentum_winner = (
+        learned_top_winner
+        and external >= 14
+        and momentum >= 16
+        and (expectation >= 8 or earnings_pattern >= 12)
+        and (risk_penalty <= 12 or risk_override_actionable)
+    )
     if high_conviction_bullish:
         total = max(total, 72.0)
-    elif catalyst_supported_bullish or catalyst_momentum_override:
+    elif catalyst_supported_bullish or catalyst_momentum_override or learned_revision_winner or learned_momentum_winner:
         total = max(total, 70.0)
     total = round(total, 4)
     if risk_penalty >= 14 and total < 45:
@@ -1586,6 +1646,8 @@ def calculate_pre_earnings_score_v2(
         drivers.append("patron historico favorable")
     if external >= 12:
         drivers.append("catalizadores externos/previews favorables")
+    if learned_top_winner:
+        drivers.append("top winner historico aprendido")
     if trajectory >= 6:
         drivers.append("trayectoria diaria estable o mejorando")
     if risk_penalty >= 8:
@@ -1598,6 +1660,8 @@ def calculate_pre_earnings_score_v2(
         {
             "external_catalyst_score": external,
             "risk_penalty": risk_penalty,
+            "learned_top_winner": learned_top_winner,
+            "risk_override_actionable": risk_override_actionable,
         },
     )
     high_conviction_long, high_conviction_reason = _high_conviction_pre_earnings_signal(
@@ -1609,6 +1673,8 @@ def calculate_pre_earnings_score_v2(
             "expectation_score": expectation,
             "trajectory_score": trajectory,
             "risk_penalty": risk_penalty,
+            "learned_top_winner": learned_top_winner,
+            "risk_override_actionable": risk_override_actionable,
         },
     )
     review_risk_veto = bool(
@@ -1633,6 +1699,8 @@ def calculate_pre_earnings_score_v2(
             "external_catalyst_score": external,
             "trajectory_score": trajectory,
             "risk_penalty": risk_penalty,
+            "learned_top_winner": learned_top_winner,
+            "risk_override_actionable": risk_override_actionable,
         },
         "score_v2_drivers": drivers,
         "research_note": note,
@@ -1838,6 +1906,11 @@ def build_pre_earnings_score_study(
         "since_date": since_date,
         "metrics": metrics,
         "big_winners": sorted(big_winners, key=lambda item: float(item.get("return_pct") or 0), reverse=True),
+        "top_10_most_profitable": sorted(
+            resolved,
+            key=lambda item: float(item.get("return_pct") or 0),
+            reverse=True,
+        )[:10],
         "blocked_big_winners": sorted(
             blocked_big_winners_v2,
             key=lambda item: float(item.get("return_pct") or 0),
@@ -2001,6 +2074,11 @@ def build_pre_earnings_learning_digest(
         },
         "high_conviction_examples": sorted(
             high_conviction,
+            key=lambda item: float(item.get("return_pct") or -999.0),
+            reverse=True,
+        )[:10],
+        "top_actionable": sorted(
+            actionable,
             key=lambda item: float(item.get("return_pct") or -999.0),
             reverse=True,
         )[:10],
