@@ -198,6 +198,10 @@ class Settings(BaseSettings):
     improvement_llm_temperature: float = Field(default=0.2, alias="IMPROVEMENT_LLM_TEMPERATURE")
     improvement_llm_max_tokens: int = Field(default=6000, alias="IMPROVEMENT_LLM_MAX_TOKENS")
     improvement_llm_timeout_seconds: int = Field(default=120, alias="IMPROVEMENT_LLM_TIMEOUT_SECONDS")
+    improvement_llm_local_fallback_enabled: bool = Field(
+        default=True,
+        alias="IMPROVEMENT_LLM_LOCAL_FALLBACK_ENABLED",
+    )
     improvement_llm_retries: int = Field(default=2, alias="IMPROVEMENT_LLM_RETRIES")
     improvement_dry_run: bool = Field(default=True, alias="IMPROVEMENT_DRY_RUN")
     allow_auto_apply_improvements: bool = Field(default=False, alias="ALLOW_AUTO_APPLY_IMPROVEMENTS")

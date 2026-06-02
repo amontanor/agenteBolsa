@@ -4700,6 +4700,10 @@ def _latest_ci_llm_result(events: list[dict[str, Any]]) -> dict[str, Any]:
         if not current_cycle_id.startswith("ci_cycle_"):
             continue
         if item.get("agent") not in {"ImprovementStrategistAgent", "ChiefInvestmentOrchestratorAgent"}:
+            "provider": payload.get("provider"),
+            "model": payload.get("model"),
+            "base_url": payload.get("base_url"),
+            "fallback_used": bool(payload.get("fallback_used")),
             continue
         if item.get("event_type") != "lab_llm_call_completed":
             continue
@@ -4729,6 +4733,21 @@ def _ci_api_connection_status(
     llm_status = str((latest_cycle or {}).get("llm_status") or "").strip().lower()
     if llm_status == "ok":
         return ("conectada", "Ultima llamada LLM completada")
+def _ci_llm_route_label(settings: Any, latest_llm_result: dict[str, Any] | None = None) -> str:
+    result = latest_llm_result or {}
+    provider = str(result.get("provider") or "").strip()
+    model = str(result.get("model") or "").strip()
+    base_url = str(result.get("base_url") or "").strip()
+    fallback_used = bool(result.get("fallback_used"))
+    if provider or model or base_url:
+        prefix = "fallback local" if fallback_used else "primario"
+        return f"{prefix}: {provider or '-'} | {model or '-'} | {base_url or '-'}"
+    return (
+        f"configurado: {settings.improvement_llm_provider} | "
+        f"{settings.improvement_llm_orchestrator_model} | {settings.improvement_llm_base_url}"
+    )
+
+
     if llm_status == "failed":
         return ("error", "Ultima llamada LLM fallida")
     return ("pendiente", "Aun no hay handshake confirmado con la API")
@@ -4831,6 +4850,7 @@ def page_continuous_improvement() -> None:
             runtime.enqueue_event(
                 event_type="manual_ui_event",
                 source="streamlit",
+    st.caption(f"Ruta activa CI: {_ci_llm_route_label(settings, latest_llm_result)}")
                 domain="software-improvement",
                 payload={"requested_at": datetime.now(ZoneInfo("UTC")).isoformat()},
                 force_unique=True,
@@ -4854,6 +4874,8 @@ def page_continuous_improvement() -> None:
                 _metric_card("Estado", latest.get("status"))
             with m2:
                 _metric_card("Senales", summary.get("signals", 0))
+        st.write(f"Fallback local CI: {'activo' if settings.improvement_llm_local_fallback_enabled else 'off'}")
+        st.write(f"Ruta LLM activa: {_ci_llm_route_label(settings, latest_llm_result)}")
             with m3:
                 _metric_card("Errores", summary.get("recent_errors", 0))
             with m4:

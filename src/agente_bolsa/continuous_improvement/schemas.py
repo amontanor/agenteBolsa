@@ -204,6 +204,8 @@ class LLMJsonResult(BaseModel):
     error: str | None = None
     provider: str = ""
     model: str = ""
+    base_url: str = ""
+    fallback_used: bool = False
     request_preview: dict[str, Any] = Field(default_factory=dict)
 
 

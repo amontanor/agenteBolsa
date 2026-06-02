@@ -21,6 +21,25 @@ from .schemas import LLMImprovementResponse, LLMJsonResult
 LOGGER = logging.getLogger(__name__)
 
 
+class _ImprovementEndpoint:
+    def __init__(
+        self,
+        *,
+        name: str,
+        provider: str,
+        base_url: str,
+        api_key: str | None,
+        model: str,
+        fallback_used: bool,
+    ) -> None:
+        self.name = name
+        self.provider = provider
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.model = model
+        self.fallback_used = fallback_used
+
+
 class ImprovementLLMClient:
     """OpenAI-compatible JSON client with disabled/mock mode for tests and safety."""
 
@@ -38,18 +57,29 @@ class ImprovementLLMClient:
         response_model: type[BaseModel] = LLMImprovementResponse,
     ) -> LLMJsonResult:
         llm_call_id = new_id("ci_llm")
-        provider = self.settings.improvement_llm_provider
+        primary_provider = self.settings.improvement_llm_provider
         model_name = model or self.settings.improvement_llm_model
+        endpoints = self._endpoints(model_name)
+        primary = endpoints[0]
         request_preview = {
-            "provider": provider,
-            "base_url": self.settings.improvement_llm_base_url,
-            "model": model_name,
+            "provider": primary.provider,
+            "base_url": primary.base_url,
+            "model": primary.model,
             "messages": len(messages),
             "schema": schema.get("title") or schema.get("$defs", {}).keys(),
             "temperature": temperature if temperature is not None else self.settings.improvement_llm_temperature,
             "max_tokens": max_tokens if max_tokens is not None else self.settings.improvement_llm_max_tokens,
+            "fallback_chain": [
+                {
+                    "name": endpoint.name,
+                    "provider": endpoint.provider,
+                    "base_url": endpoint.base_url,
+                    "model": endpoint.model,
+                }
+                for endpoint in endpoints
+            ],
         }
-        if not self.settings.improvement_llm_enabled or provider.lower() in {"disabled", "mock"}:
+        if not self.settings.improvement_llm_enabled or primary_provider.lower() in {"disabled", "mock"}:
             payload = LLMImprovementResponse(
                 diagnosis={
                     "summary": "LLM externo de mejora continua desactivado; ciclo ejecutado en modo seguro.",
@@ -77,77 +107,163 @@ class ImprovementLLMClient:
                 ok=True,
                 llm_call_id=llm_call_id,
                 payload=payload,
-                provider=provider,
-                model=model_name,
+                provider=primary.provider,
+                model=primary.model,
+                base_url=primary.base_url,
                 request_preview=request_preview,
             )
 
-        config_error = self._configuration_error(provider)
+        config_error = self._configuration_error(primary.provider)
         if config_error:
-            log_system_event(
-                self.settings.logs_dir,
-                "continuous_improvement_llm_config_error",
-                {"llm_call_id": llm_call_id, "provider": provider, "model": model_name, "error": config_error},
-            )
-            return LLMJsonResult(
-                ok=False,
+            LOGGER.warning("Improvement primary LLM configuration invalid: %s", config_error)
+            last_error = config_error
+        else:
+            last_error = ""
+            result = self._try_endpoint(
+                endpoint=primary,
                 llm_call_id=llm_call_id,
-                raw_response=None,
-                error=config_error,
-                provider=provider,
-                model=model_name,
+                messages=messages,
+                temperature=temperature if temperature is not None else self.settings.improvement_llm_temperature,
+                max_tokens=max_tokens if max_tokens is not None else self.settings.improvement_llm_max_tokens,
                 request_preview=request_preview,
+                response_model=response_model,
             )
+            if result.ok:
+                return result
+            last_error = result.error or ""
 
-        endpoint = self.settings.improvement_llm_base_url.rstrip("/") + "/chat/completions"
-        body = self._request_body(
-            provider=provider,
-            model=model_name,
-            messages=messages,
-            temperature=temperature if temperature is not None else self.settings.improvement_llm_temperature,
-            max_tokens=max_tokens if max_tokens is not None else self.settings.improvement_llm_max_tokens,
-        )
-        headers = self._request_headers(provider)
-
-        last_error = ""
-        for attempt in range(max(1, self.settings.improvement_llm_retries + 1)):
-            try:
-                raw = self._post_json(endpoint, body, headers)
-                content = self._extract_content(raw)
-                parsed = self._parse_json_content(content)
-                payload = response_model.model_validate(parsed)
-                log_system_event(
-                    self.settings.logs_dir,
-                    "continuous_improvement_llm_success",
-                    {"llm_call_id": llm_call_id, "provider": provider, "model": model_name, "attempt": attempt + 1},
-                )
-                return LLMJsonResult(
-                    ok=True,
-                    llm_call_id=llm_call_id,
-                    payload=payload,
-                    raw_response=content,
-                    provider=provider,
-                    model=model_name,
-                    request_preview=request_preview,
-                )
-            except (OSError, ValueError, ValidationError) as exc:
-                last_error = str(exc)
-                LOGGER.warning("Improvement LLM call failed on attempt %s: %s", attempt + 1, exc)
-                if attempt < self.settings.improvement_llm_retries:
-                    time.sleep(min(2**attempt, 8))
+        fallback_endpoint = endpoints[1] if len(endpoints) > 1 else None
+        if fallback_endpoint is not None:
+            fallback_preview = {
+                **request_preview,
+                "provider": fallback_endpoint.provider,
+                "base_url": fallback_endpoint.base_url,
+                "model": fallback_endpoint.model,
+                "fallback_used": True,
+                "primary_error": last_error,
+            }
+            fallback_result = self._try_endpoint(
+                endpoint=fallback_endpoint,
+                llm_call_id=llm_call_id,
+                messages=messages,
+                temperature=temperature if temperature is not None else self.settings.improvement_llm_temperature,
+                max_tokens=max_tokens if max_tokens is not None else self.settings.improvement_llm_max_tokens,
+                request_preview=fallback_preview,
+                response_model=response_model,
+            )
+            if fallback_result.ok:
+                return fallback_result
+            fallback_error = fallback_result.error or ""
+            if last_error and fallback_error:
+                last_error = f"primary_error={last_error} | local_fallback_error={fallback_error}"
+            else:
+                last_error = fallback_error or last_error
 
         log_system_event(
             self.settings.logs_dir,
             "continuous_improvement_llm_failed",
-            {"llm_call_id": llm_call_id, "provider": provider, "model": model_name, "error": last_error},
+            {"llm_call_id": llm_call_id, "provider": primary.provider, "model": primary.model, "error": last_error},
         )
         return LLMJsonResult(
             ok=False,
             llm_call_id=llm_call_id,
             raw_response=None,
             error=last_error,
-            provider=provider,
-            model=model_name,
+            provider=primary.provider,
+            model=primary.model,
+            base_url=primary.base_url,
+            request_preview=request_preview,
+        )
+
+    def _endpoints(self, model_name: str) -> list[_ImprovementEndpoint]:
+        endpoints = [
+            _ImprovementEndpoint(
+                name="primary",
+                provider=self.settings.improvement_llm_provider,
+                base_url=self.settings.improvement_llm_base_url,
+                api_key=self.settings.improvement_llm_api_key,
+                model=model_name,
+                fallback_used=False,
+            )
+        ]
+        if self.settings.improvement_llm_local_fallback_enabled:
+            endpoints.append(
+                _ImprovementEndpoint(
+                    name="local_fallback",
+                    provider="openai-local",
+                    base_url=self.settings.openai_api_base,
+                    api_key=self.settings.openai_api_key or "local-llama",
+                    model=self.settings.openai_model,
+                    fallback_used=True,
+                )
+            )
+        return endpoints
+
+    def _try_endpoint(
+        self,
+        *,
+        endpoint: _ImprovementEndpoint,
+        llm_call_id: str,
+        messages: list[dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+        request_preview: dict[str, Any],
+        response_model: type[BaseModel],
+    ) -> LLMJsonResult:
+        request_body = self._request_body(
+            provider=endpoint.provider,
+            model=endpoint.model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        headers = self._request_headers(endpoint.provider, endpoint.api_key)
+        target = endpoint.base_url.rstrip("/") + "/chat/completions"
+        retries = 0 if endpoint.fallback_used else max(1, self.settings.improvement_llm_retries + 1) - 1
+        last_error = ""
+        for attempt in range(retries + 1):
+            try:
+                raw = self._post_json(target, request_body, headers)
+                content = self._extract_content(raw)
+                parsed = self._parse_json_content(content)
+                payload = response_model.model_validate(parsed)
+                log_system_event(
+                    self.settings.logs_dir,
+                    "continuous_improvement_llm_success",
+                    {
+                        "llm_call_id": llm_call_id,
+                        "provider": endpoint.provider,
+                        "model": endpoint.model,
+                        "base_url": endpoint.base_url,
+                        "fallback_used": endpoint.fallback_used,
+                        "attempt": attempt + 1,
+                    },
+                )
+                return LLMJsonResult(
+                    ok=True,
+                    llm_call_id=llm_call_id,
+                    payload=payload,
+                    raw_response=content,
+                    provider=endpoint.provider,
+                    model=endpoint.model,
+                    base_url=endpoint.base_url,
+                    fallback_used=endpoint.fallback_used,
+                    request_preview=request_preview,
+                )
+            except (OSError, ValueError, ValidationError) as exc:
+                last_error = str(exc)
+                LOGGER.warning("Improvement LLM call failed on %s attempt %s: %s", endpoint.name, attempt + 1, exc)
+                if attempt < retries:
+                    time.sleep(min(2**attempt, 8))
+        return LLMJsonResult(
+            ok=False,
+            llm_call_id=llm_call_id,
+            raw_response=None,
+            error=last_error,
+            provider=endpoint.provider,
+            model=endpoint.model,
+            base_url=endpoint.base_url,
+            fallback_used=endpoint.fallback_used,
             request_preview=request_preview,
         )
 
@@ -193,15 +309,15 @@ class ImprovementLLMClient:
             body["response_format"] = {"type": "json_object"}
         return body
 
-    def _request_headers(self, provider: str) -> dict[str, str]:
+    def _request_headers(self, provider: str, api_key: str | None) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
-        if not self.settings.improvement_llm_api_key:
+        if not api_key:
             return headers
         provider_key = provider.strip().lower()
         if provider_key == "mimo":
-            headers["api-key"] = self.settings.improvement_llm_api_key
+            headers["api-key"] = api_key
         else:
-            headers["Authorization"] = f"Bearer {self.settings.improvement_llm_api_key}"
+            headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
     def _post_json(self, endpoint: str, body: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:

@@ -998,6 +998,8 @@ class ContinuousImprovementLabRuntime:
                 agent="continuous_improvement_lab",
                 event_type="lab_cycle_failed",
                 cycle_id=cycle_id,
+                    "base_url": llm_result.base_url,
+                    "fallback_used": llm_result.fallback_used,
                 payload={"error": str(exc), "error_type": type(exc).__name__},
             )
             self._update_runtime(status=RuntimeStatus.FAILED, payload={"cycle_id": cycle_id, "error": str(exc)})
@@ -1020,6 +1022,10 @@ class ContinuousImprovementLabRuntime:
             agent="OrchestratorAgent",
             event_type="lab_proposals_consolidated",
             cycle_id=cycle_id,
+                    "provider": llm_result.provider,
+                    "model": llm_result.model,
+                    "base_url": llm_result.base_url,
+                    "fallback_used": llm_result.fallback_used,
             payload=stats,
         )
         stored: list[dict[str, Any]] = []
