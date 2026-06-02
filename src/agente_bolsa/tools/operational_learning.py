@@ -9,9 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from openai import OpenAI
-
 from agente_bolsa.config import Settings
+from agente_bolsa.llm_router import chat_completion_with_fallback
 from agente_bolsa.llm_usage import record_llm_response
 from agente_bolsa.models import new_id
 from agente_bolsa.storage import Store
@@ -822,11 +821,6 @@ def evaluate_shadow_rules(
 
 
 def _llm_learning_review(settings: Settings, report: dict[str, Any]) -> dict[str, Any]:
-    client = OpenAI(
-        api_key=settings.openai_api_key or "local-llama",
-        base_url=settings.openai_api_base,
-        timeout=settings.llm_timeout_seconds,
-    )
     prompt = {
         "summary": report["summary"],
         "rules": report["rules"][:20],
@@ -850,11 +844,11 @@ def _llm_learning_review(settings: Settings, report: dict[str, Any]) -> dict[str
         },
         {"role": "user", "content": json.dumps(prompt, ensure_ascii=True, default=str)},
     ]
-    response = client.chat.completions.create(
-        model=settings.openai_model,
+    response, _endpoint, _attempts = chat_completion_with_fallback(
+        settings,
+        messages=messages,
         temperature=0.1,
         max_tokens=max(settings.llm_max_tokens or 0, 1800),
-        messages=messages,
     )
     record_llm_response(settings, "operational_learning", response, prompt=messages)
     text = response.choices[0].message.content or "{}"

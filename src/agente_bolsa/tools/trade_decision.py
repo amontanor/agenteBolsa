@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from agente_bolsa.config import Settings
+from agente_bolsa.llm_router import chat_completion_with_fallback
 from agente_bolsa.llm_usage import record_llm_response
 from agente_bolsa.models import OrderPlan, PortfolioSnapshot, RiskDecision, TradeRecommendation
 from agente_bolsa.storage import Store
@@ -1804,11 +1805,6 @@ def request_trade_recommendations(
 ) -> dict[str, Any]:
     """Ask the configured LLM for structured trade recommendations."""
 
-    try:
-        from openai import OpenAI
-    except ImportError as exc:
-        raise RuntimeError("Instala openai con `pip install -r requirements.txt`.") from exc
-
     daily_learning_digest = load_daily_learning_context(settings.data_dir)
     operational_response_context = load_operational_response_context(settings.data_dir)
     annotated_technical_context = _annotate_technical_context_with_learning(
@@ -1832,11 +1828,6 @@ def request_trade_recommendations(
         decision_learning_context,
         operational_response_context,
         compact=True,
-    )
-    client = OpenAI(
-        api_key=settings.openai_api_key or "local-llama",
-        base_url=settings.openai_api_base,
-        timeout=settings.llm_timeout_seconds,
     )
     decision_max_tokens = max(settings.llm_max_tokens or 0, 3000)
     system_prompt = (
@@ -1884,15 +1875,16 @@ def request_trade_recommendations(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=True)},
         ]
-        return client.chat.completions.create(
-            model=settings.openai_model,
+        response, endpoint, _attempts = chat_completion_with_fallback(
+            settings,
+            messages=messages,
             temperature=settings.llm_temperature,
             max_tokens=max_tokens,
-            messages=messages,
-        ), messages
+        )
+        return response, messages, endpoint
 
     try:
-        response, messages = _create_completion(prompt, decision_max_tokens)
+        response, messages, _endpoint = _create_completion(prompt, decision_max_tokens)
         record_llm_response(settings, "trade_decision", response, prompt=messages)
     except Exception as exc:
         message = str(exc).lower()
@@ -1915,7 +1907,7 @@ def request_trade_recommendations(
             "weak_setups_3d": list(decision_learning_context.get("weak_setups_3d", []) or [])[:3],
             "active_operational_responses": list(decision_learning_context.get("active_operational_responses", []) or [])[:4],
         }
-        response, messages = _create_completion(fallback_prompt, min(decision_max_tokens, 1800))
+        response, messages, _endpoint = _create_completion(fallback_prompt, min(decision_max_tokens, 1800))
         record_llm_response(settings, "trade_decision_fallback", response, prompt=messages)
         prompt = fallback_prompt
     content = response.choices[0].message.content or "{}"

@@ -20,6 +20,14 @@ class Settings(BaseSettings):
     )
     openai_model: str = Field(
         default="qwen3.6-27b",
+    llm_primary_preflight_enabled: bool = Field(default=True, alias="LLM_PRIMARY_PREFLIGHT_ENABLED")
+    llm_fallback_enabled: bool = Field(default=True, alias="LLM_FALLBACK_ENABLED")
+    llm_fallback_api_key: str | None = Field(default=None, alias="LLM_FALLBACK_API_KEY")
+    llm_fallback_api_base: str = Field(
+        default="https://generativelanguage.googleapis.com/v1beta/openai/",
+        alias="LLM_FALLBACK_API_BASE",
+    )
+    llm_fallback_model: str = Field(default="gemini-3.5-flash", alias="LLM_FALLBACK_MODEL")
         validation_alias=AliasChoices("OPENAI_MODEL_NAME", "OPENAI_MODEL", "LLM_MODEL"),
     )
     llm_temperature: float = Field(default=0.2, alias="LLM_TEMPERATURE")

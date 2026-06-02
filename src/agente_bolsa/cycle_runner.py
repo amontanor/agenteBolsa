@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from .config import Settings
 from .crew import build_crew
 from .eventing import AgentPhase, EventReporter
+from .llm_router import select_preferred_endpoint
 from .logging_utils import log_system_event
 from .market_calendar import MarketCalendar
 from .models import Hypothesis, new_id
@@ -902,11 +903,12 @@ def run_observable_cycle(
 
     crew_result: str | None = None
     if use_crew:
+        endpoint, _attempts = select_preferred_endpoint(settings)
         reporter.emit(
             "orchestrator",
             "crew_started",
             run_id,
-            f"Lanzando CrewAI contra {settings.openai_model} en {settings.openai_api_base}.",
+            f"Lanzando CrewAI contra {endpoint.model} en {endpoint.base_url}.",
         )
         try:
             crew = build_crew(settings)

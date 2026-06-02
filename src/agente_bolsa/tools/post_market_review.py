@@ -10,9 +10,8 @@ import time
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from openai import OpenAI
-
 from agente_bolsa.config import Settings
+from agente_bolsa.llm_router import chat_completion_with_fallback
 from agente_bolsa.llm_usage import record_llm_response
 from agente_bolsa.models import PortfolioSnapshot
 from agente_bolsa.storage import Store
@@ -199,11 +198,6 @@ def load_post_market_learning_context(data_dir: Path) -> dict[str, Any]:
 
 
 def _llm_review(settings: Settings, report: dict[str, Any]) -> dict[str, Any]:
-    client = OpenAI(
-        api_key=settings.openai_api_key or "local-llama",
-        base_url=settings.openai_api_base,
-        timeout=settings.llm_timeout_seconds,
-    )
     prompt = {
         "session_date": report["session_date"],
         "summary": report["summary"],
@@ -230,11 +224,11 @@ def _llm_review(settings: Settings, report: dict[str, Any]) -> dict[str, Any]:
         },
         {"role": "user", "content": json.dumps(prompt, ensure_ascii=True)},
     ]
-    response = client.chat.completions.create(
-        model=settings.openai_model,
+    response, _endpoint, _attempts = chat_completion_with_fallback(
+        settings,
+        messages=messages,
         temperature=0.1,
         max_tokens=max(settings.llm_max_tokens or 0, 1800),
-        messages=messages,
     )
     record_llm_response(settings, "post_market_review", response, prompt=messages)
     text = response.choices[0].message.content or "{}"

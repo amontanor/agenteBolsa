@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from .config import Settings
+from .llm_router import select_preferred_endpoint
 
 
 AGENT_ORDER = [
@@ -38,9 +39,10 @@ def build_crew(settings: Settings):
     `status` and `init-db` still work before dependencies are installed.
     """
 
-    os.environ["OPENAI_API_KEY"] = settings.openai_api_key or "local-llama"
-    os.environ["OPENAI_API_BASE"] = settings.openai_api_base
-    os.environ["OPENAI_BASE_URL"] = settings.openai_api_base
+    endpoint, _attempts = select_preferred_endpoint(settings)
+    os.environ["OPENAI_API_KEY"] = endpoint.api_key
+    os.environ["OPENAI_API_BASE"] = endpoint.base_url
+    os.environ["OPENAI_BASE_URL"] = endpoint.base_url
     os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
     os.environ.setdefault("OTEL_SDK_DISABLED", "true")
 
@@ -54,9 +56,9 @@ def build_crew(settings: Settings):
     config_dir = Path(__file__).parent / "config"
     agent_config = _load_yaml(config_dir / "agents.yaml")
     shared_llm = LLM(
-        model=settings.openai_model,
-        base_url=settings.openai_api_base,
-        api_key=settings.openai_api_key or "local-llama",
+        model=endpoint.model,
+        base_url=endpoint.base_url,
+        api_key=endpoint.api_key,
         temperature=settings.llm_temperature,
         max_tokens=settings.llm_max_tokens,
         timeout=settings.llm_timeout_seconds,

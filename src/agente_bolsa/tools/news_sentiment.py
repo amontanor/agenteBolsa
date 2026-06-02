@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agente_bolsa.config import Settings
+from agente_bolsa.llm_router import chat_completion_with_fallback
 from agente_bolsa.llm_usage import record_llm_response
 from .reporting import write_json_report
 
@@ -131,16 +132,6 @@ def _llm_sentiment(settings: Settings, symbol: str, candidate: dict[str, Any], n
             "risk_flags": ["sin_noticias"],
         }
 
-    try:
-        from openai import OpenAI
-    except ImportError as exc:
-        raise RuntimeError("Instala openai con `pip install -r requirements.txt`.") from exc
-
-    client = OpenAI(
-        api_key=settings.openai_api_key or "local-llama",
-        base_url=settings.openai_api_base,
-        timeout=settings.llm_timeout_seconds,
-    )
     prompt = {
         "symbol": symbol,
         "technical_direction": candidate.get("direction"),
@@ -164,11 +155,11 @@ def _llm_sentiment(settings: Settings, symbol: str, candidate: dict[str, Any], n
             "content": json.dumps(prompt, ensure_ascii=True),
         },
     ]
-    response = client.chat.completions.create(
-        model=settings.openai_model,
+    response, _endpoint, _attempts = chat_completion_with_fallback(
+        settings,
+        messages=messages,
         temperature=settings.llm_temperature,
         max_tokens=settings.llm_max_tokens,
-        messages=messages,
     )
     record_llm_response(settings, "news_sentiment", response, prompt=messages)
     content = response.choices[0].message.content or "{}"
