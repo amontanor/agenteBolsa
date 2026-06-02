@@ -15,6 +15,7 @@ class LLMEndpoint:
     base_url: str
     model: str
     preflight: bool = False
+    reasoning_effort: str | None = None
 
 
 def configured_llm_endpoints(settings: Settings) -> list[LLMEndpoint]:
@@ -35,6 +36,7 @@ def configured_llm_endpoints(settings: Settings) -> list[LLMEndpoint]:
                 base_url=settings.llm_fallback_api_base,
                 model=settings.llm_fallback_model,
                 preflight=False,
+                reasoning_effort=settings.llm_fallback_reasoning_effort,
             )
         )
     unique: list[LLMEndpoint] = []
@@ -114,11 +116,16 @@ def chat_completion_with_fallback(
             continue
         try:
             client = build_openai_client(endpoint, settings.llm_timeout_seconds)
+            request_kwargs = {
+                "model": endpoint.model,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "messages": messages,
+            }
+            if endpoint.reasoning_effort:
+                request_kwargs["reasoning_effort"] = endpoint.reasoning_effort
             response = client.chat.completions.create(
-                model=endpoint.model,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                messages=messages,
+                **request_kwargs,
             )
             attempts.append(
                 {

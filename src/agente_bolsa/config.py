@@ -27,6 +27,7 @@ class Settings(BaseSettings):
         default="https://generativelanguage.googleapis.com/v1beta/openai/",
         alias="LLM_FALLBACK_API_BASE",
     )
+    llm_fallback_reasoning_effort: str | None = Field(default="low", alias="LLM_FALLBACK_REASONING_EFFORT")
     llm_fallback_model: str = Field(default="gemini-3.5-flash", alias="LLM_FALLBACK_MODEL")
         validation_alias=AliasChoices("OPENAI_MODEL_NAME", "OPENAI_MODEL", "LLM_MODEL"),
     )

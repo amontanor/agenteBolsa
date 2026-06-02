@@ -20,6 +20,7 @@ def test_configured_llm_endpoints_prioritize_primary_then_fallback():
     assert endpoints[0].model == "qwen3.6-27b"
     assert endpoints[1].base_url == "https://generativelanguage.googleapis.com/v1beta/openai/"
     assert endpoints[1].model == "gemini-3.5-flash"
+    assert endpoints[1].reasoning_effort == "low"
 
 
 def test_select_preferred_endpoint_uses_fallback_when_primary_preflight_fails(monkeypatch):
