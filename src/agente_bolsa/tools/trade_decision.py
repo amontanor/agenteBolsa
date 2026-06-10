@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
 from typing import Any
 
 from agente_bolsa.config import Settings
-from agente_bolsa.llm_router import chat_completion_with_fallback
+from agente_bolsa.llm_router import chat_for_role
 from agente_bolsa.llm_usage import record_llm_response
 from agente_bolsa.models import OrderPlan, PortfolioSnapshot, RiskDecision, TradeRecommendation
 from agente_bolsa.storage import Store
@@ -258,7 +258,10 @@ def _effective_long_only_capacity(settings: Settings, selected_count: int) -> in
 
 def _effective_trade_recommendation_limit(settings: Settings, technical_context: dict[str, Any]) -> int:
     selected = list((technical_context or {}).get("selected_candidates", []) or [])
-    return _effective_long_only_capacity(settings, len(selected))
+    base_limit = max(1, int(settings.max_orders_per_cycle))
+    if settings.allow_short_selling:
+        return base_limit
+    return max(base_limit, _effective_long_only_capacity(settings, len(selected)))
 
 
 def _effective_buy_plan_limit(settings: Settings, recommendations: list[TradeRecommendation]) -> int:
@@ -275,10 +278,28 @@ def _effective_daily_buy_limit(settings: Settings, plans: list[Any]) -> int:
     base_limit = max(0, int(settings.max_daily_buy_orders))
     buy_count = sum(1 for item in plans if str(getattr(item, "side", "")).lower() == "buy")
     if _can_expand_long_only_capacity(settings) and buy_count >= 5:
-        return max(base_limit, 5)
-    if _can_expand_long_only_capacity(settings) and buy_count >= 4:
-        return max(base_limit, 4)
-    return base_limit
+        limit = max(base_limit, 5)
+    elif _can_expand_long_only_capacity(settings) and buy_count >= 4:
+        limit = max(base_limit, 4)
+    else:
+        limit = base_limit
+    return _apply_risk_off_factor(settings, limit)
+
+
+def _apply_risk_off_factor(settings: Settings, limit: int) -> int:
+    """Reduce el limite de compras si la tesis de mercado es risk_off (T3.1)."""
+
+    if not getattr(settings, "macro_thesis_enabled", True):
+        return limit
+    try:
+        from .macro_context import load_latest_thesis, risk_off_buy_factor
+
+        factor = risk_off_buy_factor(settings, load_latest_thesis(settings))
+        if factor < 1.0:
+            return max(0, int(limit * factor))
+    except Exception:  # noqa: BLE001 - la tesis nunca debe romper la decision.
+        return limit
+    return limit
 
 
 def _deterministic_selection_limit(settings: Settings) -> int:
@@ -379,6 +400,7 @@ def _llm_prompt_payload(
     daily_learning_digest: dict[str, Any],
     decision_learning_context: dict[str, Any],
     operational_response_context: dict[str, Any],
+    market_state: dict[str, Any] | None = None,
     *,
     compact: bool,
 ) -> dict[str, Any]:
@@ -402,6 +424,7 @@ def _llm_prompt_payload(
         "portfolio": _compact_portfolio_for_prompt(portfolio) if compact else asdict(portfolio),
         "technical_candidates": technical_candidates,
         "news_sentiment": _compact_sentiment_for_prompt(sentiment_context, technical_context) if compact else sentiment_context,
+        "market_state": market_state or {},
         "portfolio_rebalance": rebalance_context or {},
         "daily_learning_digest": _compact_daily_learning_for_prompt(daily_learning_digest) if compact else daily_learning_digest,
         "decision_learning_context": decision_learning_context,
@@ -426,7 +449,58 @@ def _llm_prompt_payload(
             "min_confidence_to_trade": settings.min_llm_confidence_to_trade,
             "allow_short_selling": settings.allow_short_selling,
         },
+        "lecciones_validadas": _lessons_block_for_prompt(settings, technical_context),
+        "market_thesis": _market_thesis_for_prompt(settings),
     }
+
+
+def _market_thesis_for_prompt(settings: Settings) -> dict[str, Any]:
+    """Tesis de mercado compactada para el prompt (T3.1)."""
+
+    if not getattr(settings, "macro_thesis_enabled", True):
+        return {}
+    try:
+        from .macro_context import load_latest_thesis
+
+        thesis = load_latest_thesis(settings)
+        if not thesis:
+            return {}
+        payload = thesis.get("payload", {}) or {}
+        return {
+            "thesis_date": thesis.get("thesis_date"),
+            "stance": thesis.get("stance"),
+            "confidence": thesis.get("confidence"),
+            "key_risks": (payload.get("key_risks") or [])[:5],
+            "key_catalysts": (payload.get("key_catalysts") or [])[:5],
+            "sector_bias": payload.get("sector_bias") or {},
+        }
+    except Exception:  # noqa: BLE001 - acceso defensivo.
+        return {}
+
+
+def _lessons_block_for_prompt(settings: Settings, technical_context: dict[str, Any]) -> list[dict[str, Any]]:
+    """Inyecta lecciones validadas relevantes (T2.4), cap ~600 tokens."""
+
+    if not getattr(settings, "lessons_injection_enabled", True):
+        return []
+    try:
+        from ..continuous_improvement.lesson_distiller import relevant_lessons
+        from ..continuous_improvement.context_compaction import truncate_string
+        from ..storage import Store
+
+        store = Store(settings.database_path, settings.agent_logs_dir)
+        lessons = relevant_lessons(store, k=6)
+        block = [
+            {
+                "scope": item.get("scope"),
+                "statement": truncate_string(item.get("statement", ""), 240),
+                "confidence": item.get("confidence"),
+            }
+            for item in lessons
+        ]
+        return block
+    except Exception:  # noqa: BLE001 - la inyeccion nunca debe romper la decision.
+        return []
 
 
 def _latest_report(data_dir: Path, prefix: str) -> Path | None:
@@ -459,7 +533,10 @@ def load_latest_technical_candidates(
         return {"path": None, "top_longs": [], "top_shorts": [], "all_candidates": []}
 
     report = json.loads(path.read_text(encoding="utf-8"))
-    all_candidates = report.get("all_candidates", []) or []
+    all_candidates = _annotate_candidates_with_top_long_rank(
+        report.get("all_candidates", []) or [],
+        report.get("top_longs", []) or [],
+    )
     daily_learning_digest = load_daily_learning_context(data_dir)
     operational_response_context = load_operational_response_context(data_dir)
     settings = Settings(DATA_DIR=data_dir)
@@ -475,7 +552,10 @@ def load_latest_technical_candidates(
         "path": str(path),
         "run_id": report.get("run_id"),
         "as_of": report.get("as_of"),
-        "top_longs": report.get("top_longs", [])[:per_side],
+        "top_longs": _annotate_candidates_with_top_long_rank(
+            report.get("top_longs", [])[:per_side],
+            report.get("top_longs", []) or [],
+        ),
         "top_shorts": report.get("top_shorts", [])[:per_side],
         "selected_candidates": selected_candidates,
         "selection_metadata": selection_metadata,
@@ -752,6 +832,690 @@ def _candidate_learning_features(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _annotate_candidates_with_top_long_rank(
+    candidates: list[dict[str, Any]],
+    top_longs: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    top_long_ranks = {
+        str(item.get("symbol") or "").upper(): idx
+        for idx, item in enumerate(top_longs or [], start=1)
+        if isinstance(item, dict) and str(item.get("symbol") or "").strip()
+    }
+    annotated: list[dict[str, Any]] = []
+    for candidate in candidates or []:
+        if not isinstance(candidate, dict):
+            continue
+        symbol = str(candidate.get("symbol") or "").upper()
+        top_long_rank = top_long_ranks.get(symbol)
+        if top_long_rank is None and candidate.get("top_long_rank") is None:
+            annotated.append(candidate)
+            continue
+        annotated.append(
+            {
+                **candidate,
+                "top_long_rank": candidate.get("top_long_rank") or top_long_rank,
+            }
+        )
+    return annotated
+
+
+def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
+    return max(low, min(high, value))
+
+
+def _entry_reward_risk(recommendation: TradeRecommendation) -> float | None:
+    entry = _float(recommendation.entry_price)
+    stop = _float(recommendation.stop_loss)
+    take = _float(recommendation.take_profit)
+    if entry is None or stop is None or take is None or entry <= 0 or stop <= 0 or take <= 0:
+        return None
+    risk = entry - stop
+    reward = take - entry
+    if risk <= 0 or reward <= 0:
+        return None
+    return reward / risk
+
+
+def _entry_score_v2(
+    settings: Settings,
+    recommendation: TradeRecommendation,
+    *,
+    score: int,
+    setup_quality: str,
+    direction: str,
+    rsi: float | None,
+    sma20_distance: float | None,
+    macd: float | None,
+    macd_signal: float | None,
+    return_20d: float | None,
+    volume_z: float | None,
+    relative_return_20d: float | None,
+    sentiment_score: float | None,
+    sentiment_confidence: float,
+    sentiment_failed: bool,
+    learning_prior: dict[str, Any],
+) -> dict[str, Any]:
+    reward_risk = _entry_reward_risk(recommendation)
+    prior_edge_3d = _float(learning_prior.get("expected_edge_3d"))
+    prior_sample_3d = int(learning_prior.get("sample_size_3d") or 0)
+    prior_confidence = _float(learning_prior.get("confidence_weight_3d")) or 0.0
+
+    if rsi is None:
+        rsi_component = 0.55
+    elif 52 <= rsi <= 76:
+        rsi_component = 0.95
+    elif 45 <= rsi < 52:
+        rsi_component = 0.55
+    elif 76 < rsi <= 84:
+        rsi_component = 0.70
+    else:
+        rsi_component = 0.30
+
+    if sma20_distance is None:
+        sma20_component = 0.55
+    elif sma20_distance < -0.04:
+        sma20_component = 0.35
+    elif sma20_distance <= settings.entry_quality_max_sma20_distance:
+        sma20_component = 0.95
+    elif sma20_distance <= settings.entry_quality_extended_sma20_distance:
+        sma20_component = 0.75
+    elif sma20_distance <= 0.20:
+        sma20_component = 0.45
+    else:
+        sma20_component = 0.20
+
+    sentiment_missing = sentiment_failed or sentiment_score is None
+    if sentiment_score is None:
+        sentiment_component = 0.55
+    elif sentiment_confidence >= 0.5:
+        sentiment_component = _clamp((sentiment_score + 1.0) / 2.0)
+    else:
+        sentiment_component = 0.60
+    if sentiment_failed:
+        sentiment_component = min(sentiment_component, 0.30)
+
+    learning_component = 0.55
+    if prior_edge_3d is not None and prior_sample_3d >= 4 and prior_confidence >= 0.35:
+        learning_component = _clamp(0.55 + (prior_edge_3d * 8.0), 0.20, 0.90)
+
+    components = {
+        "score": _clamp(score / 20.0),
+        "setup": 1.0 if setup_quality == "strong" and direction == "long" else 0.0,
+        "momentum_20d": 0.55 if return_20d is None else _clamp(0.50 + return_20d * 3.0),
+        "sma20_distance": sma20_component,
+        "rsi": rsi_component,
+        "volume": 0.55 if volume_z is None else _clamp(0.55 + volume_z * 0.20),
+        "relative_strength": 0.50 if relative_return_20d is None else _clamp(0.55 + relative_return_20d * 5.0),
+        "macd": 0.55 if macd is None or macd_signal is None else (0.90 if macd > macd_signal else 0.20),
+        "reward_risk": 0.0 if reward_risk is None else _clamp(reward_risk / 3.0),
+        "sentiment": sentiment_component,
+        "learning_prior": learning_component,
+    }
+    weights = {
+        "score": 0.18,
+        "setup": 0.12,
+        "momentum_20d": 0.10,
+        "sma20_distance": 0.10,
+        "rsi": 0.08,
+        "volume": 0.08,
+        "relative_strength": 0.07,
+        "macd": 0.07,
+        "reward_risk": 0.12,
+        "sentiment": 0.04,
+        "learning_prior": 0.04,
+    }
+    raw_score = sum(components[key] * weights[key] for key in weights)
+    if sentiment_missing and not settings.news_sentiment_fail_closed_for_buys:
+        missing_data_penalty = 0.03
+    else:
+        missing_data_penalty = 0.06 if sentiment_missing else 0.0
+    final_score = _clamp(raw_score - missing_data_penalty)
+
+    hard_blocks = []
+    if reward_risk is None:
+        hard_blocks.append("reward_risk_indisponible")
+    elif reward_risk < settings.entry_score_v2_min_reward_risk:
+        hard_blocks.append("reward_risk_bajo")
+
+    reasons = []
+    if sentiment_missing:
+        reasons.append("sentimiento_no_validado_penalizado")
+    if final_score < settings.entry_score_v2_min:
+        reasons.append("score_agregado_bajo")
+    if hard_blocks:
+        reasons.extend(hard_blocks)
+
+    micro_experiment = (
+        not hard_blocks
+        and settings.entry_score_v2_micro_min <= final_score < settings.entry_score_v2_min
+    )
+    return {
+        "score": round(final_score, 4),
+        "raw_score": round(raw_score, 4),
+        "approved": not hard_blocks and final_score >= settings.entry_score_v2_min,
+        "micro_experiment": micro_experiment,
+        "missing_data": {"sentiment": sentiment_missing},
+        "missing_data_penalty": round(missing_data_penalty, 4),
+        "reward_risk": round(reward_risk, 4) if reward_risk is not None else None,
+        "min_score": settings.entry_score_v2_min,
+        "micro_min_score": settings.entry_score_v2_micro_min,
+        "min_reward_risk": settings.entry_score_v2_min_reward_risk,
+        "components": {key: round(value, 4) for key, value in components.items()},
+        "hard_blocks": hard_blocks,
+        "reasons": reasons,
+    }
+
+
+def _fallback_constructive_extension_exception(
+    settings: Settings,
+    candidate: dict[str, Any],
+    *,
+    score: int | float | None = None,
+    return_20d: float | None = None,
+    rsi: float | None = None,
+    sma20_distance: float | None = None,
+    volume_z: float | None = None,
+    confirmed_patterns: int | None = None,
+) -> bool:
+    if not settings.entry_quality_fallback_constructive_extension_enabled:
+        return False
+    selection_rank = int(candidate.get("selection_rank") or 0)
+    score_value = int(_float(score if score is not None else candidate.get("score")) or 0)
+    return_20d_value = return_20d if return_20d is not None else _float(_technical_value(candidate, "return_20d"))
+    rsi_value = rsi if rsi is not None else _float(_technical_value(candidate, "rsi_14"))
+    volume_value = volume_z if volume_z is not None else _float(_technical_value(candidate, "volume_zscore_20"))
+    if sma20_distance is None:
+        close = _float(_technical_value(candidate, "close"))
+        sma20 = _float(_technical_value(candidate, "sma_20"))
+        sma20_distance = ((close - sma20) / sma20) if close and sma20 else None
+    confirmed_count = confirmed_patterns if confirmed_patterns is not None else len(_confirmed_bullish_patterns(candidate))
+    return bool(
+        selection_rank > 0
+        and selection_rank <= int(settings.entry_quality_fallback_constructive_extension_max_selection_rank)
+        and score_value >= int(settings.entry_quality_fallback_constructive_extension_min_score)
+        and return_20d_value is not None
+        and return_20d_value >= float(settings.entry_quality_fallback_constructive_extension_min_return_20d)
+        and rsi_value is not None
+        and rsi_value >= float(settings.entry_quality_fallback_constructive_extension_min_rsi)
+        and sma20_distance is not None
+        and sma20_distance > float(settings.entry_quality_max_sma20_distance)
+        and sma20_distance <= float(settings.entry_quality_fallback_constructive_extension_max_sma20_distance)
+        and volume_value is not None
+        and volume_value >= float(settings.entry_quality_fallback_constructive_extension_min_volume_z)
+        and confirmed_count >= int(settings.entry_quality_fallback_constructive_extension_min_bullish_patterns)
+    )
+
+
+def _fallback_momentum_extension_exception(
+    settings: Settings,
+    candidate: dict[str, Any],
+    *,
+    score: int | float | None = None,
+    return_20d: float | None = None,
+    rsi: float | None = None,
+    sma20_distance: float | None = None,
+    volume_z: float | None = None,
+    confirmed_patterns: int | None = None,
+) -> bool:
+    if not settings.entry_quality_fallback_momentum_extension_enabled:
+        return False
+    selection_rank = int(candidate.get("selection_rank") or 0)
+    score_value = int(_float(score if score is not None else candidate.get("score")) or 0)
+    return_20d_value = return_20d if return_20d is not None else _float(_technical_value(candidate, "return_20d"))
+    rsi_value = rsi if rsi is not None else _float(_technical_value(candidate, "rsi_14"))
+    volume_value = volume_z if volume_z is not None else _float(_technical_value(candidate, "volume_zscore_20"))
+    if sma20_distance is None:
+        close = _float(_technical_value(candidate, "close"))
+        sma20 = _float(_technical_value(candidate, "sma_20"))
+        sma20_distance = ((close - sma20) / sma20) if close and sma20 else None
+    confirmed_count = confirmed_patterns if confirmed_patterns is not None else len(_confirmed_bullish_patterns(candidate))
+    return bool(
+        selection_rank > 0
+        and selection_rank <= int(settings.entry_quality_fallback_momentum_extension_max_selection_rank)
+        and score_value >= int(settings.entry_quality_fallback_momentum_extension_min_score)
+        and return_20d_value is not None
+        and return_20d_value >= float(settings.entry_quality_fallback_momentum_extension_min_return_20d)
+        and rsi_value is not None
+        and float(settings.entry_quality_fallback_momentum_extension_min_rsi)
+        <= rsi_value
+        <= float(settings.entry_quality_fallback_momentum_extension_max_rsi)
+        and sma20_distance is not None
+        and sma20_distance > float(settings.entry_quality_max_sma20_distance)
+        and sma20_distance <= float(settings.entry_quality_fallback_momentum_extension_max_sma20_distance)
+        and volume_value is not None
+        and volume_value >= float(settings.entry_quality_fallback_momentum_extension_min_volume_z)
+        and confirmed_count >= int(settings.entry_quality_fallback_momentum_extension_min_bullish_patterns)
+    )
+
+
+def _fallback_weak_volume_momentum_extension_exception(
+    settings: Settings,
+    candidate: dict[str, Any],
+    *,
+    score: int | float | None = None,
+    return_20d: float | None = None,
+    rsi: float | None = None,
+    sma20_distance: float | None = None,
+    volume_z: float | None = None,
+    confirmed_patterns: int | None = None,
+) -> bool:
+    if not settings.entry_quality_fallback_weak_volume_momentum_extension_enabled:
+        return False
+    selection_reason = str(candidate.get("selection_reason") or "")
+    if (
+        "weak_volume_penalty" not in selection_reason
+        or "confirmed_pattern" not in selection_reason
+        or "leader_momentum_extension" in selection_reason
+        or "same_session_intraday_momentum" in selection_reason
+    ):
+        return False
+    selection_rank = int(candidate.get("selection_rank") or 0)
+    score_value = int(_float(score if score is not None else candidate.get("score")) or 0)
+    return_20d_value = return_20d if return_20d is not None else _float(_technical_value(candidate, "return_20d"))
+    rsi_value = rsi if rsi is not None else _float(_technical_value(candidate, "rsi_14"))
+    volume_value = volume_z if volume_z is not None else _float(_technical_value(candidate, "volume_zscore_20"))
+    if sma20_distance is None:
+        close = _float(_technical_value(candidate, "close"))
+        sma20 = _float(_technical_value(candidate, "sma_20"))
+        sma20_distance = ((close - sma20) / sma20) if close and sma20 else None
+    confirmed_count = confirmed_patterns if confirmed_patterns is not None else len(_confirmed_bullish_patterns(candidate))
+    return bool(
+        selection_rank > 0
+        and selection_rank <= int(settings.entry_quality_fallback_weak_volume_momentum_extension_max_selection_rank)
+        and score_value >= int(settings.entry_quality_fallback_weak_volume_momentum_extension_min_score)
+        and return_20d_value is not None
+        and return_20d_value >= float(settings.entry_quality_fallback_weak_volume_momentum_extension_min_return_20d)
+        and rsi_value is not None
+        and float(settings.entry_quality_fallback_weak_volume_momentum_extension_min_rsi)
+        <= rsi_value
+        <= float(settings.entry_quality_fallback_weak_volume_momentum_extension_max_rsi)
+        and sma20_distance is not None
+        and float(settings.entry_quality_fallback_weak_volume_momentum_extension_min_sma20_distance)
+        <= sma20_distance
+        <= float(settings.entry_quality_fallback_weak_volume_momentum_extension_max_sma20_distance)
+        and volume_value is not None
+        and float(settings.entry_quality_fallback_weak_volume_momentum_extension_min_volume_z)
+        <= volume_value
+        <= float(settings.entry_quality_fallback_weak_volume_momentum_extension_max_volume_z)
+        and confirmed_count
+        >= int(settings.entry_quality_fallback_weak_volume_momentum_extension_min_bullish_patterns)
+    )
+
+
+def _fallback_relative_strength_pullback_extension_exception(
+    settings: Settings,
+    candidate: dict[str, Any],
+    *,
+    score: int | float | None = None,
+    return_20d: float | None = None,
+    relative_return_20d: float | None = None,
+    rsi: float | None = None,
+    sma20_distance: float | None = None,
+    volume_z: float | None = None,
+    confirmed_patterns: int | None = None,
+) -> bool:
+    if not settings.entry_quality_fallback_relative_strength_pullback_extension_enabled:
+        return False
+    selection_reason = str(candidate.get("selection_reason") or "")
+    if selection_reason != "profile_edge_high_sample,weak_volume_penalty,confirmed_pattern,relative_strength":
+        return False
+    selection_rank = int(candidate.get("selection_rank") or 0)
+    score_value = int(_float(score if score is not None else candidate.get("score")) or 0)
+    return_20d_value = return_20d if return_20d is not None else _float(_technical_value(candidate, "return_20d"))
+    relative_return_value = (
+        relative_return_20d
+        if relative_return_20d is not None
+        else _float(_technical_value(candidate, "relative_return_20d"))
+    )
+    rsi_value = rsi if rsi is not None else _float(_technical_value(candidate, "rsi_14"))
+    volume_value = volume_z if volume_z is not None else _float(_technical_value(candidate, "volume_zscore_20"))
+    if sma20_distance is None:
+        close = _float(_technical_value(candidate, "close"))
+        sma20 = _float(_technical_value(candidate, "sma_20"))
+        sma20_distance = ((close - sma20) / sma20) if close and sma20 else None
+    confirmed_count = confirmed_patterns if confirmed_patterns is not None else len(_confirmed_bullish_patterns(candidate))
+    return bool(
+        selection_rank > 0
+        and selection_rank <= int(settings.entry_quality_fallback_relative_strength_pullback_extension_max_selection_rank)
+        and score_value >= int(settings.entry_quality_fallback_relative_strength_pullback_extension_min_score)
+        and return_20d_value is not None
+        and float(settings.entry_quality_fallback_relative_strength_pullback_extension_min_return_20d)
+        <= return_20d_value
+        <= float(settings.entry_quality_fallback_relative_strength_pullback_extension_max_return_20d)
+        and relative_return_value is not None
+        and float(settings.entry_quality_fallback_relative_strength_pullback_extension_min_relative_return_20d)
+        <= relative_return_value
+        <= float(settings.entry_quality_fallback_relative_strength_pullback_extension_max_relative_return_20d)
+        and rsi_value is not None
+        and float(settings.entry_quality_fallback_relative_strength_pullback_extension_min_rsi)
+        <= rsi_value
+        <= float(settings.entry_quality_fallback_relative_strength_pullback_extension_max_rsi)
+        and sma20_distance is not None
+        and float(settings.entry_quality_fallback_relative_strength_pullback_extension_min_sma20_distance)
+        <= sma20_distance
+        <= float(settings.entry_quality_fallback_relative_strength_pullback_extension_max_sma20_distance)
+        and volume_value is not None
+        and float(settings.entry_quality_fallback_relative_strength_pullback_extension_min_volume_z)
+        <= volume_value
+        <= float(settings.entry_quality_fallback_relative_strength_pullback_extension_max_volume_z)
+        and confirmed_count
+        >= int(settings.entry_quality_fallback_relative_strength_pullback_extension_min_bullish_patterns)
+    )
+
+
+def _fallback_leader_pullback_extension_exception(
+    settings: Settings,
+    candidate: dict[str, Any],
+    *,
+    score: int | float | None = None,
+    return_20d: float | None = None,
+    rsi: float | None = None,
+    sma20_distance: float | None = None,
+    volume_z: float | None = None,
+    confirmed_patterns: int | None = None,
+) -> bool:
+    if not settings.entry_quality_fallback_leader_pullback_extension_enabled:
+        return False
+    selection_reason = str(candidate.get("selection_reason") or "")
+    if selection_reason != (
+        "profile_edge_high_sample,confirmed_pattern,leader_momentum_extension,"
+        "relative_strength,weak_volume_tolerated_for_leader"
+    ):
+        return False
+    selection_rank = int(candidate.get("selection_rank") or 0)
+    score_value = int(_float(score if score is not None else candidate.get("score")) or 0)
+    return_20d_value = return_20d if return_20d is not None else _float(_technical_value(candidate, "return_20d"))
+    rsi_value = rsi if rsi is not None else _float(_technical_value(candidate, "rsi_14"))
+    volume_value = volume_z if volume_z is not None else _float(_technical_value(candidate, "volume_zscore_20"))
+    if sma20_distance is None:
+        close = _float(_technical_value(candidate, "close"))
+        sma20 = _float(_technical_value(candidate, "sma_20"))
+        sma20_distance = ((close - sma20) / sma20) if close and sma20 else None
+    confirmed_count = confirmed_patterns if confirmed_patterns is not None else len(_confirmed_bullish_patterns(candidate))
+    return bool(
+        selection_rank > 0
+        and selection_rank <= int(settings.entry_quality_fallback_leader_pullback_extension_max_selection_rank)
+        and score_value >= int(settings.entry_quality_fallback_leader_pullback_extension_min_score)
+        and return_20d_value is not None
+        and float(settings.entry_quality_fallback_leader_pullback_extension_min_return_20d)
+        <= return_20d_value
+        <= float(settings.entry_quality_fallback_leader_pullback_extension_max_return_20d)
+        and rsi_value is not None
+        and float(settings.entry_quality_fallback_leader_pullback_extension_min_rsi)
+        <= rsi_value
+        <= float(settings.entry_quality_fallback_leader_pullback_extension_max_rsi)
+        and sma20_distance is not None
+        and float(settings.entry_quality_fallback_leader_pullback_extension_min_sma20_distance)
+        <= sma20_distance
+        <= float(settings.entry_quality_fallback_leader_pullback_extension_max_sma20_distance)
+        and volume_value is not None
+        and float(settings.entry_quality_fallback_leader_pullback_extension_min_volume_z)
+        <= volume_value
+        <= float(settings.entry_quality_fallback_leader_pullback_extension_max_volume_z)
+        and confirmed_count >= int(settings.entry_quality_fallback_leader_pullback_extension_min_bullish_patterns)
+    )
+
+
+def _fallback_top_long_follow_through_exception(
+    settings: Settings,
+    candidate: dict[str, Any],
+    *,
+    score: int | float | None = None,
+    return_20d: float | None = None,
+    rsi: float | None = None,
+    volume_z: float | None = None,
+    confirmed_patterns: int | None = None,
+) -> bool:
+    if not settings.entry_quality_fallback_top_long_follow_through_enabled:
+        return False
+    selection_reason = str(candidate.get("selection_reason") or "")
+    required_tokens = {
+        "profile_edge_high_sample",
+        "weak_volume_penalty",
+        "confirmed_pattern",
+        "top_long_alignment",
+    }
+    if not required_tokens.issubset(set(selection_reason.split(","))):
+        return False
+    selection_rank = int(candidate.get("selection_rank") or 0)
+    score_value = int(_float(score if score is not None else candidate.get("score")) or 0)
+    return_20d_value = return_20d if return_20d is not None else _float(_technical_value(candidate, "return_20d"))
+    rsi_value = rsi if rsi is not None else _float(_technical_value(candidate, "rsi_14"))
+    volume_value = volume_z if volume_z is not None else _float(_technical_value(candidate, "volume_zscore_20"))
+    confirmed_count = confirmed_patterns if confirmed_patterns is not None else len(_confirmed_bullish_patterns(candidate))
+    return bool(
+        selection_rank > 0
+        and selection_rank <= int(settings.entry_quality_fallback_top_long_follow_through_max_selection_rank)
+        and score_value >= int(settings.entry_quality_fallback_top_long_follow_through_min_score)
+        and return_20d_value is not None
+        and float(settings.entry_quality_fallback_top_long_follow_through_min_return_20d)
+        <= return_20d_value
+        <= float(settings.entry_quality_fallback_top_long_follow_through_max_return_20d)
+        and rsi_value is not None
+        and float(settings.entry_quality_fallback_top_long_follow_through_min_rsi)
+        <= rsi_value
+        <= float(settings.entry_quality_fallback_top_long_follow_through_max_rsi)
+        and volume_value is not None
+        and float(settings.entry_quality_fallback_top_long_follow_through_min_volume_z)
+        <= volume_value
+        <= float(settings.entry_quality_fallback_top_long_follow_through_max_volume_z)
+        and confirmed_count >= int(settings.entry_quality_fallback_top_long_follow_through_min_bullish_patterns)
+    )
+
+
+def _prior_error_volume_confirmation_override_exception(
+    settings: Settings,
+    candidate: dict[str, Any],
+    *,
+    score: int | float | None = None,
+    return_20d: float | None = None,
+    rsi: float | None = None,
+    volume_z: float | None = None,
+    confirmed_patterns: int | None = None,
+) -> bool:
+    if not settings.entry_quality_prior_error_volume_confirmation_override_enabled:
+        return False
+    selection_reason = str(candidate.get("selection_reason") or "")
+    if (
+        selection_reason != "profile_edge_high_sample,volume_confirmation,confirmed_pattern"
+        or "same_session_intraday_momentum" in selection_reason
+    ):
+        return False
+    selection_rank = int(candidate.get("selection_rank") or 0)
+    score_value = int(_float(score if score is not None else candidate.get("score")) or 0)
+    return_20d_value = return_20d if return_20d is not None else _float(_technical_value(candidate, "return_20d"))
+    rsi_value = rsi if rsi is not None else _float(_technical_value(candidate, "rsi_14"))
+    volume_value = volume_z if volume_z is not None else _float(_technical_value(candidate, "volume_zscore_20"))
+    confirmed_count = confirmed_patterns if confirmed_patterns is not None else len(_confirmed_bullish_patterns(candidate))
+    return bool(
+        selection_rank > 0
+        and selection_rank <= int(settings.entry_quality_prior_error_volume_confirmation_override_max_selection_rank)
+        and score_value >= int(settings.entry_quality_prior_error_volume_confirmation_override_min_score)
+        and return_20d_value is not None
+        and return_20d_value >= float(settings.entry_quality_prior_error_volume_confirmation_override_min_return_20d)
+        and rsi_value is not None
+        and float(settings.entry_quality_prior_error_volume_confirmation_override_min_rsi)
+        <= rsi_value
+        <= float(settings.entry_quality_prior_error_volume_confirmation_override_max_rsi)
+        and volume_value is not None
+        and volume_value >= float(settings.entry_quality_prior_error_volume_confirmation_override_min_volume_z)
+        and confirmed_count
+        >= int(settings.entry_quality_prior_error_volume_confirmation_override_min_bullish_patterns)
+    )
+
+
+def _low_score_volume_rebound_override_exception(
+    settings: Settings,
+    candidate: dict[str, Any],
+    *,
+    score: int | float | None = None,
+    return_20d: float | None = None,
+    rsi: float | None = None,
+    volume_z: float | None = None,
+) -> bool:
+    if not settings.entry_quality_low_score_volume_rebound_override_enabled:
+        return False
+    selection_reason = str(candidate.get("selection_reason") or "")
+    if not (
+        "profile_edge_shrunk" in selection_reason
+        and "volume_confirmation" in selection_reason
+        and "same_session_intraday_momentum" not in selection_reason
+    ):
+        return False
+    selection_rank = int(candidate.get("selection_rank") or 0)
+    score_value = int(_float(score if score is not None else candidate.get("score")) or 0)
+    return_20d_value = return_20d if return_20d is not None else _float(_technical_value(candidate, "return_20d"))
+    rsi_value = rsi if rsi is not None else _float(_technical_value(candidate, "rsi_14"))
+    volume_value = volume_z if volume_z is not None else _float(_technical_value(candidate, "volume_zscore_20"))
+    return bool(
+        selection_rank > 0
+        and selection_rank <= int(settings.entry_quality_low_score_volume_rebound_max_selection_rank)
+        and int(settings.entry_quality_low_score_volume_rebound_min_score)
+        <= score_value
+        <= int(settings.entry_quality_low_score_volume_rebound_max_score)
+        and return_20d_value is not None
+        and float(settings.entry_quality_low_score_volume_rebound_min_return_20d)
+        <= return_20d_value
+        <= float(settings.entry_quality_low_score_volume_rebound_max_return_20d)
+        and rsi_value is not None
+        and float(settings.entry_quality_low_score_volume_rebound_min_rsi)
+        <= rsi_value
+        <= float(settings.entry_quality_low_score_volume_rebound_max_rsi)
+        and volume_value is not None
+        and volume_value >= float(settings.entry_quality_low_score_volume_rebound_min_volume_z)
+    )
+
+
+def _reward_risk_follow_through_override_exception(
+    settings: Settings,
+    candidate: dict[str, Any],
+    *,
+    score: int | float | None = None,
+    return_20d: float | None = None,
+    rsi: float | None = None,
+    sma20_distance: float | None = None,
+    confirmed_patterns: int | None = None,
+) -> bool:
+    if not settings.entry_score_v2_reward_risk_follow_through_override_enabled:
+        return False
+    selection_reason = str(candidate.get("selection_reason") or "")
+    allowed_selection_reason = (
+        "constructive_early_pattern" in selection_reason
+        or "high_conviction_confirmed_momentum" in selection_reason
+        or (
+            "weak_volume_penalty" in selection_reason
+            and "confirmed_pattern" in selection_reason
+            and "top_long_alignment" not in selection_reason
+            and "same_session_intraday_momentum" not in selection_reason
+        )
+    )
+    if not allowed_selection_reason:
+        return False
+    selection_rank = int(candidate.get("selection_rank") or 0)
+    score_value = int(_float(score if score is not None else candidate.get("score")) or 0)
+    return_20d_value = return_20d if return_20d is not None else _float(_technical_value(candidate, "return_20d"))
+    rsi_value = rsi if rsi is not None else _float(_technical_value(candidate, "rsi_14"))
+    if sma20_distance is None:
+        close = _float(_technical_value(candidate, "close"))
+        sma20 = _float(_technical_value(candidate, "sma_20"))
+        sma20_distance = ((close - sma20) / sma20) if close and sma20 else None
+    confirmed_count = confirmed_patterns if confirmed_patterns is not None else len(_confirmed_bullish_patterns(candidate))
+    return bool(
+        selection_rank > 0
+        and selection_rank <= int(settings.entry_score_v2_reward_risk_follow_through_max_selection_rank)
+        and score_value >= int(settings.entry_score_v2_reward_risk_follow_through_min_score)
+        and return_20d_value is not None
+        and return_20d_value >= float(settings.entry_score_v2_reward_risk_follow_through_min_return_20d)
+        and rsi_value is not None
+        and rsi_value >= float(settings.entry_score_v2_reward_risk_follow_through_min_rsi)
+        and sma20_distance is not None
+        and sma20_distance <= float(settings.entry_score_v2_reward_risk_follow_through_max_sma20_distance)
+        and confirmed_count >= int(settings.entry_score_v2_reward_risk_follow_through_min_confirmed_patterns)
+    )
+
+
+def _late_constructive_follow_through_reward_risk_override_exception(
+    settings: Settings,
+    candidate: dict[str, Any],
+    *,
+    score: int | float | None = None,
+    return_20d: float | None = None,
+    rsi: float | None = None,
+    volume_z: float | None = None,
+) -> bool:
+    if not settings.entry_score_v2_late_constructive_follow_through_override_enabled:
+        return False
+    selection_reason = str(candidate.get("selection_reason") or "")
+    if not (
+        "constructive_early_pattern" in selection_reason
+        and "weak_volume_penalty" in selection_reason
+        and "confirmed_pattern" in selection_reason
+        and "top_long_alignment" not in selection_reason
+        and "same_session_intraday_momentum" not in selection_reason
+    ):
+        return False
+    selection_rank = int(candidate.get("selection_rank") or 0)
+    score_value = int(_float(score if score is not None else candidate.get("score")) or 0)
+    return_20d_value = return_20d if return_20d is not None else _float(_technical_value(candidate, "return_20d"))
+    rsi_value = rsi if rsi is not None else _float(_technical_value(candidate, "rsi_14"))
+    volume_value = volume_z if volume_z is not None else _float(_technical_value(candidate, "volume_zscore_20"))
+    return bool(
+        selection_rank >= int(settings.entry_score_v2_late_constructive_follow_through_min_selection_rank)
+        and selection_rank <= int(settings.entry_score_v2_late_constructive_follow_through_max_selection_rank)
+        and score_value >= int(settings.entry_score_v2_late_constructive_follow_through_min_score)
+        and return_20d_value is not None
+        and float(settings.entry_score_v2_late_constructive_follow_through_min_return_20d)
+        <= return_20d_value
+        <= float(settings.entry_score_v2_late_constructive_follow_through_max_return_20d)
+        and rsi_value is not None
+        and float(settings.entry_score_v2_late_constructive_follow_through_min_rsi)
+        <= rsi_value
+        <= float(settings.entry_score_v2_late_constructive_follow_through_max_rsi)
+        and volume_value is not None
+        and float(settings.entry_score_v2_late_constructive_follow_through_min_volume_z)
+        <= volume_value
+        <= float(settings.entry_score_v2_late_constructive_follow_through_max_volume_z)
+    )
+
+
+def _missing_relative_strength_follow_through_exception(
+    settings: Settings,
+    candidate: dict[str, Any],
+    *,
+    score: int | float | None = None,
+    return_20d: float | None = None,
+    rsi: float | None = None,
+    sma20_distance: float | None = None,
+    confirmed_patterns: int | None = None,
+) -> bool:
+    if not settings.entry_quality_missing_relative_strength_follow_through_enabled:
+        return False
+    selection_reason = str(candidate.get("selection_reason") or "")
+    if "top_long_alignment" not in selection_reason:
+        return False
+    selection_rank = int(candidate.get("selection_rank") or 0)
+    score_value = int(_float(score if score is not None else candidate.get("score")) or 0)
+    return_20d_value = return_20d if return_20d is not None else _float(_technical_value(candidate, "return_20d"))
+    rsi_value = rsi if rsi is not None else _float(_technical_value(candidate, "rsi_14"))
+    if sma20_distance is None:
+        close = _float(_technical_value(candidate, "close"))
+        sma20 = _float(_technical_value(candidate, "sma_20"))
+        sma20_distance = ((close - sma20) / sma20) if close and sma20 else None
+    confirmed_count = confirmed_patterns if confirmed_patterns is not None else len(_confirmed_bullish_patterns(candidate))
+    return bool(
+        selection_rank > 0
+        and selection_rank <= int(settings.entry_quality_missing_relative_strength_follow_through_max_selection_rank)
+        and score_value >= int(settings.entry_quality_missing_relative_strength_follow_through_min_score)
+        and return_20d_value is not None
+        and return_20d_value >= float(settings.entry_quality_missing_relative_strength_follow_through_min_return_20d)
+        and rsi_value is not None
+        and rsi_value >= float(settings.entry_quality_missing_relative_strength_follow_through_min_rsi)
+        and sma20_distance is not None
+        and sma20_distance <= float(settings.entry_quality_missing_relative_strength_follow_through_max_sma20_distance)
+        and confirmed_count >= int(settings.entry_quality_missing_relative_strength_follow_through_min_confirmed_patterns)
+    )
+
+
 def _setup_prior_maps(digest: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     priors_3d = {
         str(item.get("profile_key") or "").strip(): item
@@ -874,6 +1638,7 @@ def _selection_score_for_candidate(
     same_session_context: dict[str, dict[str, Any]] | None = None,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
+    settings = settings or Settings()
     learning_prior = candidate.get("learning_prior") or _candidate_learning_prior(
         candidate,
         daily_learning_digest,
@@ -890,14 +1655,100 @@ def _selection_score_for_candidate(
     orderly_breakout = bool(_technical_value(candidate, "orderly_breakout_long"))
     breakout_continuation = bool(_technical_value(candidate, "breakout_continuation_long"))
     range_expansion = setup_name == "range_expansion_breakout"
+    close_position_in_range = _float(_technical_value(candidate, "close_position_in_range"))
+    return_20d = _float(_technical_value(candidate, "return_20d")) or 0.0
+    return_60d = _float(_technical_value(candidate, "return_60d")) or 0.0
+    bollinger_pct_b = _float(_technical_value(candidate, "bollinger_pct_b_20")) or 0.0
+    top_long_rank = int(candidate.get("top_long_rank") or 0)
+    top_long_rank = int(candidate.get("top_long_rank") or 0)
     high_conviction_confirmed_momentum = bool(
-        score >= 17.0
+        score >= 16.0
         and volume_z >= 1.25
         and confirmed_patterns >= 2
         and not breakout_failure_risk
         and distance_sma20 is not None
         and 0.04 <= distance_sma20 <= 0.20
         and 65.0 <= rsi <= 82.0
+    )
+    leader_momentum_extension = bool(
+        score >= float(settings.selection_leader_momentum_min_score)
+        and relative_return_20d >= float(settings.selection_leader_momentum_min_relative_return_20d)
+        and confirmed_patterns >= int(settings.selection_leader_momentum_min_bullish_patterns)
+        and not breakout_failure_risk
+        and distance_sma20 is not None
+        and 0.08 <= distance_sma20 <= float(settings.selection_leader_momentum_max_sma20_distance)
+        and 60.0 <= rsi <= float(settings.selection_leader_momentum_max_rsi)
+        and (
+            close_position_in_range is None
+            or close_position_in_range >= float(settings.selection_leader_momentum_min_close_position_in_range)
+        )
+        and volume_z >= float(settings.selection_leader_momentum_min_volume_z)
+    )
+    emerging_leader_momentum = bool(
+        float(settings.selection_emerging_leader_min_score) <= score <= float(settings.selection_emerging_leader_max_score)
+        and return_20d >= float(settings.selection_emerging_leader_min_return_20d)
+        and not breakout_failure_risk
+        and distance_sma20 is not None
+        and float(settings.selection_emerging_leader_min_sma20_distance)
+        <= distance_sma20
+        <= float(settings.selection_emerging_leader_max_sma20_distance)
+        and float(settings.selection_emerging_leader_min_rsi) <= rsi <= float(settings.selection_emerging_leader_max_rsi)
+        and (
+            close_position_in_range is None
+            or close_position_in_range >= float(settings.selection_emerging_leader_min_close_position_in_range)
+        )
+        and float(settings.selection_emerging_leader_min_volume_z)
+        <= volume_z
+        <= float(settings.selection_emerging_leader_max_volume_z)
+    )
+    parabolic_leader_momentum = bool(
+        score >= float(settings.selection_parabolic_leader_min_score)
+        and return_20d >= float(settings.selection_parabolic_leader_min_return_20d)
+        and not breakout_failure_risk
+        and distance_sma20 is not None
+        and float(settings.selection_parabolic_leader_min_sma20_distance)
+        <= distance_sma20
+        <= float(settings.selection_parabolic_leader_max_sma20_distance)
+        and float(settings.selection_parabolic_leader_min_rsi) <= rsi <= float(settings.selection_parabolic_leader_max_rsi)
+        and volume_z >= float(settings.selection_parabolic_leader_min_volume_z)
+    )
+    top_long_alignment = bool(
+        top_long_rank > 0
+        and top_long_rank <= int(settings.selection_top_long_alignment_max_rank)
+        and score >= float(settings.selection_top_long_alignment_min_score)
+        and confirmed_patterns >= int(settings.selection_top_long_alignment_min_bullish_patterns)
+        and float(settings.selection_top_long_alignment_min_return_20d)
+        <= return_20d
+        <= float(settings.selection_top_long_alignment_max_return_20d)
+        and distance_sma20 is not None
+        and float(settings.selection_top_long_alignment_min_sma20_distance)
+        <= distance_sma20
+        <= float(settings.selection_top_long_alignment_max_sma20_distance)
+        and float(settings.selection_top_long_alignment_min_rsi) <= rsi <= float(settings.selection_top_long_alignment_max_rsi)
+        and float(settings.selection_top_long_alignment_min_volume_z)
+        <= volume_z
+        <= float(settings.selection_top_long_alignment_max_volume_z)
+        and not breakout_failure_risk
+    )
+    constructive_early_pattern = bool(
+        float(settings.selection_constructive_early_min_score) <= score <= float(settings.selection_constructive_early_max_score)
+        and float(settings.selection_constructive_early_min_return_20d)
+        <= return_20d
+        <= float(settings.selection_constructive_early_max_return_20d)
+        and float(settings.selection_constructive_early_min_return_60d)
+        <= return_60d
+        <= float(settings.selection_constructive_early_max_return_60d)
+        and distance_sma20 is not None
+        and float(settings.selection_constructive_early_min_sma20_distance)
+        <= distance_sma20
+        <= float(settings.selection_constructive_early_max_sma20_distance)
+        and float(settings.selection_constructive_early_min_rsi) <= rsi <= float(settings.selection_constructive_early_max_rsi)
+        and float(settings.selection_constructive_early_min_volume_z)
+        <= volume_z
+        <= float(settings.selection_constructive_early_max_volume_z)
+        and bollinger_pct_b >= float(settings.selection_constructive_early_min_bollinger_pct_b)
+        and confirmed_patterns >= int(settings.selection_constructive_early_min_bullish_patterns)
+        and not breakout_failure_risk
     )
     same_session_intraday_rule, same_session_summary = _same_session_intraday_momentum_bonus(
         candidate,
@@ -909,14 +1760,37 @@ def _selection_score_for_candidate(
     sample_penalty = float(edge_components["sample_penalty"])
     score_component = min(0.025, max(0.0, score / 1200.0))
     relative_strength_component = min(0.020, max(-0.010, relative_return_20d * 0.20))
-    volume_component = 0.006 if volume_z >= 1.0 else -0.006 if volume_z < 0 else 0.0
+    volume_component = (
+        0.006
+        if volume_z >= 1.0
+        else 0.0
+        if (leader_momentum_extension or emerging_leader_momentum or parabolic_leader_momentum) and volume_z < 0
+        else -0.006
+        if volume_z < 0
+        else 0.0
+    )
     pattern_component = min(0.010, confirmed_patterns * 0.005)
     continuation_component = 0.012 if orderly_breakout else 0.008 if breakout_continuation else 0.0
     high_conviction_momentum_component = 0.018 if high_conviction_confirmed_momentum else 0.0
+    leader_momentum_extension_component = (
+        float(settings.selection_leader_momentum_selection_bonus) if leader_momentum_extension else 0.0
+    )
+    emerging_leader_momentum_component = (
+        float(settings.selection_emerging_leader_selection_bonus) if emerging_leader_momentum else 0.0
+    )
+    parabolic_leader_momentum_component = (
+        float(settings.selection_parabolic_leader_selection_bonus) if parabolic_leader_momentum else 0.0
+    )
+    top_long_alignment_component = (
+        float(settings.selection_top_long_alignment_selection_bonus) if top_long_alignment else 0.0
+    )
+    constructive_early_component = (
+        float(settings.selection_constructive_early_selection_bonus) if constructive_early_pattern else 0.0
+    )
     if same_session_intraday_rule == "same_session_intraday_leader":
-        same_session_momentum_component = float((settings or Settings()).intraday_same_session_leader_selection_bonus)
+        same_session_momentum_component = float(settings.intraday_same_session_leader_selection_bonus)
     elif same_session_intraday_rule == "same_session_intraday_momentum":
-        same_session_momentum_component = float((settings or Settings()).intraday_same_session_selection_bonus)
+        same_session_momentum_component = float(settings.intraday_same_session_selection_bonus)
     else:
         same_session_momentum_component = 0.0
     failure_penalty = 0.020 if breakout_failure_risk else 0.0
@@ -931,6 +1805,11 @@ def _selection_score_for_candidate(
         + pattern_component
         + continuation_component
         + high_conviction_momentum_component
+        + leader_momentum_extension_component
+        + emerging_leader_momentum_component
+        + parabolic_leader_momentum_component
+        + top_long_alignment_component
+        + constructive_early_component
         + same_session_momentum_component
         - sample_penalty
         - failure_penalty
@@ -949,6 +1828,16 @@ def _selection_score_for_candidate(
         reasons.append("breakout_follow_through")
     if high_conviction_confirmed_momentum:
         reasons.append("high_conviction_confirmed_momentum")
+    if leader_momentum_extension:
+        reasons.append("leader_momentum_extension")
+    if emerging_leader_momentum:
+        reasons.append("emerging_leader_momentum")
+    if parabolic_leader_momentum:
+        reasons.append("parabolic_leader_momentum")
+    if top_long_alignment:
+        reasons.append("top_long_alignment")
+    if constructive_early_pattern:
+        reasons.append("constructive_early_pattern")
     if same_session_intraday_rule:
         reasons.append(same_session_intraday_rule)
     if breakout_failure_risk:
@@ -957,6 +1846,8 @@ def _selection_score_for_candidate(
         reasons.append("range_expansion_shadow_only")
     if relative_strength_component > 0:
         reasons.append("relative_strength")
+    if (leader_momentum_extension or emerging_leader_momentum or parabolic_leader_momentum) and volume_z < 0:
+        reasons.append("weak_volume_tolerated_for_leader")
 
     return {
         "selection_score": round(selection_score, 4),
@@ -970,6 +1861,11 @@ def _selection_score_for_candidate(
             "pattern_component": round(pattern_component, 4),
             "continuation_component": round(continuation_component, 4),
             "high_conviction_momentum_component": round(high_conviction_momentum_component, 4),
+            "leader_momentum_extension_component": round(leader_momentum_extension_component, 4),
+            "emerging_leader_momentum_component": round(emerging_leader_momentum_component, 4),
+            "parabolic_leader_momentum_component": round(parabolic_leader_momentum_component, 4),
+            "top_long_alignment_component": round(top_long_alignment_component, 4),
+            "constructive_early_component": round(constructive_early_component, 4),
             "same_session_momentum_component": round(same_session_momentum_component, 4),
             "failure_penalty": round(failure_penalty, 4),
             "setup_risk_penalty": round(setup_risk_penalty, 4),
@@ -1084,6 +1980,7 @@ def _candidate_rank_priority(
     same_session_context: dict[str, dict[str, Any]] | None = None,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
+    settings = settings or Settings()
     learning_prior = candidate.get("learning_prior") or _candidate_learning_prior(
         candidate,
         daily_learning_digest,
@@ -1105,14 +2002,99 @@ def _candidate_rank_priority(
     range_expansion_breakout = bool(_technical_value(candidate, "range_expansion_breakout_long"))
     orderly_breakout = bool(_technical_value(candidate, "orderly_breakout_long"))
     breakout_failure_risk = bool(_technical_value(candidate, "breakout_failure_risk"))
+    close_position_in_range = _float(_technical_value(candidate, "close_position_in_range"))
+    return_20d = _float(_technical_value(candidate, "return_20d")) or 0.0
+    top_long_rank = int(candidate.get("top_long_rank") or 0)
     high_conviction_confirmed_momentum = bool(
-        score >= 17.0
+        score >= 16.0
         and volume_z >= 1.25
         and confirmed_patterns >= 2
         and not breakout_failure_risk
         and distance_sma20 is not None
         and 0.04 <= distance_sma20 <= 0.20
         and 65.0 <= rsi <= 82.0
+    )
+    leader_momentum_extension = bool(
+        score >= float(settings.selection_leader_momentum_min_score)
+        and relative_return_20d >= float(settings.selection_leader_momentum_min_relative_return_20d)
+        and confirmed_patterns >= int(settings.selection_leader_momentum_min_bullish_patterns)
+        and not breakout_failure_risk
+        and distance_sma20 is not None
+        and 0.08 <= distance_sma20 <= float(settings.selection_leader_momentum_max_sma20_distance)
+        and 60.0 <= rsi <= float(settings.selection_leader_momentum_max_rsi)
+        and (
+            close_position_in_range is None
+            or close_position_in_range >= float(settings.selection_leader_momentum_min_close_position_in_range)
+        )
+        and volume_z >= float(settings.selection_leader_momentum_min_volume_z)
+    )
+    emerging_leader_momentum = bool(
+        float(settings.selection_emerging_leader_min_score) <= score <= float(settings.selection_emerging_leader_max_score)
+        and return_20d >= float(settings.selection_emerging_leader_min_return_20d)
+        and not breakout_failure_risk
+        and distance_sma20 is not None
+        and float(settings.selection_emerging_leader_min_sma20_distance)
+        <= distance_sma20
+        <= float(settings.selection_emerging_leader_max_sma20_distance)
+        and float(settings.selection_emerging_leader_min_rsi) <= rsi <= float(settings.selection_emerging_leader_max_rsi)
+        and (
+            close_position_in_range is None
+            or close_position_in_range >= float(settings.selection_emerging_leader_min_close_position_in_range)
+        )
+        and float(settings.selection_emerging_leader_min_volume_z)
+        <= volume_z
+        <= float(settings.selection_emerging_leader_max_volume_z)
+    )
+    parabolic_leader_momentum = bool(
+        score >= float(settings.selection_parabolic_leader_min_score)
+        and return_20d >= float(settings.selection_parabolic_leader_min_return_20d)
+        and not breakout_failure_risk
+        and distance_sma20 is not None
+        and float(settings.selection_parabolic_leader_min_sma20_distance)
+        <= distance_sma20
+        <= float(settings.selection_parabolic_leader_max_sma20_distance)
+        and float(settings.selection_parabolic_leader_min_rsi) <= rsi <= float(settings.selection_parabolic_leader_max_rsi)
+        and volume_z >= float(settings.selection_parabolic_leader_min_volume_z)
+    )
+    top_long_alignment = bool(
+        top_long_rank > 0
+        and top_long_rank <= int(settings.selection_top_long_alignment_max_rank)
+        and score >= float(settings.selection_top_long_alignment_min_score)
+        and confirmed_patterns >= int(settings.selection_top_long_alignment_min_bullish_patterns)
+        and float(settings.selection_top_long_alignment_min_return_20d)
+        <= return_20d
+        <= float(settings.selection_top_long_alignment_max_return_20d)
+        and distance_sma20 is not None
+        and float(settings.selection_top_long_alignment_min_sma20_distance)
+        <= distance_sma20
+        <= float(settings.selection_top_long_alignment_max_sma20_distance)
+        and float(settings.selection_top_long_alignment_min_rsi) <= rsi <= float(settings.selection_top_long_alignment_max_rsi)
+        and float(settings.selection_top_long_alignment_min_volume_z)
+        <= volume_z
+        <= float(settings.selection_top_long_alignment_max_volume_z)
+        and not breakout_failure_risk
+    )
+    return_60d = _float(_technical_value(candidate, "return_60d")) or 0.0
+    bollinger_pct_b = _float(_technical_value(candidate, "bollinger_pct_b_20")) or 0.0
+    constructive_early_pattern = bool(
+        float(settings.selection_constructive_early_min_score) <= score <= float(settings.selection_constructive_early_max_score)
+        and float(settings.selection_constructive_early_min_return_20d)
+        <= return_20d
+        <= float(settings.selection_constructive_early_max_return_20d)
+        and float(settings.selection_constructive_early_min_return_60d)
+        <= return_60d
+        <= float(settings.selection_constructive_early_max_return_60d)
+        and distance_sma20 is not None
+        and float(settings.selection_constructive_early_min_sma20_distance)
+        <= distance_sma20
+        <= float(settings.selection_constructive_early_max_sma20_distance)
+        and float(settings.selection_constructive_early_min_rsi) <= rsi <= float(settings.selection_constructive_early_max_rsi)
+        and float(settings.selection_constructive_early_min_volume_z)
+        <= volume_z
+        <= float(settings.selection_constructive_early_max_volume_z)
+        and bollinger_pct_b >= float(settings.selection_constructive_early_min_bollinger_pct_b)
+        and confirmed_patterns >= int(settings.selection_constructive_early_min_bullish_patterns)
+        and not breakout_failure_risk
     )
     same_session_intraday_rule, same_session_summary = _same_session_intraday_momentum_bonus(
         candidate,
@@ -1121,7 +2103,15 @@ def _candidate_rank_priority(
     )
     score_component = min(0.04, max(0.0, score / 1000.0))
     relative_strength_component = min(0.03, max(-0.01, relative_return_20d * 0.25))
-    volume_component = 0.01 if volume_z >= 1.0 else -0.01 if volume_z < 0 else 0.0
+    volume_component = (
+        0.01
+        if volume_z >= 1.0
+        else 0.0
+        if (leader_momentum_extension or emerging_leader_momentum or parabolic_leader_momentum) and volume_z < 0
+        else -0.01
+        if volume_z < 0
+        else 0.0
+    )
     pattern_component = min(0.02, confirmed_patterns * 0.01)
     continuation_component = (
         0.025
@@ -1133,10 +2123,25 @@ def _candidate_rank_priority(
         else 0.0
     )
     high_conviction_momentum_component = 0.015 if high_conviction_confirmed_momentum else 0.0
+    leader_momentum_extension_component = (
+        float(settings.selection_leader_momentum_priority_bonus) if leader_momentum_extension else 0.0
+    )
+    emerging_leader_momentum_component = (
+        float(settings.selection_emerging_leader_priority_bonus) if emerging_leader_momentum else 0.0
+    )
+    parabolic_leader_momentum_component = (
+        float(settings.selection_parabolic_leader_priority_bonus) if parabolic_leader_momentum else 0.0
+    )
+    top_long_alignment_component = (
+        float(settings.selection_top_long_alignment_priority_bonus) if top_long_alignment else 0.0
+    )
+    constructive_early_component = (
+        float(settings.selection_constructive_early_priority_bonus) if constructive_early_pattern else 0.0
+    )
     if same_session_intraday_rule == "same_session_intraday_leader":
-        same_session_momentum_component = float((settings or Settings()).intraday_same_session_leader_priority_bonus)
+        same_session_momentum_component = float(settings.intraday_same_session_leader_priority_bonus)
     elif same_session_intraday_rule == "same_session_intraday_momentum":
-        same_session_momentum_component = float((settings or Settings()).intraday_same_session_priority_bonus)
+        same_session_momentum_component = float(settings.intraday_same_session_priority_bonus)
     else:
         same_session_momentum_component = 0.0
     failure_penalty = 0.02 if breakout_failure_risk else 0.0
@@ -1152,6 +2157,11 @@ def _candidate_rank_priority(
         + pattern_component
         + continuation_component
         + high_conviction_momentum_component
+        + leader_momentum_extension_component
+        + emerging_leader_momentum_component
+        + parabolic_leader_momentum_component
+        + top_long_alignment_component
+        + constructive_early_component
         + same_session_momentum_component
     )
     reasons = []
@@ -1173,12 +2183,24 @@ def _candidate_rank_priority(
         reasons.append("orderly_breakout")
     if high_conviction_confirmed_momentum:
         reasons.append("high_conviction_confirmed_momentum")
+    if leader_momentum_extension:
+        reasons.append("leader_momentum_extension")
+    if emerging_leader_momentum:
+        reasons.append("emerging_leader_momentum")
+    if parabolic_leader_momentum:
+        reasons.append("parabolic_leader_momentum")
+    if top_long_alignment:
+        reasons.append("top_long_alignment")
+    if constructive_early_pattern:
+        reasons.append("constructive_early_pattern")
     if same_session_intraday_rule:
         reasons.append(same_session_intraday_rule)
     if breakout_failure_risk:
         reasons.append("breakout_failure_penalty")
     if relative_strength_component > 0:
         reasons.append("relative_strength")
+    if (leader_momentum_extension or emerging_leader_momentum or parabolic_leader_momentum) and volume_z < 0:
+        reasons.append("weak_volume_tolerated_for_leader")
     return {
         "rank_priority_score": round(priority_score, 4),
         "rank_priority_components": {
@@ -1191,6 +2213,11 @@ def _candidate_rank_priority(
             "pattern_component": round(pattern_component, 4),
             "continuation_component": round(continuation_component, 4),
             "high_conviction_momentum_component": round(high_conviction_momentum_component, 4),
+            "leader_momentum_extension_component": round(leader_momentum_extension_component, 4),
+            "emerging_leader_momentum_component": round(emerging_leader_momentum_component, 4),
+            "parabolic_leader_momentum_component": round(parabolic_leader_momentum_component, 4),
+            "top_long_alignment_component": round(top_long_alignment_component, 4),
+            "constructive_early_component": round(constructive_early_component, 4),
             "same_session_momentum_component": round(same_session_momentum_component, 4),
             "failure_penalty": round(failure_penalty, 4),
             "same_session_observations": int(same_session_summary.get("observations") or 0),
@@ -1207,6 +2234,21 @@ def _annotate_technical_context_with_learning(
     data_dir: Path | None = None,
 ) -> dict[str, Any]:
     base_context = dict(technical_context)
+    if isinstance(base_context.get("all_candidates"), list):
+        base_context["all_candidates"] = _annotate_candidates_with_top_long_rank(
+            base_context.get("all_candidates", []) or [],
+            base_context.get("top_longs", []) or [],
+        )
+    if isinstance(base_context.get("selected_candidates"), list):
+        base_context["selected_candidates"] = _annotate_candidates_with_top_long_rank(
+            base_context.get("selected_candidates", []) or [],
+            base_context.get("top_longs", []) or [],
+        )
+    if isinstance(base_context.get("top_longs"), list):
+        base_context["top_longs"] = _annotate_candidates_with_top_long_rank(
+            base_context.get("top_longs", []) or [],
+            base_context.get("top_longs", []) or [],
+        )
     settings = Settings(DATA_DIR=data_dir) if data_dir is not None else None
     same_session_context = _same_session_intraday_context(data_dir, base_context)
     if not base_context.get("selected_candidates") and isinstance(base_context.get("all_candidates"), list):
@@ -1432,6 +2474,8 @@ def validate_entry_quality(
     event_momentum_long = bool(_technical_value(candidate, "event_momentum_long"))
     range_expansion_breakout_long = bool(_technical_value(candidate, "range_expansion_breakout_long"))
     orderly_breakout_long = bool(_technical_value(candidate, "orderly_breakout_long"))
+    breakout_continuation_long = bool(_technical_value(candidate, "breakout_continuation_long"))
+    breakout_failure_risk = bool(_technical_value(candidate, "breakout_failure_risk"))
     momentum_shakeout_hold_long = bool(_technical_value(candidate, "momentum_shakeout_hold_long"))
     relative_return_20d = _float(candidate.get("relative_return_20d"))
     confirmed_patterns = _confirmed_bullish_patterns(candidate)
@@ -1475,6 +2519,8 @@ def validate_entry_quality(
         "event_momentum_long": event_momentum_long,
         "range_expansion_breakout_long": range_expansion_breakout_long,
         "orderly_breakout_long": orderly_breakout_long,
+        "breakout_continuation_long": breakout_continuation_long,
+        "breakout_failure_risk": breakout_failure_risk,
         "momentum_shakeout_hold_long": momentum_shakeout_hold_long,
         "momentum_confirmation_long": momentum_confirmation_long,
         "relative_return_20d": relative_return_20d,
@@ -1485,32 +2531,402 @@ def validate_entry_quality(
         "learning_prior": learning_prior,
         "prior_accuracy": prior_accuracy,
     }
+    if close and sma20:
+        checks["sma20_distance"] = round((close - sma20) / sma20, 4)
+    fallback_constructive_extension = (
+        recommendation.source == "deterministic_fallback"
+        and _fallback_constructive_extension_exception(
+            settings,
+            candidate,
+            score=score,
+            return_20d=return_20d,
+            rsi=rsi,
+            sma20_distance=checks["sma20_distance"],
+            volume_z=volume_z,
+            confirmed_patterns=len(confirmed_patterns),
+        )
+    )
+    fallback_momentum_extension = (
+        recommendation.source == "deterministic_fallback"
+        and _fallback_momentum_extension_exception(
+            settings,
+            candidate,
+            score=score,
+            return_20d=return_20d,
+            rsi=rsi,
+            sma20_distance=checks["sma20_distance"],
+            volume_z=volume_z,
+            confirmed_patterns=len(confirmed_patterns),
+        )
+    )
+    fallback_weak_volume_momentum_extension = (
+        recommendation.source == "deterministic_fallback"
+        and _fallback_weak_volume_momentum_extension_exception(
+            settings,
+            candidate,
+            score=score,
+            return_20d=return_20d,
+            rsi=rsi,
+            sma20_distance=checks["sma20_distance"],
+            volume_z=volume_z,
+            confirmed_patterns=len(confirmed_patterns),
+        )
+    )
+    fallback_relative_strength_pullback_extension = (
+        recommendation.source == "deterministic_fallback"
+        and _fallback_relative_strength_pullback_extension_exception(
+            settings,
+            candidate,
+            score=score,
+            return_20d=return_20d,
+            relative_return_20d=relative_return_20d,
+            rsi=rsi,
+            sma20_distance=checks["sma20_distance"],
+            volume_z=volume_z,
+            confirmed_patterns=len(confirmed_patterns),
+        )
+    )
+    fallback_leader_pullback_extension = (
+        recommendation.source == "deterministic_fallback"
+        and _fallback_leader_pullback_extension_exception(
+            settings,
+            candidate,
+            score=score,
+            return_20d=return_20d,
+            rsi=rsi,
+            sma20_distance=checks["sma20_distance"],
+            volume_z=volume_z,
+            confirmed_patterns=len(confirmed_patterns),
+        )
+    )
+    fallback_top_long_follow_through = (
+        recommendation.source == "deterministic_fallback"
+        and _fallback_top_long_follow_through_exception(
+            settings,
+            candidate,
+            score=score,
+            return_20d=return_20d,
+            rsi=rsi,
+            volume_z=volume_z,
+            confirmed_patterns=len(confirmed_patterns),
+        )
+    )
+    prior_error_volume_confirmation_override = (
+        recommendation.source == "deterministic_fallback"
+        and _prior_error_volume_confirmation_override_exception(
+            settings,
+            candidate,
+            score=score,
+            return_20d=return_20d,
+            rsi=rsi,
+            volume_z=volume_z,
+            confirmed_patterns=len(confirmed_patterns),
+        )
+    )
+    low_score_volume_rebound_override = (
+        recommendation.source == "deterministic_fallback"
+        and _low_score_volume_rebound_override_exception(
+            settings,
+            candidate,
+            score=score,
+            return_20d=return_20d,
+            rsi=rsi,
+            volume_z=volume_z,
+        )
+    )
+    checks["fallback_constructive_extension_exception"] = {
+        "eligible": fallback_constructive_extension,
+        "max_selection_rank": settings.entry_quality_fallback_constructive_extension_max_selection_rank,
+        "min_score": settings.entry_quality_fallback_constructive_extension_min_score,
+        "min_return_20d": settings.entry_quality_fallback_constructive_extension_min_return_20d,
+        "min_rsi": settings.entry_quality_fallback_constructive_extension_min_rsi,
+        "max_sma20_distance": settings.entry_quality_fallback_constructive_extension_max_sma20_distance,
+        "min_volume_zscore_20": settings.entry_quality_fallback_constructive_extension_min_volume_z,
+        "min_bullish_patterns": settings.entry_quality_fallback_constructive_extension_min_bullish_patterns,
+    }
+    checks["fallback_momentum_extension_exception"] = {
+        "eligible": fallback_momentum_extension,
+        "max_selection_rank": settings.entry_quality_fallback_momentum_extension_max_selection_rank,
+        "min_score": settings.entry_quality_fallback_momentum_extension_min_score,
+        "min_return_20d": settings.entry_quality_fallback_momentum_extension_min_return_20d,
+        "min_rsi": settings.entry_quality_fallback_momentum_extension_min_rsi,
+        "max_rsi": settings.entry_quality_fallback_momentum_extension_max_rsi,
+        "max_sma20_distance": settings.entry_quality_fallback_momentum_extension_max_sma20_distance,
+        "min_volume_zscore_20": settings.entry_quality_fallback_momentum_extension_min_volume_z,
+        "min_bullish_patterns": settings.entry_quality_fallback_momentum_extension_min_bullish_patterns,
+    }
+    checks["fallback_weak_volume_momentum_extension_exception"] = {
+        "eligible": fallback_weak_volume_momentum_extension,
+        "max_selection_rank": settings.entry_quality_fallback_weak_volume_momentum_extension_max_selection_rank,
+        "min_score": settings.entry_quality_fallback_weak_volume_momentum_extension_min_score,
+        "min_return_20d": settings.entry_quality_fallback_weak_volume_momentum_extension_min_return_20d,
+        "min_rsi": settings.entry_quality_fallback_weak_volume_momentum_extension_min_rsi,
+        "max_rsi": settings.entry_quality_fallback_weak_volume_momentum_extension_max_rsi,
+        "min_sma20_distance": settings.entry_quality_fallback_weak_volume_momentum_extension_min_sma20_distance,
+        "max_sma20_distance": settings.entry_quality_fallback_weak_volume_momentum_extension_max_sma20_distance,
+        "min_volume_zscore_20": settings.entry_quality_fallback_weak_volume_momentum_extension_min_volume_z,
+        "max_volume_zscore_20": settings.entry_quality_fallback_weak_volume_momentum_extension_max_volume_z,
+        "min_bullish_patterns": settings.entry_quality_fallback_weak_volume_momentum_extension_min_bullish_patterns,
+    }
+    checks["fallback_relative_strength_pullback_extension_exception"] = {
+        "eligible": fallback_relative_strength_pullback_extension,
+        "max_selection_rank": settings.entry_quality_fallback_relative_strength_pullback_extension_max_selection_rank,
+        "min_score": settings.entry_quality_fallback_relative_strength_pullback_extension_min_score,
+        "min_return_20d": settings.entry_quality_fallback_relative_strength_pullback_extension_min_return_20d,
+        "max_return_20d": settings.entry_quality_fallback_relative_strength_pullback_extension_max_return_20d,
+        "min_relative_return_20d": settings.entry_quality_fallback_relative_strength_pullback_extension_min_relative_return_20d,
+        "max_relative_return_20d": settings.entry_quality_fallback_relative_strength_pullback_extension_max_relative_return_20d,
+        "min_rsi": settings.entry_quality_fallback_relative_strength_pullback_extension_min_rsi,
+        "max_rsi": settings.entry_quality_fallback_relative_strength_pullback_extension_max_rsi,
+        "min_sma20_distance": settings.entry_quality_fallback_relative_strength_pullback_extension_min_sma20_distance,
+        "max_sma20_distance": settings.entry_quality_fallback_relative_strength_pullback_extension_max_sma20_distance,
+        "min_volume_zscore_20": settings.entry_quality_fallback_relative_strength_pullback_extension_min_volume_z,
+        "max_volume_zscore_20": settings.entry_quality_fallback_relative_strength_pullback_extension_max_volume_z,
+        "min_bullish_patterns": settings.entry_quality_fallback_relative_strength_pullback_extension_min_bullish_patterns,
+    }
+    checks["fallback_leader_pullback_extension_exception"] = {
+        "eligible": fallback_leader_pullback_extension,
+        "max_selection_rank": settings.entry_quality_fallback_leader_pullback_extension_max_selection_rank,
+        "min_score": settings.entry_quality_fallback_leader_pullback_extension_min_score,
+        "min_return_20d": settings.entry_quality_fallback_leader_pullback_extension_min_return_20d,
+        "max_return_20d": settings.entry_quality_fallback_leader_pullback_extension_max_return_20d,
+        "min_rsi": settings.entry_quality_fallback_leader_pullback_extension_min_rsi,
+        "max_rsi": settings.entry_quality_fallback_leader_pullback_extension_max_rsi,
+        "min_sma20_distance": settings.entry_quality_fallback_leader_pullback_extension_min_sma20_distance,
+        "max_sma20_distance": settings.entry_quality_fallback_leader_pullback_extension_max_sma20_distance,
+        "min_volume_zscore_20": settings.entry_quality_fallback_leader_pullback_extension_min_volume_z,
+        "max_volume_zscore_20": settings.entry_quality_fallback_leader_pullback_extension_max_volume_z,
+        "min_bullish_patterns": settings.entry_quality_fallback_leader_pullback_extension_min_bullish_patterns,
+    }
+    checks["fallback_top_long_follow_through_exception"] = {
+        "eligible": fallback_top_long_follow_through,
+        "max_selection_rank": settings.entry_quality_fallback_top_long_follow_through_max_selection_rank,
+        "min_score": settings.entry_quality_fallback_top_long_follow_through_min_score,
+        "min_return_20d": settings.entry_quality_fallback_top_long_follow_through_min_return_20d,
+        "max_return_20d": settings.entry_quality_fallback_top_long_follow_through_max_return_20d,
+        "min_rsi": settings.entry_quality_fallback_top_long_follow_through_min_rsi,
+        "max_rsi": settings.entry_quality_fallback_top_long_follow_through_max_rsi,
+        "min_volume_zscore_20": settings.entry_quality_fallback_top_long_follow_through_min_volume_z,
+        "max_volume_zscore_20": settings.entry_quality_fallback_top_long_follow_through_max_volume_z,
+        "min_bullish_patterns": settings.entry_quality_fallback_top_long_follow_through_min_bullish_patterns,
+    }
+    checks["prior_error_volume_confirmation_override_exception"] = {
+        "eligible": prior_error_volume_confirmation_override,
+        "max_selection_rank": settings.entry_quality_prior_error_volume_confirmation_override_max_selection_rank,
+        "min_score": settings.entry_quality_prior_error_volume_confirmation_override_min_score,
+        "min_return_20d": settings.entry_quality_prior_error_volume_confirmation_override_min_return_20d,
+        "min_rsi": settings.entry_quality_prior_error_volume_confirmation_override_min_rsi,
+        "max_rsi": settings.entry_quality_prior_error_volume_confirmation_override_max_rsi,
+        "min_volume_zscore_20": settings.entry_quality_prior_error_volume_confirmation_override_min_volume_z,
+        "min_bullish_patterns": settings.entry_quality_prior_error_volume_confirmation_override_min_bullish_patterns,
+    }
+    checks["low_score_volume_rebound_override_exception"] = {
+        "eligible": low_score_volume_rebound_override,
+        "max_selection_rank": settings.entry_quality_low_score_volume_rebound_max_selection_rank,
+        "min_score": settings.entry_quality_low_score_volume_rebound_min_score,
+        "max_score": settings.entry_quality_low_score_volume_rebound_max_score,
+        "min_return_20d": settings.entry_quality_low_score_volume_rebound_min_return_20d,
+        "max_return_20d": settings.entry_quality_low_score_volume_rebound_max_return_20d,
+        "min_rsi": settings.entry_quality_low_score_volume_rebound_min_rsi,
+        "max_rsi": settings.entry_quality_low_score_volume_rebound_max_rsi,
+        "min_volume_zscore_20": settings.entry_quality_low_score_volume_rebound_min_volume_z,
+    }
 
     if direction != "long":
         return False, f"direccion tecnica no es long ({direction or 'desconocida'})", checks
     if setup_quality != "strong":
         return False, f"setup no es strong ({setup_quality or 'desconocido'})", checks
     if range_expansion_breakout_long:
-        checks["shadow_only_setup"] = "range_expansion_breakout"
-        return False, "range_expansion_breakout_shadow_only", checks
-    if score < settings.entry_quality_min_score:
+        reward_risk = _entry_reward_risk(recommendation)
+        confirmed_negative_sentiment = (
+            sentiment_score is not None
+            and sentiment_confidence >= 0.5
+            and sentiment_score <= -0.5
+        )
+        range_expansion_eligible = (
+            settings.trading_mode == "paper"
+            and settings.trade_aggressiveness_profile in {"opportunistic", "aggressive"}
+            and score >= 16
+            and volume_z is not None
+            and volume_z >= 1.25
+            and close_position is not None
+            and close_position >= 0.80
+            and (rsi is None or rsi <= 82.0)
+            and checks["sma20_distance"] is not None
+            and checks["sma20_distance"] <= 0.22
+            and reward_risk is not None
+            and reward_risk >= 1.5
+            and not confirmed_negative_sentiment
+        )
+        checks["range_expansion_breakout_exception"] = {
+            "eligible": range_expansion_eligible,
+            "profile": settings.trade_aggressiveness_profile,
+            "paper_only": settings.trading_mode == "paper",
+            "min_score": 16,
+            "min_volume_zscore_20": 1.25,
+            "min_close_position_in_range": 0.80,
+            "max_rsi": 82.0,
+            "max_sma20_distance": 0.22,
+            "min_reward_risk": 1.5,
+            "reward_risk": round(reward_risk, 4) if reward_risk is not None else None,
+            "confirmed_negative_sentiment": confirmed_negative_sentiment,
+        }
+        if not range_expansion_eligible:
+            checks["shadow_only_setup"] = "range_expansion_breakout"
+            return False, "range_expansion_breakout_shadow_only", checks
+    if score < settings.entry_quality_min_score and not low_score_volume_rebound_override:
         return False, f"score {score} < minimo {settings.entry_quality_min_score}", checks
     if return_20d is not None and return_20d <= 0:
         return False, f"momentum 20d no positivo ({return_20d:.2%})", checks
     if relative_return_20d is not None and relative_return_20d <= 0:
         return False, f"fuerza relativa 20d negativa vs benchmark ({relative_return_20d:.2%})", checks
-    if macd is not None and macd_signal is not None and macd <= macd_signal:
+    if macd is not None and macd_signal is not None and macd <= macd_signal and not low_score_volume_rebound_override:
         return False, "MACD no confirma momentum alcista", checks
     deterministic_fallback = recommendation.source == "deterministic_fallback"
     checks["deterministic_fallback"] = deterministic_fallback
+    sentiment_failed = "sentiment_failed" in sentiment_flags
+    checks["sentiment_data_quality"] = {
+        "status": "missing_or_failed" if sentiment_failed or sentiment_score is None else "available",
+        "penalized": bool(sentiment_failed or sentiment_score is None),
+    }
     if (
         settings.news_sentiment_fail_closed_for_buys
-        and "sentiment_failed" in sentiment_flags
+        and sentiment_failed
         and not deterministic_fallback
     ):
         return False, "sentimiento no validado; compra bloqueada por fallo de noticias", checks
     if sentiment_score is not None and sentiment_confidence >= 0.5 and sentiment_score <= -0.5:
         return False, f"sentimiento negativo confirmado ({sentiment_score})", checks
+    if settings.entry_score_v2_enabled:
+        entry_score = _entry_score_v2(
+            settings,
+            recommendation,
+            score=score,
+            setup_quality=setup_quality,
+            direction=direction,
+            rsi=rsi,
+            sma20_distance=checks["sma20_distance"],
+            macd=macd,
+            macd_signal=macd_signal,
+            return_20d=return_20d,
+            volume_z=volume_z,
+            relative_return_20d=relative_return_20d,
+            sentiment_score=sentiment_score,
+            sentiment_confidence=sentiment_confidence,
+            sentiment_failed=sentiment_failed,
+            learning_prior=learning_prior,
+        )
+        reward_risk_margin_override = False
+        reward_risk_margin_tolerance = float(settings.entry_score_v2_reward_risk_margin_tolerance)
+        reward_risk = _float(entry_score.get("reward_risk"))
+        selected_rank = int(candidate.get("selection_rank") or 0)
+        reward_risk_hard_blocks = list(entry_score.get("hard_blocks") or [])
+        high_conviction_reward_risk_override = bool(
+            settings.entry_score_v2_reward_risk_margin_override_enabled
+            and deterministic_fallback
+            and reward_risk is not None
+            and score >= int(settings.entry_score_v2_reward_risk_override_min_score)
+            and selected_rank > 0
+            and selected_rank <= int(settings.entry_score_v2_reward_risk_override_max_selection_rank)
+            and return_20d is not None
+            and return_20d >= float(settings.entry_score_v2_reward_risk_override_min_return_20d)
+            and rsi is not None
+            and rsi >= float(settings.entry_score_v2_reward_risk_override_min_rsi)
+            and checks["sma20_distance"] is not None
+            and checks["sma20_distance"] <= float(settings.entry_score_v2_reward_risk_override_max_sma20_distance)
+            and reward_risk_hard_blocks == ["reward_risk_bajo"]
+            and reward_risk >= float(settings.entry_score_v2_min_reward_risk) - reward_risk_margin_tolerance
+        )
+        follow_through_reward_risk_override = bool(
+            deterministic_fallback
+            and reward_risk is not None
+            and reward_risk_hard_blocks == ["reward_risk_bajo"]
+            and reward_risk >= float(settings.entry_score_v2_min_reward_risk) - reward_risk_margin_tolerance
+            and _reward_risk_follow_through_override_exception(
+                settings,
+                candidate,
+                score=score,
+                return_20d=return_20d,
+                rsi=rsi,
+                sma20_distance=checks["sma20_distance"],
+                confirmed_patterns=len(confirmed_patterns),
+            )
+        )
+        late_constructive_follow_through_reward_risk_override = bool(
+            deterministic_fallback
+            and reward_risk is not None
+            and reward_risk_hard_blocks == ["reward_risk_bajo"]
+            and reward_risk >= float(settings.entry_score_v2_min_reward_risk) - reward_risk_margin_tolerance
+            and _late_constructive_follow_through_reward_risk_override_exception(
+                settings,
+                candidate,
+                score=score,
+                return_20d=return_20d,
+                rsi=rsi,
+                volume_z=volume_z,
+            )
+        )
+        low_score_volume_rebound_entry_score_override = bool(
+            deterministic_fallback
+            and low_score_volume_rebound_override
+            and reward_risk_hard_blocks == ["reward_risk_bajo"]
+        )
+        relative_strength_pullback_entry_score_override = bool(
+            deterministic_fallback
+            and fallback_relative_strength_pullback_extension
+            and reward_risk_hard_blocks == ["reward_risk_bajo"]
+        )
+        top_long_follow_through_entry_score_override = bool(
+            deterministic_fallback
+            and fallback_top_long_follow_through
+            and reward_risk_hard_blocks == ["reward_risk_bajo"]
+        )
+        reward_risk_override_eligible = (
+            high_conviction_reward_risk_override
+            or follow_through_reward_risk_override
+            or late_constructive_follow_through_reward_risk_override
+            or low_score_volume_rebound_entry_score_override
+            or relative_strength_pullback_entry_score_override
+            or top_long_follow_through_entry_score_override
+        )
+        if reward_risk_override_eligible:
+            entry_score["approved"] = True
+            entry_score["hard_blocks"] = []
+            entry_score["reasons"] = [
+                reason for reason in list(entry_score.get("reasons") or []) if reason != "reward_risk_bajo"
+            ]
+            entry_score["reward_risk_margin_override"] = {
+                "applied": True,
+                "selection_rank": selected_rank,
+                "reward_risk": round(reward_risk, 4),
+                "min_reward_risk": float(settings.entry_score_v2_min_reward_risk),
+                "tolerance": reward_risk_margin_tolerance,
+                "mode": (
+                    "high_conviction"
+                    if high_conviction_reward_risk_override
+                    else "follow_through_pattern"
+                    if follow_through_reward_risk_override
+                    else "late_constructive_follow_through"
+                    if late_constructive_follow_through_reward_risk_override
+                    else "low_score_volume_rebound"
+                    if low_score_volume_rebound_entry_score_override
+                    else "relative_strength_pullback_extension"
+                    if relative_strength_pullback_entry_score_override
+                    else "top_long_follow_through"
+                ),
+            }
+        else:
+            entry_score["reward_risk_margin_override"] = {
+                "applied": False,
+                "selection_rank": selected_rank,
+                "reward_risk": round(reward_risk, 4) if reward_risk is not None else None,
+                "min_reward_risk": float(settings.entry_score_v2_min_reward_risk),
+                "tolerance": reward_risk_margin_tolerance,
+                "mode": None,
+            }
+        checks["entry_score_v2"] = entry_score
+        if not entry_score["approved"] and not entry_score["micro_experiment"]:
+            return False, f"entry_score_v2 bajo ({entry_score['score']:.2f}): {', '.join(entry_score['reasons'])}", checks
     if (
         rsi is not None
         and rsi < settings.entry_quality_weak_rsi_max
@@ -1537,7 +2953,13 @@ def validate_entry_quality(
             and not momentum_confirmation_long
         ):
             return False, f"setup prior reciente desfavorable ({prior_edge_3d:.2%})", checks
-        if prior_edge_3d < 0 and score < settings.entry_quality_min_score + 2 and not confirmed_patterns:
+        if (
+            prior_edge_3d < 0
+            and score < settings.entry_quality_min_score + 2
+            and not confirmed_patterns
+            and not low_score_volume_rebound_override
+            and not fallback_leader_pullback_extension
+        ):
             return False, "setup prior reciente debil sin confirmacion suficiente", checks
     if (
         prior_avg_abs_error is not None
@@ -1549,26 +2971,49 @@ def validate_entry_quality(
         and not orderly_breakout_long
         and not momentum_shakeout_hold_long
         and not momentum_confirmation_long
+        and not fallback_weak_volume_momentum_extension
+        and not prior_error_volume_confirmation_override
+        and not low_score_volume_rebound_override
+        and not fallback_leader_pullback_extension
     ):
         return False, "perfil reciente sobreestima el edge con demasiada frecuencia", checks
 
     if close and sma20:
         sma20_distance = (close - sma20) / sma20
         checks["sma20_distance"] = round(sma20_distance, 4)
+        if sma20_distance > 0.35 or (rsi is not None and rsi > 90.0):
+            return False, "entrada extremadamente extendida; requiere retesteo antes de comprar", checks
         if (
             sma20_distance > settings.entry_quality_max_sma20_distance
             and not event_momentum_long
             and not range_expansion_breakout_long
             and not orderly_breakout_long
+            and not breakout_continuation_long
             and not momentum_shakeout_hold_long
             and not momentum_confirmation_long
+            and not fallback_constructive_extension
+            and not fallback_momentum_extension
+            and not fallback_weak_volume_momentum_extension
+            and not fallback_relative_strength_pullback_extension
+            and not fallback_leader_pullback_extension
+            and not fallback_top_long_follow_through
         ):
             return (
                 False,
                 f"precio demasiado extendido sobre SMA20 ({sma20_distance:.2%})",
                 checks,
             )
-        if sma20_distance > settings.entry_quality_max_sma20_distance and event_momentum_long:
+        elif sma20_distance > settings.entry_quality_max_sma20_distance and fallback_momentum_extension:
+            extended = False
+        elif sma20_distance > settings.entry_quality_max_sma20_distance and fallback_weak_volume_momentum_extension:
+            extended = False
+        elif sma20_distance > settings.entry_quality_max_sma20_distance and fallback_relative_strength_pullback_extension:
+            extended = False
+        elif sma20_distance > settings.entry_quality_max_sma20_distance and fallback_leader_pullback_extension:
+            extended = False
+        elif sma20_distance > settings.entry_quality_max_sma20_distance and fallback_top_long_follow_through:
+            extended = False
+        elif sma20_distance > settings.entry_quality_max_sma20_distance and event_momentum_long:
             checks["event_momentum_exception"] = {
                 "min_score": settings.entry_quality_extreme_rsi_min_score,
                 "min_volume_zscore_20": 2.0,
@@ -1583,6 +3028,7 @@ def validate_entry_quality(
             extended = False
         elif sma20_distance > settings.entry_quality_max_sma20_distance and range_expansion_breakout_long:
             checks["range_expansion_breakout_exception"] = {
+                **(checks.get("range_expansion_breakout_exception") or {}),
                 "max_sma20_distance": settings.entry_quality_range_expansion_max_sma20_distance,
                 "max_rsi": settings.entry_quality_range_expansion_max_rsi,
                 "min_score": settings.entry_quality_extreme_rsi_min_score,
@@ -1618,6 +3064,33 @@ def validate_entry_quality(
                 return False, "orderly breakout sin volumen relativo suficiente", checks
             if close_position is None or close_position < 0.80:
                 return False, "orderly breakout sin cierre muy fuerte en el rango diario", checks
+            extended = False
+        elif sma20_distance > settings.entry_quality_max_sma20_distance and breakout_continuation_long:
+            checks["breakout_continuation_exception"] = {
+                "max_sma20_distance": settings.entry_quality_breakout_continuation_max_sma20_distance,
+                "max_rsi": settings.entry_quality_breakout_continuation_max_rsi,
+                "min_score": settings.entry_quality_breakout_continuation_min_score,
+                "min_volume_zscore_20": settings.entry_quality_breakout_continuation_min_volume_z,
+                "min_relative_return_20d": settings.entry_quality_breakout_continuation_min_relative_return_20d,
+                "min_close_position_in_range": 0.90,
+                "confirmed_bullish_patterns": len(confirmed_patterns),
+            }
+            if sma20_distance > settings.entry_quality_breakout_continuation_max_sma20_distance:
+                return False, "breakout continuation demasiado extendido sobre SMA20", checks
+            if rsi is not None and rsi > settings.entry_quality_breakout_continuation_max_rsi:
+                return False, "breakout continuation con RSI demasiado extremo", checks
+            if score < settings.entry_quality_breakout_continuation_min_score:
+                return False, "breakout continuation sin score suficiente", checks
+            if volume_z is None or volume_z < settings.entry_quality_breakout_continuation_min_volume_z:
+                return False, "breakout continuation sin volumen relativo suficiente", checks
+            if relative_return_20d is None or relative_return_20d < settings.entry_quality_breakout_continuation_min_relative_return_20d:
+                return False, "breakout continuation sin fuerza relativa suficiente", checks
+            if close_position is None or close_position < 0.90:
+                return False, "breakout continuation sin cierre excepcionalmente fuerte en el rango diario", checks
+            if len(confirmed_patterns) < 2:
+                return False, "breakout continuation sin confirmacion estructural suficiente", checks
+            if breakout_failure_risk:
+                return False, "breakout continuation con riesgo de fallo de ruptura", checks
             extended = False
         elif sma20_distance > settings.entry_quality_max_sma20_distance and momentum_shakeout_hold_long:
             checks["momentum_shakeout_exception"] = {
@@ -1663,6 +3136,7 @@ def validate_entry_quality(
                 "min_relative_return_20d": settings.entry_quality_extended_min_relative_return,
                 "min_volume_zscore_20": settings.entry_quality_extended_min_volume_z,
             }
+            follow_through_missing_relative_strength = False
             if relative_return_20d is None:
                 confirmed_breakout_exception = bool(
                     (range_expansion_breakout_long or orderly_breakout_long)
@@ -1674,6 +3148,21 @@ def validate_entry_quality(
                     and rsi is not None
                     and rsi <= settings.entry_quality_range_expansion_max_rsi
                     and confirmed_patterns
+                )
+                breakout_continuation_exception = bool(
+                    breakout_continuation_long
+                    and score >= settings.entry_quality_breakout_continuation_min_score
+                    and volume_z is not None
+                    and volume_z >= settings.entry_quality_breakout_continuation_min_volume_z
+                    and close_position is not None
+                    and close_position >= 0.90
+                    and rsi is not None
+                    and rsi <= settings.entry_quality_breakout_continuation_max_rsi
+                    and sma20_distance <= settings.entry_quality_breakout_continuation_max_sma20_distance
+                    and return_20d is not None
+                    and return_20d >= settings.entry_quality_breakout_continuation_min_relative_return_20d
+                    and len(confirmed_patterns) >= 2
+                    and not breakout_failure_risk
                 )
                 confirmed_momentum_exception = bool(
                     not (event_momentum_long or range_expansion_breakout_long or orderly_breakout_long)
@@ -1687,13 +3176,41 @@ def validate_entry_quality(
                     and sma20_distance <= settings.entry_quality_momentum_confirmation_max_sma20_distance
                     and confirmed_patterns
                 )
+                follow_through_exception = bool(
+                    deterministic_fallback
+                    and _missing_relative_strength_follow_through_exception(
+                        settings,
+                        candidate,
+                        score=score,
+                        return_20d=return_20d,
+                        rsi=rsi,
+                        sma20_distance=sma20_distance,
+                        confirmed_patterns=len(confirmed_patterns),
+                    )
+                )
+                follow_through_missing_relative_strength = follow_through_exception or fallback_top_long_follow_through
                 checks["relative_strength_missing_exception"] = {
-                    "allowed": confirmed_breakout_exception or confirmed_momentum_exception,
+                    "allowed": (
+                        confirmed_breakout_exception
+                        or breakout_continuation_exception
+                        or confirmed_momentum_exception
+                        or follow_through_exception
+                        or fallback_constructive_extension
+                        or fallback_top_long_follow_through
+                    ),
                     "reason": (
                         "confirmed_breakout_with_volume_and_strong_close"
                         if confirmed_breakout_exception
+                        else "breakout_continuation_with_exceptional_close"
+                        if breakout_continuation_exception
                         else "confirmed_momentum_with_volume_and_pattern"
                         if confirmed_momentum_exception
+                        else "follow_through_alignment_without_relative_strength"
+                        if follow_through_exception
+                        else "constructive_extension_fallback_exception"
+                        if fallback_constructive_extension
+                        else "top_long_follow_through"
+                        if fallback_top_long_follow_through
                         else "missing_relative_strength_without_exception"
                     ),
                     "min_score": settings.entry_quality_extreme_rsi_min_score,
@@ -1709,8 +3226,32 @@ def validate_entry_quality(
                         "max_rsi": settings.entry_quality_momentum_confirmation_max_rsi,
                         "max_sma20_distance": settings.entry_quality_momentum_confirmation_max_sma20_distance,
                     },
+                    "follow_through_exception": {
+                        "allowed": follow_through_exception,
+                        "max_selection_rank": settings.entry_quality_missing_relative_strength_follow_through_max_selection_rank,
+                        "min_score": settings.entry_quality_missing_relative_strength_follow_through_min_score,
+                        "min_return_20d": settings.entry_quality_missing_relative_strength_follow_through_min_return_20d,
+                        "min_rsi": settings.entry_quality_missing_relative_strength_follow_through_min_rsi,
+                        "max_sma20_distance": settings.entry_quality_missing_relative_strength_follow_through_max_sma20_distance,
+                        "min_confirmed_patterns": settings.entry_quality_missing_relative_strength_follow_through_min_confirmed_patterns,
+                    },
+                    "breakout_continuation_exception": {
+                        "allowed": breakout_continuation_exception,
+                        "min_score": settings.entry_quality_breakout_continuation_min_score,
+                        "min_volume_zscore_20": settings.entry_quality_breakout_continuation_min_volume_z,
+                        "min_return_20d": settings.entry_quality_breakout_continuation_min_relative_return_20d,
+                        "max_rsi": settings.entry_quality_breakout_continuation_max_rsi,
+                        "max_sma20_distance": settings.entry_quality_breakout_continuation_max_sma20_distance,
+                    },
                 }
-                if not (confirmed_breakout_exception or confirmed_momentum_exception):
+                if not (
+                    confirmed_breakout_exception
+                    or breakout_continuation_exception
+                    or confirmed_momentum_exception
+                    or follow_through_exception
+                    or fallback_constructive_extension
+                    or fallback_top_long_follow_through
+                ):
                     return False, "entrada extendida sin fuerza relativa 20d disponible", checks
             if (
                 relative_return_20d is not None
@@ -1724,7 +3265,10 @@ def validate_entry_quality(
                 )
             if volume_z is None:
                 return False, "entrada extendida sin volumen relativo disponible", checks
-            if volume_z < settings.entry_quality_extended_min_volume_z:
+            if (
+                volume_z < settings.entry_quality_extended_min_volume_z
+                and not follow_through_missing_relative_strength
+            ):
                 return (
                     False,
                     f"entrada extendida sin volumen de confirmacion ({volume_z:.2f})",
@@ -1740,7 +3284,12 @@ def validate_entry_quality(
             return False, f"RSI extremo {rsi:.2f} sin score excepcional", checks
         if not confirmed_patterns:
             return False, f"RSI extremo {rsi:.2f} sin patron confirmado", checks
-        if volume_z is not None and volume_z < 0:
+        if (
+            volume_z is not None
+            and volume_z < 0
+            and not fallback_relative_strength_pullback_extension
+            and not fallback_top_long_follow_through
+        ):
             return False, f"RSI extremo {rsi:.2f} sin volumen de confirmacion", checks
 
     return True, "entry-quality aprobado", checks
@@ -1770,9 +3319,58 @@ def filter_entry_quality(
                 "checks": checks,
             }
         )
-        if approved:
-            kept.append(recommendation)
+        entry_score = checks.get("entry_score_v2") or {}
+        micro_experiment = bool(entry_score.get("micro_experiment"))
+        soft_override_reasons = list(recommendation.soft_override_reasons or [])
+        if _backtest_soft_override_eligible_from_entry_checks(settings, checks):
+            soft_override_reasons.append("backtest_soft_override_eligible")
+        if approved or micro_experiment:
+            kept.append(
+                replace(
+                    recommendation,
+                    aggressiveness_profile=settings.trade_aggressiveness_profile,
+                    micro_experiment=bool(recommendation.micro_experiment or micro_experiment),
+                    size_multiplier=(
+                        min(float(recommendation.size_multiplier or 1.0), float(settings.micro_experiment_size_multiplier))
+                        if micro_experiment
+                        else float(recommendation.size_multiplier or 1.0)
+                    ),
+                    soft_override_reasons=[
+                        *soft_override_reasons,
+                        *(["entry_score_v2_micro_experiment"] if micro_experiment else []),
+                    ],
+                )
+            )
     return kept, decisions
+
+
+def _backtest_soft_override_eligible_from_entry_checks(settings: Settings, checks: dict[str, Any]) -> bool:
+    if not settings.backtest_gate_paper_soft_override_enabled:
+        return False
+    if settings.trading_mode != "paper":
+        return False
+    if settings.trade_aggressiveness_profile not in {"opportunistic", "aggressive"}:
+        return False
+    entry_score = checks.get("entry_score_v2") or {}
+    reward_risk = _float(entry_score.get("reward_risk"))
+    sentiment_score = _float(checks.get("sentiment_score"))
+    sentiment_confidence = _float(checks.get("sentiment_confidence")) or 0.0
+    confirmed_negative_sentiment = (
+        sentiment_score is not None
+        and sentiment_confidence >= 0.5
+        and sentiment_score <= -0.5
+    )
+    return bool(
+        (_float(checks.get("score")) or 0.0) >= 16
+        and (_float(checks.get("volume_zscore_20")) or 0.0) >= 1.25
+        and int(checks.get("confirmed_bullish_patterns") or 0) >= 1
+        and reward_risk is not None
+        and reward_risk >= 1.5
+        and (_float(checks.get("close_position_in_range")) or 0.0) >= 0.80
+        and (_float(checks.get("sma20_distance")) is None or (_float(checks.get("sma20_distance")) or 0.0) <= 0.26)
+        and (_float(checks.get("rsi_14")) is None or (_float(checks.get("rsi_14")) or 0.0) <= 88.0)
+        and not confirmed_negative_sentiment
+    )
 
 
 def _recommendation_from_dict(item: dict[str, Any]) -> TradeRecommendation | None:
@@ -1793,6 +3391,11 @@ def _recommendation_from_dict(item: dict[str, Any]) -> TradeRecommendation | Non
         target_exposure_pct=_exposure_fraction(item.get("target_exposure_pct")),
         time_horizon=str(item.get("time_horizon", "")) or None,
         invalidation=str(item.get("invalidation", "")) or None,
+        aggressiveness_profile=str(item.get("aggressiveness_profile") or "") or None,
+        micro_experiment=bool(item.get("micro_experiment")),
+        size_multiplier=float(item.get("size_multiplier") or 1.0),
+        backtest_soft_override=bool(item.get("backtest_soft_override")),
+        soft_override_reasons=[str(value) for value in list(item.get("soft_override_reasons") or [])],
     )
 
 
@@ -1802,6 +3405,7 @@ def request_trade_recommendations(
     technical_context: dict[str, Any],
     sentiment_context: dict[str, Any],
     rebalance_context: dict[str, Any] | None = None,
+    market_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Ask the configured LLM for structured trade recommendations."""
 
@@ -1827,6 +3431,7 @@ def request_trade_recommendations(
         daily_learning_digest,
         decision_learning_context,
         operational_response_context,
+        market_state,
         compact=True,
     )
     decision_max_tokens = max(settings.llm_max_tokens or 0, 3000)
@@ -1844,6 +3449,8 @@ def request_trade_recommendations(
         "setup_edge_3d, setup_win_rate_3d y operational_penalty para priorizar setups con evidencia reciente. "
         "Prioriza technical_candidates.selected_candidates; technical_candidates.top_longs es contexto secundario. "
         "Usa selection_score, selection_reason, setup_sample_size_3d y expected_edge_3d para comparar entradas. "
+        "Trata market_state como contexto obligatorio: si data_quality.status es INSUFFICIENT, no propongas buys; "
+        "si market_regime es bearish o data_quality.status es PARTIAL, solo propone buys excepcionales y explicalos. "
         "No recomiendes comprar candidatos con blocked_auto_buy=true; tratalos como shadow/watch. "
         "Si learning_prior.matched_on es 'none' o sample_size_3d es 0, trata la ausencia de historial "
         "como neutral, no como edge negativo implicito; en ese caso decide por tecnico, riesgo y contexto actual. "
@@ -1866,8 +3473,17 @@ def request_trade_recommendations(
         "prioriza hasta llenar esa capacidad efectiva con compras distintas antes de devolver hold por exceso de conservadurismo. "
         "No compres solo porque haya cash. "
         "Si falta evidencia suficiente, action debe ser hold. "
-        f"Devuelve como maximo {recommendation_limit} recomendaciones. Usa razones breves. "
-        "No uses markdown. Cierra siempre el JSON."
+    )
+    # Prompt versionado (T2.1): si hay una version ACTIVE en prompt_versions se
+    # usa; si no, cae al texto por defecto de arriba. El cierre dinamico
+    # (limite de recomendaciones) se aplica SIEMPRE, sobre el prompt elegido.
+    from ..prompt_store import get_prompt
+
+    system_prompt = get_prompt(settings, "trade_decision_system", system_prompt)
+    system_prompt = (
+        system_prompt
+        + f" Devuelve como maximo {recommendation_limit} recomendaciones. Usa razones breves. "
+        + "No uses markdown. Cierra siempre el JSON."
     )
 
     def _create_completion(payload: dict[str, Any], max_tokens: int):
@@ -1875,8 +3491,9 @@ def request_trade_recommendations(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=True)},
         ]
-        response, endpoint, _attempts = chat_completion_with_fallback(
-            settings,
+        response, endpoint, _attempts = chat_for_role(
+            "decision",
+            settings=settings,
             messages=messages,
             temperature=settings.llm_temperature,
             max_tokens=max_tokens,
@@ -1885,7 +3502,7 @@ def request_trade_recommendations(
 
     try:
         response, messages, _endpoint = _create_completion(prompt, decision_max_tokens)
-        record_llm_response(settings, "trade_decision", response, prompt=messages)
+        record_llm_response(settings, "trade_decision", response, prompt=messages, role="decision")
     except Exception as exc:
         message = str(exc).lower()
         if "timeout" not in message and "timed out" not in message and "read operation" not in message:
@@ -1899,6 +3516,7 @@ def request_trade_recommendations(
             daily_learning_digest,
             decision_learning_context,
             operational_response_context,
+            market_state,
             compact=True,
         )
         fallback_prompt["decision_learning_context"] = {
@@ -1908,7 +3526,7 @@ def request_trade_recommendations(
             "active_operational_responses": list(decision_learning_context.get("active_operational_responses", []) or [])[:4],
         }
         response, messages, _endpoint = _create_completion(fallback_prompt, min(decision_max_tokens, 1800))
-        record_llm_response(settings, "trade_decision_fallback", response, prompt=messages)
+        record_llm_response(settings, "trade_decision_fallback", response, prompt=messages, role="decision")
         prompt = fallback_prompt
     content = response.choices[0].message.content or "{}"
     parsed = _extract_json_object(content)
@@ -1960,6 +3578,7 @@ def deterministic_trade_fallback_recommendations(
         if not _valid_risk_plan(candidate):
             continue
         technical_state = candidate.get("technical_state", {}) or {}
+        score = _float(candidate.get("score")) or 0.0
         close = _float(technical_state.get("close"))
         sma20 = _float(technical_state.get("sma_20"))
         if close and sma20:
@@ -1970,14 +3589,75 @@ def deterministic_trade_fallback_recommendations(
                     "event_momentum_long",
                     "range_expansion_breakout_long",
                     "orderly_breakout_long",
+                    "breakout_continuation_long",
                     "momentum_shakeout_hold_long",
                     "momentum_confirmation_long",
                 )
             )
+            has_extension_exception = has_extension_exception or _fallback_constructive_extension_exception(
+                settings,
+                candidate,
+                score=score,
+                volume_z=_float(technical_state.get("volume_zscore_20")),
+            )
+            has_extension_exception = has_extension_exception or _fallback_momentum_extension_exception(
+                settings,
+                candidate,
+                score=score,
+                volume_z=_float(technical_state.get("volume_zscore_20")),
+            )
+            has_extension_exception = has_extension_exception or _fallback_weak_volume_momentum_extension_exception(
+                settings,
+                candidate,
+                score=score,
+                volume_z=_float(technical_state.get("volume_zscore_20")),
+            )
+            has_extension_exception = has_extension_exception or _fallback_relative_strength_pullback_extension_exception(
+                settings,
+                candidate,
+                score=score,
+                return_20d=_float(technical_state.get("return_20d")),
+                relative_return_20d=_float(candidate.get("relative_return_20d")),
+                rsi=_float(technical_state.get("rsi_14")),
+                sma20_distance=sma20_distance,
+                volume_z=_float(technical_state.get("volume_zscore_20")),
+            )
+            has_extension_exception = has_extension_exception or _fallback_leader_pullback_extension_exception(
+                settings,
+                candidate,
+                score=score,
+                return_20d=_float(technical_state.get("return_20d")),
+                rsi=_float(technical_state.get("rsi_14")),
+                sma20_distance=sma20_distance,
+                volume_z=_float(technical_state.get("volume_zscore_20")),
+            )
+            has_extension_exception = has_extension_exception or _fallback_top_long_follow_through_exception(
+                settings,
+                candidate,
+                score=score,
+                return_20d=_float(technical_state.get("return_20d")),
+                rsi=_float(technical_state.get("rsi_14")),
+                volume_z=_float(technical_state.get("volume_zscore_20")),
+            )
             if sma20_distance > settings.entry_quality_max_sma20_distance and not has_extension_exception:
                 continue
-        score = _float(candidate.get("score")) or 0.0
-        if score < max(float(settings.entry_quality_min_score), 14.0):
+        fallback_min_score = max(
+            float(settings.entry_quality_min_score),
+            13.0 if _fallback_constructive_extension_exception(settings, candidate, score=score) else 14.0,
+        )
+        if _low_score_volume_rebound_override_exception(
+            settings,
+            candidate,
+            score=score,
+            return_20d=_float(technical_state.get("return_20d")),
+            rsi=_float(technical_state.get("rsi_14")),
+            volume_z=_float(technical_state.get("volume_zscore_20")),
+        ):
+            fallback_min_score = min(
+                fallback_min_score,
+                float(settings.entry_quality_low_score_volume_rebound_min_score),
+            )
+        if score < fallback_min_score:
             continue
         risk = candidate.get("risk_plan", {}) or {}
         candidate_recommendation = TradeRecommendation(
@@ -2041,9 +3721,91 @@ def deterministic_trade_fallback_recommendations(
                 time_horizon="3d",
                 invalidation="Stop loss o deterioro tecnico en el siguiente ciclo.",
                 source="deterministic_fallback",
+                aggressiveness_profile=settings.trade_aggressiveness_profile,
             )
         )
     return recommendations
+
+
+def augment_recommendations_with_deterministic_fallback(
+    settings: Settings,
+    portfolio: PortfolioSnapshot,
+    technical_context: dict[str, Any],
+    recommendations: list[TradeRecommendation],
+    *,
+    limit: int | None = None,
+) -> tuple[list[TradeRecommendation], dict[str, Any]]:
+    recommendation_limit = max(1, int(limit or _effective_trade_recommendation_limit(settings, technical_context)))
+    fallback_recommendations = deterministic_trade_fallback_recommendations(
+        settings,
+        portfolio,
+        technical_context,
+        limit=recommendation_limit,
+    )
+    if not fallback_recommendations:
+        return recommendations, {"added": [], "replaced_holds": [], "fallback_candidates": 0}
+
+    by_symbol: dict[str, TradeRecommendation] = {}
+    hold_symbols: set[str] = set()
+    buy_symbols: set[str] = set()
+    non_buy_count = 0
+    for recommendation in recommendations:
+        symbol = recommendation.symbol.upper()
+        by_symbol[symbol] = recommendation
+        action = str(recommendation.action).lower()
+        if action == "hold":
+            hold_symbols.add(symbol)
+        if action == "buy":
+            buy_symbols.add(symbol)
+        else:
+            non_buy_count += 1
+
+    current_buy_count = len(buy_symbols)
+    remaining_capacity = max(0, recommendation_limit - current_buy_count)
+    added: list[str] = []
+    replaced_holds: list[str] = []
+    merged = list(recommendations)
+
+    for fallback in fallback_recommendations:
+        symbol = fallback.symbol.upper()
+        if symbol in buy_symbols:
+            continue
+        if symbol in hold_symbols:
+            merged = [item for item in merged if item.symbol.upper() != symbol]
+            merged.append(
+                replace(
+                    fallback,
+                    reason=f"{fallback.reason} Override conservador sobre hold del LLM.",
+                    source="deterministic_hold_override",
+                )
+            )
+            buy_symbols.add(symbol)
+            added.append(symbol)
+            replaced_holds.append(symbol)
+            remaining_capacity = max(0, remaining_capacity - 1)
+            continue
+        if remaining_capacity <= 0:
+            continue
+        merged.append(
+            replace(
+                fallback,
+                reason=f"{fallback.reason} Completa capacidad buy no usada por el LLM.",
+                source="deterministic_capacity_fill",
+            )
+        )
+        buy_symbols.add(symbol)
+        added.append(symbol)
+        remaining_capacity -= 1
+
+    return merged, {
+        "added": added,
+        "replaced_holds": replaced_holds,
+        "fallback_candidates": len(fallback_recommendations),
+        "original_recommendations": len(recommendations),
+        "merged_recommendations": len(merged),
+        "non_buy_count": non_buy_count,
+        "recommendation_limit": recommendation_limit,
+    }
 
 
 def build_buy_order_plans(
@@ -2174,6 +3936,23 @@ def build_buy_order_plans(
             daily_learning_digest,
             operational_response_context,
         )
+        if recommendation.micro_experiment or recommendation.backtest_soft_override:
+            micro_multiplier = max(
+                0.0,
+                min(
+                    float(settings.micro_experiment_size_multiplier),
+                    float(recommendation.size_multiplier or 1.0),
+                    float(sizing_adjustment.get("size_multiplier") or 1.0),
+                ),
+            )
+            sizing_adjustment = {
+                **sizing_adjustment,
+                "size_multiplier": micro_multiplier,
+                "reason": "micro_experiment",
+                "micro_experiment": bool(recommendation.micro_experiment),
+                "backtest_soft_override": bool(recommendation.backtest_soft_override),
+                "soft_override_reasons": list(recommendation.soft_override_reasons or []),
+            }
         notional, sizing_checks = recommended_notional(
             settings,
             portfolio,
@@ -2217,6 +3996,12 @@ def build_buy_order_plans(
         decision = risk_manager.validate_order(proposal)
         decision.checks["position_sizing"] = sizing_checks
         decision.checks["sizing_adjustment"] = sizing_adjustment
+        decision.checks["aggressiveness_profile"] = (
+            recommendation.aggressiveness_profile or settings.trade_aggressiveness_profile
+        )
+        decision.checks["micro_experiment"] = bool(recommendation.micro_experiment)
+        decision.checks["backtest_soft_override"] = bool(recommendation.backtest_soft_override)
+        decision.checks["soft_override_reasons"] = list(recommendation.soft_override_reasons or [])
         if not decision.approved:
             if rejected is not None:
                 rejected.append(
@@ -2271,6 +4056,11 @@ def build_buy_order_plans(
                 recommendation=recommendation,
                 risk_decision=decision,
                 dry_run=dry_run,
+                aggressiveness_profile=recommendation.aggressiveness_profile or settings.trade_aggressiveness_profile,
+                micro_experiment=bool(recommendation.micro_experiment),
+                size_multiplier=float(sizing_checks.get("size_multiplier") or recommendation.size_multiplier or 1.0),
+                backtest_soft_override=bool(recommendation.backtest_soft_override),
+                soft_override_reasons=list(recommendation.soft_override_reasons or []),
             )
         )
         planned_buy_symbols.add(recommendation.symbol)
@@ -2419,29 +4209,6 @@ def _is_exceptional_llm_exit(
         "Salida LLM bloqueada: esperar stop_loss/take_profit salvo excepcion objetiva.",
         checks,
     )
-    exceptional_terms = (
-        "stop",
-        "take profit",
-        "take_profit",
-        "bajista",
-        "bearish",
-        "deterioro",
-        "deterioration",
-        "soporte perdido",
-        "lost support",
-        "noticia negativa",
-        "negative news",
-        "drawdown",
-        "riesgo extraordinario",
-        "fraud",
-        "guidance",
-        "earnings",
-    )
-    rotation_terms = ("rotacion", "rotación", "rotation", "candidato mejor", "superior")
-    return any(term in reason for term in exceptional_terms) and not any(
-        term in reason for term in rotation_terms
-    )
-
 
 def build_order_plans(
     settings: Settings,

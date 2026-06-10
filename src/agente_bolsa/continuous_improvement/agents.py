@@ -14,11 +14,13 @@ from agente_bolsa.models import new_id
 from agente_bolsa.storage import Store
 
 from .llm_client import ImprovementLLMClient
+from .context_compaction import compact_ci_context_for_llm
 from .schemas import (
     AgentName,
     ImprovementProposalPayload,
     LLMJsonResult,
     ProgrammerAgentResponse,
+    ParameterCalibrationResponse,
     SpecialistResponseBase,
     StrategyEvaluatorResponse,
     TechnicalAnalystResponse,
@@ -35,6 +37,7 @@ SPECIALIST_RESPONSE_MODELS = {
     AgentName.TECHNICAL_EDGE: TechnicalAnalystResponse,
     AgentName.SENTIMENT: SentimentAnalystResponse,
     AgentName.STRATEGY: StrategyEvaluatorResponse,
+    AgentName.PARAMETER_CALIBRATION: ParameterCalibrationResponse,
     AgentName.PRE_EARNINGS: StrategyEvaluatorResponse,
     AgentName.RISK_CAPITAL: StrategyEvaluatorResponse,
     AgentName.DATA_QUALITY: ProgrammerAgentResponse,
@@ -56,6 +59,18 @@ def _load_json_file(path: Path) -> dict[str, Any]:
         }
     except (OSError, json.JSONDecodeError) as exc:
         return {"available": False, "path": str(path), "error": str(exc)}
+
+
+def _load_latest_prefixed_report(reports_dir: Path, prefix: str) -> dict[str, Any]:
+    candidates = [
+        path
+        for path in reports_dir.glob(f"{prefix}_*.json")
+        if not path.name.endswith(".manifest.json")
+    ]
+    if not candidates:
+        return {"available": False, "path": str(reports_dir / f"{prefix}_*.json")}
+    latest = max(candidates, key=lambda path: path.stat().st_mtime)
+    return _load_json_file(latest)
 
 
 def proposal_fingerprint(proposal: ImprovementProposalPayload) -> str:
@@ -122,6 +137,7 @@ def initiative_title_from_key(key: str) -> str:
         "runtime_reliability": "Reducir errores y deuda técnica",
         "market_regime": "Seguir régimen de mercado",
         "strategy_evaluation": "Evaluar estabilidad de estrategia",
+        "opportunistic_parameters": "Calibrar perfil oportunista",
         "risk_capital": "Revisar riesgo y capital",
         "data_quality": "Reforzar calidad de datos",
         "software_reliability": "Reforzar fiabilidad del runtime",
@@ -140,6 +156,7 @@ def initiative_owner_from_key(key: str) -> str:
         "runtime_reliability": AgentName.SOFTWARE_RELIABILITY.value,
         "market_regime": AgentName.MARKET_REGIME.value,
         "strategy_evaluation": AgentName.STRATEGY.value,
+        "opportunistic_parameters": AgentName.PARAMETER_CALIBRATION.value,
         "risk_capital": AgentName.RISK_CAPITAL.value,
         "data_quality": AgentName.DATA_QUALITY.value,
         "software_reliability": AgentName.SOFTWARE_RELIABILITY.value,
@@ -150,6 +167,7 @@ def initiative_owner_from_key(key: str) -> str:
 def _compact_signal(item: dict[str, Any]) -> dict[str, Any]:
     features = item.get("features") or {}
     outcome = item.get("outcome") or {}
+    exit_policy = outcome.get("exit_policy_v2") or {}
     return {
         "signal_id": item.get("signal_id"),
         "source_run_id": item.get("source_run_id"),
@@ -163,6 +181,10 @@ def _compact_signal(item: dict[str, Any]) -> dict[str, Any]:
         "selected_for_llm": features.get("selected_for_llm"),
         "return_5d": outcome.get("return_5d"),
         "return_10d": outcome.get("return_10d"),
+        "mfe_10d": outcome.get("mfe_10d"),
+        "mae_10d": outcome.get("mae_10d"),
+        "exit_policy_v2_reason": exit_policy.get("exit_reason"),
+        "exit_policy_v2_return": exit_policy.get("return_pct"),
         "verdict": outcome.get("verdict"),
         "outcome_available": outcome.get("available"),
         "created_at": item.get("created_at"),
@@ -216,11 +238,18 @@ class DataCollectorAgent:
             latest_cycle = None
         signals = store.signal_outcomes(limit=160, since_date=since)
         observations = store.learning_observations(since_date=since, limit=160)
-        recent_errors = [
+        def _runtime_error_event(item: dict[str, Any]) -> bool:
+            event_type = str(item.get("event_type", "")).lower()
+            payload_text = str(item.get("payload_json", "")).lower()
+            if event_type in {"entry_quality_gate_completed", "stop_take_exit_executed"}:
+                return False
+            return "fail" in event_type or "error" in event_type or '"error"' in payload_text
+
+        recent_errors = [item for item in latest_events if _runtime_error_event(item)][:30]
+        operational_incidents = [
             item
             for item in latest_events
-            if "fail" in str(item.get("event_type", "")).lower()
-            or "error" in str(item.get("payload_json", "")).lower()
+            if str(item.get("event_type", "")).lower() in {"entry_quality_gate_completed", "stop_take_exit_executed"}
         ][:30]
         return {
             "cycle_id": cycle_id,
@@ -235,6 +264,21 @@ class DataCollectorAgent:
                 "improvement_dry_run": settings.improvement_dry_run,
                 "backtest_gate_enabled": settings.backtest_gate_enabled,
                 "entry_quality_gate_enabled": settings.entry_quality_gate_enabled,
+                "entry_score_v2_enabled": settings.entry_score_v2_enabled,
+                "exit_policy_v2_enabled": settings.exit_policy_v2_enabled,
+                "trade_aggressiveness_profile": settings.trade_aggressiveness_profile,
+                "trade_selection_top_n": settings.trade_selection_top_n,
+                "max_orders_per_cycle": settings.max_orders_per_cycle,
+                "max_daily_buy_orders": settings.max_daily_buy_orders,
+                "max_position_exposure": settings.max_position_exposure,
+                "max_risk_per_trade": settings.max_risk_per_trade,
+                "max_total_open_risk": settings.max_total_open_risk,
+                "entry_score_v2_min": settings.entry_score_v2_min,
+                "entry_score_v2_micro_min": settings.entry_score_v2_micro_min,
+                "entry_score_v2_min_reward_risk": settings.entry_score_v2_min_reward_risk,
+                "micro_experiment_size_multiplier": settings.micro_experiment_size_multiplier,
+                "backtest_gate_paper_soft_override_enabled": settings.backtest_gate_paper_soft_override_enabled,
+                "news_sentiment_fail_closed_for_buys": settings.news_sentiment_fail_closed_for_buys,
             },
             "database": store.status(),
             "runtime": {
@@ -247,6 +291,7 @@ class DataCollectorAgent:
             "events": {
                 "latest": latest_events,
                 "recent_errors": recent_errors,
+                "operational_incidents": operational_incidents,
             },
             "reports": {
                 "daily_learning": _load_json_file(reports_dir / "latest_daily_learning_digest.json"),
@@ -258,6 +303,8 @@ class DataCollectorAgent:
                 "pre_earnings_learning": _load_json_file(reports_dir / "latest_pre_earnings_learning_digest.json"),
                 "walk_forward_validation": _load_json_file(reports_dir / "latest_walk_forward_validation.json"),
                 "session_retrospective": _load_json_file(reports_dir / "latest_session_retrospective.json"),
+                "winner_coverage": _load_latest_prefixed_report(reports_dir, "winner_coverage"),
+                "fallback_blockers": _load_latest_prefixed_report(reports_dir, "fallback_blockers"),
             },
             "learning": {
                 "signals": [_compact_signal(item) for item in signals],
@@ -273,14 +320,24 @@ class DataCollectorAgent:
 
 
 class PerformanceEvaluatorAgent:
+    def score_dynamic_agents(self, store: Any) -> list[dict[str, Any]]:
+        """Puntua y retira agentes dinamicos inutiles (T2.2)."""
+
+        from .dynamic_agents import score_dynamic_agents
+
+        return score_dynamic_agents(store)
+
     def evaluate(self, context: dict[str, Any]) -> dict[str, Any]:
         signals = context.get("learning", {}).get("signals", []) or []
         observations = context.get("learning", {}).get("observations", []) or []
         recent_errors = context.get("events", {}).get("recent_errors", []) or []
         executed = [item for item in observations if item.get("executed_buy")]
+        micro = [item for item in observations if str(item.get("decision") or "") in {"approved_buy_micro", "executed_buy_micro"}]
+        soft_backtest = [item for item in observations if str(item.get("decision") or "") == "approved_buy_soft_backtest"]
         blocked_entry = [item for item in observations if item.get("blocked_entry_quality")]
         blocked_backtest = [item for item in observations if item.get("blocked_backtest")]
         outcomes_available = [item for item in signals if item.get("outcome_available") and item.get("verdict")]
+        exit_policy_available = [item for item in signals if item.get("exit_policy_v2_reason")]
         blockers: list[dict[str, Any]] = []
         if recent_errors:
             blockers.append(
@@ -311,10 +368,14 @@ class PerformanceEvaluatorAgent:
                 "signals": len(signals),
                 "observations": len(observations),
                 "executed_observations": len(executed),
+                "micro_observations": len(micro),
+                "soft_backtest_overrides": len(soft_backtest),
                 "blocked_entry_quality": len(blocked_entry),
                 "blocked_backtest": len(blocked_backtest),
                 "outcomes_available": len(outcomes_available),
+                "exit_policy_v2_available": len(exit_policy_available),
                 "recent_errors": len(recent_errors),
+                "operational_incidents": len(context.get("events", {}).get("operational_incidents", []) or []),
             },
             "blockers": blockers,
             "data_quality": "GOOD" if outcomes_available else "PARTIAL" if signals or observations else "INSUFFICIENT",
@@ -354,6 +415,15 @@ class SpecialistAgent:
             return LLMJsonResult(ok=False, llm_call_id=new_id("ci_llm_skip"), error="agent_llm_not_supported")
         if not self.settings.improvement_llm_enabled:
             return LLMJsonResult(ok=False, llm_call_id=new_id("ci_llm_skip"), error="llm_disabled")
+        user_payload = compact_ci_context_for_llm(
+            context=context,
+            evaluation=context.get("evaluation", {}),
+            event=event,
+            task_payload=task_payload,
+            deterministic_baseline=deterministic,
+            target_tokens=self.settings.improvement_llm_context_target_tokens,
+            hard_limit_tokens=self.settings.improvement_llm_context_hard_limit_tokens,
+        )
         messages = [
             {
                 "role": "system",
@@ -365,19 +435,7 @@ class SpecialistAgent:
             },
             {
                 "role": "user",
-                "content": json.dumps(
-                    {
-                        "event": event,
-                        "task_payload": task_payload,
-                        "deterministic_baseline": deterministic,
-                        "context_summary": {
-                            "evaluation": context.get("evaluation", {}),
-                            "reports": context.get("reports", {}),
-                        },
-                    },
-                    ensure_ascii=True,
-                    default=str,
-                ),
+                "content": json.dumps(user_payload, ensure_ascii=True, default=str),
             },
         ]
         return self.client.generate_json(
@@ -529,6 +587,107 @@ class StrategyEvaluatorAgent(SpecialistAgent):
         ).model_dump()
 
 
+class ParameterCalibrationAgent(SpecialistAgent):
+    agent_name = AgentName.PARAMETER_CALIBRATION
+    domain = "trading-improvement"
+
+    def _deterministic(self, context: dict[str, Any], event: dict[str, Any], task_payload: dict[str, Any]) -> dict[str, Any]:
+        settings = context.get("settings", {}) or {}
+        summary = context.get("evaluation", {}).get("summary", {}) or {}
+        observations = context.get("learning", {}).get("observations", []) or []
+        signals = int(summary.get("signals") or 0)
+        outcomes = int(summary.get("outcomes_available") or 0)
+        micro = int(summary.get("micro_observations") or 0)
+        soft_backtest = int(summary.get("soft_backtest_overrides") or 0)
+        blocked_entry = int(summary.get("blocked_entry_quality") or 0)
+        blocked_backtest = int(summary.get("blocked_backtest") or 0)
+        profile = str(settings.get("trade_aggressiveness_profile") or "conservative")
+        executed = int(summary.get("executed_observations") or 0)
+        approved_like = [
+            item
+            for item in observations
+            if str(item.get("decision") or "") in {"approved_buy", "approved_buy_micro", "approved_buy_soft_backtest", "executed_buy", "executed_buy_micro"}
+        ]
+
+        proposals: list[dict[str, Any]] = []
+        actions = [
+            {
+                "action_type": "MONITORING",
+                "title": "Auditar perfil oportunista",
+                "rationale": "Los nuevos parametros deben medirse por conversion, outcomes, micro-operaciones y drawdown antes de volver a tocar riesgo.",
+                "risk_level": "LOW",
+                "required_validations": ["baseline_compare"],
+            }
+        ]
+
+        if profile == "opportunistic" and outcomes < 10:
+            proposals.append(
+                {
+                    "proposal_type": "MONITORING_CHANGE",
+                    "target_component": "opportunistic_profile",
+                    "target_identifier": "minimum_evidence_window",
+                    "current_value": f"profile={profile}; outcomes={outcomes}; micro={micro}; soft_backtest={soft_backtest}",
+                    "proposed_value": "Mantener perfil oportunista hasta 10 sesiones o 20 operaciones/micro-operaciones antes de recalibrar thresholds.",
+                    "rationale": "Aun no hay outcomes suficientes para saber si el cambio mejora expectancy o solo aumenta actividad.",
+                    "expected_impact": "Evitar sobreajuste inmediato y forzar medicion objetiva del nuevo perfil.",
+                    "risk_level": "LOW",
+                    "required_validations": ["baseline_compare", "walk_forward"],
+                    "rollback_plan": "Volver a conservative si aparecen drawdown, errores operativos o degradacion de outcomes.",
+                }
+            )
+        if profile == "opportunistic" and signals >= 30 and not approved_like and not (blocked_entry or blocked_backtest):
+            proposals.append(
+                {
+                    "proposal_type": "PARAMETER_CHANGE",
+                    "target_component": "opportunistic_profile",
+                    "target_identifier": "decision_bandwidth",
+                    "current_value": f"trade_selection_top_n={settings.get('trade_selection_top_n')}; max_orders={settings.get('max_orders_per_cycle')}",
+                    "proposed_value": "Revisar si el LLM/fallback esta ignorando candidatos seleccionados pese a perfil oportunista; no aumentar tamano por posicion.",
+                    "rationale": "Si hay muchas senales y ninguna aprobacion, el cuello de botella puede estar en priorizacion o prompt, no en riesgo.",
+                    "expected_impact": "Mejor conversion de oportunidades sin subir exposicion por posicion.",
+                    "risk_level": "MEDIUM",
+                    "required_validations": ["baseline_compare", "shadow_review"],
+                    "rollback_plan": "Mantener limites actuales si la revision no mejora conversion con coste controlado.",
+                }
+            )
+        if outcomes >= 10 and (micro or soft_backtest) and executed == 0:
+            proposals.append(
+                {
+                    "proposal_type": "PARAMETER_CHANGE",
+                    "target_component": "opportunistic_profile",
+                    "target_identifier": "micro_execution_conversion",
+                    "current_value": f"micro={micro}; soft_backtest={soft_backtest}; executed={executed}",
+                    "proposed_value": "Investigar por que las oportunidades micro no llegan a ejecucion paper; validar daily caps, broker orders y trazabilidad.",
+                    "rationale": "Un perfil oportunista sin conversion a ejecucion no aprende de mercado real.",
+                    "expected_impact": "Cerrar el bucle entre senal, orden paper, outcome y recalibracion.",
+                    "risk_level": "MEDIUM",
+                    "required_validations": ["tests", "paper_audit"],
+                    "rollback_plan": "Desactivar micro overrides si no se puede auditar la ejecucion.",
+                }
+            )
+
+        return ParameterCalibrationResponse(
+            summary="Calibracion del perfil oportunista y sus parametros operativos.",
+            confidence="MEDIUM" if signals or outcomes else "LOW",
+            hypotheses=[
+                {
+                    "subject": "opportunistic_parameter_learning",
+                    "summary": "El grupo debe medir si mas ancho de seleccion y micro-operaciones aumentan conversion sin deteriorar riesgo.",
+                    "confidence": "MEDIUM" if profile == "opportunistic" else "LOW",
+                    "evidence": [
+                        f"profile={profile}",
+                        f"signals={signals}",
+                        f"outcomes={outcomes}",
+                        f"micro={micro}",
+                        f"soft_backtest={soft_backtest}",
+                    ],
+                }
+            ],
+            actions=actions,
+            proposals=proposals,
+        ).model_dump()
+
+
 class ProgrammerAgent(SpecialistAgent):
     agent_name = AgentName.PROGRAMMER
     domain = "software-improvement"
@@ -631,6 +790,22 @@ class TechnicalEdgeAgent(TechnicalAnalystAgent):
 
     def _deterministic(self, context: dict[str, Any], event: dict[str, Any], task_payload: dict[str, Any]) -> dict[str, Any]:
         summary = context.get("evaluation", {}).get("summary", {})
+        reports = context.get("reports", {}) or {}
+        winner_report = (reports.get("winner_coverage") or {}).get("payload", {}) if (reports.get("winner_coverage") or {}).get("available") else {}
+        blocker_report = (reports.get("fallback_blockers") or {}).get("payload", {}) if (reports.get("fallback_blockers") or {}).get("available") else {}
+        winner_summary = winner_report.get("summary", {}) or {}
+        blocker_summary = blocker_report.get("summary", {}) or {}
+        fallback_blocker_sessions = sum(
+            int(item.get("sessions") or 0)
+            for item in list(winner_summary.get("fallback_blocker_summary") or [])[:10]
+            if isinstance(item, dict)
+        )
+        selection_miss_sessions = sum(
+            int(item.get("sessions") or 0)
+            for item in list(winner_summary.get("selection_miss_summary") or [])[:10]
+            if isinstance(item, dict)
+        )
+        selected_blocked_sessions = int(blocker_summary.get("selected_blocked_sessions") or 0)
         observations = max(summary.get("observations", 0), 1)
         blocked = summary.get("blocked_entry_quality", 0)
         duplicate_share = summary.get("duplicate_share", 0)
@@ -648,6 +823,56 @@ class TechnicalEdgeAgent(TechnicalAnalystAgent):
                     "risk_level": "LOW",
                     "required_validations": ["tests"],
                     "rollback_plan": "Volver a la configuracion vigente si el analisis no añade señal.",
+                }
+            )
+        if fallback_blocker_sessions or selected_blocked_sessions:
+            proposals.append(
+                {
+                    "proposal_type": "PARAMETER_CHANGE",
+                    "target_component": "entry_quality_filter",
+                    "target_identifier": "counterfactual_false_blockers",
+                    "current_value": (
+                        f"winner_blocker_sessions={fallback_blocker_sessions}; "
+                        f"selected_blocked_sessions={selected_blocked_sessions}"
+                    ),
+                    "proposed_value": (
+                        "Usar reportes winner_coverage/fallback_blockers para investigar excepciones estrechas "
+                        "sobre SMA20, entry_score_v2, prior_error y score_min antes de tocar umbrales globales."
+                    ),
+                    "rationale": (
+                        "La ventana reciente puede no tener outcomes maduros, pero los contrafactuales historicos "
+                        "muestran coste real de oportunidad en ganadoras bloqueadas."
+                    ),
+                    "expected_impact": "Reducir falsos bloqueos de ganadoras sin abrir filtros globales ruidosos.",
+                    "risk_level": "MEDIUM",
+                    "required_validations": ["backtest", "baseline_compare"],
+                    "rollback_plan": "Mantener reglas champion si las excepciones aumentan negativos o drawdown.",
+                }
+            )
+        if selection_miss_sessions:
+            top_reasons = ", ".join(
+                f"{item.get('reason')}={int(item.get('sessions') or 0)}"
+                for item in list(winner_summary.get("selection_miss_summary") or [])[:3]
+                if isinstance(item, dict)
+            )
+            proposals.append(
+                {
+                    "proposal_type": "PARAMETER_CHANGE",
+                    "target_component": "deterministic_selector",
+                    "target_identifier": "counterfactual_selection_misses",
+                    "current_value": f"selection_miss_sessions={selection_miss_sessions}; {top_reasons}",
+                    "proposed_value": (
+                        "Separar oportunidades perdidas por ranking/direccion de los bloqueos de entrada; "
+                        "evaluar boosts estrechos de ranking solo si la cohorte historica supera negativos y drawdown."
+                    ),
+                    "rationale": (
+                        "Las ganadoras no capturadas no siempre fallan por entry_quality: algunas quedan fuera del limite "
+                        "de seleccion o nacen como short/bearish, y requieren diagnostico distinto."
+                    ),
+                    "expected_impact": "Dirigir la mejora hacia ranking/seleccion sin relajar filtros de compra globales.",
+                    "risk_level": "MEDIUM",
+                    "required_validations": ["backtest", "baseline_compare"],
+                    "rollback_plan": "No cambiar ranking champion si la cohorte ampliada no mejora expectancy ajustada por riesgo.",
                 }
             )
         if duplicate_share:
@@ -673,7 +898,12 @@ class TechnicalEdgeAgent(TechnicalAnalystAgent):
                     "subject": "technical_edge",
                     "summary": "La calidad tecnica depende de separar ruido, duplicados y falsos bloqueos.",
                     "confidence": "MEDIUM",
-                    "evidence": [f"blocked_entry_quality={blocked}", f"observations={observations}"],
+                    "evidence": [
+                        f"blocked_entry_quality={blocked}",
+                        f"observations={observations}",
+                        f"winner_blocker_sessions={fallback_blocker_sessions}",
+                        f"selected_blocked_sessions={selected_blocked_sessions}",
+                    ],
                 }
             ],
             proposals=proposals,
@@ -936,6 +1166,9 @@ class DecisionCommitteeAgent(SpecialistAgent):
             confidence="MEDIUM" if considered else "LOW",
             decision=decision,
             decision_reason=self._decision_reason(decision, considered),
+            deterministic_alignment=True,
+            deterministic_decision=decision,
+            discrepancy_justification="",
             initiative_status_target=self._initiative_status_for_decision(decision),
             proposal_status_targets=proposal_targets,
             priority_adjustment=self._priority_adjustment(decision, considered),
@@ -1042,19 +1275,22 @@ class ImprovementStrategistAgent:
             "Debes devolver solo JSON valido con el esquema pedido. No inventes metricas, no propongas "
             "trading real, no propongas cambios destructivos y no bases PnL en texto generado."
         )
-        user_payload = {
-            "real_context": context,
-            "deterministic_evaluation": evaluation,
-            "safety_rules": {
-                "no_live_trading": True,
-                "no_real_orders": True,
-                "no_destructive_changes": True,
-                "code_changes_require_human_review": self.settings.require_human_approval_for_code_changes,
-                "dry_run_first": self.settings.improvement_dry_run,
-                "allow_auto_apply_improvements": self.settings.allow_auto_apply_improvements,
-                "allow_live_trading": self.settings.allow_live_trading,
-            },
+        safety_rules = {
+            "no_live_trading": True,
+            "no_real_orders": True,
+            "no_destructive_changes": True,
+            "code_changes_require_human_review": self.settings.require_human_approval_for_code_changes,
+            "dry_run_first": self.settings.improvement_dry_run,
+            "allow_auto_apply_improvements": self.settings.allow_auto_apply_improvements,
+            "allow_live_trading": self.settings.allow_live_trading,
         }
+        user_payload = compact_ci_context_for_llm(
+            context=context,
+            evaluation=evaluation,
+            safety_rules=safety_rules,
+            target_tokens=self.settings.improvement_llm_context_target_tokens,
+            hard_limit_tokens=self.settings.improvement_llm_context_hard_limit_tokens,
+        )
         return self.client.generate_json(
             [
                 {"role": "system", "content": system},
@@ -1099,30 +1335,50 @@ class RiskGuardAgent:
         if any(term in text for term in self.DANGEROUS_TERMS):
             reasons.append("dangerous_term")
         if proposal.proposal_type == "CODE_CHANGE" and settings.require_human_approval_for_code_changes:
-            reasons.append("code_change_requires_human_review")
+            reasons.append("code_change_autonomy_disabled")
         if proposal.risk_level == "HIGH" and settings.require_human_approval_for_high_risk:
-            reasons.append("high_risk_requires_human_review")
+            reasons.append("high_risk_autonomy_disabled")
         if settings.allow_live_trading:
-            reasons.append("environment_allows_live_trading_review_required")
+            reasons.append("environment_allows_live_trading")
         if not settings.improvement_dry_run:
-            reasons.append("dry_run_disabled_review_required")
+            reasons.append("autonomous_apply_enabled")
 
         rejected = "dangerous_term" in reasons
         if rejected:
             status = "REJECTED"
-        elif reasons:
-            status = "REQUIRES_HUMAN_REVIEW"
+        elif (
+            proposal.proposal_type == "CODE_CHANGE"
+            and proposal.risk_level == "HIGH"
+            and settings.require_human_approval_for_high_risk
+        ):
+            status = "WAITING_HUMAN_REVIEW"
+        elif proposal.proposal_type == "CODE_CHANGE" and settings.require_human_approval_for_code_changes:
+            status = "WAITING_HUMAN_REVIEW"
         else:
             status = "PENDING"
         return {
             "status": status,
-            "approved_for_auto_apply": False,
+            "approved_for_auto_apply": not rejected and proposal.proposal_type == "CODE_CHANGE" and settings.allow_auto_apply_improvements and not settings.improvement_dry_run and not settings.require_human_approval_for_code_changes and not settings.allow_live_trading,
             "reasons": reasons,
             "dry_run": settings.improvement_dry_run,
         }
 
 
 class ValidationAgent:
+    CANONICAL_VALIDATION_ALIASES = {
+        "backtest": "in_sample",
+        "baseline_compare": "out_of_sample",
+        "shadow_review": "walk_forward",
+        "paper_audit": "paper_or_shadow_window",
+    }
+    CHAMPION_CHALLENGER_REQUIRED = [
+        "in_sample",
+        "walk_forward",
+        "out_of_sample",
+        "paper_or_shadow_window",
+        "risk_review",
+    ]
+
     def validate(
         self,
         proposal: dict[str, Any],
@@ -1133,7 +1389,9 @@ class ValidationAgent:
         payload = {**(proposal.get("payload", {}) or {}), "proposal_id": proposal.get("proposal_id")}
         proposal_type = str(proposal.get("proposal_type") or payload.get("proposal_type") or "MONITORING_CHANGE")
         target_component = str(proposal.get("target_component") or payload.get("target_component") or "").strip()
-        required = payload.get("required_validations") or self._default_required_validations(proposal_type)
+        required = self._normalize_required_validations(
+            payload.get("required_validations") or self._default_required_validations(proposal_type)
+        )
         required_lower = {str(item).lower() for item in required}
         objective = self._objective_validation(
             proposal_type=proposal_type,
@@ -1175,6 +1433,24 @@ class ValidationAgent:
             },
         ]
         checks.extend(objective["checks"])
+        if bool(payload.get("evaluation_window_frozen")) and bool(payload.get("frozen_conflict")):
+            checks.append(
+                {
+                    "name": "evaluation_window_frozen",
+                    "passed": False,
+                    "detail": "La propuesta intenta cambiar parametros durante una ventana de evaluacion congelada.",
+                }
+            )
+        tuning_count = int(payload.get("parameter_tuning_count") or payload.get("threshold_change_count") or 0)
+        if tuning_count > 2:
+            checks.append(
+                {
+                    "name": "repeated_parameter_tuning",
+                    "passed": False,
+                    "detail": "Demasiados cambios de parametros dentro de la ventana; riesgo alto de sobreajuste.",
+                    "evidence": {"tuning_count": tuning_count},
+                }
+            )
         if proposal_type == "CODE_CHANGE":
             checks.append(
                 {
@@ -1197,6 +1473,7 @@ class ValidationAgent:
             passed=passed,
             objective_status=objective["status"],
             settings=settings,
+            proposal=proposal,
         )
         return {
             "validation_id": new_id("ci_val"),
@@ -1222,17 +1499,23 @@ class ValidationAgent:
         passed: bool,
         objective_status: str,
         settings: Settings,
+        proposal: dict[str, Any],
     ) -> str:
+        risk_level = str(proposal.get("risk_level") or "").upper()
         if proposal_type == "CODE_CHANGE":
-            return objective_status if passed and objective_status in {"READY_TO_APPLY", "WAITING_HUMAN_REVIEW"} else "PENDING"
+            if objective_status == "REJECTED":
+                return "REJECTED"
+            if risk_level == "HIGH" and settings.require_human_approval_for_high_risk:
+                return "WAITING_HUMAN_REVIEW"
+            if settings.require_human_approval_for_code_changes:
+                return "WAITING_HUMAN_REVIEW"
+            return objective_status if passed and objective_status == "READY_TO_APPLY" else "PENDING"
         if objective_status == "REJECTED":
             return "REJECTED"
         if not passed:
             return "PENDING"
         if settings.allow_auto_apply_improvements and objective_status == "PASSED":
             return "READY_TO_APPLY"
-        if objective_status == "WAITING_HUMAN_REVIEW":
-            return "WAITING_HUMAN_REVIEW"
         return "PASSED"
 
     def _objective_validation(
@@ -1262,7 +1545,9 @@ class ValidationAgent:
         session_retrospective = self._report_payload(reports.get("session_retrospective"))
         required_lower = {
             str(item).lower()
-            for item in (payload.get("required_validations") or self._default_required_validations(proposal_type))
+            for item in self._normalize_required_validations(
+                payload.get("required_validations") or self._default_required_validations(proposal_type)
+            )
         }
 
         evidence: dict[str, Any] = {
@@ -1341,7 +1626,7 @@ class ValidationAgent:
                 session_retrospective=session_retrospective,
             )
 
-        if "backtest" in required_lower and not self._has_backtest_evidence(
+        if "in_sample" in required_lower and not self._has_backtest_evidence(
             daily=daily,
             backtest=backtest,
             operational=operational,
@@ -1350,34 +1635,59 @@ class ValidationAgent:
         ):
             checks.append(
                 {
-                    "name": "backtest_evidence",
+                    "name": "in_sample",
                     "passed": False,
                     "detail": "Backtest requerido, pero no hay reporte objetivo disponible.",
                 }
             )
             objective_status = "PENDING" if objective_status == "PASSED" else objective_status
-        if "baseline_compare" in required_lower and not self._has_baseline_evidence(
+        if "out_of_sample" in required_lower and not self._has_baseline_evidence(
             daily=daily,
             operational=operational,
             session_retrospective=session_retrospective,
         ):
             checks.append(
                 {
-                    "name": "baseline_compare",
+                    "name": "out_of_sample",
                     "passed": False,
                     "detail": "Comparacion contra baseline requerida, pero no hay evidencia objetiva disponible.",
                 }
             )
             objective_status = "PENDING" if objective_status == "PASSED" else objective_status
-        if "shadow_review" in required_lower and not self._has_shadow_evidence(
+        if "walk_forward" in required_lower and not self._has_shadow_evidence(
             operational=operational,
             session_retrospective=session_retrospective,
         ):
             checks.append(
                 {
-                    "name": "shadow_review",
+                    "name": "walk_forward",
                     "passed": False,
                     "detail": "Revision shadow requerida, pero no hay evaluacion shadow disponible.",
+                }
+            )
+            objective_status = "PENDING" if objective_status == "PASSED" else objective_status
+        if "paper_or_shadow_window" in required_lower and not self._has_paper_or_shadow_window_evidence(
+            operational=operational,
+            daily=daily,
+            post_market=post_market,
+        ):
+            checks.append(
+                {
+                    "name": "paper_or_shadow_window",
+                    "passed": False,
+                    "detail": "Falta ventana paper/shadow con evidencia operativa suficiente.",
+                }
+            )
+            objective_status = "PENDING" if objective_status == "PASSED" else objective_status
+        if "risk_review" in required_lower and not self._has_risk_review_evidence(
+            live_readiness=live_readiness,
+            market_quality=market_quality,
+        ):
+            checks.append(
+                {
+                    "name": "risk_review",
+                    "passed": False,
+                    "detail": "Falta revision objetiva de riesgo/readiness para promover el challenger.",
                 }
             )
             objective_status = "PENDING" if objective_status == "PASSED" else objective_status
@@ -1484,6 +1794,29 @@ class ValidationAgent:
         if market_quality:
             return True
         return bool(daily.get("summary"))
+
+    def _has_paper_or_shadow_window_evidence(
+        self,
+        *,
+        operational: dict[str, Any],
+        daily: dict[str, Any],
+        post_market: dict[str, Any],
+    ) -> bool:
+        if (operational.get("shadow_evaluation") or {}).get("metrics_by_rule"):
+            return True
+        if daily.get("summary"):
+            return True
+        return bool(post_market.get("summary"))
+
+    def _has_risk_review_evidence(
+        self,
+        *,
+        live_readiness: dict[str, Any],
+        market_quality: dict[str, Any],
+    ) -> bool:
+        if live_readiness:
+            return True
+        return bool(market_quality)
 
     def _validate_pre_earnings_veto(
         self,
@@ -1839,11 +2172,22 @@ class ValidationAgent:
             "CODE_CHANGE": ["tests"],
             "DATA_QUALITY_CHANGE": ["tests", "data_quality_review"],
             "PROMPT_CHANGE": ["tests", "shadow_review"],
-            "RISK_RULE_CHANGE": ["backtest", "baseline_compare", "shadow_review"],
-            "PARAMETER_CHANGE": ["backtest", "baseline_compare"],
-            "STRATEGY_RULE_CHANGE": ["backtest", "baseline_compare", "shadow_review"],
+            "RISK_RULE_CHANGE": list(self.CHAMPION_CHALLENGER_REQUIRED),
+            "PARAMETER_CHANGE": list(self.CHAMPION_CHALLENGER_REQUIRED),
+            "STRATEGY_RULE_CHANGE": list(self.CHAMPION_CHALLENGER_REQUIRED),
         }
         return list(mapping.get(proposal_type, []))
+
+    def _normalize_required_validations(self, values: list[str] | None) -> list[str]:
+        normalized: list[str] = []
+        for item in values or []:
+            text = str(item or "").strip().lower()
+            if not text:
+                continue
+            canonical = self.CANONICAL_VALIDATION_ALIASES.get(text, text)
+            if canonical not in normalized:
+                normalized.append(canonical)
+        return normalized
 
 
 class ReportAgent:
@@ -1865,12 +2209,60 @@ class ReportAgent:
             by_agent[task["agent_name"]] = by_agent.get(task["agent_name"], 0) + 1
         decision_counts: dict[str, int] = {}
         backlog_buckets: dict[str, int] = {}
+        validations_by_proposal: dict[str, dict[str, Any]] = {}
+        for validation in validations:
+            proposal_id = str(validation.get("proposal_id") or "")
+            if proposal_id and proposal_id not in validations_by_proposal:
+                validations_by_proposal[proposal_id] = validation
+        initiative_by_proposal: dict[str, dict[str, Any]] = {}
         for initiative in initiatives or []:
             decision = initiative.get("latest_decision") or {}
             decision_name = str(decision.get("decision") or initiative.get("status") or "UNKNOWN")
             decision_counts[decision_name] = decision_counts.get(decision_name, 0) + 1
             bucket = str(decision.get("backlog_bucket") or "UNKNOWN")
             backlog_buckets[bucket] = backlog_buckets.get(bucket, 0) + 1
+            for proposal_id in initiative.get("linked_proposal_ids") or []:
+                initiative_by_proposal[str(proposal_id)] = initiative
+        promotion_counts: dict[str, int] = {}
+        challengers: list[dict[str, Any]] = []
+        current_champion = None
+        for proposal in proposals:
+            payload = proposal.get("payload") or {}
+            promotion_state = str(payload.get("promotion_state") or "").lower() or "unclassified"
+            promotion_counts[promotion_state] = promotion_counts.get(promotion_state, 0) + 1
+            if promotion_state == "champion" and current_champion is None:
+                current_champion = {
+                    "proposal_id": proposal.get("proposal_id"),
+                    "target_component": proposal.get("target_component"),
+                    "status": proposal.get("status"),
+                }
+            if promotion_state in {"challenger", "shadow", "micro_experiment"}:
+                validation = validations_by_proposal.get(str(proposal.get("proposal_id") or ""))
+                validation_payload = (validation or {}).get("payload") or {}
+                failed_checks = [
+                    item.get("name")
+                    for item in validation_payload.get("checks", []) or []
+                    if item.get("passed") is False and item.get("name")
+                ]
+                initiative = initiative_by_proposal.get(str(proposal.get("proposal_id") or ""))
+                latest_decision = (initiative or {}).get("latest_decision") or {}
+                challengers.append(
+                    {
+                        "proposal_id": proposal.get("proposal_id"),
+                        "target_component": proposal.get("target_component"),
+                        "promotion_state": promotion_state,
+                        "status": proposal.get("status"),
+                        "required_validations": payload.get("required_validations", []),
+                        "evaluation_window_frozen": bool(payload.get("evaluation_window_frozen")),
+                        "latest_validation_status": (validation or {}).get("status"),
+                        "latest_objective_status": validation_payload.get("objective_status"),
+                        "blocking_checks": failed_checks,
+                        "committee_decision": latest_decision.get("decision"),
+                        "committee_bucket": latest_decision.get("backlog_bucket"),
+                        "next_action": (initiative or {}).get("next_action"),
+                        "next_review_at": payload.get("next_review_at"),
+                    }
+                )
         return {
             "cycle_id": cycle_id,
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -1892,6 +2284,11 @@ class ReportAgent:
             "governance": {
                 "decision_counts": decision_counts,
                 "backlog_buckets": backlog_buckets,
+                "champion_challenger": {
+                    "current_champion": current_champion,
+                    "promotion_counts": promotion_counts,
+                    "challengers": challengers[:10],
+                },
                 "actionable_initiatives": [
                     item
                     for item in initiatives or []
@@ -1909,6 +2306,7 @@ SPECIALIST_AGENT_CLASSES: dict[AgentName, type[SpecialistAgent]] = {
     AgentName.TECHNICAL_EDGE: TechnicalEdgeAgent,
     AgentName.SENTIMENT: SentimentAnalystAgent,
     AgentName.STRATEGY: StrategyEvaluatorAgent,
+    AgentName.PARAMETER_CALIBRATION: ParameterCalibrationAgent,
     AgentName.PRE_EARNINGS: PreEarningsSpecialistAgent,
     AgentName.PROGRAMMER: ProgrammerAgent,
     AgentName.RISK_CAPITAL: RiskCapitalAgent,

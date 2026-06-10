@@ -21,3 +21,4 @@ data/reports/*.json
 data/cache/
 *.pkl
 *.egg-info/
+sandboxes/

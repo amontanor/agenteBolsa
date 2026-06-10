@@ -85,6 +85,31 @@ def available_command_catalog() -> list[dict[str, Any]]:
             "description": "Convierte alertas recientes en respuestas conservadoras auditables; solo penaliza setups degradados y deja el resto en shadow.",
         },
         {
+            "group": "estado",
+            "command": r".\.venv\Scripts\python.exe -m agente_bolsa.main production-health",
+            "description": "Consolida la salud de produccion: jobs, scheduler, mejora continua y estado general.",
+        },
+        {
+            "group": "seguridad",
+            "command": r".\.venv\Scripts\python.exe -m agente_bolsa.main kernel-status --json",
+            "description": "Verifica la integridad del kernel inmutable contra el manifest sellado (kernel-seal lo regenera).",
+        },
+        {
+            "group": "estado",
+            "command": r".\.venv\Scripts\python.exe -m agente_bolsa.main performance --days 30 --json",
+            "description": "Serie diaria de rendimiento del sistema: equity, PnL, alpha vs SPY, Sharpe e iq_score.",
+        },
+        {
+            "group": "estado",
+            "command": r".\.venv\Scripts\python.exe -m agente_bolsa.main iq-score --json",
+            "description": "Metrica unica de progreso (0-100): cuanto mas listo y rentable es el sistema.",
+        },
+        {
+            "group": "estado",
+            "command": r".\.venv\Scripts\python.exe -m agente_bolsa.main llm-usage --by-role --json",
+            "description": "Uso y coste de LLM agregado por rol (fast/decision/deep) del router por roles.",
+        },
+        {
             "group": "mejora continua",
             "command": r".\.venv\Scripts\python.exe -m agente_bolsa.main continuous-improvement --json",
             "description": "Ejecuta un ciclo dry-run auditable con LLM externo configurable; no aplica cambios ni opera en real.",
@@ -103,6 +128,16 @@ def available_command_catalog() -> list[dict[str, Any]]:
             "group": "estado",
             "command": r".\.venv\Scripts\python.exe -m agente_bolsa.main market-data-quality --json",
             "description": "Audita cobertura OHLCV, simbolos faltantes, anomalias y proveedor efectivo del universo configurado.",
+        },
+        {
+            "group": "estado",
+            "command": r".\.venv\Scripts\python.exe -m agente_bolsa.main market-data-reconciliation --json",
+            "description": "Compara OHLCV entre proveedor configurado y proveedor alternativo para detectar discrepancias.",
+        },
+        {
+            "group": "mejora continua",
+            "command": r".\.venv\Scripts\python.exe -m agente_bolsa.main strategy-registry --json",
+            "description": "Lista reglas y estrategias champion/challenger/shadow con validaciones y bloqueos.",
         },
         {
             "group": "estado",
@@ -321,6 +356,8 @@ def command_cheatsheet() -> str:
             "   Resume bloqueos, avisos y evidencias que deben revisarse antes de cambiar a real.",
             r"   .\.venv\Scripts\python.exe -m agente_bolsa.main market-data-quality --json",
             "   Audita cobertura OHLCV, simbolos faltantes y anomalias antes del siguiente scan operativo.",
+            r"   .\.venv\Scripts\python.exe -m agente_bolsa.main market-data-reconciliation --json",
+            "   Compara proveedores y detecta discrepancias de cierre antes de confiar en datos para live.",
             r"   .\.venv\Scripts\python.exe -m agente_bolsa.main backup-db",
             "   Crea una copia restaurable de SQLite con instrucciones de restauracion.",
             "",

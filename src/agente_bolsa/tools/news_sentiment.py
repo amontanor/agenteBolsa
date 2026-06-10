@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agente_bolsa.config import Settings
-from agente_bolsa.llm_router import chat_completion_with_fallback
+from agente_bolsa.llm_router import chat_for_role
 from agente_bolsa.llm_usage import record_llm_response
 from .reporting import write_json_report
 
@@ -155,13 +155,12 @@ def _llm_sentiment(settings: Settings, symbol: str, candidate: dict[str, Any], n
             "content": json.dumps(prompt, ensure_ascii=True),
         },
     ]
-    response, _endpoint, _attempts = chat_completion_with_fallback(
-        settings,
+    response, _endpoint, _attempts = chat_for_role(
+        "fast",
+        settings=settings,
         messages=messages,
-        temperature=settings.llm_temperature,
-        max_tokens=settings.llm_max_tokens,
     )
-    record_llm_response(settings, "news_sentiment", response, prompt=messages)
+    record_llm_response(settings, "news_sentiment", response, prompt=messages, role="fast")
     content = response.choices[0].message.content or "{}"
     result = _extract_json_object(content)
     result["raw_response_preview"] = content[:1000]

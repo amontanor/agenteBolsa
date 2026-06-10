@@ -99,7 +99,8 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     completion_tokens INTEGER NOT NULL,
     total_tokens INTEGER NOT NULL,
     payload_json TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    role TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_llm_usage_created
@@ -612,6 +613,119 @@ CREATE TABLE IF NOT EXISTS continuous_improvement_applied_changes (
 
 CREATE INDEX IF NOT EXISTS idx_ci_applied_changes_status_updated
 ON continuous_improvement_applied_changes(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS performance_daily (
+    session_date TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    equity REAL,
+    pnl_pct REAL,
+    spy_pct REAL,
+    alpha REAL,
+    hit_rate_20 REAL,
+    sharpe_60 REAL,
+    max_dd REAL,
+    iq_score REAL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_performance_daily_date
+ON performance_daily(session_date);
+
+CREATE TABLE IF NOT EXISTS promotion_windows (
+    window_id TEXT PRIMARY KEY,
+    strategy TEXT NOT NULL,
+    version TEXT NOT NULL,
+    slot TEXT,
+    started_at TEXT NOT NULL,
+    min_sessions INTEGER NOT NULL,
+    min_signals INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_promotion_windows_status
+ON promotion_windows(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS prompt_versions (
+    prompt_id TEXT PRIMARY KEY,
+    prompt_key TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    template TEXT NOT NULL,
+    status TEXT NOT NULL,
+    parent_version INTEGER,
+    created_by TEXT,
+    metrics_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_prompt_versions_key_status
+ON prompt_versions(prompt_key, status);
+
+CREATE TABLE IF NOT EXISTS agent_definitions (
+    agent_key TEXT PRIMARY KEY,
+    role TEXT NOT NULL,
+    goal TEXT NOT NULL,
+    prompt_key TEXT,
+    inputs_json TEXT NOT NULL,
+    output_schema_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_by TEXT,
+    performance_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS distilled_lessons (
+    lesson_id TEXT PRIMARY KEY,
+    scope TEXT NOT NULL,
+    statement TEXT NOT NULL,
+    supporting_cases INTEGER NOT NULL,
+    contradicting_cases INTEGER NOT NULL,
+    confidence REAL NOT NULL,
+    status TEXT NOT NULL,
+    last_validated_at TEXT,
+    source_refs_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_distilled_lessons_status
+ON distilled_lessons(status, scope);
+
+CREATE TABLE IF NOT EXISTS market_thesis (
+    thesis_date TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    stance TEXT,
+    confidence REAL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS factory_runs (
+    run_id TEXT PRIMARY KEY,
+    run_date TEXT NOT NULL,
+    variants INTEGER NOT NULL,
+    survivors INTEGER NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_factory_runs_date
+ON factory_runs(run_date);
+
+CREATE TABLE IF NOT EXISTS pattern_stats (
+    pattern_key TEXT PRIMARY KEY,
+    pattern TEXT NOT NULL,
+    regime TEXT NOT NULL,
+    occurrences INTEGER NOT NULL,
+    hit_rate REAL,
+    expectancy REAL,
+    lift REAL,
+    status TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -621,6 +735,11 @@ def _utc_iso() -> str:
 
 def _dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=True, default=str)
+
+
+def _loads_list(value: str | None) -> list[Any]:
+    loaded = json.loads(value or "[]")
+    return loaded if isinstance(loaded, list) else []
 
 
 def _num(value: Any) -> float | None:
@@ -659,6 +778,14 @@ class Store:
     def ensure_schema(self) -> None:
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+            # Migraciones defensivas e idempotentes para bases preexistentes.
+            self._ensure_column(conn, "llm_usage", "role", "TEXT")
+
+    @staticmethod
+    def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def record_agent_event(self, event: AgentEvent) -> None:
         self.agent_history.log(event)
@@ -871,15 +998,16 @@ class Store:
         completion_tokens: int,
         total_tokens: int,
         payload: dict[str, Any] | None = None,
+        role: str | None = None,
     ) -> None:
         with self.connect() as conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO llm_usage (
                     usage_id, source, model, request_count, prompt_tokens,
-                    completion_tokens, total_tokens, payload_json, created_at
+                    completion_tokens, total_tokens, payload_json, created_at, role
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     usage_id,
@@ -891,8 +1019,35 @@ class Store:
                     int(total_tokens),
                     _dumps(payload or {}),
                     _utc_iso(),
+                    role,
                 ),
             )
+
+    def llm_usage_by_role(self, *, limit: int = 1000) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT COALESCE(role, 'unspecified') AS role,
+                       COUNT(*) AS requests,
+                       SUM(prompt_tokens) AS prompt_tokens,
+                       SUM(completion_tokens) AS completion_tokens,
+                       SUM(total_tokens) AS total_tokens
+                FROM (SELECT * FROM llm_usage ORDER BY created_at DESC LIMIT ?)
+                GROUP BY COALESCE(role, 'unspecified')
+                ORDER BY total_tokens DESC
+                """,
+                (limit,),
+            ).fetchall()
+        return [
+            {
+                "role": row["role"],
+                "requests": int(row["requests"] or 0),
+                "prompt_tokens": int(row["prompt_tokens"] or 0),
+                "completion_tokens": int(row["completion_tokens"] or 0),
+                "total_tokens": int(row["total_tokens"] or 0),
+            }
+            for row in rows
+        ]
 
     def daily_llm_usage(self, limit: int = 30) -> list[dict[str, Any]]:
         with self.connect() as conn:
@@ -1135,6 +1290,45 @@ class Store:
                 ),
             )
 
+    def save_signal_outcomes_bulk(self, items: list[dict[str, Any]]) -> None:
+        if not items:
+            return
+        now = _utc_iso()
+        payload = [
+            (
+                item["signal_id"],
+                item["source_run_id"],
+                item["source"],
+                str(item["symbol"]).upper(),
+                item["signal_date"],
+                item["decision"],
+                _dumps(item["features"]),
+                _dumps(item.get("gate") or {}),
+                _dumps(item.get("outcome") or {}),
+                now,
+                now,
+            )
+            for item in items
+        ]
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO signal_outcomes (
+                    signal_id, source_run_id, source, symbol, signal_date,
+                    decision, features_json, gate_json, outcome_json,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(signal_id) DO UPDATE SET
+                    decision=excluded.decision,
+                    features_json=excluded.features_json,
+                    gate_json=excluded.gate_json,
+                    outcome_json=excluded.outcome_json,
+                    updated_at=excluded.updated_at
+                """,
+                payload,
+            )
+
     def update_signal_decision(
         self,
         *,
@@ -1165,6 +1359,37 @@ class Store:
                 WHERE source_run_id = ? AND symbol = ?
                 """,
                 (decision, _dumps(existing_gate), _utc_iso(), source_run_id, symbol.upper()),
+            )
+
+    def update_signal_gate(
+        self,
+        *,
+        source_run_id: str,
+        symbol: str,
+        gate: dict[str, Any],
+    ) -> None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT gate_json
+                FROM signal_outcomes
+                WHERE source_run_id = ? AND symbol = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (source_run_id, symbol.upper()),
+            ).fetchone()
+            if not row:
+                return
+            existing_gate = json.loads(row["gate_json"] or "{}")
+            existing_gate.update(gate)
+            conn.execute(
+                """
+                UPDATE signal_outcomes
+                SET gate_json = ?, updated_at = ?
+                WHERE source_run_id = ? AND symbol = ?
+                """,
+                (_dumps(existing_gate), _utc_iso(), source_run_id, symbol.upper()),
             )
 
     def update_signal_outcome(self, signal_id: str, outcome: dict[str, Any]) -> None:
@@ -1932,6 +2157,563 @@ class Store:
             for row in rows
         ]
 
+    def upsert_promotion_window(self, item: dict[str, Any]) -> None:
+        now = _utc_iso()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO promotion_windows (
+                    window_id, strategy, version, slot, started_at, min_sessions,
+                    min_signals, status, result_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(window_id) DO UPDATE SET
+                    status=excluded.status,
+                    result_json=excluded.result_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    str(item["window_id"]),
+                    str(item["strategy"]),
+                    str(item.get("version", "1")),
+                    item.get("slot"),
+                    item.get("started_at") or now,
+                    int(item.get("min_sessions", 10)),
+                    int(item.get("min_signals", 20)),
+                    str(item.get("status", "OPEN")),
+                    _dumps(item.get("result", {})),
+                    item.get("created_at") or now,
+                    now,
+                ),
+            )
+
+    def promotion_windows(self, *, status: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        query = "SELECT * FROM promotion_windows WHERE 1 = 1"
+        params: list[Any] = []
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "window_id": row["window_id"],
+                "strategy": row["strategy"],
+                "version": row["version"],
+                "slot": row["slot"],
+                "started_at": row["started_at"],
+                "min_sessions": row["min_sessions"],
+                "min_signals": row["min_signals"],
+                "status": row["status"],
+                "result": json.loads(row["result_json"] or "{}"),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
+    # -- market_thesis (T3.1) ---------------------------------------------
+    def upsert_market_thesis(self, item: dict[str, Any]) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO market_thesis (thesis_date, payload_json, stance, confidence, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(thesis_date) DO UPDATE SET
+                    payload_json=excluded.payload_json,
+                    stance=excluded.stance,
+                    confidence=excluded.confidence
+                """,
+                (
+                    str(item["thesis_date"]),
+                    _dumps(item.get("payload", {})),
+                    item.get("stance"),
+                    _num(item.get("confidence")),
+                    _utc_iso(),
+                ),
+            )
+
+    def latest_market_thesis(self) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM market_thesis ORDER BY thesis_date DESC LIMIT 1"
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "thesis_date": row["thesis_date"],
+            "payload": json.loads(row["payload_json"] or "{}"),
+            "stance": row["stance"],
+            "confidence": row["confidence"],
+            "created_at": row["created_at"],
+        }
+
+    # -- factory_runs (T3.2) ----------------------------------------------
+    def save_factory_run(self, item: dict[str, Any]) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO factory_runs (run_id, run_date, variants, survivors, payload_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(item["run_id"]),
+                    str(item.get("run_date")),
+                    int(item.get("variants", 0)),
+                    int(item.get("survivors", 0)),
+                    _dumps(item.get("payload", {})),
+                    _utc_iso(),
+                ),
+            )
+
+    def factory_runs(self, *, limit: int = 30) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM factory_runs ORDER BY run_date DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [
+            {
+                "run_id": row["run_id"],
+                "run_date": row["run_date"],
+                "variants": row["variants"],
+                "survivors": row["survivors"],
+                "payload": json.loads(row["payload_json"] or "{}"),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    # -- pattern_stats (T3.3) ---------------------------------------------
+    def upsert_pattern_stat(self, item: dict[str, Any]) -> None:
+        pattern_key = str(item.get("pattern_key") or f"{item['pattern']}:{item.get('regime', 'all')}")
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO pattern_stats (
+                    pattern_key, pattern, regime, occurrences, hit_rate, expectancy, lift, status, payload_json, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(pattern_key) DO UPDATE SET
+                    occurrences=excluded.occurrences,
+                    hit_rate=excluded.hit_rate,
+                    expectancy=excluded.expectancy,
+                    lift=excluded.lift,
+                    status=excluded.status,
+                    payload_json=excluded.payload_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    pattern_key,
+                    str(item["pattern"]),
+                    str(item.get("regime", "all")),
+                    int(item.get("occurrences", 0)),
+                    _num(item.get("hit_rate")),
+                    _num(item.get("expectancy")),
+                    _num(item.get("lift")),
+                    str(item.get("status", "ACTIVE")),
+                    _dumps(item.get("payload", {})),
+                    _utc_iso(),
+                ),
+            )
+
+    def pattern_stats(self, *, status: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
+        query = "SELECT * FROM pattern_stats WHERE 1 = 1"
+        params: list[Any] = []
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "pattern_key": row["pattern_key"],
+                "pattern": row["pattern"],
+                "regime": row["regime"],
+                "occurrences": row["occurrences"],
+                "hit_rate": row["hit_rate"],
+                "expectancy": row["expectancy"],
+                "lift": row["lift"],
+                "status": row["status"],
+                "payload": json.loads(row["payload_json"] or "{}"),
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
+    # -- prompt_versions (T2.1) -------------------------------------------
+    def next_prompt_version(self, prompt_key: str) -> int:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT MAX(version) AS v FROM prompt_versions WHERE prompt_key = ?",
+                (prompt_key,),
+            ).fetchone()
+        return int((row["v"] or 0)) + 1
+
+    def upsert_prompt_version(self, item: dict[str, Any]) -> None:
+        now = _utc_iso()
+        prompt_id = str(item.get("prompt_id") or f"{item['prompt_key']}:{item['version']}")
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO prompt_versions (
+                    prompt_id, prompt_key, version, template, status, parent_version,
+                    created_by, metrics_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(prompt_id) DO UPDATE SET
+                    template=excluded.template,
+                    status=excluded.status,
+                    metrics_json=excluded.metrics_json
+                """,
+                (
+                    prompt_id,
+                    str(item["prompt_key"]),
+                    int(item["version"]),
+                    str(item["template"]),
+                    str(item.get("status", "CANDIDATE")),
+                    item.get("parent_version"),
+                    item.get("created_by"),
+                    _dumps(item.get("metrics", {})),
+                    item.get("created_at") or now,
+                ),
+            )
+
+    def prompt_versions(self, *, prompt_key: str | None = None, status: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        query = "SELECT * FROM prompt_versions WHERE 1 = 1"
+        params: list[Any] = []
+        if prompt_key:
+            query += " AND prompt_key = ?"
+            params.append(prompt_key)
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        query += " ORDER BY prompt_key ASC, version DESC LIMIT ?"
+        params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "prompt_id": row["prompt_id"],
+                "prompt_key": row["prompt_key"],
+                "version": row["version"],
+                "template": row["template"],
+                "status": row["status"],
+                "parent_version": row["parent_version"],
+                "created_by": row["created_by"],
+                "metrics": json.loads(row["metrics_json"] or "{}"),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def active_prompt(self, prompt_key: str) -> dict[str, Any] | None:
+        rows = self.prompt_versions(prompt_key=prompt_key, status="ACTIVE", limit=1)
+        return rows[0] if rows else None
+
+    def set_prompt_status(self, prompt_key: str, version: int, status: str) -> None:
+        with self.connect() as conn:
+            if status == "ACTIVE":
+                conn.execute(
+                    "UPDATE prompt_versions SET status='RETIRED' WHERE prompt_key=? AND status='ACTIVE'",
+                    (prompt_key,),
+                )
+            conn.execute(
+                "UPDATE prompt_versions SET status=? WHERE prompt_key=? AND version=?",
+                (status, prompt_key, int(version)),
+            )
+
+    # -- agent_definitions (T2.2) -----------------------------------------
+    def upsert_agent_definition(self, item: dict[str, Any]) -> None:
+        now = _utc_iso()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO agent_definitions (
+                    agent_key, role, goal, prompt_key, inputs_json, output_schema_json,
+                    status, created_by, performance_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(agent_key) DO UPDATE SET
+                    role=excluded.role,
+                    goal=excluded.goal,
+                    prompt_key=excluded.prompt_key,
+                    inputs_json=excluded.inputs_json,
+                    output_schema_json=excluded.output_schema_json,
+                    status=excluded.status,
+                    performance_json=excluded.performance_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    str(item["agent_key"]),
+                    str(item.get("role", "")),
+                    str(item.get("goal", "")),
+                    item.get("prompt_key"),
+                    _dumps(item.get("inputs", [])),
+                    _dumps(item.get("output_schema", {})),
+                    str(item.get("status", "ACTIVE")),
+                    item.get("created_by"),
+                    _dumps(item.get("performance", {})),
+                    item.get("created_at") or now,
+                    now,
+                ),
+            )
+
+    def agent_definitions(self, *, status: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        query = "SELECT * FROM agent_definitions WHERE 1 = 1"
+        params: list[Any] = []
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "agent_key": row["agent_key"],
+                "role": row["role"],
+                "goal": row["goal"],
+                "prompt_key": row["prompt_key"],
+                "inputs": json.loads(row["inputs_json"] or "[]"),
+                "output_schema": json.loads(row["output_schema_json"] or "{}"),
+                "status": row["status"],
+                "created_by": row["created_by"],
+                "performance": json.loads(row["performance_json"] or "{}"),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
+    def set_agent_status(self, agent_key: str, status: str, *, performance: dict[str, Any] | None = None) -> int:
+        with self.connect() as conn:
+            if performance is not None:
+                cursor = conn.execute(
+                    "UPDATE agent_definitions SET status=?, performance_json=?, updated_at=? WHERE agent_key=?",
+                    (status, _dumps(performance), _utc_iso(), agent_key),
+                )
+            else:
+                cursor = conn.execute(
+                    "UPDATE agent_definitions SET status=?, updated_at=? WHERE agent_key=?",
+                    (status, _utc_iso(), agent_key),
+                )
+            return cursor.rowcount
+
+    # -- distilled_lessons (T2.4) -----------------------------------------
+    def upsert_distilled_lesson(self, item: dict[str, Any]) -> None:
+        now = _utc_iso()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO distilled_lessons (
+                    lesson_id, scope, statement, supporting_cases, contradicting_cases,
+                    confidence, status, last_validated_at, source_refs_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(lesson_id) DO UPDATE SET
+                    scope=excluded.scope,
+                    statement=excluded.statement,
+                    supporting_cases=excluded.supporting_cases,
+                    contradicting_cases=excluded.contradicting_cases,
+                    confidence=excluded.confidence,
+                    status=excluded.status,
+                    last_validated_at=excluded.last_validated_at,
+                    source_refs_json=excluded.source_refs_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    str(item["lesson_id"]),
+                    str(item.get("scope", "process")),
+                    str(item.get("statement", "")),
+                    int(item.get("supporting_cases", 0)),
+                    int(item.get("contradicting_cases", 0)),
+                    float(item.get("confidence", 0.0)),
+                    str(item.get("status", "ACTIVE")),
+                    item.get("last_validated_at") or now,
+                    _dumps(item.get("source_refs", {})),
+                    item.get("created_at") or now,
+                    now,
+                ),
+            )
+
+    def distilled_lessons(self, *, status: str | None = None, scope: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        query = "SELECT * FROM distilled_lessons WHERE 1 = 1"
+        params: list[Any] = []
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        if scope:
+            query += " AND scope = ?"
+            params.append(scope)
+        query += " ORDER BY confidence DESC, updated_at DESC LIMIT ?"
+        params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "lesson_id": row["lesson_id"],
+                "scope": row["scope"],
+                "statement": row["statement"],
+                "supporting_cases": row["supporting_cases"],
+                "contradicting_cases": row["contradicting_cases"],
+                "confidence": row["confidence"],
+                "status": row["status"],
+                "last_validated_at": row["last_validated_at"],
+                "source_refs": json.loads(row["source_refs_json"] or "{}"),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
+    def set_lesson_status(self, lesson_id: str, status: str) -> int:
+        with self.connect() as conn:
+            cursor = conn.execute(
+                "UPDATE distilled_lessons SET status=?, updated_at=? WHERE lesson_id=?",
+                (status, _utc_iso(), lesson_id),
+            )
+            return cursor.rowcount
+
+    def upsert_strategy_version(self, item: dict[str, Any]) -> None:
+        now = _utc_iso()
+        strategy_id = str(item.get("strategy_id") or f"{item['name']}:{item.get('version', '1')}")
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO strategy_versions (
+                    strategy_id, name, version, status, source_path, metrics_json,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(strategy_id) DO UPDATE SET
+                    name=excluded.name,
+                    version=excluded.version,
+                    status=excluded.status,
+                    source_path=excluded.source_path,
+                    metrics_json=excluded.metrics_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    strategy_id,
+                    str(item["name"]),
+                    str(item.get("version", "1")),
+                    str(item.get("status", "ACTIVE")),
+                    item.get("source_path"),
+                    _dumps(item.get("metrics", {})),
+                    item.get("created_at") or now,
+                    now,
+                ),
+            )
+
+    def strategy_versions(self, *, status: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        query = "SELECT * FROM strategy_versions WHERE 1 = 1"
+        params: list[Any] = []
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "strategy_id": row["strategy_id"],
+                "name": row["name"],
+                "version": row["version"],
+                "status": row["status"],
+                "source_path": row["source_path"],
+                "metrics": json.loads(row["metrics_json"] or "{}"),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
+    def set_strategy_status(self, name: str, status: str) -> int:
+        with self.connect() as conn:
+            cursor = conn.execute(
+                "UPDATE strategy_versions SET status = ?, updated_at = ? WHERE name = ?",
+                (status, _utc_iso(), name),
+            )
+            return cursor.rowcount
+
+    def upsert_performance_daily(self, item: dict[str, Any]) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO performance_daily (
+                    session_date, payload_json, equity, pnl_pct, spy_pct, alpha,
+                    hit_rate_20, sharpe_60, max_dd, iq_score, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_date) DO UPDATE SET
+                    payload_json=excluded.payload_json,
+                    equity=excluded.equity,
+                    pnl_pct=excluded.pnl_pct,
+                    spy_pct=excluded.spy_pct,
+                    alpha=excluded.alpha,
+                    hit_rate_20=excluded.hit_rate_20,
+                    sharpe_60=excluded.sharpe_60,
+                    max_dd=excluded.max_dd,
+                    iq_score=excluded.iq_score
+                """,
+                (
+                    str(item.get("session_date")),
+                    _dumps(item.get("payload", {})),
+                    _num(item.get("equity")),
+                    _num(item.get("pnl_pct")),
+                    _num(item.get("spy_pct")),
+                    _num(item.get("alpha")),
+                    _num(item.get("hit_rate_20")),
+                    _num(item.get("sharpe_60")),
+                    _num(item.get("max_dd")),
+                    _num(item.get("iq_score")),
+                    _utc_iso(),
+                ),
+            )
+
+    def performance_daily(
+        self,
+        *,
+        limit: int = 90,
+        since_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        query = "SELECT * FROM performance_daily WHERE 1 = 1"
+        params: list[Any] = []
+        if since_date:
+            query += " AND session_date >= ?"
+            params.append(since_date)
+        query += " ORDER BY session_date ASC"
+        if limit:
+            query += " LIMIT ?"
+            params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "session_date": row["session_date"],
+                "payload": json.loads(row["payload_json"] or "{}"),
+                "equity": row["equity"],
+                "pnl_pct": row["pnl_pct"],
+                "spy_pct": row["spy_pct"],
+                "alpha": row["alpha"],
+                "hit_rate_20": row["hit_rate_20"],
+                "sharpe_60": row["sharpe_60"],
+                "max_dd": row["max_dd"],
+                "iq_score": row["iq_score"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def latest_performance_daily(self) -> dict[str, Any] | None:
+        rows = self.performance_daily(limit=0)
+        return rows[-1] if rows else None
+
     def same_session_intraday_signal_summary(
         self,
         *,
@@ -2100,7 +2882,7 @@ class Store:
             assignments.append(f"{column} = ?")
             value = updates[key]
             if column.endswith("_json"):
-                value = _dumps(value or {})
+                value = _dumps(value if value is not None else ([] if key.startswith("linked_") else {}))
             values.append(value)
         if not assignments:
             return

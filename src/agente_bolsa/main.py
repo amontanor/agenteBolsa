@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .agent_registry import AGENTS
+from .agent_config import load_agent_config, load_task_config, validate_agent_task_config
 from .config import get_settings
 from .continuous_improvement.api import run_api_server
 from .continuous_improvement.experiments import AutoApplyCodeAgent
@@ -45,10 +46,13 @@ from .tools.command_catalog import available_command_catalog, command_cheatsheet
 from .tools.counterfactual_analysis import (
     DEFAULT_RETROSPECTIVE_SESSIONS,
     build_decision_compare_report,
+    build_fallback_blocker_report,
     build_missed_opportunities_report,
+    build_selector_replay_report,
     build_session_retrospective_report,
     build_signal_postmortem_report,
     build_walk_forward_validation_report,
+    build_winner_coverage_report,
 )
 from .tools.daily_learning import (
     DEFAULT_DAILY_LEARNING_START,
@@ -69,12 +73,15 @@ from .tools.trade_decision import (
 )
 from .tools.execution import submit_paper_order_plan
 from .tools.live_readiness import build_live_readiness_report
+from .tools.market_state import build_market_state, load_latest_market_state
 from .tools.opportunities import parse_opportunity_snapshot_times
 from .tools.operational_learning import build_operational_learning_review
 from .tools.operational_health import build_operational_health_report
+from .tools.operational_health import build_production_health_report
 from .tools.operational_health import load_operational_response_context
 from .tools.ops_reports import (
     backup_database,
+    build_market_data_reconciliation_report,
     build_market_data_quality_report,
     build_selection_bandwidth_review,
     build_weekly_trading_review,
@@ -95,6 +102,7 @@ from .tools.pre_earnings import (
 from .tools.post_market_review import build_post_market_review
 from .tools.retention import cleanup_runtime_data
 from .tools.signal_learning import (
+    backfill_signal_candidates_from_reports,
     build_learning_status,
     record_signal_candidates,
     update_signal_decisions,
@@ -362,6 +370,41 @@ def _print_counterfactual_summary(title: str, report: dict[str, Any]) -> None:
             f"Ventanas={summary.get('windows', 0)} | "
             f"ventanas estables={summary.get('stable_windows', 0)}"
         )
+        return
+    if "winners_considered" in summary:
+        print(
+            f"Ganadoras={summary.get('winners_considered', 0)} | "
+            f"seleccionadas_any={summary.get('selected_any', 0)} | "
+            f"seleccionadas_mayoria={summary.get('selected_majority', 0)} | "
+            f"fallback_any={summary.get('fallback_buy_any', 0)} | "
+            f"fallback_mayoria={summary.get('fallback_buy_majority', 0)}"
+        )
+        buckets = summary.get("coverage_buckets", {}) or {}
+        if buckets:
+            print(f"Cobertura: {buckets}")
+        blockers = summary.get("fallback_blocker_summary", []) or []
+        if blockers:
+            print("Bloqueadores principales:")
+            for item in blockers[:5]:
+                print(f"  - {item.get('reason')}: {item.get('sessions')} sesiones")
+        misses = summary.get("selection_miss_summary", []) or []
+        if misses:
+            print("Misses de seleccion principales:")
+            for item in misses[:5]:
+                print(f"  - {item.get('reason')}: {item.get('sessions')} sesiones")
+        top_rows = report.get("top_winner_coverage", []) or []
+        if top_rows:
+            print("Top ganadoras:")
+            for item in top_rows[:10]:
+                print(
+                    "  - "
+                    f"{item.get('symbol')} {item.get('signal_date')} ret5d={_pct(item.get('return_5d'))} | "
+                    f"bucket={item.get('coverage_bucket')} | "
+                    f"selected={item.get('selected_sessions')}/{item.get('reports_on_date')} | "
+                    f"fallback={item.get('fallback_buy_sessions')}/{item.get('reports_on_date')} | "
+                    f"best_rank={item.get('best_selection_rank')}"
+                )
+        return
 
 
 def _print_pre_earnings_report(report: dict[str, Any]) -> None:
@@ -694,6 +737,7 @@ def command_decide_once(args: argparse.Namespace) -> None:
         recommendations=recommendations,
         entry_quality_gate=entry_quality_gate,
         backtest_gate=[],
+        settings=settings,
     )
 
     for recommendation in recommendations:
@@ -1375,6 +1419,33 @@ def command_learning_status(args: argparse.Namespace) -> None:
             print(f"  - {warning}")
 
 
+def command_backfill_signal_candidates(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    result = backfill_signal_candidates_from_reports(
+        settings,
+        store,
+        settings.data_dir / "reports",
+        since_date=args.start,
+        end_date=args.end,
+        infer_selected=not args.no_infer_selected,
+    )
+    if args.json:
+        _print_json({"ok": True, **result})
+        return
+    print("BACKFILL SIGNAL CANDIDATES")
+    print(
+        f"reports_saved={result.get('reports_saved', 0)} / {result.get('reports_scanned', 0)} | "
+        f"signals_saved={result.get('signals_saved', 0)} | "
+        f"inferred_reports={result.get('inferred_reports', 0)} | "
+        f"skipped_reports={result.get('skipped_reports', 0)}"
+    )
+    if result.get("warnings"):
+        print(f"Warnings: {len(result['warnings'])}")
+
+
 def command_learning_review(args: argparse.Namespace) -> None:
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
@@ -1672,6 +1743,112 @@ def command_market_data_quality(args: argparse.Namespace) -> None:
     _print_json({"ok": True, **report})
 
 
+def command_market_data_reconciliation(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    symbols = [item.strip().upper() for item in str(args.symbols or "").split(",") if item.strip()] or None
+    report = build_market_data_reconciliation_report(
+        settings,
+        settings.data_dir / "reports",
+        new_id("data_reconcile"),
+        symbols=symbols,
+        start=args.start,
+        end=args.end,
+        tolerance_pct=args.tolerance_pct,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    _print_json({"ok": True, **report})
+
+
+def command_strategy_registry(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+
+    # Acciones sobre el registro de estrategias plugables (T1.2).
+    action_name = (
+        getattr(args, "activate", None)
+        or getattr(args, "shadow", None)
+        or getattr(args, "retire", None)
+    )
+    if action_name:
+        if getattr(args, "activate", None):
+            new_status = "ACTIVE"
+        elif getattr(args, "shadow", None):
+            new_status = "SHADOW"
+        else:
+            new_status = "RETIRED"
+        updated = store.set_strategy_status(action_name, new_status)
+        if updated == 0:
+            # Si aun no esta en strategy_versions, la registramos con ese estado.
+            from .strategies.registry import register
+
+            register(store, name=action_name, status=new_status)
+        _print_json(
+            {
+                "ok": True,
+                "action": new_status,
+                "name": action_name,
+                "strategies": store.strategy_versions(limit=args.limit),
+            }
+        )
+        return
+
+    if getattr(args, "list_registry", False):
+        from .strategies.registry import discover
+
+        active = [
+            {"name": s.name, "version": s.version, "status": s.status}
+            for s in discover(store)
+        ]
+        _print_json(
+            {
+                "ok": True,
+                "discovered": active,
+                "strategy_versions": store.strategy_versions(limit=args.limit),
+            }
+        )
+        return
+
+    proposals = store.continuous_improvement_proposals(limit=args.limit)
+    validations = store.continuous_improvement_validations(limit=args.limit)
+    validation_by_proposal = {
+        str(item.get("proposal_id")): item
+        for item in validations
+        if item.get("proposal_id")
+    }
+    rows = []
+    for proposal in proposals:
+        payload = proposal.get("payload") or {}
+        promotion_state = str(payload.get("promotion_state") or "unclassified")
+        if args.active_only and promotion_state not in {"champion", "challenger", "shadow", "micro_experiment"}:
+            continue
+        validation = validation_by_proposal.get(str(proposal.get("proposal_id")))
+        validation_payload = (validation or {}).get("payload") or {}
+        checks = validation_payload.get("checks", []) or []
+        blocking_checks = [item.get("name") for item in checks if item.get("passed") is False and item.get("name")]
+        rows.append(
+            {
+                "proposal_id": proposal.get("proposal_id"),
+                "target_component": proposal.get("target_component"),
+                "target_identifier": proposal.get("target_identifier"),
+                "promotion_state": promotion_state,
+                "status": proposal.get("status"),
+                "evaluation_window_frozen": bool(payload.get("evaluation_window_frozen")),
+                "required_validations": payload.get("required_validations", []),
+                "latest_validation_status": (validation or {}).get("status"),
+                "latest_objective_status": validation_payload.get("objective_status"),
+                "blocking_checks": blocking_checks,
+                "next_review_at": payload.get("next_review_at"),
+                "rollback_plan": payload.get("rollback_plan"),
+            }
+        )
+    payload = {"ok": True, "strategies": rows, "summary": {"items": len(rows)}}
+    _print_json(payload)
+
+
 def command_weekly_review(args: argparse.Namespace) -> None:
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
@@ -1734,6 +1911,66 @@ def command_session_retrospective(args: argparse.Namespace) -> None:
         _print_json({"ok": True, **report})
         return
     _print_counterfactual_summary("RETROSPECTIVA POR SESION", report)
+
+
+def command_selector_replay(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    report = build_selector_replay_report(
+        settings,
+        settings.data_dir / "reports",
+        new_id("selector_replay"),
+        since_date=args.start,
+        end_date=args.end,
+        limit=args.limit,
+        symbols=[item.strip() for item in str(args.symbols or "").split(",") if item.strip()],
+        full=args.full,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    _print_json({"ok": True, **report})
+
+
+def command_winner_coverage_report(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    report = build_winner_coverage_report(
+        settings,
+        store,
+        settings.data_dir / "reports",
+        new_id("winner_coverage"),
+        since_date=args.start,
+        end_date=args.end,
+        top_n=args.top,
+        full=args.full,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    _print_counterfactual_summary("COBERTURA DE GANADORAS", report)
+
+
+def command_fallback_blocker_report(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    report = build_fallback_blocker_report(
+        settings,
+        store,
+        settings.data_dir / "reports",
+        new_id("fallback_blockers"),
+        since_date=args.start,
+        end_date=args.end,
+        full=args.full,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    _print_json({"ok": True, **report})
 
 
 def command_commands(args: argparse.Namespace) -> None:
@@ -1851,6 +2088,314 @@ def command_learning_promotions(args: argparse.Namespace) -> None:
         print(f"  - [{item['status']}] {item['policy_id']} | promoted_at={item.get('promoted_at') or '-'}")
 
 
+def command_autonomy_digest(args: argparse.Namespace) -> None:
+    from .tools.autonomy_digest import build_autonomy_digest, pause_all, resume_all
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    if getattr(args, "pause", False):
+        _print_json({"ok": True, **pause_all(store, settings)})
+        return
+    if getattr(args, "resume", False):
+        _print_json({"ok": True, **resume_all(store, settings)})
+        return
+    result = build_autonomy_digest(store, settings)
+    if getattr(args, "json", False):
+        _print_json({"ok": True, "date": result["date"], "path": result["path"], "state": result["state"]})
+        return
+    print(result["markdown"])
+
+
+def command_risk_budget(args: argparse.Namespace) -> None:
+    from .risk_budget import available_now
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    _print_json({"ok": True, "enabled": settings.risk_budget_enabled, **available_now(store, settings)})
+
+
+def command_pattern_scorecard(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    if getattr(args, "build", False):
+        from .tools.pattern_scorecard import build_pattern_scorecard
+
+        _print_json({"ok": True, **build_pattern_scorecard(store, min_occurrences=settings.pattern_min_occurrences)})
+        return
+    _print_json({"ok": True, "patterns": store.pattern_stats(limit=getattr(args, "limit", 200))})
+
+
+def command_factory_status(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    if getattr(args, "run", False):
+        from .tools.hypothesis_factory import run_factory
+
+        _print_json({"ok": True, **run_factory(store, settings)})
+        return
+    _print_json({"ok": True, "runs": store.factory_runs(limit=getattr(args, "limit", 30))})
+
+
+def command_market_thesis(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    if getattr(args, "build", False):
+        from .tools.macro_context import build_market_thesis
+        from .tools.market_state import load_latest_market_state
+
+        market_state = load_latest_market_state(settings.data_dir / "reports") or {}
+        thesis = build_market_thesis(store, settings, market_state=market_state)
+        _print_json({"ok": True, **thesis})
+        return
+    latest = store.latest_market_thesis()
+    _print_json({"ok": bool(latest), "thesis": latest})
+
+
+def command_lessons(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    if getattr(args, "retire", None):
+        updated = store.set_lesson_status(args.retire, "RETIRED")
+        _print_json({"ok": bool(updated), "retired": args.retire})
+        return
+    if getattr(args, "distill", False):
+        from .continuous_improvement.lesson_distiller import distill_lessons
+
+        _print_json({"ok": True, **distill_lessons(store, settings)})
+        return
+    if getattr(args, "revalidate", False):
+        from .continuous_improvement.lesson_distiller import revalidate_lessons
+
+        _print_json({"ok": True, **revalidate_lessons(store, settings)})
+        return
+    rows = store.distilled_lessons(limit=getattr(args, "limit", 100))
+    if getattr(args, "json", False):
+        _print_json({"ok": True, "lessons": rows})
+        return
+    print("DISTILLED LESSONS")
+    for row in rows:
+        print(f"  [{row['status']}] conf={row['confidence']:.2f} ({row['scope']}) {row['statement'][:80]}")
+
+
+def command_retrospective(args: argparse.Namespace) -> None:
+    from datetime import datetime, timezone
+
+    from .tools.nightly_retrospective import run_nightly_retrospective
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    session_date = getattr(args, "date", None) or datetime.now(timezone.utc).date().isoformat()
+    result = run_nightly_retrospective(store, settings, session_date)
+    _print_json({"ok": True, **result})
+
+
+def command_prompts(args: argparse.Namespace) -> None:
+    from . import prompt_store
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    Store(settings.database_path, settings.agent_logs_dir).ensure_schema()
+    if getattr(args, "import_defaults", False):
+        result = prompt_store.import_prompts(settings, prompt_store.default_prompt_catalog())
+        _print_json({"ok": True, **result})
+        return
+    if getattr(args, "promote", None) and getattr(args, "key", None):
+        prompt_store.promote(settings, args.key, int(args.promote))
+        _print_json({"ok": True, "promoted": {"key": args.key, "version": int(args.promote)}})
+        return
+    rows = prompt_store.list_prompts(settings)
+    if getattr(args, "json", False):
+        _print_json({"ok": True, "prompts": rows})
+        return
+    print("PROMPTS")
+    for row in rows:
+        print(f"  [{row['status']}] {row['prompt_key']} v{row['version']} (by {row['created_by']})")
+
+
+def command_promotions(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    if getattr(args, "evaluate", False):
+        from .continuous_improvement.promotion import PromotionManager
+
+        decisions = PromotionManager(store, settings).evaluate_windows()
+        _print_json({"ok": True, "decisions": decisions})
+        return
+    windows = store.promotion_windows(limit=getattr(args, "limit", 100))
+    if getattr(args, "json", False):
+        _print_json({"ok": True, "windows": windows})
+        return
+    print("PROMOTION WINDOWS")
+    for window in windows:
+        print(f"  [{window['status']}] {window['strategy']} v{window['version']} (slot={window['slot']})")
+
+
+def command_llm_usage(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    if getattr(args, "by_role", False):
+        rows = store.llm_usage_by_role(limit=getattr(args, "limit", 1000))
+        if getattr(args, "json", False):
+            _print_json({"ok": True, "by_role": rows})
+            return
+        print("LLM USAGE POR ROL")
+        print("  rol           requests  prompt_tok  completion_tok  total_tok")
+        for row in rows:
+            print(
+                f"  {row['role']:<12}  {row['requests']:>8}  {row['prompt_tokens']:>10}  "
+                f"{row['completion_tokens']:>14}  {row['total_tokens']:>9}"
+            )
+        return
+    rows = store.daily_llm_usage(limit=getattr(args, "limit", 30))
+    if getattr(args, "json", False):
+        _print_json({"ok": True, "daily": rows})
+        return
+    print("LLM USAGE DIARIO")
+    for row in rows:
+        print(f"  {row}")
+
+
+def command_performance(args: argparse.Namespace) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    days = max(1, int(getattr(args, "days", 30)))
+    since = (datetime.now(timezone.utc).date() - timedelta(days=days)).isoformat()
+    rows = store.performance_daily(limit=0, since_date=since)
+    if getattr(args, "json", False):
+        _print_json({"ok": True, "days": days, "rows": rows})
+        return
+    print(f"PERFORMANCE (ultimos {days} dias)")
+    if not rows:
+        print("  Sin filas de rendimiento todavia. Ejecuta el review post-mercado.")
+        return
+    print("  fecha       equity        pnl%     spy%     alpha     hit20   sharpe60  maxdd   iq")
+    for row in rows:
+        def _f(value, fmt):
+            return fmt % value if isinstance(value, (int, float)) else "   -  "
+
+        print(
+            f"  {row['session_date']}  {_f(row.get('equity'), '%11.2f')}  "
+            f"{_f(row.get('pnl_pct'), '%7.4f')}  {_f(row.get('spy_pct'), '%7.4f')}  "
+            f"{_f(row.get('alpha'), '%8.4f')}  {_f(row.get('hit_rate_20'), '%6.2f')}  "
+            f"{_f(row.get('sharpe_60'), '%8.2f')}  {_f(row.get('max_dd'), '%6.3f')}  "
+            f"{_f(row.get('iq_score'), '%5.1f')}"
+        )
+
+
+def command_iq_score(args: argparse.Namespace) -> None:
+    from .tools.performance_baseline import system_iq_score
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    window = max(1, int(getattr(args, "window", 20)))
+    score = system_iq_score(store, window_days=window)
+    latest = store.latest_performance_daily()
+    payload = {
+        "iq_score": score,
+        "window_days": window,
+        "latest_session": (latest or {}).get("session_date"),
+    }
+    if getattr(args, "json", False):
+        _print_json({"ok": True, **payload})
+        return
+    print("IQ SCORE")
+    print(f"  Score compuesto (ventana {window}d): {score}")
+    print(f"  Ultima sesion registrada: {payload['latest_session']}")
+
+
+def command_kernel_unlock_live(args: argparse.Namespace) -> None:
+    """Desbloqueo de live: SIEMPRE humano y doble (T4.3).
+
+    Exige (1) ALLOW_LIVE_TRADING=true en .env y (2) confirmacion interactiva, y
+    re-sella el manifest del kernel. Los agentes no pueden ejecutar esto.
+    """
+
+    from .kernel import kernel_seal
+    from .tools.live_readiness import build_live_readiness_report
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+
+    if not settings.allow_live_trading:
+        _print_json({"ok": False, "error": "Primero edita .env con ALLOW_LIVE_TRADING=true (paso manual 1/2)."})
+        return
+    report = build_live_readiness_report(settings, store, settings.data_dir / "reports", new_id("live_ready"))
+    if not report["summary"]["ready_for_live"]:
+        _print_json({"ok": False, "error": "live-readiness con bloqueos.", "blocks": report["required_before_live"]})
+        return
+    if not getattr(args, "yes", False):
+        confirm = input("Escribe 'DESBLOQUEAR LIVE' para confirmar el desbloqueo: ")
+        if confirm.strip() != "DESBLOQUEAR LIVE":
+            _print_json({"ok": False, "error": "confirmacion no coincide; abortado."})
+            return
+    sealed = kernel_seal(settings)
+    log_system_event(settings.logs_dir, "kernel_live_unlocked", {"manifest": sealed.get("path")})
+    _print_json({"ok": True, "unlocked": True, "manifest": sealed.get("path"), "live_capital_fraction": settings.live_capital_fraction})
+
+
+def command_kernel_seal(args: argparse.Namespace) -> None:
+    from .kernel import kernel_seal
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    result = kernel_seal(settings)
+    if getattr(args, "json", False):
+        _print_json({"ok": True, **result})
+        return
+    print("KERNEL SEAL")
+    print(f"Manifest: {result['path']}")
+    print(f"Sellado: {result['sealed_at']}")
+    for rel, digest in result.get("files", {}).items():
+        shown = digest[:16] + "..." if isinstance(digest, str) else "(ausente)"
+        print(f"  - {rel}: {shown}")
+
+
+def command_kernel_status(args: argparse.Namespace) -> None:
+    from .kernel import kernel_integrity
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    result = kernel_integrity(settings)
+    if getattr(args, "json", False):
+        _print_json({"ok": result.get("ok", False), **result})
+        return
+    print("KERNEL STATUS")
+    print(f"Estado: {result['status']}")
+    print(f"Sellado: {result.get('sealed_at')}")
+    if result.get("violations"):
+        print(f"Violaciones: {result['violations']}")
+    for rel, info in (result.get("files") or {}).items():
+        match = info.get("match")
+        flag = "ok" if match else ("sin-sellar" if match is None else "ALTERADO")
+        print(f"  - [{flag}] {rel}")
+
+
 def command_operational_health(args: argparse.Namespace) -> None:
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
@@ -1913,6 +2458,35 @@ def command_operational_responses(args: argparse.Namespace) -> None:
             f"  - [{item['status']}] {item['action']} | {item.get('scope', '-')} | "
             f"{item.get('detail', '')}"
         )
+
+
+def command_production_health(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    report = build_production_health_report(
+        settings,
+        store,
+        settings.data_dir / "reports",
+        new_id("prod_health"),
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    print("PRODUCTION HEALTH")
+    print(f"Estado general: {report['summary']['overall_status']}")
+    print(
+        f"Salud: {report['summary']['healthy']} | alertas={report['summary']['alerts']} | "
+        f"responses={report['summary'].get('responses', 0)}"
+    )
+    print(
+        f"Scheduler: {report['summary'].get('scheduler_heartbeat', {}).get('status')} | "
+        f"CI: {report['summary'].get('continuous_improvement_heartbeat', {}).get('status')}"
+    )
+    for item in report.get("alerts", [])[:12]:
+        scope = item.get("job") or item.get("scope") or "-"
+        print(f"  - [{item['severity']}] {item['kind']} | {scope} | {item['detail']}")
 
 
 def command_continuous_improvement(args: argparse.Namespace) -> None:
@@ -2011,6 +2585,12 @@ def command_continuous_improvement_lab(args: argparse.Namespace) -> None:
         _print_json({"ok": bool(change), "applied_change": change})
         return
     if args.lab_command == "autonomy-status":
+        from .continuous_improvement.autonomy import (
+            AUTONOMY_TIERS,
+            active_autonomy_level,
+            autonomy_promotion_check,
+        )
+
         committee_decisions = store.continuous_improvement_decisions(actor="DecisionCommitteeAgent", limit=1000)
         decision_counts: dict[str, int] = {}
         backlog_buckets: dict[str, int] = {}
@@ -2019,6 +2599,9 @@ def command_continuous_improvement_lab(args: argparse.Namespace) -> None:
             decision_counts[decision] = decision_counts.get(decision, 0) + 1
             bucket = str(((item.get("payload") or {}).get("committee_decision") or {}).get("backlog_bucket") or "UNKNOWN")
             backlog_buckets[bucket] = backlog_buckets.get(bucket, 0) + 1
+        level = active_autonomy_level(store, settings)
+        # Solo lectura: calcula el progreso sin persistir cambios de nivel.
+        progress = autonomy_promotion_check(store, settings, persist=False)
         _print_json(
             {
                 "ok": True,
@@ -2028,6 +2611,10 @@ def command_continuous_improvement_lab(args: argparse.Namespace) -> None:
                 "require_human_approval_for_code_changes": settings.require_human_approval_for_code_changes,
                 "allow_live_trading": settings.allow_live_trading,
                 "workspace": str(settings.improvement_workspace_dir),
+                "code_autonomy_level": level,
+                "max_level": max(AUTONOMY_TIERS),
+                "allowed_prefixes": list(AUTONOMY_TIERS[level]["allowed_prefixes"]),
+                "promotion_progress": progress,
                 "ready_to_apply": len(store.continuous_improvement_proposals(status="READY_TO_APPLY", limit=1000)),
                 "applied": len(store.continuous_improvement_applied_changes(statuses=["APPLIED"], limit=1000)),
                 "blocked": len(store.continuous_improvement_applied_changes(statuses=["BLOCKED"], limit=1000)),
@@ -2037,6 +2624,25 @@ def command_continuous_improvement_lab(args: argparse.Namespace) -> None:
             }
         )
         return
+    if args.lab_command == "dynamic-agents":
+        if getattr(args, "score", False):
+            from .continuous_improvement.dynamic_agents import score_dynamic_agents
+
+            _print_json({"ok": True, "scores": score_dynamic_agents(store)})
+            return
+        _print_json({"ok": True, "agents": store.agent_definitions(limit=getattr(args, "limit", 100))})
+        return
+    if args.lab_command == "build-strategy":
+        from .continuous_improvement.strategy_builder import build_strategy_from_spec
+
+        try:
+            spec = json.loads(args.spec) if getattr(args, "spec", None) else {}
+        except json.JSONDecodeError as exc:
+            _print_json({"ok": False, "error": f"spec JSON invalido: {exc}"})
+            return
+        result = build_strategy_from_spec(store, settings, spec)
+        _print_json({"ok": result.get("ok", False), **result})
+        return
     raise ValueError(f"Unknown lab command: {args.lab_command}")
 
 
@@ -2044,16 +2650,57 @@ def command_continuous_improvement_api(args: argparse.Namespace) -> None:
     run_api_server(host=args.host, port=args.port)
 
 
+def command_validate_agent_config(args: argparse.Namespace) -> None:
+    payload = validate_agent_task_config(load_agent_config(), load_task_config())
+    if args.json or not payload["ok"]:
+        _print_json(payload)
+        return
+    print("Configuracion valida")
+
+
+def command_market_state(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    if getattr(args, "latest", False):
+        payload = load_latest_market_state(settings.data_dir / "reports")
+        if payload is None:
+            raise FileNotFoundError("No existe ningun market_state previo en data/reports.")
+        if args.json:
+            _print_json(payload)
+            return
+        print(payload.get("path") or "")
+        return
+    run_id = new_id("market_state")
+    payload = build_market_state(
+        settings,
+        settings.data_dir / "reports",
+        run_id,
+    )
+    if args.json:
+        _print_json(payload)
+        return
+    print(payload.get("path") or "")
+
+
 def command_agents(_: argparse.Namespace) -> None:
-    rows = [
-        {
-            "code": info.code,
-            "agent": agent,
-            "title": info.title,
-            "lane": info.lane,
-        }
-        for agent, info in sorted(AGENTS.items(), key=lambda item: item[1].code)
-    ]
+    config = load_agent_config()
+    tasks = load_task_config()
+    usage = validate_agent_task_config(config, tasks).get("agent_usage", {})
+    rows = []
+    for agent, meta in config.items():
+        info = AGENTS.get(agent)
+        rows.append(
+            {
+                "code": info.code if info else "AGNT",
+                "agent": agent,
+                "title": info.title if info else meta["role"],
+                "lane": meta["lane"],
+                "status": meta["status"],
+                "uses_llm": meta["uses_llm"],
+                "can_block_execution": meta["can_block_execution"],
+                "runtime_entrypoints": meta["runtime_entrypoints"],
+                "tasks": usage.get(agent, []),
+            }
+        )
     _print_json({"agents": rows})
 
 
@@ -2326,6 +2973,25 @@ def build_parser() -> argparse.ArgumentParser:
     learning_status.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     learning_status.set_defaults(func=command_learning_status)
 
+    backfill_signal_candidates = subparsers.add_parser(
+        "backfill-signal-candidates",
+        help="Reconstruye signal_outcomes historicos desde reportes cerrados persistidos en data/reports.",
+    )
+    backfill_signal_candidates.add_argument(
+        "--from",
+        dest="start",
+        default=DEFAULT_HISTORY_START_DATE,
+        help=f"Fecha inicial YYYY-MM-DD. Por defecto {DEFAULT_HISTORY_START_DATE}.",
+    )
+    backfill_signal_candidates.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
+    backfill_signal_candidates.add_argument(
+        "--no-infer-selected",
+        action="store_true",
+        help="No infiere selected_candidates desde top_longs/top_shorts cuando falten en el reporte.",
+    )
+    backfill_signal_candidates.add_argument("--json", action="store_true", help="Devuelve el resultado en JSON.")
+    backfill_signal_candidates.set_defaults(func=command_backfill_signal_candidates)
+
     learning_review = subparsers.add_parser(
         "learning-review",
         help="Construye memoria enriquecida de operaciones, evalua reglas shadow y genera aprendizaje operativo.",
@@ -2401,6 +3067,133 @@ def build_parser() -> argparse.ArgumentParser:
     learning_promotions.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     learning_promotions.set_defaults(func=command_learning_promotions)
 
+    autonomy_digest = subparsers.add_parser(
+        "autonomy-digest",
+        help="Digest de autonomia y freno humano (T4.2): resumen, pausa o reanuda.",
+    )
+    autonomy_digest.add_argument("--pause", action="store_true", help="PAUSA TOTAL: kill switch + congelar laboratorio + cancelar ordenes.")
+    autonomy_digest.add_argument("--resume", action="store_true", help="Reanuda tras una pausa total.")
+    autonomy_digest.add_argument("--json", action="store_true", help="Salida JSON.")
+    autonomy_digest.set_defaults(func=command_autonomy_digest)
+
+    risk_budget = subparsers.add_parser(
+        "risk-budget",
+        help="Presupuesto de riesgo vigente (T4.1): VaR diario, riesgo nuevo y por cluster.",
+    )
+    risk_budget.add_argument("--json", action="store_true", help="Salida JSON.")
+    risk_budget.set_defaults(func=command_risk_budget)
+
+    pattern_scorecard = subparsers.add_parser(
+        "pattern-scorecard",
+        help="Scorecard de figuras auto-evaluado (T3.3): lift por patron.",
+    )
+    pattern_scorecard.add_argument("--build", action="store_true", help="Recalcula el scorecard ahora.")
+    pattern_scorecard.add_argument("--limit", type=int, default=200)
+    pattern_scorecard.add_argument("--json", action="store_true", help="Salida JSON.")
+    pattern_scorecard.set_defaults(func=command_pattern_scorecard)
+
+    factory_status = subparsers.add_parser(
+        "factory-status",
+        help="Granja de backtests en lote (T3.2): muestra runs o ejecuta uno.",
+    )
+    factory_status.add_argument("--run", action="store_true", help="Ejecuta la fabrica ahora.")
+    factory_status.add_argument("--limit", type=int, default=30)
+    factory_status.add_argument("--json", action="store_true", help="Salida JSON.")
+    factory_status.set_defaults(func=command_factory_status)
+
+    market_thesis = subparsers.add_parser(
+        "market-thesis",
+        help="Tesis de mercado viva (T3.1): muestra la ultima o construye una nueva.",
+    )
+    market_thesis.add_argument("--build", action="store_true", help="Construye la tesis del dia.")
+    market_thesis.add_argument("--latest", action="store_true", help="Muestra la ultima tesis (por defecto).")
+    market_thesis.add_argument("--json", action="store_true", help="Salida JSON.")
+    market_thesis.set_defaults(func=command_market_thesis)
+
+    lessons = subparsers.add_parser(
+        "lessons",
+        help="Memoria destilada (T2.4): lista, destila, revalida o retira lecciones.",
+    )
+    lessons.add_argument("--distill", action="store_true", help="Destila lecciones desde el historico.")
+    lessons.add_argument("--revalidate", action="store_true", help="Revalida lecciones ACTIVE/WEAKENED.")
+    lessons.add_argument("--retire", metavar="LESSON_ID", help="Retira una leccion por id.")
+    lessons.add_argument("--limit", type=int, default=100)
+    lessons.add_argument("--json", action="store_true", help="Devuelve las lecciones en JSON.")
+    lessons.set_defaults(func=command_lessons)
+
+    retrospective = subparsers.add_parser(
+        "retrospective",
+        help="Retrospectiva generativa nocturna: perdidas -> hipotesis (T2.3).",
+    )
+    retrospective.add_argument("--date", help="Fecha de sesion YYYY-MM-DD. Por defecto hoy.")
+    retrospective.add_argument("--json", action="store_true", help="Devuelve el resultado en JSON.")
+    retrospective.set_defaults(func=command_retrospective)
+
+    prompts = subparsers.add_parser(
+        "prompts",
+        help="Prompts versionados (T2.1). Lista, importa defaults o promueve una version.",
+    )
+    prompts.add_argument("--import-defaults", dest="import_defaults", action="store_true", help="Carga los prompts por defecto como v1 ACTIVE (idempotente).")
+    prompts.add_argument("--key", help="Clave de prompt a promover.")
+    prompts.add_argument("--promote", help="Version a promover a ACTIVE (requiere --key).")
+    prompts.add_argument("--json", action="store_true", help="Devuelve el listado en JSON.")
+    prompts.set_defaults(func=command_prompts)
+
+    promotions = subparsers.add_parser(
+        "promotions",
+        help="Ventanas de promocion champion/challenger de estrategias (T1.3).",
+    )
+    promotions.add_argument("--evaluate", action="store_true", help="Evalua las ventanas abiertas ahora.")
+    promotions.add_argument("--limit", type=int, default=100, help="Maximo de ventanas a listar.")
+    promotions.add_argument("--json", action="store_true", help="Devuelve las ventanas en JSON.")
+    promotions.set_defaults(func=command_promotions)
+
+    llm_usage = subparsers.add_parser(
+        "llm-usage",
+        help="Uso/coste de LLM. Con --by-role agrega por rol (fast/decision/deep).",
+    )
+    llm_usage.add_argument("--by-role", dest="by_role", action="store_true", help="Agrega el uso por rol.")
+    llm_usage.add_argument("--limit", type=int, default=1000, help="Numero de registros recientes a considerar.")
+    llm_usage.add_argument("--json", action="store_true", help="Devuelve el uso en JSON.")
+    llm_usage.set_defaults(func=command_llm_usage)
+
+    performance = subparsers.add_parser(
+        "performance",
+        help="Serie diaria de rendimiento del sistema (equity, alpha vs SPY, iq_score).",
+    )
+    performance.add_argument("--days", type=int, default=30, help="Numero de dias a mostrar. Por defecto 30.")
+    performance.add_argument("--json", action="store_true", help="Devuelve la serie en JSON.")
+    performance.set_defaults(func=command_performance)
+
+    iq_score = subparsers.add_parser(
+        "iq-score",
+        help="Metrica unica de progreso: score compuesto 0-100.",
+    )
+    iq_score.add_argument("--window", type=int, default=20, help="Ventana en sesiones. Por defecto 20.")
+    iq_score.add_argument("--json", action="store_true", help="Devuelve el score en JSON.")
+    iq_score.set_defaults(func=command_iq_score)
+
+    kernel_unlock_live = subparsers.add_parser(
+        "kernel-unlock-live",
+        help="Desbloqueo manual de live (T4.3): exige .env + confirmacion + re-sello.",
+    )
+    kernel_unlock_live.add_argument("--yes", action="store_true", help="Omite la confirmacion interactiva (uso avanzado).")
+    kernel_unlock_live.set_defaults(func=command_kernel_unlock_live)
+
+    kernel_seal = subparsers.add_parser(
+        "kernel-seal",
+        help="Regenera el manifest de integridad del kernel (uso manual).",
+    )
+    kernel_seal.add_argument("--json", action="store_true", help="Devuelve el resultado en JSON.")
+    kernel_seal.set_defaults(func=command_kernel_seal)
+
+    kernel_status = subparsers.add_parser(
+        "kernel-status",
+        help="Verifica la integridad del kernel contra el manifest sellado.",
+    )
+    kernel_status.add_argument("--json", action="store_true", help="Devuelve el estado en JSON.")
+    kernel_status.set_defaults(func=command_kernel_status)
+
     operational_health = subparsers.add_parser(
         "operational-health",
         help="Combina salud de jobs, reportes recientes y degradacion por setup.",
@@ -2414,6 +3207,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     operational_responses.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     operational_responses.set_defaults(func=command_operational_responses)
+
+    production_health = subparsers.add_parser(
+        "production-health",
+        help="Consolida salud operativa, scheduler y mejora continua en una sola vista.",
+    )
+    production_health.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    production_health.set_defaults(func=command_production_health)
 
     continuous_improvement = subparsers.add_parser(
         "continuous-improvement",
@@ -2472,6 +3272,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     ci_lab_autonomy = ci_lab_subparsers.add_parser("autonomy-status", help="Muestra gates de autonomia de codigo.")
     ci_lab_autonomy.set_defaults(func=command_continuous_improvement_lab)
+
+    ci_lab_build = ci_lab_subparsers.add_parser("build-strategy", help="Construye una estrategia desde una spec (T1.4).")
+    ci_lab_build.add_argument("--spec", help="Especificacion en JSON (string).")
+    ci_lab_build.set_defaults(func=command_continuous_improvement_lab)
+
+    ci_lab_dynamic = ci_lab_subparsers.add_parser("dynamic-agents", help="Lista o puntua agentes dinamicos (T2.2).")
+    ci_lab_dynamic.add_argument("--score", action="store_true", help="Puntua y retira agentes inutiles.")
+    ci_lab_dynamic.add_argument("--limit", type=int, default=100)
+    ci_lab_dynamic.set_defaults(func=command_continuous_improvement_lab)
 
     learning_postmortem = subparsers.add_parser(
         "learning-postmortem",
@@ -2570,6 +3379,43 @@ def build_parser() -> argparse.ArgumentParser:
     session_retrospective.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     session_retrospective.set_defaults(func=command_session_retrospective)
 
+    selector_replay = subparsers.add_parser(
+        "selector-replay",
+        help="Rejuega el selector actual sobre reportes cerrados guardados y resume que tickers entrarian.",
+    )
+    selector_replay.add_argument("--from", dest="start", help="Fecha inicial YYYY-MM-DD.")
+    selector_replay.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
+    selector_replay.add_argument("--limit", type=int, default=20, help="Numero maximo de seleccionados por sesion.")
+    selector_replay.add_argument(
+        "--symbols",
+        default="DDOG,QCOM,MU,SNDK,CSCO,HPE,DELL,INTC,STX",
+        help="Lista CSV de tickers a seguir dentro del replay.",
+    )
+    selector_replay.add_argument("--full", action="store_true", help="Incluye todas las sesiones y filas seleccionadas.")
+    selector_replay.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    selector_replay.set_defaults(func=command_selector_replay)
+
+    winner_coverage = subparsers.add_parser(
+        "winner-coverage-report",
+        help="Resume si el selector actual captura las mayores ganadoras historicas en fechas con reportes conservados.",
+    )
+    winner_coverage.add_argument("--from", dest="start", help="Fecha inicial YYYY-MM-DD.")
+    winner_coverage.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
+    winner_coverage.add_argument("--top", type=int, default=15, help="Numero de ganadoras unicas a revisar.")
+    winner_coverage.add_argument("--full", action="store_true", help="Incluye ejemplos de sesiones seleccionadas.")
+    winner_coverage.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    winner_coverage.set_defaults(func=command_winner_coverage_report)
+
+    fallback_blockers = subparsers.add_parser(
+        "fallback-blocker-report",
+        help="Resume por que motivos el fallback determinista deja fuera seleccionados y como rindieron a 5d.",
+    )
+    fallback_blockers.add_argument("--from", dest="start", help="Fecha inicial YYYY-MM-DD.")
+    fallback_blockers.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
+    fallback_blockers.add_argument("--full", action="store_true", help="Incluye todas las filas bloqueadas.")
+    fallback_blockers.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    fallback_blockers.set_defaults(func=command_fallback_blocker_report)
+
     adaptive_status_parser = subparsers.add_parser(
         "adaptive-status",
         help="Muestra propuestas/overrides adaptativos de parametros.",
@@ -2619,6 +3465,35 @@ def build_parser() -> argparse.ArgumentParser:
     market_data_quality.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD. Por defecto manana UTC.")
     market_data_quality.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     market_data_quality.set_defaults(func=command_market_data_quality)
+
+    market_data_reconciliation = subparsers.add_parser(
+        "market-data-reconciliation",
+        help="Compara OHLCV entre proveedor configurado y proveedor alternativo cuando existe.",
+    )
+    market_data_reconciliation.add_argument("--symbols", help="Tickers separados por coma. Por defecto usa el universo base.")
+    market_data_reconciliation.add_argument("--from", dest="start", help="Fecha inicial YYYY-MM-DD. Por defecto 10 dias atras.")
+    market_data_reconciliation.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD. Por defecto manana UTC.")
+    market_data_reconciliation.add_argument(
+        "--tolerance-pct",
+        type=float,
+        default=0.01,
+        help="Tolerancia relativa para diferencias de cierre. Por defecto 0.01.",
+    )
+    market_data_reconciliation.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    market_data_reconciliation.set_defaults(func=command_market_data_reconciliation)
+
+    strategy_registry = subparsers.add_parser(
+        "strategy-registry",
+        help="Muestra estrategias/reglas champion-challenger derivadas de propuestas de mejora continua.",
+    )
+    strategy_registry.add_argument("--limit", type=int, default=100, help="Maximo de propuestas/validaciones a leer.")
+    strategy_registry.add_argument("--active-only", action="store_true", help="Solo estados champion/challenger/shadow/micro.")
+    strategy_registry.add_argument("--list-registry", dest="list_registry", action="store_true", help="Lista las estrategias plugables descubiertas (T1.2).")
+    strategy_registry.add_argument("--activate", metavar="NAME", help="Marca ACTIVE una estrategia plugable.")
+    strategy_registry.add_argument("--shadow", metavar="NAME", help="Marca SHADOW una estrategia plugable.")
+    strategy_registry.add_argument("--retire", metavar="NAME", help="Marca RETIRED una estrategia plugable.")
+    strategy_registry.add_argument("--json", action="store_true", help="Devuelve el registro en JSON.")
+    strategy_registry.set_defaults(func=command_strategy_registry)
 
     weekly_review = subparsers.add_parser(
         "weekly-review",

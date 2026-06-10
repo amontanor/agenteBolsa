@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from .agent_registry import agent_info
 from .models import AgentEvent
 from .storage import Store
 

@@ -56,6 +56,38 @@ def _latest_report_payload(data_dir: Path, filename: str) -> dict[str, Any] | No
     return _load_json(data_dir / "reports" / filename)
 
 
+def _parse_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _freshness_status(heartbeat_at: Any, *, max_age_seconds: int) -> dict[str, Any]:
+    parsed = _parse_datetime(heartbeat_at)
+    if parsed is None:
+        return {
+            "status": "missing",
+            "heartbeat_at": heartbeat_at,
+            "age_seconds": None,
+            "max_age_seconds": max_age_seconds,
+            "is_fresh": False,
+        }
+    age_seconds = max(0.0, (datetime.now(timezone.utc) - parsed).total_seconds())
+    return {
+        "status": "fresh" if age_seconds <= max_age_seconds else "stale",
+        "heartbeat_at": parsed.isoformat(),
+        "age_seconds": round(age_seconds, 3),
+        "max_age_seconds": max_age_seconds,
+        "is_fresh": age_seconds <= max_age_seconds,
+    }
+
+
 def load_operational_response_context(data_dir: Path) -> dict[str, Any]:
     payload = _latest_report_payload(data_dir, "latest_operational_health.json") or {}
     responses = payload.get("responses", []) if isinstance(payload, dict) else []
@@ -78,7 +110,72 @@ def load_operational_response_context(data_dir: Path) -> dict[str, Any]:
     }
 
 
+KILL_SWITCH_OVERRIDE_FILENAME = "operational_kill_switch.json"
+
+
+def _kill_switch_override_path(data_dir: Path) -> Path:
+    return data_dir / "state" / KILL_SWITCH_OVERRIDE_FILENAME
+
+
+def activate_persistent_kill_switch(
+    data_dir: Path,
+    *,
+    reason: str,
+    kind: str = "manual",
+) -> dict[str, Any]:
+    """Activa un kill switch persistente que bloquea la ejecucion de compras.
+
+    A diferencia de los alerts derivados del reporte (que se recalculan cada
+    ciclo), este override vive en disco hasta que se desactiva explicitamente.
+    Lo usa, por ejemplo, ``kernel_integrity`` ante una violacion de integridad.
+    """
+
+    path = _kill_switch_override_path(data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "active": True,
+        "kind": kind,
+        "reason": reason,
+        "activated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+    return payload
+
+
+def clear_persistent_kill_switch(data_dir: Path) -> bool:
+    """Desactiva el kill switch persistente. Devuelve True si existia."""
+
+    path = _kill_switch_override_path(data_dir)
+    if path.exists():
+        path.unlink()
+        return True
+    return False
+
+
+def load_persistent_kill_switch(data_dir: Path) -> dict[str, Any]:
+    payload = _load_json(_kill_switch_override_path(data_dir)) or {}
+    return payload if bool(payload.get("active")) else {}
+
+
 def load_operational_block_context(data_dir: Path) -> dict[str, Any]:
+    override = load_persistent_kill_switch(data_dir)
+    if override:
+        reason = str(override.get("reason") or "kill_switch_persistente_activo")
+        return {
+            "available": True,
+            "as_of": override.get("activated_at"),
+            "kill_switch_active": True,
+            "block_new_buys": True,
+            "block_buy_execution": True,
+            "blocking_alerts": [
+                {
+                    "kind": str(override.get("kind") or "manual"),
+                    "scope": "global",
+                    "detail": reason,
+                }
+            ],
+            "reasons": [reason],
+        }
     path = data_dir / "reports" / "latest_operational_health.json"
     if not path.exists():
         return {
@@ -332,6 +429,104 @@ def _build_operational_responses(alerts: list[dict[str, Any]]) -> list[dict[str,
         seen.add(response_id)
         responses.append(response)
     return responses
+
+
+def build_production_health_report(
+    settings: Settings,
+    store: Store,
+    reports_dir: Path,
+    run_id: str,
+) -> dict[str, Any]:
+    operational_report = build_operational_health_report(settings, store, reports_dir, run_id)
+    ci_runtime = store.continuous_improvement_runtime_state()
+    latest_cycle = store.latest_continuous_improvement_cycle()
+    applied_changes = store.continuous_improvement_applied_changes(limit=500)
+    committee_decisions = store.continuous_improvement_decisions(actor="DecisionCommitteeAgent", limit=500)
+
+    ci_max_age_seconds = max(300, int(settings.continuous_improvement_runtime_interval_seconds) * 3)
+    ci_freshness = _freshness_status((ci_runtime or {}).get("heartbeat_at"), max_age_seconds=ci_max_age_seconds)
+    scheduler_runtime = operational_report.get("job_runtime", {}) or {}
+    scheduler_updates = [
+        _parse_datetime((item or {}).get("finished_at"))
+        for item in scheduler_runtime.values()
+        if isinstance(item, dict)
+    ]
+    scheduler_updates = [item for item in scheduler_updates if item is not None]
+    latest_scheduler_update = max(scheduler_updates) if scheduler_updates else None
+    scheduler_max_age_seconds = max(900, int(settings.run_interval_seconds) * 2)
+    scheduler_freshness = _freshness_status(
+        latest_scheduler_update.isoformat() if latest_scheduler_update else None,
+        max_age_seconds=scheduler_max_age_seconds,
+    )
+
+    continuous_improvement_summary = {
+        "enabled": settings.continuous_improvement_enabled,
+        "status": (ci_runtime or {}).get("status") or "missing",
+        "heartbeat": ci_freshness,
+        "latest_cycle": {
+            "cycle_id": (latest_cycle or {}).get("cycle_id"),
+            "status": (latest_cycle or {}).get("status"),
+            "updated_at": (latest_cycle or {}).get("updated_at"),
+        }
+        if latest_cycle
+        else None,
+        "applied_changes": len([item for item in applied_changes if item.get("status") == "APPLIED"]),
+        "rolled_back_changes": len([item for item in applied_changes if item.get("status") == "ROLLED_BACK"]),
+        "committee_decisions": len(committee_decisions),
+    }
+
+    alerts = list(operational_report.get("alerts", []))
+    responses = list(operational_report.get("responses", []))
+    if not ci_freshness["is_fresh"]:
+        alerts.append(
+            {
+                "severity": "warning" if ci_runtime else "critical",
+                "kind": "continuous_improvement_runtime_stale" if ci_runtime else "continuous_improvement_runtime_missing",
+                "scope": "continuous_improvement",
+                "detail": (
+                    f"Heartbeat de mejora continua {ci_freshness['status']} "
+                    f"(max_age={ci_freshness['max_age_seconds']}s)."
+                ),
+            }
+        )
+    if not scheduler_freshness["is_fresh"]:
+        alerts.append(
+            {
+                "severity": "warning" if scheduler_updates else "critical",
+                "kind": "scheduler_runtime_stale" if scheduler_updates else "scheduler_runtime_missing",
+                "scope": "scheduler",
+                "detail": (
+                    f"Ultima actualizacion del scheduler {scheduler_freshness['status']} "
+                    f"(max_age={scheduler_freshness['max_age_seconds']}s)."
+                ),
+            }
+        )
+
+    severity_counts = {
+        "critical": sum(1 for item in alerts if item["severity"] == "critical"),
+        "warning": sum(1 for item in alerts if item["severity"] == "warning"),
+        "info": sum(1 for item in alerts if item["severity"] == "info"),
+    }
+    overall_status = "critical" if severity_counts["critical"] > 0 else "warning" if severity_counts["warning"] > 0 else "ok"
+    report = {
+        "run_id": run_id,
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "summary": {
+            "overall_status": overall_status,
+            "healthy": overall_status == "ok",
+            "alerts": len(alerts),
+            "severity_counts": severity_counts,
+            "responses": len(responses),
+            "scheduler_heartbeat": scheduler_freshness,
+            "continuous_improvement_heartbeat": ci_freshness,
+        },
+        "operational_health": operational_report,
+        "alerts": alerts,
+        "responses": responses,
+        "scheduler_heartbeat": scheduler_freshness,
+        "continuous_improvement": continuous_improvement_summary,
+    }
+    return write_json_report(report, reports_dir, "production_health", run_id, latest_filename="latest_production_health.json")
 
 
 def build_operational_health_report(

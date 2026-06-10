@@ -91,6 +91,110 @@ def select_preferred_endpoint(settings: Settings) -> tuple[LLMEndpoint, list[dic
     return endpoints[0], attempts
 
 
+# Perfiles de rol (T0.4). Cada rol resuelve a settings LLM_ROLE_<ROL>_* con
+# fallback a la cadena por defecto (`configured_llm_endpoints`).
+ROLE_PROFILES: dict[str, dict[str, Any]] = {
+    "fast": {"temperature": 0.2, "max_tokens": 1200, "timeout": None},
+    "decision": {"temperature": 0.2, "max_tokens": None, "timeout": None},
+    "deep": {"temperature": 0.2, "max_tokens": 16000, "timeout": 600},
+}
+
+
+def role_endpoints(settings: Settings, role: str) -> list[LLMEndpoint]:
+    """Endpoints para un rol: el especifico (si esta configurado) + la cadena base.
+
+    - Si hay `LLM_ROLE_<ROL>_MODEL` y `..._BASE_URL`, se antepone ese endpoint.
+    - Si solo hay modelo, se reutiliza la base del endpoint primario.
+    - Para `deep` sin config explicita, se usa el modelo del laboratorio
+      (`IMPROVEMENT_LLM_*`) cuando existe, que es el modelo potente por defecto.
+    - Siempre se anexa la cadena estandar como fallback.
+    """
+
+    role = (role or "").lower()
+    model = getattr(settings, f"llm_role_{role}_model", None)
+    base = getattr(settings, f"llm_role_{role}_base_url", None)
+    api_key = getattr(settings, f"llm_role_{role}_api_key", None)
+
+    endpoints: list[LLMEndpoint] = []
+    if model and base:
+        endpoints.append(
+            LLMEndpoint(
+                name=f"role:{role}",
+                api_key=api_key or settings.openai_api_key or "local-llama",
+                base_url=base,
+                model=model,
+                preflight=settings.llm_primary_preflight_enabled,
+            )
+        )
+    elif model:
+        endpoints.append(
+            LLMEndpoint(
+                name=f"role:{role}",
+                api_key=settings.openai_api_key or "local-llama",
+                base_url=settings.openai_api_base,
+                model=model,
+                preflight=settings.llm_primary_preflight_enabled,
+            )
+        )
+    elif role == "deep" and getattr(settings, "improvement_llm_model", None):
+        endpoints.append(
+            LLMEndpoint(
+                name="role:deep",
+                api_key=settings.improvement_llm_api_key or settings.openai_api_key or "local-llama",
+                base_url=settings.improvement_llm_base_url,
+                model=settings.improvement_llm_model,
+                preflight=False,
+            )
+        )
+
+    endpoints.extend(configured_llm_endpoints(settings))
+    unique: list[LLMEndpoint] = []
+    seen: set[tuple[str, str, str]] = set()
+    for endpoint in endpoints:
+        key = (endpoint.base_url.rstrip("/"), endpoint.model, endpoint.api_key)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(endpoint)
+    return unique
+
+
+def role_max_tokens(settings: Settings, role: str) -> int | None:
+    role = (role or "").lower()
+    override = getattr(settings, f"llm_role_{role}_max_tokens", None)
+    if override is not None:
+        return override
+    profile_default = ROLE_PROFILES.get(role, {}).get("max_tokens")
+    if profile_default is not None:
+        return profile_default
+    return settings.llm_max_tokens
+
+
+def chat_for_role(
+    role: str,
+    *,
+    settings: Settings,
+    messages: list[dict[str, Any]],
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+) -> tuple[Any, LLMEndpoint, list[dict[str, Any]]]:
+    """Completa un chat usando el endpoint del rol con fallback a la cadena base."""
+
+    profile = ROLE_PROFILES.get((role or "").lower(), {})
+    temp = temperature if temperature is not None else profile.get("temperature", settings.llm_temperature)
+    tokens = max_tokens if max_tokens is not None else role_max_tokens(settings, role)
+    timeout = profile.get("timeout") or settings.llm_timeout_seconds
+    endpoints = role_endpoints(settings, role)
+    return _complete_with_endpoints(
+        settings,
+        endpoints=endpoints,
+        messages=messages,
+        temperature=temp,
+        max_tokens=tokens,
+        timeout_seconds=int(timeout),
+    )
+
+
 def chat_completion_with_fallback(
     settings: Settings,
     *,
@@ -98,10 +202,29 @@ def chat_completion_with_fallback(
     temperature: float,
     max_tokens: int | None,
 ) -> tuple[Any, LLMEndpoint, list[dict[str, Any]]]:
+    return _complete_with_endpoints(
+        settings,
+        endpoints=configured_llm_endpoints(settings),
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout_seconds=settings.llm_timeout_seconds,
+    )
+
+
+def _complete_with_endpoints(
+    settings: Settings,
+    *,
+    endpoints: list[LLMEndpoint],
+    messages: list[dict[str, Any]],
+    temperature: float,
+    max_tokens: int | None,
+    timeout_seconds: int,
+) -> tuple[Any, LLMEndpoint, list[dict[str, Any]]]:
     attempts: list[dict[str, Any]] = []
     last_error: Exception | None = None
-    for endpoint in configured_llm_endpoints(settings):
-        available, preflight_error = is_endpoint_available(endpoint, settings.llm_timeout_seconds)
+    for endpoint in endpoints:
+        available, preflight_error = is_endpoint_available(endpoint, timeout_seconds)
         attempts.append(
             {
                 "name": endpoint.name,
@@ -115,7 +238,7 @@ def chat_completion_with_fallback(
         if not available:
             continue
         try:
-            client = build_openai_client(endpoint, settings.llm_timeout_seconds)
+            client = build_openai_client(endpoint, timeout_seconds)
             request_kwargs = {
                 "model": endpoint.model,
                 "temperature": temperature,

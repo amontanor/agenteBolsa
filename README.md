@@ -156,6 +156,16 @@ Para comprobar el flujo, logs y persistencia sin llamar todavia al LLM:
 python -m agente_bolsa.main run-once --skip-crew
 ```
 
+Kernel inmutable (suelo de seguridad absoluto) y baseline de rendimiento:
+
+```powershell
+python -m agente_bolsa.main kernel-seal          # sella el manifest de integridad (manual)
+python -m agente_bolsa.main kernel-status --json # verifica integridad del kernel
+python -m agente_bolsa.main performance --days 30 --json
+python -m agente_bolsa.main iq-score --json      # metrica unica de progreso (0-100)
+python -m agente_bolsa.main llm-usage --by-role --json  # coste LLM por rol (fast/decision/deep)
+```
+
 Para ver eventos recientes o seguirlos en vivo:
 
 ```powershell
@@ -268,13 +278,37 @@ Asi se puede apagar y reiniciar sin perder el historial de cada agente.
 
 ## Datos reales antes del LLM
 
-Antes de llamar a CrewAI, el sistema descarga un snapshot diario con `yfinance`, calcula variables tecnicas basicas y lo guarda en:
+Antes de llamar a CrewAI, el sistema descarga un snapshot diario con el proveedor configurado (`MARKET_DATA_PROVIDER=auto|fmp|yfinance`), calcula variables tecnicas basicas y lo guarda en:
 
 ```text
 data/reports/market_snapshot_<cycle_id>.json
 ```
 
-Los agentes reciben ese snapshot en el prompt para reducir invenciones de precios o fechas.
+Tambien construye un estado de mercado unico por ciclo:
+
+```text
+data/reports/market_state_<cycle_id>.json
+```
+
+Ese `market_state` incluye regimen, amplitud, volatilidad, fuerza relativa, liderazgo sectorial, sentimiento agregado, calidad de datos, postura de riesgo y politica de regimen. Los agentes y la decision operativa reciben ese contexto para reducir invenciones de precios o fechas.
+
+Comandos utiles:
+
+```powershell
+python -m agente_bolsa.main validate-agent-config --json
+python -m agente_bolsa.main market-state --latest --json
+python -m agente_bolsa.main market-data-reconciliation --json
+python -m agente_bolsa.main strategy-registry --json
+```
+
+## Limites conocidos
+
+Este proyecto debe describirse como un pipeline autonomo controlado de investigacion, validacion, riesgo, ejecucion y retrospectiva. No es un trader experto plenamente autonomo, no predice el mercado completo y no garantiza edge economico.
+
+- `yfinance` puede usarse para investigacion o fallback, pero live requiere proveedor formal (`FMP_API_KEY` o `MARKET_DATA_PROVIDER=fmp`) y aprobacion explicita.
+- La mejora continua es experimental: propone challengers, shadow rules y micro-experimentos, pero no debe modificar produccion sin evidencia y rollback.
+- El sentimiento y macro son contexto, veto o reduccion de riesgo; no son predictores autonomos.
+- La unanimidad de agentes LLM no debe tratarse como independencia total si comparten el mismo modelo base.
 
 ## Fuentes de diseno consultadas
 

@@ -12,7 +12,6 @@ import pandas as pd
 from .market_data import download_daily_prices_with_metadata
 from .reporting import write_json_report
 from .technical_analysis import add_basic_technical_features
-from .technical_state_validator import validate_symbol_technical_state
 
 
 def _symbol_frame(data: pd.DataFrame, symbol: str, multi_symbol: bool) -> pd.DataFrame:
@@ -35,6 +34,7 @@ def build_closed_market_technical_study(
     top_n: int = 15,
     progress_callback: Any | None = None,
     benchmark_symbol: str = "SPY",
+    store: Any | None = None,
 ) -> dict[str, Any]:
     end = datetime.now(timezone.utc).date() + timedelta(days=1)
     start = end - timedelta(days=lookback_days)
@@ -63,28 +63,36 @@ def build_closed_market_technical_study(
     else:
         warnings = []
 
+    # Generacion de candidatos via registro de estrategias (T1.2). Por defecto
+    # solo `builtin_breakout` esta ACTIVE, lo que reproduce el comportamiento
+    # previo (mismos candidatos), ahora etiquetados con strategy_name/version.
+    from ..strategies.base import MarketContext
+    from ..strategies.registry import discover
+
+    context = MarketContext(
+        symbols=requested_symbols,
+        data=data,
+        multi_symbol=multi_symbol,
+        benchmark_return_20d=benchmark_return_20d,
+    )
     candidates: list[dict[str, Any]] = []
+    shadow_candidates: list[dict[str, Any]] = []
     tool_requests: list[dict[str, Any]] = []
-    for index, symbol in enumerate(requested_symbols, start=1):
-        try:
-            frame = _symbol_frame(data, symbol, multi_symbol)
-            if frame.empty:
-                warnings.append(f"{symbol}: sin datos")
-                continue
-            features = add_basic_technical_features(frame)
-            candidate = validate_symbol_technical_state(symbol, features)
-            symbol_return_20d = _float((candidate.get("technical_state", {}) or {}).get("return_20d"))
-            candidate["relative_return_20d"] = (
-                round(symbol_return_20d - benchmark_return_20d, 4)
-                if symbol_return_20d is not None and benchmark_return_20d is not None
-                else None
-            )
-            candidates.append(candidate)
+    for strategy in discover(store):
+        produced = strategy.generate_candidates(context)
+        for candidate in produced:
+            candidate["strategy_name"] = strategy.name
+            candidate["strategy_version"] = strategy.version
+        warnings.extend(getattr(strategy, "last_warnings", []) or [])
+        if str(getattr(strategy, "status", "ACTIVE")).upper() == "SHADOW":
+            # Las SHADOW acumulan outcomes pero NUNCA llegan a decision/ejecucion.
+            shadow_candidates.extend(produced)
+            continue
+        candidates.extend(produced)
+        for candidate in produced:
             tool_requests.extend(candidate.get("tool_requests", []))
-        except Exception as exc:  # noqa: BLE001 - a bad symbol must not block the whole scan.
-            warnings.append(f"{symbol}: {exc}")
-        if progress_callback and (index % 25 == 0 or index == len(requested_symbols)):
-            progress_callback(index, len(requested_symbols), len(candidates))
+    if progress_callback:
+        progress_callback(len(requested_symbols), len(requested_symbols), len(candidates))
 
     long_candidates = sorted(
         [item for item in candidates if item["direction"] == "long"],
@@ -125,6 +133,7 @@ def build_closed_market_technical_study(
         "analysis_plan_counts": dict(plan_counts.most_common()),
         "setup_counts": dict(setup_counts.most_common()),
         "all_candidates": candidates,
+        "shadow_candidates": shadow_candidates,
         "tool_requests": tool_requests[:100],
         "warnings": warnings[:100],
     }

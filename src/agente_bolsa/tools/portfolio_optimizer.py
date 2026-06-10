@@ -134,7 +134,6 @@ def build_portfolio_rebalance_context(
         item for item in candidates if item.get("direction") == "short" and (item.get("score") or 0) > 0
     ]
     best_longs = sorted(long_candidates, key=lambda item: item.get("score") or 0, reverse=True)[:5]
-    held_symbols = {position.symbol.upper() for position in portfolio.positions}
 
     cash_available_exposure = portfolio.cash / portfolio.portfolio_value if portfolio.portfolio_value else 0
     current_exposure = sum(position.market_value for position in portfolio.positions) / portfolio.portfolio_value if portfolio.portfolio_value else 0

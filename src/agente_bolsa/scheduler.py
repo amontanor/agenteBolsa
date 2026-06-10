@@ -20,7 +20,6 @@ except ModuleNotFoundError:  # pragma: no cover - exercised by import-only test 
     IntervalTrigger = None  # type: ignore[assignment]
 
 from .config import Settings
-from .continuous_improvement.orchestrator import scheduled_dedupe_key
 from .continuous_improvement.runtime import ContinuousImprovementLabRuntime
 from .cycle_runner import run_observable_cycle
 from .eventing import EventReporter
@@ -34,7 +33,11 @@ from .tools.execution import submit_paper_order_plan
 from .tools.daily_learning import build_learning_digest_report, load_daily_learning_context
 from .tools.news_sentiment import analyze_news_sentiment_for_candidates
 from .tools.opportunities import build_opportunity_snapshot
-from .tools.operational_health import load_operational_response_context
+from .tools.operational_health import (
+    activate_persistent_kill_switch,
+    load_operational_response_context,
+)
+from .kernel import kernel_integrity
 from .tools.pre_earnings import (
     backfill_pending_pre_earnings_estimates,
     build_pre_earnings_learning_digest,
@@ -47,6 +50,7 @@ from .tools.pre_earnings import (
     record_pre_earnings_predictions,
     update_pre_earnings_outcomes,
 )
+from .tools.performance_baseline import build_daily_performance, fetch_spy_daily_return
 from .tools.post_market_review import build_post_market_review
 from .tools.retention import cleanup_runtime_data
 from .tools.signal_learning import record_signal_candidates
@@ -409,6 +413,85 @@ def _set_job_status(
     store.set_runtime_value(_job_state_key(job_name), payload)
 
 
+def _continuous_improvement_retry_delay_seconds(settings: Settings, attempt: int) -> int:
+    base_delay = max(
+        int(settings.continuous_improvement_runtime_interval_seconds),
+        int(settings.continuous_improvement_retry_base_seconds),
+    )
+    max_delay = max(base_delay, int(settings.continuous_improvement_retry_max_seconds))
+    exponent = max(0, int(attempt) - 1)
+    return min(max_delay, base_delay * (2**exponent))
+
+
+def _continuous_improvement_retry_state(
+    settings: Settings,
+    previous_job_state: dict[str, Any] | None,
+) -> dict[str, Any]:
+    previous_extra = ((previous_job_state or {}).get("extra") or {}) if isinstance(previous_job_state, dict) else {}
+    attempt = int(previous_extra.get("retry_attempt") or 0) + 1
+    delay_seconds = _continuous_improvement_retry_delay_seconds(settings, attempt)
+    next_retry_at = (datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)).isoformat()
+    return {
+        "retry_attempt": attempt,
+        "retry_delay_seconds": delay_seconds,
+        "next_retry_at": next_retry_at,
+    }
+
+
+def _continuous_improvement_retry_gate(
+    previous_job_state: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(previous_job_state, dict):
+        return None
+    extra = previous_job_state.get("extra") or {}
+    next_retry_at_raw = str(extra.get("next_retry_at") or "").strip()
+    if not next_retry_at_raw:
+        return None
+    try:
+        next_retry_at = datetime.fromisoformat(next_retry_at_raw)
+    except ValueError:
+        return None
+    if next_retry_at.tzinfo is None:
+        next_retry_at = next_retry_at.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    if next_retry_at <= now:
+        return None
+    remaining_seconds = max(0, int((next_retry_at - now).total_seconds()))
+    return {
+        "remaining_seconds": remaining_seconds,
+        "next_retry_at": next_retry_at.isoformat(),
+        "retry_attempt": int(extra.get("retry_attempt") or 0),
+        "error_type": extra.get("error_type"),
+    }
+
+
+def _merge_continuous_improvement_runtime_failure(
+    store: Store,
+    *,
+    error: str,
+    error_type: str,
+    retry_state: dict[str, Any],
+) -> None:
+    current = store.continuous_improvement_runtime_state("lab") or {}
+    payload = current.get("payload") or {}
+    payload.update(
+        {
+            "status": "FAILED",
+            "error": error,
+            "error_type": error_type,
+            "retry_attempt": retry_state["retry_attempt"],
+            "retry_delay_seconds": retry_state["retry_delay_seconds"],
+            "next_retry_at": retry_state["next_retry_at"],
+        }
+    )
+    store.upsert_continuous_improvement_runtime_state(
+        runtime_name="lab",
+        status="FAILED",
+        heartbeat_at=datetime.now(timezone.utc).isoformat(),
+        payload=payload,
+    )
+
+
 def _risk_exit_plan(
     *,
     symbol: str,
@@ -456,12 +539,125 @@ def _risk_exit_plan(
                     "held_qty": qty,
                     "notional": round(notional, 2),
                     "source_plan_id": source_plan.get("plan_id"),
+                    "exit_policy_v2": {
+                        "enabled": trigger in {"time_stop_v2", "trailing_stop_v2", "partial_take_profit_v2"},
+                        "trigger": trigger,
+                    },
                 },
             },
             "dry_run": True,
         },
         "created_at": "",
     }
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        text = str(value).replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(text)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def _exit_policy_v2_time_stop_trigger(
+    settings: Settings,
+    *,
+    position: Any,
+    source_created_at: Any,
+) -> tuple[str | None, float]:
+    if not settings.exit_policy_v2_enabled or settings.exit_policy_v2_time_stop_days <= 0:
+        return None, 0.0
+    created_at = _parse_datetime(source_created_at)
+    if created_at is None:
+        return None, 0.0
+    held_days = (datetime.now(timezone.utc) - created_at).days
+    unrealized_return = float(getattr(position, "unrealized_plpc", 0.0) or 0.0)
+    if held_days >= settings.exit_policy_v2_time_stop_days and unrealized_return <= settings.exit_policy_v2_time_stop_min_return:
+        return "time_stop_v2", float(getattr(position, "current_price", 0.0) or 0.0)
+    return None, 0.0
+
+
+def _exit_policy_v2_runtime_trigger(
+    settings: Settings,
+    store: Store,
+    *,
+    symbol: str,
+    position: Any,
+    source: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not settings.exit_policy_v2_enabled:
+        return None
+    entry = float(payload.get("entry_price") or getattr(position, "avg_entry_price", 0.0) or 0.0)
+    stop = float(payload.get("stop_loss") or 0.0)
+    current = float(getattr(position, "current_price", 0.0) or 0.0)
+    if entry <= 0 or current <= 0:
+        return None
+    initial_risk = entry - stop if 0 < stop < entry else entry * 0.05
+    if initial_risk <= 0:
+        return None
+
+    source_plan = source.get("plan", {}) or {}
+    state_key = f"exit_policy_v2_state:{symbol}"
+    state = store.get_runtime_value(state_key) or {}
+    source_id = source_plan.get("plan_id") or source.get("created_at")
+    if state.get("source_id") != source_id:
+        state = {
+            "source_id": source_id,
+            "entry_price": entry,
+            "initial_risk": initial_risk,
+            "high_water": entry,
+            "partial_taken": False,
+        }
+    high_water = max(float(state.get("high_water") or entry), current)
+    state["high_water"] = high_water
+
+    partial_level = entry + (settings.exit_policy_v2_partial_r * initial_risk)
+    if not state.get("partial_taken") and current >= partial_level:
+        store.set_runtime_value(state_key, state)
+        return {
+            "trigger": "partial_take_profit_v2",
+            "level": partial_level,
+            "qty_fraction": 0.5,
+            "state_key": state_key,
+            "state": {**state, "partial_taken": True},
+        }
+
+    trailing_activation = entry + (settings.exit_policy_v2_trailing_r * initial_risk)
+    trailing_level = high_water - (settings.exit_policy_v2_trailing_giveback_r * initial_risk)
+    if high_water >= trailing_activation and current <= trailing_level:
+        state["trailing_level"] = trailing_level
+        store.set_runtime_value(state_key, state)
+        return {
+            "trigger": "trailing_stop_v2",
+            "level": trailing_level,
+            "qty_fraction": 1.0,
+            "state_key": state_key,
+            "state": state,
+        }
+
+    time_trigger, time_level = _exit_policy_v2_time_stop_trigger(
+        settings,
+        position=position,
+        source_created_at=source.get("created_at"),
+    )
+    if time_trigger:
+        store.set_runtime_value(state_key, state)
+        return {
+            "trigger": time_trigger,
+            "level": time_level,
+            "qty_fraction": 1.0,
+            "state_key": state_key,
+            "state": state,
+        }
+
+    store.set_runtime_value(state_key, state)
+    return None
 
 
 def _execute_stop_take_exits(
@@ -492,19 +688,37 @@ def _execute_stop_take_exits(
         take_profit = float(payload.get("take_profit") or 0)
         trigger = None
         level = 0.0
+        qty_fraction = 1.0
+        exit_policy_state: dict[str, Any] | None = None
         if stop_loss > 0 and position.current_price <= stop_loss:
             trigger = "stop_loss"
             level = stop_loss
         elif take_profit > 0 and position.current_price >= take_profit:
             trigger = "take_profit"
             level = take_profit
+        else:
+            exit_policy_trigger = _exit_policy_v2_runtime_trigger(
+                settings,
+                store,
+                symbol=symbol,
+                position=position,
+                source=source,
+                payload=payload,
+            )
+            if exit_policy_trigger:
+                trigger = exit_policy_trigger["trigger"]
+                level = float(exit_policy_trigger["level"])
+                qty_fraction = float(exit_policy_trigger.get("qty_fraction") or 1.0)
+                exit_policy_state = exit_policy_trigger
         if not trigger:
             continue
 
+        exit_qty = position.qty * qty_fraction
+        exit_notional = position.market_value * qty_fraction
         plan = _risk_exit_plan(
             symbol=symbol,
-            notional=position.market_value,
-            qty=position.qty,
+            notional=exit_notional,
+            qty=exit_qty,
             current_price=position.current_price,
             trigger=trigger,
             level=level,
@@ -525,11 +739,14 @@ def _execute_stop_take_exits(
                 status=order["status"],
                 payload={"plan": plan, "broker_order": order},
             )
+            if exit_policy_state and exit_policy_state.get("state_key"):
+                store.set_runtime_value(exit_policy_state["state_key"], exit_policy_state.get("state") or {})
             exits.append(
                 {
                     "symbol": symbol,
                     "trigger": trigger,
                     "level": level,
+                    "qty_fraction": qty_fraction,
                     "current_price": position.current_price,
                     "status": order["status"],
                 }
@@ -540,6 +757,7 @@ def _execute_stop_take_exits(
                     "symbol": symbol,
                     "trigger": trigger,
                     "level": level,
+                    "qty_fraction": qty_fraction,
                     "current_price": position.current_price,
                     "error": str(exc),
                 }
@@ -701,6 +919,45 @@ def _run_open_position_news_guard(
     return report
 
 
+def _check_kernel_integrity_once_per_session(
+    settings: Settings,
+    store: Store,
+    reporter: Any,
+    run_id: str,
+) -> None:
+    """Verifica la integridad del kernel una vez por sesion de mercado.
+
+    Si los archivos criticos no coinciden con el manifest sellado, activa el
+    kill switch persistente y emite un evento ``kernel_integrity_violation``.
+    Un manifest ausente (``unsealed``) no se trata como violacion.
+    """
+
+    session_date = datetime.now(timezone.utc).date().isoformat()
+    state_key = "kernel_integrity_last_session"
+    if store.get_runtime_value(state_key) == session_date:
+        return
+    try:
+        result = kernel_integrity(settings)
+    except Exception as exc:  # noqa: BLE001 - la verificacion no debe tumbar el job.
+        log_system_event(settings.logs_dir, "kernel_integrity_check_failed", {"error": repr(exc)})
+        return
+    store.set_runtime_value(state_key, session_date)
+    if result.get("status") == "violation":
+        reason = "kernel_integrity_violation: " + ", ".join(result.get("violations", []))
+        activate_persistent_kill_switch(settings.data_dir, reason=reason, kind="kernel_integrity_violation")
+        log_system_event(settings.logs_dir, "kernel_integrity_violation", result)
+        reporter.emit(
+            "kernel_guard",
+            "kernel_integrity_violation",
+            run_id,
+            (
+                "Integridad del kernel comprometida: se activa el kill switch y se "
+                f"bloquea la ejecucion de compras. Archivos alterados: {result.get('violations')}."
+            ),
+            result,
+        )
+
+
 def portfolio_watch_job(
     settings: Settings,
     store: Store,
@@ -730,6 +987,8 @@ def portfolio_watch_job(
         )
         _set_job_status(store, "portfolio_watch", status="completed", run_id=run_id, started_at=started_at, detail="mercado cerrado; monitor en espera", extra={"market_open": False})
         return
+
+    _check_kernel_integrity_once_per_session(settings, store, reporter, run_id)
 
     portfolio = None
     watch_message = f"Revisando cartera. Mercado abierto: {status.is_open}."
@@ -867,6 +1126,7 @@ def market_cycle_job(
             settings.data_dir / "reports",
             run_id,
             benchmark_symbol=settings.benchmark_symbol,
+            store=store,
         )
         selected_candidates, selected_symbols = _selected_candidates(report, settings)
         report["selected_candidates"] = selected_candidates
@@ -1102,6 +1362,7 @@ def closed_market_technical_study_job(
         run_id,
         progress_callback=_progress,
         benchmark_symbol=settings.benchmark_symbol,
+        store=store,
     )
     selected_candidates, selected_symbols = _selected_candidates(report, settings)
     report["selected_candidates"] = selected_candidates
@@ -1274,6 +1535,7 @@ def opportunity_snapshot_job(
         run_id,
         top_n=20,
         benchmark_symbol=settings.benchmark_symbol,
+        store=store,
     )
     annotated_report = _annotate_technical_context_with_learning(
         report,
@@ -1384,6 +1646,209 @@ def daily_study_job(
     _set_job_status(store, "daily_study", status="completed", run_id=run_id, started_at=started_at, detail="estudio diario finalizado")
 
 
+def _persist_daily_performance(
+    settings: Settings,
+    store: Store,
+    session_date: str,
+    reporter: Any,
+    run_id: str,
+) -> None:
+    """Calcula y persiste la fila de ``performance_daily`` de la sesion (T0.2).
+
+    Nunca debe tumbar el review: cualquier fallo de broker o de datos degrada la
+    fila (equity/alpha nulos) en lugar de propagar la excepcion.
+    """
+
+    portfolio = None
+    try:
+        portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
+    except Exception as exc:  # noqa: BLE001 - degradacion controlada.
+        log_system_event(settings.logs_dir, "performance_baseline_portfolio_unavailable", {"error": repr(exc)})
+
+    spy_pct = fetch_spy_daily_return(settings, session_date)
+    try:
+        payload = build_daily_performance(
+            store,
+            settings,
+            session_date,
+            spy_pct=spy_pct,
+            portfolio=portfolio,
+        )
+        store.upsert_performance_daily(payload)
+        reporter.emit(
+            "performance_baseline_agent",
+            "performance_daily_recorded",
+            run_id,
+            (
+                f"Baseline de rendimiento guardado para {session_date}: "
+                f"iq_score={payload.get('iq_score')}, alpha_vs_spy={payload.get('alpha_vs_spy')}."
+            ),
+            payload,
+        )
+    except Exception as exc:  # noqa: BLE001 - el baseline no debe romper el review.
+        log_system_event(settings.logs_dir, "performance_baseline_failed", {"error": repr(exc), "session_date": session_date})
+
+
+def _run_change_watchdog(
+    settings: Settings,
+    store: Store,
+    reporter: Any,
+    run_id: str,
+) -> None:
+    """Ejecuta el watchdog de cambios aplicados (T0.5) al cierre del review."""
+
+    if not getattr(settings, "change_watchdog_enabled", True):
+        return
+    try:
+        from .tools.change_watchdog import run_change_watchdog
+
+        result = run_change_watchdog(store, settings)
+    except Exception as exc:  # noqa: BLE001 - el watchdog no debe tumbar el review.
+        log_system_event(settings.logs_dir, "change_watchdog_failed", {"error": repr(exc)})
+        return
+    rolled_back = result.get("rolled_back", [])
+    requested = [item for item in result.get("evaluated", []) if item.get("verdict") == "ROLLBACK_REQUESTED"]
+    if rolled_back or requested:
+        reporter.emit(
+            "change_watchdog_agent",
+            "change_watchdog_completed",
+            run_id,
+            (
+                f"Watchdog de cambios: {len(requested)} rollback(s) solicitados, "
+                f"{len(rolled_back)} ejecutado(s)."
+            ),
+            result,
+        )
+
+    # Revisar promocion/degradacion automatica del nivel de autonomia (T1.1).
+    try:
+        from .continuous_improvement.autonomy import autonomy_promotion_check
+
+        progress = autonomy_promotion_check(store, settings)
+        if progress.get("changed"):
+            reporter.emit(
+                "autonomy_governor",
+                "autonomy_level_changed",
+                run_id,
+                (
+                    f"Nivel de autonomia de codigo {progress['current_level']} -> "
+                    f"{progress['new_level']}: {progress['reason']}."
+                ),
+                progress,
+            )
+    except Exception as exc:  # noqa: BLE001 - el gobierno de autonomia no debe tumbar el review.
+        log_system_event(settings.logs_dir, "autonomy_promotion_failed", {"error": repr(exc)})
+
+    # Resolver ventanas de promocion champion/challenger de estrategias (T1.3).
+    try:
+        from .continuous_improvement.promotion import PromotionManager
+
+        decisions = PromotionManager(store, settings).evaluate_windows()
+        resolved = [d for d in decisions if d.get("verdict") in {"PROMOTED", "REJECTED_SHADOW"}]
+        if resolved:
+            reporter.emit(
+                "promotion_manager",
+                "promotion_windows_resolved",
+                run_id,
+                f"Promociones resueltas: {len(resolved)} (de {len(decisions)} ventanas evaluadas).",
+                {"decisions": decisions},
+            )
+    except Exception as exc:  # noqa: BLE001 - la promocion no debe tumbar el review.
+        log_system_event(settings.logs_dir, "promotion_evaluation_failed", {"error": repr(exc)})
+
+
+def _run_hypothesis_factory(
+    settings: Settings,
+    store: Store,
+    reporter: Any,
+    run_id: str,
+) -> None:
+    """Granja nocturna de backtests en lote (T3.2)."""
+
+    try:
+        from .tools.hypothesis_factory import run_factory
+
+        result = run_factory(store, settings)
+    except Exception as exc:  # noqa: BLE001 - la fabrica no debe tumbar el review.
+        log_system_event(settings.logs_dir, "hypothesis_factory_failed", {"error": repr(exc)})
+        return
+    if result.get("survivors"):
+        reporter.emit(
+            "hypothesis_factory_agent",
+            "hypothesis_factory_completed",
+            run_id,
+            (
+                f"Fabrica de hipotesis: {result['survivors']} supervivientes de "
+                f"{result['variants']} variantes; {result['hypotheses_inserted']} hipotesis nuevas."
+            ),
+            result,
+        )
+
+
+def _run_macro_thesis(
+    settings: Settings,
+    store: Store,
+    reporter: Any,
+    run_id: str,
+) -> None:
+    """Construye la tesis de mercado del dia (T3.1)."""
+
+    if not getattr(settings, "macro_thesis_enabled", True):
+        return
+    try:
+        from .tools.macro_context import build_market_thesis
+        from .tools.market_state import load_latest_market_state
+
+        market_state = load_latest_market_state(settings.data_dir / "reports") or {}
+        recent = store.performance_daily(limit=0)[-10:]
+        thesis = build_market_thesis(
+            store,
+            settings,
+            market_state=market_state,
+            recent_performance={"performance_daily": recent},
+        )
+        reporter.emit(
+            "macro_strategist",
+            "market_thesis_built",
+            run_id,
+            f"Tesis de mercado {thesis['thesis_date']}: stance={thesis['stance']} (confidence={thesis['confidence']}).",
+            thesis,
+        )
+    except Exception as exc:  # noqa: BLE001 - la tesis no debe tumbar el review.
+        log_system_event(settings.logs_dir, "market_thesis_failed", {"error": repr(exc)})
+
+
+def _run_nightly_retrospective(
+    settings: Settings,
+    store: Store,
+    session_date: str,
+    reporter: Any,
+    run_id: str,
+) -> None:
+    """Retrospectiva generativa nocturna: perdidas -> hipotesis (T2.3)."""
+
+    if not getattr(settings, "nightly_retrospective_enabled", True):
+        return
+    try:
+        from .tools.nightly_retrospective import run_nightly_retrospective
+
+        retro = run_nightly_retrospective(store, settings, session_date)
+    except Exception as exc:  # noqa: BLE001 - la retrospectiva no debe tumbar el review.
+        log_system_event(settings.logs_dir, "nightly_retrospective_failed", {"error": repr(exc)})
+        return
+    if retro.get("hypotheses_inserted"):
+        reporter.emit(
+            "nightly_retrospective_agent",
+            "nightly_retrospective_completed",
+            run_id,
+            (
+                f"Retrospectiva nocturna: {retro['hypotheses_inserted']} hipotesis nuevas "
+                f"desde {retro['evidence_counts']}."
+            ),
+            retro,
+        )
+
+
 def post_market_review_job(
     settings: Settings,
     store: Store,
@@ -1426,6 +1891,17 @@ def post_market_review_job(
             use_llm=use_llm and settings.post_market_review_use_llm,
         )
         store.set_runtime_value(state_key, session_date)
+        _persist_daily_performance(settings, store, session_date, reporter, run_id)
+        _run_change_watchdog(settings, store, reporter, run_id)
+        _run_macro_thesis(settings, store, reporter, run_id)
+        _run_nightly_retrospective(settings, store, session_date, reporter, run_id)
+        _run_hypothesis_factory(settings, store, reporter, run_id)
+        try:
+            from .tools.pattern_scorecard import build_pattern_scorecard
+
+            build_pattern_scorecard(store, min_occurrences=settings.pattern_min_occurrences)
+        except Exception as exc:  # noqa: BLE001 - el scorecard no debe tumbar el review.
+            log_system_event(settings.logs_dir, "pattern_scorecard_failed", {"error": repr(exc)})
         improvements = report.get("proposed_improvements", [])
         reporter.emit(
             "post_market_review_agent",
@@ -1474,9 +1950,33 @@ def continuous_improvement_job(
     if not settings.continuous_improvement_schedule_enabled and not force:
         return None
 
+    previous_job_state = store.get_runtime_value(_job_state_key("continuous_improvement"))
+    if not force:
+        retry_gate = _continuous_improvement_retry_gate(previous_job_state)
+        if retry_gate:
+            started_at = datetime.now(timezone.utc)
+            _set_job_status(
+                store,
+                "continuous_improvement",
+                status="retry_wait",
+                run_id=new_id("ci_sched_wait"),
+                started_at=started_at,
+                detail=(
+                    "Ultimo fallo de mejora continua. "
+                    f"Reintento automatico a las {retry_gate['next_retry_at']} "
+                    f"(faltan {retry_gate['remaining_seconds']} s)."
+                ),
+                extra={
+                    "retry_attempt": retry_gate["retry_attempt"],
+                    "next_retry_at": retry_gate["next_retry_at"],
+                    "remaining_seconds": retry_gate["remaining_seconds"],
+                    "error_type": retry_gate.get("error_type"),
+                },
+            )
+            return None
+
     run_id = new_id("ci_sched")
     started_at = datetime.now(timezone.utc)
-    dedupe_key = scheduled_dedupe_key(settings)
     _set_job_status(
         store,
         "continuous_improvement",
@@ -1488,9 +1988,6 @@ def continuous_improvement_job(
     try:
         runtime = ContinuousImprovementLabRuntime(settings, store)
         report = runtime.tick() if not force else runtime.run_once(mode="scheduled", trigger_event_type="scheduled_forced")
-        if dedupe_key and report.get("cycle_id"):
-            store.update_continuous_improvement_cycle(report["cycle_id"], dedupe_key=dedupe_key)
-            report = store.continuous_improvement_cycle(report["cycle_id"]) or report
         _set_job_status(
             store,
             "continuous_improvement",
@@ -1506,19 +2003,52 @@ def continuous_improvement_job(
                 "continuous_improvement_completed",
                 report.get("cycle_id") or run_id,
                 f"Mejora continua completada: estado {report.get('status')}.",
-                {"dedupe_key": dedupe_key, "deduped": report.get("deduped", False)},
+                {"deduped": report.get("deduped", False)},
             )
         return report
     except Exception as exc:  # noqa: BLE001 - scheduler must keep running.
+        retry_state = _continuous_improvement_retry_state(settings, previous_job_state)
+        error_text = str(exc)
         _set_job_status(
             store,
             "continuous_improvement",
             status="failed",
             run_id=run_id,
             started_at=started_at,
-            detail=str(exc),
-            extra={"error_type": type(exc).__name__},
+            detail=(
+                f"{error_text}. "
+                f"Reintento automatico en {retry_state['retry_delay_seconds']} s "
+                f"({retry_state['next_retry_at']})."
+            ),
+            extra={
+                "error_type": type(exc).__name__,
+                "retry_attempt": retry_state["retry_attempt"],
+                "retry_delay_seconds": retry_state["retry_delay_seconds"],
+                "next_retry_at": retry_state["next_retry_at"],
+            },
         )
+        _merge_continuous_improvement_runtime_failure(
+            store,
+            error=error_text,
+            error_type=type(exc).__name__,
+            retry_state=retry_state,
+        )
+        if verbose:
+            EventReporter(store, verbose=True).emit(
+                "continuous_improvement_orchestrator",
+                "continuous_improvement_failed",
+                run_id,
+                (
+                    "Mejora continua fallida. "
+                    f"Reintento automatico en {retry_state['retry_delay_seconds']} s. Error: {error_text}"
+                ),
+                {
+                    "error": repr(exc),
+                    "retry_attempt": retry_state["retry_attempt"],
+                    "retry_delay_seconds": retry_state["retry_delay_seconds"],
+                    "next_retry_at": retry_state["next_retry_at"],
+                },
+            )
         return None
 
 

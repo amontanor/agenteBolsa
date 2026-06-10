@@ -6,8 +6,22 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from agente_bolsa.config import Settings
+from agente_bolsa.kernel import kernel_check_order
 from agente_bolsa.tools.operational_health import load_operational_block_context
 from agente_bolsa.tools.broker import BrokerClientFactory
+
+
+def _kernel_portfolio_snapshot(settings: Settings) -> Any:
+    """Mejor esfuerzo para obtener contexto de cartera para el kernel.
+
+    Nunca debe impedir la ejecucion por un fallo de lectura: si el broker no
+    responde, el kernel evaluara con lo que haya en el propio plan.
+    """
+
+    try:
+        return BrokerClientFactory(settings).alpaca_portfolio_snapshot()
+    except Exception:  # noqa: BLE001 - el kernel degrada con portfolio=None.
+        return None
 
 
 def _order_value(order: Any, key: str, default: Any = None) -> Any:
@@ -123,6 +137,55 @@ def submit_paper_order_plan(
         if operational_block.get("block_buy_execution"):
             reason = "; ".join(operational_block.get("reasons", [])[:3]) or "critical_operational_alerts_active"
             raise RuntimeError(f"Compra bloqueada por operational kill switch: {reason}")
+
+    # Ultima validacion inmutable: el kernel es el suelo absoluto, adicional a risk.py.
+    kernel_portfolio = _kernel_portfolio_snapshot(settings)
+    kernel_ok, kernel_reason = kernel_check_order(plan, kernel_portfolio, settings)
+    if not kernel_ok:
+        try:
+            from agente_bolsa.logging_utils import log_system_event
+
+            log_system_event(
+                settings.logs_dir,
+                "kernel_block",
+                {
+                    "symbol": plan.get("symbol"),
+                    "side": plan.get("side"),
+                    "client_order_id": client_order_id,
+                    "reason": kernel_reason,
+                },
+            )
+        except Exception:  # noqa: BLE001 - el bloqueo no depende del logging.
+            pass
+        raise RuntimeError(f"Orden bloqueada por el kernel inmutable: {kernel_reason}")
+
+    # Presupuesto de riesgo (T4.1): para compras, la orden debe caber en el VaR.
+    if getattr(settings, "risk_budget_enabled", False) and str(plan.get("side", "")).lower() == "buy":
+        try:
+            from agente_bolsa.risk_budget import check_order as _risk_budget_check
+            from agente_bolsa.storage import Store
+
+            _store = Store(settings.database_path, settings.agent_logs_dir)
+            budget_ok, budget_reason = _risk_budget_check(_store, settings, plan)
+        except Exception as exc:  # noqa: BLE001 - el presupuesto degrada sin bloquear por error interno.
+            budget_ok, budget_reason = True, f"risk_budget_error:{exc!r}"
+        if not budget_ok:
+            try:
+                from agente_bolsa.logging_utils import log_system_event
+
+                log_system_event(
+                    settings.logs_dir,
+                    "risk_budget_block",
+                    {
+                        "symbol": plan.get("symbol"),
+                        "side": plan.get("side"),
+                        "client_order_id": client_order_id,
+                        "reason": budget_reason,
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            raise RuntimeError(f"Compra bloqueada por presupuesto de riesgo: {budget_reason}")
 
     client = BrokerClientFactory(settings).alpaca_trading_client()
     if _is_full_position_exit(plan):

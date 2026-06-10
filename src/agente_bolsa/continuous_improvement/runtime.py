@@ -38,6 +38,20 @@ from .schemas import CycleStatus, ImprovementProposalPayload, RuntimeStatus, Tas
 
 
 class ContinuousImprovementLabRuntime:
+    VALIDATION_ALIASES = {
+        "backtest": "in_sample",
+        "baseline_compare": "out_of_sample",
+        "shadow_review": "walk_forward",
+        "paper_audit": "paper_or_shadow_window",
+    }
+    CHAMPION_CHALLENGER_REQUIRED = [
+        "in_sample",
+        "walk_forward",
+        "out_of_sample",
+        "paper_or_shadow_window",
+        "risk_review",
+    ]
+
     def __init__(self, settings: Settings, store: Store, *, runtime_name: str = "lab") -> None:
         self.settings = settings
         self.store = store
@@ -101,7 +115,7 @@ class ContinuousImprovementLabRuntime:
             "ReportAgent": "Genera informes de ciclo y estado operativo.",
         }
         heartbeat = self.store.continuous_improvement_runtime_state(self.runtime_name)
-        return [
+        agents = [
             {
                 "agent_name": name,
                 "kind": "specialist" if name in {item.value for item in SPECIALIST_AGENT_CLASSES} else "support",
@@ -110,6 +124,20 @@ class ContinuousImprovementLabRuntime:
             }
             for name in descriptions
         ]
+        # Fusionar con los agentes dinamicos ACTIVE (T2.2).
+        try:
+            for row in self.store.agent_definitions(status="ACTIVE"):
+                agents.append(
+                    {
+                        "agent_name": row["agent_key"],
+                        "kind": "dynamic_specialist",
+                        "description": row.get("goal") or row.get("role") or "",
+                        "runtime_heartbeat": (heartbeat or {}).get("heartbeat_at"),
+                    }
+                )
+        except Exception:  # noqa: BLE001 - sin tabla seguimos con los estaticos.
+            pass
+        return agents
 
     def _should_skip_task(
         self,
@@ -277,13 +305,30 @@ class ContinuousImprovementLabRuntime:
             },
         }
 
-    def _committee_decision_from_response(self, response: dict[str, Any]) -> dict[str, Any]:
+    def _committee_decision_from_response(
+        self,
+        response: dict[str, Any],
+        *,
+        deterministic_baseline: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         decision = str(response.get("decision") or "ESCALATE").upper()
         if decision not in {"APPROVE", "REJECT", "REWORK", "MONITOR", "ESCALATE"}:
             decision = "ESCALATE"
+        deterministic_decision = str((deterministic_baseline or {}).get("decision") or response.get("deterministic_decision") or "").upper()
+        aligns_with_deterministic = response.get("deterministic_alignment")
+        if aligns_with_deterministic is None:
+            aligns_with_deterministic = bool(not deterministic_decision or deterministic_decision == decision)
+        discrepancy_justification = str(response.get("discrepancy_justification") or "").strip()
+        if deterministic_decision and deterministic_decision != decision and not discrepancy_justification:
+            decision = "ESCALATE"
+            aligns_with_deterministic = False
+            discrepancy_justification = "Missing committee justification for deterministic disagreement."
         return {
             "decision": decision,
             "reason": str(response.get("decision_reason") or response.get("summary") or ""),
+            "deterministic_decision": deterministic_decision,
+            "aligns_with_deterministic": bool(aligns_with_deterministic),
+            "discrepancy_justification": discrepancy_justification,
             "initiative_status_target": str(response.get("initiative_status_target") or self._initiative_status_from_committee_decision(decision)),
             "proposal_status_targets": response.get("proposal_status_targets") or [],
             "priority_adjustment": str(response.get("priority_adjustment") or "keep"),
@@ -342,7 +387,8 @@ class ContinuousImprovementLabRuntime:
         if not initiative:
             return
         response = (result.get("response") or {}) if isinstance(result, dict) else {}
-        decision = self._committee_decision_from_response(response)
+        deterministic_baseline = (result.get("deterministic") or {}) if isinstance(result, dict) else {}
+        decision = self._committee_decision_from_response(response, deterministic_baseline=deterministic_baseline)
         targets = decision.get("proposal_status_targets") or []
         target_by_id = {
             str(item.get("proposal_id")): str(item.get("status") or "")
@@ -433,10 +479,14 @@ class ContinuousImprovementLabRuntime:
         cycle_id: str,
     ) -> dict[str, Any]:
         payload = proposal.get("payload", {}) or {}
-        required = {str(item).lower() for item in payload.get("required_validations", []) or []}
+        required = {
+            self.VALIDATION_ALIASES.get(str(item).strip().lower(), str(item).strip().lower())
+            for item in payload.get("required_validations", []) or []
+        }
         reports_dir = self.settings.data_dir / "reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
         artifacts: dict[str, Any] = {}
-        if "backtest" in required:
+        if "in_sample" in required:
             symbol = self._proposal_symbol(proposal)
             if symbol:
                 try:
@@ -467,7 +517,7 @@ class ContinuousImprovementLabRuntime:
                     artifacts["backtest_error"] = str(exc)
             else:
                 artifacts["backtest_error"] = "No se pudo inferir un simbolo para ejecutar backtest."
-        if "baseline_compare" in required:
+        if "out_of_sample" in required:
             try:
                 artifacts["session_retrospective"] = build_session_retrospective_report(
                     self.settings,
@@ -482,7 +532,7 @@ class ContinuousImprovementLabRuntime:
                 )
             except Exception as exc:  # noqa: BLE001
                 artifacts["session_retrospective_error"] = str(exc)
-        if "shadow_review" in required or proposal.get("proposal_type") in {"RISK_RULE_CHANGE", "STRATEGY_RULE_CHANGE"}:
+        if "walk_forward" in required or proposal.get("proposal_type") in {"RISK_RULE_CHANGE", "STRATEGY_RULE_CHANGE"}:
             try:
                 artifacts["walk_forward_validation"] = build_walk_forward_validation_report(
                     self.settings,
@@ -569,11 +619,14 @@ class ContinuousImprovementLabRuntime:
             if result.get("inserted"):
                 discovered.append(result["event"])
 
-        recent_errors = [
-            item
-            for item in self.store.latest_events(40)
-            if "fail" in str(item.get("event_type", "")).lower() or "error" in str(item.get("payload_json", "")).lower()
-        ]
+        def _runtime_error_event(item: dict[str, Any]) -> bool:
+            event_type = str(item.get("event_type", "")).lower()
+            payload_text = str(item.get("payload_json", "")).lower()
+            if event_type in {"entry_quality_gate_completed", "stop_take_exit_executed"}:
+                return False
+            return "fail" in event_type or "error" in event_type or '"error"' in payload_text
+
+        recent_errors = [item for item in self.store.latest_events(40) if _runtime_error_event(item)]
         if len(recent_errors) >= 3:
             payload = {
                 "sample_event_ids": [item.get("event_id") for item in recent_errors[:5]],
@@ -648,6 +701,36 @@ class ContinuousImprovementLabRuntime:
             )
         )
 
+    def _maybe_start_shadow_window(self, proposal: dict[str, Any], cycle_id: str | None) -> None:
+        """Si un cambio de estrategia queda APPLIED, abre ventana SHADOW (T1.3)."""
+
+        payload = proposal.get("payload") or {}
+        proposal_type = str(proposal.get("proposal_type") or payload.get("proposal_type") or "")
+        target = str(proposal.get("target_component") or payload.get("target_component") or "")
+        strategy_name = payload.get("strategy_name") or payload.get("strategy")
+        is_strategy = (
+            proposal_type in {"STRATEGY_RULE_CHANGE", "BUILD_STRATEGY"}
+            or target.startswith("strateg")
+            or bool(strategy_name)
+        )
+        if not is_strategy or not strategy_name:
+            return
+        try:
+            from .promotion import PromotionManager
+
+            window = PromotionManager(self.store, self.settings).start_shadow(
+                str(strategy_name),
+                str(payload.get("strategy_version") or "1"),
+            )
+            self._record_agent_event(
+                agent="PromotionManager",
+                event_type="promotion_shadow_started",
+                cycle_id=cycle_id,
+                payload={"strategy": strategy_name, "window_id": window.get("window_id")},
+            )
+        except Exception:  # noqa: BLE001 - abrir ventana no debe romper el tick.
+            pass
+
     def _update_runtime(self, *, status: RuntimeStatus, payload: dict[str, Any]) -> None:
         self.store.upsert_continuous_improvement_runtime_state(
             runtime_name=self.runtime_name,
@@ -655,6 +738,106 @@ class ContinuousImprovementLabRuntime:
             heartbeat_at=datetime.now(timezone.utc).isoformat(),
             payload=payload,
         )
+
+    def _cooldown_state(self) -> tuple[bool, dict[str, Any]]:
+        runtime = self.store.continuous_improvement_runtime_state(self.runtime_name) or {}
+        payload = runtime.get("payload") or {}
+        cooldown_until = str(payload.get("cooldown_until") or "").strip()
+        if not cooldown_until:
+            return False, {}
+        try:
+            until = datetime.fromisoformat(cooldown_until)
+        except ValueError:
+            return False, {}
+        if until.tzinfo is None:
+            until = until.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        if until <= now:
+            return False, {}
+        return True, {
+            "cooldown_until": until.isoformat(),
+            "remaining_seconds": max(0, int((until - now).total_seconds())),
+            "last_completed_cycle_id": payload.get("last_completed_cycle_id"),
+        }
+
+    def _activate_group_cooldown(self, *, cycle_id: str, cycle_status: str, mode: str) -> dict[str, Any]:
+        cooldown_seconds = max(0, int(self.settings.continuous_improvement_group_cooldown_seconds))
+        cooldown_until = datetime.now(timezone.utc) + timedelta(seconds=cooldown_seconds)
+        payload = {
+            "status": "COOLDOWN",
+            "mode": mode,
+            "cooldown_seconds": cooldown_seconds,
+            "cooldown_until": cooldown_until.isoformat(),
+            "last_completed_cycle_id": cycle_id,
+            "last_completed_status": cycle_status,
+        }
+        self._update_runtime(status=RuntimeStatus.IDLE, payload=payload)
+        return payload
+
+    def _normalize_autonomous_backlog(self) -> None:
+        proposals = self.store.continuous_improvement_proposals(limit=5000)
+        for proposal in proposals:
+            current_status = str(proposal.get("status") or "")
+            payload = proposal.get("payload") or {}
+            initiative_key = str(payload.get("initiative_key") or "").strip()
+            if not initiative_key:
+                initiative_key = initiative_topic_key(
+                    domain="trading" if any(token in str(proposal.get("target_component") or "").lower() for token in ["pre_earnings", "entry_quality", "signal", "strategy", "analyst", "risk"]) else "software",
+                    focus=str(proposal.get("target_component") or proposal.get("proposal_type") or "general"),
+                )
+            initiative = self.store.continuous_improvement_initiative_by_key(initiative_key)
+            if not initiative:
+                initiative_id = new_id("ci_init")
+                self.store.upsert_continuous_improvement_initiative(
+                    {
+                        "initiative_id": initiative_id,
+                        "initiative_key": initiative_key,
+                        "title": initiative_title_from_key(initiative_key),
+                        "domain": "trading" if initiative_key.startswith("trading:") else "software",
+                        "status": "OPEN",
+                        "owner_agent": initiative_owner_from_key(initiative_key),
+                        "priority": str(proposal.get("priority") or "MEDIUM"),
+                        "target_metric": str(proposal.get("proposal_type") or "impact").lower(),
+                        "baseline_value": None,
+                        "current_value": None,
+                        "expected_impact": str(payload.get("expected_impact") or payload.get("rationale") or ""),
+                        "risk_level": str(proposal.get("risk_level") or "MEDIUM"),
+                        "evidence": [
+                            str(payload.get("rationale") or ""),
+                            str(payload.get("proposed_value") or ""),
+                            f"proposal_id={proposal.get('proposal_id')}",
+                        ],
+                        "linked_event_ids": [],
+                        "linked_task_ids": [],
+                        "linked_hypothesis_ids": [],
+                        "linked_proposal_ids": [proposal.get("proposal_id")] if proposal.get("proposal_id") else [],
+                        "linked_validation_ids": [],
+                        "latest_decision": {"decision": current_status or "PENDING", "source": "autonomy_normalizer"},
+                        "next_action": "Esperar validacion objetiva y autoapply si supera los gates.",
+                    }
+                )
+                initiative = self.store.continuous_improvement_initiative_by_key(initiative_key)
+            if initiative:
+                self.store.append_continuous_improvement_initiative_links(
+                    initiative["initiative_id"],
+                    proposal_ids=[proposal["proposal_id"]],
+                )
+            if current_status in {"REQUIRES_HUMAN_REVIEW", "WAITING_HUMAN_REVIEW"}:
+                next_status = "PENDING"
+                self.store.update_continuous_improvement_proposal_status(
+                    proposal["proposal_id"],
+                    status=next_status,
+                    actor="AutonomyNormalizer",
+                    reason="La autonomia ya no usa revision humana; la propuesta vuelve al pipeline automatico.",
+                    payload={"normalized_from": current_status, "initiative_key": initiative_key},
+                )
+                if initiative:
+                    self.store.update_continuous_improvement_initiative(
+                        initiative["initiative_id"],
+                        status="VALIDATING",
+                        latest_decision={"decision": next_status, "source": "AutonomyNormalizer"},
+                        next_action="Revalidar y promover a READY_TO_APPLY o REJECTED.",
+                    )
 
     def run_once(
         self,
@@ -664,8 +847,19 @@ class ContinuousImprovementLabRuntime:
         trigger_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.store.ensure_schema()
+        self._normalize_autonomous_backlog()
         if not self.settings.continuous_improvement_enabled:
             return {"ok": False, "status": "DISABLED", "reason": "CONTINUOUS_IMPROVEMENT_ENABLED=false"}
+        cooldown_active, cooldown_payload = self._cooldown_state()
+        if cooldown_active:
+            self._update_runtime(status=RuntimeStatus.IDLE, payload={**cooldown_payload, "status": "COOLDOWN", "mode": mode})
+            self._record_agent_event(
+                agent="continuous_improvement_lab",
+                event_type="lab_group_cooldown_active",
+                cycle_id=None,
+                payload={**cooldown_payload, "mode": mode},
+            )
+            return {"ok": False, "status": "COOLDOWN", **cooldown_payload}
         market_allowed, market_reason, market_payload = self._market_window()
         if not market_allowed:
             self._update_runtime(
@@ -892,6 +1086,12 @@ class ContinuousImprovementLabRuntime:
                     "cycle_id": cycle_id,
                     "provider": llm_result.provider,
                     "model": llm_result.model,
+                    "base_url": llm_result.base_url,
+                    "fallback_used": llm_result.fallback_used,
+                    "prompt_tokens_estimate": llm_result.prompt_tokens_estimate,
+                    "context_limit_tokens": llm_result.context_limit_tokens,
+                    "context_compacted": llm_result.context_compacted,
+                    "truncation_report": llm_result.truncation_report,
                     "status": "ok" if llm_result.ok else "failed",
                     "request": llm_result.request_preview,
                     "response": llm_result.payload.model_dump() if llm_result.payload else {},
@@ -913,6 +1113,14 @@ class ContinuousImprovementLabRuntime:
                     "llm_call_id": llm_result.llm_call_id,
                     "status": "ok" if llm_result.ok else "failed",
                     "error": llm_result.error,
+                    "provider": llm_result.provider,
+                    "model": llm_result.model,
+                    "base_url": llm_result.base_url,
+                    "fallback_used": llm_result.fallback_used,
+                    "prompt_tokens_estimate": llm_result.prompt_tokens_estimate,
+                    "context_limit_tokens": llm_result.context_limit_tokens,
+                    "context_compacted": llm_result.context_compacted,
+                    "truncation_report": llm_result.truncation_report,
                 },
             )
 
@@ -967,6 +1175,7 @@ class ContinuousImprovementLabRuntime:
                     "initiatives": len(initiatives),
                 },
             )
+            cooldown_payload = self._activate_group_cooldown(cycle_id=cycle_id, cycle_status=status, mode=mode)
             self._update_runtime(
                 status=RuntimeStatus.IDLE,
                 payload={
@@ -984,6 +1193,9 @@ class ContinuousImprovementLabRuntime:
                             limit=200,
                         )
                     ),
+                    "cooldown_seconds": cooldown_payload["cooldown_seconds"],
+                    "cooldown_until": cooldown_payload["cooldown_until"],
+                    "last_completed_cycle_id": cooldown_payload["last_completed_cycle_id"],
                 },
             )
             return self.store.continuous_improvement_cycle(cycle_id) or {"cycle_id": cycle_id}
@@ -998,11 +1210,23 @@ class ContinuousImprovementLabRuntime:
                 agent="continuous_improvement_lab",
                 event_type="lab_cycle_failed",
                 cycle_id=cycle_id,
-                    "base_url": llm_result.base_url,
-                    "fallback_used": llm_result.fallback_used,
                 payload={"error": str(exc), "error_type": type(exc).__name__},
             )
-            self._update_runtime(status=RuntimeStatus.FAILED, payload={"cycle_id": cycle_id, "error": str(exc)})
+            cooldown_payload = self._activate_group_cooldown(
+                cycle_id=cycle_id,
+                cycle_status=CycleStatus.FAILED.value,
+                mode=mode,
+            )
+            self._update_runtime(
+                status=RuntimeStatus.FAILED,
+                payload={
+                    "cycle_id": cycle_id,
+                    "error": str(exc),
+                    "cooldown_seconds": cooldown_payload["cooldown_seconds"],
+                    "cooldown_until": cooldown_payload["cooldown_until"],
+                    "last_completed_cycle_id": cooldown_payload["last_completed_cycle_id"],
+                },
+            )
             log_system_event(
                 self.settings.logs_dir,
                 "continuous_improvement_lab_cycle_failed",
@@ -1022,10 +1246,6 @@ class ContinuousImprovementLabRuntime:
             agent="OrchestratorAgent",
             event_type="lab_proposals_consolidated",
             cycle_id=cycle_id,
-                    "provider": llm_result.provider,
-                    "model": llm_result.model,
-                    "base_url": llm_result.base_url,
-                    "fallback_used": llm_result.fallback_used,
             payload=stats,
         )
         stored: list[dict[str, Any]] = []
@@ -1038,13 +1258,25 @@ class ContinuousImprovementLabRuntime:
             merged_validations: list[str] = []
             for item in raw.get("required_validations") or []:
                 text = str(item or "").strip().lower()
+                text = self.VALIDATION_ALIASES.get(text, text)
                 if text and text not in merged_validations:
                     merged_validations.append(text)
             for item in experiment_guidance.get(initiative_key, []):
                 text = str(item or "").strip().lower()
+                text = self.VALIDATION_ALIASES.get(text, text)
                 if text and text not in merged_validations:
                     merged_validations.append(text)
             normalized_raw = dict(raw)
+            if normalized_raw.get("proposal_type") in {"RISK_RULE_CHANGE", "PARAMETER_CHANGE", "STRATEGY_RULE_CHANGE"}:
+                for item in self.CHAMPION_CHALLENGER_REQUIRED:
+                    if item not in merged_validations:
+                        merged_validations.append(item)
+                normalized_raw.setdefault("promotion_state", "challenger")
+                normalized_raw.setdefault("evaluation_window_frozen", True)
+                normalized_raw.setdefault(
+                    "next_review_at",
+                    (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+                )
             normalized_raw["required_validations"] = merged_validations
             payload = ImprovementProposalPayload.model_validate(normalized_raw)
             guard = self.guard.assess(payload, self.settings)
@@ -1078,6 +1310,15 @@ class ContinuousImprovementLabRuntime:
                     }
                 )
                 initiative = self.store.continuous_improvement_initiative_by_key(initiative_key)
+            initiative_status = str((initiative or {}).get("status") or "")
+            frozen_conflict = (
+                initiative
+                and payload.evaluation_window_frozen
+                and initiative_status in {"EXPERIMENTING", "VALIDATING", "MONITORING", "READY_TO_APPLY"}
+            )
+            status = guard["status"]
+            if frozen_conflict:
+                status = "WAITING_HUMAN_REVIEW"
             stored_id, inserted = self.store.upsert_continuous_improvement_proposal(
                 {
                     "proposal_id": proposal_id,
@@ -1086,7 +1327,7 @@ class ContinuousImprovementLabRuntime:
                     "proposal_type": payload.proposal_type,
                     "target_component": payload.target_component,
                     "target_identifier": payload.target_identifier,
-                    "status": guard["status"],
+                    "status": status,
                     "priority": self._priority_from_score(int(raw.get("_initiative_score") or 0)),
                     "risk_level": payload.risk_level,
                     "payload": {
@@ -1094,6 +1335,7 @@ class ContinuousImprovementLabRuntime:
                         "initiative_key": initiative_key,
                         "initiative_score": int(raw.get("_initiative_score") or 0),
                         "merged_count": int(raw.get("_merged_count") or 1),
+                        "frozen_conflict": frozen_conflict,
                     },
                     "guard": guard,
                 }
@@ -1300,7 +1542,7 @@ class ContinuousImprovementLabRuntime:
                     validation=validation,
                 )
                 applied_status = applied_change.get("status")
-                if applied_status in {"APPLIED", "ROLLED_BACK", "FAILED", "BLOCKED"}:
+                if applied_status in {"APPLIED", "ROLLED_BACK", "FAILED", "BLOCKED", "REJECTED_BY_TESTS"}:
                     proposal_status = "APPLIED" if applied_status == "APPLIED" else applied_status
                     self.store.update_continuous_improvement_proposal_status(
                         proposal["proposal_id"],
@@ -1332,6 +1574,8 @@ class ContinuousImprovementLabRuntime:
                             "error": applied_change.get("error"),
                         },
                     )
+                    if applied_status == "APPLIED":
+                        self._maybe_start_shadow_window(proposal, cycle_id)
             self._record_agent_event(
                 agent="ValidationAgent",
                 event_type="lab_validation_recorded",
@@ -1369,16 +1613,13 @@ class ContinuousImprovementLabRuntime:
         if validation_status == "READY_TO_APPLY" or objective_status == "READY_TO_APPLY":
             return "READY_TO_APPLY"
         if validation_status == "PASSED" or objective_status == "PASSED":
-            return "WAITING_REVIEW"
-        if validation_status == "WAITING_HUMAN_REVIEW":
-            return "WAITING_REVIEW"
+            return "MONITORING"
         return "VALIDATING"
 
     def _initiative_next_action_from_validation(self, validation_status: str) -> str:
         mapping = {
             "READY_TO_APPLY": "Lista para aplicar con rollback preparado.",
-            "PASSED": "Pendiente de revision humana final.",
-            "WAITING_HUMAN_REVIEW": "Esperar revision humana.",
+            "PASSED": "Monitorizar evidencia adicional o promover automaticamente.",
             "REJECTED": "Cerrar o reformular la iniciativa.",
             "FAILED": "Revisar evidencia y repetir validacion.",
         }

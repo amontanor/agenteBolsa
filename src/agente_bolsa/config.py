@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     )
     openai_model: str = Field(
         default="qwen3.6-27b",
+        validation_alias=AliasChoices("OPENAI_MODEL_NAME", "OPENAI_MODEL", "LLM_MODEL"),
+    )
     llm_primary_preflight_enabled: bool = Field(default=True, alias="LLM_PRIMARY_PREFLIGHT_ENABLED")
     llm_fallback_enabled: bool = Field(default=True, alias="LLM_FALLBACK_ENABLED")
     llm_fallback_api_key: str | None = Field(default=None, alias="LLM_FALLBACK_API_KEY")
@@ -27,18 +29,37 @@ class Settings(BaseSettings):
         default="https://generativelanguage.googleapis.com/v1beta/openai/",
         alias="LLM_FALLBACK_API_BASE",
     )
-    llm_fallback_reasoning_effort: str | None = Field(default="low", alias="LLM_FALLBACK_REASONING_EFFORT")
     llm_fallback_model: str = Field(default="gemini-3.5-flash", alias="LLM_FALLBACK_MODEL")
-        validation_alias=AliasChoices("OPENAI_MODEL_NAME", "OPENAI_MODEL", "LLM_MODEL"),
-    )
+    llm_fallback_reasoning_effort: str | None = Field(default="low", alias="LLM_FALLBACK_REASONING_EFFORT")
+    secondary_review_llm_enabled: bool = Field(default=False, alias="SECONDARY_REVIEW_LLM_ENABLED")
+    secondary_review_llm_model: str = Field(default="", alias="SECONDARY_REVIEW_LLM_MODEL")
     llm_temperature: float = Field(default=0.2, alias="LLM_TEMPERATURE")
     llm_max_tokens: int | None = Field(default=1200, alias="LLM_MAX_TOKENS")
     llm_timeout_seconds: int = Field(default=120, alias="LLM_TIMEOUT_SECONDS")
+
+    # Router LLM por roles (T0.4). Cada rol cae a la cadena por defecto si no se
+    # define modelo/base/key, asi que dejarlos vacios mantiene el comportamiento.
+    llm_role_fast_model: str | None = Field(default=None, alias="LLM_ROLE_FAST_MODEL")
+    llm_role_fast_base_url: str | None = Field(default=None, alias="LLM_ROLE_FAST_BASE_URL")
+    llm_role_fast_api_key: str | None = Field(default=None, alias="LLM_ROLE_FAST_API_KEY")
+    llm_role_fast_max_tokens: int | None = Field(default=None, alias="LLM_ROLE_FAST_MAX_TOKENS")
+    llm_role_decision_model: str | None = Field(default=None, alias="LLM_ROLE_DECISION_MODEL")
+    llm_role_decision_base_url: str | None = Field(default=None, alias="LLM_ROLE_DECISION_BASE_URL")
+    llm_role_decision_api_key: str | None = Field(default=None, alias="LLM_ROLE_DECISION_API_KEY")
+    llm_role_decision_max_tokens: int | None = Field(default=None, alias="LLM_ROLE_DECISION_MAX_TOKENS")
+    llm_role_deep_model: str | None = Field(default=None, alias="LLM_ROLE_DEEP_MODEL")
+    llm_role_deep_base_url: str | None = Field(default=None, alias="LLM_ROLE_DEEP_BASE_URL")
+    llm_role_deep_api_key: str | None = Field(default=None, alias="LLM_ROLE_DEEP_API_KEY")
+    llm_role_deep_max_tokens: int | None = Field(default=None, alias="LLM_ROLE_DEEP_MAX_TOKENS")
     crewai_planning: bool = Field(default=False, alias="CREWAI_PLANNING")
     crew_agent_max_iter: int = Field(default=1, alias="CREW_AGENT_MAX_ITER")
     crew_agent_max_execution_seconds: int = Field(default=120, alias="CREW_AGENT_MAX_EXECUTION_SECONDS")
 
     trading_mode: Literal["paper", "live"] = Field(default="paper", alias="TRADING_MODE")
+    trade_aggressiveness_profile: Literal["conservative", "opportunistic", "aggressive"] = Field(
+        default="opportunistic",
+        alias="TRADE_AGGRESSIVENESS_PROFILE",
+    )
     allow_live_trading: bool = Field(default=False, alias="ALLOW_LIVE_TRADING")
     broker: str = Field(default="alpaca", alias="BROKER")
     alpaca_api_key: str | None = Field(
@@ -66,6 +87,8 @@ class Settings(BaseSettings):
     )
     benchmark_symbol: str = Field(default="SPY", alias="BENCHMARK_SYMBOL")
     market_data_provider: str = Field(default="auto", alias="MARKET_DATA_PROVIDER")
+    live_requires_formal_market_data: bool = Field(default=True, alias="LIVE_REQUIRES_FORMAL_MARKET_DATA")
+    market_regime_policy_enabled: bool = Field(default=True, alias="MARKET_REGIME_POLICY_ENABLED")
 
     max_portfolio_exposure: float = Field(default=0.50, alias="MAX_PORTFOLIO_EXPOSURE")
     max_position_exposure: float = Field(default=0.05, alias="MAX_POSITION_EXPOSURE")
@@ -131,11 +154,11 @@ class Settings(BaseSettings):
         alias="ENTRY_QUALITY_ORDERLY_BREAKOUT_MIN_VOLUME_Z",
     )
     entry_quality_momentum_confirmation_max_sma20_distance: float = Field(
-        default=0.22,
+        default=0.26,
         alias="ENTRY_QUALITY_MOMENTUM_CONFIRMATION_MAX_SMA20_DISTANCE",
     )
     entry_quality_momentum_confirmation_max_rsi: float = Field(
-        default=84.0,
+        default=88.0,
         alias="ENTRY_QUALITY_MOMENTUM_CONFIRMATION_MAX_RSI",
     )
     entry_quality_momentum_confirmation_min_score: int = Field(
@@ -143,13 +166,496 @@ class Settings(BaseSettings):
         alias="ENTRY_QUALITY_MOMENTUM_CONFIRMATION_MIN_SCORE",
     )
     entry_quality_momentum_confirmation_min_volume_z: float = Field(
-        default=0.75,
+        default=0.50,
         alias="ENTRY_QUALITY_MOMENTUM_CONFIRMATION_MIN_VOLUME_Z",
     )
     entry_quality_momentum_confirmation_min_return_20d: float = Field(
         default=0.18,
         alias="ENTRY_QUALITY_MOMENTUM_CONFIRMATION_MIN_RETURN_20D",
     )
+    entry_quality_breakout_continuation_max_sma20_distance: float = Field(
+        default=0.27,
+        alias="ENTRY_QUALITY_BREAKOUT_CONTINUATION_MAX_SMA20_DISTANCE",
+    )
+    entry_quality_breakout_continuation_max_rsi: float = Field(
+        default=84.0,
+        alias="ENTRY_QUALITY_BREAKOUT_CONTINUATION_MAX_RSI",
+    )
+    entry_quality_breakout_continuation_min_score: int = Field(
+        default=16,
+        alias="ENTRY_QUALITY_BREAKOUT_CONTINUATION_MIN_SCORE",
+    )
+    entry_quality_breakout_continuation_min_volume_z: float = Field(
+        default=1.5,
+        alias="ENTRY_QUALITY_BREAKOUT_CONTINUATION_MIN_VOLUME_Z",
+    )
+    entry_quality_breakout_continuation_min_relative_return_20d: float = Field(
+        default=0.12,
+        alias="ENTRY_QUALITY_BREAKOUT_CONTINUATION_MIN_RELATIVE_RETURN_20D",
+    )
+    entry_quality_fallback_constructive_extension_enabled: bool = Field(
+        default=True,
+        alias="ENTRY_QUALITY_FALLBACK_CONSTRUCTIVE_EXTENSION_ENABLED",
+    )
+    entry_quality_fallback_constructive_extension_max_selection_rank: int = Field(
+        default=3,
+        alias="ENTRY_QUALITY_FALLBACK_CONSTRUCTIVE_EXTENSION_MAX_SELECTION_RANK",
+    )
+    entry_quality_fallback_constructive_extension_min_score: int = Field(
+        default=13,
+        alias="ENTRY_QUALITY_FALLBACK_CONSTRUCTIVE_EXTENSION_MIN_SCORE",
+    )
+    entry_quality_fallback_constructive_extension_min_return_20d: float = Field(
+        default=0.20,
+        alias="ENTRY_QUALITY_FALLBACK_CONSTRUCTIVE_EXTENSION_MIN_RETURN_20D",
+    )
+    entry_quality_fallback_constructive_extension_min_rsi: float = Field(
+        default=72.0,
+        alias="ENTRY_QUALITY_FALLBACK_CONSTRUCTIVE_EXTENSION_MIN_RSI",
+    )
+    entry_quality_fallback_constructive_extension_max_sma20_distance: float = Field(
+        default=0.13,
+        alias="ENTRY_QUALITY_FALLBACK_CONSTRUCTIVE_EXTENSION_MAX_SMA20_DISTANCE",
+    )
+    entry_quality_fallback_constructive_extension_min_volume_z: float = Field(
+        default=0.5,
+        alias="ENTRY_QUALITY_FALLBACK_CONSTRUCTIVE_EXTENSION_MIN_VOLUME_Z",
+    )
+    entry_quality_fallback_constructive_extension_min_bullish_patterns: int = Field(
+        default=1,
+        alias="ENTRY_QUALITY_FALLBACK_CONSTRUCTIVE_EXTENSION_MIN_BULLISH_PATTERNS",
+    )
+    entry_quality_fallback_momentum_extension_enabled: bool = Field(
+        default=True,
+        alias="ENTRY_QUALITY_FALLBACK_MOMENTUM_EXTENSION_ENABLED",
+    )
+    entry_quality_fallback_momentum_extension_max_selection_rank: int = Field(
+        default=5,
+        alias="ENTRY_QUALITY_FALLBACK_MOMENTUM_EXTENSION_MAX_SELECTION_RANK",
+    )
+    entry_quality_fallback_momentum_extension_min_score: int = Field(
+        default=16,
+        alias="ENTRY_QUALITY_FALLBACK_MOMENTUM_EXTENSION_MIN_SCORE",
+    )
+    entry_quality_fallback_momentum_extension_min_return_20d: float = Field(
+        default=0.30,
+        alias="ENTRY_QUALITY_FALLBACK_MOMENTUM_EXTENSION_MIN_RETURN_20D",
+    )
+    entry_quality_fallback_momentum_extension_min_rsi: float = Field(
+        default=80.0,
+        alias="ENTRY_QUALITY_FALLBACK_MOMENTUM_EXTENSION_MIN_RSI",
+    )
+    entry_quality_fallback_momentum_extension_max_rsi: float = Field(
+        default=85.0,
+        alias="ENTRY_QUALITY_FALLBACK_MOMENTUM_EXTENSION_MAX_RSI",
+    )
+    entry_quality_fallback_momentum_extension_max_sma20_distance: float = Field(
+        default=0.30,
+        alias="ENTRY_QUALITY_FALLBACK_MOMENTUM_EXTENSION_MAX_SMA20_DISTANCE",
+    )
+    entry_quality_fallback_momentum_extension_min_volume_z: float = Field(
+        default=0.0,
+        alias="ENTRY_QUALITY_FALLBACK_MOMENTUM_EXTENSION_MIN_VOLUME_Z",
+    )
+    entry_quality_fallback_momentum_extension_min_bullish_patterns: int = Field(
+        default=1,
+        alias="ENTRY_QUALITY_FALLBACK_MOMENTUM_EXTENSION_MIN_BULLISH_PATTERNS",
+    )
+    entry_quality_fallback_weak_volume_momentum_extension_enabled: bool = Field(
+        default=True,
+        alias="ENTRY_QUALITY_FALLBACK_WEAK_VOLUME_MOMENTUM_EXTENSION_ENABLED",
+    )
+    entry_quality_fallback_weak_volume_momentum_extension_max_selection_rank: int = Field(
+        default=12,
+        alias="ENTRY_QUALITY_FALLBACK_WEAK_VOLUME_MOMENTUM_EXTENSION_MAX_SELECTION_RANK",
+    )
+    entry_quality_fallback_weak_volume_momentum_extension_min_score: int = Field(
+        default=15,
+        alias="ENTRY_QUALITY_FALLBACK_WEAK_VOLUME_MOMENTUM_EXTENSION_MIN_SCORE",
+    )
+    entry_quality_fallback_weak_volume_momentum_extension_min_return_20d: float = Field(
+        default=0.30,
+        alias="ENTRY_QUALITY_FALLBACK_WEAK_VOLUME_MOMENTUM_EXTENSION_MIN_RETURN_20D",
+    )
+    entry_quality_fallback_weak_volume_momentum_extension_min_rsi: float = Field(
+        default=65.0,
+        alias="ENTRY_QUALITY_FALLBACK_WEAK_VOLUME_MOMENTUM_EXTENSION_MIN_RSI",
+    )
+    entry_quality_fallback_weak_volume_momentum_extension_max_rsi: float = Field(
+        default=82.0,
+        alias="ENTRY_QUALITY_FALLBACK_WEAK_VOLUME_MOMENTUM_EXTENSION_MAX_RSI",
+    )
+    entry_quality_fallback_weak_volume_momentum_extension_min_sma20_distance: float = Field(
+        default=0.12,
+        alias="ENTRY_QUALITY_FALLBACK_WEAK_VOLUME_MOMENTUM_EXTENSION_MIN_SMA20_DISTANCE",
+    )
+    entry_quality_fallback_weak_volume_momentum_extension_max_sma20_distance: float = Field(
+        default=0.22,
+        alias="ENTRY_QUALITY_FALLBACK_WEAK_VOLUME_MOMENTUM_EXTENSION_MAX_SMA20_DISTANCE",
+    )
+    entry_quality_fallback_weak_volume_momentum_extension_min_volume_z: float = Field(
+        default=-2.0,
+        alias="ENTRY_QUALITY_FALLBACK_WEAK_VOLUME_MOMENTUM_EXTENSION_MIN_VOLUME_Z",
+    )
+    entry_quality_fallback_weak_volume_momentum_extension_max_volume_z: float = Field(
+        default=0.0,
+        alias="ENTRY_QUALITY_FALLBACK_WEAK_VOLUME_MOMENTUM_EXTENSION_MAX_VOLUME_Z",
+    )
+    entry_quality_fallback_weak_volume_momentum_extension_min_bullish_patterns: int = Field(
+        default=1,
+        alias="ENTRY_QUALITY_FALLBACK_WEAK_VOLUME_MOMENTUM_EXTENSION_MIN_BULLISH_PATTERNS",
+    )
+    entry_quality_fallback_relative_strength_pullback_extension_enabled: bool = Field(
+        default=True,
+        alias="ENTRY_QUALITY_FALLBACK_RELATIVE_STRENGTH_PULLBACK_EXTENSION_ENABLED",
+    )
+    entry_quality_fallback_relative_strength_pullback_extension_max_selection_rank: int = Field(
+        default=10,
+        alias="ENTRY_QUALITY_FALLBACK_RELATIVE_STRENGTH_PULLBACK_EXTENSION_MAX_SELECTION_RANK",
+    )
+    entry_quality_fallback_relative_strength_pullback_extension_min_score: int = Field(
+        default=15,
+        alias="ENTRY_QUALITY_FALLBACK_RELATIVE_STRENGTH_PULLBACK_EXTENSION_MIN_SCORE",
+    )
+    entry_quality_fallback_relative_strength_pullback_extension_min_return_20d: float = Field(
+        default=0.30,
+        alias="ENTRY_QUALITY_FALLBACK_RELATIVE_STRENGTH_PULLBACK_EXTENSION_MIN_RETURN_20D",
+    )
+    entry_quality_fallback_relative_strength_pullback_extension_max_return_20d: float = Field(
+        default=0.34,
+        alias="ENTRY_QUALITY_FALLBACK_RELATIVE_STRENGTH_PULLBACK_EXTENSION_MAX_RETURN_20D",
+    )
+    entry_quality_fallback_relative_strength_pullback_extension_min_relative_return_20d: float = Field(
+        default=0.24,
+        alias="ENTRY_QUALITY_FALLBACK_RELATIVE_STRENGTH_PULLBACK_EXTENSION_MIN_RELATIVE_RETURN_20D",
+    )
+    entry_quality_fallback_relative_strength_pullback_extension_max_relative_return_20d: float = Field(
+        default=0.28,
+        alias="ENTRY_QUALITY_FALLBACK_RELATIVE_STRENGTH_PULLBACK_EXTENSION_MAX_RELATIVE_RETURN_20D",
+    )
+    entry_quality_fallback_relative_strength_pullback_extension_min_rsi: float = Field(
+        default=88.0,
+        alias="ENTRY_QUALITY_FALLBACK_RELATIVE_STRENGTH_PULLBACK_EXTENSION_MIN_RSI",
+    )
+    entry_quality_fallback_relative_strength_pullback_extension_max_rsi: float = Field(
+        default=90.0,
+        alias="ENTRY_QUALITY_FALLBACK_RELATIVE_STRENGTH_PULLBACK_EXTENSION_MAX_RSI",
+    )
+    entry_quality_fallback_relative_strength_pullback_extension_min_sma20_distance: float = Field(
+        default=0.18,
+        alias="ENTRY_QUALITY_FALLBACK_RELATIVE_STRENGTH_PULLBACK_EXTENSION_MIN_SMA20_DISTANCE",
+    )
+    entry_quality_fallback_relative_strength_pullback_extension_max_sma20_distance: float = Field(
+        default=0.19,
+        alias="ENTRY_QUALITY_FALLBACK_RELATIVE_STRENGTH_PULLBACK_EXTENSION_MAX_SMA20_DISTANCE",
+    )
+    entry_quality_fallback_relative_strength_pullback_extension_min_volume_z: float = Field(
+        default=-1.0,
+        alias="ENTRY_QUALITY_FALLBACK_RELATIVE_STRENGTH_PULLBACK_EXTENSION_MIN_VOLUME_Z",
+    )
+    entry_quality_fallback_relative_strength_pullback_extension_max_volume_z: float = Field(
+        default=0.0,
+        alias="ENTRY_QUALITY_FALLBACK_RELATIVE_STRENGTH_PULLBACK_EXTENSION_MAX_VOLUME_Z",
+    )
+    entry_quality_fallback_relative_strength_pullback_extension_min_bullish_patterns: int = Field(
+        default=1,
+        alias="ENTRY_QUALITY_FALLBACK_RELATIVE_STRENGTH_PULLBACK_EXTENSION_MIN_BULLISH_PATTERNS",
+    )
+    entry_quality_fallback_leader_pullback_extension_enabled: bool = Field(
+        default=True,
+        alias="ENTRY_QUALITY_FALLBACK_LEADER_PULLBACK_EXTENSION_ENABLED",
+    )
+    entry_quality_fallback_leader_pullback_extension_max_selection_rank: int = Field(
+        default=8,
+        alias="ENTRY_QUALITY_FALLBACK_LEADER_PULLBACK_EXTENSION_MAX_SELECTION_RANK",
+    )
+    entry_quality_fallback_leader_pullback_extension_min_score: int = Field(
+        default=15,
+        alias="ENTRY_QUALITY_FALLBACK_LEADER_PULLBACK_EXTENSION_MIN_SCORE",
+    )
+    entry_quality_fallback_leader_pullback_extension_min_return_20d: float = Field(
+        default=0.40,
+        alias="ENTRY_QUALITY_FALLBACK_LEADER_PULLBACK_EXTENSION_MIN_RETURN_20D",
+    )
+    entry_quality_fallback_leader_pullback_extension_max_return_20d: float = Field(
+        default=0.46,
+        alias="ENTRY_QUALITY_FALLBACK_LEADER_PULLBACK_EXTENSION_MAX_RETURN_20D",
+    )
+    entry_quality_fallback_leader_pullback_extension_min_rsi: float = Field(
+        default=75.0,
+        alias="ENTRY_QUALITY_FALLBACK_LEADER_PULLBACK_EXTENSION_MIN_RSI",
+    )
+    entry_quality_fallback_leader_pullback_extension_max_rsi: float = Field(
+        default=82.0,
+        alias="ENTRY_QUALITY_FALLBACK_LEADER_PULLBACK_EXTENSION_MAX_RSI",
+    )
+    entry_quality_fallback_leader_pullback_extension_min_sma20_distance: float = Field(
+        default=0.25,
+        alias="ENTRY_QUALITY_FALLBACK_LEADER_PULLBACK_EXTENSION_MIN_SMA20_DISTANCE",
+    )
+    entry_quality_fallback_leader_pullback_extension_max_sma20_distance: float = Field(
+        default=0.28,
+        alias="ENTRY_QUALITY_FALLBACK_LEADER_PULLBACK_EXTENSION_MAX_SMA20_DISTANCE",
+    )
+    entry_quality_fallback_leader_pullback_extension_min_volume_z: float = Field(
+        default=-2.0,
+        alias="ENTRY_QUALITY_FALLBACK_LEADER_PULLBACK_EXTENSION_MIN_VOLUME_Z",
+    )
+    entry_quality_fallback_leader_pullback_extension_max_volume_z: float = Field(
+        default=0.0,
+        alias="ENTRY_QUALITY_FALLBACK_LEADER_PULLBACK_EXTENSION_MAX_VOLUME_Z",
+    )
+    entry_quality_fallback_leader_pullback_extension_min_bullish_patterns: int = Field(
+        default=1,
+        alias="ENTRY_QUALITY_FALLBACK_LEADER_PULLBACK_EXTENSION_MIN_BULLISH_PATTERNS",
+    )
+    entry_quality_fallback_top_long_follow_through_enabled: bool = Field(
+        default=True,
+        alias="ENTRY_QUALITY_FALLBACK_TOP_LONG_FOLLOW_THROUGH_ENABLED",
+    )
+    entry_quality_fallback_top_long_follow_through_max_selection_rank: int = Field(
+        default=20,
+        alias="ENTRY_QUALITY_FALLBACK_TOP_LONG_FOLLOW_THROUGH_MAX_SELECTION_RANK",
+    )
+    entry_quality_fallback_top_long_follow_through_min_score: int = Field(
+        default=15,
+        alias="ENTRY_QUALITY_FALLBACK_TOP_LONG_FOLLOW_THROUGH_MIN_SCORE",
+    )
+    entry_quality_fallback_top_long_follow_through_min_return_20d: float = Field(
+        default=0.14,
+        alias="ENTRY_QUALITY_FALLBACK_TOP_LONG_FOLLOW_THROUGH_MIN_RETURN_20D",
+    )
+    entry_quality_fallback_top_long_follow_through_max_return_20d: float = Field(
+        default=0.18,
+        alias="ENTRY_QUALITY_FALLBACK_TOP_LONG_FOLLOW_THROUGH_MAX_RETURN_20D",
+    )
+    entry_quality_fallback_top_long_follow_through_min_rsi: float = Field(
+        default=66.0,
+        alias="ENTRY_QUALITY_FALLBACK_TOP_LONG_FOLLOW_THROUGH_MIN_RSI",
+    )
+    entry_quality_fallback_top_long_follow_through_max_rsi: float = Field(
+        default=72.0,
+        alias="ENTRY_QUALITY_FALLBACK_TOP_LONG_FOLLOW_THROUGH_MAX_RSI",
+    )
+    entry_quality_fallback_top_long_follow_through_min_volume_z: float = Field(
+        default=-2.75,
+        alias="ENTRY_QUALITY_FALLBACK_TOP_LONG_FOLLOW_THROUGH_MIN_VOLUME_Z",
+    )
+    entry_quality_fallback_top_long_follow_through_max_volume_z: float = Field(
+        default=0.0,
+        alias="ENTRY_QUALITY_FALLBACK_TOP_LONG_FOLLOW_THROUGH_MAX_VOLUME_Z",
+    )
+    entry_quality_fallback_top_long_follow_through_min_bullish_patterns: int = Field(
+        default=1,
+        alias="ENTRY_QUALITY_FALLBACK_TOP_LONG_FOLLOW_THROUGH_MIN_BULLISH_PATTERNS",
+    )
+    entry_quality_prior_error_volume_confirmation_override_enabled: bool = Field(
+        default=True,
+        alias="ENTRY_QUALITY_PRIOR_ERROR_VOLUME_CONFIRMATION_OVERRIDE_ENABLED",
+    )
+    entry_quality_prior_error_volume_confirmation_override_max_selection_rank: int = Field(
+        default=5,
+        alias="ENTRY_QUALITY_PRIOR_ERROR_VOLUME_CONFIRMATION_OVERRIDE_MAX_SELECTION_RANK",
+    )
+    entry_quality_prior_error_volume_confirmation_override_min_score: int = Field(
+        default=16,
+        alias="ENTRY_QUALITY_PRIOR_ERROR_VOLUME_CONFIRMATION_OVERRIDE_MIN_SCORE",
+    )
+    entry_quality_prior_error_volume_confirmation_override_min_return_20d: float = Field(
+        default=0.30,
+        alias="ENTRY_QUALITY_PRIOR_ERROR_VOLUME_CONFIRMATION_OVERRIDE_MIN_RETURN_20D",
+    )
+    entry_quality_prior_error_volume_confirmation_override_min_rsi: float = Field(
+        default=80.0,
+        alias="ENTRY_QUALITY_PRIOR_ERROR_VOLUME_CONFIRMATION_OVERRIDE_MIN_RSI",
+    )
+    entry_quality_prior_error_volume_confirmation_override_max_rsi: float = Field(
+        default=85.0,
+        alias="ENTRY_QUALITY_PRIOR_ERROR_VOLUME_CONFIRMATION_OVERRIDE_MAX_RSI",
+    )
+    entry_quality_prior_error_volume_confirmation_override_min_volume_z: float = Field(
+        default=1.5,
+        alias="ENTRY_QUALITY_PRIOR_ERROR_VOLUME_CONFIRMATION_OVERRIDE_MIN_VOLUME_Z",
+    )
+    entry_quality_prior_error_volume_confirmation_override_min_bullish_patterns: int = Field(
+        default=1,
+        alias="ENTRY_QUALITY_PRIOR_ERROR_VOLUME_CONFIRMATION_OVERRIDE_MIN_BULLISH_PATTERNS",
+    )
+    entry_quality_low_score_volume_rebound_override_enabled: bool = Field(
+        default=True,
+        alias="ENTRY_QUALITY_LOW_SCORE_VOLUME_REBOUND_OVERRIDE_ENABLED",
+    )
+    entry_quality_low_score_volume_rebound_min_score: int = Field(
+        default=8,
+        alias="ENTRY_QUALITY_LOW_SCORE_VOLUME_REBOUND_MIN_SCORE",
+    )
+    entry_quality_low_score_volume_rebound_max_score: int = Field(
+        default=9,
+        alias="ENTRY_QUALITY_LOW_SCORE_VOLUME_REBOUND_MAX_SCORE",
+    )
+    entry_quality_low_score_volume_rebound_max_selection_rank: int = Field(
+        default=8,
+        alias="ENTRY_QUALITY_LOW_SCORE_VOLUME_REBOUND_MAX_SELECTION_RANK",
+    )
+    entry_quality_low_score_volume_rebound_min_return_20d: float = Field(
+        default=0.08,
+        alias="ENTRY_QUALITY_LOW_SCORE_VOLUME_REBOUND_MIN_RETURN_20D",
+    )
+    entry_quality_low_score_volume_rebound_max_return_20d: float = Field(
+        default=0.14,
+        alias="ENTRY_QUALITY_LOW_SCORE_VOLUME_REBOUND_MAX_RETURN_20D",
+    )
+    entry_quality_low_score_volume_rebound_min_rsi: float = Field(
+        default=35.0,
+        alias="ENTRY_QUALITY_LOW_SCORE_VOLUME_REBOUND_MIN_RSI",
+    )
+    entry_quality_low_score_volume_rebound_max_rsi: float = Field(
+        default=42.0,
+        alias="ENTRY_QUALITY_LOW_SCORE_VOLUME_REBOUND_MAX_RSI",
+    )
+    entry_quality_low_score_volume_rebound_min_volume_z: float = Field(
+        default=1.0,
+        alias="ENTRY_QUALITY_LOW_SCORE_VOLUME_REBOUND_MIN_VOLUME_Z",
+    )
+    entry_score_v2_enabled: bool = Field(default=True, alias="ENTRY_SCORE_V2_ENABLED")
+    entry_score_v2_min: float = Field(default=0.52, alias="ENTRY_SCORE_V2_MIN")
+    entry_score_v2_micro_min: float = Field(default=0.46, alias="ENTRY_SCORE_V2_MICRO_MIN")
+    entry_score_v2_min_reward_risk: float = Field(default=1.5, alias="ENTRY_SCORE_V2_MIN_REWARD_RISK")
+    entry_score_v2_reward_risk_margin_override_enabled: bool = Field(
+        default=True,
+        alias="ENTRY_SCORE_V2_REWARD_RISK_MARGIN_OVERRIDE_ENABLED",
+    )
+    entry_score_v2_reward_risk_margin_tolerance: float = Field(
+        default=0.02,
+        alias="ENTRY_SCORE_V2_REWARD_RISK_MARGIN_TOLERANCE",
+    )
+    entry_score_v2_reward_risk_override_max_selection_rank: int = Field(
+        default=8,
+        alias="ENTRY_SCORE_V2_REWARD_RISK_OVERRIDE_MAX_SELECTION_RANK",
+    )
+    entry_score_v2_reward_risk_override_min_score: int = Field(
+        default=13,
+        alias="ENTRY_SCORE_V2_REWARD_RISK_OVERRIDE_MIN_SCORE",
+    )
+    entry_score_v2_reward_risk_override_min_return_20d: float = Field(
+        default=0.20,
+        alias="ENTRY_SCORE_V2_REWARD_RISK_OVERRIDE_MIN_RETURN_20D",
+    )
+    entry_score_v2_reward_risk_override_min_rsi: float = Field(
+        default=74.0,
+        alias="ENTRY_SCORE_V2_REWARD_RISK_OVERRIDE_MIN_RSI",
+    )
+    entry_score_v2_reward_risk_override_max_sma20_distance: float = Field(
+        default=0.30,
+        alias="ENTRY_SCORE_V2_REWARD_RISK_OVERRIDE_MAX_SMA20_DISTANCE",
+    )
+    entry_score_v2_reward_risk_follow_through_override_enabled: bool = Field(
+        default=True,
+        alias="ENTRY_SCORE_V2_REWARD_RISK_FOLLOW_THROUGH_OVERRIDE_ENABLED",
+    )
+    entry_score_v2_reward_risk_follow_through_max_selection_rank: int = Field(
+        default=15,
+        alias="ENTRY_SCORE_V2_REWARD_RISK_FOLLOW_THROUGH_MAX_SELECTION_RANK",
+    )
+    entry_score_v2_reward_risk_follow_through_min_score: int = Field(
+        default=14,
+        alias="ENTRY_SCORE_V2_REWARD_RISK_FOLLOW_THROUGH_MIN_SCORE",
+    )
+    entry_score_v2_reward_risk_follow_through_min_return_20d: float = Field(
+        default=0.06,
+        alias="ENTRY_SCORE_V2_REWARD_RISK_FOLLOW_THROUGH_MIN_RETURN_20D",
+    )
+    entry_score_v2_reward_risk_follow_through_min_rsi: float = Field(
+        default=65.0,
+        alias="ENTRY_SCORE_V2_REWARD_RISK_FOLLOW_THROUGH_MIN_RSI",
+    )
+    entry_score_v2_reward_risk_follow_through_max_sma20_distance: float = Field(
+        default=0.10,
+        alias="ENTRY_SCORE_V2_REWARD_RISK_FOLLOW_THROUGH_MAX_SMA20_DISTANCE",
+    )
+    entry_score_v2_reward_risk_follow_through_min_confirmed_patterns: int = Field(
+        default=2,
+        alias="ENTRY_SCORE_V2_REWARD_RISK_FOLLOW_THROUGH_MIN_CONFIRMED_PATTERNS",
+    )
+    entry_score_v2_late_constructive_follow_through_override_enabled: bool = Field(
+        default=True,
+        alias="ENTRY_SCORE_V2_LATE_CONSTRUCTIVE_FOLLOW_THROUGH_OVERRIDE_ENABLED",
+    )
+    entry_score_v2_late_constructive_follow_through_min_selection_rank: int = Field(
+        default=16,
+        alias="ENTRY_SCORE_V2_LATE_CONSTRUCTIVE_FOLLOW_THROUGH_MIN_SELECTION_RANK",
+    )
+    entry_score_v2_late_constructive_follow_through_max_selection_rank: int = Field(
+        default=20,
+        alias="ENTRY_SCORE_V2_LATE_CONSTRUCTIVE_FOLLOW_THROUGH_MAX_SELECTION_RANK",
+    )
+    entry_score_v2_late_constructive_follow_through_min_score: int = Field(
+        default=14,
+        alias="ENTRY_SCORE_V2_LATE_CONSTRUCTIVE_FOLLOW_THROUGH_MIN_SCORE",
+    )
+    entry_score_v2_late_constructive_follow_through_min_return_20d: float = Field(
+        default=0.06,
+        alias="ENTRY_SCORE_V2_LATE_CONSTRUCTIVE_FOLLOW_THROUGH_MIN_RETURN_20D",
+    )
+    entry_score_v2_late_constructive_follow_through_max_return_20d: float = Field(
+        default=0.09,
+        alias="ENTRY_SCORE_V2_LATE_CONSTRUCTIVE_FOLLOW_THROUGH_MAX_RETURN_20D",
+    )
+    entry_score_v2_late_constructive_follow_through_min_rsi: float = Field(
+        default=65.0,
+        alias="ENTRY_SCORE_V2_LATE_CONSTRUCTIVE_FOLLOW_THROUGH_MIN_RSI",
+    )
+    entry_score_v2_late_constructive_follow_through_max_rsi: float = Field(
+        default=72.0,
+        alias="ENTRY_SCORE_V2_LATE_CONSTRUCTIVE_FOLLOW_THROUGH_MAX_RSI",
+    )
+    entry_score_v2_late_constructive_follow_through_min_volume_z: float = Field(
+        default=-2.2,
+        alias="ENTRY_SCORE_V2_LATE_CONSTRUCTIVE_FOLLOW_THROUGH_MIN_VOLUME_Z",
+    )
+    entry_score_v2_late_constructive_follow_through_max_volume_z: float = Field(
+        default=-1.0,
+        alias="ENTRY_SCORE_V2_LATE_CONSTRUCTIVE_FOLLOW_THROUGH_MAX_VOLUME_Z",
+    )
+    entry_quality_missing_relative_strength_follow_through_enabled: bool = Field(
+        default=True,
+        alias="ENTRY_QUALITY_MISSING_RELATIVE_STRENGTH_FOLLOW_THROUGH_ENABLED",
+    )
+    entry_quality_missing_relative_strength_follow_through_max_selection_rank: int = Field(
+        default=18,
+        alias="ENTRY_QUALITY_MISSING_RELATIVE_STRENGTH_FOLLOW_THROUGH_MAX_SELECTION_RANK",
+    )
+    entry_quality_missing_relative_strength_follow_through_min_score: int = Field(
+        default=15,
+        alias="ENTRY_QUALITY_MISSING_RELATIVE_STRENGTH_FOLLOW_THROUGH_MIN_SCORE",
+    )
+    entry_quality_missing_relative_strength_follow_through_min_return_20d: float = Field(
+        default=0.11,
+        alias="ENTRY_QUALITY_MISSING_RELATIVE_STRENGTH_FOLLOW_THROUGH_MIN_RETURN_20D",
+    )
+    entry_quality_missing_relative_strength_follow_through_min_rsi: float = Field(
+        default=66.0,
+        alias="ENTRY_QUALITY_MISSING_RELATIVE_STRENGTH_FOLLOW_THROUGH_MIN_RSI",
+    )
+    entry_quality_missing_relative_strength_follow_through_max_sma20_distance: float = Field(
+        default=0.10,
+        alias="ENTRY_QUALITY_MISSING_RELATIVE_STRENGTH_FOLLOW_THROUGH_MAX_SMA20_DISTANCE",
+    )
+    entry_quality_missing_relative_strength_follow_through_min_confirmed_patterns: int = Field(
+        default=2,
+        alias="ENTRY_QUALITY_MISSING_RELATIVE_STRENGTH_FOLLOW_THROUGH_MIN_CONFIRMED_PATTERNS",
+    )
+    micro_experiment_size_multiplier: float = Field(default=0.50, alias="MICRO_EXPERIMENT_SIZE_MULTIPLIER")
+    backtest_gate_paper_soft_override_enabled: bool = Field(
+        default=True,
+        alias="BACKTEST_GATE_PAPER_SOFT_OVERRIDE_ENABLED",
+    )
+    exit_policy_v2_enabled: bool = Field(default=True, alias="EXIT_POLICY_V2_ENABLED")
+    exit_policy_v2_partial_r: float = Field(default=1.0, alias="EXIT_POLICY_V2_PARTIAL_R")
+    exit_policy_v2_trailing_r: float = Field(default=2.0, alias="EXIT_POLICY_V2_TRAILING_R")
+    exit_policy_v2_trailing_giveback_r: float = Field(default=1.0, alias="EXIT_POLICY_V2_TRAILING_GIVEBACK_R")
+    exit_policy_v2_time_stop_days: int = Field(default=5, alias="EXIT_POLICY_V2_TIME_STOP_DAYS")
+    exit_policy_v2_time_stop_min_return: float = Field(default=0.0, alias="EXIT_POLICY_V2_TIME_STOP_MIN_RETURN")
     auto_paper_trading: bool = Field(default=False, alias="AUTO_PAPER_TRADING")
     require_human_approval: bool = Field(default=True, alias="REQUIRE_HUMAN_APPROVAL")
     deterministic_trade_fallback_enabled: bool = Field(
@@ -158,8 +664,8 @@ class Settings(BaseSettings):
     )
     max_risk_per_trade: float = Field(default=0.01, alias="MAX_RISK_PER_TRADE")
     max_total_open_risk: float = Field(default=0.03, alias="MAX_TOTAL_OPEN_RISK")
-    max_orders_per_cycle: int = Field(default=3, alias="MAX_ORDERS_PER_CYCLE")
-    max_daily_buy_orders: int = Field(default=3, alias="MAX_DAILY_BUY_ORDERS")
+    max_orders_per_cycle: int = Field(default=4, alias="MAX_ORDERS_PER_CYCLE")
+    max_daily_buy_orders: int = Field(default=4, alias="MAX_DAILY_BUY_ORDERS")
     min_order_notional: float = Field(default=100.0, alias="MIN_ORDER_NOTIONAL")
     allow_position_adds: bool = Field(default=False, alias="ALLOW_POSITION_ADDS")
     min_llm_confidence_to_trade: float = Field(default=0.65, alias="MIN_LLM_CONFIDENCE_TO_TRADE")
@@ -198,21 +704,95 @@ class Settings(BaseSettings):
     improvement_llm_temperature: float = Field(default=0.2, alias="IMPROVEMENT_LLM_TEMPERATURE")
     improvement_llm_max_tokens: int = Field(default=6000, alias="IMPROVEMENT_LLM_MAX_TOKENS")
     improvement_llm_timeout_seconds: int = Field(default=120, alias="IMPROVEMENT_LLM_TIMEOUT_SECONDS")
+    improvement_llm_retries: int = Field(default=2, alias="IMPROVEMENT_LLM_RETRIES")
     improvement_llm_local_fallback_enabled: bool = Field(
         default=True,
         alias="IMPROVEMENT_LLM_LOCAL_FALLBACK_ENABLED",
     )
-    improvement_llm_retries: int = Field(default=2, alias="IMPROVEMENT_LLM_RETRIES")
-    improvement_dry_run: bool = Field(default=True, alias="IMPROVEMENT_DRY_RUN")
-    allow_auto_apply_improvements: bool = Field(default=False, alias="ALLOW_AUTO_APPLY_IMPROVEMENTS")
+    improvement_llm_context_target_tokens: int = Field(
+        default=40000,
+        alias="IMPROVEMENT_LLM_CONTEXT_TARGET_TOKENS",
+    )
+    improvement_llm_context_hard_limit_tokens: int = Field(
+        default=55000,
+        alias="IMPROVEMENT_LLM_CONTEXT_HARD_LIMIT_TOKENS",
+    )
+    improvement_llm_local_context_target_tokens: int = Field(
+        default=30000,
+        alias="IMPROVEMENT_LLM_LOCAL_CONTEXT_TARGET_TOKENS",
+    )
+    improvement_llm_local_context_hard_limit_tokens: int = Field(
+        default=50000,
+        alias="IMPROVEMENT_LLM_LOCAL_CONTEXT_HARD_LIMIT_TOKENS",
+    )
+    improvement_dry_run: bool = Field(default=False, alias="IMPROVEMENT_DRY_RUN")
+    allow_auto_apply_improvements: bool = Field(default=True, alias="ALLOW_AUTO_APPLY_IMPROVEMENTS")
     require_human_approval_for_code_changes: bool = Field(
-        default=True,
+        default=False,
         alias="REQUIRE_HUMAN_APPROVAL_FOR_CODE_CHANGES",
     )
     require_human_approval_for_high_risk: bool = Field(
         default=True,
         alias="REQUIRE_HUMAN_APPROVAL_FOR_HIGH_RISK",
     )
+    ci_sandbox_enabled: bool = Field(default=True, alias="CI_SANDBOX_ENABLED")
+    ci_sandbox_full_suite: bool = Field(default=True, alias="CI_SANDBOX_FULL_SUITE")
+    ci_sandbox_validate_timeout_seconds: int = Field(
+        default=900,
+        alias="CI_SANDBOX_VALIDATE_TIMEOUT_SECONDS",
+    )
+    # Watchdog de cambios aplicados (T0.5): vigila las metricas tras cada cambio
+    # promovido y revierte solo si empeoran.
+    change_watchdog_enabled: bool = Field(default=True, alias="CHANGE_WATCHDOG_ENABLED")
+    change_watchdog_window_sessions: int = Field(default=5, alias="CHANGE_WATCHDOG_WINDOW_SESSIONS")
+    change_watchdog_max_iq_drop: float = Field(default=10.0, alias="CHANGE_WATCHDOG_MAX_IQ_DROP")
+    change_watchdog_max_hit_rate_drop: float = Field(default=0.15, alias="CHANGE_WATCHDOG_MAX_HIT_RATE_DROP")
+    change_watchdog_min_trades: int = Field(default=5, alias="CHANGE_WATCHDOG_MIN_TRADES")
+    # Niveles de autonomia de codigo (T1.1). El nivel sube/baja solo segun el
+    # historial; CODE_AUTONOMY_LEVEL es el suelo/arranque.
+    code_autonomy_level: int = Field(default=1, alias="CODE_AUTONOMY_LEVEL")
+    autonomy_promotion_min_applied: int = Field(default=10, alias="AUTONOMY_PROMOTION_MIN_APPLIED")
+    autonomy_promotion_clean_sessions: int = Field(default=15, alias="AUTONOMY_PROMOTION_CLEAN_SESSIONS")
+    autonomy_demote_rollbacks: int = Field(default=2, alias="AUTONOMY_DEMOTE_ROLLBACKS")
+    autonomy_demote_sessions: int = Field(default=10, alias="AUTONOMY_DEMOTE_SESSIONS")
+    # Promocion champion/challenger de estrategias (T1.3).
+    promotion_min_sessions: int = Field(default=10, alias="PROMOTION_MIN_SESSIONS")
+    promotion_min_signals: int = Field(default=20, alias="PROMOTION_MIN_SIGNALS")
+    promotion_max_sessions: int = Field(default=25, alias="PROMOTION_MAX_SESSIONS")
+    promotion_hit_rate_margin: float = Field(default=0.02, alias="PROMOTION_HIT_RATE_MARGIN")
+    promotion_max_dd_factor: float = Field(default=1.2, alias="PROMOTION_MAX_DD_FACTOR")
+    promotion_human_veto_hours: int = Field(default=0, alias="PROMOTION_HUMAN_VETO_HOURS")
+    # ProgrammerAgent end-to-end / construccion de estrategias (T1.4).
+    ci_build_strategy_enabled: bool = Field(default=False, alias="CI_BUILD_STRATEGY_ENABLED")
+    programmer_max_repair_attempts: int = Field(default=2, alias="PROGRAMMER_MAX_REPAIR_ATTEMPTS")
+    # Auto-edicion de prompts por el laboratorio (T2.1).
+    prompt_self_edit_enabled: bool = Field(default=False, alias="PROMPT_SELF_EDIT_ENABLED")
+    # Retrospectiva generativa nocturna (T2.3).
+    nightly_retrospective_enabled: bool = Field(default=True, alias="NIGHTLY_RETROSPECTIVE_ENABLED")
+    nightly_retrospective_min_evidence: int = Field(default=3, alias="NIGHTLY_RETROSPECTIVE_MIN_EVIDENCE")
+    # Memoria destilada / lecciones (T2.4).
+    lessons_injection_enabled: bool = Field(default=True, alias="LESSONS_INJECTION_ENABLED")
+    max_active_lessons: int = Field(default=40, alias="MAX_ACTIVE_LESSONS")
+    # Fabrica de agentes dinamicos (T2.2).
+    max_dynamic_agents: int = Field(default=8, alias="MAX_DYNAMIC_AGENTS")
+    # Tesis de mercado / contexto macro (T3.1).
+    macro_thesis_enabled: bool = Field(default=True, alias="MACRO_THESIS_ENABLED")
+    risk_off_buy_factor: float = Field(default=0.5, alias="RISK_OFF_BUY_FACTOR")
+    risk_off_confidence_threshold: float = Field(default=0.7, alias="RISK_OFF_CONFIDENCE_THRESHOLD")
+    # Fabrica de hipotesis + granja de backtests (T3.2).
+    factory_max_variants_per_night: int = Field(default=50, alias="FACTORY_MAX_VARIANTS_PER_NIGHT")
+    factory_workers: int = Field(default=4, alias="FACTORY_WORKERS")
+    factory_max_minutes: int = Field(default=60, alias="FACTORY_MAX_MINUTES")
+    # Scorecard de figuras con pesos dinamicos (T3.3).
+    pattern_dynamic_weights_enabled: bool = Field(default=False, alias="PATTERN_DYNAMIC_WEIGHTS_ENABLED")
+    pattern_min_occurrences: int = Field(default=30, alias="PATTERN_MIN_OCCURRENCES")
+    # Presupuesto de riesgo como unica correa (T4.1).
+    risk_budget_enabled: bool = Field(default=False, alias="RISK_BUDGET_ENABLED")
+    risk_budget_daily_var_pct: float = Field(default=0.03, alias="RISK_BUDGET_DAILY_VAR_PCT")
+    risk_budget_max_new_risk_per_day_pct: float = Field(default=0.015, alias="RISK_BUDGET_MAX_NEW_RISK_PER_DAY_PCT")
+    risk_budget_max_correlated_cluster_pct: float = Field(default=0.012, alias="RISK_BUDGET_MAX_CORRELATED_CLUSTER_PCT")
+    # Camino a live con capital progresivo (T4.3).
+    live_capital_fraction: float = Field(default=0.10, alias="LIVE_CAPITAL_FRACTION")
     continuous_improvement_schedule_enabled: bool = Field(
         default=False,
         alias="CONTINUOUS_IMPROVEMENT_SCHEDULE_ENABLED",
@@ -225,6 +805,10 @@ class Settings(BaseSettings):
         default=60,
         alias="CONTINUOUS_IMPROVEMENT_RUNTIME_INTERVAL_SECONDS",
     )
+    continuous_improvement_group_cooldown_seconds: int = Field(
+        default=300,
+        alias="CONTINUOUS_IMPROVEMENT_GROUP_COOLDOWN_SECONDS",
+    )
     continuous_improvement_event_cooldown_seconds: int = Field(
         default=1800,
         alias="CONTINUOUS_IMPROVEMENT_EVENT_COOLDOWN_SECONDS",
@@ -232,6 +816,14 @@ class Settings(BaseSettings):
     continuous_improvement_runtime_loop_sleep_seconds: int = Field(
         default=15,
         alias="CONTINUOUS_IMPROVEMENT_RUNTIME_LOOP_SLEEP_SECONDS",
+    )
+    continuous_improvement_retry_base_seconds: int = Field(
+        default=180,
+        alias="CONTINUOUS_IMPROVEMENT_RETRY_BASE_SECONDS",
+    )
+    continuous_improvement_retry_max_seconds: int = Field(
+        default=900,
+        alias="CONTINUOUS_IMPROVEMENT_RETRY_MAX_SECONDS",
     )
     continuous_improvement_max_proposals_per_cycle: int = Field(
         default=5,
@@ -335,14 +927,250 @@ class Settings(BaseSettings):
         default=0.022,
         alias="INTRADAY_SAME_SESSION_LEADER_PRIORITY_BONUS",
     )
+    selection_leader_momentum_min_score: int = Field(
+        default=11,
+        alias="SELECTION_LEADER_MOMENTUM_MIN_SCORE",
+    )
+    selection_leader_momentum_min_relative_return_20d: float = Field(
+        default=0.16,
+        alias="SELECTION_LEADER_MOMENTUM_MIN_RELATIVE_RETURN_20D",
+    )
+    selection_leader_momentum_min_bullish_patterns: int = Field(
+        default=1,
+        alias="SELECTION_LEADER_MOMENTUM_MIN_BULLISH_PATTERNS",
+    )
+    selection_leader_momentum_max_sma20_distance: float = Field(
+        default=0.33,
+        alias="SELECTION_LEADER_MOMENTUM_MAX_SMA20_DISTANCE",
+    )
+    selection_leader_momentum_max_rsi: float = Field(
+        default=86.0,
+        alias="SELECTION_LEADER_MOMENTUM_MAX_RSI",
+    )
+    selection_leader_momentum_min_close_position_in_range: float = Field(
+        default=0.35,
+        alias="SELECTION_LEADER_MOMENTUM_MIN_CLOSE_POSITION_IN_RANGE",
+    )
+    selection_leader_momentum_min_volume_z: float = Field(
+        default=-3.0,
+        alias="SELECTION_LEADER_MOMENTUM_MIN_VOLUME_Z",
+    )
+    selection_leader_momentum_selection_bonus: float = Field(
+        default=0.016,
+        alias="SELECTION_LEADER_MOMENTUM_SELECTION_BONUS",
+    )
+    selection_leader_momentum_priority_bonus: float = Field(
+        default=0.014,
+        alias="SELECTION_LEADER_MOMENTUM_PRIORITY_BONUS",
+    )
+    selection_emerging_leader_min_score: int = Field(
+        default=10,
+        alias="SELECTION_EMERGING_LEADER_MIN_SCORE",
+    )
+    selection_emerging_leader_max_score: int = Field(
+        default=11,
+        alias="SELECTION_EMERGING_LEADER_MAX_SCORE",
+    )
+    selection_emerging_leader_min_return_20d: float = Field(
+        default=0.08,
+        alias="SELECTION_EMERGING_LEADER_MIN_RETURN_20D",
+    )
+    selection_emerging_leader_min_rsi: float = Field(
+        default=75.0,
+        alias="SELECTION_EMERGING_LEADER_MIN_RSI",
+    )
+    selection_emerging_leader_max_rsi: float = Field(
+        default=86.0,
+        alias="SELECTION_EMERGING_LEADER_MAX_RSI",
+    )
+    selection_emerging_leader_min_sma20_distance: float = Field(
+        default=0.04,
+        alias="SELECTION_EMERGING_LEADER_MIN_SMA20_DISTANCE",
+    )
+    selection_emerging_leader_max_sma20_distance: float = Field(
+        default=0.15,
+        alias="SELECTION_EMERGING_LEADER_MAX_SMA20_DISTANCE",
+    )
+    selection_emerging_leader_min_volume_z: float = Field(
+        default=-3.0,
+        alias="SELECTION_EMERGING_LEADER_MIN_VOLUME_Z",
+    )
+    selection_emerging_leader_max_volume_z: float = Field(
+        default=3.0,
+        alias="SELECTION_EMERGING_LEADER_MAX_VOLUME_Z",
+    )
+    selection_emerging_leader_min_close_position_in_range: float = Field(
+        default=0.75,
+        alias="SELECTION_EMERGING_LEADER_MIN_CLOSE_POSITION_IN_RANGE",
+    )
+    selection_emerging_leader_selection_bonus: float = Field(
+        default=0.018,
+        alias="SELECTION_EMERGING_LEADER_SELECTION_BONUS",
+    )
+    selection_emerging_leader_priority_bonus: float = Field(
+        default=0.016,
+        alias="SELECTION_EMERGING_LEADER_PRIORITY_BONUS",
+    )
+    selection_parabolic_leader_min_score: int = Field(
+        default=14,
+        alias="SELECTION_PARABOLIC_LEADER_MIN_SCORE",
+    )
+    selection_parabolic_leader_min_return_20d: float = Field(
+        default=0.60,
+        alias="SELECTION_PARABOLIC_LEADER_MIN_RETURN_20D",
+    )
+    selection_parabolic_leader_min_rsi: float = Field(
+        default=85.0,
+        alias="SELECTION_PARABOLIC_LEADER_MIN_RSI",
+    )
+    selection_parabolic_leader_max_rsi: float = Field(
+        default=94.0,
+        alias="SELECTION_PARABOLIC_LEADER_MAX_RSI",
+    )
+    selection_parabolic_leader_max_sma20_distance: float = Field(
+        default=0.45,
+        alias="SELECTION_PARABOLIC_LEADER_MAX_SMA20_DISTANCE",
+    )
+    selection_parabolic_leader_min_sma20_distance: float = Field(
+        default=0.25,
+        alias="SELECTION_PARABOLIC_LEADER_MIN_SMA20_DISTANCE",
+    )
+    selection_parabolic_leader_min_volume_z: float = Field(
+        default=-3.0,
+        alias="SELECTION_PARABOLIC_LEADER_MIN_VOLUME_Z",
+    )
+    selection_parabolic_leader_selection_bonus: float = Field(
+        default=0.020,
+        alias="SELECTION_PARABOLIC_LEADER_SELECTION_BONUS",
+    )
+    selection_parabolic_leader_priority_bonus: float = Field(
+        default=0.018,
+        alias="SELECTION_PARABOLIC_LEADER_PRIORITY_BONUS",
+    )
+    selection_top_long_alignment_max_rank: int = Field(
+        default=10,
+        alias="SELECTION_TOP_LONG_ALIGNMENT_MAX_RANK",
+    )
+    selection_top_long_alignment_min_score: int = Field(
+        default=14,
+        alias="SELECTION_TOP_LONG_ALIGNMENT_MIN_SCORE",
+    )
+    selection_top_long_alignment_min_bullish_patterns: int = Field(
+        default=2,
+        alias="SELECTION_TOP_LONG_ALIGNMENT_MIN_BULLISH_PATTERNS",
+    )
+    selection_top_long_alignment_min_return_20d: float = Field(
+        default=0.10,
+        alias="SELECTION_TOP_LONG_ALIGNMENT_MIN_RETURN_20D",
+    )
+    selection_top_long_alignment_max_return_20d: float = Field(
+        default=0.22,
+        alias="SELECTION_TOP_LONG_ALIGNMENT_MAX_RETURN_20D",
+    )
+    selection_top_long_alignment_min_rsi: float = Field(
+        default=65.0,
+        alias="SELECTION_TOP_LONG_ALIGNMENT_MIN_RSI",
+    )
+    selection_top_long_alignment_max_rsi: float = Field(
+        default=72.0,
+        alias="SELECTION_TOP_LONG_ALIGNMENT_MAX_RSI",
+    )
+    selection_top_long_alignment_min_sma20_distance: float = Field(
+        default=0.04,
+        alias="SELECTION_TOP_LONG_ALIGNMENT_MIN_SMA20_DISTANCE",
+    )
+    selection_top_long_alignment_max_sma20_distance: float = Field(
+        default=0.10,
+        alias="SELECTION_TOP_LONG_ALIGNMENT_MAX_SMA20_DISTANCE",
+    )
+    selection_top_long_alignment_min_volume_z: float = Field(
+        default=-3.0,
+        alias="SELECTION_TOP_LONG_ALIGNMENT_MIN_VOLUME_Z",
+    )
+    selection_top_long_alignment_max_volume_z: float = Field(
+        default=0.5,
+        alias="SELECTION_TOP_LONG_ALIGNMENT_MAX_VOLUME_Z",
+    )
+    selection_top_long_alignment_selection_bonus: float = Field(
+        default=0.01,
+        alias="SELECTION_TOP_LONG_ALIGNMENT_SELECTION_BONUS",
+    )
+    selection_top_long_alignment_priority_bonus: float = Field(
+        default=0.008,
+        alias="SELECTION_TOP_LONG_ALIGNMENT_PRIORITY_BONUS",
+    )
+    selection_constructive_early_min_score: int = Field(
+        default=14,
+        alias="SELECTION_CONSTRUCTIVE_EARLY_MIN_SCORE",
+    )
+    selection_constructive_early_max_score: int = Field(
+        default=16,
+        alias="SELECTION_CONSTRUCTIVE_EARLY_MAX_SCORE",
+    )
+    selection_constructive_early_min_return_20d: float = Field(
+        default=0.065,
+        alias="SELECTION_CONSTRUCTIVE_EARLY_MIN_RETURN_20D",
+    )
+    selection_constructive_early_max_return_20d: float = Field(
+        default=0.09,
+        alias="SELECTION_CONSTRUCTIVE_EARLY_MAX_RETURN_20D",
+    )
+    selection_constructive_early_min_return_60d: float = Field(
+        default=0.03,
+        alias="SELECTION_CONSTRUCTIVE_EARLY_MIN_RETURN_60D",
+    )
+    selection_constructive_early_max_return_60d: float = Field(
+        default=0.14,
+        alias="SELECTION_CONSTRUCTIVE_EARLY_MAX_RETURN_60D",
+    )
+    selection_constructive_early_min_rsi: float = Field(
+        default=65.0,
+        alias="SELECTION_CONSTRUCTIVE_EARLY_MIN_RSI",
+    )
+    selection_constructive_early_max_rsi: float = Field(
+        default=72.0,
+        alias="SELECTION_CONSTRUCTIVE_EARLY_MAX_RSI",
+    )
+    selection_constructive_early_min_sma20_distance: float = Field(
+        default=0.055,
+        alias="SELECTION_CONSTRUCTIVE_EARLY_MIN_SMA20_DISTANCE",
+    )
+    selection_constructive_early_max_sma20_distance: float = Field(
+        default=0.08,
+        alias="SELECTION_CONSTRUCTIVE_EARLY_MAX_SMA20_DISTANCE",
+    )
+    selection_constructive_early_min_volume_z: float = Field(
+        default=-2.3,
+        alias="SELECTION_CONSTRUCTIVE_EARLY_MIN_VOLUME_Z",
+    )
+    selection_constructive_early_max_volume_z: float = Field(
+        default=0.3,
+        alias="SELECTION_CONSTRUCTIVE_EARLY_MAX_VOLUME_Z",
+    )
+    selection_constructive_early_min_bollinger_pct_b: float = Field(
+        default=0.85,
+        alias="SELECTION_CONSTRUCTIVE_EARLY_MIN_BOLLINGER_PCT_B",
+    )
+    selection_constructive_early_min_bullish_patterns: int = Field(
+        default=2,
+        alias="SELECTION_CONSTRUCTIVE_EARLY_MIN_BULLISH_PATTERNS",
+    )
+    selection_constructive_early_selection_bonus: float = Field(
+        default=0.014,
+        alias="SELECTION_CONSTRUCTIVE_EARLY_SELECTION_BONUS",
+    )
+    selection_constructive_early_priority_bonus: float = Field(
+        default=0.012,
+        alias="SELECTION_CONSTRUCTIVE_EARLY_PRIORITY_BONUS",
+    )
     breakout_extra_symbols: str = Field(default="", alias="BREAKOUT_EXTRA_SYMBOLS")
     intraday_news_sentiment_enabled: bool = Field(default=False, alias="INTRADAY_NEWS_SENTIMENT_ENABLED")
     news_sentiment_enabled: bool = Field(default=True, alias="NEWS_SENTIMENT_ENABLED")
     news_sentiment_top_n: int = Field(default=10, alias="NEWS_SENTIMENT_TOP_N")
-    trade_selection_top_n: int = Field(default=16, alias="TRADE_SELECTION_TOP_N")
+    trade_selection_top_n: int = Field(default=24, alias="TRADE_SELECTION_TOP_N")
     news_items_per_symbol: int = Field(default=5, alias="NEWS_ITEMS_PER_SYMBOL")
     news_sentiment_fail_closed_for_buys: bool = Field(
-        default=True,
+        default=False,
         alias="NEWS_SENTIMENT_FAIL_CLOSED_FOR_BUYS",
     )
     open_position_news_guard_enabled: bool = Field(default=True, alias="OPEN_POSITION_NEWS_GUARD_ENABLED")
@@ -457,6 +1285,11 @@ class Settings(BaseSettings):
             raise RuntimeError("Live trading bloqueado: ALLOW_LIVE_TRADING debe ser true.")
         if self.trading_mode == "live" and self.alpaca_paper:
             raise RuntimeError("Configuracion inconsistente: live trading con ALPACA_PAPER=true.")
+        formal_data = self.market_data_provider == "fmp" or (
+            self.market_data_provider == "auto" and bool(self.fmp_api_key)
+        )
+        if self.trading_mode == "live" and self.live_requires_formal_market_data and not formal_data:
+            raise RuntimeError("Live trading bloqueado: configura FMP_API_KEY o MARKET_DATA_PROVIDER=fmp.")
 
 
 @lru_cache(maxsize=1)

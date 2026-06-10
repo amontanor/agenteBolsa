@@ -79,12 +79,20 @@ def usage_tokens_from_response(response: Any) -> dict[str, int]:
     }
 
 
-def record_llm_response(settings: Settings, source: str, response: Any, *, prompt: Any | None = None) -> None:
+def record_llm_response(
+    settings: Settings,
+    source: str,
+    response: Any,
+    *,
+    prompt: Any | None = None,
+    role: str | None = None,
+) -> None:
     raw_tokens = usage_tokens_from_response(response)
     tokens = usage_tokens(response, prompt=prompt)
     payload = {
         **tokens,
         "estimated": int(raw_tokens["total_tokens"] == 0 and tokens["total_tokens"] > 0),
+        "role": role,
     }
     try:
         store = Store(settings.database_path, settings.agent_logs_dir)
@@ -98,6 +106,7 @@ def record_llm_response(settings: Settings, source: str, response: Any, *, promp
             completion_tokens=tokens["completion_tokens"],
             total_tokens=tokens["total_tokens"],
             payload=payload,
+            role=role,
         )
     except (OSError, sqlite3.Error):
         return

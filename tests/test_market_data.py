@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pandas as pd
 import pytest
 
 from agente_bolsa.tools.errors import MarketDataValidationError
 from agente_bolsa.tools.market_data import download_daily_prices_with_metadata
+from agente_bolsa.config import Settings
+from agente_bolsa.tools.ops_reports import build_market_data_reconciliation_report
 
 
 def _single_symbol_frame() -> pd.DataFrame:
@@ -149,3 +149,42 @@ def test_market_data_reports_invalid_bars(monkeypatch, tmp_path):
     assert meta["invalid_bars_by_symbol"]["AAPL"] >= 2
     assert meta["negative_volume_bars_by_symbol"]["AAPL"] == 1
     assert meta["validation_alerts"]
+
+
+def test_market_data_reconciliation_flags_close_discrepancy(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_download(symbols, start, end, **kwargs):
+        calls.append(kwargs["provider"])
+        close = 100.0 if kwargs["provider"] == "fmp" else 110.0
+        frame = pd.DataFrame(
+            {
+                "Open": [close],
+                "High": [close + 1],
+                "Low": [close - 1],
+                "Close": [close],
+                "Volume": [1_000_000],
+            },
+            index=pd.date_range("2026-05-01", periods=1),
+        )
+        return frame, {
+            "source": kwargs["provider"],
+            "coverage_ratio": 1.0,
+            "symbols_with_data": ["AAPL"],
+            "symbols_with_data_count": 1,
+            "requested_count": 1,
+            "missing_symbols_count": 0,
+        }
+
+    monkeypatch.setattr("agente_bolsa.tools.ops_reports.download_daily_prices_with_metadata", fake_download)
+    report = build_market_data_reconciliation_report(
+        Settings(DATA_DIR=tmp_path, MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="demo", DEFAULT_UNIVERSE="AAPL"),
+        tmp_path / "reports",
+        "reconcile",
+        symbols=["AAPL"],
+        tolerance_pct=0.01,
+    )
+
+    assert calls == ["fmp", "yfinance"]
+    assert report["summary"]["discrepancies"] == 1
+    assert report["discrepancies"][0]["kind"] == "close_discrepancy"

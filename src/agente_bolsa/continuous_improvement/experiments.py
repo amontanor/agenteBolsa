@@ -18,8 +18,24 @@ from agente_bolsa.tools.counterfactual_analysis import (
     build_walk_forward_validation_report,
 )
 
+from .sandbox import GitSandbox, GitSandboxError, sandbox_supported
+from .autonomy import (
+    ALWAYS_BLOCKED_EXACT,
+    ALWAYS_BLOCKED_PREFIXES,
+    active_autonomy_level,
+    ast_import_violation,
+    path_violation,
+)
+
 
 class ExperimentRunner:
+    VALIDATION_ALIASES = {
+        "backtest": "in_sample",
+        "baseline_compare": "out_of_sample",
+        "shadow_review": "walk_forward",
+        "paper_audit": "paper_or_shadow_window",
+    }
+
     def __init__(self, settings: Settings, store: Store) -> None:
         self.settings = settings
         self.store = store
@@ -32,24 +48,43 @@ class ExperimentRunner:
         initiative_id: str | None,
     ) -> dict[str, Any]:
         payload = proposal.get("payload", {}) or {}
-        required = {str(item).lower() for item in payload.get("required_validations", []) or []}
+        required = {
+            self.VALIDATION_ALIASES.get(str(item).lower(), str(item).lower())
+            for item in payload.get("required_validations", []) or []
+        }
         proposal_type = str(proposal.get("proposal_type") or payload.get("proposal_type") or "")
         reports_dir = self.settings.data_dir / "reports"
         artifacts: dict[str, Any] = {}
 
-        if "backtest" in required:
+        if "in_sample" in required:
             artifacts["backtest"] = self._run_backtest(proposal=proposal, cycle_id=cycle_id, initiative_id=initiative_id)
-        if "baseline_compare" in required:
+        if "out_of_sample" in required:
             artifacts["session_retrospective"] = self._run_session_retrospective(
                 proposal=proposal,
                 cycle_id=cycle_id,
                 initiative_id=initiative_id,
             )
-        if "shadow_review" in required or proposal_type in {"RISK_RULE_CHANGE", "STRATEGY_RULE_CHANGE"}:
+        if "walk_forward" in required or proposal_type in {"RISK_RULE_CHANGE", "STRATEGY_RULE_CHANGE"}:
             artifacts["walk_forward_validation"] = self._run_walk_forward(
                 proposal=proposal,
                 cycle_id=cycle_id,
                 initiative_id=initiative_id,
+            )
+        if "paper_or_shadow_window" in required:
+            artifacts["paper_or_shadow_window"] = self._record_report_experiment(
+                proposal=proposal,
+                cycle_id=cycle_id,
+                initiative_id=initiative_id,
+                experiment_type="paper_or_shadow_window",
+                artifact_path=str(reports_dir / "latest_operational_learning.json"),
+            )
+        if "risk_review" in required:
+            artifacts["risk_review"] = self._record_report_experiment(
+                proposal=proposal,
+                cycle_id=cycle_id,
+                initiative_id=initiative_id,
+                experiment_type="risk_review",
+                artifact_path=str(reports_dir / "latest_live_readiness.json"),
             )
         if "data_quality_review" in required:
             artifacts["data_quality_review"] = self._record_report_experiment(
@@ -294,6 +329,9 @@ class AutoApplyConfigAgent:
         "CONTINUOUS_IMPROVEMENT_RUNTIME_INTERVAL_SECONDS": "continuous_improvement_runtime_interval_seconds",
         "CONTINUOUS_IMPROVEMENT_MAX_PROPOSALS_PER_CYCLE": "continuous_improvement_max_proposals_per_cycle",
         "MARKET_DATA_PROVIDER": "market_data_provider",
+        "RISK_BUDGET_DAILY_VAR_PCT": "risk_budget_daily_var_pct",
+        "RISK_BUDGET_MAX_NEW_RISK_PER_DAY_PCT": "risk_budget_max_new_risk_per_day_pct",
+        "RISK_BUDGET_MAX_CORRELATED_CLUSTER_PCT": "risk_budget_max_correlated_cluster_pct",
     }
     FORBIDDEN_TERMS = {"LIVE_TRADING", "BROKER", "ALPACA", "OPENAI", "API_KEY", "SECRET", "ORDER", "TRADING_MODE"}
 
@@ -384,39 +422,178 @@ class AutoApplyConfigAgent:
 
 
 class AutoApplyCodeAgent:
-    """Applies small, reversible code changes after deterministic gates pass."""
+    """Applies small, reversible code changes after deterministic gates pass.
 
-    ALLOWED_PREFIXES = (
-        "src/agente_bolsa/continuous_improvement/",
-        "src/agente_bolsa/tools/operational_",
-        "src/agente_bolsa/tools/reporting.py",
-        "src/agente_bolsa/tools/retention.py",
-        "tests/",
-        "docs/",
-        ".env.example",
-    )
-    BLOCKED_PREFIXES = (
-        ".git/",
-        ".venv/",
-        "data/",
-        "logs/",
-        "src/agente_bolsa/tools/broker.py",
-        "src/agente_bolsa/tools/execution.py",
-    )
-    BLOCKED_EXACT = {".env"}
-    BLOCKED_TERMS = {
-        "API_KEY",
-        "SECRET",
-        "TOKEN",
-        "LIVE_TRADING",
-        "TRADING_MODE",
-        "ALPACA",
-        "BROKER",
-        "ORDER",
-        "EXECUTION",
-    }
+    El allowlist ya no es fijo: depende del nivel de autonomia vigente (T1.1),
+    resuelto por ``continuous_improvement/autonomy.py``. ``BLOCKED_PREFIXES`` se
+    mantiene como las rutas bloqueadas SIEMPRE (compatibilidad y kernel test).
+    """
+
+    # Compatibilidad: rutas bloqueadas en todos los niveles.
+    BLOCKED_PREFIXES = ALWAYS_BLOCKED_PREFIXES
+    BLOCKED_EXACT = ALWAYS_BLOCKED_EXACT
 
     def try_apply(
+        self,
+        *,
+        settings: Settings,
+        store: Store,
+        initiative: dict[str, Any] | None,
+        proposal: dict[str, Any],
+        validation: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Aplica un cambio autonomo.
+
+        Si el sandbox git real esta habilitado y el workspace es un repo git,
+        usa `GitSandbox` (rama aislada + suite completa + merge revertible).
+        En cualquier otro caso (p. ej. tests con workspace no-git) cae al
+        camino legacy de snapshot/restore.
+        """
+
+        workspace = settings.improvement_workspace_dir
+        if getattr(settings, "ci_sandbox_enabled", True) and sandbox_supported(workspace):
+            return self._sandbox_apply(
+                settings=settings,
+                store=store,
+                initiative=initiative,
+                proposal=proposal,
+                validation=validation,
+            )
+        return self._legacy_apply(
+            settings=settings,
+            store=store,
+            initiative=initiative,
+            proposal=proposal,
+            validation=validation,
+        )
+
+    def _apply_base(
+        self,
+        *,
+        settings: Settings,
+        initiative: dict[str, Any] | None,
+        proposal: dict[str, Any],
+        validation: dict[str, Any],
+    ) -> dict[str, Any]:
+        payload = proposal.get("payload", {}) or {}
+        workspace = settings.improvement_workspace_dir
+        target_key = str(proposal.get("target_component") or payload.get("target_component") or "code")
+        return {
+            "applied_change_id": new_id("ci_apply"),
+            "initiative_id": (initiative or {}).get("initiative_id"),
+            "proposal_id": proposal.get("proposal_id"),
+            "cycle_id": proposal.get("cycle_id"),
+            "change_type": "CODE_CHANGE",
+            "target_key": target_key,
+            "validation_ids": [validation.get("validation_id")] if validation.get("validation_id") else [],
+            "decision": {
+                "actor": "AutoApplyCodeAgent",
+                "validation_status": validation.get("status"),
+                "workspace": str(workspace),
+            },
+        }
+
+    def _sandbox_apply(
+        self,
+        *,
+        settings: Settings,
+        store: Store,
+        initiative: dict[str, Any] | None,
+        proposal: dict[str, Any],
+        validation: dict[str, Any],
+    ) -> dict[str, Any]:
+        payload = proposal.get("payload", {}) or {}
+        workspace = settings.improvement_workspace_dir
+        base = self._apply_base(settings=settings, initiative=initiative, proposal=proposal, validation=validation)
+
+        blocked_reason = self._blocked_reason(settings=settings, proposal=proposal, validation=validation)
+        if blocked_reason:
+            return self._save(store, base, status="BLOCKED", error=blocked_reason)
+
+        file_edits = payload.get("file_edits") or payload.get("files")
+        patch_text = str(payload.get("patch") or "").strip()
+
+        # Validacion de rutas ANTES de crear el worktree: un cambio a una ruta
+        # bloqueada (p. ej. kernel.py) se rechaza sin abrir sandbox.
+        level = active_autonomy_level(store, settings)
+        base["decision"]["autonomy_level"] = level
+        targets = self._target_paths(workspace, file_edits=file_edits, patch_text=patch_text)
+        path_error = self._validate_paths(workspace, targets, level)
+        if path_error:
+            return self._save(store, base, status="BLOCKED", error=path_error)
+        ast_error = self._ast_import_violation(workspace, file_edits)
+        if ast_error:
+            return self._save(store, base, status="BLOCKED", error=ast_error)
+
+        sandbox = GitSandbox(settings, repo_root=workspace)
+        change_id = str(base["applied_change_id"])
+        try:
+            sandbox.open(change_id)
+            sandbox.apply(file_edits, patch_text)
+            validation_result = sandbox.validate()
+        except (GitSandboxError, ValueError, RuntimeError) as exc:
+            sandbox.destroy()
+            return self._save(store, base, status="FAILED", error=f"{type(exc).__name__}: {exc}")
+
+        if not validation_result.get("ok"):
+            self._persist_sandbox_artifacts(store, proposal, validation_result)
+            sandbox.destroy()
+            return self._save(
+                store,
+                base,
+                status="REJECTED_BY_TESTS",
+                rollback={"reason": "sandbox_validation_failed"},
+                decision={**base["decision"], "sandbox": validation_result},
+                error=self._summarize_validation_failure(validation_result),
+            )
+
+        try:
+            merge_result = sandbox.merge()
+        except GitSandboxError as exc:
+            sandbox.destroy()
+            return self._save(store, base, status="FAILED", error=f"merge fallo: {exc}")
+        sandbox.destroy()
+        return self._save(
+            store,
+            base,
+            status="APPLIED",
+            after={"git": merge_result},
+            rollback={"git": merge_result},
+            decision={**base["decision"], "sandbox": validation_result, "git": merge_result},
+        )
+
+    def _persist_sandbox_artifacts(
+        self,
+        store: Store,
+        proposal: dict[str, Any],
+        validation_result: dict[str, Any],
+    ) -> None:
+        proposal_id = proposal.get("proposal_id")
+        if not proposal_id:
+            return
+        for step in validation_result.get("steps", []):
+            try:
+                store.save_continuous_improvement_proposal_artifact(
+                    {
+                        "artifact_id": new_id("ci_artifact"),
+                        "proposal_id": proposal_id,
+                        "artifact_type": f"sandbox_{step.get('step', 'step')}_log",
+                        "content_text": str(step.get("output") or "")[-6000:],
+                        "payload": {"returncode": step.get("returncode"), "ok": step.get("ok")},
+                    }
+                )
+            except Exception:  # noqa: BLE001 - los artefactos no deben tumbar el flujo.
+                continue
+
+    @staticmethod
+    def _summarize_validation_failure(validation_result: dict[str, Any]) -> str:
+        failed = [item for item in validation_result.get("steps", []) if not item.get("ok")]
+        if not failed:
+            return "Validacion del sandbox fallida."
+        last = failed[-1]
+        return f"sandbox:{last.get('step')} rc={last.get('returncode')}: {str(last.get('output') or '')[-2000:]}"
+
+    def _legacy_apply(
         self,
         *,
         settings: Settings,
@@ -446,6 +623,8 @@ class AutoApplyCodeAgent:
         if blocked_reason:
             return self._save(store, base, status="BLOCKED", error=blocked_reason)
 
+        level = active_autonomy_level(store, settings)
+        base["decision"]["autonomy_level"] = level
         file_edits = payload.get("file_edits") or payload.get("files")
         patch_text = str(payload.get("patch") or "").strip()
         test_commands = [str(item) for item in payload.get("test_commands", []) or [] if str(item).strip()]
@@ -454,9 +633,12 @@ class AutoApplyCodeAgent:
 
         try:
             targets = self._target_paths(workspace, file_edits=file_edits, patch_text=patch_text)
-            path_error = self._validate_paths(workspace, targets)
+            path_error = self._validate_paths(workspace, targets, level)
             if path_error:
                 return self._save(store, base, status="BLOCKED", error=path_error)
+            ast_error = self._ast_import_violation(workspace, file_edits)
+            if ast_error:
+                return self._save(store, base, status="BLOCKED", error=ast_error)
             dirty_error = self._dirty_targets(workspace, targets)
             if dirty_error:
                 return self._save(store, base, status="BLOCKED", error=dirty_error)
@@ -509,6 +691,9 @@ class AutoApplyCodeAgent:
             return None
         if change.get("change_type") != "CODE_CHANGE":
             return store.rollback_continuous_improvement_applied_change(applied_change_id, actor=actor)
+        git_info = (change.get("rollback") or {}).get("git")
+        if isinstance(git_info, dict) and git_info.get("commit"):
+            return self._git_revert(settings=settings, store=store, change=change, git_info=git_info, actor=actor)
         restore = (change.get("rollback") or {}).get("restore")
         if not isinstance(restore, dict):
             change["status"] = "ROLLBACK_FAILED"
@@ -517,7 +702,9 @@ class AutoApplyCodeAgent:
             return change
         workspace = settings.improvement_workspace_dir
         targets = [(workspace / rel).resolve() for rel in (restore.get("files") or {}).keys()]
-        path_error = self._validate_paths(workspace, targets)
+        # Restaurar un snapshot ya aplicado: validar al nivel maximo (no es una
+        # escalada de privilegios, solo se revierten archivos ya permitidos).
+        path_error = self._validate_paths(workspace, targets, 3)
         if path_error:
             change["status"] = "ROLLBACK_FAILED"
             change["error"] = path_error
@@ -530,6 +717,56 @@ class AutoApplyCodeAgent:
             **(change.get("decision") or {}),
             "rollback_actor": actor,
             "rollback_at": datetime.now(timezone.utc).isoformat(),
+        }
+        store.save_continuous_improvement_applied_change(change)
+        return change
+
+    def _git_revert(
+        self,
+        *,
+        settings: Settings,
+        store: Store,
+        change: dict[str, Any],
+        git_info: dict[str, Any],
+        actor: str,
+    ) -> dict[str, Any]:
+        """Revierte un cambio fusionado (T0.3) con `git revert` + re-suite."""
+
+        workspace = settings.improvement_workspace_dir
+        commit = str(git_info.get("commit"))
+        sandbox = GitSandbox(settings, repo_root=workspace)
+        # Un commit de merge requiere -m 1 (mainline). Si no es merge, git lo
+        # ignora y revierte normal; probamos primero con -m 1 y caemos a simple.
+        revert_ok = False
+        revert_error = ""
+        for args in (["revert", "--no-edit", "-m", "1", commit], ["revert", "--no-edit", commit]):
+            result = sandbox._git(
+                "-c", "user.email=ci-bot@agente-bolsa.local", "-c", "user.name=ci-auto", *args
+            )
+            if result.returncode == 0:
+                revert_ok = True
+                break
+            revert_error = (result.stderr or result.stdout).strip()
+            sandbox._git("revert", "--abort")
+        if not revert_ok:
+            change["status"] = "ROLLBACK_FAILED"
+            change["error"] = f"git revert fallo: {revert_error}"
+            store.save_continuous_improvement_applied_change(change)
+            return change
+
+        revert_commit = sandbox._git("rev-parse", "HEAD").stdout.strip()
+        # Re-ejecutar la suite tras el revert para confirmar arbol verde.
+        from .sandbox import run_validation_steps
+
+        suite = run_validation_steps(settings, workspace)
+        change["status"] = "ROLLED_BACK"
+        change["decision"] = {
+            **(change.get("decision") or {}),
+            "rollback_actor": actor,
+            "rollback_at": datetime.now(timezone.utc).isoformat(),
+            "rollback_strategy": "git_revert",
+            "revert_commit": revert_commit,
+            "rollback_suite_ok": suite.get("ok"),
         }
         store.save_continuous_improvement_applied_change(change)
         return change
@@ -590,7 +827,7 @@ class AutoApplyCodeAgent:
             targets.append((workspace / match.group(1).strip()).resolve())
         return sorted(set(targets))
 
-    def _validate_paths(self, workspace: Path, targets: list[Path]) -> str | None:
+    def _validate_paths(self, workspace: Path, targets: list[Path], level: int = 1) -> str | None:
         if not targets:
             return "No hay archivos objetivo"
         workspace = workspace.resolve()
@@ -599,13 +836,28 @@ class AutoApplyCodeAgent:
                 rel = path.resolve().relative_to(workspace).as_posix()
             except ValueError:
                 return f"{path} queda fuera del workspace"
-            if rel in self.BLOCKED_EXACT or any(rel.startswith(prefix) for prefix in self.BLOCKED_PREFIXES):
-                return f"{rel} esta bloqueado"
-            if not any(rel.startswith(prefix) or rel == prefix for prefix in self.ALLOWED_PREFIXES):
-                return f"{rel} no esta en allowlist"
-            upper = rel.upper()
-            if any(term in upper for term in self.BLOCKED_TERMS):
-                return f"{rel} contiene termino protegido"
+            violation = path_violation(rel, level)
+            if violation:
+                return violation
+        return None
+
+    def _ast_import_violation(self, workspace: Path, file_edits: Any) -> str | None:
+        """Rechaza ediciones que introducen imports de broker/execution nuevos."""
+
+        if not isinstance(file_edits, list):
+            return None
+        workspace = workspace.resolve()
+        for item in file_edits:
+            if not isinstance(item, dict) or not item.get("path"):
+                continue
+            rel = str(item["path"])
+            if not rel.endswith(".py") or "content" not in item:
+                continue
+            existing = workspace / rel
+            before_text = existing.read_text(encoding="utf-8") if existing.exists() else ""
+            violation = ast_import_violation(before_text, str(item.get("content") or ""))
+            if violation:
+                return f"{rel}: {violation}"
         return None
 
     def _dirty_targets(self, workspace: Path, targets: list[Path]) -> str | None:
