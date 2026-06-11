@@ -1,9 +1,19 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from agente_bolsa.config import Settings
-from agente_bolsa.scheduler import _job_state_key, _selected_candidates, scheduler_status
+from agente_bolsa.continuous_improvement.runtime import ContinuousImprovementLabRuntime
+from agente_bolsa.scheduler import (
+    _exit_policy_v2_runtime_trigger,
+    _exit_policy_v2_time_stop_trigger,
+    _job_state_key,
+    _selected_candidates,
+    continuous_improvement_job,
+    scheduler_status,
+)
 from agente_bolsa.storage import Store
 
 
@@ -110,6 +120,164 @@ def test_scheduler_status_includes_last_job_runtime(tmp_path):
 
     assert status["job_runtime"]["market_cycle"]["status"] == "completed"
     assert status["job_runtime"]["market_cycle"]["extra"]["selected_symbols"] == ["AAPL"]
+
+
+def test_exit_policy_v2_time_stop_triggers_for_stale_flat_position(tmp_path):
+    settings = Settings(
+        DATA_DIR=tmp_path,
+        EXIT_POLICY_V2_ENABLED=True,
+        EXIT_POLICY_V2_TIME_STOP_DAYS=5,
+        EXIT_POLICY_V2_TIME_STOP_MIN_RETURN=0.0,
+    )
+    position = SimpleNamespace(current_price=101.0, unrealized_plpc=-0.002)
+    source_created_at = (datetime.now(timezone.utc) - timedelta(days=6)).isoformat()
+
+    trigger, level = _exit_policy_v2_time_stop_trigger(
+        settings,
+        position=position,
+        source_created_at=source_created_at,
+    )
+
+    assert trigger == "time_stop_v2"
+    assert level == 101.0
+
+
+def test_exit_policy_v2_runtime_triggers_partial_once(tmp_path):
+    settings = Settings(DATA_DIR=tmp_path, EXIT_POLICY_V2_ENABLED=True)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    source = {"created_at": datetime.now(timezone.utc).isoformat(), "plan": {"plan_id": "plan-1"}}
+    payload = {"entry_price": 100.0, "stop_loss": 95.0}
+    position = SimpleNamespace(avg_entry_price=100.0, current_price=105.0, unrealized_plpc=0.05)
+
+    trigger = _exit_policy_v2_runtime_trigger(
+        settings,
+        store,
+        symbol="AAPL",
+        position=position,
+        source=source,
+        payload=payload,
+    )
+    store.set_runtime_value(trigger["state_key"], trigger["state"])
+    second = _exit_policy_v2_runtime_trigger(
+        settings,
+        store,
+        symbol="AAPL",
+        position=position,
+        source=source,
+        payload=payload,
+    )
+
+    assert trigger["trigger"] == "partial_take_profit_v2"
+    assert trigger["qty_fraction"] == 0.5
+    assert second is None
+
+
+def test_exit_policy_v2_runtime_triggers_trailing_after_high_water(tmp_path):
+    settings = Settings(DATA_DIR=tmp_path, EXIT_POLICY_V2_ENABLED=True)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    source = {"created_at": datetime.now(timezone.utc).isoformat(), "plan": {"plan_id": "plan-1"}}
+    payload = {"entry_price": 100.0, "stop_loss": 95.0}
+
+    first = _exit_policy_v2_runtime_trigger(
+        settings,
+        store,
+        symbol="AAPL",
+        position=SimpleNamespace(avg_entry_price=100.0, current_price=112.0, unrealized_plpc=0.12),
+        source=source,
+        payload=payload,
+    )
+    store.set_runtime_value(first["state_key"], first["state"])
+    trigger = _exit_policy_v2_runtime_trigger(
+        settings,
+        store,
+        symbol="AAPL",
+        position=SimpleNamespace(avg_entry_price=100.0, current_price=107.0, unrealized_plpc=0.07),
+        source=source,
+        payload=payload,
+    )
+
+    assert trigger["trigger"] == "trailing_stop_v2"
+    assert trigger["level"] == 107.0
+
+
+def test_continuous_improvement_job_persists_retry_metadata_after_failure(tmp_path, monkeypatch):
+    settings = Settings(
+        DATA_DIR=tmp_path,
+        CONTINUOUS_IMPROVEMENT_ENABLED=True,
+        CONTINUOUS_IMPROVEMENT_SCHEDULE_ENABLED=True,
+        IMPROVEMENT_LLM_ENABLED=False,
+        CONTINUOUS_IMPROVEMENT_RUNTIME_INTERVAL_SECONDS=60,
+        CONTINUOUS_IMPROVEMENT_RETRY_BASE_SECONDS=180,
+        CONTINUOUS_IMPROVEMENT_RETRY_MAX_SECONDS=900,
+    )
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+
+    def _boom(self):
+        raise RuntimeError("scheduler ci timeout")
+
+    monkeypatch.setattr(ContinuousImprovementLabRuntime, "tick", _boom)
+
+    report = continuous_improvement_job(settings, store, verbose=False)
+
+    assert report is None
+    job_state = store.get_runtime_value(_job_state_key("continuous_improvement"))
+    assert job_state["status"] == "failed"
+    assert "Reintento automatico en 180 s" in job_state["detail"]
+    assert job_state["extra"]["retry_attempt"] == 1
+    runtime_state = store.continuous_improvement_runtime_state()
+    assert runtime_state["status"] == "FAILED"
+    assert runtime_state["payload"]["error"] == "scheduler ci timeout"
+    assert runtime_state["payload"]["retry_delay_seconds"] == 180
+
+
+def test_continuous_improvement_job_waits_until_retry_window(tmp_path, monkeypatch):
+    settings = Settings(
+        DATA_DIR=tmp_path,
+        CONTINUOUS_IMPROVEMENT_ENABLED=True,
+        CONTINUOUS_IMPROVEMENT_SCHEDULE_ENABLED=True,
+        IMPROVEMENT_LLM_ENABLED=False,
+        CONTINUOUS_IMPROVEMENT_RUNTIME_INTERVAL_SECONDS=60,
+        CONTINUOUS_IMPROVEMENT_RETRY_BASE_SECONDS=180,
+        CONTINUOUS_IMPROVEMENT_RETRY_MAX_SECONDS=900,
+    )
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    store.set_runtime_value(
+        _job_state_key("continuous_improvement"),
+        {
+            "job": "continuous_improvement",
+            "status": "failed",
+            "run_id": "ci_prev",
+            "started_at": "2026-06-02T16:16:00+00:00",
+            "finished_at": "2999-06-02T16:16:01+00:00",
+            "duration_seconds": 1.0,
+            "detail": "old failure",
+            "extra": {
+                "error_type": "RuntimeError",
+                "retry_attempt": 1,
+                "retry_delay_seconds": 180,
+                "next_retry_at": "2999-06-02T16:20:00+00:00",
+            },
+        },
+    )
+    called = {"value": False}
+
+    def _tick(self):
+        called["value"] = True
+        return {"status": "COMPLETED"}
+
+    monkeypatch.setattr(ContinuousImprovementLabRuntime, "tick", _tick)
+
+    report = continuous_improvement_job(settings, store, verbose=False)
+
+    assert report is None
+    assert called["value"] is False
+    job_state = store.get_runtime_value(_job_state_key("continuous_improvement"))
+    assert job_state["status"] == "retry_wait"
+    assert job_state["extra"]["retry_attempt"] == 1
 
 
 def test_selected_candidates_promotes_repeated_intraday_momentum_not_selected_by_llm(tmp_path):

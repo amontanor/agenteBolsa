@@ -1073,7 +1073,7 @@ class Store:
             rows = conn.execute(
                 """
                 SELECT usage_id, source, model, request_count, prompt_tokens,
-                       completion_tokens, total_tokens, payload_json, created_at
+                       completion_tokens, total_tokens, payload_json, created_at, role
                 FROM llm_usage
                 ORDER BY created_at DESC
                 LIMIT ?
@@ -2169,6 +2169,7 @@ class Store:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(window_id) DO UPDATE SET
                     status=excluded.status,
+                    started_at=excluded.started_at,
                     result_json=excluded.result_json,
                     updated_at=excluded.updated_at
                 """,
@@ -3317,7 +3318,7 @@ class Store:
             assignments.append(f"{column} = ?")
             value = updates[key]
             if column.endswith("_json"):
-                value = _dumps(value or {})
+                value = _dumps(value if value is not None else ([] if key.startswith("linked_") else {}))
             values.append(value)
         if not assignments:
             return
@@ -3430,7 +3431,7 @@ class Store:
             assignments.append(f"{column} = ?")
             value = updates[key]
             if column.endswith("_json"):
-                value = _dumps(value or {})
+                value = _dumps(value if value is not None else ([] if key.startswith("linked_") else {}))
             values.append(value)
         if not assignments:
             return
@@ -3876,7 +3877,7 @@ class Store:
             assignments.append(f"{column} = ?")
             value = updates[key]
             if column.endswith("_json"):
-                value = _dumps(value or {})
+                value = _dumps(value if value is not None else ([] if key.startswith("linked_") else {}))
             values.append(value)
         if not assignments:
             return

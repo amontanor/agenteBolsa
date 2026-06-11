@@ -105,7 +105,7 @@ def record_signal_candidates(store: Store, report: dict[str, Any], *, source: st
     source_run_id = str(report.get("run_id") or "")
     if not source_run_id:
         return 0
-    count = 0
+    rows = []
     candidates = list(report.get("all_candidates", []) or [])
     selected_by_symbol = {
         str(candidate.get("symbol", "")).upper(): candidate
@@ -155,19 +155,118 @@ def record_signal_candidates(store: Store, report: dict[str, Any], *, source: st
         )
         signal_date = _date(features.get("last_date"))
         signal_id = f"{source_run_id}:{_slug(symbol)}"
-        store.save_signal_outcome(
-            signal_id=signal_id,
-            source_run_id=source_run_id,
-            source=source,
-            symbol=symbol,
-            signal_date=signal_date,
-            decision="candidate",
-            features=features,
-            gate={},
-            outcome={},
+        rows.append(
+            {
+                "signal_id": signal_id,
+                "source_run_id": source_run_id,
+                "source": source,
+                "symbol": symbol,
+                "signal_date": signal_date,
+                "decision": "candidate",
+                "features": features,
+                "gate": {},
+                "outcome": {},
+            }
         )
-        count += 1
-    return count
+    if hasattr(store, "save_signal_outcomes_bulk"):
+        store.save_signal_outcomes_bulk(rows)
+    else:
+        for row in rows:
+            store.save_signal_outcome(**row)
+    return len(rows)
+
+
+def _signal_report_date(report: dict[str, Any]) -> str:
+    report_date = _date(report.get("as_of") or report.get("session_date") or report.get("date"))
+    if report_date:
+        return report_date
+    candidates = list(report.get("all_candidates", []) or [])
+    if candidates:
+        return _date(candidates[0].get("last_date"))
+    return ""
+
+
+def _inferred_selected_candidates(report: dict[str, Any], settings: Settings) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    top_longs = list(report.get("top_longs", []) or [])
+    top_shorts = list(report.get("top_shorts", []) or [])
+    long_limit = max(12, int(settings.news_sentiment_top_n), int(settings.trade_selection_top_n))
+    short_limit = max(1, int(settings.news_sentiment_top_n // 2))
+    selected = top_longs[:long_limit]
+    if settings.allow_short_selling:
+        selected = [*selected, *top_shorts[:short_limit]]
+    metadata = {
+        "method": "backfill_inferred_from_top_lists",
+        "inferred": True,
+        "long_limit": long_limit,
+        "short_limit": short_limit if settings.allow_short_selling else 0,
+    }
+    return selected, metadata
+
+
+def backfill_signal_candidates_from_reports(
+    settings: Settings,
+    store: Store,
+    reports_dir: Path,
+    *,
+    since_date: str | None = None,
+    end_date: str | None = None,
+    source: str = "closed_market_study_backfill",
+    infer_selected: bool = True,
+) -> dict[str, Any]:
+    reports = sorted(reports_dir.glob("closed_market_technical_study_*.json"))
+    saved_reports = 0
+    saved_signals = 0
+    inferred_reports = 0
+    skipped_reports = 0
+    warnings: list[str] = []
+
+    for path in reports:
+        try:
+            report = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001 - best-effort historical recovery.
+            skipped_reports += 1
+            warnings.append(f"{path.name}: {exc}")
+            continue
+        if not isinstance(report, dict):
+            skipped_reports += 1
+            warnings.append(f"{path.name}: formato no soportado")
+            continue
+        if not report.get("run_id") or not list(report.get("all_candidates", []) or []):
+            skipped_reports += 1
+            continue
+
+        report_date = _signal_report_date(report)
+        if since_date and report_date and report_date < since_date:
+            continue
+        if end_date and report_date and report_date > end_date:
+            continue
+
+        payload = dict(report)
+        if infer_selected and not list(payload.get("selected_candidates", []) or []):
+            selected, metadata = _inferred_selected_candidates(payload, settings)
+            if selected:
+                payload["selected_candidates"] = selected
+                payload["selection_metadata"] = metadata
+                inferred_reports += 1
+
+        saved = record_signal_candidates(store, payload, source=source)
+        if saved <= 0:
+            skipped_reports += 1
+            continue
+        saved_reports += 1
+        saved_signals += saved
+
+    return {
+        "reports_scanned": len(reports),
+        "reports_saved": saved_reports,
+        "signals_saved": saved_signals,
+        "inferred_reports": inferred_reports,
+        "skipped_reports": skipped_reports,
+        "since_date": since_date,
+        "end_date": end_date,
+        "source": source,
+        "warnings": warnings[:50],
+    }
 
 
 def _gate_by_symbol(items: list[dict[str, Any]], name: str) -> dict[str, dict[str, Any]]:
@@ -190,9 +289,11 @@ def update_signal_decisions(
     recommendations: list[TradeRecommendation],
     entry_quality_gate: list[dict[str, Any]],
     backtest_gate: list[dict[str, Any]],
+    settings: Settings | None = None,
 ) -> int:
     if not source_run_id:
         return 0
+    settings = settings or Settings()
     gate_by_symbol = defaultdict(dict)
     for symbol, gate in _gate_by_symbol(entry_quality_gate, "entry_quality_gate").items():
         gate_by_symbol[symbol].update(gate)
@@ -207,10 +308,21 @@ def update_signal_decisions(
         if recommendation.action == "buy":
             entry_gate = gate.get("entry_quality_gate")
             backtest = gate.get("backtest_gate")
-            if entry_gate and not entry_gate.get("approved"):
+            entry_score = ((entry_gate or {}).get("checks") or {}).get("entry_score_v2") or {}
+            entry_micro = bool(entry_score.get("micro_experiment") or recommendation.micro_experiment)
+            if entry_gate and not entry_gate.get("approved") and not entry_micro:
                 decision = "blocked_entry_quality"
             elif backtest and not backtest.get("approved"):
-                decision = "blocked_backtest"
+                if _paper_backtest_soft_override(settings, recommendation, gate):
+                    decision = "approved_buy_soft_backtest"
+                    gate["backtest_soft_override"] = {
+                        "approved": True,
+                        "reason": "paper_high_conviction_micro_override",
+                    }
+                else:
+                    decision = "blocked_backtest"
+            elif entry_micro:
+                decision = "approved_buy_micro"
             else:
                 decision = "approved_buy"
         store.update_signal_decision(
@@ -228,6 +340,137 @@ def update_signal_decisions(
         )
         updated += 1
     return updated
+
+
+def update_signal_execution_status(
+    store: Store,
+    *,
+    source_run_id: str | None,
+    approved_symbols: list[str] | None = None,
+    rejected_order_plans: list[dict[str, Any]] | None = None,
+    planned_symbols: list[str] | None = None,
+    submitted: list[dict[str, Any]] | None = None,
+    failed: list[dict[str, Any]] | None = None,
+    effective_max_orders_per_cycle: int | None = None,
+    effective_max_daily_buy_orders: int | None = None,
+) -> int:
+    if not source_run_id:
+        return 0
+
+    rejected_by_symbol: dict[str, dict[str, Any]] = {}
+    for item in rejected_order_plans or []:
+        symbol = str(item.get("symbol") or "").upper().strip()
+        if symbol and symbol not in rejected_by_symbol:
+            rejected_by_symbol[symbol] = item
+    submitted_by_symbol = {
+        str(item.get("symbol") or "").upper().strip(): item
+        for item in (submitted or [])
+        if str(item.get("symbol") or "").strip()
+    }
+    failed_by_symbol = {
+        str(item.get("symbol") or "").upper().strip(): item
+        for item in (failed or [])
+        if str(item.get("symbol") or "").strip()
+    }
+    planned = {str(symbol).upper().strip() for symbol in (planned_symbols or []) if str(symbol).strip()}
+    updated = 0
+
+    for raw_symbol in approved_symbols or []:
+        symbol = str(raw_symbol or "").upper().strip()
+        if not symbol:
+            continue
+        payload = {
+            "effective_max_orders_per_cycle": effective_max_orders_per_cycle,
+            "effective_max_daily_buy_orders": effective_max_daily_buy_orders,
+        }
+        if symbol in submitted_by_symbol:
+            item = submitted_by_symbol[symbol]
+            payload.update(
+                {
+                    "status": "submitted",
+                    "broker_status": item.get("status"),
+                    "notional": item.get("notional"),
+                }
+            )
+        elif symbol in failed_by_symbol:
+            item = failed_by_symbol[symbol]
+            payload.update(
+                {
+                    "status": "submit_failed",
+                    "side": item.get("side"),
+                    "error": item.get("error"),
+                }
+            )
+        elif symbol in rejected_by_symbol:
+            item = rejected_by_symbol[symbol]
+            payload.update(
+                {
+                    "status": "plan_rejected",
+                    "stage": item.get("stage"),
+                    "reason": item.get("reason"),
+                    "checks": item.get("checks", {}),
+                }
+            )
+        elif symbol in planned:
+            payload["status"] = "plan_created"
+        else:
+            payload["status"] = "approved_not_planned"
+        store.update_signal_gate(
+            source_run_id=source_run_id,
+            symbol=symbol,
+            gate={"execution": payload},
+        )
+        updated += 1
+    return updated
+
+
+def _paper_backtest_soft_override(
+    settings: Settings,
+    recommendation: TradeRecommendation,
+    gate: dict[str, Any],
+) -> bool:
+    if not settings.backtest_gate_paper_soft_override_enabled:
+        return False
+    if settings.trading_mode != "paper":
+        return False
+    if settings.trade_aggressiveness_profile not in {"opportunistic", "aggressive"}:
+        return False
+    if recommendation.backtest_soft_override or "backtest_soft_override_eligible" in list(
+        recommendation.soft_override_reasons or []
+    ):
+        return True
+    entry_gate = gate.get("entry_quality_gate") or {}
+    entry_checks = entry_gate.get("checks") or {}
+    entry_score = entry_checks.get("entry_score_v2") or {}
+    if entry_gate and not entry_gate.get("approved") and not entry_score.get("micro_experiment"):
+        return False
+
+    reward_risk = _num(entry_score.get("reward_risk"))
+    score = _num(entry_checks.get("score"), 0.0)
+    volume_z = _num(entry_checks.get("volume_zscore_20"), 0.0)
+    close_position = _num(entry_checks.get("close_position_in_range"), 0.0)
+    sma20_distance = _num(entry_checks.get("sma20_distance"))
+    rsi = _num(entry_checks.get("rsi_14"))
+    confirmed = int(entry_checks.get("confirmed_bullish_patterns") or 0)
+    sentiment_score = _num(entry_checks.get("sentiment_score"))
+    sentiment_confidence = _num(entry_checks.get("sentiment_confidence"), 0.0) or 0.0
+    confirmed_negative_sentiment = (
+        sentiment_score is not None
+        and sentiment_confidence >= 0.5
+        and sentiment_score <= -0.5
+    )
+
+    return bool(
+        (score or 0.0) >= 16
+        and (volume_z or 0.0) >= 1.25
+        and confirmed >= 1
+        and reward_risk is not None
+        and reward_risk >= 1.5
+        and (close_position or 0.0) >= 0.80
+        and (sma20_distance is None or sma20_distance <= 0.26)
+        and (rsi is None or rsi <= 88.0)
+        and not confirmed_negative_sentiment
+    )
 
 
 def _symbol_frame(data: pd.DataFrame, symbol: str) -> pd.DataFrame:
@@ -297,9 +540,117 @@ def _outcome_for_signal(signal: dict[str, Any], frame: pd.DataFrame) -> dict[str
         "mfe_10d": round((max(window_highs) - entry) / entry, 4) if window_highs else None,
         "mae_10d": round((min(window_lows) - entry) / entry, 4) if window_lows else None,
         "first_hit": first_hit,
+        "exit_policy_v2": _simulate_exit_policy_v2(
+            entry=entry,
+            stop=stop,
+            take=take,
+            closes=closes,
+            highs=highs,
+            lows=lows,
+            dates=dates,
+        ),
     }
     outcome["verdict"] = _verdict(outcome)
     return outcome
+
+
+def _simulate_exit_policy_v2(
+    *,
+    entry: float,
+    stop: float | None,
+    take: float | None,
+    closes: list[float | None],
+    highs: list[float | None],
+    lows: list[float | None],
+    dates: list[str],
+    partial_r: float = 1.0,
+    trailing_r: float = 2.0,
+    trailing_giveback_r: float = 1.0,
+    time_stop_days: int = 5,
+    time_stop_min_return: float = 0.0,
+) -> dict[str, Any]:
+    if not entry or not closes:
+        return {"available": False, "reason": "sin barras"}
+    initial_risk = entry - stop if stop is not None and stop < entry else None
+    if initial_risk is None or initial_risk <= 0:
+        initial_risk = entry * 0.05
+    partial_taken = False
+    peak_price = entry
+    trailing_stop = stop
+    events: list[dict[str, Any]] = []
+    exit_price = closes[min(len(closes), 10) - 1] or entry
+    exit_reason = "horizon_10d" if len(closes) >= 10 else "pending"
+    exit_day = min(len(closes), 10)
+    max_window = min(len(closes), 10)
+    for index in range(max_window):
+        day = index + 1
+        date = dates[index] if index < len(dates) else ""
+        high = highs[index]
+        low = lows[index]
+        close = closes[index]
+        if high is not None:
+            peak_price = max(peak_price, high)
+        if not partial_taken and high is not None and high >= entry + (partial_r * initial_risk):
+            partial_taken = True
+            events.append(
+                {
+                    "type": "partial_take_profit",
+                    "date": date,
+                    "days": day,
+                    "price": round(entry + (partial_r * initial_risk), 4),
+                    "fraction": 0.5,
+                }
+            )
+        if high is not None and high >= entry + (trailing_r * initial_risk):
+            candidate_stop = peak_price - (trailing_giveback_r * initial_risk)
+            trailing_stop = max(trailing_stop or 0.0, candidate_stop)
+        active_stop = trailing_stop or stop
+        if low is not None and active_stop is not None and low <= active_stop:
+            exit_price = active_stop
+            exit_reason = "trailing_stop" if trailing_stop and trailing_stop != stop else "stop_loss"
+            exit_day = day
+            events.append({"type": exit_reason, "date": date, "days": day, "price": round(exit_price, 4)})
+            break
+        if high is not None and take is not None and high >= take:
+            exit_price = take
+            exit_reason = "take_profit"
+            exit_day = day
+            events.append({"type": "take_profit", "date": date, "days": day, "price": round(exit_price, 4)})
+            break
+        if day >= time_stop_days and close is not None and ((close - entry) / entry) <= time_stop_min_return:
+            exit_price = close
+            exit_reason = "time_stop"
+            exit_day = day
+            events.append({"type": "time_stop", "date": date, "days": day, "price": round(exit_price, 4)})
+            break
+    gross_return = (exit_price - entry) / entry
+    if partial_taken and exit_reason not in {"pending"}:
+        partial_price = entry + (partial_r * initial_risk)
+        gross_return = (((partial_price - entry) / entry) * 0.5) + (((exit_price - entry) / entry) * 0.5)
+    # Retorno neto de slippage sintetico (T5.5), aditivo: no altera return_pct
+    # (que sigue siendo el bruto) para no romper metricas/tests existentes.
+    from .cost_calibration import apply_synthetic_slippage
+
+    net_return = apply_synthetic_slippage(gross_return, slippage_bps=10)
+    return {
+        "available": True,
+        "exit_reason": exit_reason,
+        "exit_day": exit_day,
+        "exit_price": round(exit_price, 4),
+        "return_pct": round(gross_return, 4),
+        "gross_return_pct": round(gross_return, 4),
+        "net_return_pct": round(net_return, 4),
+        "partial_taken": partial_taken,
+        "peak_return": round((peak_price - entry) / entry, 4),
+        "events": events,
+        "parameters": {
+            "partial_r": partial_r,
+            "trailing_r": trailing_r,
+            "trailing_giveback_r": trailing_giveback_r,
+            "time_stop_days": time_stop_days,
+            "time_stop_min_return": time_stop_min_return,
+        },
+    }
 
 
 def _verdict(outcome: dict[str, Any]) -> str:

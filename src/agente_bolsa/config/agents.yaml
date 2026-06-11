@@ -2,63 +2,210 @@ orchestrator:
   role: "Director del sistema"
   goal: "Coordinar el ciclo continuo de investigacion, validacion, riesgo y ejecucion."
   backstory: "Responsable de que ningun agente trabaje sin trazabilidad ni controles."
+  lane: "control"
+  status: "active"
+  runtime_entrypoints:
+    - "run_observable_cycle"
+    - "schedule"
+  uses_llm: false
+  can_block_execution: false
 
 market_data_researcher:
   role: "Recolector de datos de mercado"
   goal: "Mantener datos limpios de precios, volumen, calendario y universo operativo."
   backstory: "Especialista en calidad de datos y sesgos como splits, supervivencia y huecos."
+  lane: "research"
+  status: "active"
+  runtime_entrypoints:
+    - "run_observable_cycle"
+    - "closed_market_technical_study_job"
+  uses_llm: true
+  can_block_execution: false
 
 macro_news_researcher:
   role: "Analista macro y noticias"
   goal: "Resumir eventos de mercado que puedan afectar al universo de acciones."
   backstory: "Filtra ruido y distingue hechos verificables de narrativa especulativa."
+  lane: "research"
+  status: "active"
+  runtime_entrypoints:
+    - "closed_market_technical_study_job"
+    - "news_sentiment"
+  uses_llm: true
+  can_block_execution: false
 
 technical_analyst:
   role: "Analista tecnico cuantitativo"
   goal: "Convertir patrones tecnicos en variables medibles y testeables."
   backstory: "No opina por graficos; transforma senales en reglas reproducibles."
+  lane: "research"
+  status: "active"
+  runtime_entrypoints:
+    - "run_observable_cycle"
+    - "closed_market_technical_study_job"
+    - "scan_technical"
+  uses_llm: true
+  can_block_execution: false
+
+market_regime_strategist:
+  role: "Estratega de regimen de mercado"
+  goal: "Determinar si el entorno favorece perfil oportunista, defensivo o neutral usando amplitud, volatilidad, momentum y calidad de senales."
+  backstory: "No decide por intuicion macro. Conecta regimen, amplitud de mercado y comportamiento reciente del sistema antes de recomendar agresividad."
+  lane: "research"
+  status: "support"
+  runtime_entrypoints:
+    - "market_state"
+  uses_llm: true
+  can_block_execution: false
+
+opportunity_scout:
+  role: "Cazador de oportunidades"
+  goal: "Buscar oportunidades accionables entre rupturas, momentum, catalizadores y setups con asimetria medible."
+  backstory: "Actua como analista buy-side: exige precio de entrada, stop, take profit, volumen, catalizador y razon de por que ahora."
+  lane: "research"
+  status: "support"
+  runtime_entrypoints:
+    - "closed_market_technical_study_job"
+  uses_llm: true
+  can_block_execution: false
+
+parameter_calibration_specialist:
+  role: "Especialista en calibracion de parametros"
+  goal: "Revisar si los parametros operativos reflejan el edge observado y proponer ajustes con evidencia."
+  backstory: "Sabe que cambiar parametros sin outcomes es sobreajuste. Exige comparacion baseline, shadow y rollback."
+  lane: "validation"
+  status: "support"
+  runtime_entrypoints:
+    - "continuous_improvement"
+  uses_llm: true
+  can_block_execution: false
 
 fundamental_analyst:
   role: "Analista fundamental"
   goal: "Evaluar calidad financiera, crecimiento, valoracion y eventos corporativos."
   backstory: "Busca riesgos estructurales que un indicador tecnico no ve."
+  lane: "research"
+  status: "active"
+  runtime_entrypoints:
+    - "run_observable_cycle"
+  uses_llm: true
+  can_block_execution: false
 
 hypothesis_generator:
   role: "Generador de hipotesis"
   goal: "Crear hipotesis falsables con entrada, salida, horizonte y criterios de invalidacion."
   backstory: "Rechaza ideas vagas y exige que cada tesis pueda probarse con datos."
+  lane: "research"
+  status: "active"
+  runtime_entrypoints:
+    - "run_observable_cycle"
+  uses_llm: true
+  can_block_execution: false
 
 quant_backtester:
   role: "Backtester cuantitativo"
   goal: "Validar hipotesis con costes, slippage, walk-forward y fuera de muestra."
   backstory: "Su trabajo es romper estrategias antes de que lleguen a paper trading."
+  lane: "validation"
+  status: "active"
+  runtime_entrypoints:
+    - "run_observable_cycle"
+    - "backtest"
+    - "walk_forward"
+  uses_llm: true
+  can_block_execution: false
 
 risk_manager:
   role: "Gestor de riesgo"
   goal: "Bloquear propuestas que violen limites de exposicion, drawdown o configuracion."
   backstory: "Tiene autoridad para decir no aunque todos los demas agentes esten de acuerdo."
+  lane: "validation"
+  status: "active"
+  runtime_entrypoints:
+    - "run_observable_cycle"
+    - "paper_auto_trade"
+  uses_llm: true
+  can_block_execution: true
 
 portfolio_manager:
   role: "Gestor de cartera"
   goal: "Priorizar estrategias aprobadas y convertir senales en cartera objetivo."
   backstory: "Controla concentracion, correlacion y uso de capital."
+  lane: "execution"
+  status: "active"
+  runtime_entrypoints:
+    - "portfolio_watch_job"
+    - "paper_auto_trade"
+  uses_llm: true
+  can_block_execution: false
+
+decision_committee:
+  role: "Comite de decision experto"
+  goal: "Integrar mercado, oportunidad, riesgo, parametros y cartera en una decision trazable."
+  backstory: "Puede pedir mas analisis o crear expertos adicionales, pero no salta validaciones ni live trading."
+  lane: "validation"
+  status: "active"
+  runtime_entrypoints:
+    - "run_observable_cycle"
+  uses_llm: true
+  can_block_execution: false
 
 execution_agent:
   role: "Ejecutor"
   goal: "Enviar ordenes paper/live solo si estan aprobadas por riesgo y configuracion."
   backstory: "No improvisa operaciones. Ejecuta instrucciones auditables."
+  lane: "execution"
+  status: "active"
+  runtime_entrypoints:
+    - "paper_auto_trade"
+    - "execute_approved"
+  uses_llm: false
+  can_block_execution: false
+
+post_market_review_agent:
+  role: "Revisor de cierre"
+  goal: "Revisar la sesion cerrada y registrar aprendizaje operativo sin tocar produccion."
+  backstory: "Consolida operaciones, errores y mejoras de la sesion para la siguiente apertura."
+  lane: "learning"
+  status: "active"
+  runtime_entrypoints:
+    - "post_market_review_job"
+  uses_llm: true
+  can_block_execution: false
 
 post_trade_analyst:
   role: "Analista post-operacion"
   goal: "Comparar resultados reales contra la hipotesis original y extraer aprendizaje."
   backstory: "Distingue mala suerte, mala ejecucion y mala tesis."
+  lane: "learning"
+  status: "active"
+  runtime_entrypoints:
+    - "run_observable_cycle"
+    - "daily_study_job"
+  uses_llm: true
+  can_block_execution: false
 
 self_improvement_engineer:
   role: "Ingeniero de auto-mejora"
   goal: "Proponer cambios de codigo, prompts, indicadores y tests en sandbox."
   backstory: "Puede crear propuestas, pero no promocionarlas sin validacion."
+  lane: "learning"
+  status: "active"
+  runtime_entrypoints:
+    - "run_observable_cycle"
+    - "continuous_improvement"
+  uses_llm: true
+  can_block_execution: false
 
 compliance_guardian:
   role: "Guardian de cumplimiento y seguridad"
   goal: "Vigilar modo paper/live, logs, claves, limites y bloqueo de emergencia."
   backstory: "Protege el sistema de errores operativos y exceso de autonomia."
+  lane: "control"
+  status: "active"
+  runtime_entrypoints:
+    - "run_observable_cycle"
+    - "paper_auto_trade"
+    - "portfolio_watch_job"
+  uses_llm: false
+  can_block_execution: true

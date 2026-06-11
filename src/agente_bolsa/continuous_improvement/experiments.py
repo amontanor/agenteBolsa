@@ -402,6 +402,8 @@ class AutoApplyConfigAgent:
         target_key: str,
     ) -> str | None:
         payload = proposal.get("payload", {}) or {}
+        if getattr(settings, "system_freeze_mode", False):
+            return "system_freeze"
         if not settings.allow_auto_apply_improvements:
             return "ALLOW_AUTO_APPLY_IMPROVEMENTS=false"
         if settings.allow_live_trading:
@@ -796,6 +798,8 @@ class AutoApplyCodeAgent:
         return item
 
     def _blocked_reason(self, *, settings: Settings, proposal: dict[str, Any], validation: dict[str, Any]) -> str | None:
+        if getattr(settings, "system_freeze_mode", False):
+            return "system_freeze"
         if not settings.allow_auto_apply_improvements:
             return "ALLOW_AUTO_APPLY_IMPROVEMENTS=false"
         if settings.improvement_dry_run:
@@ -899,6 +903,13 @@ class AutoApplyCodeAgent:
                 path.unlink()
 
     def _apply_payload(self, workspace: Path, *, file_edits: Any, patch_text: str) -> None:
+        # T5.8: el camino legacy JAMAS escribe sobre el repo principal. Esa via
+        # es solo para entornos sin git (tests con workspace temporal); en
+        # produccion la unica via de escritura es el worktree del GitSandbox.
+        if Path(workspace).resolve() == Path(__file__).resolve().parents[3]:
+            raise RuntimeError(
+                "Escritura directa sobre el repo principal prohibida (T5.8): usa el GitSandbox."
+            )
         if isinstance(file_edits, list) and file_edits:
             for item in file_edits:
                 if not isinstance(item, dict) or not item.get("path"):

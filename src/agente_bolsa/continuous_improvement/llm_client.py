@@ -15,10 +15,16 @@ from agente_bolsa.config import Settings
 from agente_bolsa.logging_utils import log_system_event
 from agente_bolsa.models import new_id
 
+from .context_compaction import compact_messages_for_token_budget, estimate_json_tokens
 from .schemas import LLMImprovementResponse, LLMJsonResult
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _is_quota_exhausted_error(error_text: str) -> bool:
+    text = str(error_text or "").lower()
+    return "quota exhausted" in text or "code\": \"429" in text or "http 429" in text
 
 
 class _ImprovementEndpoint:
@@ -113,6 +119,7 @@ class ImprovementLLMClient:
                 request_preview=request_preview,
             )
 
+        final_preview = request_preview
         config_error = self._configuration_error(primary.provider)
         if config_error:
             LOGGER.warning("Improvement primary LLM configuration invalid: %s", config_error)
@@ -131,8 +138,16 @@ class ImprovementLLMClient:
             if result.ok:
                 return result
             last_error = result.error or ""
+            final_preview = result.request_preview
 
         fallback_endpoint = endpoints[1] if len(endpoints) > 1 else None
+        if fallback_endpoint is not None and _is_quota_exhausted_error(last_error):
+            final_preview = {
+                **final_preview,
+                "fallback_skipped": True,
+                "fallback_skip_reason": "quota_exhausted",
+            }
+            fallback_endpoint = None
         if fallback_endpoint is not None:
             fallback_preview = {
                 **request_preview,
@@ -153,6 +168,7 @@ class ImprovementLLMClient:
             )
             if fallback_result.ok:
                 return fallback_result
+            final_preview = fallback_result.request_preview
             fallback_error = fallback_result.error or ""
             if last_error and fallback_error:
                 last_error = f"primary_error={last_error} | local_fallback_error={fallback_error}"
@@ -172,7 +188,11 @@ class ImprovementLLMClient:
             provider=primary.provider,
             model=primary.model,
             base_url=primary.base_url,
-            request_preview=request_preview,
+            prompt_tokens_estimate=final_preview.get("prompt_tokens_estimate"),
+            context_limit_tokens=final_preview.get("context_limit_tokens"),
+            context_compacted=bool(final_preview.get("context_compacted")),
+            truncation_report=final_preview.get("truncation_report") or {},
+            request_preview=final_preview,
         )
 
     def _endpoints(self, model_name: str) -> list[_ImprovementEndpoint]:
@@ -191,9 +211,9 @@ class ImprovementLLMClient:
                 _ImprovementEndpoint(
                     name="local_fallback",
                     provider="openai-local",
-                    base_url=self.settings.openai_api_base,
-                    api_key=self.settings.openai_api_key or "local-llama",
-                    model=self.settings.openai_model,
+                    base_url=self.settings.llm_local_fallback_api_base,
+                    api_key=self.settings.llm_local_fallback_api_key,
+                    model=self.settings.llm_local_fallback_model,
                     fallback_used=True,
                 )
             )
@@ -210,10 +230,70 @@ class ImprovementLLMClient:
         request_preview: dict[str, Any],
         response_model: type[BaseModel],
     ) -> LLMJsonResult:
+        target_tokens = (
+            self.settings.improvement_llm_local_context_target_tokens
+            if endpoint.fallback_used
+            else self.settings.improvement_llm_context_target_tokens
+        )
+        hard_limit_tokens = (
+            self.settings.improvement_llm_local_context_hard_limit_tokens
+            if endpoint.fallback_used
+            else self.settings.improvement_llm_context_hard_limit_tokens
+        )
+        messages_to_send, truncation_report = compact_messages_for_token_budget(
+            messages,
+            target_tokens=target_tokens,
+            hard_limit_tokens=hard_limit_tokens,
+            force=endpoint.fallback_used,
+        )
+        prompt_tokens_estimate = estimate_json_tokens(messages_to_send)
+        request_preview = {
+            **request_preview,
+            "prompt_tokens_estimate": prompt_tokens_estimate,
+            "context_limit_tokens": hard_limit_tokens,
+            "context_compacted": bool(truncation_report.get("compacted")),
+            "truncation_report": truncation_report,
+        }
+        if prompt_tokens_estimate > hard_limit_tokens:
+            last_error = (
+                "context_too_large_before_request: "
+                f"estimated_tokens={prompt_tokens_estimate} hard_limit={hard_limit_tokens}"
+            )
+            log_system_event(
+                self.settings.logs_dir,
+                "continuous_improvement_llm_rejected",
+                {
+                    "llm_call_id": llm_call_id,
+                    "provider": endpoint.provider,
+                    "model": endpoint.model,
+                    "base_url": endpoint.base_url,
+                    "fallback_used": endpoint.fallback_used,
+                    "error": last_error,
+                    "prompt_tokens_estimate": prompt_tokens_estimate,
+                    "context_limit_tokens": hard_limit_tokens,
+                    "context_compacted": bool(truncation_report.get("compacted")),
+                    "truncation_report": truncation_report,
+                },
+            )
+            return LLMJsonResult(
+                ok=False,
+                llm_call_id=llm_call_id,
+                raw_response=None,
+                error=last_error,
+                provider=endpoint.provider,
+                model=endpoint.model,
+                base_url=endpoint.base_url,
+                fallback_used=endpoint.fallback_used,
+                prompt_tokens_estimate=prompt_tokens_estimate,
+                context_limit_tokens=hard_limit_tokens,
+                context_compacted=bool(truncation_report.get("compacted")),
+                truncation_report=truncation_report,
+                request_preview=request_preview,
+            )
         request_body = self._request_body(
             provider=endpoint.provider,
             model=endpoint.model,
-            messages=messages,
+            messages=messages_to_send,
             temperature=temperature,
             max_tokens=max_tokens,
         )
@@ -237,6 +317,10 @@ class ImprovementLLMClient:
                         "base_url": endpoint.base_url,
                         "fallback_used": endpoint.fallback_used,
                         "attempt": attempt + 1,
+                        "prompt_tokens_estimate": prompt_tokens_estimate,
+                        "context_limit_tokens": hard_limit_tokens,
+                        "context_compacted": bool(truncation_report.get("compacted")),
+                        "truncation_report": truncation_report,
                     },
                 )
                 return LLMJsonResult(
@@ -248,6 +332,10 @@ class ImprovementLLMClient:
                     model=endpoint.model,
                     base_url=endpoint.base_url,
                     fallback_used=endpoint.fallback_used,
+                    prompt_tokens_estimate=prompt_tokens_estimate,
+                    context_limit_tokens=hard_limit_tokens,
+                    context_compacted=bool(truncation_report.get("compacted")),
+                    truncation_report=truncation_report,
                     request_preview=request_preview,
                 )
             except (OSError, ValueError, ValidationError) as exc:
@@ -264,6 +352,10 @@ class ImprovementLLMClient:
             model=endpoint.model,
             base_url=endpoint.base_url,
             fallback_used=endpoint.fallback_used,
+            prompt_tokens_estimate=prompt_tokens_estimate,
+            context_limit_tokens=hard_limit_tokens,
+            context_compacted=bool(truncation_report.get("compacted")),
+            truncation_report=truncation_report,
             request_preview=request_preview,
         )
 

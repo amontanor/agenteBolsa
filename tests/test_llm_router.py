@@ -10,72 +10,69 @@ from agente_bolsa.llm_usage import record_llm_response
 from agente_bolsa.storage import Store
 
 
-def test_configured_llm_endpoints_prioritize_primary_then_fallback():
+def test_configured_llm_endpoints_return_primary_and_local_fallback():
     settings = Settings(
-        OPENAI_API_KEY="local-llama",
-        OPENAI_API_BASE="http://127.0.0.1:8080/v1",
-        OPENAI_MODEL_NAME="qwen3.6-27b",
-        LLM_FALLBACK_ENABLED=True,
-        LLM_FALLBACK_API_KEY="gemini-key",
-        LLM_FALLBACK_API_BASE="https://generativelanguage.googleapis.com/v1beta/openai/",
-        LLM_FALLBACK_MODEL="gemini-3.5-flash",
+        OPENAI_API_KEY="mimo-key",
+        OPENAI_API_BASE="https://token-plan-ams.xiaomimimo.com/v1",
+        OPENAI_MODEL_NAME="mimo-v2.5-pro",
+        LLM_LOCAL_FALLBACK_ENABLED=True,
+        LLM_LOCAL_FALLBACK_API_KEY="local-llama",
+        LLM_LOCAL_FALLBACK_API_BASE="http://127.0.0.1:8080/v1",
+        LLM_LOCAL_FALLBACK_MODEL="qwen3.6-27b",
     )
 
     endpoints = configured_llm_endpoints(settings)
 
-    assert [endpoint.name for endpoint in endpoints] == ["primary", "fallback"]
-    assert endpoints[0].base_url == "http://127.0.0.1:8080/v1"
-    assert endpoints[0].model == "qwen3.6-27b"
-    assert endpoints[1].base_url == "https://generativelanguage.googleapis.com/v1beta/openai/"
-    assert endpoints[1].model == "gemini-3.5-flash"
-    assert endpoints[1].reasoning_effort == "low"
+    assert [endpoint.name for endpoint in endpoints] == ["primary", "local_fallback"]
+    assert endpoints[0].base_url == "https://token-plan-ams.xiaomimimo.com/v1"
+    assert endpoints[0].model == "mimo-v2.5-pro"
+    assert endpoints[1].base_url == "http://127.0.0.1:8080/v1"
+    assert endpoints[1].model == "qwen3.6-27b"
 
 
-def test_select_preferred_endpoint_uses_fallback_when_primary_preflight_fails(monkeypatch):
+def test_select_preferred_endpoint_returns_primary_when_it_is_available(monkeypatch):
     settings = Settings(
-        OPENAI_API_KEY="local-llama",
-        OPENAI_API_BASE="http://127.0.0.1:8080/v1",
-        OPENAI_MODEL_NAME="qwen3.6-27b",
-        LLM_FALLBACK_ENABLED=True,
-        LLM_FALLBACK_API_KEY="gemini-key",
-        LLM_FALLBACK_API_BASE="https://generativelanguage.googleapis.com/v1beta/openai/",
-        LLM_FALLBACK_MODEL="gemini-3.5-flash",
+        OPENAI_API_KEY="mimo-key",
+        OPENAI_API_BASE="https://token-plan-ams.xiaomimimo.com/v1",
+        OPENAI_MODEL_NAME="mimo-v2.5-pro",
+        LLM_LOCAL_FALLBACK_ENABLED=True,
+        LLM_LOCAL_FALLBACK_API_KEY="local-llama",
+        LLM_LOCAL_FALLBACK_API_BASE="http://127.0.0.1:8080/v1",
+        LLM_LOCAL_FALLBACK_MODEL="qwen3.6-27b",
     )
 
     def fake_is_endpoint_available(endpoint, timeout_seconds):
-        if endpoint.name == "primary":
-            return False, "connection refused"
         return True, None
 
     monkeypatch.setattr("agente_bolsa.llm_router.is_endpoint_available", fake_is_endpoint_available)
 
     endpoint, attempts = select_preferred_endpoint(settings)
 
-    assert endpoint.name == "fallback"
-    assert endpoint.model == "gemini-3.5-flash"
-    assert attempts[0]["available"] is False
+    assert endpoint.name == "primary"
+    assert endpoint.model == "mimo-v2.5-pro"
+    assert attempts[0]["available"] is True
 
 
 # -- Router por roles (T0.4) ----------------------------------------------
 def _role_settings(**overrides):
     base = {
-        "OPENAI_API_KEY": "local-llama",
-        "OPENAI_API_BASE": "http://127.0.0.1:8080/v1",
-        "OPENAI_MODEL_NAME": "qwen3.6-27b",
+        "OPENAI_API_KEY": "mimo-key",
+        "OPENAI_API_BASE": "https://token-plan-ams.xiaomimimo.com/v1",
+        "OPENAI_MODEL_NAME": "mimo-v2.5-pro",
+        "LLM_LOCAL_FALLBACK_ENABLED": True,
+        "LLM_LOCAL_FALLBACK_API_KEY": "local-llama",
+        "LLM_LOCAL_FALLBACK_API_BASE": "http://127.0.0.1:8080/v1",
+        "LLM_LOCAL_FALLBACK_MODEL": "qwen3.6-27b",
         "LLM_PRIMARY_PREFLIGHT_ENABLED": False,
-        "LLM_FALLBACK_ENABLED": True,
-        "LLM_FALLBACK_API_KEY": "gemini-key",
-        "LLM_FALLBACK_API_BASE": "https://generativelanguage.googleapis.com/v1beta/openai/",
-        "LLM_FALLBACK_MODEL": "gemini-3.5-flash",
     }
     base.update(overrides)
     return Settings(**base)
 
 
-def test_role_without_config_falls_back_to_default_chain():
+def test_role_without_config_uses_default_chain():
     settings = _role_settings()
     endpoints = role_endpoints(settings, "fast")
-    assert [endpoint.name for endpoint in endpoints] == ["primary", "fallback"]
+    assert [endpoint.name for endpoint in endpoints] == ["primary", "local_fallback"]
 
 
 def test_role_with_config_prepends_its_endpoint():

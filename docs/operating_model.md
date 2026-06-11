@@ -65,7 +65,8 @@ Agentes implicados:
 Objetivo:
 
 - Solo corre si NYSE esta abierto.
-- Descargar snapshot real.
+- Descargar snapshot real con el proveedor configurado.
+- Construir `market_state` obligatorio con regimen, calidad de datos y postura de riesgo.
 - Recalcular variables tecnicas.
 - Generar o revisar hipotesis.
 - Bloquear cualquier decision sin backtest, stop loss, take profit y riesgo definido.
@@ -141,18 +142,19 @@ Fases por ciclo:
 
 ## Decision operativa LLM
 
-La primera version operativa queda en modo dry-run:
+La operativa por defecto usa `TRADE_AGGRESSIVENESS_PROFILE=opportunistic` en `paper`. Esto amplia el numero de candidatos y permite micro-experimentos cuando hay alta conviccion, pero no activa live trading ni aumenta el limite por posicion.
 
 1. `portfolio-status` lee cuenta, posiciones y ordenes abiertas desde Alpaca paper.
 2. `decide-once` carga los mejores candidatos del ultimo estudio tecnico cerrado y el ultimo sentimiento disponible.
 3. El LLM devuelve JSON estricto con `buy`, `sell`, `hold`, `reduce` o `exit`.
-4. El codigo normaliza la respuesta y calcula el tamano de compras con reglas deterministas.
-5. `risk_manager` valida entrada, stop, take profit, exposicion maxima y ratio beneficio/riesgo.
-6. Se guardan recomendaciones y planes en SQLite, pero no se envia ninguna orden.
+4. El codigo normaliza la respuesta y ejecuta revision determinista y adversarial no-LLM.
+5. `risk_manager` valida entrada, stop, take profit, exposicion maxima, ratio beneficio/riesgo, calidad de datos y politica de regimen.
+6. Se guardan recomendaciones y planes en SQLite; las entradas `micro_experiment` se dimensionan con `MICRO_EXPERIMENT_SIZE_MULTIPLIER`.
 7. `execute-approved` envia planes aprobados a Alpaca paper solo con confirmacion explicita o `AUTO_PAPER_TRADING=true`.
 8. Si NYSE esta cerrado, `execute-approved` bloquea el envio salvo `--queue-closed-market`.
 
 El LLM decide intencion y tesis. El codigo decide limites, tamano maximo y aprobacion de riesgo.
+En paper, `BACKTEST_GATE_PAPER_SOFT_OVERRIDE_ENABLED=true` permite que una senal de alta conviccion con backtest fallido pase como micro-operacion trazada. En live, el backtest fallido sigue siendo veto duro.
 
 En la consola se imprime cada fase con agente, ciclo y accion. Para validar la maquinaria sin consumir LLM se puede ejecutar:
 
@@ -178,6 +180,16 @@ El sistema se auto-mejora por evidencia acumulada, no por intuicion del LLM.
 6. Promocion: una mejora solo pasa a uso si supera tests, backtest y paper trading.
 
 La auto-mejora puede proponer codigo, indicadores o prompts, pero no puede saltarse al `risk_manager`, cambiar a live trading ni ejecutar una estrategia no validada.
+
+El protocolo actual usa estados `champion`, `challenger`, `shadow`, `micro_experiment`, `rejected` y `retired`. Los parametros quedan congelados durante la ventana de evaluacion; cambios repetidos de thresholds o conflictos con una ventana congelada bloquean la promocion.
+
+Comandos de auditoria:
+
+```powershell
+python -m agente_bolsa.main strategy-registry --json
+python -m agente_bolsa.main market-data-reconciliation --json
+python -m agente_bolsa.main live-readiness --json
+```
 
 ## Estudios tecnicos
 

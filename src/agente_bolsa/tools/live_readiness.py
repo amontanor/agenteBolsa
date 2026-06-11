@@ -175,6 +175,19 @@ def build_live_readiness_report(
         {"operational_kill_switch_enabled": settings.operational_kill_switch_enabled},
     )
 
+    formal_data = settings.market_data_provider == "fmp" or (
+        settings.market_data_provider == "auto" and bool(settings.fmp_api_key)
+    )
+    _check(
+        checks,
+        "market_data_provider",
+        "pass" if formal_data else "block",
+        "Proveedor de datos formal configurado."
+        if formal_data
+        else "Live requiere proveedor formal: FMP_API_KEY o MARKET_DATA_PROVIDER=fmp.",
+        {"market_data_provider": settings.market_data_provider, "fmp_api_key_set": bool(settings.fmp_api_key)},
+    )
+
     operational_block = load_operational_block_context(settings.data_dir)
     _check(
         checks,

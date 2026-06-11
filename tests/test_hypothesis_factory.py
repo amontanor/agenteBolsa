@@ -4,6 +4,7 @@ from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.hypothesis_factory import (
     DEFAULT_PARAM_BASE,
+    deflated_sharpe,
     generate_variants,
     passes_survival,
     run_batch,
@@ -12,7 +13,11 @@ from agente_bolsa.tools.hypothesis_factory import (
 
 
 def _setup(tmp_path, **overrides):
-    settings = Settings(DATA_DIR=tmp_path, **overrides)
+    # Cuota de regimen a 0 por defecto: estos tests cuentan solo las variantes
+    # parametricas base (la cuota de T5.7 se prueba en test_cash_regime).
+    base = {"FACTORY_REGIME_QUOTA": 0.0}
+    base.update(overrides)
+    settings = Settings(DATA_DIR=tmp_path, **base)
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()
     return settings, store
@@ -69,6 +74,21 @@ def test_run_batch_collects_survivors(tmp_path):
     batch = run_batch(variants, backtester=backtester, baseline_metrics=_BASELINE)
     assert batch["variants_run"] == 11
     assert len(batch["survivors"]) == 5
+
+
+def test_deflated_sharpe_penalizes_many_trials():
+    assert deflated_sharpe(1.2, 1) == 1.2
+    assert deflated_sharpe(1.2, 50) < 0  # 50 variantes elevan el umbral
+    assert deflated_sharpe(3.0, 50) > 0
+
+
+def test_survival_requires_positive_deflated_sharpe():
+    metrics = {"sharpe": 1.2, "trades": 40, "profit_factor": 1.5, "max_drawdown": 0.1, "expectancy_return": 0.02}
+    ok_one, _ = passes_survival(metrics, _BASELINE, subperiod_improvements=[0.1, 0.1, 0.1], n_trials=1)
+    ok_many, reasons = passes_survival(metrics, _BASELINE, subperiod_improvements=[0.1, 0.1, 0.1], n_trials=50)
+    assert ok_one
+    assert not ok_many
+    assert "deflated_sharpe<=0" in reasons
 
 
 def test_run_factory_persists_survivors_as_hypotheses(tmp_path):

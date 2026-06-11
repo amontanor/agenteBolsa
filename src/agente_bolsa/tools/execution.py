@@ -72,10 +72,13 @@ def build_market_order_request(
     *,
     client_order_id: str,
     use_bracket_orders: bool,
+    use_limit_entries: bool = False,
+    max_entry_gap_pct: float = 0.015,
 ) -> Any:
     try:
         from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
         from alpaca.trading.requests import (
+            LimitOrderRequest,
             MarketOrderRequest,
             StopLossRequest,
             TakeProfitRequest,
@@ -114,6 +117,19 @@ def build_market_order_request(
                 ),
             }
         )
+    elif (
+        plan["side"].lower() == "buy"
+        and use_limit_entries
+        and payload.get("entry_price")
+        and not _is_fractional_qty(qty)
+    ):
+        # Limit con techo de gap (T5.5): si la apertura supera el techo, la orden
+        # no se llena y se cancela al cierre (time_in_force=day). Eso es deseado.
+        request_kwargs["qty"] = float(qty)
+        request_kwargs["limit_price"] = _alpaca_price(
+            float(payload["entry_price"]) * (1.0 + float(max_entry_gap_pct))
+        )
+        return LimitOrderRequest(**request_kwargs)
     elif plan["side"].lower() == "buy" and notional:
         request_kwargs["notional"] = float(notional)
     else:
@@ -196,6 +212,8 @@ def submit_paper_order_plan(
         plan,
         client_order_id=client_order_id,
         use_bracket_orders=settings.use_bracket_orders,
+        use_limit_entries=getattr(settings, "use_limit_entries", False),
+        max_entry_gap_pct=getattr(settings, "max_entry_gap_pct", 0.015),
     )
     order = client.submit_order(order_data=order_request)
     return _order_snapshot(order)

@@ -1,11 +1,16 @@
+import json
+
 from agente_bolsa.tools.signal_learning import (
+    backfill_signal_candidates_from_reports,
     _outcome_for_signal,
     _combo_key,
     _indicator_tags,
     build_learning_status,
     record_signal_candidates,
+    update_signal_execution_status,
     update_signal_decisions,
 )
+from agente_bolsa.config import Settings
 from agente_bolsa.models import TradeRecommendation
 import pandas as pd
 
@@ -168,6 +173,235 @@ def test_update_signal_decisions_marks_blocked_entry_quality(tmp_path):
     assert row["gate"]["entry_quality_gate"]["reason"] == "score bajo"
 
 
+def test_update_signal_decisions_marks_soft_backtest_override(tmp_path):
+    from agente_bolsa.storage import Store
+
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    store.save_signal_outcome(
+        signal_id="scan-1:AAPL",
+        source_run_id="scan-1",
+        source="test",
+        symbol="AAPL",
+        signal_date="2026-04-27",
+        decision="candidate",
+        features={"score": 17},
+    )
+
+    updated = update_signal_decisions(
+        store,
+        source_run_id="scan-1",
+        recommendations=[
+            TradeRecommendation(symbol="AAPL", action="buy", confidence=0.9, reason="test")
+        ],
+        entry_quality_gate=[
+            {
+                "symbol": "AAPL",
+                "action": "buy",
+                "approved": True,
+                "reason": "entry-quality aprobado",
+                "checks": {
+                    "score": 17,
+                    "volume_zscore_20": 1.4,
+                    "confirmed_bullish_patterns": 2,
+                    "close_position_in_range": 0.85,
+                    "sma20_distance": 0.18,
+                    "rsi_14": 78,
+                    "entry_score_v2": {"reward_risk": 1.6},
+                },
+            }
+        ],
+        backtest_gate=[
+            {"symbol": "AAPL", "approved": False, "reason": "trades 5 < minimo 10", "checks": {}}
+        ],
+        settings=Settings(DATA_DIR=tmp_path),
+    )
+    row = store.signal_outcomes()[0]
+
+    assert updated == 1
+    assert row["decision"] == "approved_buy_soft_backtest"
+    assert row["gate"]["backtest_soft_override"]["approved"] is True
+    assert row["gate"]["backtest_gate"]["reason"] == "trades 5 < minimo 10"
+
+
+def test_update_signal_decisions_keeps_hard_backtest_block_when_not_high_conviction(tmp_path):
+    from agente_bolsa.storage import Store
+
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    store.save_signal_outcome(
+        signal_id="scan-1:AAPL",
+        source_run_id="scan-1",
+        source="test",
+        symbol="AAPL",
+        signal_date="2026-04-27",
+        decision="candidate",
+        features={"score": 12},
+    )
+
+    update_signal_decisions(
+        store,
+        source_run_id="scan-1",
+        recommendations=[
+            TradeRecommendation(symbol="AAPL", action="buy", confidence=0.9, reason="test")
+        ],
+        entry_quality_gate=[
+            {
+                "symbol": "AAPL",
+                "action": "buy",
+                "approved": True,
+                "reason": "entry-quality aprobado",
+                "checks": {
+                    "score": 12,
+                    "volume_zscore_20": 0.2,
+                    "confirmed_bullish_patterns": 0,
+                    "entry_score_v2": {"reward_risk": 1.6},
+                },
+            }
+        ],
+        backtest_gate=[
+            {"symbol": "AAPL", "approved": False, "reason": "trades 5 < minimo 10", "checks": {}}
+        ],
+        settings=Settings(DATA_DIR=tmp_path),
+    )
+    row = store.signal_outcomes()[0]
+
+    assert row["decision"] == "blocked_backtest"
+
+
+def test_update_signal_execution_status_marks_plan_rejected(tmp_path):
+    from agente_bolsa.storage import Store
+
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    store.save_signal_outcome(
+        signal_id="scan-1:AAPL",
+        source_run_id="scan-1",
+        source="test",
+        symbol="AAPL",
+        signal_date="2026-04-27",
+        decision="approved_buy",
+        features={"score": 16},
+        gate={"llm": {"action": "buy"}},
+    )
+
+    updated = update_signal_execution_status(
+        store,
+        source_run_id="scan-1",
+        approved_symbols=["AAPL"],
+        rejected_order_plans=[{"symbol": "AAPL", "stage": "position_sizing", "reason": "below_min_order_notional"}],
+        effective_max_orders_per_cycle=4,
+        effective_max_daily_buy_orders=4,
+    )
+    row = store.signal_outcomes()[0]
+
+    assert updated == 1
+    assert row["gate"]["execution"]["status"] == "plan_rejected"
+    assert row["gate"]["execution"]["stage"] == "position_sizing"
+    assert row["gate"]["execution"]["reason"] == "below_min_order_notional"
+
+
+def test_update_signal_execution_status_marks_submitted(tmp_path):
+    from agente_bolsa.storage import Store
+
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    store.save_signal_outcome(
+        signal_id="scan-1:MSFT",
+        source_run_id="scan-1",
+        source="test",
+        symbol="MSFT",
+        signal_date="2026-04-27",
+        decision="approved_buy",
+        features={"score": 17},
+        gate={"llm": {"action": "buy"}},
+    )
+
+    updated = update_signal_execution_status(
+        store,
+        source_run_id="scan-1",
+        approved_symbols=["MSFT"],
+        planned_symbols=["MSFT"],
+        submitted=[{"symbol": "MSFT", "status": "accepted", "notional": 1000.0}],
+        effective_max_orders_per_cycle=5,
+        effective_max_daily_buy_orders=5,
+    )
+    row = store.signal_outcomes()[0]
+
+    assert updated == 1
+    assert row["gate"]["execution"]["status"] == "submitted"
+    assert row["gate"]["execution"]["broker_status"] == "accepted"
+    assert row["gate"]["execution"]["notional"] == 1000.0
+    assert "backtest_soft_override" not in row["gate"]
+
+
+def test_backfill_signal_candidates_from_reports_infers_selected_candidates(tmp_path):
+    from agente_bolsa.storage import Store
+
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    report = {
+        "run_id": "mkt_backfill_1",
+        "as_of": "2026-05-28T22:12:17+02:00",
+        "all_candidates": [
+            {
+                "symbol": "AAPL",
+                "direction": "long",
+                "score": 16,
+                "setup_quality": "strong",
+                "last_date": "2026-05-28",
+                "technical_state": {"close": 100, "sma_20": 95},
+                "risk_plan": {"entry_price": 100, "stop_loss": 95, "take_profit": 115},
+            },
+            {
+                "symbol": "MSFT",
+                "direction": "long",
+                "score": 14,
+                "setup_quality": "strong",
+                "last_date": "2026-05-28",
+                "technical_state": {"close": 200, "sma_20": 190},
+                "risk_plan": {"entry_price": 200, "stop_loss": 190, "take_profit": 230},
+            },
+        ],
+        "top_longs": [
+            {
+                "symbol": "AAPL",
+                "direction": "long",
+                "score": 16,
+                "setup_quality": "strong",
+                "last_date": "2026-05-28",
+                "technical_state": {"close": 100, "sma_20": 95},
+                "risk_plan": {"entry_price": 100, "stop_loss": 95, "take_profit": 115},
+            }
+        ],
+        "top_shorts": [],
+    }
+    (reports_dir / "closed_market_technical_study_mkt_backfill_1.json").write_text(
+        json.dumps(report, indent=2),
+        encoding="utf-8",
+    )
+
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    settings = Settings(DATA_DIR=tmp_path, ALLOW_SHORT_SELLING=False)
+
+    result = backfill_signal_candidates_from_reports(
+        settings,
+        store,
+        reports_dir,
+        since_date="2026-05-01",
+        end_date="2026-05-31",
+    )
+    rows = {row["symbol"]: row for row in store.signal_outcomes()}
+
+    assert result["reports_saved"] == 1
+    assert result["signals_saved"] == 2
+    assert result["inferred_reports"] == 1
+    assert rows["AAPL"]["features"]["selected_for_llm"] is True
+    assert rows["AAPL"]["features"]["selection_method"] == "backfill_inferred_from_top_lists"
+    assert rows["MSFT"]["features"]["selected_for_llm"] is False
+
+
 def test_learning_status_groups_indicator_tags(tmp_path):
     from agente_bolsa.storage import Store
 
@@ -258,6 +492,33 @@ def test_learning_status_reports_combinations_and_maturity(tmp_path):
     assert report["maturity"]["enough_for_rules"] is False
     assert report["best_combinations"][0]["key"] == _combo_key({"features": features})
     assert report["best_combinations"][0]["avg_return_10d"] == 0.04
+
+
+def test_outcome_for_signal_includes_exit_policy_v2_partial_and_trailing():
+    frame = pd.DataFrame(
+        {
+            "Close": [102, 105, 110, 109, 108, 107, 106, 105, 104, 103],
+            "High": [104, 106, 111, 115, 114, 113, 112, 111, 110, 109],
+            "Low": [99, 103, 108, 109, 107, 106, 105, 104, 103, 102],
+        },
+        index=pd.date_range("2026-01-02", periods=10, freq="D"),
+    )
+    signal = {
+        "signal_date": "2026-01-01",
+        "features": {"entry_price": 100.0, "stop_loss": 95.0, "take_profit": 130.0},
+    }
+
+    outcome = _outcome_for_signal(signal, frame)
+    policy = outcome["exit_policy_v2"]
+
+    assert outcome["matured"] is True
+    assert outcome["mfe_10d"] == 0.15
+    assert outcome["mae_10d"] == -0.01
+    assert policy["available"] is True
+    assert policy["partial_taken"] is True
+    assert policy["exit_reason"] == "trailing_stop"
+    assert policy["exit_day"] == 4
+    assert policy["return_pct"] == 0.075
 
 
 def test_learning_status_reports_setup_stats(tmp_path):

@@ -13,24 +13,27 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    openai_api_key: str | None = Field(default="local-llama", alias="OPENAI_API_KEY")
+    openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     openai_api_base: str = Field(
-        default="http://127.0.0.1:8080/v1",
+        default="https://token-plan-ams.xiaomimimo.com/v1",
         validation_alias=AliasChoices("OPENAI_API_BASE", "OPENAI_BASE_URL", "LLM_BASE_URL"),
     )
     openai_model: str = Field(
-        default="qwen3.6-27b",
+        default="mimo-v2.5-pro",
         validation_alias=AliasChoices("OPENAI_MODEL_NAME", "OPENAI_MODEL", "LLM_MODEL"),
     )
     llm_primary_preflight_enabled: bool = Field(default=True, alias="LLM_PRIMARY_PREFLIGHT_ENABLED")
-    llm_fallback_enabled: bool = Field(default=True, alias="LLM_FALLBACK_ENABLED")
-    llm_fallback_api_key: str | None = Field(default=None, alias="LLM_FALLBACK_API_KEY")
-    llm_fallback_api_base: str = Field(
-        default="https://generativelanguage.googleapis.com/v1beta/openai/",
-        alias="LLM_FALLBACK_API_BASE",
+    llm_local_fallback_enabled: bool = Field(default=True, alias="LLM_LOCAL_FALLBACK_ENABLED")
+    llm_local_fallback_api_key: str | None = Field(default="local-llama", alias="LLM_LOCAL_FALLBACK_API_KEY")
+    llm_local_fallback_api_base: str = Field(
+        default="http://127.0.0.1:8080/v1",
+        alias="LLM_LOCAL_FALLBACK_API_BASE",
     )
-    llm_fallback_model: str = Field(default="gemini-3.5-flash", alias="LLM_FALLBACK_MODEL")
-    llm_fallback_reasoning_effort: str | None = Field(default="low", alias="LLM_FALLBACK_REASONING_EFFORT")
+    llm_local_fallback_model: str = Field(default="qwen3.6-27b", alias="LLM_LOCAL_FALLBACK_MODEL")
+    llm_local_fallback_preflight_enabled: bool = Field(
+        default=True,
+        alias="LLM_LOCAL_FALLBACK_PREFLIGHT_ENABLED",
+    )
     secondary_review_llm_enabled: bool = Field(default=False, alias="SECONDARY_REVIEW_LLM_ENABLED")
     secondary_review_llm_model: str = Field(default="", alias="SECONDARY_REVIEW_LLM_MODEL")
     llm_temperature: float = Field(default=0.2, alias="LLM_TEMPERATURE")
@@ -51,6 +54,9 @@ class Settings(BaseSettings):
     llm_role_deep_base_url: str | None = Field(default=None, alias="LLM_ROLE_DEEP_BASE_URL")
     llm_role_deep_api_key: str | None = Field(default=None, alias="LLM_ROLE_DEEP_API_KEY")
     llm_role_deep_max_tokens: int | None = Field(default=None, alias="LLM_ROLE_DEEP_MAX_TOKENS")
+    # Presupuesto economico del laboratorio (T5.9). 0 = sin limite.
+    llm_daily_budget_usd: float = Field(default=5.0, alias="LLM_DAILY_BUDGET_USD")
+    llm_role_deep_daily_budget_usd: float = Field(default=3.0, alias="LLM_ROLE_DEEP_DAILY_BUDGET_USD")
     crewai_planning: bool = Field(default=False, alias="CREWAI_PLANNING")
     crew_agent_max_iter: int = Field(default=1, alias="CREW_AGENT_MAX_ITER")
     crew_agent_max_execution_seconds: int = Field(default=120, alias="CREW_AGENT_MAX_EXECUTION_SECONDS")
@@ -705,6 +711,13 @@ class Settings(BaseSettings):
     improvement_llm_max_tokens: int = Field(default=6000, alias="IMPROVEMENT_LLM_MAX_TOKENS")
     improvement_llm_timeout_seconds: int = Field(default=120, alias="IMPROVEMENT_LLM_TIMEOUT_SECONDS")
     improvement_llm_retries: int = Field(default=2, alias="IMPROVEMENT_LLM_RETRIES")
+    # Ciclo de vida del laboratorio (Etapa 7): TTL, WIP y cierre de iniciativas.
+    ci_task_ttl_hours: float = Field(default=48.0, alias="CI_TASK_TTL_HOURS")
+    ci_initiative_ttl_days: float = Field(default=5.0, alias="CI_INITIATIVE_TTL_DAYS")
+    ci_initiative_stall_days: float = Field(default=3.0, alias="CI_INITIATIVE_STALL_DAYS")
+    ci_monitoring_close_days: float = Field(default=5.0, alias="CI_MONITORING_CLOSE_DAYS")
+    ci_max_open_initiatives: int = Field(default=6, alias="CI_MAX_OPEN_INITIATIVES")
+    ci_recurring_cooldown_hours: float = Field(default=24.0, alias="CI_RECURRING_COOLDOWN_HOURS")
     improvement_llm_local_fallback_enabled: bool = Field(
         default=True,
         alias="IMPROVEMENT_LLM_LOCAL_FALLBACK_ENABLED",
@@ -756,12 +769,15 @@ class Settings(BaseSettings):
     autonomy_demote_rollbacks: int = Field(default=2, alias="AUTONOMY_DEMOTE_ROLLBACKS")
     autonomy_demote_sessions: int = Field(default=10, alias="AUTONOMY_DEMOTE_SESSIONS")
     # Promocion champion/challenger de estrategias (T1.3).
-    promotion_min_sessions: int = Field(default=10, alias="PROMOTION_MIN_SESSIONS")
-    promotion_min_signals: int = Field(default=20, alias="PROMOTION_MIN_SIGNALS")
-    promotion_max_sessions: int = Field(default=25, alias="PROMOTION_MAX_SESSIONS")
+    promotion_min_sessions: int = Field(default=25, alias="PROMOTION_MIN_SESSIONS")  # T5.2
+    promotion_min_signals: int = Field(default=40, alias="PROMOTION_MIN_SIGNALS")  # T5.2
+    promotion_max_sessions: int = Field(default=45, alias="PROMOTION_MAX_SESSIONS")  # T5.2
     promotion_hit_rate_margin: float = Field(default=0.02, alias="PROMOTION_HIT_RATE_MARGIN")
     promotion_max_dd_factor: float = Field(default=1.2, alias="PROMOTION_MAX_DD_FACTOR")
     promotion_human_veto_hours: int = Field(default=0, alias="PROMOTION_HUMAN_VETO_HOURS")
+    promotion_binomial_max_p: float = Field(default=0.10, alias="PROMOTION_BINOMIAL_MAX_P")  # T5.2
+    max_concurrent_promotions: int = Field(default=2, alias="MAX_CONCURRENT_PROMOTIONS")  # T5.2
+    max_promotions_per_week: int = Field(default=1, alias="MAX_PROMOTIONS_PER_WEEK")  # T5.2
     # ProgrammerAgent end-to-end / construccion de estrategias (T1.4).
     ci_build_strategy_enabled: bool = Field(default=False, alias="CI_BUILD_STRATEGY_ENABLED")
     programmer_max_repair_attempts: int = Field(default=2, alias="PROGRAMMER_MAX_REPAIR_ATTEMPTS")
@@ -770,9 +786,11 @@ class Settings(BaseSettings):
     # Retrospectiva generativa nocturna (T2.3).
     nightly_retrospective_enabled: bool = Field(default=True, alias="NIGHTLY_RETROSPECTIVE_ENABLED")
     nightly_retrospective_min_evidence: int = Field(default=3, alias="NIGHTLY_RETROSPECTIVE_MIN_EVIDENCE")
-    # Memoria destilada / lecciones (T2.4).
+    # Memoria destilada / lecciones (T2.4 / T5.4).
     lessons_injection_enabled: bool = Field(default=True, alias="LESSONS_INJECTION_ENABLED")
     max_active_lessons: int = Field(default=40, alias="MAX_ACTIVE_LESSONS")
+    lesson_revalidation_window: int = Field(default=10, alias="LESSON_REVALIDATION_WINDOW")
+    lesson_min_supporting: int = Field(default=30, alias="LESSON_MIN_SUPPORTING")  # T5.4
     # Fabrica de agentes dinamicos (T2.2).
     max_dynamic_agents: int = Field(default=8, alias="MAX_DYNAMIC_AGENTS")
     # Tesis de mercado / contexto macro (T3.1).
@@ -786,6 +804,7 @@ class Settings(BaseSettings):
     # Scorecard de figuras con pesos dinamicos (T3.3).
     pattern_dynamic_weights_enabled: bool = Field(default=False, alias="PATTERN_DYNAMIC_WEIGHTS_ENABLED")
     pattern_min_occurrences: int = Field(default=30, alias="PATTERN_MIN_OCCURRENCES")
+    survivorship_haircut: float = Field(default=0.25, alias="SURVIVORSHIP_HAIRCUT")  # T5.6
     # Presupuesto de riesgo como unica correa (T4.1).
     risk_budget_enabled: bool = Field(default=False, alias="RISK_BUDGET_ENABLED")
     risk_budget_daily_var_pct: float = Field(default=0.03, alias="RISK_BUDGET_DAILY_VAR_PCT")
@@ -793,6 +812,20 @@ class Settings(BaseSettings):
     risk_budget_max_correlated_cluster_pct: float = Field(default=0.012, alias="RISK_BUDGET_MAX_CORRELATED_CLUSTER_PCT")
     # Camino a live con capital progresivo (T4.3).
     live_capital_fraction: float = Field(default=0.10, alias="LIVE_CAPITAL_FRACTION")
+    # Etapa 5: robustez de trading.
+    system_freeze_mode: bool = Field(default=False, alias="SYSTEM_FREEZE_MODE")  # T5.1
+    # Cash activo y estrategias por regimen (T5.7).
+    cash_floor_risk_off: float = Field(default=0.60, alias="CASH_FLOOR_RISK_OFF")
+    cash_floor_neutral: float = Field(default=0.25, alias="CASH_FLOOR_NEUTRAL")
+    factory_regime_quota: float = Field(default=0.30, alias="FACTORY_REGIME_QUOTA")
+    shorts_shadow_enabled: bool = Field(default=True, alias="SHORTS_SHADOW_ENABLED")
+    # Huecos operativos: earnings/splits/halts (T5.10).
+    earnings_hold_max_days: int = Field(default=2, alias="EARNINGS_HOLD_MAX_DAYS")
+    earnings_hold_policy: str = Field(default="reduce", alias="EARNINGS_HOLD_POLICY")
+    # Realismo de ejecucion (T5.5).
+    paper_synthetic_slippage_bps: float = Field(default=10.0, alias="PAPER_SYNTHETIC_SLIPPAGE_BPS")
+    max_entry_gap_pct: float = Field(default=0.015, alias="MAX_ENTRY_GAP_PCT")
+    use_limit_entries: bool = Field(default=True, alias="USE_LIMIT_ENTRIES")
     continuous_improvement_schedule_enabled: bool = Field(
         default=False,
         alias="CONTINUOUS_IMPROVEMENT_SCHEDULE_ENABLED",

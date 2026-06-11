@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.performance_baseline import (
+    _lab_promotion_quality,
     _max_drawdown,
     _sharpe,
     build_daily_performance,
@@ -20,6 +21,53 @@ def _store(tmp_path):
 
 def _settings(tmp_path):
     return SimpleNamespace(market_data_provider="auto", fmp_api_key=None, data_dir=tmp_path)
+
+
+def _seed_neutral_perf(store):
+    for i in range(1, 21):
+        store.upsert_performance_daily(
+            {"session_date": f"2026-05-{i:02d}", "alpha": 0.0005, "hit_rate_20": 0.55, "profit_factor": 1.8, "iq_score": 60}
+        )
+
+
+def test_lab_promotion_quality_ignores_neutral_changes(tmp_path):
+    store = _store(tmp_path)
+    for i in range(10):
+        store.save_continuous_improvement_applied_change(
+            {"applied_change_id": f"n{i}", "change_type": "CODE_CHANGE", "status": "APPLIED", "target_key": "x", "decision": {}}
+        )
+    assert _lab_promotion_quality(store) == 0.5  # promover neutros no mueve la nota
+
+
+def test_iq_score_unmoved_by_neutral_but_lowered_by_rollback(tmp_path):
+    store = _store(tmp_path)
+    _seed_neutral_perf(store)
+    iq_neutral = system_iq_score(store)
+
+    store2 = _store(tmp_path / "b")
+    _seed_neutral_perf(store2)
+    store2.save_continuous_improvement_applied_change(
+        {"applied_change_id": "r1", "change_type": "CODE_CHANGE", "status": "ROLLED_BACK", "target_key": "x", "decision": {}}
+    )
+    iq_reverted = system_iq_score(store2)
+    assert iq_reverted < iq_neutral
+
+
+def test_iq_score_raised_by_improved_promotions(tmp_path):
+    store = _store(tmp_path)
+    _seed_neutral_perf(store)
+    base = system_iq_score(store)
+    for i in range(3):
+        store.save_continuous_improvement_applied_change(
+            {
+                "applied_change_id": f"g{i}",
+                "change_type": "CODE_CHANGE",
+                "status": "APPLIED",
+                "target_key": "x",
+                "decision": {"watchdog": {"improved": True}},
+            }
+        )
+    assert system_iq_score(store) > base
 
 
 def test_max_drawdown_manual():

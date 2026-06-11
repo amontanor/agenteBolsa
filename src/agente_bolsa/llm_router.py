@@ -22,21 +22,20 @@ def configured_llm_endpoints(settings: Settings) -> list[LLMEndpoint]:
     endpoints = [
         LLMEndpoint(
             name="primary",
-            api_key=settings.openai_api_key or "local-llama",
+            api_key=str(settings.openai_api_key or "").strip(),
             base_url=settings.openai_api_base,
             model=settings.openai_model,
             preflight=settings.llm_primary_preflight_enabled,
-        )
+        ),
     ]
-    if settings.llm_fallback_enabled:
+    if settings.llm_local_fallback_enabled:
         endpoints.append(
             LLMEndpoint(
-                name="fallback",
-                api_key=settings.llm_fallback_api_key or settings.openai_api_key or "local-llama",
-                base_url=settings.llm_fallback_api_base,
-                model=settings.llm_fallback_model,
-                preflight=False,
-                reasoning_effort=settings.llm_fallback_reasoning_effort,
+                name="local_fallback",
+                api_key=str(settings.llm_local_fallback_api_key or "local-llama").strip(),
+                base_url=settings.llm_local_fallback_api_base,
+                model=settings.llm_local_fallback_model,
+                preflight=settings.llm_local_fallback_preflight_enabled,
             )
         )
     unique: list[LLMEndpoint] = []
@@ -107,7 +106,7 @@ def role_endpoints(settings: Settings, role: str) -> list[LLMEndpoint]:
     - Si solo hay modelo, se reutiliza la base del endpoint primario.
     - Para `deep` sin config explicita, se usa el modelo del laboratorio
       (`IMPROVEMENT_LLM_*`) cuando existe, que es el modelo potente por defecto.
-    - Siempre se anexa la cadena estandar como fallback.
+    - Siempre se anexa el endpoint primario como respaldo estandar.
     """
 
     role = (role or "").lower()
@@ -120,7 +119,7 @@ def role_endpoints(settings: Settings, role: str) -> list[LLMEndpoint]:
         endpoints.append(
             LLMEndpoint(
                 name=f"role:{role}",
-                api_key=api_key or settings.openai_api_key or "local-llama",
+                api_key=str(api_key or settings.openai_api_key or "").strip(),
                 base_url=base,
                 model=model,
                 preflight=settings.llm_primary_preflight_enabled,
@@ -130,7 +129,7 @@ def role_endpoints(settings: Settings, role: str) -> list[LLMEndpoint]:
         endpoints.append(
             LLMEndpoint(
                 name=f"role:{role}",
-                api_key=settings.openai_api_key or "local-llama",
+                api_key=str(settings.openai_api_key or "").strip(),
                 base_url=settings.openai_api_base,
                 model=model,
                 preflight=settings.llm_primary_preflight_enabled,
@@ -140,7 +139,7 @@ def role_endpoints(settings: Settings, role: str) -> list[LLMEndpoint]:
         endpoints.append(
             LLMEndpoint(
                 name="role:deep",
-                api_key=settings.improvement_llm_api_key or settings.openai_api_key or "local-llama",
+                api_key=str(settings.improvement_llm_api_key or settings.openai_api_key or "").strip(),
                 base_url=settings.improvement_llm_base_url,
                 model=settings.improvement_llm_model,
                 preflight=False,
@@ -170,6 +169,13 @@ def role_max_tokens(settings: Settings, role: str) -> int | None:
     return settings.llm_max_tokens
 
 
+class LLMBudgetExhausted(RuntimeError):
+    """El presupuesto economico diario del laboratorio se agoto (T5.9).
+
+    El laboratorio lo trata como 'posponer tarea', no como fallo.
+    """
+
+
 def chat_for_role(
     role: str,
     *,
@@ -180,11 +186,30 @@ def chat_for_role(
 ) -> tuple[Any, LLMEndpoint, list[dict[str, Any]]]:
     """Completa un chat usando el endpoint del rol con fallback a la cadena base."""
 
-    profile = ROLE_PROFILES.get((role or "").lower(), {})
+    role_lc = (role or "").lower()
+    profile = ROLE_PROFILES.get(role_lc, {})
     temp = temperature if temperature is not None else profile.get("temperature", settings.llm_temperature)
     tokens = max_tokens if max_tokens is not None else role_max_tokens(settings, role)
     timeout = profile.get("timeout") or settings.llm_timeout_seconds
-    endpoints = role_endpoints(settings, role)
+
+    # Presupuesto economico del laboratorio (T5.9). 0 = sin limite.
+    degrade_to_local = False
+    try:
+        from .llm_usage import today_llm_spend
+
+        total_budget = float(getattr(settings, "llm_daily_budget_usd", 0.0) or 0.0)
+        if total_budget > 0 and today_llm_spend(settings) >= total_budget:
+            raise LLMBudgetExhausted("llm_budget_exhausted")
+        if role_lc == "deep":
+            deep_budget = float(getattr(settings, "llm_role_deep_daily_budget_usd", 0.0) or 0.0)
+            if deep_budget > 0 and today_llm_spend(settings, role="deep") >= deep_budget:
+                degrade_to_local = True  # degradar al endpoint local barato
+    except LLMBudgetExhausted:
+        raise
+    except Exception:  # noqa: BLE001 - sin contabilidad disponible, no bloquear.
+        pass
+
+    endpoints = configured_llm_endpoints(settings) if degrade_to_local else role_endpoints(settings, role)
     return _complete_with_endpoints(
         settings,
         endpoints=endpoints,

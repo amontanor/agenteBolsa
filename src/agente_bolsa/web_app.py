@@ -23,6 +23,8 @@ try:
     import streamlit as st
 except ModuleNotFoundError:  # pragma: no cover - import-only test environments may omit dashboard extras.
     class _MissingStreamlit:
+        dataframe = None
+
         def __getattr__(self, name: str):
             raise RuntimeError("Streamlit no esta instalado. Instala las dependencias del dashboard para usar web.")
 
@@ -2445,6 +2447,14 @@ def _render_autonomy_panel(store: Any, settings: Any) -> None:
             f"iq_score: {state.get('iq_score')} | lecciones activas: {state.get('active_lessons')} | "
             f"promociones abiertas: {state.get('promotions_open')} | tesis: {thesis.get('stance')}"
         )
+        try:
+            from .tools.naive_benchmarks import edge_report as _edge_report
+
+            edge = _edge_report(store, sessions=60)
+            freeze = "ON" if getattr(settings, "system_freeze_mode", False) else "off"
+            st.caption(f"Edge base (T5.1): **{edge['verdict']}** | freeze={freeze} | t_vs_SPY={edge['t_stat_vs_spy']}")
+        except Exception:  # noqa: BLE001
+            pass
         paused = bool(state.get("lab_enabled") is False)
         col_pause, col_resume = st.columns(2)
         with col_pause:
@@ -3316,12 +3326,12 @@ def page_company_studies() -> None:
     )
 
     st.subheader("Iteraciones")
-    for index, (signal, reason) in enumerate(zip(symbol_signals, reasons_by_signal), start=1):
-        run_id = str(signal.get("source_run_id") or "")
+    for index, (sig, reason) in enumerate(zip(symbol_signals, reasons_by_signal), start=1):
+        run_id = str(sig.get("source_run_id") or "")
         news_items = [item for item in symbol_news if str(item.get("run_id") or "") == run_id]
         if not news_items:
             news_items = symbol_news[:1]
-        _render_company_study_iteration(signal, reason, news_items[:3], expanded=index == 1)
+        _render_company_study_iteration(sig, reason, news_items[:3], expanded=index == 1)
 
 
 def page_signals() -> None:
@@ -6175,19 +6185,23 @@ def _dashboard_llm_pills(
 ) -> list[dict[str, str]]:
     pills: list[dict[str, str]] = []
     latest_trade_llm = _latest_trade_decision_llm_usage(store)
+    primary_model = str(getattr(settings, "openai_model", "") or "").strip()
+    local_model = str(getattr(settings, "llm_local_fallback_model", "") or "").strip()
     trade_model = str(latest_trade_llm.get("model") or settings.openai_model or "-").strip()
     trade_created_at = latest_trade_llm.get("created_at")
     if latest_trade_llm:
-        trade_route = (
-            "local"
-            if trade_model == str(settings.openai_model)
-            else "fallback"
-            if trade_model == str(settings.llm_fallback_model)
-            else "activo"
-        )
+        if trade_model == primary_model:
+            trade_route = "mimo"
+            trade_tone = "good"
+        elif trade_model == local_model:
+            trade_route = "local"
+            trade_tone = "good"
+        else:
+            trade_route = "historico"
+            trade_tone = "neutral"
         pills.append(
             {
-                "tone": "good",
+                "tone": trade_tone,
                 "text": f"Trading LLM {trade_model} | {trade_route} {_local_time(trade_created_at)}",
             }
         )
@@ -6928,6 +6942,8 @@ def page_config() -> None:
         {"clave": "alpaca_endpoint", "valor": settings.alpaca_endpoint},
         {"clave": "openai_model", "valor": settings.openai_model},
         {"clave": "openai_api_base", "valor": settings.openai_api_base},
+        {"clave": "llm_local_fallback_model", "valor": settings.llm_local_fallback_model},
+        {"clave": "llm_local_fallback_api_base", "valor": settings.llm_local_fallback_api_base},
         {"clave": "closed_market_study_universe", "valor": settings.closed_market_study_universe},
         {"clave": "closed_market_study_max_symbols", "valor": settings.closed_market_study_max_symbols},
         {"clave": "breakout_extra_symbols", "valor": ", ".join(settings.breakout_watchlist) or "-"},

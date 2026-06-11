@@ -19,6 +19,12 @@ if TYPE_CHECKING:  # pragma: no cover - solo anotaciones.
 LAB_ENABLED_KEY = "continuous_improvement_enabled"
 
 
+def _llm_cost_today(settings: "Settings") -> float:
+    from ..llm_usage import today_llm_spend
+
+    return today_llm_spend(settings)
+
+
 def collect_autonomy_state(store: "Store", settings: "Settings") -> dict[str, Any]:
     """Reune el estado de autonomia para el dashboard y el digest."""
 
@@ -49,8 +55,21 @@ def collect_autonomy_state(store: "Store", settings: "Settings") -> dict[str, An
         "iq_score": latest_perf.get("iq_score"),
         "equity": latest_perf.get("equity"),
         "alpha": latest_perf.get("alpha"),
+        "result_metrics": (latest_perf.get("payload") or {}).get("result_metrics", {}),
+        "process_metrics": (latest_perf.get("payload") or {}).get("process_metrics", {}),
+        "llm_cost_today_usd": _safe(lambda: _llm_cost_today(settings), 0.0),
+        "pnl_pct_today": latest_perf.get("pnl_pct"),
         "lab_enabled": _safe(lambda: store.get_runtime_value(LAB_ENABLED_KEY), None),
+        # Flujo del laboratorio (Etapa 7): WIP, edades y throughput. Si
+        # oldest_open_days crece sin parar, el lab acumula en vez de terminar.
+        "lab_flow": _safe(lambda: _lab_flow(store), {}),
     }
+
+
+def _lab_flow(store: "Store") -> dict[str, Any]:
+    from ..continuous_improvement.lifecycle import flow_report
+
+    return flow_report(store)
 
 
 def build_autonomy_digest(store: "Store", settings: "Settings") -> dict[str, Any]:
@@ -68,6 +87,11 @@ def build_autonomy_digest(store: "Store", settings: "Settings") -> dict[str, Any
         f"- Agentes dinamicos activos: {state['dynamic_agents']} | lecciones activas: {state['active_lessons']}",
         f"- iq_score: {state['iq_score']} | equity: {state['equity']} | alpha: {state['alpha']}",
         f"- Tesis de mercado: stance={thesis.get('stance')} (confidence={thesis.get('confidence')})",
+        "",
+        "## El proceso no es el resultado (T5.3)",
+        f"- RESULTADO: {state.get('result_metrics')}",
+        f"- PROCESO: {state.get('process_metrics')}",
+        f"- Coste LLM hoy: ${state.get('llm_cost_today_usd')} | PnL del dia: {state.get('pnl_pct_today')} (T5.9)",
     ]
     digest_md = "\n".join(lines)
     path = settings.data_dir / "reports" / f"autonomy_digest_{date}.md"

@@ -41,6 +41,8 @@ class Strategy(ABC):
     version: str = "1"
     #: ACTIVE | SHADOW | RETIRED (lo fija el registry desde strategy_versions).
     status: str = "ACTIVE"
+    #: Regimen objetivo: trend | range | bear | any (T5.7).
+    target_regime: str = "any"
     #: Dias de historia que necesita para calcular sus features.
     required_history_days: int = 420
 

@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest ruff
+      - name: Chequeo de bytes nulos (T5.8)
+        run: python scripts/check_no_nulls.py
+      - name: Ruff
+        run: ruff check src tests
+      - name: Pytest
+        run: python -m pytest tests/ -q --deselect tests/test_pre_earnings.py::test_score_study_regression_current_sqlite

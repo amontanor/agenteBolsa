@@ -31,6 +31,20 @@ def _change_session_date(change: dict[str, Any]) -> str:
     return str(change.get("created_at") or "")[:10]
 
 
+def _dominant_regime(rows: list[dict[str, Any]]) -> str | None:
+    """Regimen de mercado mayoritario de una ventana (T5.2), o None si no consta."""
+
+    counts: dict[str, int] = {}
+    for row in rows:
+        payload = row.get("payload") or {}
+        regime = payload.get("regime") or (payload.get("market_state") or {}).get("market_regime")
+        if regime:
+            counts[str(regime)] = counts.get(str(regime), 0) + 1
+    if not counts:
+        return None
+    return max(counts, key=counts.get)
+
+
 def _trades_in_window(rows: list[dict[str, Any]]) -> int:
     total = 0
     for row in rows:
@@ -86,6 +100,13 @@ def evaluate_applied_changes(store: "Store", settings: "Settings") -> list[dict[
             decisions.append({**base, "verdict": "WAIT"})
             continue
 
+        # No comparar ventanas de regimenes distintos (T5.2): extender en su lugar.
+        regime_post = _dominant_regime(post)
+        regime_prior = _dominant_regime(prior_window)
+        if regime_post and regime_prior and regime_post != regime_prior:
+            decisions.append({**base, "verdict": "WAIT", "reason": f"regime_mismatch:{regime_prior}->{regime_post}"})
+            continue
+
         iq_post = _mean([row.get("iq_score") for row in post])
         iq_prior = _mean([row.get("iq_score") for row in prior_window])
         hit_post = _mean([row.get("hit_rate_20") for row in post])
@@ -124,7 +145,15 @@ def evaluate_applied_changes(store: "Store", settings: "Settings") -> list[dict[
             store.save_continuous_improvement_applied_change(change)
             decisions.append({**base, "verdict": "ROLLBACK_REQUESTED", "metrics": metrics, "reasons": reasons})
         else:
-            decisions.append({**base, "verdict": "HOLD", "metrics": metrics})
+            # HOLD: registrar si la ventana post mejoro, para la calidad de
+            # promociones corregida del iq_score (T5.3).
+            improved = bool(iq_drop is not None and iq_drop < 0)
+            change["decision"] = {
+                **(change.get("decision") or {}),
+                "watchdog": {"metrics": metrics, "improved": improved},
+            }
+            store.save_continuous_improvement_applied_change(change)
+            decisions.append({**base, "verdict": "HOLD", "metrics": metrics, "improved": improved})
 
     return decisions
 
@@ -174,7 +203,7 @@ def run_change_watchdog(store: "Store", settings: "Settings") -> dict[str, Any]:
     # Tras rollbacks (semana mala), recortar el presupuesto de riesgo -25% (T4.1).
     if rolled_back and getattr(settings, "risk_budget_enabled", False):
         try:
-            from .risk_budget import risk_budget_throttle
+            from ..risk_budget import risk_budget_throttle
 
             throttle = risk_budget_throttle(store, settings, 0.75)
         except Exception:  # noqa: BLE001 - el throttle no debe tumbar el watchdog.

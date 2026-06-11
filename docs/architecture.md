@@ -134,6 +134,32 @@ El gestor de riesgo puede bloquear cualquier orden. Reglas iniciales:
 
 `technical_study.build_closed_market_technical_study` ahora acepta un `store` opcional, itera `registry.discover(store)` y etiqueta cada candidato con `strategy_name`/`strategy_version`. Con solo `builtin_breakout` ACTIVE (por defecto) el comportamiento es idéntico. Las estrategias SHADOW generan candidatos que van a `shadow_candidates` del informe y nunca llegan a `trade_decision` ni a ejecución. CLI: `strategy-registry --list-registry`, `--activate/--shadow/--retire <name>`.
 
+## Etapa 5 — Robustez de trading: edge, estadistica y realismo
+
+Corrige los puntos debiles que deciden si la maquina autonoma gana dinero o automatiza una estrategia mediocre.
+
+**T5.8 Endurecer auto-escritura** (`sandbox.py`, `scripts/check_no_nulls.py`, `.github/workflows/ci.yml`, `.pre-commit-config.yaml`): cada archivo escrito en el worktree se re-lee y valida (sin bytes nulos, `ast.parse` en `.py`, byte a byte, newline final); `_apply_payload` legacy rechaza escribir sobre el repo principal; CI remota y hook pre-commit bloquean corrupcion.
+
+**T5.1 Edge base + freeze** (`tools/naive_benchmarks.py`): `SYSTEM_FREEZE_MODE` bloquea apply/config/promocion/tuning (el laboratorio sigue aprendiendo); `edge_report` calcula alpha y t-stat vs SPY y vs momentum ingenuo, con veredicto `EDGE_CONFIRMED|EDGE_WEAK|NO_EDGE`. CLI `edge-report`.
+
+**T5.2 Disciplina estadistica** (`hypothesis_factory.py`, `promotion.py`, `change_watchdog.py`): deflated Sharpe (penaliza por `n_trials`); promocion exige test binomial `p<0.10` y defaults 25/40/45; change budget (`MAX_CONCURRENT_PROMOTIONS`, `MAX_PROMOTIONS_PER_WEEK`) con cola QUEUED; el watchdog no compara ventanas de regimenes distintos.
+
+**T5.3 iq_score anti-Goodhart** (`performance_baseline.py`): una promocion solo suma si su ventana post mejoro (flag del watchdog), resta si fue revertida, neutros no cuentan; `performance_daily` separa `result_metrics`/`process_metrics`.
+
+**T5.4 Lecciones como hipotesis** (`lesson_distiller.py`): las lecciones nacen `HYPOTHESIS`; pasan a `ACTIVE` solo con `supporting>=30`, limite inferior del Wilson CI 90% por encima del hit rate base y variante derivada confirmada OOS.
+
+**T5.5 Realismo de ejecucion** (`tools/cost_calibration.py`): slippage sintetico (round-trip + media horquilla ATR), limit orders con techo de gap (`MAX_ENTRY_GAP_PCT`/`USE_LIMIT_ENTRIES`) y calibracion de bps de coste con fills reales.
+
+**T5.6 Sesgo de supervivencia** (`universe.py`): `universe_as_of(date)` reconstruye la composicion point-in-time desde `data/universe/sp500_changes.csv` (fallback al universo actual con `survivorship_biased=true`); la fabrica aplica un haircut (`SURVIVORSHIP_HAIRCUT`) a los umbrales cuando hay sesgo.
+
+**T5.7 Cash activo y regimen** (`strategies/cash_allocation.py`): `target_cash_pct` segun regimen/tesis/drawdown con floors; la fabrica reserva cuota (`FACTORY_REGIME_QUOTA`) para variantes de rango/bajista; estrategias con `target_regime`; shorts solo SHADOW.
+
+**T5.9 Presupuesto LLM** (`llm_usage.py`, `llm_router.py`): tabla de precios por modelo, gasto diario por rol; `chat_for_role` degrada a local si se agota el presupuesto del rol `deep` y lanza `LLMBudgetExhausted` (posponer tarea) si se agota el total; coste vs PnL en el digest.
+
+**T5.10 Huecos operativos** (`tools/corporate_actions.py`): decision determinista ante earnings en posiciones abiertas, ajuste de outcomes por splits/dividendos, deteccion de halts.
+
+**T5.11 Diversidad del comite** (`tools/committee_diversity.py`): correlacion de votos por par de modelos (redundantes si coinciden >95% en >=50 dictamenes) e invariante de gobierno: ninguna compra sin candidato determinista.
+
 ## Etapa 4 — Gobierno por riesgo y camino a live
 
 **T4.1 Presupuesto de riesgo** (`risk_budget.py`): sustituye la maraña de gates finos de cantidad por un contrato simple — VaR diario total (`RISK_BUDGET_DAILY_VAR_PCT`), riesgo nuevo por día (`...MAX_NEW_RISK_PER_DAY_PCT`) y riesgo por cluster correlacionado/sector (`...MAX_CORRELATED_CLUSTER_PCT`). `RiskBudget.from_settings` acota el presupuesto a los límites del kernel (T0.1). `check_order` consulta `available()` antes de cada compra y consume el presupuesto; `release_position` lo libera. Es tuneable por los agentes vía `AutoApplyConfigAgent` (dentro del kernel) y el watchdog lo recorta −25% tras rollbacks. Gated por `RISK_BUDGET_ENABLED`. CLI: `risk-budget`.

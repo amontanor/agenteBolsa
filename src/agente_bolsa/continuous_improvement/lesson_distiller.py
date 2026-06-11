@@ -31,6 +31,34 @@ DEFAULT_DISTILLER_PROMPT = (
 
 WEAK_CONFIDENCE = 0.45
 RETIRE_CONFIDENCE = 0.35
+# Hit rate base del sistema contra el que se contrasta una leccion (T5.4).
+SYSTEM_BASE_HIT_RATE = 0.50
+
+
+def wilson_interval(wins: int, n: int, *, z: float = 1.645) -> tuple[float, float]:
+    """Intervalo de confianza de Wilson (z=1.645 ~ 90%) para una proporcion."""
+
+    if n <= 0:
+        return (0.0, 1.0)
+    import math
+
+    phat = wins / n
+    denom = 1 + z * z / n
+    centre = (phat + z * z / (2 * n)) / denom
+    margin = (z * math.sqrt((phat * (1 - phat) + z * z / (4 * n)) / n)) / denom
+    return (round(max(0.0, centre - margin), 4), round(min(1.0, centre + margin), 4))
+
+
+def lesson_to_variant(lesson: dict[str, Any]) -> dict[str, Any]:
+    """Convierte una leccion en una variante testeable para la fabrica (T5.4)."""
+
+    setup = str((lesson.get("source_refs") or {}).get("setup") or "")
+    return {
+        "label": f"lesson_{lesson.get('lesson_id')}",
+        "lesson_id": lesson.get("lesson_id"),
+        "target_setup": setup,
+        "params": {},  # la fabrica completa con su malla; aqui marcamos el origen
+    }
 
 
 def _verdict(signal: dict[str, Any]) -> str:
@@ -115,6 +143,8 @@ def distill_lessons(
         contradicting = int(agg.get("decided") or 0) - winners
         confidence = round(winners / agg["decided"], 4) if agg.get("decided") else 0.0
         lesson_id = new_id("lesson")
+        # T5.4: nace como HYPOTHESIS; no se inyecta al prompt hasta validarse.
+        derived_variant_id = new_id("lvariant")
         store.upsert_distilled_lesson(
             {
                 "lesson_id": lesson_id,
@@ -123,12 +153,56 @@ def distill_lessons(
                 "supporting_cases": winners,
                 "contradicting_cases": max(0, contradicting),
                 "confidence": confidence,
-                "status": "ACTIVE",
-                "source_refs": {"setup": setup, "aggregate": agg},
+                "status": "HYPOTHESIS",
+                "source_refs": {
+                    "setup": setup,
+                    "aggregate": agg,
+                    "derived_variant_id": derived_variant_id,
+                    "variant_confirmed": False,
+                },
             }
         )
         inserted.append(lesson_id)
     return {"distilled": len(inserted), "lessons": inserted}
+
+
+def promote_qualified_lessons(
+    store: "Store",
+    settings: "Settings",
+    *,
+    base_hit_rate: float = SYSTEM_BASE_HIT_RATE,
+) -> dict[str, Any]:
+    """Promueve HYPOTHESIS -> ACTIVE solo si cumple los gates de T5.4.
+
+    Requiere: supporting_cases >= LESSON_MIN_SUPPORTING, el limite inferior del
+    Wilson CI 90% del hit rate supera el hit rate base del sistema, y la variante
+    derivada fue confirmada en backtest OOS por la fabrica (`variant_confirmed`).
+    """
+
+    min_supporting = int(getattr(settings, "lesson_min_supporting", 30))
+    promoted: list[str] = []
+    for lesson in store.distilled_lessons(status="HYPOTHESIS", limit=500):
+        refs = lesson.get("source_refs") or {}
+        agg = refs.get("aggregate") or {}
+        decided = int(agg.get("decided") or 0)
+        winners = int(agg.get("winners") or 0)
+        supporting = int(lesson.get("supporting_cases") or 0)
+        if supporting < min_supporting or decided <= 0:
+            continue
+        lo, _hi = wilson_interval(winners, decided)
+        if lo <= base_hit_rate:
+            continue
+        if not bool(refs.get("variant_confirmed")):
+            continue
+        store.upsert_distilled_lesson(
+            {
+                **{k: lesson[k] for k in ("lesson_id", "scope", "statement", "supporting_cases", "contradicting_cases", "confidence")},
+                "status": "ACTIVE",
+                "source_refs": {**refs, "wilson_low": lo},
+            }
+        )
+        promoted.append(lesson["lesson_id"])
+    return {"promoted": promoted}
 
 
 def revalidate_lessons(
@@ -137,10 +211,26 @@ def revalidate_lessons(
     *,
     since_date: str | None = None,
 ) -> dict[str, Any]:
-    """Recalcula soporte de lecciones ACTIVE/WEAKENED; baja confianza -> retiro."""
+    """Recalcula soporte de lecciones ACTIVE/WEAKENED; baja confianza -> retiro.
+
+    Usa una ventana de RECENCIA por setup (las ultimas N maduradas): una leccion
+    se debilita cuando la evidencia nueva deja de apoyarla, aunque el historico
+    acumulado siga siendo favorable.
+    """
 
     outcomes = store.signal_outcomes(limit=8000, since_date=since_date)
-    aggregates = aggregate_by_setup(outcomes)
+    window = int(getattr(settings, "lesson_revalidation_window", 10))
+    recent_by_setup: dict[str, list[dict[str, Any]]] = {}
+    for signal in outcomes:  # signal_outcomes devuelve lo mas reciente primero.
+        if not _is_matured(signal):
+            continue
+        bucket = recent_by_setup.setdefault(_setup_of(signal), [])
+        if len(bucket) < window:
+            bucket.append(signal)
+    aggregates = {
+        setup: aggregate_by_setup(items).get(setup, {})
+        for setup, items in recent_by_setup.items()
+    }
     transitions: list[dict[str, Any]] = []
     for lesson in store.distilled_lessons(limit=500):
         if lesson["status"] == "RETIRED":

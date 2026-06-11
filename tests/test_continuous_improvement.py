@@ -4,10 +4,13 @@ import pytest
 
 from agente_bolsa.config import Settings
 from agente_bolsa.config import get_settings
+from agente_bolsa.continuous_improvement.agents import DataCollectorAgent
 from agente_bolsa.continuous_improvement.agents import DecisionCommitteeAgent
 from agente_bolsa.continuous_improvement.agents import ExperimentDesignerAgent
 from agente_bolsa.continuous_improvement.agents import ImprovementStrategistAgent
 from agente_bolsa.continuous_improvement.agents import MarketEstimatorAgent
+from agente_bolsa.continuous_improvement.agents import ParameterCalibrationAgent
+from agente_bolsa.continuous_improvement.agents import ReportAgent
 from agente_bolsa.continuous_improvement.agents import TechnicalEdgeAgent
 from agente_bolsa.continuous_improvement.agents import RiskGuardAgent
 from agente_bolsa.continuous_improvement.agents import ValidationAgent
@@ -30,6 +33,7 @@ def _settings(tmp_path, **overrides):
         "ALLOW_AUTO_APPLY_IMPROVEMENTS": False,
         "ALLOW_LIVE_TRADING": False,
         "CONTINUOUS_IMPROVEMENT_RUNTIME_INTERVAL_SECONDS": 60,
+        "CONTINUOUS_IMPROVEMENT_GROUP_COOLDOWN_SECONDS": 300,
         "CONTINUOUS_IMPROVEMENT_EVENT_COOLDOWN_SECONDS": 120,
         "CONTINUOUS_IMPROVEMENT_RUNTIME_LOOP_SLEEP_SECONDS": 5,
     }
@@ -173,7 +177,7 @@ def test_improvement_llm_client_builds_mimo_request_shape(tmp_path):
         temperature=0.2,
         max_tokens=6000,
     )
-    headers = client._request_headers("mimo")
+    headers = client._request_headers("mimo", "test-token")
 
     assert body["model"] == "mimo-v2.5"
     assert body["max_completion_tokens"] == 6000
@@ -247,6 +251,59 @@ def test_improvement_llm_client_rejects_mimo_token_plan_key_on_payg_base_url(tmp
     assert "token-plan" in str(result.error)
 
 
+def test_improvement_llm_client_skips_local_fallback_when_primary_quota_is_exhausted(tmp_path):
+    settings = _settings(
+        tmp_path,
+        IMPROVEMENT_LLM_ENABLED=True,
+        IMPROVEMENT_LLM_PROVIDER="mimo",
+        IMPROVEMENT_LLM_BASE_URL="https://token-plan-ams.xiaomimimo.com/v1",
+        IMPROVEMENT_LLM_API_KEY="tp-test",
+        IMPROVEMENT_LLM_MODEL="mimo-v2.5",
+        IMPROVEMENT_LLM_LOCAL_FALLBACK_ENABLED=True,
+        LLM_LOCAL_FALLBACK_API_BASE="http://127.0.0.1:8080/v1",
+        LLM_LOCAL_FALLBACK_API_KEY="local-llama",
+        LLM_LOCAL_FALLBACK_MODEL="qwen3.6-27b",
+    )
+    client = ImprovementLLMClient(settings)
+    calls = []
+
+    def _fake_post(endpoint, body, headers):
+        calls.append({"endpoint": endpoint, "body": body, "headers": headers})
+        if "token-plan-ams.xiaomimimo.com" in endpoint:
+            raise OSError("HTTP 429: quota exhausted")
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "diagnosis": {
+                                    "summary": "ok-local",
+                                    "confidence": "LOW",
+                                    "data_quality": "PARTIAL",
+                                },
+                                "detected_issues": [],
+                                "proposals": [],
+                                "recommended_next_actions": [],
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+
+    client._post_json = _fake_post
+    result = client.generate_json([{"role": "user", "content": "hola"}], {})
+
+    assert result.ok is False
+    assert "quota exhausted" in str(result.error)
+    assert result.request_preview["fallback_skipped"] is True
+    assert result.request_preview["fallback_skip_reason"] == "quota_exhausted"
+    assert len(calls) == 1
+    assert "token-plan-ams.xiaomimimo.com" in calls[0]["endpoint"]
+    assert all("127.0.0.1:8080" not in item["endpoint"] for item in calls)
+
+
 def test_risk_guard_rejects_dangerous_live_trading_proposal(tmp_path):
     settings = _settings(tmp_path)
     proposal = ImprovementProposalPayload(
@@ -265,6 +322,57 @@ def test_risk_guard_rejects_dangerous_live_trading_proposal(tmp_path):
 
     assert guard["status"] == "REJECTED"
     assert "dangerous_term" in guard["reasons"]
+
+
+def test_risk_guard_marks_high_risk_code_change_for_human_review(tmp_path):
+    settings = _settings(tmp_path, REQUIRE_HUMAN_APPROVAL_FOR_HIGH_RISK=True)
+    proposal = ImprovementProposalPayload(
+        proposal_type="CODE_CHANGE",
+        target_component="continuous_improvement",
+        target_identifier="runtime_guard",
+        current_value="old",
+        proposed_value="new",
+        rationale="touch critical runtime path",
+        risk_level="HIGH",
+        required_validations=["tests"],
+        rollback_plan="revert",
+    )
+
+    guard = RiskGuardAgent().assess(proposal, settings)
+
+    assert guard["status"] == "WAITING_HUMAN_REVIEW"
+
+
+def test_validation_blocks_repeated_parameter_tuning_in_frozen_window(tmp_path):
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    validator = ValidationAgent()
+    proposal = {
+        "proposal_id": "ci_prop_tuning",
+        "cycle_id": "ci_cycle_tuning",
+        "proposal_type": "PARAMETER_CHANGE",
+        "target_component": "entry_quality_gate",
+        "target_identifier": "threshold",
+        "risk_level": "MEDIUM",
+        "payload": {
+            "required_validations": ["in_sample", "out_of_sample", "walk_forward"],
+            "rollback_plan": "revert thresholds",
+            "evaluation_window_frozen": True,
+            "parameter_tuning_count": 3,
+        },
+    }
+
+    validation = validator.validate(
+        proposal,
+        {"evaluation": {"summary": {}}, "reports": {"daily_learning": {"available": True, "payload": {"summary": {"signals": 1}}}}},
+        settings,
+        store=store,
+    )
+
+    checks = {item["name"]: item for item in validation["payload"]["checks"]}
+    assert validation["status"] == "PENDING"
+    assert checks["repeated_parameter_tuning"]["passed"] is False
 
 
 def test_runtime_enqueue_event_deduplicates_same_payload(tmp_path):
@@ -300,7 +408,7 @@ def test_runtime_run_once_creates_events_tasks_hypotheses_and_cycle(tmp_path, mo
 
     result = runtime.run_once(mode="manual", trigger_event_type="manual_trigger", trigger_payload={"source": "test"})
 
-    assert result["status"] in {"COMPLETED", "WAITING_HUMAN_REVIEW", "PARTIAL"}
+    assert result["status"] in {"COMPLETED", "PARTIAL"}
     assert store.continuous_improvement_events(limit=50)
     assert store.continuous_improvement_tasks(limit=50)
     assert store.continuous_improvement_hypotheses(limit=50)
@@ -318,8 +426,49 @@ def test_runtime_scheduled_mode_does_not_enqueue_synthetic_tick_event(tmp_path, 
     result = runtime.run_once(mode="scheduled", trigger_event_type="scheduled_tick", trigger_payload={"tick": "x"})
 
     event_types = [item["event_type"] for item in store.continuous_improvement_events(limit=50)]
-    assert result["status"] in {"COMPLETED", "PARTIAL", "WAITING_HUMAN_REVIEW"}
+    assert result["status"] in {"COMPLETED", "PARTIAL"}
     assert "scheduled_tick" not in event_types
+
+
+def test_runtime_sets_group_cooldown_after_cycle_completion(tmp_path, monkeypatch):
+    settings = _settings(tmp_path, CONTINUOUS_IMPROVEMENT_GROUP_COOLDOWN_SECONDS=300)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    runtime = ContinuousImprovementLabRuntime(settings, store)
+    monkeypatch.setattr(runtime, "_market_window", _open_market_window)
+
+    result = runtime.run_once(mode="manual", trigger_event_type="manual_trigger", trigger_payload={"source": "test"})
+
+    assert result["status"] in {"COMPLETED", "PARTIAL"}
+    runtime_state = store.continuous_improvement_runtime_state()
+    assert runtime_state is not None
+    payload = runtime_state.get("payload") or {}
+    assert payload.get("cooldown_seconds") == 300
+    assert payload.get("cooldown_until")
+
+
+def test_runtime_respects_group_cooldown_before_starting_next_cycle(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    runtime = ContinuousImprovementLabRuntime(settings, store)
+    monkeypatch.setattr(runtime, "_market_window", _open_market_window)
+    store.upsert_continuous_improvement_runtime_state(
+        runtime_name="lab",
+        status="IDLE",
+        heartbeat_at="2026-01-01T00:00:00+00:00",
+        payload={
+            "status": "COOLDOWN",
+            "cooldown_until": "2999-01-01T00:05:00+00:00",
+            "cooldown_seconds": 300,
+            "last_completed_cycle_id": "ci_cycle_prev",
+        },
+    )
+
+    result = runtime.run_once(mode="scheduled", trigger_event_type="scheduled_tick", trigger_payload={"tick": "x"})
+
+    assert result["status"] == "COOLDOWN"
+    assert result["last_completed_cycle_id"] == "ci_cycle_prev"
 
 
 def test_runtime_discovers_scheduler_state_change_only_once_per_same_payload(tmp_path):
@@ -417,6 +566,69 @@ def test_orchestrator_does_not_plan_sentiment_without_real_sentiment_context(tmp
     assert "SentimentAnalystAgent" not in agent_names
     strategy = next(item for item in tasks if item["agent_name"] == "StrategyEvaluatorAgent")
     assert "SentimentAnalystAgent" not in strategy.get("dependency_agent_names", [])
+
+
+def test_orchestrator_plans_parameter_calibration_for_opportunistic_profile(tmp_path):
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    orchestrator = LabOrchestrator(store)
+
+    tasks = orchestrator.planned_tasks_for_event(
+        {"event_id": "evt_opportunistic", "domain": "trading-improvement", "priority": "MEDIUM"},
+        {
+            "settings": {"trade_aggressiveness_profile": "opportunistic"},
+            "evaluation": {
+                "summary": {
+                    "signals": 12,
+                    "observations": 12,
+                    "outcomes_available": 0,
+                    "blocked_entry_quality": 0,
+                    "blocked_backtest": 0,
+                    "micro_observations": 0,
+                    "soft_backtest_overrides": 0,
+                },
+                "blockers": [],
+            },
+            "reports": {},
+        },
+    )
+
+    agent_names = [item["agent_name"] for item in tasks]
+    assert "ParameterCalibrationAgent" in agent_names
+    assert any(task["payload"]["initiative_key"] == "trading:opportunistic_parameters" for task in tasks)
+
+
+def test_parameter_calibration_agent_monitors_opportunistic_profile(tmp_path):
+    settings = _settings(tmp_path)
+    agent = ParameterCalibrationAgent(settings, ImprovementLLMClient(settings))
+
+    response = agent.run(
+        {
+            "settings": {
+                "trade_aggressiveness_profile": "opportunistic",
+                "trade_selection_top_n": 24,
+                "max_orders_per_cycle": 4,
+            },
+            "evaluation": {
+                "summary": {
+                    "signals": 40,
+                    "outcomes_available": 2,
+                    "micro_observations": 1,
+                    "soft_backtest_overrides": 1,
+                    "executed_observations": 0,
+                }
+            },
+            "learning": {"observations": []},
+        },
+        {"event_id": "evt_opportunistic", "domain": "trading-improvement"},
+        {"focus": "opportunistic_parameters"},
+    )
+
+    payload = response["response"]
+    assert payload["summary"].startswith("Calibracion del perfil oportunista")
+    assert any(item["target_identifier"] == "minimum_evidence_window" for item in payload["proposals"])
+    assert payload["hypotheses"][0]["subject"] == "opportunistic_parameter_learning"
 
 
 def test_orchestrator_does_not_plan_programmer_without_software_signal(tmp_path):
@@ -693,6 +905,71 @@ def test_runtime_applies_committee_decision_to_linked_proposals(tmp_path):
     assert any(item["decision"] == "APPROVE" for item in decisions)
 
 
+def test_runtime_escalates_committee_disagreement_without_justification(tmp_path):
+    settings = _settings(tmp_path)
+    runtime = ContinuousImprovementLabRuntime(settings, Store(settings.database_path, tmp_path / "agent_logs"))
+
+    decision = runtime._committee_decision_from_response(
+        {"decision": "APPROVE", "decision_reason": "override"},
+        deterministic_baseline={"decision": "REJECT"},
+    )
+
+    assert decision["decision"] == "ESCALATE"
+    assert decision["aligns_with_deterministic"] is False
+    assert "Missing committee justification" in decision["discrepancy_justification"]
+
+
+def test_report_agent_exposes_challenger_blockers_and_next_review():
+    report = ReportAgent().build(
+        cycle_id="ci_cycle",
+        context={"database": {"path": "db.sqlite"}},
+        evaluation={"summary": {"signals": 3}},
+        event_batch=[],
+        tasks=[],
+        hypotheses=[],
+        proposals=[
+            {
+                "proposal_id": "ci_prop_1",
+                "target_component": "entry_quality_gate",
+                "status": "PENDING",
+                "payload": {
+                    "promotion_state": "challenger",
+                    "required_validations": ["in_sample", "walk_forward"],
+                    "evaluation_window_frozen": True,
+                    "next_review_at": "2026-06-05T10:00:00+00:00",
+                },
+            }
+        ],
+        validations=[
+            {
+                "proposal_id": "ci_prop_1",
+                "status": "PENDING",
+                "payload": {
+                    "objective_status": "PENDING",
+                    "checks": [
+                        {"name": "walk_forward", "passed": False},
+                        {"name": "rollback_plan_present", "passed": True},
+                    ],
+                },
+            }
+        ],
+        initiatives=[
+            {
+                "initiative_id": "ci_init_1",
+                "linked_proposal_ids": ["ci_prop_1"],
+                "latest_decision": {"decision": "REWORK", "backlog_bucket": "NEXT"},
+                "next_action": "Completar walk-forward y revisar.",
+            }
+        ],
+    )
+
+    challenger = report["governance"]["champion_challenger"]["challengers"][0]
+    assert challenger["evaluation_window_frozen"] is True
+    assert challenger["blocking_checks"] == ["walk_forward"]
+    assert challenger["committee_decision"] == "REWORK"
+    assert challenger["next_action"] == "Completar walk-forward y revisar."
+
+
 def test_runtime_persist_proposals_merges_experiment_guidance_into_required_validations(tmp_path):
     settings = _settings(tmp_path)
     store = Store(settings.database_path, settings.agent_logs_dir)
@@ -719,7 +996,9 @@ def test_runtime_persist_proposals_merges_experiment_guidance_into_required_vali
     )
 
     required = proposals[0]["payload"]["required_validations"]
-    assert required == ["backtest", "baseline_compare", "shadow_review"]
+    assert required == ["in_sample", "out_of_sample", "walk_forward", "paper_or_shadow_window", "risk_review"]
+    assert proposals[0]["payload"]["promotion_state"] == "challenger"
+    assert proposals[0]["payload"]["evaluation_window_frozen"] is True
 
 
 def test_runtime_prepare_proposals_merges_duplicates_and_limits_count(tmp_path):
@@ -803,7 +1082,7 @@ def test_validation_agent_keeps_risk_rule_change_pending_without_real_execution(
     assert validation["status"] == "PENDING"
     payload = validation["payload"]
     assert payload["objective_status"] == "PENDING"
-    assert any(item["name"] == "backtest_evidence" and item["passed"] is False for item in payload["checks"])
+    assert any(item["name"] == "in_sample" and item["passed"] is False for item in payload["checks"])
 
 
 def test_validation_agent_passes_entry_quality_with_objective_evidence(tmp_path):
@@ -856,7 +1135,115 @@ def test_validation_agent_passes_entry_quality_with_objective_evidence(tmp_path)
     assert any(check["name"] == "entry_quality_calibration_present" and check["passed"] for check in payload["checks"])
 
 
-def test_runtime_translates_passed_validation_into_review_status(tmp_path):
+def test_data_collector_loads_latest_counterfactual_reports(tmp_path):
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True)
+    (reports_dir / "winner_coverage_old.json").write_text(
+        json.dumps({"summary": {"winners_considered": 1, "fallback_buy_any": 0}}),
+        encoding="utf-8",
+    )
+    latest_winner = reports_dir / "winner_coverage_new.json"
+    latest_winner.write_text(
+        json.dumps({"summary": {"winners_considered": 3, "fallback_buy_any": 1}}),
+        encoding="utf-8",
+    )
+    (reports_dir / "fallback_blockers_new.manifest.json").write_text("{}", encoding="utf-8")
+    latest_blockers = reports_dir / "fallback_blockers_new.json"
+    latest_blockers.write_text(
+        json.dumps({"summary": {"selected_blocked_sessions": 12}}),
+        encoding="utf-8",
+    )
+
+    context = DataCollectorAgent().collect(settings, store, cycle_id="ci_cycle_test")
+
+    assert context["reports"]["winner_coverage"]["available"] is True
+    assert context["reports"]["winner_coverage"]["payload"]["summary"]["winners_considered"] == 3
+    assert context["reports"]["fallback_blockers"]["available"] is True
+    assert context["reports"]["fallback_blockers"]["payload"]["summary"]["selected_blocked_sessions"] == 12
+
+
+def test_technical_edge_agent_uses_counterfactual_blockers_when_recent_window_is_empty(tmp_path):
+    settings = _settings(tmp_path)
+    agent = TechnicalEdgeAgent(settings, ImprovementLLMClient(settings))
+
+    result = agent.run(
+        context={
+            "evaluation": {"summary": {"observations": 160, "blocked_entry_quality": 0}},
+            "reports": {
+                "winner_coverage": {
+                    "available": True,
+                    "payload": {
+                        "summary": {
+                            "winners_considered": 15,
+                            "fallback_buy_any": 2,
+                            "fallback_blocker_summary": [
+                                {"reason": "entry_score_v2 bajo", "sessions": 9},
+                                {"reason": "sma20_extension_no_exception", "sessions": 3},
+                            ],
+                        }
+                    },
+                },
+                "fallback_blockers": {
+                    "available": True,
+                    "payload": {"summary": {"selected_blocked_sessions": 7146}},
+                },
+            },
+        },
+        event={"event_id": "evt"},
+        task_payload={"focus": "entry_quality_filter"},
+    )
+
+    proposals = result["response"]["proposals"]
+    assert any(item["target_identifier"] == "counterfactual_false_blockers" for item in proposals)
+    proposal = next(item for item in proposals if item["target_identifier"] == "counterfactual_false_blockers")
+    assert "winner_blocker_sessions=12" in proposal["current_value"]
+    assert proposal["proposal_type"] == "PARAMETER_CHANGE"
+
+
+def test_technical_edge_agent_uses_counterfactual_selection_misses(tmp_path):
+    settings = _settings(tmp_path)
+    agent = TechnicalEdgeAgent(settings, ImprovementLLMClient(settings))
+
+    result = agent.run(
+        context={
+            "evaluation": {"summary": {"observations": 160, "blocked_entry_quality": 0}},
+            "reports": {
+                "winner_coverage": {
+                    "available": True,
+                    "payload": {
+                        "summary": {
+                            "winners_considered": 15,
+                            "fallback_buy_any": 5,
+                            "selection_miss_summary": [
+                                {"reason": "rank_outside_selection_limit", "sessions": 110},
+                                {"reason": "bearish_direction", "sessions": 56},
+                            ],
+                        }
+                    },
+                },
+                "fallback_blockers": {
+                    "available": True,
+                    "payload": {"summary": {"selected_blocked_sessions": 0}},
+                },
+            },
+        },
+        event={"event_id": "evt"},
+        task_payload={"focus": "deterministic_selector"},
+    )
+
+    proposals = result["response"]["proposals"]
+    assert any(item["target_identifier"] == "counterfactual_selection_misses" for item in proposals)
+    proposal = next(item for item in proposals if item["target_identifier"] == "counterfactual_selection_misses")
+    assert proposal["target_component"] == "deterministic_selector"
+    assert "selection_miss_sessions=166" in proposal["current_value"]
+    assert "rank_outside_selection_limit=110" in proposal["current_value"]
+    assert proposal["proposal_type"] == "PARAMETER_CHANGE"
+
+
+def test_runtime_translates_passed_validation_into_monitoring_status(tmp_path):
     settings = _settings(tmp_path)
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()
@@ -936,7 +1323,7 @@ def test_runtime_translates_passed_validation_into_review_status(tmp_path):
     proposal = store.continuous_improvement_proposal("ci_prop_test")
 
     assert validations[0]["status"] == "PASSED"
-    assert initiative["status"] == "WAITING_REVIEW"
+    assert initiative["status"] == "MONITORING"
     assert proposal["status"] == "PASSED"
 
 
@@ -1018,8 +1405,11 @@ def test_runtime_executes_validation_artifacts_before_validation(tmp_path, monke
     assert "backtest" in calls
     assert "walk_forward" in calls
     assert "session_retrospective" in calls
+    assert "backtest" in artifacts
+    assert "walk_forward_validation" in artifacts
+    assert "session_retrospective" in artifacts
     assert validation["payload"]["objective_status"] in {"PENDING", "PASSED", "READY_TO_APPLY"}
-    assert any(item["name"] == "backtest_evidence" for item in validation["payload"]["checks"])
+    assert validation["payload"]["required_validations"] == ["in_sample", "out_of_sample", "walk_forward"]
 
 
 def test_improvement_strategist_uses_orchestrator_model(tmp_path):
@@ -1198,7 +1588,7 @@ def test_continuous_improvement_cycle_creates_proposal_and_validation(tmp_path, 
 
     result = ContinuousImprovementOrchestrator(settings, store).run_cycle(mode="manual")
 
-    assert result["status"] in {"COMPLETED", "WAITING_HUMAN_REVIEW", "PARTIAL"}
+    assert result["status"] in {"COMPLETED", "PARTIAL"}
     proposals = store.continuous_improvement_proposals()
     validations = store.continuous_improvement_validations()
     assert len(proposals) >= 1
@@ -1219,23 +1609,44 @@ def test_continuous_improvement_dedupe_key_returns_existing_cycle(tmp_path, monk
     assert second["cycle_id"] == first["cycle_id"]
 
 
-def test_apply_action_is_blocked_to_human_review_status(tmp_path, monkeypatch):
+def test_runtime_normalizes_human_review_proposals_back_to_automatic_pipeline(tmp_path, monkeypatch):
     settings = _settings(tmp_path)
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()
-    monkeypatch.setattr(ContinuousImprovementLabRuntime, "_market_window", lambda self: _open_market_window())
-    ContinuousImprovementOrchestrator(settings, store).run_cycle(mode="manual")
-    proposal = store.continuous_improvement_proposals()[0]
-
-    store.update_continuous_improvement_proposal_status(
-        proposal["proposal_id"],
-        status="WAITING_HUMAN_REVIEW",
-        actor="test",
-        reason="apply blocked in v1",
+    store.upsert_continuous_improvement_proposal(
+        {
+            "proposal_id": "ci_prop_legacy_review",
+            "cycle_id": "ci_cycle_legacy",
+            "fingerprint": "legacy-review",
+            "proposal_type": "CODE_CHANGE",
+            "target_component": "software_runtime",
+            "target_identifier": "legacy_patch",
+            "status": "REQUIRES_HUMAN_REVIEW",
+            "priority": "MEDIUM",
+            "risk_level": "MEDIUM",
+            "payload": {
+                "proposal_type": "CODE_CHANGE",
+                "target_component": "software_runtime",
+                "target_identifier": "legacy_patch",
+                "current_value": "before",
+                "proposed_value": "after",
+                "rationale": "Legacy review state should be normalized.",
+                "expected_impact": "Resume autonomous pipeline.",
+                "risk_level": "MEDIUM",
+                "rollback_plan": "restore before",
+            },
+            "guard": {"status": "REQUIRES_HUMAN_REVIEW"},
+        }
     )
+    runtime = ContinuousImprovementLabRuntime(settings, store)
+    monkeypatch.setattr(runtime, "_market_window", _open_market_window)
 
-    updated = store.continuous_improvement_proposal(proposal["proposal_id"])
-    assert updated["status"] == "WAITING_HUMAN_REVIEW"
+    runtime.run_once(mode="manual", trigger_event_type="manual_trigger", trigger_payload={"source": "test"})
+
+    updated = store.continuous_improvement_proposal("ci_prop_legacy_review")
+    assert updated["status"] == "PENDING"
+    initiatives = store.continuous_improvement_initiatives(limit=20)
+    assert initiatives
 
 
 def test_status_payload_reports_runtime(tmp_path, monkeypatch):
@@ -1262,6 +1673,40 @@ def test_status_payload_reports_runtime(tmp_path, monkeypatch):
     assert "latest_cycle" in payload
     assert payload["llm_model"] == settings.improvement_llm_model
     assert payload["llm_orchestrator_model"] == settings.improvement_llm_orchestrator_model
+
+
+def test_update_initiative_keeps_empty_link_lists_as_lists(tmp_path):
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    store.upsert_continuous_improvement_initiative(
+        {
+            "initiative_id": "ci_init_links",
+            "initiative_key": "software:links",
+            "title": "Links",
+            "domain": "software",
+            "status": "VALIDATING",
+            "owner_agent": "OrchestratorAgent",
+            "priority": "MEDIUM",
+            "target_metric": "monitoring_change",
+            "expected_impact": "Mantener trazabilidad.",
+            "risk_level": "LOW",
+            "evidence": [],
+            "linked_event_ids": [],
+            "linked_task_ids": [],
+            "linked_hypothesis_ids": [],
+            "linked_proposal_ids": [],
+            "linked_validation_ids": ["ci_val_1"],
+            "latest_decision": {"decision": "PENDING"},
+            "next_action": "Esperar validacion.",
+        }
+    )
+
+    store.update_continuous_improvement_initiative("ci_init_links", linked_validation_ids=[])
+
+    initiative = store.continuous_improvement_initiative("ci_init_links")
+    assert initiative is not None
+    assert initiative["linked_validation_ids"] == []
 
 
 def test_status_payload_reports_initiative_counts(tmp_path, monkeypatch):

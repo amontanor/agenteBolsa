@@ -1,0 +1,574 @@
+{
+  "cycle_id": "ci_cycle_765bc8e2cac4",
+  "generated_at": "2026-05-30T09:35:53.508828+00:00",
+  "real_data": {
+    "database": {
+      "database": "tmp_ci_smoke_open\\state\\agente_bolsa.sqlite3",
+      "tables": {
+        "agent_events": 1,
+        "hypotheses": 0,
+        "backtest_runs": 0,
+        "decisions": 0,
+        "trade_recommendations": 0,
+        "order_plans": 0,
+        "broker_orders": 0,
+        "opportunity_snapshots": 0,
+        "signal_outcomes": 0,
+        "trade_memory": 0,
+        "strategy_rules": 0,
+        "rule_evaluations": 0,
+        "learning_observations": 0,
+        "learning_daily_summaries": 0,
+        "learning_policy_candidates": 0,
+        "learning_policy_evaluations": 0,
+        "pre_earnings_predictions": 0,
+        "pre_earnings_analyst_snapshots": 0,
+        "continuous_improvement_cycles": 1,
+        "continuous_improvement_llm_responses": 0,
+        "continuous_improvement_proposals": 0,
+        "continuous_improvement_validations": 0,
+        "continuous_improvement_decisions": 0,
+        "continuous_improvement_events": 0,
+        "continuous_improvement_agent_tasks": 0,
+        "continuous_improvement_memories": 0,
+        "continuous_improvement_hypotheses": 0,
+        "continuous_improvement_proposal_artifacts": 0,
+        "continuous_improvement_runtime_state": 1,
+        "continuous_improvement_initiatives": 0,
+        "continuous_improvement_initiative_messages": 0
+      }
+    },
+    "summary": {
+      "signals": 0,
+      "observations": 0,
+      "executed_observations": 0,
+      "blocked_entry_quality": 0,
+      "blocked_backtest": 0,
+      "outcomes_available": 0,
+      "recent_errors": 0
+    }
+  },
+  "events": [
+    {
+      "event_id": "ci_event_aa1a483fcdd0",
+      "event_type": "manual_trigger",
+      "domain": "software-improvement",
+      "status": "DISCOVERED",
+      "source": "manual",
+      "priority": "MEDIUM",
+      "fingerprint": "6501e3972f44b9ee4fdeb568",
+      "payload": {
+        "source": "smoke",
+        "_nonce": "ci_event_aa1a483fcdd0"
+      },
+      "cooldown_until": "2026-05-30T09:37:52.957922+00:00",
+      "created_at": "2026-05-30T09:35:52.957922+00:00",
+      "updated_at": "2026-05-30T09:35:52.957922+00:00"
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "ci_task_57960b752805",
+      "cycle_id": "ci_cycle_765bc8e2cac4",
+      "event_id": "ci_event_aa1a483fcdd0",
+      "agent_name": "SoftwareReliabilityAgent",
+      "domain": "software",
+      "status": "COMPLETED",
+      "priority": "MEDIUM",
+      "dependency_ids": [],
+      "payload": {
+        "focus": "software_reliability",
+        "initiative_id": "ci_init_f1556548006f",
+        "initiative_key": "software:software_reliability",
+        "initiative_title": "Reforzar fiabilidad del runtime",
+        "target_metric": "runtime_error_rate",
+        "owner_agent": "SoftwareReliabilityAgent"
+      },
+      "result": {
+        "agent_name": "SoftwareReliabilityAgent",
+        "domain": "software-improvement",
+        "deterministic": {
+          "summary": "Analisis de fiabilidad del runtime y deuda tecnica.",
+          "confidence": "LOW",
+          "detected_issues": [],
+          "hypotheses": [
+            {
+              "subject": "software_reliability",
+              "summary": "La fiabilidad mejora si cada error repetido se convierte en deuda t\u00e9cnica accionable.",
+              "confidence": "LOW",
+              "evidence": [
+                "recent_errors=0"
+              ]
+            }
+          ],
+          "actions": [],
+          "proposals": []
+        },
+        "llm": {
+          "ok": false,
+          "llm_call_id": "ci_llm_skip_bb98dc9f1ed4",
+          "payload": null,
+          "raw_response": null,
+          "error": "agent_llm_not_supported",
+          "provider": "",
+          "model": "",
+          "request_preview": {}
+        },
+        "response": {
+          "summary": "Analisis de fiabilidad del runtime y deuda tecnica.",
+          "confidence": "LOW",
+          "detected_issues": [],
+          "hypotheses": [
+            {
+              "subject": "software_reliability",
+              "summary": "La fiabilidad mejora si cada error repetido se convierte en deuda t\u00e9cnica accionable.",
+              "confidence": "LOW",
+              "evidence": [
+                "recent_errors=0"
+              ]
+            }
+          ],
+          "actions": [],
+          "proposals": []
+        }
+      },
+      "error": {},
+      "attempt_count": 1,
+      "created_at": "2026-05-30T09:35:52.973461+00:00",
+      "updated_at": "2026-05-30T09:35:53.049656+00:00",
+      "started_at": "2026-05-30T09:35:53.025468+00:00",
+      "finished_at": "2026-05-30T09:35:53.049656+00:00"
+    },
+    {
+      "task_id": "ci_task_ee957715f478",
+      "cycle_id": "ci_cycle_765bc8e2cac4",
+      "event_id": "ci_event_aa1a483fcdd0",
+      "agent_name": "ExperimentDesignerAgent",
+      "domain": "software",
+      "status": "COMPLETED",
+      "priority": "MEDIUM",
+      "dependency_ids": [
+        "ci_task_57960b752805"
+      ],
+      "payload": {
+        "focus": "software_reliability",
+        "initiative_id": "ci_init_f1556548006f",
+        "initiative_key": "software:software_reliability",
+        "initiative_title": "Reforzar fiabilidad del runtime",
+        "target_metric": "runtime_error_rate",
+        "owner_agent": "SoftwareReliabilityAgent"
+      },
+      "result": {
+        "agent_name": "ExperimentDesignerAgent",
+        "domain": "trading-improvement",
+        "deterministic": {
+          "summary": "Dise\u00f1o de experimentos y validaciones seguras para las iniciativas abiertas.",
+          "confidence": "LOW",
+          "detected_issues": [],
+          "hypotheses": [
+            {
+              "subject": "experiment_design",
+              "summary": "Los experimentos deben comparar baseline, shadow y propuesta con la misma ventana y costes.",
+              "confidence": "HIGH",
+              "evidence": [
+                "blockers=0"
+              ]
+            }
+          ],
+          "actions": [
+            {
+              "action_type": "VALIDATION",
+              "title": "Planificar backtest y shadow mode",
+              "rationale": "Cada iniciativa debe cerrarse con una validacion objetiva y trazable.",
+              "risk_level": "LOW",
+              "required_validations": []
+            }
+          ],
+          "proposals": []
+        },
+        "llm": {
+          "ok": false,
+          "llm_call_id": "ci_llm_skip_b2e5463b6442",
+          "payload": null,
+          "raw_response": null,
+          "error": "agent_llm_not_supported",
+          "provider": "",
+          "model": "",
+          "request_preview": {}
+        },
+        "response": {
+          "summary": "Dise\u00f1o de experimentos y validaciones seguras para las iniciativas abiertas.",
+          "confidence": "LOW",
+          "detected_issues": [],
+          "hypotheses": [
+            {
+              "subject": "experiment_design",
+              "summary": "Los experimentos deben comparar baseline, shadow y propuesta con la misma ventana y costes.",
+              "confidence": "HIGH",
+              "evidence": [
+                "blockers=0"
+              ]
+            }
+          ],
+          "actions": [
+            {
+              "action_type": "VALIDATION",
+              "title": "Planificar backtest y shadow mode",
+              "rationale": "Cada iniciativa debe cerrarse con una validacion objetiva y trazable.",
+              "risk_level": "LOW",
+              "required_validations": []
+            }
+          ],
+          "proposals": []
+        }
+      },
+      "error": {},
+      "attempt_count": 1,
+      "created_at": "2026-05-30T09:35:52.978462+00:00",
+      "updated_at": "2026-05-30T09:35:53.169780+00:00",
+      "started_at": "2026-05-30T09:35:53.143484+00:00",
+      "finished_at": "2026-05-30T09:35:53.169780+00:00"
+    },
+    {
+      "task_id": "ci_task_ab9b8971d2e4",
+      "cycle_id": "ci_cycle_765bc8e2cac4",
+      "event_id": "ci_event_aa1a483fcdd0",
+      "agent_name": "DecisionCommitteeAgent",
+      "domain": "software",
+      "status": "COMPLETED",
+      "priority": "MEDIUM",
+      "dependency_ids": [
+        "ci_task_57960b752805",
+        "ci_task_ee957715f478"
+      ],
+      "payload": {
+        "focus": "software_reliability",
+        "initiative_id": "ci_init_f1556548006f",
+        "initiative_key": "software:software_reliability",
+        "initiative_title": "Reforzar fiabilidad del runtime",
+        "target_metric": "runtime_error_rate",
+        "owner_agent": "SoftwareReliabilityAgent"
+      },
+      "result": {
+        "agent_name": "DecisionCommitteeAgent",
+        "domain": "trading-improvement",
+        "deterministic": {
+          "summary": "Decision provisional del comite sobre iniciativas y propuestas.",
+          "confidence": "LOW",
+          "detected_issues": [],
+          "hypotheses": [
+            {
+              "subject": "decision_governance",
+              "summary": "La decision final debe depender del estado de validacion y del impacto medido.",
+              "confidence": "HIGH",
+              "evidence": [
+                "pending_proposals=0"
+              ]
+            }
+          ],
+          "actions": [
+            {
+              "action_type": "ESCALATION",
+              "title": "Cerrar o revisar segun validacion",
+              "rationale": "Ninguna iniciativa debe pasar sin evidencia objetiva y rollback.",
+              "risk_level": "LOW",
+              "required_validations": []
+            }
+          ],
+          "proposals": []
+        },
+        "llm": {
+          "ok": false,
+          "llm_call_id": "ci_llm_skip_b187de9af18b",
+          "payload": null,
+          "raw_response": null,
+          "error": "agent_llm_not_supported",
+          "provider": "",
+          "model": "",
+          "request_preview": {}
+        },
+        "response": {
+          "summary": "Decision provisional del comite sobre iniciativas y propuestas.",
+          "confidence": "LOW",
+          "detected_issues": [],
+          "hypotheses": [
+            {
+              "subject": "decision_governance",
+              "summary": "La decision final debe depender del estado de validacion y del impacto medido.",
+              "confidence": "HIGH",
+              "evidence": [
+                "pending_proposals=0"
+              ]
+            }
+          ],
+          "actions": [
+            {
+              "action_type": "ESCALATION",
+              "title": "Cerrar o revisar segun validacion",
+              "rationale": "Ninguna iniciativa debe pasar sin evidencia objetiva y rollback.",
+              "risk_level": "LOW",
+              "required_validations": []
+            }
+          ],
+          "proposals": []
+        }
+      },
+      "error": {},
+      "attempt_count": 1,
+      "created_at": "2026-05-30T09:35:52.984464+00:00",
+      "updated_at": "2026-05-30T09:35:53.289416+00:00",
+      "started_at": "2026-05-30T09:35:53.250369+00:00",
+      "finished_at": "2026-05-30T09:35:53.289416+00:00"
+    }
+  ],
+  "hypotheses": [
+    {
+      "hypothesis_id": "ci_hyp_211c80cbca44",
+      "cycle_id": "ci_cycle_765bc8e2cac4",
+      "event_id": "ci_event_aa1a483fcdd0",
+      "domain": "software",
+      "subject": "decision_governance",
+      "status": "OPEN",
+      "confidence": "HIGH",
+      "fingerprint": "b1d859189a8a4a1f06672d97",
+      "summary_text": "La decision final debe depender del estado de validacion y del impacto medido.",
+      "evidence": [
+        "pending_proposals=0"
+      ],
+      "source_task_ids": [
+        "ci_task_ab9b8971d2e4"
+      ],
+      "proposal_ids": [],
+      "created_at": "2026-05-30T09:35:53.331396+00:00",
+      "updated_at": "2026-05-30T09:35:53.331396+00:00"
+    },
+    {
+      "hypothesis_id": "ci_hyp_0779320a9d31",
+      "cycle_id": "ci_cycle_765bc8e2cac4",
+      "event_id": "ci_event_aa1a483fcdd0",
+      "domain": "software",
+      "subject": "experiment_design",
+      "status": "OPEN",
+      "confidence": "HIGH",
+      "fingerprint": "50d37a25e8943c1d0a9bcc7e",
+      "summary_text": "Los experimentos deben comparar baseline, shadow y propuesta con la misma ventana y costes.",
+      "evidence": [
+        "blockers=0"
+      ],
+      "source_task_ids": [
+        "ci_task_ee957715f478"
+      ],
+      "proposal_ids": [],
+      "created_at": "2026-05-30T09:35:53.203655+00:00",
+      "updated_at": "2026-05-30T09:35:53.203655+00:00"
+    },
+    {
+      "hypothesis_id": "ci_hyp_159b72487463",
+      "cycle_id": "ci_cycle_765bc8e2cac4",
+      "event_id": "ci_event_aa1a483fcdd0",
+      "domain": "software",
+      "subject": "software_reliability",
+      "status": "OPEN",
+      "confidence": "LOW",
+      "fingerprint": "bbd0c6285bea5411d4c84f79",
+      "summary_text": "La fiabilidad mejora si cada error repetido se convierte en deuda t\u00e9cnica accionable.",
+      "evidence": [
+        "recent_errors=0"
+      ],
+      "source_task_ids": [
+        "ci_task_57960b752805"
+      ],
+      "proposal_ids": [],
+      "created_at": "2026-05-30T09:35:53.089816+00:00",
+      "updated_at": "2026-05-30T09:35:53.089816+00:00"
+    }
+  ],
+  "proposals": [
+    {
+      "proposal_id": "ci_prop_66b3bf9203be",
+      "cycle_id": "ci_cycle_765bc8e2cac4",
+      "fingerprint": "64886a7e3d40767482e57c17",
+      "proposal_type": "MONITORING_CHANGE",
+      "target_component": "continuous_improvement",
+      "target_identifier": "llm_configuration",
+      "status": "PENDING",
+      "priority": "LOW",
+      "risk_level": "LOW",
+      "payload": {
+        "proposal_type": "MONITORING_CHANGE",
+        "target_component": "continuous_improvement",
+        "target_identifier": "llm_configuration",
+        "current_value": "IMPROVEMENT_LLM_ENABLED=false",
+        "proposed_value": "Configurar IMPROVEMENT_LLM_* y ejecutar un ciclo manual.",
+        "rationale": "Sin LLM externo solo se pueden generar diagn\u00f3sticos deterministas.",
+        "expected_impact": "Permitir propuestas razonadas por un modelo externo.",
+        "risk_level": "LOW",
+        "required_validations": [
+          "configuration_review"
+        ],
+        "rollback_plan": "Volver a IMPROVEMENT_LLM_ENABLED=false.",
+        "initiative_key": "software:llm_configuration",
+        "initiative_score": 43,
+        "merged_count": 1
+      },
+      "guard": {
+        "status": "PENDING",
+        "approved_for_auto_apply": false,
+        "reasons": [],
+        "dry_run": true
+      },
+      "created_at": "2026-05-30T09:35:53.434662+00:00",
+      "updated_at": "2026-05-30T09:35:53.434662+00:00",
+      "validations": []
+    }
+  ],
+  "validations": [
+    {
+      "validation_id": "ci_val_0ca7fbdc735f",
+      "proposal_id": "ci_prop_66b3bf9203be",
+      "cycle_id": "ci_cycle_765bc8e2cac4",
+      "validation_type": "deterministic_gate",
+      "status": "PASSED",
+      "payload": {
+        "checks": [
+          {
+            "name": "safety_flags",
+            "passed": true,
+            "detail": "Dry-run activo, auto-apply desactivado y live trading bloqueado."
+          },
+          {
+            "name": "rollback_plan_present",
+            "passed": true,
+            "detail": "Toda propuesta debe tener rollback."
+          }
+        ],
+        "required_validations": [
+          "configuration_review"
+        ],
+        "data_quality": "INSUFFICIENT"
+      }
+    }
+  ],
+  "initiatives": [
+    {
+      "initiative_id": "ci_init_d337478b3f7a",
+      "initiative_key": "software:llm_configuration",
+      "title": "Llm Configuration",
+      "domain": "software",
+      "status": "VALIDATING",
+      "owner_agent": "OrchestratorAgent",
+      "priority": "LOW",
+      "target_metric": "monitoring_change",
+      "baseline_value": null,
+      "current_value": null,
+      "expected_impact": "Permitir propuestas razonadas por un modelo externo.",
+      "risk_level": "LOW",
+      "evidence": [
+        "Sin LLM externo solo se pueden generar diagn\u00f3sticos deterministas.",
+        "Configurar IMPROVEMENT_LLM_* y ejecutar un ciclo manual.",
+        "IMPROVEMENT_LLM_ENABLED=false"
+      ],
+      "linked_event_ids": {},
+      "linked_task_ids": {},
+      "linked_hypothesis_ids": {},
+      "linked_proposal_ids": [
+        "ci_prop_66b3bf9203be"
+      ],
+      "linked_validation_ids": [
+        "ci_val_0ca7fbdc735f"
+      ],
+      "latest_decision": {
+        "decision": "PASSED",
+        "validation_id": "ci_val_0ca7fbdc735f",
+        "source": "validation"
+      },
+      "next_action": "Revisar resultado de la validacion.",
+      "created_at": "2026-05-30T09:35:53.427376+00:00",
+      "updated_at": "2026-05-30T09:35:53.475853+00:00"
+    },
+    {
+      "initiative_id": "ci_init_f1556548006f",
+      "initiative_key": "software:software_reliability",
+      "title": "Reforzar fiabilidad del runtime",
+      "domain": "software",
+      "status": "VALIDATING",
+      "owner_agent": "SoftwareReliabilityAgent",
+      "priority": "MEDIUM",
+      "target_metric": "runtime_error_rate",
+      "baseline_value": 0.0,
+      "current_value": 0.0,
+      "expected_impact": "Reducir errores repetidos y deuda tecnica del runtime.",
+      "risk_level": "LOW",
+      "evidence": [
+        "event_type=manual_trigger"
+      ],
+      "linked_event_ids": [
+        "ci_event_aa1a483fcdd0"
+      ],
+      "linked_task_ids": [
+        "ci_task_57960b752805",
+        "ci_task_ee957715f478",
+        "ci_task_ab9b8971d2e4"
+      ],
+      "linked_hypothesis_ids": [
+        "ci_hyp_159b72487463",
+        "ci_hyp_0779320a9d31",
+        "ci_hyp_211c80cbca44"
+      ],
+      "linked_proposal_ids": {},
+      "linked_validation_ids": {},
+      "latest_decision": {
+        "decision": "OPEN",
+        "source": "orchestrator"
+      },
+      "next_action": "Esperar validacion objetiva de la propuesta.",
+      "created_at": "2026-05-30T09:35:52.971467+00:00",
+      "updated_at": "2026-05-30T09:35:53.354806+00:00"
+    }
+  ],
+  "pending": [
+    {
+      "proposal_id": "ci_prop_66b3bf9203be",
+      "cycle_id": "ci_cycle_765bc8e2cac4",
+      "fingerprint": "64886a7e3d40767482e57c17",
+      "proposal_type": "MONITORING_CHANGE",
+      "target_component": "continuous_improvement",
+      "target_identifier": "llm_configuration",
+      "status": "PENDING",
+      "priority": "LOW",
+      "risk_level": "LOW",
+      "payload": {
+        "proposal_type": "MONITORING_CHANGE",
+        "target_component": "continuous_improvement",
+        "target_identifier": "llm_configuration",
+        "current_value": "IMPROVEMENT_LLM_ENABLED=false",
+        "proposed_value": "Configurar IMPROVEMENT_LLM_* y ejecutar un ciclo manual.",
+        "rationale": "Sin LLM externo solo se pueden generar diagn\u00f3sticos deterministas.",
+        "expected_impact": "Permitir propuestas razonadas por un modelo externo.",
+        "risk_level": "LOW",
+        "required_validations": [
+          "configuration_review"
+        ],
+        "rollback_plan": "Volver a IMPROVEMENT_LLM_ENABLED=false.",
+        "initiative_key": "software:llm_configuration",
+        "initiative_score": 43,
+        "merged_count": 1
+      },
+      "guard": {
+        "status": "PENDING",
+        "approved_for_auto_apply": false,
+        "reasons": [],
+        "dry_run": true
+      },
+      "created_at": "2026-05-30T09:35:53.434662+00:00",
+      "updated_at": "2026-05-30T09:35:53.434662+00:00",
+      "validations": []
+    }
+  ],
+  "agent_summary": {
+    "SoftwareReliabilityAgent": 1,
+    "ExperimentDesignerAgent": 1,
+    "DecisionCommitteeAgent": 1
+  },
+  "path": "tmp_ci_smoke_open\\reports\\latest_continuous_improvement_report.json"
+}

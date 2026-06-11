@@ -1,0 +1,16 @@
+# Hook local anti-corrupcion (T5.8). Instala con: pre-commit install
+repos:
+  - repo: local
+    hooks:
+      - id: check-no-nulls
+        name: Bloquea bytes nulos y .py corruptos
+        entry: python scripts/check_no_nulls.py
+        language: system
+        types: [python]
+        pass_filenames: true
+      - id: ruff
+        name: ruff
+        entry: ruff check
+        language: system
+        types: [python]
+        pass_filenames: false

@@ -29,7 +29,13 @@ jobs:
 
       - name: Validar tests clave
         run: |
-          pytest -q tests/test_reporting_and_universe.py tests/test_market_data.py
+          pytest -q \
+            tests/test_reporting_and_universe.py \
+            tests/test_market_data.py \
+            tests/test_continuous_improvement.py \
+            tests/test_operational_health.py \
+            tests/test_scheduler_observability.py \
+            tests/test_command_catalog.py
 
       - name: Configurar flyctl (CLI oficial de Fly.io)
         uses: superfly/flyctl-actions/setup-flyctl@master
@@ -40,3 +46,8 @@ jobs:
         run: flyctl deploy --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Verificacion post-despliegue
+        run: |
+          curl -fsS --retry 3 --retry-delay 10 https://agente-bolsa.fly.dev/_stcore/health >/dev/null
+          curl -fsS --retry 3 --retry-delay 10 https://agente-bolsa.fly.dev/ >/dev/null

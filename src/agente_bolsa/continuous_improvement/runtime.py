@@ -848,6 +848,15 @@ class ContinuousImprovementLabRuntime:
     ) -> dict[str, Any]:
         self.store.ensure_schema()
         self._normalize_autonomous_backlog()
+        # Ciclo de vida (Etapa 7): caduca tareas muertas y cierra/expira
+        # iniciativas estancadas ANTES de planificar trabajo nuevo, para que el
+        # backlog refleje trabajo real y no se acumulen tareas de 7-8 dias.
+        try:
+            from .lifecycle import run_lifecycle
+
+            run_lifecycle(self.store, self.settings)
+        except Exception as exc:  # noqa: BLE001 - el lifecycle nunca bloquea el ciclo.
+            log_system_event(self.settings.logs_dir, "ci_lifecycle_failed", {"error": repr(exc)})
         if not self.settings.continuous_improvement_enabled:
             return {"ok": False, "status": "DISABLED", "reason": "CONTINUOUS_IMPROVEMENT_ENABLED=false"}
         cooldown_active, cooldown_payload = self._cooldown_state()
@@ -893,6 +902,11 @@ class ContinuousImprovementLabRuntime:
             context = self.collector.collect(self.settings, self.store, cycle_id=cycle_id)
             evaluation = self.evaluator.evaluate(context)
             context["evaluation"] = evaluation
+            # Limites de flujo del laboratorio (Etapa 7) para el orquestador.
+            settings_ctx = context.setdefault("settings", {})
+            if isinstance(settings_ctx, dict):
+                settings_ctx.setdefault("ci_max_open_initiatives", self.settings.ci_max_open_initiatives)
+                settings_ctx.setdefault("ci_recurring_cooldown_hours", self.settings.ci_recurring_cooldown_hours)
             self.store.update_continuous_improvement_cycle(cycle_id, context=context, evaluation=evaluation)
 
             if trigger_event_type.startswith("manual"):

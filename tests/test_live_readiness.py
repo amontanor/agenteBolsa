@@ -43,3 +43,20 @@ def test_live_readiness_blocks_without_official_data_and_traceability(tmp_path):
     assert checks["market_data_provider"]["status"] == "block"
     assert checks["fill_signal_traceability"]["status"] == "block"
     assert checks["human_approval"]["status"] == "pass"
+
+
+def test_trading_safety_blocks_live_with_informal_market_data(tmp_path):
+    settings = Settings(
+        DATA_DIR=tmp_path / "data",
+        TRADING_MODE="live",
+        ALLOW_LIVE_TRADING=True,
+        ALPACA_PAPER=False,
+        MARKET_DATA_PROVIDER="yfinance",
+    )
+
+    try:
+        settings.assert_trading_safety()
+    except RuntimeError as exc:
+        assert "FMP_API_KEY" in str(exc)
+    else:
+        raise AssertionError("live trading should require formal market data")

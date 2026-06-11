@@ -33,12 +33,16 @@ class LabOrchestrator:
         evaluation = context.get("evaluation", {}) or {}
         summary = evaluation.get("summary", {}) or {}
         reports = context.get("reports", {}) or {}
+        settings = context.get("settings", {}) or {}
         pre_earnings_report = (reports.get("pre_earnings_learning") or {})
         has_pre_earnings = bool(pre_earnings_report.get("available"))
         blocked_entry = int(summary.get("blocked_entry_quality") or 0)
         blocked_backtest = int(summary.get("blocked_backtest") or 0)
         outcomes_available = int(summary.get("outcomes_available") or 0)
+        micro = int(summary.get("micro_observations") or 0)
+        soft_backtest = int(summary.get("soft_backtest_overrides") or 0)
         signals = int(summary.get("signals") or 0)
+        opportunistic_profile = str(settings.get("trade_aggressiveness_profile") or "") == "opportunistic"
         duplicates = self._max_duplicate_count(context)
         blockers = evaluation.get("blockers", []) or []
 
@@ -54,6 +58,29 @@ class LabOrchestrator:
             return []
 
         specs: list[dict[str, Any]] = []
+        if opportunistic_profile or micro or soft_backtest:
+            specs.append(
+                {
+                    "initiative_key": initiative_topic_key(domain="trading", focus="opportunistic_parameters"),
+                    "title": initiative_title_from_key("trading:opportunistic_parameters"),
+                    "owner_agent": AgentName.PARAMETER_CALIBRATION.value,
+                    "priority": "HIGH" if micro or soft_backtest else event.get("priority", "MEDIUM"),
+                    "target_metric": "opportunistic_expectancy",
+                    "baseline_value": None,
+                    "current_value": outcomes_available,
+                    "expected_impact": "Que el comite mida y ajuste automaticamente el perfil oportunista con evidencia.",
+                    "risk_level": "MEDIUM",
+                    "agents": [
+                        AgentName.PARAMETER_CALIBRATION.value,
+                        AgentName.TECHNICAL_EDGE.value,
+                        AgentName.STRATEGY.value,
+                        AgentName.RISK_CAPITAL.value,
+                        AgentName.EXPERIMENT_DESIGNER.value,
+                        AgentName.DECISION_COMMITTEE.value,
+                    ],
+                    "payload": {"focus": "opportunistic_parameters"},
+                }
+            )
         specs.append(
             {
                 "initiative_key": initiative_topic_key(domain="trading", focus="market_regime"),
@@ -261,6 +288,20 @@ class LabOrchestrator:
             if (item.get("payload") or {}).get("initiative_key")
         }
 
+        # Control de flujo (Etapa 7): WIP limitado y cooldown de iniciativas
+        # activas, para que el laboratorio TERMINE trabajo antes de abrir mas.
+        from .lifecycle import ACTIVE_INITIATIVE_STATUSES, _age_hours
+
+        settings_ctx = context.get("settings", {}) or {}
+        wip_limit = int(settings_ctx.get("ci_max_open_initiatives") or 6)
+        cooldown_hours = float(settings_ctx.get("ci_recurring_cooldown_hours") or 24.0)
+        open_initiatives = [
+            item
+            for item in self.store.continuous_improvement_initiatives(limit=500)
+            if str(item.get("status") or "") in ACTIVE_INITIATIVE_STATUSES
+        ]
+        open_count = len(open_initiatives)
+
         created: list[dict[str, Any]] = []
         task_ids_by_agent: dict[str, str] = {}
         for spec in specs:
@@ -270,6 +311,20 @@ class LabOrchestrator:
             if (previous_initiative or {}).get("status") == "MONITORING" and event["event_id"] in (
                 previous_initiative or {}
             ).get("linked_event_ids", []):
+                continue
+            previous_status = str((previous_initiative or {}).get("status") or "")
+            if previous_status in ACTIVE_INITIATIVE_STATUSES:
+                idle_hours = _age_hours((previous_initiative or {}).get("updated_at"))
+                if idle_hours is not None and idle_hours < cooldown_hours:
+                    # Iniciativa ya activa y con movimiento reciente: enlazar el
+                    # evento como evidencia, sin duplicar el grupo de tareas.
+                    self.store.append_continuous_improvement_initiative_links(
+                        previous_initiative["initiative_id"],
+                        event_ids=[event["event_id"]],
+                    )
+                    continue
+            if previous_initiative is None and open_count >= wip_limit:
+                # WIP lleno: no abrir iniciativas nuevas hasta cerrar otras.
                 continue
             initiative = self.store.upsert_continuous_improvement_initiative(
                 {
@@ -295,6 +350,8 @@ class LabOrchestrator:
                     "next_action": "Crear y ejecutar tareas del grupo experto.",
                 }
             )
+            if previous_initiative is None:
+                open_count += 1
             if spec["initiative_key"] in existing_keys:
                 continue
             for index, agent_name in enumerate(spec["agents"]):

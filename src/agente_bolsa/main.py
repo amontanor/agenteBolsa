@@ -2108,6 +2108,24 @@ def command_autonomy_digest(args: argparse.Namespace) -> None:
     print(result["markdown"])
 
 
+def command_edge_report(args: argparse.Namespace) -> None:
+    from .tools.naive_benchmarks import edge_report
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    report = edge_report(store, sessions=getattr(args, "sessions", 60))
+    if getattr(args, "json", False):
+        _print_json({"ok": True, "system_freeze_mode": settings.system_freeze_mode, **report})
+        return
+    print("EDGE REPORT")
+    print(f"  Veredicto: {report['verdict']} (freeze={'on' if settings.system_freeze_mode else 'off'})")
+    print(f"  Sesiones: {report['sessions']}")
+    print(f"  alpha vs SPY: {report['alpha_vs_spy']} (t={report['t_stat_vs_spy']})")
+    print(f"  alpha vs naive momentum: {report['alpha_vs_naive_momentum']} (t={report['t_stat_vs_naive_momentum']})")
+
+
 def command_risk_budget(args: argparse.Namespace) -> None:
     from .risk_budget import available_now
 
@@ -3075,6 +3093,14 @@ def build_parser() -> argparse.ArgumentParser:
     autonomy_digest.add_argument("--resume", action="store_true", help="Reanuda tras una pausa total.")
     autonomy_digest.add_argument("--json", action="store_true", help="Salida JSON.")
     autonomy_digest.set_defaults(func=command_autonomy_digest)
+
+    edge_report = subparsers.add_parser(
+        "edge-report",
+        help="Validacion del edge base vs SPY y momentum ingenuo (T5.1).",
+    )
+    edge_report.add_argument("--sessions", type=int, default=60, help="Numero de sesiones a evaluar.")
+    edge_report.add_argument("--json", action="store_true", help="Salida JSON.")
+    edge_report.set_defaults(func=command_edge_report)
 
     risk_budget = subparsers.add_parser(
         "risk-budget",

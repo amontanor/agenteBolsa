@@ -96,6 +96,11 @@ class TradeRecommendation:
     time_horizon: str | None = None
     invalidation: str | None = None
     source: str = "llm"
+    aggressiveness_profile: str | None = None
+    micro_experiment: bool = False
+    size_multiplier: float = 1.0
+    backtest_soft_override: bool = False
+    soft_override_reasons: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -110,3 +115,8 @@ class OrderPlan:
     recommendation: TradeRecommendation
     risk_decision: RiskDecision
     dry_run: bool = True
+    aggressiveness_profile: str | None = None
+    micro_experiment: bool = False
+    size_multiplier: float = 1.0
+    backtest_soft_override: bool = False
+    soft_override_reasons: list[str] = field(default_factory=list)

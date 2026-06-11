@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import asdict
+from dataclasses import asdict, replace
+import hashlib
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -19,18 +20,23 @@ from .market_calendar import MarketCalendar
 from .models import Hypothesis, new_id
 from .storage import Store
 from .tools.backtest import build_symbol_backtest
+from .tools.adversarial_reviewer import review_recommendations_adversarial
 from .tools.broker import BrokerClientFactory
 from .tools.costs import TransactionCostModel
 from .tools.execution import submit_paper_order_plan
 from .tools.market_snapshot import build_market_snapshot, compact_snapshot_for_prompt
+from .tools.market_state import build_market_state, compact_market_state_for_prompt
 from .tools.operational_health import load_operational_block_context
 from .tools.portfolio_optimizer import build_portfolio_rebalance_context
 from .tools.signal_learning import update_signal_decisions
+from .tools.signal_learning import update_signal_execution_status
+from .tools.deterministic_reviewer import recommendation_input_fingerprint, review_recommendations
 from .tools.trade_decision import (
     _compact_technical_context_for_prompt,
     _effective_buy_plan_limit,
     _effective_trade_recommendation_limit,
     _effective_daily_buy_limit,
+    augment_recommendations_with_deterministic_fallback,
     build_order_plans,
     deterministic_trade_fallback_recommendations,
     filter_entry_quality,
@@ -97,6 +103,11 @@ PHASES = [
         "Proponiendo mejoras controladas de datos, indicadores, prompts, tests y codigo.",
     ),
 ]
+
+
+def _payload_hash(payload: Any) -> str:
+    raw = json.dumps(payload or {}, sort_keys=True, ensure_ascii=True, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
 
 def cycle_id() -> str:
@@ -219,6 +230,8 @@ def _apply_daily_buy_limit(
     reporter: EventReporter,
     run_id: str,
     plans: list[Any],
+    *,
+    rejected: list[dict[str, Any]] | None = None,
 ) -> list[Any]:
     daily_buy_limit = _effective_daily_buy_limit(settings, plans)
     if daily_buy_limit <= 0:
@@ -242,6 +255,21 @@ def _apply_daily_buy_limit(
             blocked.append(plan)
 
     if blocked:
+        if rejected is not None:
+            for plan in blocked:
+                rejected.append(
+                    {
+                        "symbol": plan.symbol,
+                        "action": str(getattr(plan, "side", "")).lower(),
+                        "stage": "daily_buy_limit",
+                        "reason": "max_daily_buy_orders_reached",
+                        "checks": {
+                            "used_buy_orders_today": used_buys,
+                            "max_daily_buy_orders": settings.max_daily_buy_orders,
+                            "effective_max_daily_buy_orders": daily_buy_limit,
+                        },
+                    }
+                )
         reporter.emit(
             "risk_manager",
             "daily_buy_limit_applied",
@@ -330,15 +358,56 @@ def _apply_backtest_gate(
             )
             if approved:
                 kept.append(recommendation)
+            elif (
+                settings.trading_mode == "paper"
+                and settings.backtest_gate_paper_soft_override_enabled
+                and "backtest_soft_override_eligible" in list(getattr(recommendation, "soft_override_reasons", []) or [])
+            ):
+                kept.append(
+                    replace(
+                        recommendation,
+                        micro_experiment=True,
+                        size_multiplier=min(
+                            float(getattr(recommendation, "size_multiplier", 1.0) or 1.0),
+                            float(settings.micro_experiment_size_multiplier),
+                        ),
+                        backtest_soft_override=True,
+                        soft_override_reasons=[
+                            *list(getattr(recommendation, "soft_override_reasons", []) or []),
+                            f"backtest_gate_failed:{reason}",
+                        ],
+                    )
+                )
         except Exception as exc:  # noqa: BLE001 - missing validation should block buys, not crash cycle.
+            reason = f"backtest fallido: {exc}"
             decisions.append(
                 {
                     "symbol": recommendation.symbol,
                     "approved": False,
-                    "reason": f"backtest fallido: {exc}",
+                    "reason": reason,
                     "error": repr(exc),
                 }
             )
+            if (
+                settings.trading_mode == "paper"
+                and settings.backtest_gate_paper_soft_override_enabled
+                and "backtest_soft_override_eligible" in list(getattr(recommendation, "soft_override_reasons", []) or [])
+            ):
+                kept.append(
+                    replace(
+                        recommendation,
+                        micro_experiment=True,
+                        size_multiplier=min(
+                            float(getattr(recommendation, "size_multiplier", 1.0) or 1.0),
+                            float(settings.micro_experiment_size_multiplier),
+                        ),
+                        backtest_soft_override=True,
+                        soft_override_reasons=[
+                            *list(getattr(recommendation, "soft_override_reasons", []) or []),
+                            f"backtest_gate_failed:{reason}",
+                        ],
+                    )
+                )
 
     blocked = [item for item in decisions if not item["approved"]]
     approved_items = [item for item in decisions if item["approved"]]
@@ -547,6 +616,8 @@ def _auto_paper_trade(
     reporter: EventReporter,
     run_id: str,
     technical_context: dict[str, Any] | None,
+    market_snapshot: dict[str, Any] | None,
+    market_state: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
     if not settings.auto_paper_trading:
         return None
@@ -631,6 +702,7 @@ def _auto_paper_trade(
             decision_context,
             sentiment_context,
             rebalance_context,
+            market_state,
         )
     except Exception as exc:  # noqa: BLE001 - bad LLM JSON or broker read must not stop scheduler.
         if settings.deterministic_trade_fallback_enabled and "portfolio" in locals() and "decision_context" in locals():
@@ -667,21 +739,123 @@ def _auto_paper_trade(
             return {"submitted": [], "failed": [{"stage": "decision", "error": str(exc)}]}
 
     recommendations = decision["recommendations"]
-    for recommendation in recommendations:
+    recommendation_augmentation = {"added": [], "replaced_holds": [], "fallback_candidates": 0}
+    if settings.deterministic_trade_fallback_enabled:
+        recommendations, recommendation_augmentation = augment_recommendations_with_deterministic_fallback(
+            settings,
+            portfolio,
+            decision_context,
+            recommendations,
+            limit=locals().get("effective_recommendation_limit"),
+        )
+        if recommendation_augmentation.get("added"):
+            reporter.emit(
+                "execution_agent",
+                "paper_auto_trade_recommendation_augmented",
+                run_id,
+                (
+                    "Fallback determinista completa la decision del LLM con "
+                    f"{len(recommendation_augmentation['added'])} compra(s)."
+                ),
+                recommendation_augmentation,
+            )
+    reviewed_recommendations, deterministic_review = review_recommendations(
+        settings,
+        recommendations,
+        decision_context,
+        sentiment_context,
+        market_state,
+    )
+    if deterministic_review:
+        reporter.emit(
+            "risk_manager",
+            "deterministic_review_completed",
+            run_id,
+            (
+                "Revision determinista completada. "
+                f"Aprobadas: {', '.join(item['symbol'] for item in deterministic_review if item['approved']) or 'ninguna'}. "
+                f"Bloqueadas: {', '.join(item['symbol'] for item in deterministic_review if not item['approved']) or 'ninguna'}."
+            ),
+            {"decisions": deterministic_review},
+        )
+    adversarial_review = review_recommendations_adversarial(
+        reviewed_recommendations,
+        technical_context=decision_context,
+        market_state=market_state,
+    )
+    if adversarial_review:
+        reporter.emit(
+            "risk_manager",
+            "adversarial_review_completed",
+            run_id,
+            (
+                "Revision adversarial determinista completada. "
+                f"Bloqueos: {sum(1 for item in adversarial_review if not item['approved'])}."
+            ),
+            {"decisions": adversarial_review},
+        )
+
+    model_info = {
+        "llm_model": settings.openai_model,
+        "secondary_review_llm_enabled": settings.secondary_review_llm_enabled,
+        "secondary_review_llm_model": settings.secondary_review_llm_model,
+        "trade_aggressiveness_profile": settings.trade_aggressiveness_profile,
+        "decision_fallback_error": decision.get("fallback_error"),
+    }
+    gate_config = {
+        "entry_quality_gate_enabled": settings.entry_quality_gate_enabled,
+        "backtest_gate_enabled": settings.backtest_gate_enabled,
+        "min_llm_confidence_to_trade": settings.min_llm_confidence_to_trade,
+    }
+    for recommendation in reviewed_recommendations:
+        review_row = next(
+            (item for item in deterministic_review if item["symbol"] == recommendation.symbol and item["action"] == recommendation.action),
+            None,
+        )
+        adversarial_row = next(
+            (item for item in adversarial_review if item["symbol"] == recommendation.symbol and item["action"] == recommendation.action),
+            None,
+        )
+        fingerprint = recommendation_input_fingerprint(
+            recommendation,
+            market_snapshot=market_snapshot,
+            market_state=market_state,
+            technical_context=decision_context,
+            sentiment_context=sentiment_context,
+            model_info=model_info,
+            gate_config=gate_config,
+        )
         store.save_trade_recommendation(
             recommendation_id=new_id("rec"),
             cycle_id=run_id,
             symbol=recommendation.symbol,
             action=recommendation.action,
             confidence=recommendation.confidence,
-            payload=asdict(recommendation),
+            payload={
+                **asdict(recommendation),
+                "deterministic_review": review_row,
+                "adversarial_review": adversarial_row,
+                "decision_input_fingerprint": fingerprint,
+                "market_state_quality": ((market_state or {}).get("data_quality") or {}).get("status"),
+                "prompt_version": "trade_decision.v2",
+                "model_config_hash": _payload_hash(model_info),
+                "feature_hash": _payload_hash(decision_context),
+                "data_provider_hash": _payload_hash(
+                    {
+                        "market_state_provider": (market_state or {}).get("provider"),
+                        "market_snapshot_provider": (market_snapshot or {}).get("provider"),
+                        "data_vendor_quality": ((market_state or {}).get("data_quality") or {}).get("data_vendor_quality"),
+                    }
+                ),
+                "model_info": model_info,
+            },
         )
 
     quality_recommendations, entry_quality_gate = _apply_entry_quality_gate(
         settings,
         reporter,
         run_id,
-        recommendations,
+        reviewed_recommendations,
         decision_context,
         sentiment_context,
     )
@@ -694,9 +868,10 @@ def _auto_paper_trade(
     learned_decisions = update_signal_decisions(
         store,
         source_run_id=decision_context.get("run_id"),
-        recommendations=recommendations,
+        recommendations=reviewed_recommendations,
         entry_quality_gate=entry_quality_gate,
         backtest_gate=backtest_gate,
+        settings=settings,
     )
     if learned_decisions:
         reporter.emit(
@@ -711,7 +886,8 @@ def _auto_paper_trade(
     effective_plan_limit = _effective_buy_plan_limit(settings, gated_recommendations)
     effective_daily_limit = _effective_daily_buy_limit(settings, plans)
     approved_buys = sorted({item.symbol for item in gated_recommendations if str(item.action).lower() == "buy"})
-    plans = _apply_daily_buy_limit(settings, store, reporter, run_id, plans)
+    plans = _apply_daily_buy_limit(settings, store, reporter, run_id, plans, rejected=rejected_order_plans)
+    planned_symbols = [plan.symbol for plan in plans if str(plan.side).lower() == "buy"]
     for plan in plans:
         plan_id = new_id("plan")
         store.save_order_plan(
@@ -726,8 +902,19 @@ def _auto_paper_trade(
         )
 
     if not plans:
+        execution_updates = update_signal_execution_status(
+            store,
+            source_run_id=decision_context.get("run_id"),
+            approved_symbols=approved_buys,
+            rejected_order_plans=rejected_order_plans,
+            planned_symbols=[],
+            submitted=[],
+            failed=[],
+            effective_max_orders_per_cycle=effective_plan_limit,
+            effective_max_daily_buy_orders=effective_daily_limit,
+        )
         actions = ", ".join(
-            f"{item.symbol}:{item.action}:{item.confidence:.2f}" for item in recommendations
+            f"{item.symbol}:{item.action}:{item.confidence:.2f}" for item in reviewed_recommendations
         ) or "sin recomendaciones"
         reporter.emit(
             "execution_agent",
@@ -735,7 +922,9 @@ def _auto_paper_trade(
             run_id,
             f"No compra ni vende. Recomendaciones sin plan aprobado: {actions}.",
             {
-                "recommendations": [asdict(item) for item in recommendations],
+                "recommendations": [asdict(item) for item in reviewed_recommendations],
+                "deterministic_review": deterministic_review,
+                "adversarial_review": adversarial_review,
                 "entry_quality_gate": entry_quality_gate,
                 "backtest_gate": backtest_gate,
                 "rebalance_context": rebalance_context,
@@ -743,19 +932,25 @@ def _auto_paper_trade(
                 "effective_max_orders_per_cycle": effective_plan_limit,
                 "effective_max_daily_buy_orders": effective_daily_limit,
                 "rejected_order_plans": rejected_order_plans,
+                "execution_updates": execution_updates,
+                "recommendation_augmentation": recommendation_augmentation,
                 "submitted": [],
             },
         )
         return {
             "submitted": [],
             "failed": [],
-            "recommendations": [asdict(item) for item in recommendations],
+            "recommendations": [asdict(item) for item in reviewed_recommendations],
+            "deterministic_review": deterministic_review,
+            "adversarial_review": adversarial_review,
             "entry_quality_gate": entry_quality_gate,
             "backtest_gate": backtest_gate,
             "approved_buys": approved_buys,
             "effective_max_orders_per_cycle": effective_plan_limit,
             "effective_max_daily_buy_orders": effective_daily_limit,
             "rejected_order_plans": rejected_order_plans,
+            "execution_updates": execution_updates,
+            "recommendation_augmentation": recommendation_augmentation,
         }
 
     submitted = []
@@ -803,6 +998,17 @@ def _auto_paper_trade(
         fail_text = "; fallos: " + ", ".join(f"{item['symbol']} {item['side']}: {item['error']}" for item in failed)
     else:
         fail_text = ""
+    execution_updates = update_signal_execution_status(
+        store,
+        source_run_id=decision_context.get("run_id"),
+        approved_symbols=approved_buys,
+        rejected_order_plans=rejected_order_plans,
+        planned_symbols=planned_symbols,
+        submitted=submitted,
+        failed=failed,
+        effective_max_orders_per_cycle=effective_plan_limit,
+        effective_max_daily_buy_orders=effective_daily_limit,
+    )
     reporter.emit(
         "execution_agent",
         "paper_auto_trade_completed",
@@ -811,21 +1017,29 @@ def _auto_paper_trade(
         {
             "submitted": submitted,
             "failed": failed,
+            "deterministic_review": deterministic_review,
+            "adversarial_review": adversarial_review,
             "entry_quality_gate": entry_quality_gate,
             "backtest_gate": backtest_gate,
             "effective_max_orders_per_cycle": effective_plan_limit,
             "effective_max_daily_buy_orders": effective_daily_limit,
             "rejected_order_plans": rejected_order_plans,
+            "execution_updates": execution_updates,
+            "recommendation_augmentation": recommendation_augmentation,
         },
     )
     return {
         "submitted": submitted,
         "failed": failed,
+        "deterministic_review": deterministic_review,
+        "adversarial_review": adversarial_review,
         "entry_quality_gate": entry_quality_gate,
         "backtest_gate": backtest_gate,
         "effective_max_orders_per_cycle": effective_plan_limit,
         "effective_max_daily_buy_orders": effective_daily_limit,
         "rejected_order_plans": rejected_order_plans,
+        "execution_updates": execution_updates,
+        "recommendation_augmentation": recommendation_augmentation,
     }
 
 
@@ -863,6 +1077,8 @@ def run_observable_cycle(
 
     market_snapshot: dict[str, Any] | None = None
     market_snapshot_prompt = "{}"
+    market_state: dict[str, Any] | None = None
+    market_state_prompt = "{}"
     technical_context_prompt = json.dumps(
         _compact_technical_context_for_prompt(technical_context or {}) if technical_context else {},
         ensure_ascii=True,
@@ -901,6 +1117,45 @@ def run_observable_cycle(
             json_safe_error,
         )
 
+    try:
+        reporter.emit(
+            "market_regime_strategist",
+            "market_state_started",
+            run_id,
+            "Construyendo estado de mercado unificado con regimen, amplitud, sentimiento y calidad de datos.",
+        )
+        market_state = build_market_state(
+            settings,
+            settings.data_dir / "reports",
+            run_id,
+            market_snapshot=market_snapshot,
+        )
+        market_state_prompt = compact_market_state_for_prompt(market_state, max_chars=2500)
+        state_quality = ((market_state.get("data_quality") or {}).get("status") or "UNKNOWN").upper()
+        event_type = "market_state_completed" if state_quality == "GOOD" else "market_state_degraded"
+        reporter.emit(
+            "market_regime_strategist",
+            event_type,
+            run_id,
+            f"Estado de mercado guardado con calidad {state_quality}.",
+            {
+                "path": market_state.get("path"),
+                "market_regime": market_state.get("market_regime"),
+                "volatility_regime": market_state.get("volatility_regime"),
+                "data_quality": market_state.get("data_quality"),
+                "warnings": market_state.get("warnings", []),
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        market_state_prompt = json.dumps({"error": str(exc)}, ensure_ascii=True)
+        reporter.emit(
+            "market_regime_strategist",
+            "market_state_degraded",
+            run_id,
+            f"No se pudo construir market_state completo: {exc}",
+            {"error": str(exc)},
+        )
+
     crew_result: str | None = None
     if use_crew:
         endpoint, _attempts = select_preferred_endpoint(settings)
@@ -921,12 +1176,17 @@ def run_observable_cycle(
                         result = crew.kickoff(
                             inputs={
                                 "universe": ", ".join(settings.universe),
-                            "cycle_id": run_id,
-                            "current_date": datetime.now(timezone.utc).date().isoformat(),
-                            "market_snapshot": market_snapshot_prompt,
-                            "technical_context": technical_context_prompt,
-                        }
-                    )
+                                "cycle_id": run_id,
+                                "current_date": datetime.now(timezone.utc).date().isoformat(),
+                                "market_snapshot": market_snapshot_prompt,
+                                "market_state": market_state_prompt,
+                                "technical_context": technical_context_prompt,
+                                "deterministic_review_summary": (
+                                    "Pendiente; la revision determinista se ejecuta antes de "
+                                    "convertir recomendaciones en planes de orden."
+                                ),
+                            }
+                        )
                 finally:
                     logging.disable(logging.NOTSET)
             crew_result = str(result)
@@ -955,7 +1215,7 @@ def run_observable_cycle(
 
     auto_result = None
     if use_crew:
-        auto_result = _auto_paper_trade(settings, store, reporter, run_id, technical_context)
+        auto_result = _auto_paper_trade(settings, store, reporter, run_id, technical_context, market_snapshot, market_state)
     _record_trade_summary(settings, store, reporter, run_id, auto_result)
     reporter.emit(
         "orchestrator",
@@ -964,4 +1224,10 @@ def run_observable_cycle(
         "Ciclo finalizado. Estado persistido en SQLite y JSONL por agente.",
     )
     log_system_event(settings.logs_dir, "cycle_completed", {"cycle_id": run_id})
-    return {"cycle_id": run_id, "crew_result": crew_result, "used_crew": use_crew}
+    return {
+        "cycle_id": run_id,
+        "crew_result": crew_result,
+        "used_crew": use_crew,
+        "market_state_path": (market_state or {}).get("path"),
+        "market_state_quality": ((market_state or {}).get("data_quality") or {}).get("status"),
+    }

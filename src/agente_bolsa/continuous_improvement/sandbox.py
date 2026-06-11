@@ -208,11 +208,44 @@ def run_validation_steps(
     return {"ok": ok, "steps": results}
 
 
+def _write_and_verify(path: Path, content: str) -> None:
+    """Escribe un archivo y verifica su integridad (T5.8).
+
+    Normaliza a newline final, escribe, re-lee y comprueba: (a) sin bytes nulos,
+    (b) ast.parse si es .py, (c) coincide byte a byte con lo solicitado. Cualquier
+    fallo lanza excepcion para que el sandbox aborte y destruya el worktree.
+    """
+
+    if not content.endswith("\n"):
+        content = content + "\n"
+    # Validacion PREVIA a la escritura: un contenido invalido jamas toca disco.
+    if "\x00" in content:
+        raise GitSandboxError(f"contenido con bytes nulos: {path.name}")
+    if str(path).endswith(".py"):
+        import ast
+
+        try:
+            ast.parse(content)
+        except SyntaxError as exc:
+            raise GitSandboxError(f"archivo .py invalido ({path.name}): {exc}") from exc
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    reread = path.read_text(encoding="utf-8")
+    if reread != content:
+        # Escritura corrupta: no dejar el archivo a medias en el worktree.
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        raise GitSandboxError(f"escritura corrupta (no coincide byte a byte): {path.name}")
+
+
 def apply_payload_to_worktree(worktree: Path, *, file_edits: Any, patch_text: str) -> None:
-    """Aplica file_edits/patch sobre un worktree. Misma logica que AutoApply.
+    """Aplica file_edits/patch sobre un worktree, con verificacion de integridad.
 
     Soporta: lista de `{path, content}` (contenido completo) o `{path, old, new}`
-    (reemplazo de bloque), o un patch unificado via `git apply`.
+    (reemplazo de bloque), o un patch unificado via `git apply`. Cada archivo
+    escrito se re-lee y valida (sin nulls, ast.parse en .py, byte a byte) — T5.8.
     """
 
     if isinstance(file_edits, list) and file_edits:
@@ -220,16 +253,15 @@ def apply_payload_to_worktree(worktree: Path, *, file_edits: Any, patch_text: st
             if not isinstance(item, dict) or not item.get("path"):
                 raise ValueError("file_edits invalido")
             path = worktree / str(item["path"])
-            path.parent.mkdir(parents=True, exist_ok=True)
             if "content" in item:
-                path.write_text(str(item["content"]), encoding="utf-8")
+                _write_and_verify(path, str(item["content"]))
                 continue
             old = str(item.get("old") or "")
             new = str(item.get("new") or "")
             current = path.read_text(encoding="utf-8")
             if old not in current:
                 raise ValueError(f"No se encontro bloque old en {item['path']}")
-            path.write_text(current.replace(old, new, 1), encoding="utf-8")
+            _write_and_verify(path, current.replace(old, new, 1))
         return
     patch_text = str(patch_text or "").strip()
     if patch_text:

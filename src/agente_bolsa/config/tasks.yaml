@@ -1,42 +1,95 @@
 daily_research:
   description: "Actualizar datos, resumir contexto y generar observaciones medibles."
-  expected_output: "Lista de observaciones con simbolo, evidencia, fecha y nivel de confianza."
+  expected_output: "Observaciones estructuradas con evidencia y simbolos afectados."
+  owner_agent: "market_data_researcher"
   agents:
     - market_data_researcher
     - macro_news_researcher
+    - market_regime_strategist
     - technical_analyst
     - fundamental_analyst
+  prompt_template: "Actualiza el estado del universo {universe} usando solo datos verificables del snapshot siguiente. No inventes precios, fechas ni fundamentales que no esten en el snapshot. Fecha del ciclo: {current_date}. Snapshot: {market_snapshot}. Estado de mercado obligatorio: {market_state}. Contexto tecnico adicional del escaneo amplio: {technical_context}. Devuelve observaciones tecnicas y de contexto. No propongas operaciones sin reglas medibles."
+  requires:
+    - "market_snapshot"
+    - "market_state"
+    - "technical_context"
+  produces:
+    - "observations"
+  enabled: true
 
 hypothesis_generation:
   description: "Convertir observaciones en hipotesis falsables."
-  expected_output: "Hipotesis con reglas de entrada, salida, invalidacion y metricas objetivo."
+  expected_output: "Lista JSON de hipotesis candidatas."
+  owner_agent: "hypothesis_generator"
   agents:
     - hypothesis_generator
+  prompt_template: "Genera hipotesis falsables a partir de las observaciones y del estado de mercado. Cada hipotesis debe tener entrada, salida, invalidacion, horizonte y metricas de promocion."
+  requires:
+    - "observations"
+    - "market_state"
+  produces:
+    - "hypotheses"
+  enabled: true
+
+portfolio_committee:
+  description: "Integrar mercado, oportunidades y parametros vigentes en un dictamen trazable."
+  expected_output: "Dictamen estructurado con regimen, oportunidades prioritarias, parametros a vigilar, validaciones requeridas y condiciones de rollback."
+  owner_agent: "decision_committee"
+  agents:
+    - decision_committee
+    - opportunity_scout
+    - parameter_calibration_specialist
+  prompt_template: "Actua como comite experto sobre el perfil operativo vigente. Usa el snapshot, estado de mercado, dictamen determinista, contexto tecnico y parametros actuales para decidir si el perfil oportunista esta justificado. Dictamen determinista obligatorio: {deterministic_review_summary}. Identifica oportunidades accionables, riesgos de sobreextension, parametros a monitorizar y expertos adicionales necesarios. No propongas live trading."
+  requires:
+    - "market_snapshot"
+    - "market_state"
+    - "technical_context"
+    - "deterministic_review_summary"
+  produces:
+    - "committee_opinion"
+  enabled: true
 
 validation:
   description: "Probar hipotesis con backtest, walk-forward, costes y fuera de muestra."
-  expected_output: "Reporte de metricas, riesgos, sesgos detectados y decision de promocion."
+  expected_output: "Decision de validacion con metricas minimas y razones de rechazo."
+  owner_agent: "quant_backtester"
   agents:
     - quant_backtester
-    - risk_manager
+  prompt_template: "Evalua las hipotesis. Penaliza sobreajuste, pocos trades, coste no modelado y dependencia de un unico periodo. Usa el estado de mercado para detectar sensibilidad por regimen."
+  requires:
+    - "hypotheses"
+    - "market_state"
+  produces:
+    - "validation_report"
+  enabled: true
 
-portfolio_decision:
-  description: "Seleccionar senales aprobadas, tamano de posicion y cartera objetivo."
-  expected_output: "Propuestas de orden con razon, riesgo y trazabilidad a hipotesis."
+risk_review:
+  description: "Aplicar limites de riesgo y decidir si alguna propuesta puede pasar a paper trading."
+  expected_output: "Aprobaciones o rechazos de riesgo con checks concretos."
+  owner_agent: "risk_manager"
   agents:
-    - portfolio_manager
     - risk_manager
-
-execution:
-  description: "Ejecutar ordenes autorizadas en paper/live segun configuracion."
-  expected_output: "Ordenes enviadas, rechazadas o pendientes con identificadores auditables."
-  agents:
-    - execution_agent
     - compliance_guardian
+  prompt_template: "Aplica limites de riesgo y decide si alguna propuesta puede pasar a paper trading. Usa el estado de mercado, la calidad de datos y el dictamen determinista. Bloquea cualquier ejecucion live si la configuracion no lo permite."
+  requires:
+    - "validation_report"
+    - "market_state"
+    - "deterministic_review_summary"
+  produces:
+    - "risk_gate"
+  enabled: true
 
 post_mortem:
   description: "Evaluar resultados y proponer mejoras controladas."
-  expected_output: "Lecciones aprendidas, cambios propuestos y tareas de investigacion futuras."
+  expected_output: "Post-mortem y backlog de mejoras priorizado."
+  owner_agent: "post_trade_analyst"
   agents:
     - post_trade_analyst
     - self_improvement_engineer
+  prompt_template: "Resume aprendizajes del ciclo y propone mejoras controladas para investigar. Las mejoras de codigo deben quedar como propuesta, no como cambio productivo activo. Mantén la estrategia champion congelada y trata nuevas ideas como challenger/shadow hasta que pasen su paquete de validacion."
+  requires:
+    - "market_state"
+    - "risk_gate"
+  produces:
+    - "improvement_backlog"
+  enabled: true

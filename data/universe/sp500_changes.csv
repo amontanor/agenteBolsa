@@ -1,0 +1,9 @@
+date,added,removed
+# Dataset point-in-time del S&P 500 (T5.6). Una fila por cambio de composicion.
+# 'added' = simbolo que ENTRO al indice en esa fecha; 'removed' = el que SALIO.
+# Fuente publica recomendada: lista de cambios de S&P Dow Jones Indices / Wikipedia
+# "List of S&P 500 companies" (seccion Selected changes). Actualizar manualmente.
+# Ejemplos ilustrativos (sustituir por datos reales):
+2024-12-23,LII,QRVO
+2024-09-23,AMTM,BBWI
+2023-10-18,HUBB,ORGN

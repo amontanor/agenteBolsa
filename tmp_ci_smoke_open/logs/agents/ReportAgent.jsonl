@@ -1,0 +1,1 @@
+{"agent": "ReportAgent", "event_type": "lab_cycle_completed", "payload": {"status": "COMPLETED", "proposals": 1, "validations": 1, "initiatives": 2}, "cycle_id": "ci_cycle_765bc8e2cac4", "event_id": "evt_69956242f6ee", "created_at": "2026-05-30T09:35:53.511829+00:00"}

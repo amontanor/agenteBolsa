@@ -151,6 +151,127 @@ def build_market_data_quality_report(
     )
 
 
+def _latest_ohlcv_by_symbol(frame: pd.DataFrame, symbols: list[str]) -> dict[str, dict[str, Any]]:
+    multi_symbol = isinstance(frame.columns, pd.MultiIndex)
+    rows: dict[str, dict[str, Any]] = {}
+    for symbol in symbols:
+        try:
+            symbol_frame = frame[symbol].copy() if multi_symbol else frame.copy()
+        except KeyError:
+            continue
+        symbol_frame = symbol_frame.dropna(how="all")
+        if symbol_frame.empty or "Close" not in symbol_frame.columns:
+            continue
+        latest = symbol_frame.dropna(subset=["Close"]).iloc[-1]
+        rows[symbol] = {
+            "date": str(symbol_frame.dropna(subset=["Close"]).index[-1])[:10],
+            "open": _safe_float(latest.get("Open")),
+            "high": _safe_float(latest.get("High")),
+            "low": _safe_float(latest.get("Low")),
+            "close": _safe_float(latest.get("Close")),
+            "volume": _safe_float(latest.get("Volume")),
+        }
+    return rows
+
+
+def build_market_data_reconciliation_report(
+    settings: Settings,
+    reports_dir: Path,
+    run_id: str,
+    *,
+    symbols: list[str] | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    tolerance_pct: float = 0.01,
+) -> dict[str, Any]:
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    today = datetime.now(timezone.utc).date()
+    start_value = start or (today - timedelta(days=10)).isoformat()
+    end_value = end or (today + timedelta(days=1)).isoformat()
+    selected_symbols = sorted({str(item).upper() for item in (symbols or settings.universe[:5]) if str(item).strip()})
+    primary_provider = settings.market_data_provider
+    primary_resolved = "fmp" if primary_provider == "auto" and settings.fmp_api_key else primary_provider
+    alternate_provider = "yfinance" if primary_resolved == "fmp" else "fmp"
+    downloads: dict[str, dict[str, Any]] = {}
+    warnings: list[str] = []
+
+    for label, provider in {"primary": primary_provider, "alternate": alternate_provider}.items():
+        try:
+            frame, meta = download_daily_prices_with_metadata(
+                selected_symbols,
+                start=start_value,
+                end=end_value,
+                provider=provider,
+                fmp_api_key=settings.fmp_api_key,
+            )
+            downloads[label] = {
+                "provider": provider,
+                "meta": meta,
+                "latest": _latest_ohlcv_by_symbol(frame, selected_symbols),
+                "available": True,
+            }
+        except Exception as exc:  # noqa: BLE001
+            downloads[label] = {"provider": provider, "available": False, "error": str(exc), "latest": {}, "meta": {}}
+            warnings.append(f"{label}:{provider}: {exc}")
+
+    discrepancies: list[dict[str, Any]] = []
+    primary_latest = downloads.get("primary", {}).get("latest", {}) or {}
+    alternate_latest = downloads.get("alternate", {}).get("latest", {}) or {}
+    for symbol in selected_symbols:
+        first = primary_latest.get(symbol)
+        second = alternate_latest.get(symbol)
+        if not first or not second:
+            discrepancies.append({"symbol": symbol, "kind": "missing_provider_comparison", "severity": "WARN"})
+            continue
+        close_a = _safe_float(first.get("close"))
+        close_b = _safe_float(second.get("close"))
+        if close_a <= 0 or close_b <= 0:
+            discrepancies.append({"symbol": symbol, "kind": "invalid_close", "severity": "BLOCK"})
+            continue
+        diff_pct = abs(close_a - close_b) / max(close_a, close_b)
+        if diff_pct > tolerance_pct:
+            discrepancies.append(
+                {
+                    "symbol": symbol,
+                    "kind": "close_discrepancy",
+                    "severity": "BLOCK" if diff_pct > tolerance_pct * 3 else "WARN",
+                    "primary_close": close_a,
+                    "alternate_close": close_b,
+                    "diff_pct": round(diff_pct, 4),
+                }
+            )
+
+    report = {
+        "run_id": run_id,
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "period": {"from": start_value, "to": end_value},
+        "symbols": selected_symbols,
+        "providers": {
+            "primary": downloads.get("primary", {}),
+            "alternate": downloads.get("alternate", {}),
+        },
+        "summary": {
+            "symbols": len(selected_symbols),
+            "primary_provider": primary_provider,
+            "alternate_provider": alternate_provider,
+            "discrepancies": len(discrepancies),
+            "blockers": sum(1 for item in discrepancies if item.get("severity") == "BLOCK"),
+            "ready_for_live_data_use": not any(item.get("severity") == "BLOCK" for item in discrepancies)
+            and bool(downloads.get("primary", {}).get("available")),
+        },
+        "discrepancies": discrepancies,
+        "warnings": warnings,
+    }
+    return write_json_report(
+        report,
+        reports_dir,
+        "market_data_reconciliation",
+        run_id,
+        latest_filename="latest_market_data_reconciliation.json",
+        manifest={"symbols": selected_symbols, "primary_provider": primary_provider, "alternate_provider": alternate_provider},
+    )
+
+
 def build_weekly_trading_review(
     settings: Settings,
     store: Store,

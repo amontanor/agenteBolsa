@@ -1,9 +1,11 @@
 from agente_bolsa.config import Settings
 from agente_bolsa.cycle_runner import (
+    _apply_daily_buy_limit,
     _backtest_gate_decision,
     _record_trade_summary,
     _submitted_order_summary,
 )
+from types import SimpleNamespace
 
 
 def test_submitted_order_summary_includes_trade_evidence():
@@ -165,3 +167,38 @@ def test_backtest_gate_blocks_excessive_drawdown():
 
     assert approved is False
     assert "max drawdown" in reason
+
+
+def test_apply_daily_buy_limit_records_rejections():
+    emitted = {}
+    rejected = []
+
+    class FakeStore:
+        def count_broker_orders(self, side=None, since_iso=None):
+            return 1
+
+    class FakeReporter:
+        def emit(self, agent, event_type, cycle_id, message, payload=None):
+            emitted["event_type"] = event_type
+            emitted["payload"] = payload or {}
+
+    plans = [
+        SimpleNamespace(symbol="AAPL", side="buy"),
+        SimpleNamespace(symbol="MSFT", side="buy"),
+    ]
+
+    kept = _apply_daily_buy_limit(
+        Settings(MAX_DAILY_BUY_ORDERS=2, MAX_ORDERS_PER_CYCLE=2),
+        FakeStore(),
+        FakeReporter(),
+        "cycle",
+        plans,
+        rejected=rejected,
+    )
+
+    assert len(kept) == 1
+    assert kept[0].symbol == "AAPL"
+    assert rejected[0]["symbol"] == "MSFT"
+    assert rejected[0]["stage"] == "daily_buy_limit"
+    assert rejected[0]["reason"] == "max_daily_buy_orders_reached"
+    assert emitted["event_type"] == "daily_buy_limit_applied"

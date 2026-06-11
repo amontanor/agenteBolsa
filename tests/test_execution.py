@@ -67,6 +67,10 @@ def _install_fake_alpaca(monkeypatch):
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
+    class LimitOrderRequest:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
     class StopLossRequest:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
@@ -83,6 +87,7 @@ def _install_fake_alpaca(monkeypatch):
     enums_module.TimeInForce = TimeInForce
     enums_module.OrderClass = OrderClass
     requests_module.MarketOrderRequest = MarketOrderRequest
+    requests_module.LimitOrderRequest = LimitOrderRequest
     requests_module.StopLossRequest = StopLossRequest
     requests_module.TakeProfitRequest = TakeProfitRequest
     monkeypatch.setitem(sys.modules, "alpaca", alpaca_module)
@@ -116,6 +121,28 @@ def test_builds_bracket_market_order(monkeypatch):
     assert request.kwargs["client_order_id"] == "agente-plan_123"
     assert request.kwargs["take_profit"].kwargs["limit_price"] == 110.0
     assert request.kwargs["stop_loss"].kwargs["stop_price"] == 95.0
+
+
+def test_limit_entry_applies_gap_cap(monkeypatch):
+    _install_fake_alpaca(monkeypatch)
+    plan = {
+        "plan_id": "plan_lim",
+        "symbol": "AAPL",
+        "side": "buy",
+        "notional": 200.0,
+        "payload": {"qty": 2, "entry_price": 100.0, "stop_loss": 95.0, "take_profit": 110.0},
+    }
+    request = build_market_order_request(
+        plan,
+        client_order_id="agente-lim",
+        use_bracket_orders=False,
+        use_limit_entries=True,
+        max_entry_gap_pct=0.015,
+    )
+    # Limit price = 100 * 1.015 = 101.50
+    assert request.kwargs["limit_price"] == 101.5
+    assert request.kwargs["qty"] == 2.0
+    assert "notional" not in request.kwargs
 
 
 def test_fractional_buy_uses_simple_notional_order(monkeypatch):

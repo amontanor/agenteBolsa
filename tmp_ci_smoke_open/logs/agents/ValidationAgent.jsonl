@@ -1,0 +1,1 @@
+{"agent": "ValidationAgent", "event_type": "lab_validation_recorded", "payload": {"validation_id": "ci_val_0ca7fbdc735f", "proposal_id": "ci_prop_66b3bf9203be", "status": "PASSED", "initiative_key": "software:llm_configuration"}, "cycle_id": "ci_cycle_765bc8e2cac4", "event_id": "evt_fff4bccbba31", "created_at": "2026-05-30T09:35:53.490022+00:00"}

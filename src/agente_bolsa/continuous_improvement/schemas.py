@@ -80,6 +80,7 @@ class AgentName(str, Enum):
     TECHNICAL_EDGE = "TechnicalEdgeAgent"
     SENTIMENT = "SentimentAnalystAgent"
     STRATEGY = "StrategyEvaluatorAgent"
+    PARAMETER_CALIBRATION = "ParameterCalibrationAgent"
     PRE_EARNINGS = "PreEarningsSpecialistAgent"
     RISK = "RiskGuardAgent"
     RISK_CAPITAL = "RiskCapitalAgent"
@@ -140,6 +141,9 @@ class ImprovementProposalPayload(BaseModel):
     risk_level: Literal["LOW", "MEDIUM", "HIGH"] = "MEDIUM"
     required_validations: list[str] = Field(default_factory=list)
     rollback_plan: str = ""
+    promotion_state: Literal["champion", "challenger", "shadow", "micro_experiment", "rejected", "retired"] = "shadow"
+    evaluation_window_frozen: bool = False
+    next_review_at: str = ""
 
     @field_validator("target_component", "target_identifier", mode="before")
     @classmethod
@@ -154,6 +158,9 @@ class SpecialistResponseBase(BaseModel):
     confidence: Literal["LOW", "MEDIUM", "HIGH"] = "LOW"
     decision: Literal["APPROVE", "REJECT", "REWORK", "MONITOR", "ESCALATE"] | None = None
     decision_reason: str = ""
+    deterministic_alignment: bool | None = None
+    deterministic_decision: str = ""
+    discrepancy_justification: str = ""
     initiative_status_target: str = ""
     proposal_status_targets: list[dict[str, Any]] = Field(default_factory=list)
     priority_adjustment: str = ""
@@ -183,6 +190,10 @@ class StrategyEvaluatorResponse(SpecialistResponseBase):
     pass
 
 
+class ParameterCalibrationResponse(SpecialistResponseBase):
+    pass
+
+
 class ProgrammerAgentResponse(SpecialistResponseBase):
     pass
 
@@ -206,6 +217,10 @@ class LLMJsonResult(BaseModel):
     model: str = ""
     base_url: str = ""
     fallback_used: bool = False
+    prompt_tokens_estimate: int | None = None
+    context_limit_tokens: int | None = None
+    context_compacted: bool = False
+    truncation_report: dict[str, Any] = Field(default_factory=dict)
     request_preview: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -219,6 +234,7 @@ def specialist_response_json_schema(agent_name: AgentName) -> dict[str, Any]:
         AgentName.TECHNICAL: TechnicalAnalystResponse,
         AgentName.SENTIMENT: SentimentAnalystResponse,
         AgentName.STRATEGY: StrategyEvaluatorResponse,
+        AgentName.PARAMETER_CALIBRATION: ParameterCalibrationResponse,
         AgentName.PROGRAMMER: ProgrammerAgentResponse,
     }
     model = model_map.get(agent_name, SpecialistResponseBase)

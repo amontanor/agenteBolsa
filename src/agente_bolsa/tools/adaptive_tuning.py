@@ -329,6 +329,8 @@ def update_adaptive_config(
     since_date: str = "2026-04-01",
     min_resolved: int = 10,
 ) -> dict[str, Any]:
+    if getattr(settings, "system_freeze_mode", False):
+        return {"status": "blocked", "reason": "system_freeze", "changed": []}
     path = adaptive_config_path(settings)
     config = load_adaptive_config(path)
     parameters = config.setdefault("parameters", {})

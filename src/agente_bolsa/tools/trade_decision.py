@@ -495,6 +495,9 @@ def _lessons_block_for_prompt(settings: Settings, technical_context: dict[str, A
                 "scope": item.get("scope"),
                 "statement": truncate_string(item.get("statement", ""), 240),
                 "confidence": item.get("confidence"),
+                # T5.4: n e intervalo de confianza para que el LLM pondere.
+                "n": item.get("supporting_cases"),
+                "wilson_low": (item.get("source_refs") or {}).get("wilson_low"),
             }
             for item in lessons
         ]
@@ -2816,7 +2819,6 @@ def validate_entry_quality(
             sentiment_failed=sentiment_failed,
             learning_prior=learning_prior,
         )
-        reward_risk_margin_override = False
         reward_risk_margin_tolerance = float(settings.entry_score_v2_reward_risk_margin_tolerance)
         reward_risk = _float(entry_score.get("reward_risk"))
         selected_rank = int(candidate.get("selection_rank") or 0)

@@ -6,7 +6,12 @@ import pytest
 
 from agente_bolsa.config import Settings
 from agente_bolsa.continuous_improvement.experiments import AutoApplyCodeAgent
-from agente_bolsa.continuous_improvement.sandbox import GitSandbox, sandbox_supported
+from agente_bolsa.continuous_improvement.sandbox import (
+    GitSandbox,
+    GitSandboxError,
+    apply_payload_to_worktree,
+    sandbox_supported,
+)
 from agente_bolsa.storage import Store
 
 
@@ -183,3 +188,35 @@ def test_sandbox_supported_detects_non_git(tmp_path):
     plain = tmp_path / "plain"
     plain.mkdir()
     assert sandbox_supported(plain) is False
+
+
+# -- T5.8: integridad de escritura -----------------------------------------
+def test_apply_rejects_null_bytes(tmp_path):
+    with pytest.raises(GitSandboxError):
+        apply_payload_to_worktree(
+            tmp_path, file_edits=[{"path": "x.py", "content": "x=1\x00\n"}], patch_text=""
+        )
+
+
+def test_apply_rejects_unparseable_python(tmp_path):
+    with pytest.raises(GitSandboxError):
+        apply_payload_to_worktree(
+            tmp_path, file_edits=[{"path": "x.py", "content": "def f(:\n"}], patch_text=""
+        )
+    assert not (tmp_path / "x.py").exists() or "def f(:" not in (tmp_path / "x.py").read_text()
+
+
+def test_apply_normalizes_trailing_newline(tmp_path):
+    apply_payload_to_worktree(tmp_path, file_edits=[{"path": "docs/n.md", "content": "hola"}], patch_text="")
+    assert (tmp_path / "docs" / "n.md").read_text(encoding="utf-8") == "hola\n"
+
+
+def test_legacy_apply_refuses_main_repo():
+    from pathlib import Path
+
+    from agente_bolsa.continuous_improvement import experiments
+
+    repo_root = Path(experiments.__file__).resolve().parents[3]
+    agent = AutoApplyCodeAgent()
+    with pytest.raises(RuntimeError, match="repo principal"):
+        agent._apply_payload(repo_root, file_edits=[{"path": "docs/x.md", "content": "x"}], patch_text="")

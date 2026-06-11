@@ -164,3 +164,18 @@ def discover(store: "Store | None") -> list[Strategy]:
 
 def discover_active(store: "Store | None") -> list[Strategy]:
     return [s for s in discover(store) if str(s.status).upper() == "ACTIVE"]
+
+
+def strategy_matches_regime(strategy: Strategy, regime: str | None) -> bool:
+    """True si la estrategia opera en el regimen vigente (T5.7)."""
+
+    target = str(getattr(strategy, "target_regime", "any") or "any").lower()
+    if target == "any" or not regime:
+        return True
+    return target == str(regime).lower()
+
+
+def discover_active_for_regime(store: "Store | None", regime: str | None) -> list[Strategy]:
+    """Estrategias ACTIVE cuyo target_regime coincide con el regimen vigente."""
+
+    return [s for s in discover_active(store) if strategy_matches_regime(s, regime)]

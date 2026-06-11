@@ -1,13 +1,25 @@
 from datetime import datetime
 from types import SimpleNamespace
 
+from agente_bolsa import __version__
 from agente_bolsa.config import Settings
 from agente_bolsa.llm_usage import usage_tokens
 from agente_bolsa.models import OrderSnapshot, PortfolioSnapshot, PositionSnapshot
 from agente_bolsa.storage import Store
 from agente_bolsa.eventing import _format_time
 from agente_bolsa.web_app import (
+    _ci_conversation_groups,
+    _ci_global_export_payload,
+    _ci_runtime_alert,
     _ci_task_activity,
+    _company_study_news_files,
+    _company_study_news_for_symbol,
+    _company_study_export_payload,
+    _company_study_global_export_payload,
+    _company_study_decision_context,
+    _company_study_reason,
+    _company_study_signal_rows,
+    _company_study_symbol_summary,
     _create_manual_opportunity_plan,
     _estimated_portfolio_value_series,
     _latest_llm_context_by_symbol,
@@ -22,6 +34,7 @@ from agente_bolsa.web_app import (
     _portfolio_chart_visible_summary,
     _portfolio_value_series_from_alpaca,
     _sidebar_version_label,
+    _study_price,
     _trim_portfolio_chart_range,
 )
 
@@ -200,7 +213,7 @@ def test_latest_daily_equity_change_falls_back_to_estimated_series():
 
 
 def test_sidebar_version_label_uses_semantic_version():
-    assert _sidebar_version_label() == "v0.1.6"
+    assert _sidebar_version_label() == f"v{__version__}"
 
 
 def test_local_datetime_renders_spain_dst_from_utc():
@@ -275,6 +288,272 @@ def test_ci_task_activity_groups_messages_by_initiative_event():
     assert grouped[0]["initiative_id"] == "evt_1"
     assert set(grouped[0]["agent_names"]) == {"MarketEstimatorAgent", "StrategyEvaluatorAgent"}
     assert len(grouped[0]["messages"]) == 2
+
+
+def test_ci_conversation_groups_builds_full_thread_per_initiative():
+    initiatives = [
+        {
+            "initiative_id": "ci_init_1",
+            "initiative_key": "software:runtime_reliability",
+            "title": "Reforzar fiabilidad del runtime",
+            "status": "ANALYZING",
+            "owner_agent": "SoftwareReliabilityAgent",
+            "target_metric": "runtime_error_rate",
+            "risk_level": "LOW",
+            "latest_decision": {"decision": "OPEN"},
+            "next_action": "Esperar respuesta de agentes.",
+            "linked_event_ids": ["ci_event_1"],
+            "created_at": "2026-06-03T18:00:00+00:00",
+            "updated_at": "2026-06-03T18:04:00+00:00",
+        }
+    ]
+    initiative_messages = [
+        {
+            "initiative_id": "ci_init_1",
+            "cycle_id": "ci_cycle_test",
+            "agent_name": "SoftwareReliabilityAgent",
+            "message_type": "task_completed",
+            "content": {"summary": "Se detecta deuda tecnica en el manejo de reintentos."},
+            "created_at": "2026-06-03T18:03:00+00:00",
+        },
+        {
+            "initiative_id": "ci_init_1",
+            "cycle_id": "ci_cycle_test",
+            "agent_name": "ValidationAgent",
+            "message_type": "validation_recorded",
+            "content": {"validation": {"status": "PASSED", "proposal_id": "prop_1"}},
+            "created_at": "2026-06-03T18:04:00+00:00",
+        },
+    ]
+    recent_agent_events = [
+        {
+            "cycle_id": "ci_cycle_test",
+            "agent": "OrchestratorAgent",
+            "event_type": "lab_event_planned",
+            "payload_json": '{"event_id":"ci_event_1","event_type":"manual_trigger"}',
+            "created_at": "2026-06-03T18:01:00+00:00",
+        }
+    ]
+
+    grouped = _ci_conversation_groups(
+        initiatives,
+        initiative_messages,
+        recent_agent_events,
+        task_groups=[],
+        proposals=[],
+        validations=[],
+        cycle_id="ci_cycle_test",
+    )
+
+    assert len(grouped) == 1
+    assert grouped[0]["title"] == "Reforzar fiabilidad del runtime"
+    assert [item["stage"] for item in grouped[0]["messages"]] == [
+        "Propuesta del orquestador",
+        "Evento planificado",
+        "Respuesta del agente",
+        "Resultado de validacion",
+    ]
+    assert grouped[0]["messages"][2]["body"] == "Se detecta deuda tecnica en el manejo de reintentos."
+    assert grouped[0]["messages"][3]["body"] == "Validacion PASSED para prop_1."
+    assert grouped[0]["last_message_at"] == "2026-06-03T18:04:00+00:00"
+    assert "1 respuesta de agente" in grouped[0]["rollup"]["done"]
+    assert "1 validacion" in grouped[0]["rollup"]["done"]
+    assert grouped[0]["rollup"]["remaining"] == "Esperar respuesta de agentes."
+    assert grouped[0]["rollup"]["why"].startswith(
+        "Ya hay trabajo de agentes, pero la iniciativa sigue abierta y aun no ha cerrado su siguiente decision."
+    )
+
+
+def test_ci_conversation_groups_includes_linked_proposals_and_validations():
+    initiatives = [
+        {
+            "initiative_id": "ci_init_1",
+            "initiative_key": "software:error_investigation",
+            "title": "Error Investigation",
+            "status": "VALIDATING",
+            "owner_agent": "OrchestratorAgent",
+            "target_metric": "monitoring_change",
+            "risk_level": "LOW",
+            "latest_decision": {"decision": "PENDING"},
+            "next_action": "Esperar validacion objetiva.",
+            "linked_proposal_ids": ["prop_1"],
+            "linked_validation_ids": ["val_1"],
+            "created_at": "2026-06-03T18:00:00+00:00",
+            "updated_at": "2026-06-03T18:04:00+00:00",
+        }
+    ]
+
+    grouped = _ci_conversation_groups(
+        initiatives,
+        initiative_messages=[],
+        recent_agent_events=[],
+        task_groups=[],
+        proposals=[
+            {
+                "proposal_id": "prop_1",
+                "target_identifier": "error_investigation",
+                "created_at": "2026-06-03T18:01:00+00:00",
+                "payload": {
+                    "proposed_value": "Investigar errores recientes para prevenir recurrencias.",
+                    "expected_impact": "Reducir tiempo medio de resolucion.",
+                },
+            }
+        ],
+        validations=[
+            {
+                "validation_id": "val_1",
+                "proposal_id": "prop_1",
+                "status": "PENDING",
+                "created_at": "2026-06-03T18:02:00+00:00",
+                "payload": {
+                    "objective_summary": "La propuesta dispone de evidencia operativa suficiente para revision.",
+                },
+            }
+        ],
+        cycle_id="ci_cycle_test",
+    )
+
+    assert [item["stage"] for item in grouped[0]["messages"]] == [
+        "Propuesta del orquestador",
+        "Propuesta consolidada",
+        "Resultado de validacion",
+    ]
+    assert grouped[0]["messages"][1]["body"] == "Investigar errores recientes para prevenir recurrencias."
+    assert grouped[0]["messages"][2]["body"] == "La propuesta dispone de evidencia operativa suficiente para revision."
+    assert grouped[0]["last_message_at"] == "2026-06-03T18:02:00+00:00"
+    assert "1 propuesta" in grouped[0]["rollup"]["done"]
+    assert "1 validacion" in grouped[0]["rollup"]["done"]
+    assert "Validando evidencia" in grouped[0]["rollup"]["now"]
+    assert grouped[0]["rollup"]["why"].startswith(
+        "La iniciativa sigue en fase de validacion y no ha cerrado en READY_TO_APPLY o REJECTED."
+    )
+
+
+def test_ci_conversation_groups_infers_validation_from_linked_proposal():
+    initiatives = [
+        {
+            "initiative_id": "ci_init_1",
+            "initiative_key": "software:continuous_improvement",
+            "title": "Continuous Improvement",
+            "status": "VALIDATING",
+            "owner_agent": "OrchestratorAgent",
+            "target_metric": "monitoring_change",
+            "risk_level": "LOW",
+            "latest_decision": {"decision": "PENDING"},
+            "next_action": "Revalidar y cerrar.",
+            "linked_proposal_ids": ["prop_1"],
+            "linked_validation_ids": [],
+            "created_at": "2026-06-01T18:00:00+00:00",
+            "updated_at": "2026-06-08T18:00:00+00:00",
+        }
+    ]
+
+    grouped = _ci_conversation_groups(
+        initiatives,
+        initiative_messages=[],
+        recent_agent_events=[],
+        task_groups=[],
+        proposals=[
+            {
+                "proposal_id": "prop_1",
+                "target_identifier": "continuous_improvement",
+                "created_at": "2026-06-01T18:01:00+00:00",
+                "payload": {"proposed_value": "Crear validaciones adicionales."},
+            }
+        ],
+        validations=[
+            {
+                "validation_id": "val_1",
+                "proposal_id": "prop_1",
+                "status": "PASSED",
+                "created_at": "2026-06-01T18:02:00+00:00",
+                "payload": {"objective_summary": "Validacion objetiva superada."},
+            }
+        ],
+        cycle_id="ci_cycle_test",
+    )
+
+    assert [item["stage"] for item in grouped[0]["messages"]] == [
+        "Propuesta del orquestador",
+        "Propuesta consolidada",
+        "Resultado de validacion",
+    ]
+    assert "1 validacion" in grouped[0]["rollup"]["done"]
+    assert grouped[0]["rollup"]["why"].startswith(
+        "La iniciativa sigue en fase de validacion y no ha cerrado en READY_TO_APPLY o REJECTED."
+    )
+
+
+def test_ci_runtime_alert_exposes_error_and_retry():
+    alert = _ci_runtime_alert(
+        {
+            "status": "FAILED",
+            "payload": {
+                "error": "timeout talking to LLM",
+                "retry_attempt": 2,
+                "next_retry_at": "2026-06-02T16:20:44+00:00",
+            },
+        },
+        {
+            "status": "failed",
+            "detail": "timeout talking to LLM",
+            "extra": {},
+        },
+    )
+
+    assert alert is not None
+    assert "timeout talking to LLM" in alert["message"]
+    assert "Intento acumulado: 2" in alert["message"]
+
+
+def test_ci_global_export_payload_groups_history_for_deepresearch():
+    dataset = {
+        "cycles": [{"cycle_id": "ci_cycle_1"}],
+        "initiatives": [
+            {"initiative_id": "init_1", "status": "ANALYZING"},
+            {"initiative_id": "init_2", "status": "CLOSED"},
+        ],
+        "conversation_groups": [{"group_id": "init_1", "messages": [{"body": "Analisis"}]}],
+        "proposals": [
+            {"proposal_id": "prop_1", "status": "PENDING"},
+            {"proposal_id": "prop_2", "status": "REJECTED"},
+        ],
+        "validations": [{"validation_id": "val_1", "status": "PASSED"}],
+        "decisions": [{"decision_id": "dec_1", "decision": "REJECTED"}],
+        "tasks": [
+            {"task_id": "task_1", "status": "DISCOVERED"},
+            {"task_id": "task_2", "status": "COMPLETED"},
+        ],
+        "events": [
+            {"event_id": "event_1", "status": "DISCOVERED"},
+            {"event_id": "event_2", "status": "COMPLETED"},
+        ],
+        "hypotheses": [{"hypothesis_id": "hyp_1"}],
+        "experiments": [{"experiment_id": "exp_1"}],
+        "applied_changes": [{"applied_change_id": "chg_1"}],
+        "llm_responses": [{"llm_call_id": "llm_1"}],
+        "agent_events": [],
+        "initiative_messages": [],
+        "memories": [],
+    }
+
+    payload = _ci_global_export_payload(
+        dataset,
+        generated_at="2026-06-07T00:00:00+00:00",
+        limit=10000,
+    )
+
+    assert payload["schema"] == "agente_bolsa.continuous_improvement.deepresearch.all_history.v1"
+    assert payload["intended_consumer"] == "LLM/deepresearch"
+    assert payload["summary"]["cycles"] == 1
+    assert payload["summary"]["conversation_threads"] == 1
+    assert payload["summary"]["pending_or_applicable_proposals"] == 1
+    assert payload["summary"]["studied_proposals"] == 1
+    assert payload["summary"]["pending_tasks"] == 1
+    assert payload["summary"]["open_events"] == 1
+    assert payload["pending"]["proposals"][0]["proposal_id"] == "prop_1"
+    assert payload["studied"]["proposals"][0]["proposal_id"] == "prop_2"
+    assert payload["raw_collections"]["llm_responses"][0]["llm_call_id"] == "llm_1"
 
 
 def _opportunity_candidate(symbol: str, **overrides):
@@ -509,6 +788,310 @@ def test_manual_opportunity_recommendation_keeps_valid_stop_take():
     assert recommendation.stop_loss == 99.0
     assert recommendation.take_profit == 117.0
     assert recommendation.source == "manual_opportunity_screen"
+
+
+def _company_signal(symbol="AAPL", run_id="run_1", *, signal_id=None, close=101.0, entry_price=100.0, score=12):
+    return {
+        "signal_id": signal_id or f"{run_id}:{symbol}",
+        "source_run_id": run_id,
+        "source": "intraday_scan",
+        "symbol": symbol,
+        "signal_date": "2026-06-05",
+        "decision": "candidate",
+        "features": {
+            "close": close,
+            "entry_price": entry_price,
+            "score": score,
+            "direction": "long",
+            "reasons": ["precio sobre SMA200"],
+        },
+        "gate": {},
+        "outcome": {},
+        "created_at": "2026-06-05T19:00:00+00:00",
+        "updated_at": "2026-06-05T19:00:00+00:00",
+    }
+
+
+def test_company_study_symbol_summary_groups_latest_and_price():
+    rows = [
+        _company_signal("AAPL", "run_1", close=101.0, score=10),
+        _company_signal("AAPL", "run_2", close=110.0, score=14),
+        _company_signal("MSFT", "run_3", close=220.0, score=9),
+    ]
+    rows[1]["created_at"] = "2026-06-05T20:00:00+00:00"
+
+    summary = _company_study_symbol_summary(rows)
+    by_symbol = {item["simbolo"]: item for item in summary}
+
+    assert by_symbol["AAPL"]["iteraciones"] == 2
+    assert by_symbol["AAPL"]["ultimo_precio"] == 110.0
+    assert by_symbol["AAPL"]["ultimo_score"] == 14
+    assert by_symbol["MSFT"]["iteraciones"] == 1
+
+
+def test_company_study_reason_priority_learning_over_recommendation_and_plan():
+    signal = _company_signal("AAPL", "run_1", signal_id="sig_1")
+    learning = {
+        "sig_1": {
+            "decision": "hold",
+            "explanation": "Bloqueada por entrada extendida.",
+            "approved_buy": False,
+            "blocked_entry_quality": True,
+            "blocked_backtest": False,
+            "executed_buy": False,
+        }
+    }
+    recommendations = {
+        ("run_1", "AAPL"): {
+            "action": "buy",
+            "payload_json": '{"reason":"LLM compra"}',
+        }
+    }
+    plans = {
+        ("run_1", "AAPL"): {
+            "approved": 1,
+            "payload_json": '{"risk_decision":{"reason":"riesgo ok"}}',
+        }
+    }
+
+    reason = _company_study_reason(signal, learning, recommendations, plans)
+
+    assert reason["source"] == "learning_observations"
+    assert reason["label"] == "No compra: calidad"
+    assert "extendida" in reason["reason"]
+
+
+def test_company_study_reason_reports_approved_buy_and_backtest_block():
+    signal = _company_signal("AAPL", "run_1", signal_id="sig_1")
+
+    approved = _company_study_reason(
+        signal,
+        {
+            "sig_1": {
+                "decision": "buy",
+                "explanation": "Compra aprobada por momentum.",
+                "approved_buy": True,
+                "blocked_entry_quality": False,
+                "blocked_backtest": False,
+                "executed_buy": False,
+            }
+        },
+        {},
+        {},
+    )
+    blocked = _company_study_reason(
+        signal,
+        {
+            "sig_1": {
+                "decision": "hold",
+                "explanation": "Backtest insuficiente.",
+                "approved_buy": False,
+                "blocked_entry_quality": False,
+                "blocked_backtest": True,
+                "executed_buy": False,
+            }
+        },
+        {},
+        {},
+    )
+
+    assert approved["label"] == "Compra aprobada"
+    assert approved["tone"] == "good"
+    assert blocked["label"] == "No compra: backtest"
+    assert blocked["tone"] == "bad"
+
+
+def test_company_study_reason_fallback_candidate():
+    reason = _company_study_reason(_company_signal("AAPL"), {}, {}, {})
+
+    assert reason["source"] == "fallback"
+    assert "Candidato tecnico" in reason["label"]
+    assert "no llego a compra" in reason["reason"]
+
+
+def test_study_price_prefers_close_and_falls_back_to_entry():
+    assert _study_price({"close": 10.0, "entry_price": 9.5}) == 10.0
+    assert _study_price({"entry_price": 9.5}) == 9.5
+    assert _study_price({}) is None
+
+
+def test_company_study_news_loads_symbol_and_excludes_manifest(tmp_path):
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    (reports / "news_sentiment_run_1.manifest.json").write_text("{}", encoding="utf-8")
+    (reports / "news_sentiment_run_1.json").write_text(
+        """
+        {
+          "run_id": "run_1",
+          "as_of": "2026-06-05T20:00:00+00:00",
+          "results": [
+            {
+              "symbol": "AAPL",
+              "news": [{"title": "Apple headline"}],
+              "sentiment": {"sentiment": "positive", "sentiment_score": 1},
+              "material_risk": {"material": false}
+            },
+            {"symbol": "MSFT", "news": []}
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    files = _company_study_news_files(reports)
+    news = _company_study_news_for_symbol(reports, "AAPL", "run_1")
+
+    assert [path.name for path in files] == ["news_sentiment_run_1.json"]
+    assert len(news) == 1
+    assert news[0]["symbol"] == "AAPL"
+    assert news[0]["run_id"] == "run_1"
+
+
+def test_company_study_export_payload_is_llm_ready():
+    signal = _company_signal("AAPL", "run_1", signal_id="sig_1", close=123.45, score=15)
+    reason = {
+        "source": "learning_observations",
+        "label": "Compra aprobada",
+        "reason": "Momentum confirmado con riesgo controlado.",
+        "tone": "good",
+        "payload": {"approved_buy": True},
+    }
+    news = [
+        {
+            "symbol": "AAPL",
+            "run_id": "run_1",
+            "sentiment": {"sentiment": "positive", "sentiment_score": 1},
+            "news": [{"title": "Apple headline"}],
+        }
+    ]
+
+    payload = _company_study_export_payload(
+        symbol="AAPL",
+        signals=[signal],
+        reasons=[reason],
+        symbol_news=news,
+        filters={"since_date": "2026-06-01", "sources": ["intraday_scan"]},
+        generated_at="2026-06-07T00:00:00+00:00",
+    )
+
+    assert payload["schema"] == "agente_bolsa.company_studies.deepresearch.v1"
+    assert payload["intended_consumer"] == "LLM/deepresearch"
+    assert payload["summary"]["iterations"] == 1
+    assert payload["summary"]["approved_or_bought"] == 1
+    assert payload["summary"]["latest_price"] == 123.45
+    assert payload["iterations"][0]["price"] == 123.45
+    assert payload["iterations"][0]["decision_reason"]["reason"].startswith("Momentum confirmado")
+    assert payload["iterations"][0]["news_sentiment"][0]["news"][0]["title"] == "Apple headline"
+
+
+def test_company_study_global_export_payload_groups_all_companies():
+    aapl = _company_signal("AAPL", "run_1", signal_id="sig_aapl", close=123.45, score=15)
+    msft = _company_signal("MSFT", "run_2", signal_id="sig_msft", close=250.0, score=9)
+    context = {
+        "learning_by_signal": {
+            "sig_aapl": {
+                "decision": "buy",
+                "explanation": "Compra aprobada por momentum.",
+                "approved_buy": True,
+                "blocked_entry_quality": False,
+                "blocked_backtest": False,
+                "executed_buy": False,
+            },
+            "sig_msft": {
+                "decision": "hold",
+                "explanation": "Backtest insuficiente.",
+                "approved_buy": False,
+                "blocked_entry_quality": False,
+                "blocked_backtest": True,
+                "executed_buy": False,
+            },
+        },
+        "recommendations_by_cycle_symbol": {},
+        "plans_by_cycle_symbol": {},
+    }
+    payload = _company_study_global_export_payload(
+        signals=[aapl, msft],
+        context=context,
+        news_by_symbol={"AAPL": [{"symbol": "AAPL", "run_id": "run_1", "news": [{"title": "AAPL news"}]}]},
+        filters={"since_date": "2026-06-01"},
+        generated_at="2026-06-07T00:00:00+00:00",
+    )
+
+    assert payload["schema"] == "agente_bolsa.company_studies.deepresearch.all_companies.v1"
+    assert payload["summary"]["companies"] == 2
+    assert payload["summary"]["iterations"] == 2
+    assert payload["summary"]["approved_or_bought"] == 1
+    assert payload["summary"]["blocked"] == 1
+    assert [item["symbol"] for item in payload["companies"]] == ["AAPL", "MSFT"]
+    assert payload["companies"][0]["iterations"][0]["news_sentiment"][0]["news"][0]["title"] == "AAPL news"
+
+
+def test_company_study_decision_context_chunks_large_signal_id_lists(tmp_path):
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    signals = []
+    for index in range(1200):
+        symbol = f"S{index:04d}"
+        signal_id = f"run_1:{symbol}"
+        store.save_signal_outcome(
+            signal_id=signal_id,
+            source_run_id="run_1",
+            source="intraday_scan",
+            symbol=symbol,
+            signal_date="2026-06-05",
+            decision="candidate",
+            features={"close": 100.0 + index},
+        )
+        signals.append(_company_signal(symbol, "run_1", signal_id=signal_id))
+    store.upsert_learning_observation(
+        {
+            "observation_id": "obs_large",
+            "signal_date": "2026-06-05",
+            "symbol": "S1199",
+            "source_family": "intraday_scan",
+            "best_signal_id": "run_1:S1199",
+            "best_score": 10.0,
+            "decision": "hold",
+            "explanation": "Encontrada pese a lista grande.",
+            "llm_considered": True,
+            "approved_buy": False,
+            "blocked_entry_quality": False,
+            "blocked_backtest": True,
+            "executed_buy": False,
+            "gate": {},
+            "features": {},
+            "outcome": {},
+            "execution": {},
+            "rank_path": [],
+        }
+    )
+
+    context = _company_study_decision_context(store, signals)
+
+    assert context["learning_by_signal"]["run_1:S1199"]["blocked_backtest"] is True
+
+
+def test_company_study_signal_rows_uses_sqlite_index_without_report_json(tmp_path):
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    store.save_signal_outcome(
+        signal_id="run_1:AAPL",
+        source_run_id="run_1",
+        source="intraday_scan",
+        symbol="AAPL",
+        signal_date="2026-06-05",
+        decision="candidate",
+        features={"close": 101.0, "score": 12},
+    )
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    (reports / "closed_market_technical_study_run_1.json").write_text("not json", encoding="utf-8")
+
+    rows = _company_study_signal_rows(store, since_date="2026-06-01", sources=["intraday_scan"])
+
+    assert len(rows) == 1
+    assert rows[0]["symbol"] == "AAPL"
+    assert rows[0]["features"]["close"] == 101.0
 
 
 def test_create_manual_opportunity_plan_saves_pending_plan(tmp_path):

@@ -1,0 +1,1 @@
+{"agent": "continuous_improvement_lab", "event_type": "lab_cycle_started", "payload": {"mode": "manual", "runtime": "lab", "market": {"is_open": true}, "market_reason": "open"}, "cycle_id": "ci_cycle_765bc8e2cac4", "event_id": "evt_5d2f29e79ac6", "created_at": "2026-05-30T09:35:52.928020+00:00"}

@@ -79,6 +79,56 @@ def usage_tokens_from_response(response: Any) -> dict[str, int]:
     }
 
 
+# Precios por defecto en USD por millon de tokens (T5.9). Editables por settings
+# LLM_PRICE_PER_MTOKEN_<MODEL> (alias en mayusculas con guiones->guion_bajo).
+DEFAULT_PRICE_PER_MTOKEN: dict[str, float] = {
+    "local": 0.0,
+    "qwen": 0.0,
+    "gemini": 0.30,
+    "mimo": 0.50,
+}
+
+
+def price_per_mtoken(settings: Settings, model: str | None) -> float:
+    """Precio USD por millon de tokens del modelo (override por settings)."""
+
+    name = str(model or "").lower()
+    override_attr = "llm_price_per_mtoken_" + name.replace("-", "_").replace(".", "_").replace("/", "_")
+    override = getattr(settings, override_attr, None)
+    if isinstance(override, (int, float)):
+        return float(override)
+    for key, price in DEFAULT_PRICE_PER_MTOKEN.items():
+        if key in name:
+            return price
+    return 0.0
+
+
+def estimate_cost(settings: Settings, model: str | None, total_tokens: int) -> float:
+    return round(price_per_mtoken(settings, model) * (max(0, int(total_tokens)) / 1_000_000.0), 6)
+
+
+def today_llm_spend(settings: Settings, *, role: str | None = None) -> float:
+    """Gasto LLM acumulado de HOY en USD, opcionalmente filtrado por rol (T5.9)."""
+
+    from datetime import datetime, timezone
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    try:
+        store = Store(settings.database_path, settings.agent_logs_dir)
+        store.ensure_schema()
+        rows = store.latest_llm_usage(limit=5000)
+    except (OSError, sqlite3.Error):
+        return 0.0
+    total = 0.0
+    for row in rows:
+        if not str(row.get("created_at") or "").startswith(today):
+            continue
+        if role is not None and str(row.get("role") or "") != role:
+            continue
+        total += estimate_cost(settings, row.get("model"), int(row.get("total_tokens") or 0))
+    return round(total, 6)
+
+
 def record_llm_response(
     settings: Settings,
     source: str,

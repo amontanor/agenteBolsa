@@ -192,6 +192,20 @@ def build_daily_performance(
         "spy_pct": spy_pct if isinstance(spy_pct, (int, float)) else None,
         "alpha_vs_spy": alpha,
     }
+    # Separar resultado de proceso (T5.3): "el proceso no es el resultado".
+    payload["result_metrics"] = {
+        "alpha_vs_spy": alpha,
+        "sharpe_60": sharpe_60,
+        "max_dd": max_dd,
+        "hit_rate_20": hit_rate_20,
+        "profit_factor": payload["profit_factor"],
+        "pnl_pct": pnl_pct,
+    }
+    payload["process_metrics"] = {
+        "signals": counts["signals"],
+        "buys": counts["buys"],
+        "sells": counts["sells"],
+    }
     payload["iq_score"] = system_iq_score(store, window_days=20, extra_today=payload)
     return payload
 
@@ -208,18 +222,30 @@ def _normalize_alpha(alpha_values: list[float]) -> float:
 
 
 def _lab_promotion_quality(store: "Store") -> float:
-    """Ratio de cambios autonomos que sobreviven (APPLIED no revertidos)."""
+    """Calidad de promociones corregida anti-Goodhart (T5.3).
+
+    Una promocion solo SUMA si su ventana post (medida por el watchdog) mejoro
+    (`decision.watchdog.improved`); RESTA si fue revertida; las promociones sin
+    ventana resuelta NO cuentan. Promover cambios neutros no mueve la nota.
+    """
 
     try:
         changes = store.continuous_improvement_applied_changes(limit=500)
     except Exception:  # noqa: BLE001 - metrica opcional.
         return 0.5
-    applied = [item for item in changes if str(item.get("status")) == "APPLIED"]
-    rolled = [item for item in changes if str(item.get("status")) == "ROLLED_BACK"]
-    total = len(applied) + len(rolled)
+    good = 0
+    bad = 0
+    for item in changes:
+        if str(item.get("status")) == "ROLLED_BACK":
+            bad += 1
+            continue
+        watchdog = (item.get("decision") or {}).get("watchdog") or {}
+        if watchdog.get("improved") is True:
+            good += 1
+    total = good + bad
     if total == 0:
-        return 0.5
-    return len(applied) / total
+        return 0.5  # sin evidencia resuelta: neutro (el proceso no es el resultado)
+    return good / total
 
 
 def system_iq_score(

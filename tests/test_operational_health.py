@@ -5,7 +5,11 @@ import json
 from agente_bolsa.config import Settings
 from agente_bolsa.main import build_parser
 from agente_bolsa.storage import Store
-from agente_bolsa.tools.operational_health import build_operational_health_report, load_operational_block_context
+from agente_bolsa.tools.operational_health import (
+    build_operational_health_report,
+    build_production_health_report,
+    load_operational_block_context,
+)
 
 
 def test_operational_health_command_is_parseable():
@@ -14,6 +18,8 @@ def test_operational_health_command_is_parseable():
     assert args.command == "operational-health"
     args = parser.parse_args(["operational-responses"])
     assert args.command == "operational-responses"
+    args = parser.parse_args(["production-health"])
+    assert args.command == "production-health"
 
 
 def test_operational_health_flags_failed_job_and_degrading_setup(tmp_path):
@@ -100,3 +106,44 @@ def test_operational_block_context_activates_kill_switch_on_critical_alerts(tmp_
     assert block["block_new_buys"] is True
     assert block["block_buy_execution"] is True
     assert block["blocking_alerts"][0]["kind"] == "job_failed"
+
+
+def test_production_health_report_combines_operational_and_ci_runtime(tmp_path):
+    settings = Settings(DATA_DIR=tmp_path, CONTINUOUS_IMPROVEMENT_RUNTIME_INTERVAL_SECONDS=60)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    store.upsert_continuous_improvement_runtime_state(
+        runtime_name="lab",
+        status="IDLE",
+        heartbeat_at="2026-05-01T00:00:00+00:00",
+        payload={"mode": "scheduled"},
+    )
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "latest_closed_market_technical_study.json").write_text(
+        json.dumps(
+            {
+                "symbols_scanned": 100,
+                "symbols_with_data": 100,
+                "market_data": {"requested_count": 100, "missing_symbols_count": 0},
+                "warnings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (reports_dir / "latest_daily_learning_digest.json").write_text(
+        json.dumps({"setup_stats_3d": []}),
+        encoding="utf-8",
+    )
+    (reports_dir / "latest_post_market_learning.json").write_text(
+        json.dumps({"pipeline_steps": {"learning_pipeline_seconds": 12.0}}),
+        encoding="utf-8",
+    )
+
+    report = build_production_health_report(settings, store, reports_dir, "prod_test")
+
+    assert report["summary"]["overall_status"] in {"warning", "critical"}
+    assert report["continuous_improvement"]["heartbeat"]["status"] == "stale"
+    assert report["continuous_improvement"]["status"] == "IDLE"
+    kinds = {item["kind"] for item in report["alerts"]}
+    assert "continuous_improvement_runtime_stale" in kinds

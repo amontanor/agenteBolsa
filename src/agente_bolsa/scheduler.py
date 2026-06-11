@@ -958,6 +958,86 @@ def _check_kernel_integrity_once_per_session(
         )
 
 
+def _earnings_hold_guard(
+    settings: Settings,
+    store: Store,
+    portfolio: Any,
+    reporter: Any,
+    run_id: str,
+) -> None:
+    """Vigila posiciones abiertas que atraviesan earnings (T5.10).
+
+    Best-effort y conservador: calcula la decision determinista (reducir/cerrar)
+    y la emite como evento; NO envia ordenes por si mismo.
+    """
+
+    try:
+        from .tools.corporate_actions import earnings_hold_decision
+
+        positions = getattr(portfolio, "positions", None) or []
+        if not positions:
+            return
+        max_days = int(getattr(settings, "earnings_hold_max_days", 2))
+        policy = str(getattr(settings, "earnings_hold_policy", "reduce"))
+        earnings_days = _earnings_days_by_symbol(settings)
+        flagged: list[dict[str, Any]] = []
+        for position in positions:
+            symbol = str(getattr(position, "symbol", "")).upper()
+            days = earnings_days.get(symbol)
+            if days is None or days > max_days:
+                continue
+            raw_pnl = getattr(position, "unrealized_pl", None)
+            unrealized = float(raw_pnl) if isinstance(raw_pnl, (int, float)) else None
+            decision = earnings_hold_decision(
+                unrealized_pnl=unrealized,
+                days_to_earnings=days,
+                policy=policy,
+                max_days=max_days,
+            )
+            if decision["action"] != "hold":
+                flagged.append({"symbol": symbol, "days_to_earnings": days, **decision})
+        if flagged:
+            reporter.emit(
+                "earnings_hold_guard",
+                "earnings_hold_flagged",
+                run_id,
+                f"Posiciones con earnings en <= {max_days} dias: {len(flagged)} con decision determinista.",
+                {"flagged": flagged},
+            )
+    except Exception as exc:  # noqa: BLE001 - el guard no debe tumbar el watch.
+        log_system_event(settings.logs_dir, "earnings_hold_guard_failed", {"error": repr(exc)})
+
+
+def _earnings_days_by_symbol(settings: Settings) -> dict[str, int]:
+    """Dias hasta earnings por simbolo, desde el ultimo report pre-earnings (best-effort)."""
+
+    from datetime import date
+
+    path = settings.data_dir / "reports" / "latest_pre_earnings.json"
+    if not path.exists():
+        return {}
+    try:
+        import json
+
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    today = date.today()
+    result: dict[str, int] = {}
+    for item in payload.get("predictions", []) or payload.get("symbols", []) or []:
+        symbol = str(item.get("symbol") or "").upper()
+        edate = str(item.get("earnings_date") or item.get("date") or "")
+        if not symbol or len(edate) < 10:
+            continue
+        try:
+            days = (date.fromisoformat(edate[:10]) - today).days
+        except ValueError:
+            continue
+        if days >= 0:
+            result[symbol] = days
+    return result
+
+
 def portfolio_watch_job(
     settings: Settings,
     store: Store,
@@ -997,6 +1077,7 @@ def portfolio_watch_job(
     try:
         portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
         has_activity = bool(portfolio.positions or portfolio.open_orders)
+        _earnings_hold_guard(settings, store, portfolio, reporter, run_id)  # T5.10
         watch_payload.update(
             {
                 "cash": portfolio.cash,
@@ -1674,6 +1755,21 @@ def _persist_daily_performance(
             spy_pct=spy_pct,
             portfolio=portfolio,
         )
+        # Benchmarks ingenuos para validar el edge base (T5.1).
+        try:
+            from .tools.naive_benchmarks import compute_daily_benchmarks
+
+            payload["benchmarks"] = compute_daily_benchmarks(settings, session_date, spy_pct=spy_pct)
+        except Exception:  # noqa: BLE001 - los benchmarks no deben romper el baseline.
+            payload["benchmarks"] = {}
+        # Regimen del dia para el guard del watchdog (T5.2).
+        try:
+            from .tools.market_state import load_latest_market_state
+
+            state = load_latest_market_state(settings.data_dir / "reports") or {}
+            payload["regime"] = state.get("market_regime") or state.get("regime")
+        except Exception:  # noqa: BLE001
+            pass
         store.upsert_performance_daily(payload)
         reporter.emit(
             "performance_baseline_agent",

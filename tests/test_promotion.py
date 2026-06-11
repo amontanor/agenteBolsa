@@ -3,13 +3,24 @@
 from agente_bolsa.config import Settings
 from agente_bolsa.continuous_improvement.promotion import (
     PromotionManager,
+    _two_proportion_p,
     compute_strategy_metrics,
 )
 from agente_bolsa.storage import Store
 
 
 def _settings(tmp_path, **overrides):
-    return Settings(DATA_DIR=tmp_path, **overrides)
+    # Fija los umbrales clasicos (T1.3) para no depender de los defaults T5.2.
+    base = {
+        "PROMOTION_MIN_SESSIONS": 10,
+        "PROMOTION_MIN_SIGNALS": 20,
+        "PROMOTION_MAX_SESSIONS": 25,
+        "PROMOTION_BINOMIAL_MAX_P": 1.0,  # desactiva el gate binomial salvo que el test lo pida
+        "MAX_PROMOTIONS_PER_WEEK": 10,
+        "MAX_CONCURRENT_PROMOTIONS": 10,
+    }
+    base.update(overrides)
+    return Settings(DATA_DIR=tmp_path, **base)
 
 
 def _store(settings):
@@ -99,6 +110,23 @@ def test_insufficient_evidence_extends_window(tmp_path):
     decisions = manager.evaluate_windows()
     assert decisions[0]["verdict"] == "EXTEND"
     assert store.promotion_windows(status="OPEN")  # sigue abierta
+
+
+def test_binomial_p_significance():
+    assert _two_proportion_p(40, 50, 25, 50) < 0.10  # 80% vs 50% es significativo
+    assert _two_proportion_p(26, 50, 25, 50) > 0.10  # 52% vs 50% no lo es
+
+
+def test_change_budget_queues_excess_windows(tmp_path):
+    settings = _settings(tmp_path, MAX_CONCURRENT_PROMOTIONS=2)
+    store = _store(settings)
+    manager = PromotionManager(store, settings)
+    manager.start_shadow("a")
+    manager.start_shadow("b")
+    third = manager.start_shadow("c")
+    assert third["status"] == "QUEUED"
+    assert len(store.promotion_windows(status="OPEN")) == 2
+    assert len(store.promotion_windows(status="QUEUED")) == 1
 
 
 def test_start_shadow_creates_window_and_marks_shadow(tmp_path):

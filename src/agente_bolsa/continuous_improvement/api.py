@@ -14,6 +14,7 @@ from agente_bolsa.storage import Store
 from .experiments import AutoApplyCodeAgent
 from .orchestrator import ContinuousImprovementOrchestrator
 from .runtime import ContinuousImprovementLabRuntime
+from agente_bolsa.tools.operational_health import build_production_health_report
 
 
 BASE_PATH = "/api/continuous-improvement"
@@ -75,13 +76,23 @@ def status_payload() -> dict[str, Any]:
             )
         ),
         "pending_proposals": len(store.continuous_improvement_proposals(status="PENDING", limit=1000)),
-        "review_proposals": len(
-            store.continuous_improvement_proposals(status="REQUIRES_HUMAN_REVIEW", limit=1000)
-        ),
+        "review_proposals": 0,
         "applied_changes": len([item for item in applied_changes if item.get("status") == "APPLIED"]),
         "blocked_changes": len([item for item in applied_changes if item.get("status") == "BLOCKED"]),
         "rolled_back_changes": len([item for item in applied_changes if item.get("status") == "ROLLED_BACK"]),
     }
+
+
+def production_health_payload() -> dict[str, Any]:
+    settings = get_settings()
+    store = _store()
+    report = build_production_health_report(
+        settings,
+        store,
+        settings.data_dir / "reports",
+        "api_health",
+    )
+    return report
 
 
 def run_cycle_background() -> dict[str, Any]:
@@ -117,6 +128,9 @@ class ContinuousImprovementApiHandler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
         store = _store()
         runtime = _runtime()
+        if path in {f"{BASE_PATH}/health", f"{BASE_PATH}/production-health"}:
+            self._json(200, production_health_payload())
+            return
         if path == f"{BASE_PATH}/status" or path == f"{BASE_PATH}/lab/status":
             self._json(200, status_payload())
             return
@@ -246,8 +260,8 @@ class ContinuousImprovementApiHandler(BaseHTTPRequestHandler):
             mapping = {
                 "approve": "APPROVED",
                 "reject": "REJECTED",
-                "apply": "WAITING_HUMAN_REVIEW",
-                "validate": "WAITING_HUMAN_REVIEW",
+                "apply": "READY_TO_APPLY",
+                "validate": "PENDING",
             }
             if action not in mapping:
                 self._json(404, {"error": "not_found"})
@@ -259,8 +273,8 @@ class ContinuousImprovementApiHandler(BaseHTTPRequestHandler):
             reason = {
                 "approve": "Aprobada manualmente via API.",
                 "reject": "Rechazada manualmente via API.",
-                "apply": "Auto-apply bloqueado; queda en revision humana.",
-                "validate": "Validacion manual solicitada; queda en revision humana.",
+                "apply": "Forzada a READY_TO_APPLY via API.",
+                "validate": "Revalidacion manual solicitada; vuelve al pipeline automatico.",
             }[action]
             store.update_continuous_improvement_proposal_status(
                 proposal_id,

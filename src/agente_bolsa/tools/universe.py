@@ -48,6 +48,49 @@ FALLBACK_SP500_LARGE_CAPS = [
 ]
 
 
+def universe_as_of(
+    date: str,
+    *,
+    changes_path: Path | None = None,
+    current_universe: list[str] | None = None,
+) -> dict[str, Any]:
+    """Constituyentes del S&P 500 a una fecha (point-in-time) — T5.6.
+
+    Reconstruye la composicion historica a partir de `data/universe/sp500_changes.csv`
+    (columnas: date, added, removed). Si el dataset no esta disponible, devuelve el
+    universo actual con `survivorship_biased=true` (fallback honesto).
+    """
+
+    import csv
+
+    path = Path(changes_path) if changes_path else Path("data/universe/sp500_changes.csv")
+    current = current_universe if current_universe is not None else load_sp500_symbols()
+    if not path.exists():
+        return {"symbols": sorted(set(current)), "survivorship_biased": True, "as_of": date}
+
+    members = set(current)
+    try:
+        with path.open(encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+    except OSError:
+        return {"symbols": sorted(members), "survivorship_biased": True, "as_of": date}
+
+    # Solo filas con fecha valida (ignora comentarios `#` u otras lineas).
+    valid_rows = [r for r in rows if str(r.get("date") or "")[:4].isdigit()]
+    # Deshacer (en orden inverso) los cambios posteriores a `date`.
+    for row in sorted(valid_rows, key=lambda r: str(r.get("date") or ""), reverse=True):
+        change_date = str(row.get("date") or "")
+        if change_date <= date:
+            break
+        added = str(row.get("added") or "").strip().upper()
+        removed = str(row.get("removed") or "").strip().upper()
+        if added:
+            members.discard(added)  # aun no estaba en el indice a `date`
+        if removed:
+            members.add(removed)  # seguia en el indice a `date`
+    return {"symbols": sorted(members), "survivorship_biased": False, "as_of": date}
+
+
 def load_sp500_symbols() -> list[str]:
     try:
         import pandas as pd
