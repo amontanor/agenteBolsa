@@ -22,3 +22,8 @@ data/cache/
 *.pkl
 *.egg-info/
 sandboxes/
+
+tmp_*/
+tmp_*.json
+logs/
+data/state/*.pid
