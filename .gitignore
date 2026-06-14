@@ -27,3 +27,10 @@ tmp_*/
 tmp_*.json
 logs/
 data/state/*.pid
+data/state/*.lock
+
+# Local experiments / downloaded tool trees
+llama.cpp/
+comecocos.html
+pacman.html
+snake.html

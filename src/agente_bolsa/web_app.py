@@ -43,8 +43,18 @@ from agente_bolsa.tools.backtest import build_symbol_backtest
 from agente_bolsa.tools.broker import BrokerClientFactory
 from agente_bolsa.tools.command_catalog import available_command_catalog
 from agente_bolsa.tools.daily_learning import build_learning_digest_report, load_daily_learning_context
+from agente_bolsa.tools.news_sentiment import fetch_symbol_news
 from agente_bolsa.tools.operational_learning import build_operational_learning_review
 from agente_bolsa.tools.opportunities import build_opportunity_snapshot, opportunity_assessment, opportunity_entry_risk
+from agente_bolsa.tools.portfolio_insights import (
+    latest_analyzed_news as build_latest_analyzed_news,
+    position_chart_start_date as build_position_chart_start_date,
+    position_entry_date as build_position_entry_date,
+    position_evolution_summary as build_position_evolution_summary,
+    position_first_buy_time as build_position_first_buy_time,
+    position_price_series as build_position_price_series,
+    single_symbol_price_frame as build_single_symbol_price_frame,
+)
 from agente_bolsa.tools.pre_earnings import (
     backfill_pending_pre_earnings_estimates,
     build_pre_earnings_event_study,
@@ -1119,6 +1129,18 @@ def _company_study_news_files(reports_dir: Path) -> list[Path]:
     )
 
 
+def _news_sort_key(row: dict[str, Any]) -> tuple[str, str, str]:
+    published_at = str(row.get("published_at") or "")
+    analyzed_at = str(row.get("analyzed_at") or "")
+    title = str(row.get("title") or "")
+    return (published_at or analyzed_at, analyzed_at, title)
+
+
+@_safe_cache_data(show_spinner=False, ttl=120)
+def _latest_analyzed_news(reports_dir: Path, limit: int = 20) -> list[dict[str, Any]]:
+    return build_latest_analyzed_news(reports_dir, limit=limit)
+
+
 @_safe_cache_data(show_spinner=False, ttl=120)
 def _company_study_news_for_symbol(reports_dir: Path, symbol: str, run_id: str | None = None) -> list[dict[str, Any]]:
     symbol = str(symbol or "").upper().strip()
@@ -1645,6 +1667,321 @@ def _portfolio_table(rows: list[dict[str, Any]]) -> None:
     )
 
 
+def _portfolio_action_table(rows: list[dict[str, Any]], *, key_prefix: str = "portfolio_symbol") -> str | None:
+    if not rows:
+        st.markdown("<div class='empty-box'>No hay posiciones abiertas.</div>", unsafe_allow_html=True)
+        return None
+    clicked_symbol = None
+    sorted_rows = sorted(rows, key=lambda item: abs(_num(item.get("P/L $")) or 0), reverse=True)
+    header = st.columns([1.0, 1.25, 1.25, 1.25, 1.0, 1.0])
+    for column, label in zip(header, ["Accion", "Valor", "Precio", "P/L", "Stop", "Take"]):
+        column.markdown(f"<div class='portfolio-native-header'>{escape(label)}</div>", unsafe_allow_html=True)
+    for item in sorted_rows:
+        pl = _num(item.get("P/L $")) or 0.0
+        plpc = item.get("P/L %")
+        tone = "gain" if pl > 0 else "loss" if pl < 0 else "flat"
+        symbol = str(item.get("Simbolo") or "-").upper()
+        c1, c2, c3, c4, c5, c6 = st.columns([1.0, 1.25, 1.25, 1.25, 1.0, 1.0])
+        with c1:
+            if st.button(symbol, key=f"{key_prefix}_{symbol}", use_container_width=True):
+                clicked_symbol = symbol
+        c2.markdown(
+            f"<div class='portfolio-native-cell'>{_money(item.get('Valor'))}<span>qty {_num(item.get('Qty')) or 0:g}</span></div>",
+            unsafe_allow_html=True,
+        )
+        c3.markdown(
+            f"<div class='portfolio-native-cell'>{_money(item.get('Actual'))}<span>entrada {_money(item.get('Entrada'))}</span></div>",
+            unsafe_allow_html=True,
+        )
+        c4.markdown(
+            f"<div class='portfolio-native-cell'><b class='pl-chip {tone}'>{_money(pl)} <em>{_pct(plpc)}</em></b></div>",
+            unsafe_allow_html=True,
+        )
+        c5.markdown(f"<div class='portfolio-native-cell'>{_money(item.get('Stop'))}</div>", unsafe_allow_html=True)
+        c6.markdown(f"<div class='portfolio-native-cell'>{_money(item.get('Take'))}</div>", unsafe_allow_html=True)
+    return clicked_symbol
+
+
+def _position_first_buy_time(history: dict[str, Any], symbol: str) -> str | None:
+    return build_position_first_buy_time(history, symbol)
+
+
+def _position_entry_date(history: dict[str, Any], symbol: str) -> str | None:
+    return build_position_entry_date(history, symbol)
+
+
+def _position_chart_start_date(history: dict[str, Any], symbol: str, *, pre_entry_days: int = 7) -> str:
+    return build_position_chart_start_date(
+        history,
+        symbol,
+        pre_entry_days=pre_entry_days,
+        local_timezone=_settings().local_timezone,
+    )
+
+
+def _single_symbol_price_frame(data: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    return build_single_symbol_price_frame(data, symbol)
+
+
+def _position_price_series(
+    settings: Any,
+    symbol: str,
+    history: dict[str, Any],
+    *,
+    current_price: float | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    return build_position_price_series(settings, symbol, history, current_price=current_price)
+
+
+def _position_evolution_summary(
+    price_df: pd.DataFrame,
+    *,
+    entry_price: float | None,
+    stop_loss: float | None,
+    take_profit: float | None,
+) -> dict[str, Any]:
+    return build_position_evolution_summary(
+        price_df,
+        entry_price=entry_price,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+    )
+
+
+def _render_position_price_chart(
+    price_df: pd.DataFrame,
+    *,
+    entry_price: float | None,
+    stop_loss: float | None,
+    take_profit: float | None,
+    entry_date: str | None,
+) -> None:
+    if price_df.empty:
+        st.markdown("<div class='empty-box'>Sin precios suficientes para graficar esta posicion.</div>", unsafe_allow_html=True)
+        return
+    if alt is None:
+        st.dataframe(price_df, use_container_width=True, hide_index=True)
+        return
+
+    chart_df = price_df.copy()
+    chart_df["label"] = chart_df["close"].map(lambda value: _money(value))
+    y_values = [float(value) for value in chart_df["close"].dropna().tolist()]
+    for value in [entry_price, stop_loss, take_profit]:
+        if value:
+            y_values.append(float(value))
+    min_value = min(y_values)
+    max_value = max(y_values)
+    padding = max((max_value - min_value) * 0.18, max_value * 0.01, 1.0)
+    base = alt.Chart(chart_df).encode(
+        x=alt.X("fecha:N", title=None, sort=None, axis=alt.Axis(labelAngle=0, labelOverlap=True, labelLimit=90)),
+        y=alt.Y(
+            "close:Q",
+            title="Precio",
+            scale=alt.Scale(domain=[min_value - padding, max_value + padding]),
+            axis=alt.Axis(format="$,.2f"),
+        ),
+        tooltip=[
+            alt.Tooltip("fecha:N", title="Fecha"),
+            alt.Tooltip("close:Q", title="Cierre", format="$,.2f"),
+            alt.Tooltip("volume:Q", title="Volumen", format=",.0f"),
+        ],
+    )
+    layers = [
+        base.mark_line(color="#2563eb", strokeWidth=3),
+        base.mark_circle(size=60, color="#2563eb", opacity=0.9),
+    ]
+    level_rows = []
+    for name, value, color in [
+        ("Entrada", entry_price, "#4b5563"),
+        ("Stop", stop_loss, "#dc2626"),
+        ("Take", take_profit, "#16a34a"),
+    ]:
+        if value:
+            level_rows.append({"nivel": name, "precio": float(value), "color": color})
+    if level_rows:
+        levels = pd.DataFrame(level_rows)
+        rule = (
+            alt.Chart(levels)
+            .mark_rule(strokeDash=[6, 4], strokeWidth=2)
+            .encode(
+                y="precio:Q",
+                color=alt.Color("nivel:N", scale=alt.Scale(domain=[row["nivel"] for row in level_rows], range=[row["color"] for row in level_rows])),
+                tooltip=[alt.Tooltip("nivel:N", title="Nivel"), alt.Tooltip("precio:Q", title="Precio", format="$,.2f")],
+            )
+        )
+        labels = (
+            alt.Chart(levels)
+            .mark_text(align="left", dx=6, dy=-4, fontSize=11)
+            .encode(y="precio:Q", text="nivel:N", color=alt.Color("nivel:N", legend=None))
+        )
+        layers.extend([rule, labels])
+    if entry_date:
+        entry_rows = pd.DataFrame([{"fecha": entry_date}])
+        layers.append(alt.Chart(entry_rows).mark_rule(color="#111827", strokeDash=[2, 3]).encode(x="fecha:N"))
+    st.altair_chart(alt.layer(*layers).properties(height=360), use_container_width=True)
+
+
+def _render_position_news(settings: Any, symbol: str) -> None:
+    stored_news = _company_study_news_for_symbol(settings.data_dir / "reports", symbol)
+    rows = []
+    for report in stored_news[:3]:
+        sentiment = report.get("sentiment", {}) or {}
+        for item in report.get("news", []) or []:
+            rows.append(
+                {
+                    "publicada": _local_datetime(item.get("published_at"), settings.local_timezone)
+                    if item.get("published_at")
+                    else "-",
+                    "fuente": item.get("publisher"),
+                    "titular": item.get("title"),
+                    "sentimiento": sentiment.get("sentiment"),
+                    "score": sentiment.get("sentiment_score"),
+                    "enlace": item.get("link"),
+                }
+            )
+    if not rows:
+        try:
+            rows = [
+                {
+                    "publicada": _local_datetime(item.get("published_at"), settings.local_timezone)
+                    if item.get("published_at")
+                    else "-",
+                    "fuente": item.get("publisher"),
+                    "titular": item.get("title"),
+                    "sentimiento": "-",
+                    "score": None,
+                    "enlace": item.get("link"),
+                }
+                for item in fetch_symbol_news(symbol, max_items=6)
+            ]
+        except Exception as exc:  # noqa: BLE001
+            st.caption(f"No se pudieron descargar noticias recientes de {symbol}: {exc}")
+            rows = []
+    if not rows:
+        st.markdown("<div class='empty-box'>Sin noticias recientes para esta posicion.</div>", unsafe_allow_html=True)
+        return
+    kwargs: dict[str, Any] = {"use_container_width": True, "hide_index": True}
+    try:
+        kwargs["column_config"] = {"enlace": st.column_config.LinkColumn("enlace", display_text="abrir")}
+    except Exception:
+        pass
+    st.dataframe(pd.DataFrame(rows[:8]), **kwargs)
+
+
+def _render_position_detail_content(settings: Any, history: dict[str, Any], rows: list[dict[str, Any]], symbol: str) -> None:
+    if not rows:
+        return
+    sorted_rows = sorted(rows, key=lambda item: str(item.get("Simbolo") or ""))
+    symbols = [str(item.get("Simbolo") or "").upper() for item in sorted_rows if item.get("Simbolo")]
+    symbol = str(symbol or "").upper()
+    if symbol not in symbols:
+        symbol = symbols[0]
+    item = next((row for row in sorted_rows if str(row.get("Simbolo") or "").upper() == symbol), sorted_rows[0])
+    risk = (history.get("risk_levels", {}) or {}).get(symbol, {}) or {}
+    executed_entry_price = _num(item.get("Entrada"))
+    planned_entry_price = _num(risk.get("entry_price"))
+    entry_price = executed_entry_price or planned_entry_price
+    stop_loss = _num(item.get("Stop")) or _num(risk.get("stop_loss"))
+    take_profit = _num(item.get("Take")) or _num(risk.get("take_profit"))
+    entry_date = _position_entry_date(history, symbol)
+
+    _section_title(f"{symbol}: evolucion y tesis", "Desde una semana antes de la compra, con entrada, stop, take y noticias.")
+    try:
+        price_df, meta = _position_price_series(settings, symbol, history, current_price=_num(item.get("Actual")))
+    except Exception as exc:  # noqa: BLE001
+        price_df, meta = pd.DataFrame(), {"error": str(exc)}
+        st.warning(f"No se pudo cargar evolucion de {symbol}: {exc}")
+
+    summary = _position_evolution_summary(
+        price_df,
+        entry_price=entry_price,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+    )
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        _compact_metric("Entrada", _money(entry_price), entry_date or "-")
+    with c2:
+        _compact_metric("Actual", _money(summary.get("last_price") or item.get("Actual")), _pct(summary.get("return_from_entry")))
+    with c3:
+        _compact_metric("Stop", _money(stop_loss), _pct(summary.get("distance_to_stop")) if summary.get("distance_to_stop") is not None else "-")
+    with c4:
+        _compact_metric("Take", _money(take_profit), _pct(summary.get("distance_to_take")) if summary.get("distance_to_take") is not None else "-")
+    with c5:
+        confidence = _num(risk.get("confidence"))
+        _compact_metric("Confianza", _pct(confidence) if confidence is not None else "-", f"{summary.get('bars', 0)} barras")
+
+    _render_position_price_chart(
+        price_df,
+        entry_price=entry_price,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+        entry_date=entry_date,
+    )
+    source = meta.get("source") or meta.get("provider_requested") or "-"
+    cache = "cache" if meta.get("cache_hit") else "descarga"
+    st.caption(f"Datos de precio: {source} ({cache}). Ventana desde {_position_chart_start_date(history, symbol)}.")
+
+    left, right = st.columns([1.1, 1], gap="large")
+    with left:
+        _section_title("Tesis y riesgo", None)
+        st.markdown(
+            f"""
+            <div class="position-thesis">
+                <div><strong>Motivo guardado</strong><span>{escape(_short(risk.get("reason") or item.get("Motivo"), 900) or "Sin motivo guardado.")}</span></div>
+                <div><strong>Plan</strong><span>Entrada plan {_money(planned_entry_price)} | entrada real {_money(executed_entry_price)} | stop {_money(stop_loss)} | take {_money(take_profit)}</span></div>
+                <div><strong>Orden origen</strong><span>{escape(str(risk.get("source_plan_id") or "-"))}</span></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        symbol_trades = [
+            trade
+            for trade in history.get("trades", [])
+            if str(trade.get("symbol") or "").upper() == symbol
+        ]
+        if symbol_trades:
+            st.dataframe(
+                pd.DataFrame(symbol_trades).sort_values("time", ascending=False).head(8),
+                use_container_width=True,
+                hide_index=True,
+            )
+    with right:
+        _section_title("Ultimas noticias", None)
+        _render_position_news(settings, symbol)
+
+
+def _position_detail_panel(settings: Any, history: dict[str, Any], rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    symbols = sorted({str(item.get("Simbolo") or "").upper() for item in rows if item.get("Simbolo")})
+    if not symbols:
+        return
+    current = st.session_state.get("selected_position_symbol")
+    if current not in symbols:
+        current = symbols[0]
+    selected = st.selectbox(
+        "Detalle de posicion",
+        symbols,
+        index=symbols.index(current),
+        key="selected_position_symbol",
+    )
+    _render_position_detail_content(settings, history, rows, str(selected or current))
+
+
+def _position_detail_dialog(settings: Any, history: dict[str, Any], rows: list[dict[str, Any]], symbol: str) -> None:
+    symbol = str(symbol or "").upper()
+    if hasattr(st, "dialog"):
+
+        @st.dialog(f"{symbol}: evolucion y tesis", width="large")
+        def _dialog() -> None:
+            _render_position_detail_content(settings, history, rows, symbol)
+
+        _dialog()
+        return
+    _render_position_detail_content(settings, history, rows, symbol)
+
+
 def _portfolio_value_series_from_alpaca(
     portfolio_history: dict[str, Any],
     current_equity: float | None,
@@ -1992,6 +2329,45 @@ def _latest_relevant_events(store: Store, limit: int = 8) -> list[dict[str, Any]
     return rows
 
 
+def _render_latest_news_panel(settings: Any, limit: int = 20) -> None:
+    rows = _latest_analyzed_news(settings.data_dir / "reports", limit=limit)
+    if not rows:
+        latest_sentiment = _latest_report_json("latest_news_sentiment.json")
+        warnings = (latest_sentiment.get("payload") or {}).get("warnings", [])
+        st.markdown("<div class='empty-box'>No hay noticias analizadas disponibles.</div>", unsafe_allow_html=True)
+        if warnings:
+            st.caption(f"Ultimo intento: {warnings[0]}")
+        return
+
+    frame = pd.DataFrame(
+        [
+            {
+                "analizada": _local_datetime(row.get("analyzed_at"), settings.local_timezone),
+                "publicada": _local_datetime(row.get("published_at"), settings.local_timezone)
+                if row.get("published_at")
+                else "-",
+                "tipo": row.get("scope"),
+                "simbolo": row.get("symbol"),
+                "titular": row.get("title"),
+                "fuente": row.get("publisher"),
+                "sentimiento": row.get("sentiment"),
+                "score": row.get("sentiment_score"),
+                "riesgo": row.get("material_risk"),
+                "enlace": row.get("link"),
+            }
+            for row in rows
+        ]
+    )
+    kwargs: dict[str, Any] = {"use_container_width": True, "hide_index": True}
+    try:
+        kwargs["column_config"] = {
+            "enlace": st.column_config.LinkColumn("enlace", display_text="abrir"),
+        }
+    except Exception:
+        pass
+    st.dataframe(frame, **kwargs)
+
+
 def _auto_refresh_control() -> int:
     options = [0, 10, 30, 60, 120, 300, 600]
     preferences = _load_web_preferences()
@@ -2260,6 +2636,30 @@ def _setup_page() -> None:
             color:#6b7280;
             background:#f9fafb;
         }
+        .position-thesis {
+            border:1px solid #e5e7eb;
+            border-radius:8px;
+            background:#ffffff;
+            margin:8px 0 12px 0;
+            overflow:hidden;
+        }
+        .position-thesis div {
+            padding:10px 12px;
+            border-bottom:1px solid #f3f4f6;
+        }
+        .position-thesis div:last-child {border-bottom:none;}
+        .position-thesis strong {
+            display:block;
+            color:#111827;
+            font-size:0.82rem;
+            margin-bottom:4px;
+        }
+        .position-thesis span {
+            display:block;
+            color:#374151;
+            font-size:0.86rem;
+            line-height:1.35;
+        }
         .portfolio-table {
             width:100%;
             border-collapse: separate;
@@ -2285,6 +2685,30 @@ def _setup_page() -> None:
         }
         .portfolio-table tr:last-child td {border-bottom:none;}
         .portfolio-table td span {
+            display:block;
+            color:#6b7280;
+            font-size:0.72rem;
+            line-height:1.15;
+            margin-top:2px;
+        }
+        .portfolio-native-header {
+            background:#f9fafb;
+            color:#6b7280;
+            font-weight:650;
+            font-size:0.80rem;
+            border-top:1px solid #e5e7eb;
+            border-bottom:1px solid #e5e7eb;
+            padding:7px 4px;
+        }
+        .portfolio-native-cell {
+            color:#111827;
+            font-size:0.84rem;
+            padding:7px 4px 5px 4px;
+            border-bottom:1px solid #f3f4f6;
+            min-height:42px;
+            box-sizing:border-box;
+        }
+        .portfolio-native-cell span {
             display:block;
             color:#6b7280;
             font-size:0.72rem;
@@ -2548,7 +2972,9 @@ def page_dashboard() -> None:
         st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
         with st.container(border=True):
             _section_title("Cartera abierta", None)
-            _portfolio_table(position_rows)
+            selected_position = _portfolio_action_table(position_rows, key_prefix="dashboard_position")
+            if selected_position:
+                _position_detail_dialog(settings, history, position_rows, selected_position)
 
         st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
         with st.container(border=True):
@@ -2612,6 +3038,11 @@ def page_dashboard() -> None:
                 st.dataframe(pd.DataFrame(relevant_events), width="stretch", hide_index=True)
             else:
                 st.markdown("<div class='empty-box'>Sin eventos relevantes recientes.</div>", unsafe_allow_html=True)
+
+        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            _section_title("Ultimas noticias analizadas", "Titulares usados por el analisis de sentimiento.")
+            _render_latest_news_panel(settings, limit=20)
 
         st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
         with st.container(border=True):
@@ -2708,6 +3139,7 @@ def page_portfolio() -> None:
 
     history = build_trade_history(settings, limit=300, start_date=DEFAULT_START_DATE)
     risk_levels = history.get("risk_levels", {})
+    position_rows = _position_rows(history)
     positions = []
     for item in history.get("open_positions", []):
         risk = risk_levels.get(str(item.get("symbol")).upper(), {})
@@ -2730,6 +3162,8 @@ def page_portfolio() -> None:
     st.subheader("Posiciones abiertas")
     if positions:
         st.dataframe(pd.DataFrame(positions), use_container_width=True, hide_index=True)
+        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+        _position_detail_panel(settings, history, position_rows)
     else:
         st.info("No hay posiciones abiertas.")
 

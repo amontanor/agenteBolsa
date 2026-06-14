@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import builtins
+
 import pandas as pd
 import pytest
 
-from agente_bolsa.tools.errors import MarketDataValidationError
+from agente_bolsa.tools.errors import MarketDataFetchError, MarketDataValidationError
 from agente_bolsa.tools.market_data import download_daily_prices_with_metadata
 from agente_bolsa.config import Settings
 from agente_bolsa.tools.ops_reports import build_market_data_reconciliation_report
@@ -69,6 +71,31 @@ def test_market_data_validation_raises_on_empty_frame(monkeypatch, tmp_path):
             cache_dir=tmp_path / "cache",
             max_retries=0,
         )
+
+
+def test_market_data_reports_broken_yfinance_binary_dependency(monkeypatch, tmp_path):
+    real_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "yfinance":
+            raise ModuleNotFoundError("No module named '_cffi_backend'", name="_cffi_backend")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with pytest.raises(MarketDataFetchError) as excinfo:
+        download_daily_prices_with_metadata(
+            ["AAPL"],
+            "2026-05-01",
+            "2026-05-10",
+            cache_dir=tmp_path / "cache",
+            max_retries=0,
+        )
+
+    message = str(excinfo.value)
+    assert "yfinance esta instalado, pero fallo al importar" in message
+    assert "_cffi_backend" in message
+    assert "pip install --force-reinstall cffi curl_cffi yfinance" in message
 
 
 def test_market_data_can_use_fmp_provider(monkeypatch, tmp_path):

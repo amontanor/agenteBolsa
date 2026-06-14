@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from agente_bolsa.config import Settings
+from agente_bolsa.market_calendar import MarketCalendar
 from agente_bolsa.storage import Store
 
 from .reporting import write_json_report
@@ -32,10 +33,18 @@ JOB_DURATION_WARNINGS = {
 }
 
 CRITICAL_KILL_SWITCH_KINDS = {
+    "data_pipeline_down",
     "job_failed",
     "missing_report",
 }
 KILL_SWITCH_MAX_REPORT_AGE_SECONDS = 6 * 60 * 60
+DATA_PIPELINE_MAX_STALE_SECONDS = 30 * 60
+DATA_PIPELINE_REPORT_PATTERNS = (
+    "market_snapshot_*.json",
+    "market_state_*.json",
+    "breakout_scan_*.json",
+    "closed_market_technical_study_*.json",
+)
 
 
 def _job_state_key(job_name: str) -> str:
@@ -86,6 +95,72 @@ def _freshness_status(heartbeat_at: Any, *, max_age_seconds: int) -> dict[str, A
         "max_age_seconds": max_age_seconds,
         "is_fresh": age_seconds <= max_age_seconds,
     }
+
+
+def _latest_report_file_time(reports_dir: Path, patterns: tuple[str, ...]) -> tuple[Path, datetime] | None:
+    latest: tuple[Path, datetime] | None = None
+    for pattern in patterns:
+        for path in reports_dir.glob(pattern):
+            if not path.is_file() or path.name.endswith(".manifest.json"):
+                continue
+            try:
+                modified_at = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+            except OSError:
+                continue
+            if latest is None or modified_at > latest[1]:
+                latest = (path, modified_at)
+    return latest
+
+
+def _data_pipeline_heartbeat(settings: Settings, data_dir: Path, now: datetime | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
+    market = calendar.status(now)
+    now_utc = _parse_datetime(market.now_utc) or datetime.now(timezone.utc)
+    market_open = _parse_datetime(market.market_open)
+    reports_dir = data_dir / "reports"
+    latest = _latest_report_file_time(reports_dir, DATA_PIPELINE_REPORT_PATTERNS)
+    latest_path = str(latest[0]) if latest else None
+    latest_at = latest[1] if latest else None
+    latest_age_seconds = (now_utc - latest_at).total_seconds() if latest_at else None
+    open_age_seconds = (now_utc - market_open).total_seconds() if market_open else None
+
+    summary: dict[str, Any] = {
+        "market_is_open": market.is_open,
+        "session_date": market.session_date,
+        "max_stale_seconds": DATA_PIPELINE_MAX_STALE_SECONDS,
+        "latest_report_path": latest_path,
+        "latest_report_at": latest_at.isoformat() if latest_at else None,
+        "latest_report_age_seconds": round(max(0.0, latest_age_seconds), 3) if latest_age_seconds is not None else None,
+        "market_open_age_seconds": round(max(0.0, open_age_seconds), 3) if open_age_seconds is not None else None,
+    }
+
+    if not market.is_open:
+        summary["status"] = "not_required_market_closed"
+        return summary, []
+    if open_age_seconds is not None and open_age_seconds < DATA_PIPELINE_MAX_STALE_SECONDS:
+        summary["status"] = "grace_period_after_open"
+        return summary, []
+    if latest_age_seconds is not None and latest_age_seconds <= DATA_PIPELINE_MAX_STALE_SECONDS:
+        summary["status"] = "fresh"
+        return summary, []
+
+    summary["status"] = "stale_or_missing"
+    detail = (
+        "Mercado abierto sin snapshots/reportes de datos frescos en "
+        f"{DATA_PIPELINE_MAX_STALE_SECONDS // 60} minutos."
+    )
+    if latest_path:
+        detail += f" Ultimo reporte: {latest_path} hace {int(max(0.0, latest_age_seconds or 0))}s."
+    else:
+        detail += " No hay reportes de mercado producidos."
+    return summary, [
+        {
+            "severity": "critical",
+            "kind": "data_pipeline_down",
+            "scope": "market_data",
+            "detail": detail,
+        }
+    ]
 
 
 def load_operational_response_context(data_dir: Path) -> dict[str, Any]:
@@ -271,7 +346,7 @@ def _job_alerts(job_runtime: dict[str, Any]) -> list[dict[str, Any]]:
     return alerts
 
 
-def _report_health(data_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _report_health(settings: Settings, data_dir: Path, now: datetime | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     reports = {
         "technical_study": _latest_report_payload(data_dir, "latest_closed_market_technical_study.json"),
         "breakout_scan": _latest_report_payload(data_dir, "latest_breakout_scan.json"),
@@ -281,6 +356,9 @@ def _report_health(data_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]
     }
     alerts: list[dict[str, Any]] = []
     summary: dict[str, Any] = {}
+    data_pipeline, data_pipeline_alerts = _data_pipeline_heartbeat(settings, data_dir, now)
+    summary["data_pipeline"] = data_pipeline
+    alerts.extend(data_pipeline_alerts)
 
     technical = reports["technical_study"] or {}
     market_data = technical.get("market_data", {}) or {}
@@ -385,6 +463,16 @@ def _build_operational_responses(alerts: list[dict[str, Any]]) -> list[dict[str,
                 "mode": "ranking_only",
                 "candidate_priority_penalty": 0.05,
                 "detail": f"Reducir prioridad del setup {scope} hasta que recupere edge reciente.",
+                "reason": detail,
+            }
+        elif kind == "data_pipeline_down":
+            response = {
+                "response_id": _response_id(kind, scope),
+                "status": "guarded_active",
+                "action": "block_new_buys_until_data_pipeline_recovers",
+                "scope": scope,
+                "mode": "kill_switch",
+                "detail": "Bloquear compras nuevas hasta que el pipeline genere un snapshot fresco.",
                 "reason": detail,
             }
         elif kind in {"market_data_coverage_drop", "missing_report"}:
@@ -534,9 +622,11 @@ def build_operational_health_report(
     store: Store,
     reports_dir: Path,
     run_id: str,
+    *,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     job_runtime = _job_runtime(store)
-    report_health, report_alerts = _report_health(settings.data_dir)
+    report_health, report_alerts = _report_health(settings, settings.data_dir, now)
     job_alerts = _job_alerts(job_runtime)
     alerts = [*job_alerts, *report_alerts]
     responses = _build_operational_responses(alerts)

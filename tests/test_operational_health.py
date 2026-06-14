@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 from agente_bolsa.config import Settings
 from agente_bolsa.main import build_parser
@@ -106,6 +107,50 @@ def test_operational_block_context_activates_kill_switch_on_critical_alerts(tmp_
     assert block["block_new_buys"] is True
     assert block["block_buy_execution"] is True
     assert block["blocking_alerts"][0]["kind"] == "job_failed"
+
+
+def test_operational_health_blocks_buys_when_market_data_pipeline_is_stale(tmp_path):
+    settings = Settings(DATA_DIR=tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "latest_closed_market_technical_study.json").write_text(
+        json.dumps(
+            {
+                "symbols_scanned": 100,
+                "symbols_with_data": 100,
+                "market_data": {"requested_count": 100, "missing_symbols_count": 0},
+                "warnings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (reports_dir / "latest_daily_learning_digest.json").write_text(
+        json.dumps({"setup_stats_3d": []}),
+        encoding="utf-8",
+    )
+    (reports_dir / "latest_post_market_learning.json").write_text(
+        json.dumps({"pipeline_steps": {"learning_pipeline_seconds": 12.0}}),
+        encoding="utf-8",
+    )
+
+    report = build_operational_health_report(
+        settings,
+        store,
+        reports_dir,
+        "ops_data_down",
+        now=datetime(2026, 6, 12, 15, 0, tzinfo=timezone.utc),
+    )
+
+    kinds = {item["kind"] for item in report["alerts"]}
+    assert "data_pipeline_down" in kinds
+    response_actions = {item["action"] for item in report["responses"]}
+    assert "block_new_buys_until_data_pipeline_recovers" in response_actions
+    block = load_operational_block_context(settings.data_dir)
+    assert block["kill_switch_active"] is True
+    assert block["block_buy_execution"] is True
+    assert block["blocking_alerts"][0]["kind"] == "data_pipeline_down"
 
 
 def test_production_health_report_combines_operational_and_ci_runtime(tmp_path):

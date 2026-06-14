@@ -14,6 +14,7 @@ dependencies = [
     "openai>=1.13.3",
     "alpaca-py>=0.43.0",
     "yfinance>=0.2.50",
+    "cffi>=1.16.0,<3.0.0",
     "pandas>=2.2.0",
     "lxml>=5.0.0,<6.0.0",
     "numpy>=1.26.0",

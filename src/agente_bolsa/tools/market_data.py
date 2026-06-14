@@ -20,6 +20,19 @@ _LAST_DOWNLOAD_METADATA: dict[str, Any] = {}
 MAX_REASONABLE_DAILY_GAP_PCT = 0.60
 
 
+def _yfinance_import_error_message(exc: Exception) -> str:
+    missing_name = str(getattr(exc, "name", "") or "")
+    if missing_name == "yfinance":
+        return "yfinance no esta instalado. Ejecuta `pip install -r requirements.txt`."
+    dependency = f" dependencia {missing_name!r}" if missing_name else " una dependencia"
+    return (
+        f"yfinance esta instalado, pero fallo al importar{dependency}: "
+        f"{exc.__class__.__name__}: {exc}. "
+        "Reinstala dependencias binarias con "
+        "`pip install --force-reinstall cffi curl_cffi yfinance`."
+    )
+
+
 def _date_text(value: str | datetime | None) -> str:
     if value is None:
         return ""
@@ -305,8 +318,8 @@ def download_daily_prices_with_metadata(
             else:
                 try:
                     import yfinance as yf
-                except ImportError as exc:
-                    raise RuntimeError("Instala yfinance con `pip install -r requirements.txt`.") from exc
+                except Exception as exc:
+                    raise RuntimeError(_yfinance_import_error_message(exc)) from exc
                 data = yf.download(
                     tickers=" ".join(normalized),
                     start=start,
