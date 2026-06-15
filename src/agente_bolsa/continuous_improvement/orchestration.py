@@ -302,7 +302,7 @@ class LabOrchestrator:
         from .lifecycle import ACTIVE_INITIATIVE_STATUSES, _age_hours
 
         settings_ctx = context.get("settings", {}) or {}
-        wip_limit = int(settings_ctx.get("ci_max_open_initiatives") or 6)
+        wip_limit = int(settings_ctx.get("ci_max_open_initiatives") or 4)
         cooldown_hours = float(settings_ctx.get("ci_recurring_cooldown_hours") or 24.0)
         open_initiatives = [
             item

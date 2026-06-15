@@ -64,6 +64,28 @@ def _loser_for_horizon(observation: dict[str, Any], horizon: int) -> bool:
     return value is not None and value < -0.01
 
 
+def _decision_error_rates(observations: list[dict[str, Any]], horizon: int) -> dict[str, Any]:
+    matured = [item for item in observations if _matured_for_horizon(item, horizon)]
+    executed = [item for item in matured if bool(item.get("executed_buy"))]
+    blocked = [
+        item
+        for item in matured
+        if bool(item.get("blocked_entry_quality")) or bool(item.get("blocked_backtest"))
+    ]
+    false_positive_executed_losers = [item for item in executed if _loser_for_horizon(item, horizon)]
+    false_negative_blocked_winners = [item for item in blocked if _winner_for_horizon(item, horizon)]
+    return {
+        "horizon": f"{horizon}d",
+        "matured": len(matured),
+        "executed_buys": len(executed),
+        "blocked_candidates": len(blocked),
+        "false_positive_executed_losers": len(false_positive_executed_losers),
+        "false_positive_rate": _round(len(false_positive_executed_losers) / len(executed), 4) if executed else None,
+        "false_negative_blocked_winners": len(false_negative_blocked_winners),
+        "false_negative_rate": _round(len(false_negative_blocked_winners) / len(blocked), 4) if blocked else None,
+    }
+
+
 def _feature_bucket_stats(observations: list[dict[str, Any]], horizon: int, *, min_samples: int = 3) -> list[dict[str, Any]]:
     by_tag: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for observation in observations:
@@ -927,6 +949,7 @@ def _build_digest(
             "duplicate_ratio": health.get("duplicate_ratio", 0.0),
             "executed_observations": health.get("executed_observations", 0),
             "horizon_coverage": health.get("horizon_coverage", {}),
+            "decision_error_rates_3d": _decision_error_rates(observations, 3),
         },
         "strong_buckets_1d": stats_1d[:5],
         "strong_buckets_3d": strong_tags[:5],

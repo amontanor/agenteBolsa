@@ -255,6 +255,149 @@ def test_generated_topic_initiative_expires_and_rejects_recursive_proposal(tmp_p
     assert proposal["status"] == "REJECTED"
 
 
+def test_validating_backlog_without_ready_proposal_expires(tmp_path):
+    settings, store = _setup(
+        tmp_path,
+        CI_INITIATIVE_TTL_DAYS=5,
+        CI_VALIDATION_BACKLOG_TTL_DAYS=2,
+        CI_INITIATIVE_STALL_DAYS=3,
+    )
+    initiative_id = _seed_initiative(
+        store,
+        "software:continuous_improvement",
+        "VALIDATING",
+        created_at=_iso_ago(days=3),
+        updated_at=_iso_ago(hours=1),
+    )
+    store.upsert_continuous_improvement_proposal(
+        {
+            "proposal_id": "ci_prop_pending_validation",
+            "cycle_id": "ci_cycle_pending_validation",
+            "fingerprint": "fp_pending_validation",
+            "proposal_type": "MONITORING_CHANGE",
+            "target_component": "continuous_improvement",
+            "target_identifier": "validation_backlog",
+            "status": "PENDING",
+            "priority": "MEDIUM",
+            "risk_level": "LOW",
+            "payload": {"initiative_key": "software:continuous_improvement"},
+            "guard": {"status": "PENDING"},
+        }
+    )
+    store.update_continuous_improvement_initiative(
+        initiative_id,
+        linked_proposal_ids=["ci_prop_pending_validation"],
+        latest_decision={"decision": "PENDING", "source": "validation"},
+        next_action="Esperar validacion objetiva.",
+    )
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE continuous_improvement_initiatives SET created_at = ?, updated_at = ? WHERE initiative_id = ?",
+            (_iso_ago(days=3), _iso_ago(hours=1), initiative_id),
+        )
+
+    result = resolve_initiatives(store, settings)
+
+    initiative = store.continuous_improvement_initiative(initiative_id)
+    proposal = store.continuous_improvement_proposal("ci_prop_pending_validation")
+    assert result["expired"][0]["initiative_key"] == "software:continuous_improvement"
+    assert initiative["status"] == "REJECTED"
+    assert "validacion pendiente" in initiative["latest_decision"]["reason"]
+    assert proposal["status"] == "REJECTED"
+
+
+def test_lifecycle_promoted_validation_backlog_expires_without_ready_proposal(tmp_path):
+    settings, store = _setup(tmp_path, CI_VALIDATION_BACKLOG_TTL_DAYS=2)
+    initiative_id = _seed_initiative(
+        store,
+        "trading:entry_quality_filter",
+        "VALIDATING",
+        created_at=_iso_ago(days=4),
+        updated_at=_iso_ago(hours=1),
+    )
+    store.upsert_continuous_improvement_proposal(
+        {
+            "proposal_id": "ci_prop_lifecycle_pending",
+            "cycle_id": "ci_cycle_lifecycle_pending",
+            "fingerprint": "fp_lifecycle_pending",
+            "proposal_type": "DATA_QUALITY_CHANGE",
+            "target_component": "entry_quality_filter",
+            "target_identifier": "entry_quality_calibration",
+            "status": "PENDING",
+            "priority": "MEDIUM",
+            "risk_level": "LOW",
+            "payload": {"initiative_key": "trading:entry_quality_filter"},
+            "guard": {"status": "PENDING"},
+        }
+    )
+    store.update_continuous_improvement_initiative(
+        initiative_id,
+        linked_proposal_ids=["ci_prop_lifecycle_pending"],
+        latest_decision={
+            "decision": "VALIDATING",
+            "source": "lifecycle",
+            "reason": "all_tasks_terminal_with_active_proposals",
+        },
+        next_action="Validar propuestas vinculadas antes de planificar mas tareas.",
+    )
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE continuous_improvement_initiatives SET created_at = ?, updated_at = ? WHERE initiative_id = ?",
+            (_iso_ago(days=4), _iso_ago(hours=1), initiative_id),
+        )
+
+    result = resolve_initiatives(store, settings)
+
+    initiative = store.continuous_improvement_initiative(initiative_id)
+    proposal = store.continuous_improvement_proposal("ci_prop_lifecycle_pending")
+    assert result["expired"][0]["initiative_key"] == "trading:entry_quality_filter"
+    assert initiative["status"] == "REJECTED"
+    assert proposal["status"] == "REJECTED"
+
+
+def test_validating_backlog_with_ready_proposal_is_kept(tmp_path):
+    settings, store = _setup(tmp_path, CI_VALIDATION_BACKLOG_TTL_DAYS=2)
+    initiative_id = _seed_initiative(
+        store,
+        "software:runtime_reliability",
+        "VALIDATING",
+        created_at=_iso_ago(days=3),
+        updated_at=_iso_ago(hours=1),
+    )
+    store.upsert_continuous_improvement_proposal(
+        {
+            "proposal_id": "ci_prop_ready",
+            "cycle_id": "ci_cycle_ready",
+            "fingerprint": "fp_ready",
+            "proposal_type": "CODE_CHANGE",
+            "target_component": "runtime",
+            "target_identifier": "error_handling",
+            "status": "READY_TO_APPLY",
+            "priority": "HIGH",
+            "risk_level": "LOW",
+            "payload": {"initiative_key": "software:runtime_reliability"},
+            "guard": {"status": "READY_TO_APPLY"},
+        }
+    )
+    store.update_continuous_improvement_initiative(
+        initiative_id,
+        linked_proposal_ids=["ci_prop_ready"],
+        latest_decision={"decision": "PENDING", "source": "validation"},
+        next_action="Esperar validacion objetiva.",
+    )
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE continuous_improvement_initiatives SET created_at = ?, updated_at = ? WHERE initiative_id = ?",
+            (_iso_ago(days=3), _iso_ago(hours=1), initiative_id),
+        )
+
+    result = resolve_initiatives(store, settings)
+
+    initiative = store.continuous_improvement_initiative(initiative_id)
+    assert result["expired"] == []
+    assert initiative["status"] == "VALIDATING"
+
+
 def test_old_open_initiative_with_completed_tasks_and_no_active_proposals_expires(tmp_path):
     settings, store = _setup(tmp_path, CI_INITIATIVE_TTL_DAYS=5, CI_INITIATIVE_STALL_DAYS=3)
     initiative_id = _seed_initiative(
@@ -283,6 +426,36 @@ def test_old_open_initiative_with_completed_tasks_and_no_active_proposals_expire
     assert result["expired"][0]["initiative_key"] == "trading:opportunistic_parameters"
     assert initiative["status"] == "REJECTED"
     assert "sin propuestas activas" in initiative["latest_decision"]["reason"]
+
+
+def test_waiting_review_without_actionable_proposals_expires(tmp_path):
+    settings, store = _setup(tmp_path, CI_VALIDATION_BACKLOG_TTL_DAYS=2)
+    initiative_id = _seed_initiative(
+        store,
+        "software:data_quality",
+        "WAITING_REVIEW",
+        created_at=_iso_ago(days=4),
+        updated_at=_iso_ago(hours=1),
+    )
+    _seed_task(store, "done_data_quality", "COMPLETED", created_at=_iso_ago(days=3), initiative_id=initiative_id)
+    store.update_continuous_improvement_initiative(
+        initiative_id,
+        linked_task_ids=["done_data_quality"],
+        latest_decision={"decision": "ESCALATE", "source": "DecisionCommitteeAgent"},
+        next_action="Esperar revision humana por riesgo o ambiguedad.",
+    )
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE continuous_improvement_initiatives SET created_at = ?, updated_at = ? WHERE initiative_id = ?",
+            (_iso_ago(days=4), _iso_ago(hours=1), initiative_id),
+        )
+
+    result = resolve_initiatives(store, settings)
+
+    initiative = store.continuous_improvement_initiative(initiative_id)
+    assert result["expired"][0]["initiative_key"] == "software:data_quality"
+    assert initiative["status"] == "REJECTED"
+    assert "revision humana sin propuesta accionable" in initiative["latest_decision"]["reason"]
 
 
 def test_initiative_with_open_tasks_is_not_expired(tmp_path):

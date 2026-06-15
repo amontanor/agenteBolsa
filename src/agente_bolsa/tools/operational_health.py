@@ -36,6 +36,7 @@ CRITICAL_KILL_SWITCH_KINDS = {
     "data_pipeline_down",
     "job_failed",
     "missing_report",
+    "stale_required_report",
 }
 KILL_SWITCH_MAX_REPORT_AGE_SECONDS = 6 * 60 * 60
 DATA_PIPELINE_MAX_STALE_SECONDS = 30 * 60
@@ -425,8 +426,47 @@ def _report_health(settings: Settings, data_dir: Path, now: datetime | None = No
     pipeline_steps = post_market.get("pipeline_steps", {}) or {}
     summary["post_market_learning"] = {
         "available": bool(post_market),
+        "session_date": post_market.get("session_date"),
         "pipeline_steps": pipeline_steps,
     }
+    calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
+    market = calendar.status(now)
+    now_utc = _parse_datetime(market.now_utc) or datetime.now(timezone.utc)
+    market_close = _parse_datetime(market.market_close)
+    now_market = _parse_datetime(market.now_market)
+    derived_session_date = (
+        str(market.session_date or "")
+        or (now_market.date().isoformat() if now_market and now_market.weekday() < 5 else None)
+    )
+    after_regular_close = bool(
+        now_market and now_market.weekday() < 5 and (now_market.hour, now_market.minute) >= (16, 0)
+    )
+    post_market_required = bool(
+        not market.is_open and ((market_close and now_utc > market_close) or after_regular_close)
+    )
+    summary["post_market_learning"]["required"] = post_market_required
+    summary["post_market_learning"]["required_session_date"] = derived_session_date
+    if post_market_required and not post_market:
+        alerts.append(
+            {
+                "severity": "critical",
+                "kind": "missing_report",
+                "scope": "post_market_review",
+                "detail": f"Falta latest_post_market_learning.json para la sesion {derived_session_date}.",
+            }
+        )
+    elif post_market_required and derived_session_date and str(post_market.get("session_date") or "") != str(derived_session_date):
+        alerts.append(
+            {
+                "severity": "critical",
+                "kind": "stale_required_report",
+                "scope": "post_market_review",
+                "detail": (
+                    f"Post-market stale: session_date={post_market.get('session_date')} "
+                    f"pero se requiere {derived_session_date}."
+                ),
+            }
+        )
     if pipeline_steps:
         total = sum(float(value) for value in pipeline_steps.values() if isinstance(value, (int, float)))
         if total > 1200:
@@ -439,6 +479,75 @@ def _report_health(settings: Settings, data_dir: Path, now: datetime | None = No
                 }
             )
 
+    return summary, alerts
+
+
+def _ci_backlog_alerts(settings: Settings, store: Store) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    active_statuses = ("OPEN", "ANALYZING", "EXPERIMENTING", "VALIDATING", "WAITING_REVIEW", "READY_TO_APPLY")
+    task_statuses = (
+        "DISCOVERED",
+        "PLANNED",
+        "ASSIGNED",
+        "RUNNING",
+        "WAITING_DEPENDENCY",
+        "VALIDATING",
+        "WAITING_HUMAN_REVIEW",
+    )
+    with store.connect() as conn:
+        active_rows = conn.execute(
+            f"""
+            SELECT status, initiative_key
+            FROM continuous_improvement_initiatives
+            WHERE status IN ({",".join("?" for _ in active_statuses)})
+            """,
+            active_statuses,
+        ).fetchall()
+        open_task_count = conn.execute(
+            f"""
+            SELECT COUNT(*) AS count
+            FROM continuous_improvement_agent_tasks
+            WHERE status IN ({",".join("?" for _ in task_statuses)})
+            """,
+            task_statuses,
+        ).fetchone()["count"]
+    generated_topic_count = sum(1 for row in active_rows if ":ci_prop_" in str(row["initiative_key"]))
+    validating_count = sum(1 for row in active_rows if str(row["status"]) == "VALIDATING")
+    max_open = max(1, int(getattr(settings, "ci_max_open_initiatives", 4)))
+    summary = {
+        "active_initiatives": len(active_rows),
+        "validating_initiatives": validating_count,
+        "generated_topic_initiatives": generated_topic_count,
+        "open_task_count": int(open_task_count or 0),
+        "max_open_initiatives": max_open,
+    }
+    alerts: list[dict[str, Any]] = []
+    if generated_topic_count:
+        alerts.append(
+            {
+                "severity": "warning",
+                "kind": "ci_generated_topic_loop",
+                "scope": "continuous_improvement",
+                "detail": f"{generated_topic_count} iniciativa(s) activas usan claves generadas tipo ci_prop_*.",
+            }
+        )
+    if len(active_rows) > max_open * 2:
+        alerts.append(
+            {
+                "severity": "warning",
+                "kind": "ci_backlog_over_wip_limit",
+                "scope": "continuous_improvement",
+                "detail": f"WIP CI={len(active_rows)} supera el limite operativo {max_open}.",
+            }
+        )
+    if validating_count > max_open:
+        alerts.append(
+            {
+                "severity": "warning",
+                "kind": "ci_validation_backlog",
+                "scope": "continuous_improvement",
+                "detail": f"{validating_count} iniciativa(s) en VALIDATING; el laboratorio debe cerrar o aplicar.",
+            }
+        )
     return summary, alerts
 
 
@@ -507,6 +616,16 @@ def _build_operational_responses(alerts: list[dict[str, Any]]) -> list[dict[str,
                 "scope": scope,
                 "mode": "shadow_only",
                 "detail": "Revisar pasos opcionales y cuellos de botella antes de ampliar el pipeline.",
+                "reason": detail,
+            }
+        elif kind in {"ci_generated_topic_loop", "ci_backlog_over_wip_limit", "ci_validation_backlog"}:
+            response = {
+                "response_id": _response_id(kind, scope),
+                "status": "guarded_active",
+                "action": "run_ci_lifecycle_and_reduce_wip",
+                "scope": scope,
+                "mode": "governance",
+                "detail": "Ejecutar lifecycle y no planificar nuevas iniciativas hasta reducir WIP.",
                 "reason": detail,
             }
         else:
@@ -627,8 +746,10 @@ def build_operational_health_report(
 ) -> dict[str, Any]:
     job_runtime = _job_runtime(store)
     report_health, report_alerts = _report_health(settings, settings.data_dir, now)
+    ci_backlog, ci_alerts = _ci_backlog_alerts(settings, store)
+    report_health["continuous_improvement_backlog"] = ci_backlog
     job_alerts = _job_alerts(job_runtime)
-    alerts = [*job_alerts, *report_alerts]
+    alerts = [*job_alerts, *report_alerts, *ci_alerts]
     responses = _build_operational_responses(alerts)
     severity_counts = {
         "critical": sum(1 for item in alerts if item["severity"] == "critical"),

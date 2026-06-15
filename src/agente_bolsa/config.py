@@ -714,9 +714,10 @@ class Settings(BaseSettings):
     # Ciclo de vida del laboratorio (Etapa 7): TTL, WIP y cierre de iniciativas.
     ci_task_ttl_hours: float = Field(default=48.0, alias="CI_TASK_TTL_HOURS")
     ci_initiative_ttl_days: float = Field(default=5.0, alias="CI_INITIATIVE_TTL_DAYS")
+    ci_validation_backlog_ttl_days: float = Field(default=2.0, alias="CI_VALIDATION_BACKLOG_TTL_DAYS")
     ci_initiative_stall_days: float = Field(default=3.0, alias="CI_INITIATIVE_STALL_DAYS")
     ci_monitoring_close_days: float = Field(default=5.0, alias="CI_MONITORING_CLOSE_DAYS")
-    ci_max_open_initiatives: int = Field(default=6, alias="CI_MAX_OPEN_INITIATIVES")
+    ci_max_open_initiatives: int = Field(default=4, alias="CI_MAX_OPEN_INITIATIVES")
     ci_recurring_cooldown_hours: float = Field(default=24.0, alias="CI_RECURRING_COOLDOWN_HOURS")
     improvement_llm_local_fallback_enabled: bool = Field(
         default=True,

@@ -314,7 +314,8 @@ def _fallback_market_state_block_reason(market_state: dict[str, Any] | None) -> 
     data_quality = (market_state.get("data_quality") or {}) if isinstance(market_state, dict) else {}
     quality = str(data_quality.get("status") or "").upper()
     notes = [str(item or "").lower() for item in list(data_quality.get("notes") or [])]
-    vendor_quality = str(data_quality.get("data_vendor_quality") or "").lower()
+    vendor_quality = data_quality.get("data_vendor_quality") or {}
+    vendor_quality_text = str(vendor_quality or "").lower()
     if quality == "INSUFFICIENT":
         return "market_state_data_quality_insufficient"
     if quality == "PARTIAL":
@@ -327,7 +328,11 @@ def _fallback_market_state_block_reason(market_state: dict[str, Any] | None) -> 
             "stale",
             "missing",
         )
-        if vendor_quality in {"informal", "unknown", "degraded"} or any(
+        vendor_degraded = (
+            (isinstance(vendor_quality, dict) and (not bool(vendor_quality.get("formal_provider")) or str(vendor_quality.get("severity") or "").upper() in {"WARN", "BLOCK"}))
+            or vendor_quality_text in {"informal", "unknown", "degraded"}
+        )
+        if vendor_degraded or any(
             term in note for note in notes for term in critical_terms
         ):
             return "market_state_partial_missing_macro_or_news"
@@ -3857,6 +3862,7 @@ def build_buy_order_plans(
     *,
     dry_run: bool = True,
     rejected: list[dict[str, Any]] | None = None,
+    market_state: dict[str, Any] | None = None,
 ) -> list[OrderPlan]:
     """Build risk-checked buy plans. Sell/reduce/exit are kept as recommendations for now."""
 
@@ -3882,6 +3888,7 @@ def build_buy_order_plans(
     portfolio_risk_context = _portfolio_risk_context(settings, portfolio)
     planned_buy_exposure = 0.0
     planned_buy_risk_amount = 0.0
+    market_state_block_reason = _fallback_market_state_block_reason(market_state)
 
     for recommendation in recommendations:
         if len(plans) >= buy_plan_limit:
@@ -3900,6 +3907,22 @@ def build_buy_order_plans(
                 )
             break
         if recommendation.action != "buy":
+            continue
+        if market_state_block_reason:
+            if rejected is not None:
+                rejected.append(
+                    {
+                        "symbol": recommendation.symbol,
+                        "action": recommendation.action,
+                        "stage": "market_state_guard",
+                        "reason": market_state_block_reason,
+                        "checks": {
+                            "market_state_quality": ((market_state or {}).get("data_quality") or {}).get("status"),
+                            "data_quality_notes": list(((market_state or {}).get("data_quality") or {}).get("notes") or []),
+                            "data_vendor_quality": ((market_state or {}).get("data_quality") or {}).get("data_vendor_quality"),
+                        },
+                    }
+                )
             continue
         if settings.operational_kill_switch_enabled and operational_block_context.get("block_new_buys"):
             if rejected is not None:
@@ -4259,10 +4282,18 @@ def build_order_plans(
     *,
     dry_run: bool = True,
     rejected: list[dict[str, Any]] | None = None,
+    market_state: dict[str, Any] | None = None,
 ) -> list[OrderPlan]:
     """Build buy and long-position sell/reduce/exit plans."""
 
-    plans = build_buy_order_plans(settings, portfolio, recommendations, dry_run=dry_run, rejected=rejected)
+    plans = build_buy_order_plans(
+        settings,
+        portfolio,
+        recommendations,
+        dry_run=dry_run,
+        rejected=rejected,
+        market_state=market_state,
+    )
     total_plan_limit = _effective_buy_plan_limit(settings, recommendations)
     open_order_symbols = {order.symbol.upper() for order in portfolio.open_orders}
 

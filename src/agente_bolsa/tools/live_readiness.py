@@ -74,6 +74,26 @@ def _autonomous_metrics(settings: Settings, store: Store) -> dict[str, Any]:
     }
 
 
+def _shadow_readiness_metrics(store: Store) -> dict[str, Any]:
+    with store.connect() as conn:
+        daily_learning_sessions = conn.execute(
+            """
+            SELECT COUNT(DISTINCT session_date) AS count
+            FROM learning_daily_summaries
+            WHERE kind = 'daily_learning'
+            """
+        ).fetchone()["count"]
+        shadow_rule_evaluations = conn.execute("SELECT COUNT(*) AS count FROM rule_evaluations").fetchone()["count"]
+    shadow_rules = store.strategy_rules(status="shadow", limit=1000)
+    active_rules = store.strategy_rules(status="active", limit=1000)
+    return {
+        "daily_learning_sessions": int(daily_learning_sessions or 0),
+        "shadow_rule_evaluations": int(shadow_rule_evaluations or 0),
+        "shadow_rules": len(shadow_rules),
+        "active_rules": len(active_rules),
+    }
+
+
 def _append_autonomous_criteria(settings: Settings, store: Store, checks: list[dict[str, Any]]) -> None:
     metrics = _autonomous_metrics(settings, store)
     _check(
@@ -117,6 +137,27 @@ def _append_autonomous_criteria(settings: Settings, store: Store, checks: list[d
         "pass" if metrics["kernel_violations"] == 0 else "block",
         f"violaciones de integridad del kernel = {metrics['kernel_violations']} (debe ser 0).",
         {"kernel_violations": metrics["kernel_violations"]},
+    )
+    shadow_metrics = _shadow_readiness_metrics(store)
+    _check(
+        checks,
+        "shadow_daily_learning_window",
+        "pass" if shadow_metrics["daily_learning_sessions"] >= 20 else "block",
+        (
+            f"{shadow_metrics['daily_learning_sessions']} sesiones con digest diario "
+            "(minimo 20 antes de live)."
+        ),
+        shadow_metrics,
+    )
+    _check(
+        checks,
+        "shadow_rule_evidence_window",
+        "pass" if shadow_metrics["shadow_rule_evaluations"] >= 20 else "block",
+        (
+            f"{shadow_metrics['shadow_rule_evaluations']} evaluaciones de reglas shadow "
+            "(minimo 20 antes de live)."
+        ),
+        shadow_metrics,
     )
 
 

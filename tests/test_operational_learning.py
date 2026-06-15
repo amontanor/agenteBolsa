@@ -1,6 +1,7 @@
 from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.operational_learning import (
+    audit_broker_memory_reconciliation,
     audit_trade_memory_traceability,
     build_decision_memory,
     evaluate_shadow_rules,
@@ -218,3 +219,60 @@ def test_traceability_audit_detects_future_signal_link(tmp_path):
 
     assert audit["complete"] is False
     assert audit["issue_counts"]["signal_after_trade"] == 1
+
+
+def test_broker_memory_reconciliation_detects_duplicate_fill_memory(tmp_path):
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    store.save_broker_order(
+        broker_order_id="bo_dup",
+        plan_id="plan_dup",
+        cycle_id="cycle_dup",
+        symbol="FRT",
+        side="buy",
+        status="filled",
+        payload={"plan": {"payload": {"recommendation": {"symbol": "FRT"}}}},
+    )
+    for memory_id in ["tm_dup_1", "tm_dup_2"]:
+        store.save_trade_memory(
+            {
+                "memory_id": memory_id,
+                "trade_time": "2026-06-12T15:31:00Z",
+                "trade_date": "2026-06-12",
+                "symbol": "FRT",
+                "side": "buy",
+                "qty": 1,
+                "price": 126.0,
+                "notional": 126.0,
+                "verdict": "loser_open",
+                "features": {},
+                "thesis": {"source_order": {"broker_order_id": "bo_dup", "plan_id": "plan_dup", "cycle_id": "cycle_dup"}},
+                "outcome": {"pl": -1.0},
+            }
+        )
+
+    audit = audit_broker_memory_reconciliation(store, since_date="2026-06-01")
+
+    assert audit["complete"] is False
+    assert audit["issue_counts"]["duplicate_fills"] == 1
+    assert audit["duplicate_fills"][0]["memory_ids"] == ["tm_dup_1", "tm_dup_2"]
+
+
+def test_broker_memory_reconciliation_detects_filled_order_without_memory(tmp_path):
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    store.save_broker_order(
+        broker_order_id="bo_filled",
+        plan_id="plan_filled",
+        cycle_id="cycle_filled",
+        symbol="AAPL",
+        side="buy",
+        status="filled",
+        payload={"plan": {"payload": {"recommendation": {"symbol": "AAPL"}}}},
+    )
+
+    audit = audit_broker_memory_reconciliation(store, since_date="2026-06-01")
+
+    assert audit["complete"] is False
+    assert audit["issue_counts"]["filled_orders_without_memory"] == 1
+    assert audit["filled_orders_without_memory"][0]["broker_order_id"] == "bo_filled"

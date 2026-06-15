@@ -884,7 +884,14 @@ def _auto_paper_trade(
             {"source_run_id": decision_context.get("run_id"), "updated": learned_decisions},
         )
     rejected_order_plans: list[dict[str, Any]] = []
-    plans = build_order_plans(settings, portfolio, gated_recommendations, dry_run=True, rejected=rejected_order_plans)
+    plans = build_order_plans(
+        settings,
+        portfolio,
+        gated_recommendations,
+        dry_run=True,
+        rejected=rejected_order_plans,
+        market_state=market_state,
+    )
     effective_plan_limit = _effective_buy_plan_limit(settings, gated_recommendations)
     effective_daily_limit = _effective_daily_buy_limit(settings, plans)
     approved_buys = sorted({item.symbol for item in gated_recommendations if str(item.action).lower() == "buy"})

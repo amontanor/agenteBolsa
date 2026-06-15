@@ -1267,6 +1267,49 @@ def test_build_order_plans_blocks_buys_when_operational_kill_switch_is_active(tm
     assert rejected[0]["stage"] == "operational_kill_switch"
 
 
+def test_build_order_plans_blocks_buys_when_market_state_is_partial_missing_context(tmp_path: Path):
+    settings = Settings(DATA_DIR=tmp_path)
+    portfolio = PortfolioSnapshot(
+        account_id="paper",
+        status="ACTIVE",
+        currency="USD",
+        cash=10_000,
+        portfolio_value=20_000,
+        buying_power=20_000,
+        positions=[],
+        open_orders=[],
+    )
+    recommendation = TradeRecommendation(
+        symbol="AAPL",
+        action="buy",
+        confidence=0.9,
+        reason="test",
+        entry_price=100.0,
+        stop_loss=95.0,
+        take_profit=110.0,
+        target_exposure_pct=0.05,
+    )
+    rejected = []
+
+    plans = build_order_plans(
+        settings,
+        portfolio,
+        [recommendation],
+        rejected=rejected,
+        market_state={
+            "data_quality": {
+                "status": "PARTIAL",
+                "notes": ["macro_summary_missing", "sentiment_window_insufficient"],
+                "data_vendor_quality": {"formal_provider": False, "severity": "WARN"},
+            }
+        },
+    )
+
+    assert plans == []
+    assert rejected[0]["stage"] == "market_state_guard"
+    assert rejected[0]["reason"] == "market_state_partial_missing_macro_or_news"
+
+
 def test_build_order_plans_uses_existing_stop_data_for_aggregate_open_risk(tmp_path: Path):
     settings = Settings(DATA_DIR=tmp_path, MAX_TOTAL_OPEN_RISK=0.01)
     store = Store(settings.database_path, settings.agent_logs_dir)

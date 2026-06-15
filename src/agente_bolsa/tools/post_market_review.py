@@ -260,6 +260,107 @@ def _build_trade_evaluations(
     return evaluations, day
 
 
+def _mandatory_market_review(report: dict[str, Any]) -> dict[str, Any]:
+    """Deterministic post-market checklist required for every session close."""
+
+    summary = report.get("summary", {}) or {}
+    evaluations = list(report.get("trade_evaluations", []) or [])
+    daily_digest = ((report.get("daily_learning", {}) or {}).get("digest", {}) or {})
+    ledger = daily_digest.get("same_session_opportunity_ledger", {}) or {}
+    operational = report.get("operational_learning", {}) or {}
+    traceability = operational.get("traceability_audit", {}) or {}
+    reconciliation = operational.get("broker_memory_reconciliation", {}) or {}
+
+    winners = [
+        item
+        for item in evaluations
+        if str(item.get("verdict") or "") in {"bien_de_momento", "venta_correcta"}
+        or (_round(item.get("realized_pl"), 2) or 0.0) > 0
+        or (_round(item.get("open_pl"), 2) or 0.0) > 0
+    ]
+    weak = [item for item in evaluations if item.get("issue") or str(item.get("verdict") or "").startswith("debil")]
+    missed = [
+        item
+        for item in list(ledger.get("top_non_executed", []) or [])
+        if item.get("same_session_return") is not None and float(item.get("same_session_return") or 0.0) > 0
+    ]
+    blocker_reasons: dict[str, int] = {}
+    for item in list(ledger.get("top_non_executed", []) or []):
+        reason = str(item.get("reason_not_executed") or "unknown")
+        blocker_reasons[reason] = blocker_reasons.get(reason, 0) + 1
+
+    data_failures = []
+    if traceability and not traceability.get("complete", True):
+        data_failures.append(
+            {
+                "kind": "trade_memory_traceability",
+                "detail": "Memoria de trades con trazabilidad incompleta.",
+                "evidence": traceability.get("issue_counts", {}),
+            }
+        )
+    if reconciliation and not reconciliation.get("complete", True):
+        data_failures.append(
+            {
+                "kind": "broker_memory_reconciliation",
+                "detail": "Broker y trade_memory no cuadran completamente.",
+                "evidence": reconciliation.get("issue_counts", {}),
+            }
+        )
+    if int((report.get("signal_update", {}) or {}).get("updated") or 0) == 0:
+        data_failures.append(
+            {
+                "kind": "signal_outcomes_not_updated",
+                "detail": "No se actualizaron outcomes de senales en este post-market.",
+                "evidence": report.get("signal_update", {}),
+            }
+        )
+
+    criteria_failures = []
+    if weak:
+        criteria_failures.append(
+            {
+                "kind": "weak_executed_trades",
+                "detail": "Entradas/salidas ejecutadas con resultado o issue debil.",
+                "count": len(weak),
+                "examples": weak[:5],
+            }
+        )
+    if missed:
+        criteria_failures.append(
+            {
+                "kind": "positive_non_executed_opportunities",
+                "detail": "Candidatos no ejecutados tuvieron retorno intradia positivo.",
+                "count": len(missed),
+                "examples": missed[:5],
+            }
+        )
+
+    ledger_summary = ledger.get("summary", {}) if isinstance(ledger, dict) else {}
+    return {
+        "required": True,
+        "session_date": report.get("session_date"),
+        "recommendations_reviewed": {
+            "trade_evaluations": summary.get("trades_evaluated", 0),
+            "daily_candidates": ledger_summary.get("candidates"),
+            "non_executed_candidates": ledger_summary.get("non_executed"),
+        },
+        "execution_review": {
+            "buys": summary.get("buys", 0),
+            "sells": summary.get("sells", 0),
+            "day_realized_pl": summary.get("day_realized_pl", 0.0),
+            "open_unrealized_pl": summary.get("open_unrealized_pl", 0.0),
+        },
+        "blockers_review": {
+            "reason_counts": blocker_reasons,
+            "top_blocked": list(ledger.get("top_non_executed", []) or [])[:10] if isinstance(ledger, dict) else [],
+        },
+        "what_worked": winners[:10],
+        "what_failed_due_to_data": data_failures,
+        "what_failed_due_to_criteria": criteria_failures,
+        "proposed_improvements": list(report.get("proposed_improvements", []) or [])[:10],
+    }
+
+
 def _build_learning_pipeline(
     settings: Settings,
     store: Store,
@@ -382,6 +483,7 @@ def build_post_market_review(
             for item in ((daily_learning.get("digest", {}) or {}).get("guidance", []) or [])[:5]
         ],
     ]
+    report["mandatory_market_review"] = _mandatory_market_review(report)
 
     report = write_json_report(
         report,

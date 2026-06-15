@@ -562,6 +562,101 @@ def audit_trade_memory_traceability(store: Store, *, since_date: str = DEFAULT_H
     }
 
 
+def audit_broker_memory_reconciliation(store: Store, *, since_date: str = DEFAULT_HISTORY_START_DATE) -> dict[str, Any]:
+    """Check that broker fills and trade memory agree before learning from them."""
+
+    memories = store.trade_memory(limit=10000, since_date=since_date)
+    decisions = build_decision_memory(memories)
+    with store.connect() as conn:
+        broker_rows = conn.execute(
+            """
+            SELECT broker_order_id, plan_id, cycle_id, symbol, side, status, created_at
+            FROM broker_orders
+            WHERE substr(created_at, 1, 10) >= ?
+            ORDER BY created_at DESC
+            """,
+            (since_date,),
+        ).fetchall()
+
+    broker_order_ids = {str(row["broker_order_id"]) for row in broker_rows if row["broker_order_id"]}
+    memory_order_ids: dict[str, list[str]] = defaultdict(list)
+    duplicate_fill_keys: dict[tuple[Any, ...], list[str]] = defaultdict(list)
+    orphan_memory_ids: list[str] = []
+
+    for memory in memories:
+        thesis = memory.get("thesis", {}) or {}
+        source_order = thesis.get("source_order", {}) or {}
+        order_id = str(source_order.get("broker_order_id") or "")
+        memory_id = str(memory.get("memory_id") or "")
+        if order_id:
+            memory_order_ids[order_id].append(memory_id)
+            if order_id not in broker_order_ids:
+                orphan_memory_ids.append(memory_id)
+        else:
+            orphan_memory_ids.append(memory_id)
+        duplicate_key = (
+            str(memory.get("trade_date") or ""),
+            str(memory.get("trade_time") or "")[:19],
+            str(memory.get("symbol") or "").upper(),
+            str(memory.get("side") or "").lower(),
+            round(_num(memory.get("qty")) or 0.0, 6),
+            round(_num(memory.get("price")) or 0.0, 4),
+            order_id,
+        )
+        duplicate_fill_keys[duplicate_key].append(memory_id)
+
+    duplicate_fills = [
+        {"key": list(key), "memory_ids": ids}
+        for key, ids in duplicate_fill_keys.items()
+        if len(ids) > 1
+    ]
+    filled_status_tokens = ("filled", "partially_filled")
+    filled_orders_without_memory = [
+        {
+            "broker_order_id": str(row["broker_order_id"]),
+            "plan_id": str(row["plan_id"] or ""),
+            "symbol": str(row["symbol"] or "").upper(),
+            "side": str(row["side"] or "").lower(),
+            "status": str(row["status"] or ""),
+            "created_at": row["created_at"],
+        }
+        for row in broker_rows
+        if any(token in str(row["status"] or "").lower() for token in filled_status_tokens)
+        and str(row["broker_order_id"]) not in memory_order_ids
+    ]
+    fragmented_decisions = [
+        {
+            "decision_id": item.get("decision_id"),
+            "symbol": item.get("symbol"),
+            "side": item.get("side"),
+            "trade_date": item.get("trade_date"),
+            "orders": item.get("orders"),
+            "source_memory_ids": item.get("source_memory_ids", []),
+        }
+        for item in decisions
+        if int(item.get("orders") or 0) > 1
+    ]
+    issue_counts = {
+        "duplicate_fills": len(duplicate_fills),
+        "orphan_memories": len(orphan_memory_ids),
+        "filled_orders_without_memory": len(filled_orders_without_memory),
+        "fragmented_decisions": len(fragmented_decisions),
+    }
+    blocking_issues = issue_counts["duplicate_fills"] + issue_counts["orphan_memories"] + issue_counts["filled_orders_without_memory"]
+    return {
+        "since_date": since_date,
+        "broker_orders_checked": len(broker_rows),
+        "trade_memories_checked": len(memories),
+        "trade_decisions_checked": len(decisions),
+        "complete": blocking_issues == 0,
+        "issue_counts": issue_counts,
+        "duplicate_fills": duplicate_fills[:25],
+        "orphan_memory_ids": sorted(set(orphan_memory_ids))[:25],
+        "filled_orders_without_memory": filled_orders_without_memory[:25],
+        "fragmented_decisions": fragmented_decisions[:25],
+    }
+
+
 DEFAULT_RULES = [
     {
         "rule_id": "rule_avoid_extended_low_volume",
@@ -926,6 +1021,7 @@ def build_operational_learning_review(
     reports_dir.mkdir(parents=True, exist_ok=True)
     memory_sync = sync_trade_memory(settings, store, since_date=since_date)
     traceability_audit = audit_trade_memory_traceability(store, since_date=since_date)
+    broker_memory_reconciliation = audit_broker_memory_reconciliation(store, since_date=since_date)
     default_rules_created = ensure_default_shadow_rules(store)
     shadow_eval = evaluate_shadow_rules(store, since_date=since_date, settings=settings)
     memories = store.trade_memory(limit=500, since_date=since_date)
@@ -944,6 +1040,7 @@ def build_operational_learning_review(
         "verdicts": dict(verdicts),
         "top_symbols": dict(by_symbol.most_common(8)),
         "decision_summary": _decision_summary(decisions),
+        "broker_memory_reconciliation": broker_memory_reconciliation.get("issue_counts", {}),
     }
     report: dict[str, Any] = {
         "run_id": run_id,
@@ -951,6 +1048,7 @@ def build_operational_learning_review(
         "summary": summary,
         "memory_sync": memory_sync,
         "traceability_audit": traceability_audit,
+        "broker_memory_reconciliation": broker_memory_reconciliation,
         "default_rules_created": default_rules_created,
         "shadow_evaluation": shadow_eval,
         "rules": rules,

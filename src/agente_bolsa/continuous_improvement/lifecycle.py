@@ -15,6 +15,8 @@ acumulaba backlog en vez de mejorar. Reglas:
   `ci_init_*`, etc.) expira pronto; esos ids son metadatos, no objetivos.
 - Sin salida: una iniciativa OPEN vieja, sin tareas vivas y sin propuestas
   activas, expira aunque su updated_at se haya refrescado por bookkeeping.
+- Validacion estancada: una iniciativa VALIDATING sin tareas vivas ni
+  propuestas listas para aplicar expira tras `CI_VALIDATION_BACKLOG_TTL_DAYS`.
 - Expiracion: una iniciativa abierta mas de `CI_INITIATIVE_TTL_DAYS` dias y sin
   avance en `CI_INITIATIVE_STALL_DAYS` se marca REJECTED (expirada). Puede
   reabrirse despues, pero solo con evidencia nueva.
@@ -76,6 +78,7 @@ ACTIVE_PROPOSAL_STATUSES = {
     "REQUIRES_HUMAN_REVIEW",
     "READY_TO_APPLY",
 }
+READY_PROPOSAL_STATUSES = {"READY_TO_APPLY", "PASSED"}
 
 
 def _now_iso() -> str:
@@ -192,18 +195,36 @@ def _is_generated_topic_initiative(initiative: dict[str, Any]) -> bool:
     return is_generated_ci_reference(topic)
 
 
+def _is_validation_backlog_churn(initiative: dict[str, Any]) -> bool:
+    """True when VALIDATING is just a queue state, not objective progress."""
+
+    latest = initiative.get("latest_decision") or {}
+    source = str(latest.get("source") or "")
+    reason = str(latest.get("reason") or "").lower()
+    next_action = str(initiative.get("next_action") or "").lower()
+    if _is_decision_churn(initiative):
+        return True
+    if source == "lifecycle" and reason == "all_tasks_terminal_with_active_proposals":
+        return True
+    return "validar propuestas vinculadas" in next_action
+
+
 def _reject_linked_pending_proposals(
     store: "Store",
     initiative: dict[str, Any],
     *,
     reason: str,
+    proposal_status_by_id: dict[str, str] | None = None,
 ) -> list[str]:
     rejected: list[str] = []
+    proposal_status_by_id = proposal_status_by_id or {}
     for proposal_id in list(initiative.get("linked_proposal_ids") or []):
-        proposal = store.continuous_improvement_proposal(str(proposal_id))
-        if not proposal:
-            continue
-        current_status = str(proposal.get("status") or "").upper()
+        current_status = str(proposal_status_by_id.get(str(proposal_id)) or "").upper()
+        if not current_status:
+            proposal = store.continuous_improvement_proposal(str(proposal_id))
+            if not proposal:
+                continue
+            current_status = str(proposal.get("status") or "").upper()
         if current_status not in REJECTABLE_PROPOSAL_STATUSES:
             continue
         try:
@@ -224,24 +245,38 @@ def _reject_linked_pending_proposals(
     return rejected
 
 
-def _active_linked_proposal_ids(store: "Store", initiative: dict[str, Any]) -> list[str]:
+def _proposal_status_by_id(store: "Store") -> dict[str, str]:
+    return {
+        str(proposal["proposal_id"]): str(proposal.get("status") or "").upper()
+        for proposal in store.continuous_improvement_proposals(limit=10000)
+    }
+
+
+def _active_linked_proposal_ids(initiative: dict[str, Any], proposal_status_by_id: dict[str, str]) -> list[str]:
     active: list[str] = []
     for proposal_id in list(initiative.get("linked_proposal_ids") or []):
-        proposal = store.continuous_improvement_proposal(str(proposal_id))
-        if not proposal:
-            continue
-        if str(proposal.get("status") or "").upper() in ACTIVE_PROPOSAL_STATUSES:
+        if str(proposal_status_by_id.get(str(proposal_id)) or "").upper() in ACTIVE_PROPOSAL_STATUSES:
             active.append(str(proposal_id))
     return active
+
+
+def _ready_linked_proposal_ids(initiative: dict[str, Any], proposal_status_by_id: dict[str, str]) -> list[str]:
+    ready: list[str] = []
+    for proposal_id in list(initiative.get("linked_proposal_ids") or []):
+        if str(proposal_status_by_id.get(str(proposal_id)) or "").upper() in READY_PROPOSAL_STATUSES:
+            ready.append(str(proposal_id))
+    return ready
 
 
 def resolve_initiatives(store: "Store", settings: "Settings") -> dict[str, Any]:
     """Cierra iniciativas monitorizadas sin movimiento y expira las estancadas."""
 
     ttl_days = float(getattr(settings, "ci_initiative_ttl_days", 5.0))
+    validation_backlog_ttl_days = float(getattr(settings, "ci_validation_backlog_ttl_days", min(ttl_days, 2.0)))
     stall_days = float(getattr(settings, "ci_initiative_stall_days", 3.0))
     monitoring_close_days = float(getattr(settings, "ci_monitoring_close_days", 5.0))
     open_tasks = _open_tasks_by_initiative(store)
+    proposal_statuses = _proposal_status_by_id(store)
 
     closed: list[dict[str, Any]] = []
     expired: list[dict[str, Any]] = []
@@ -266,8 +301,18 @@ def resolve_initiatives(store: "Store", settings: "Settings") -> dict[str, Any]:
             closed.append({"initiative_id": initiative_id, "initiative_key": initiative.get("initiative_key"), "outcome": outcome})
             continue
 
-        active_proposals = _active_linked_proposal_ids(store, initiative)
+        active_proposals = _active_linked_proposal_ids(initiative, proposal_statuses)
+        ready_proposals = _ready_linked_proposal_ids(initiative, proposal_statuses)
+        latest_source = str((initiative.get("latest_decision") or {}).get("source") or "")
         generated_topic_expired = age_days > min(ttl_days, 1.0) and not has_open_tasks and _is_generated_topic_initiative(initiative)
+        validation_backlog_expired = (
+            status == "VALIDATING"
+            and age_days > validation_backlog_ttl_days
+            and not has_open_tasks
+            and not ready_proposals
+            and latest_source != "AutonomyNormalizer"
+            and _is_validation_backlog_churn(initiative)
+        )
         no_output_expired = (
             status == "OPEN"
             and age_days > ttl_days
@@ -275,9 +320,21 @@ def resolve_initiatives(store: "Store", settings: "Settings") -> dict[str, Any]:
             and not active_proposals
             and bool(initiative.get("linked_task_ids") or [])
         )
+        human_review_no_output_expired = (
+            status == "WAITING_REVIEW"
+            and age_days > validation_backlog_ttl_days
+            and not has_open_tasks
+            and not active_proposals
+            and bool(initiative.get("linked_task_ids") or [])
+        )
         if generated_topic_expired:
             reason = f"clave de iniciativa generada sin objetivo semantico durante {age_days:.1f} dias"
-            rejected_proposals = _reject_linked_pending_proposals(store, initiative, reason=reason)
+            rejected_proposals = _reject_linked_pending_proposals(
+                store,
+                initiative,
+                reason=reason,
+                proposal_status_by_id=proposal_statuses,
+            )
             store.update_continuous_improvement_initiative(
                 initiative_id,
                 status="REJECTED",
@@ -288,6 +345,36 @@ def resolve_initiatives(store: "Store", settings: "Settings") -> dict[str, Any]:
                     "rejected_proposal_ids": rejected_proposals,
                 },
                 next_action="Expirada por fragmentacion: reabrir solo como iniciativa semantica.",
+            )
+            expired.append(
+                {
+                    "initiative_id": initiative_id,
+                    "initiative_key": initiative.get("initiative_key"),
+                    "reason": reason,
+                    "rejected_proposal_ids": rejected_proposals,
+                }
+            )
+            continue
+
+        if validation_backlog_expired:
+            reason = f"validacion pendiente sin evidencia objetiva durante {age_days:.1f} dias"
+            rejected_proposals = _reject_linked_pending_proposals(
+                store,
+                initiative,
+                reason=reason,
+                proposal_status_by_id=proposal_statuses,
+            )
+            store.update_continuous_improvement_initiative(
+                initiative_id,
+                status="REJECTED",
+                latest_decision={
+                    "decision": "EXPIRED",
+                    "source": "lifecycle",
+                    "reason": reason,
+                    "rejected_proposal_ids": rejected_proposals,
+                    "validation_backlog_ttl_days": validation_backlog_ttl_days,
+                },
+                next_action="Expirada por validacion estancada: reabrir solo con evidencia nueva.",
             )
             expired.append(
                 {
@@ -311,6 +398,29 @@ def resolve_initiatives(store: "Store", settings: "Settings") -> dict[str, Any]:
                     "rejected_proposal_ids": [],
                 },
                 next_action="Expirada sin salida accionable: reabrir solo con evidencia nueva.",
+            )
+            expired.append(
+                {
+                    "initiative_id": initiative_id,
+                    "initiative_key": initiative.get("initiative_key"),
+                    "reason": reason,
+                    "rejected_proposal_ids": [],
+                }
+            )
+            continue
+
+        if human_review_no_output_expired:
+            reason = f"revision humana sin propuesta accionable tras {age_days:.1f} dias"
+            store.update_continuous_improvement_initiative(
+                initiative_id,
+                status="REJECTED",
+                latest_decision={
+                    "decision": "EXPIRED",
+                    "source": "lifecycle",
+                    "reason": reason,
+                    "rejected_proposal_ids": [],
+                },
+                next_action="Expirada: el laboratorio autonomo no espera revision humana sin propuesta accionable.",
             )
             expired.append(
                 {
@@ -353,7 +463,12 @@ def resolve_initiatives(store: "Store", settings: "Settings") -> dict[str, Any]:
                 if churn_expired
                 else f"estancada {idle_days:.1f} dias sin avance (edad {age_days:.1f}d)"
             )
-            rejected_proposals = _reject_linked_pending_proposals(store, initiative, reason=reason)
+            rejected_proposals = _reject_linked_pending_proposals(
+                store,
+                initiative,
+                reason=reason,
+                proposal_status_by_id=proposal_statuses,
+            )
             store.update_continuous_improvement_initiative(
                 initiative_id,
                 status="REJECTED",

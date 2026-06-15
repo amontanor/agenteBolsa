@@ -1,6 +1,6 @@
 from agente_bolsa.models import PortfolioSnapshot
 from agente_bolsa.main import _post_market_review_text
-from agente_bolsa.tools.post_market_review import _learning_candidates
+from agente_bolsa.tools.post_market_review import _learning_candidates, _mandatory_market_review
 
 
 def test_learning_candidates_use_day_pl_not_global_history():
@@ -72,3 +72,52 @@ def test_post_market_review_text_explains_actions_and_learning():
     assert "Aplicacion: no cambia codigo" in text
     assert "Mejoras propuestas:" in text
     assert "Guia para la proxima sesion:" in text
+
+
+def test_mandatory_market_review_classifies_data_and_criteria_failures():
+    review = _mandatory_market_review(
+        {
+            "session_date": "2026-06-12",
+            "summary": {"trades_evaluated": 1, "buys": 1, "sells": 0, "day_realized_pl": 0.0, "open_unrealized_pl": -5.0},
+            "trade_evaluations": [
+                {
+                    "symbol": "FRT",
+                    "side": "buy",
+                    "open_pl": -5.0,
+                    "verdict": "debil_de_momento",
+                    "issue": "Entrada debil.",
+                }
+            ],
+            "signal_update": {"updated": 0},
+            "daily_learning": {
+                "digest": {
+                    "same_session_opportunity_ledger": {
+                        "summary": {"candidates": 2, "non_executed": 1},
+                        "top_non_executed": [
+                            {
+                                "symbol": "AAPL",
+                                "same_session_return": 0.04,
+                                "reason_not_executed": "market_state_guard: partial",
+                            }
+                        ],
+                    }
+                }
+            },
+            "operational_learning": {
+                "traceability_audit": {"complete": False, "issue_counts": {"missing_signal_context": 1}},
+                "broker_memory_reconciliation": {"complete": False, "issue_counts": {"duplicate_fills": 1}},
+            },
+        }
+    )
+
+    assert review["required"] is True
+    assert review["recommendations_reviewed"]["non_executed_candidates"] == 1
+    assert {item["kind"] for item in review["what_failed_due_to_data"]} == {
+        "trade_memory_traceability",
+        "broker_memory_reconciliation",
+        "signal_outcomes_not_updated",
+    }
+    assert {item["kind"] for item in review["what_failed_due_to_criteria"]} == {
+        "weak_executed_trades",
+        "positive_non_executed_opportunities",
+    }

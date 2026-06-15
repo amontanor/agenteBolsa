@@ -153,6 +153,84 @@ def test_operational_health_blocks_buys_when_market_data_pipeline_is_stale(tmp_p
     assert block["blocking_alerts"][0]["kind"] == "data_pipeline_down"
 
 
+def test_operational_health_requires_post_market_review_after_close(tmp_path):
+    settings = Settings(DATA_DIR=tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "latest_closed_market_technical_study.json").write_text(
+        json.dumps({"symbols_scanned": 10, "symbols_with_data": 10, "market_data": {"requested_count": 10, "missing_symbols_count": 0}}),
+        encoding="utf-8",
+    )
+    (reports_dir / "latest_daily_learning_digest.json").write_text(json.dumps({"setup_stats_3d": []}), encoding="utf-8")
+
+    report = build_operational_health_report(
+        settings,
+        store,
+        reports_dir,
+        "ops_missing_post_market",
+        now=datetime(2026, 6, 12, 22, 30, tzinfo=timezone.utc),
+    )
+
+    missing = [item for item in report["alerts"] if item["kind"] == "missing_report" and item["scope"] == "post_market_review"]
+    assert missing
+    assert report["report_health"]["post_market_learning"]["required"] is True
+
+
+def test_operational_health_alerts_on_ci_generated_topics_and_backlog(tmp_path):
+    settings = Settings(DATA_DIR=tmp_path, CI_MAX_OPEN_INITIATIVES=1)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    for idx, key in enumerate(["software:ci_prop_123456789abc", "software:continuous_improvement", "trading:entry_quality_filter"], start=1):
+        store.upsert_continuous_improvement_initiative(
+            {
+                "initiative_id": f"ci_init_alert_{idx}",
+                "initiative_key": key,
+                "title": key,
+                "domain": "software" if key.startswith("software:") else "trading",
+                "status": "VALIDATING",
+                "owner_agent": "OrchestratorAgent",
+                "priority": "MEDIUM",
+                "target_metric": "flow",
+                "baseline_value": None,
+                "current_value": None,
+                "expected_impact": "",
+                "risk_level": "LOW",
+                "evidence": [],
+                "linked_event_ids": [],
+                "linked_task_ids": [],
+                "linked_hypothesis_ids": [],
+                "linked_proposal_ids": [],
+                "linked_validation_ids": [],
+                "latest_decision": {"decision": "PENDING"},
+                "next_action": "",
+            }
+        )
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "latest_closed_market_technical_study.json").write_text(
+        json.dumps({"symbols_scanned": 10, "symbols_with_data": 10, "market_data": {"requested_count": 10, "missing_symbols_count": 0}}),
+        encoding="utf-8",
+    )
+    (reports_dir / "latest_daily_learning_digest.json").write_text(json.dumps({"setup_stats_3d": []}), encoding="utf-8")
+    (reports_dir / "latest_post_market_learning.json").write_text(json.dumps({"session_date": "2026-06-12", "pipeline_steps": {}}), encoding="utf-8")
+
+    report = build_operational_health_report(
+        settings,
+        store,
+        reports_dir,
+        "ops_ci_backlog",
+        now=datetime(2026, 6, 12, 22, 30, tzinfo=timezone.utc),
+    )
+
+    kinds = {item["kind"] for item in report["alerts"]}
+    assert "ci_generated_topic_loop" in kinds
+    assert "ci_backlog_over_wip_limit" in kinds
+    assert "ci_validation_backlog" in kinds
+    assert "run_ci_lifecycle_and_reduce_wip" in {item["action"] for item in report["responses"]}
+
+
 def test_production_health_report_combines_operational_and_ci_runtime(tmp_path):
     settings = Settings(DATA_DIR=tmp_path, CONTINUOUS_IMPROVEMENT_RUNTIME_INTERVAL_SECONDS=60)
     store = Store(settings.database_path, settings.agent_logs_dir)

@@ -274,6 +274,48 @@ def test_learning_digest_and_health_reports_reflect_partial_outcomes(tmp_path, m
     assert load_daily_learning_context(tmp_path)["prior_accuracy_3d"]
 
 
+def test_learning_digest_exposes_false_positive_and_false_negative_rates(tmp_path, monkeypatch):
+    monkeypatch.setattr("agente_bolsa.tools.daily_learning.update_signal_outcomes", lambda *args, **kwargs: {"updated": 0})
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    store.save_signal_outcome(
+        signal_id="scan_fp:AAPL",
+        source_run_id="scan_fp",
+        source="test",
+        symbol="AAPL",
+        signal_date="2026-05-04",
+        decision="approved_buy",
+        features={"score": 18},
+        outcome={"available": True, "return_3d": -0.03, "matured_horizons": {"3d": True}},
+    )
+    _save_buy_order(store, plan_id="fp_plan", cycle_id="scan_fp", symbol="AAPL", created_at="2026-05-04T15:30:00+00:00")
+    store.save_signal_outcome(
+        signal_id="scan_fn:MSFT",
+        source_run_id="scan_fn",
+        source="test",
+        symbol="MSFT",
+        signal_date="2026-05-04",
+        decision="blocked_entry_quality",
+        features={"score": 17},
+        outcome={"available": True, "return_3d": 0.04, "matured_horizons": {"3d": True}},
+    )
+
+    report = build_learning_daily_run(
+        Settings(DATA_DIR=tmp_path),
+        store,
+        tmp_path / "reports",
+        "error_rates",
+        since_date="2026-05-04",
+        end_date="2026-05-04",
+    )
+
+    rates = report["digest"]["summary"]["decision_error_rates_3d"]
+    assert rates["false_positive_executed_losers"] == 1
+    assert rates["false_positive_rate"] == 1.0
+    assert rates["false_negative_blocked_winners"] == 1
+    assert rates["false_negative_rate"] == 1.0
+
+
 def test_learning_digest_includes_pre_earnings_context_when_available(tmp_path, monkeypatch):
     monkeypatch.setattr("agente_bolsa.tools.daily_learning.update_signal_outcomes", lambda *args, **kwargs: {"updated": 0})
     store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
