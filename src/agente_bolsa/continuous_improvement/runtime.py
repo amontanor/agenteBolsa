@@ -27,6 +27,7 @@ from .agents import (
     initiative_owner_from_key,
     initiative_title_from_key,
     initiative_topic_key,
+    is_generated_ci_reference,
     event_fingerprint,
     proposal_fingerprint,
 )
@@ -780,11 +781,18 @@ class ContinuousImprovementLabRuntime:
             current_status = str(proposal.get("status") or "")
             payload = proposal.get("payload") or {}
             initiative_key = str(payload.get("initiative_key") or "").strip()
-            if not initiative_key:
-                initiative_key = initiative_topic_key(
-                    domain="trading" if any(token in str(proposal.get("target_component") or "").lower() for token in ["pre_earnings", "entry_quality", "signal", "strategy", "analyst", "risk"]) else "software",
-                    focus=str(proposal.get("target_component") or proposal.get("proposal_type") or "general"),
+            domain = (
+                "trading"
+                if any(
+                    token in str(proposal.get("target_component") or "").lower()
+                    for token in ["pre_earnings", "entry_quality", "signal", "strategy", "analyst", "risk"]
                 )
+                else "software"
+            )
+            canonical_key = initiative_topic_key(domain=domain, proposal=proposal)
+            topic = initiative_key.split(":", 1)[-1] if ":" in initiative_key else initiative_key
+            if not initiative_key or is_generated_ci_reference(topic):
+                initiative_key = canonical_key
             initiative = self.store.continuous_improvement_initiative_by_key(initiative_key)
             if not initiative:
                 initiative_id = new_id("ci_init")
@@ -1433,6 +1441,8 @@ class ContinuousImprovementLabRuntime:
         proposal_type = str(raw.get("proposal_type") or "MONITORING_CHANGE").strip().lower()
         identifier = self._normalize_topic_part(raw.get("target_identifier"))
         component = self._normalize_topic_part(raw.get("target_component"))
+        if is_generated_ci_reference(identifier):
+            identifier = ""
         if "risk_veto" in identifier or "risk_veto" in component:
             topic = "risk_veto_policy"
         elif identifier:

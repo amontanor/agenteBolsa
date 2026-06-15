@@ -16,6 +16,15 @@ from .agents import (
 from .schemas import AgentName, TaskStatus
 
 
+POST_ANALYSIS_INITIATIVE_STATUSES = {
+    "EXPERIMENTING",
+    "VALIDATING",
+    "WAITING_REVIEW",
+    "READY_TO_APPLY",
+    "MONITORING",
+}
+
+
 class LabOrchestrator:
     def __init__(self, store: Store) -> None:
         self.store = store
@@ -308,11 +317,17 @@ class LabOrchestrator:
             previous_initiative = self.store.continuous_improvement_initiative_by_key(spec["initiative_key"])
             if (previous_initiative or {}).get("status") in {"CLOSED", "REJECTED"}:
                 continue
+            previous_status = str((previous_initiative or {}).get("status") or "")
+            if previous_status in POST_ANALYSIS_INITIATIVE_STATUSES:
+                self.store.append_continuous_improvement_initiative_links(
+                    previous_initiative["initiative_id"],
+                    event_ids=[event["event_id"]],
+                )
+                continue
             if (previous_initiative or {}).get("status") == "MONITORING" and event["event_id"] in (
                 previous_initiative or {}
             ).get("linked_event_ids", []):
                 continue
-            previous_status = str((previous_initiative or {}).get("status") or "")
             if previous_status in ACTIVE_INITIATIVE_STATUSES:
                 idle_hours = _age_hours((previous_initiative or {}).get("updated_at"))
                 if idle_hours is not None and idle_hours < cooldown_hours:

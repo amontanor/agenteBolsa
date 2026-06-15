@@ -14,6 +14,7 @@ from agente_bolsa.continuous_improvement.agents import ReportAgent
 from agente_bolsa.continuous_improvement.agents import TechnicalEdgeAgent
 from agente_bolsa.continuous_improvement.agents import RiskGuardAgent
 from agente_bolsa.continuous_improvement.agents import ValidationAgent
+from agente_bolsa.continuous_improvement.agents import initiative_topic_key
 from agente_bolsa.continuous_improvement.api import status_payload
 from agente_bolsa.continuous_improvement.experiments import AutoApplyCodeAgent
 from agente_bolsa.continuous_improvement.llm_client import ImprovementLLMClient
@@ -94,6 +95,28 @@ def _ready_validation():
         "status": "READY_TO_APPLY",
         "payload": {"objective_status": "READY_TO_APPLY"},
     }
+
+
+def test_initiative_topic_key_ignores_generated_ci_identifiers():
+    key = initiative_topic_key(
+        domain="software",
+        proposal={
+            "proposal_type": "MONITORING_CHANGE",
+            "target_component": "continuous_improvement",
+            "target_identifier": "ci_prop_83cb5aaae37c",
+        },
+    )
+    risk_key = initiative_topic_key(
+        domain="trading",
+        proposal={
+            "proposal_type": "RISK_RULE_CHANGE",
+            "target_component": "risk_manager",
+            "target_identifier": "ci_prop_30a56dcb7697",
+        },
+    )
+
+    assert key == "software:continuous_improvement"
+    assert risk_key == "trading:risk_manager"
 
 
 def test_improvement_llm_client_disabled_returns_valid_json_payload(tmp_path):
@@ -1001,6 +1024,70 @@ def test_runtime_persist_proposals_merges_experiment_guidance_into_required_vali
     assert proposals[0]["payload"]["evaluation_window_frozen"] is True
 
 
+def test_runtime_persist_proposals_groups_generated_ci_ids_by_component(tmp_path):
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    runtime = ContinuousImprovementLabRuntime(settings, store)
+
+    proposals = runtime._persist_proposals(
+        cycle_id="ci_cycle_test",
+        proposal_payloads=[
+            {
+                "proposal_type": "MONITORING_CHANGE",
+                "target_component": "continuous_improvement",
+                "target_identifier": "ci_prop_83cb5aaae37c",
+                "current_value": "",
+                "proposed_value": "APPROVE",
+                "rationale": "Do not open a new initiative per proposal id.",
+                "expected_impact": "Reduce backlog fragmentation.",
+                "risk_level": "LOW",
+                "required_validations": [],
+                "rollback_plan": "none",
+            }
+        ],
+    )
+
+    assert proposals[0]["payload"]["initiative_key"] == "software:continuous_improvement"
+    initiative = store.continuous_improvement_initiative_by_key("software:continuous_improvement")
+    assert initiative is not None
+    assert initiative["owner_agent"] == "SoftwareReliabilityAgent"
+
+
+def test_runtime_normalizer_rehomes_legacy_generated_ci_initiative_key(tmp_path):
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    runtime = ContinuousImprovementLabRuntime(settings, store)
+    store.upsert_continuous_improvement_proposal(
+        {
+            "proposal_id": "ci_prop_legacy",
+            "cycle_id": "ci_cycle_legacy",
+            "fingerprint": "fp_legacy",
+            "proposal_type": "MONITORING_CHANGE",
+            "target_component": "continuous_improvement",
+            "target_identifier": "ci_prop_83cb5aaae37c",
+            "status": "PENDING",
+            "priority": "MEDIUM",
+            "risk_level": "LOW",
+            "payload": {
+                "initiative_key": "software:ci_prop_83cb5aaae37c",
+                "rationale": "Legacy payload points to a generated proposal id.",
+                "proposed_value": "APPROVE",
+            },
+            "guard": {"status": "PENDING"},
+        }
+    )
+
+    runtime._normalize_autonomous_backlog()
+
+    canonical = store.continuous_improvement_initiative_by_key("software:continuous_improvement")
+    legacy = store.continuous_improvement_initiative_by_key("software:ci_prop_83cb5aaae37c")
+    assert canonical is not None
+    assert canonical["linked_proposal_ids"] == ["ci_prop_legacy"]
+    assert legacy is None
+
+
 def test_runtime_prepare_proposals_merges_duplicates_and_limits_count(tmp_path):
     settings = _settings(tmp_path, CONTINUOUS_IMPROVEMENT_MAX_PROPOSALS_PER_CYCLE=2)
     store = Store(settings.database_path, settings.agent_logs_dir)
@@ -1060,6 +1147,38 @@ def test_runtime_prepare_proposals_merges_duplicates_and_limits_count(tmp_path):
     assert stats["merged"] == 1
     assert stats["dropped_by_limit"] == 1
     assert prepared[0]["target_identifier"] == "risk_veto_policy"
+    assert int(prepared[0]["_merged_count"]) == 2
+
+
+def test_runtime_prepare_proposals_merges_generated_ci_identifier_topics(tmp_path):
+    settings = _settings(tmp_path, CONTINUOUS_IMPROVEMENT_MAX_PROPOSALS_PER_CYCLE=10)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    runtime = ContinuousImprovementLabRuntime(settings, store)
+
+    prepared, stats = runtime._prepare_proposals(
+        [
+            {
+                "proposal_type": "MONITORING_CHANGE",
+                "target_component": "continuous_improvement",
+                "target_identifier": "ci_prop_83cb5aaae37c",
+                "proposed_value": "APPROVE",
+                "rationale": "Resolve old pending proposal.",
+                "risk_level": "LOW",
+            },
+            {
+                "proposal_type": "MONITORING_CHANGE",
+                "target_component": "continuous_improvement",
+                "target_identifier": "ci_prop_a04d3fc33cd2",
+                "proposed_value": "APPROVE",
+                "rationale": "Resolve another old pending proposal.",
+                "risk_level": "LOW",
+            },
+        ]
+    )
+
+    assert len(prepared) == 1
+    assert stats["merged"] == 1
     assert int(prepared[0]["_merged_count"]) == 2
 
 
@@ -2009,3 +2128,47 @@ def test_orchestrator_plans_initiatives_and_manual_software_work(tmp_path):
     assert all(task["agent_name"] != "SentimentAnalystAgent" for task in trading_tasks)
     assert software_tasks
     assert all(task["payload"]["initiative_key"].startswith("software:") for task in software_tasks)
+
+
+def test_orchestrator_does_not_reopen_initiative_under_validation(tmp_path):
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    orchestrator = LabOrchestrator(store)
+    initiative_id, _ = store.upsert_continuous_improvement_initiative(
+        {
+            "initiative_id": "ci_init_entry_quality",
+            "initiative_key": "trading:entry_quality_filter",
+            "title": "entry quality",
+            "domain": "trading",
+            "status": "VALIDATING",
+            "owner_agent": "TechnicalEdgeAgent",
+            "priority": "MEDIUM",
+            "target_metric": "false_positive_rate",
+            "baseline_value": None,
+            "current_value": None,
+            "expected_impact": "Validate existing proposals.",
+            "risk_level": "LOW",
+            "evidence": [],
+            "linked_event_ids": [],
+            "linked_task_ids": [],
+            "linked_hypothesis_ids": [],
+            "linked_proposal_ids": ["ci_prop_entry"],
+            "linked_validation_ids": [],
+            "latest_decision": {"decision": "VALIDATING", "source": "lifecycle"},
+            "next_action": "Validar propuestas.",
+        }
+    )
+
+    tasks = orchestrator.planned_tasks_for_event(
+        {"event_id": "evt_trade_validation", "domain": "trading-improvement", "event_type": "scheduled_tick"},
+        {
+            "evaluation": {"summary": {"signals": 10, "blocked_entry_quality": 1}},
+            "settings": {"ci_recurring_cooldown_hours": 0},
+        },
+    )
+
+    refreshed = store.continuous_improvement_initiative(initiative_id)
+    assert all(task["payload"]["initiative_key"] != "trading:entry_quality_filter" for task in tasks)
+    assert refreshed["status"] == "VALIDATING"
+    assert refreshed["linked_event_ids"] == ["evt_trade_validation"]

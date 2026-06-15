@@ -163,6 +163,128 @@ def test_churning_initiative_expires_even_when_normalizer_refreshes_updated_at(t
     assert proposal["status"] == "REJECTED"
 
 
+def test_open_initiative_with_completed_tasks_and_active_proposals_moves_to_validating(tmp_path):
+    settings, store = _setup(tmp_path, CI_INITIATIVE_TTL_DAYS=5, CI_INITIATIVE_STALL_DAYS=3)
+    initiative_id = _seed_initiative(
+        store,
+        "trading:entry_quality_filter",
+        "OPEN",
+        created_at=_iso_ago(days=8),
+        updated_at=_iso_ago(hours=1),
+    )
+    _seed_task(store, "done_task", "COMPLETED", created_at=_iso_ago(days=7), initiative_id=initiative_id)
+    store.upsert_continuous_improvement_proposal(
+        {
+            "proposal_id": "ci_prop_active",
+            "cycle_id": "ci_cycle_active",
+            "fingerprint": "fp_active",
+            "proposal_type": "PARAMETER_CHANGE",
+            "target_component": "entry_quality_filter",
+            "target_identifier": "threshold",
+            "status": "PENDING",
+            "priority": "MEDIUM",
+            "risk_level": "LOW",
+            "payload": {"initiative_key": "trading:entry_quality_filter"},
+            "guard": {"status": "PENDING"},
+        }
+    )
+    store.update_continuous_improvement_initiative(
+        initiative_id,
+        linked_task_ids=["done_task"],
+        linked_proposal_ids=["ci_prop_active"],
+        latest_decision={"decision": "OPEN", "source": "orchestrator"},
+        next_action="Crear y ejecutar tareas del grupo experto.",
+    )
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE continuous_improvement_initiatives SET created_at = ?, updated_at = ? WHERE initiative_id = ?",
+            (_iso_ago(days=8), _iso_ago(hours=1), initiative_id),
+        )
+
+    result = resolve_initiatives(store, settings)
+
+    initiative = store.continuous_improvement_initiative(initiative_id)
+    assert result["advanced"][0]["initiative_key"] == "trading:entry_quality_filter"
+    assert initiative["status"] == "VALIDATING"
+    assert initiative["latest_decision"]["reason"] == "all_tasks_terminal_with_active_proposals"
+
+
+def test_generated_topic_initiative_expires_and_rejects_recursive_proposal(tmp_path):
+    settings, store = _setup(tmp_path, CI_INITIATIVE_TTL_DAYS=5, CI_INITIATIVE_STALL_DAYS=3)
+    initiative_id = _seed_initiative(
+        store,
+        "software:ci_prop_83cb5aaae37c",
+        "VALIDATING",
+        created_at=_iso_ago(days=2),
+        updated_at=_iso_ago(hours=1),
+    )
+    store.upsert_continuous_improvement_proposal(
+        {
+            "proposal_id": "ci_prop_recursive",
+            "cycle_id": "ci_cycle_recursive",
+            "fingerprint": "fp_recursive",
+            "proposal_type": "MONITORING_CHANGE",
+            "target_component": "continuous_improvement",
+            "target_identifier": "ci_prop_83cb5aaae37c",
+            "status": "PENDING",
+            "priority": "MEDIUM",
+            "risk_level": "LOW",
+            "payload": {"initiative_key": "software:ci_prop_83cb5aaae37c"},
+            "guard": {"status": "PENDING"},
+        }
+    )
+    store.update_continuous_improvement_initiative(
+        initiative_id,
+        linked_proposal_ids=["ci_prop_recursive"],
+        latest_decision={"decision": "PENDING", "source": "validation"},
+        next_action="Esperar validacion objetiva.",
+    )
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE continuous_improvement_initiatives SET created_at = ?, updated_at = ? WHERE initiative_id = ?",
+            (_iso_ago(days=2), _iso_ago(hours=1), initiative_id),
+        )
+
+    result = resolve_initiatives(store, settings)
+
+    initiative = store.continuous_improvement_initiative(initiative_id)
+    proposal = store.continuous_improvement_proposal("ci_prop_recursive")
+    assert result["expired"][0]["initiative_key"] == "software:ci_prop_83cb5aaae37c"
+    assert initiative["status"] == "REJECTED"
+    assert "clave de iniciativa generada" in initiative["latest_decision"]["reason"]
+    assert proposal["status"] == "REJECTED"
+
+
+def test_old_open_initiative_with_completed_tasks_and_no_active_proposals_expires(tmp_path):
+    settings, store = _setup(tmp_path, CI_INITIATIVE_TTL_DAYS=5, CI_INITIATIVE_STALL_DAYS=3)
+    initiative_id = _seed_initiative(
+        store,
+        "trading:opportunistic_parameters",
+        "OPEN",
+        created_at=_iso_ago(days=9),
+        updated_at=_iso_ago(hours=1),
+    )
+    _seed_task(store, "done_task", "COMPLETED", created_at=_iso_ago(days=7), initiative_id=initiative_id)
+    store.update_continuous_improvement_initiative(
+        initiative_id,
+        linked_task_ids=["done_task"],
+        latest_decision={"decision": "OPEN", "source": "orchestrator"},
+        next_action="Crear y ejecutar tareas del grupo experto.",
+    )
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE continuous_improvement_initiatives SET created_at = ?, updated_at = ? WHERE initiative_id = ?",
+            (_iso_ago(days=9), _iso_ago(hours=1), initiative_id),
+        )
+
+    result = resolve_initiatives(store, settings)
+
+    initiative = store.continuous_improvement_initiative(initiative_id)
+    assert result["expired"][0]["initiative_key"] == "trading:opportunistic_parameters"
+    assert initiative["status"] == "REJECTED"
+    assert "sin propuestas activas" in initiative["latest_decision"]["reason"]
+
+
 def test_initiative_with_open_tasks_is_not_expired(tmp_path):
     settings, store = _setup(tmp_path, CI_INITIATIVE_TTL_DAYS=5, CI_INITIATIVE_STALL_DAYS=3)
     initiative_id = _seed_initiative(

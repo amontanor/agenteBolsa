@@ -95,14 +95,29 @@ def event_fingerprint(event_type: str, source: str, payload: dict[str, Any]) -> 
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
 
+GENERATED_CI_REFERENCE_RE = re.compile(
+    r"^ci_(?:prop|init|val|cycle|task|event|evt|msg|hyp|artifact|art|bt|run)_[a-z0-9]{8,}$"
+)
+
+
+def _topic_part(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+
+
+def is_generated_ci_reference(value: Any) -> bool:
+    """True for internal CI ids that should not become semantic topics."""
+
+    return bool(GENERATED_CI_REFERENCE_RE.fullmatch(_topic_part(value)))
+
+
 def initiative_topic_key(*, domain: str, source: str | None = None, proposal: dict[str, Any] | None = None, focus: str | None = None) -> str:
     domain_key = re.sub(r"[^a-z0-9]+", "_", str(domain or "trading").strip().lower()).strip("_") or "trading"
     topic = ""
     proposal = proposal or {}
     if proposal:
         proposal_type = str(proposal.get("proposal_type") or "monitoring_change").strip().lower()
-        component = re.sub(r"[^a-z0-9]+", "_", str(proposal.get("target_component") or "").strip().lower()).strip("_")
-        identifier = re.sub(r"[^a-z0-9]+", "_", str(proposal.get("target_identifier") or "").strip().lower()).strip("_")
+        component = _topic_part(proposal.get("target_component"))
+        identifier = "" if is_generated_ci_reference(proposal.get("target_identifier")) else _topic_part(proposal.get("target_identifier"))
         if "risk_veto" in component or "risk_veto" in identifier:
             topic = "pre_earnings_risk_veto"
         elif "entry_quality" in component or "entry_quality" in identifier:
@@ -120,9 +135,9 @@ def initiative_topic_key(*, domain: str, source: str | None = None, proposal: di
         else:
             topic = component or proposal_type
     if not topic and focus:
-        topic = re.sub(r"[^a-z0-9]+", "_", str(focus).strip().lower()).strip("_")
+        topic = _topic_part(focus)
     if not topic and source:
-        topic = re.sub(r"[^a-z0-9]+", "_", str(source).strip().lower()).strip("_")
+        topic = _topic_part(source)
     return f"{domain_key}:{topic or 'general'}"
 
 
@@ -137,7 +152,9 @@ def initiative_title_from_key(key: str) -> str:
         "runtime_reliability": "Reducir errores y deuda técnica",
         "market_regime": "Seguir régimen de mercado",
         "strategy_evaluation": "Evaluar estabilidad de estrategia",
+        "continuous_improvement": "Mejorar flujo de mejora continua",
         "opportunistic_parameters": "Calibrar perfil oportunista",
+        "risk_manager": "Revisar motor de riesgo",
         "risk_capital": "Revisar riesgo y capital",
         "data_quality": "Reforzar calidad de datos",
         "software_reliability": "Reforzar fiabilidad del runtime",
@@ -156,7 +173,9 @@ def initiative_owner_from_key(key: str) -> str:
         "runtime_reliability": AgentName.SOFTWARE_RELIABILITY.value,
         "market_regime": AgentName.MARKET_REGIME.value,
         "strategy_evaluation": AgentName.STRATEGY.value,
+        "continuous_improvement": AgentName.SOFTWARE_RELIABILITY.value,
         "opportunistic_parameters": AgentName.PARAMETER_CALIBRATION.value,
+        "risk_manager": AgentName.RISK.value,
         "risk_capital": AgentName.RISK_CAPITAL.value,
         "data_quality": AgentName.DATA_QUALITY.value,
         "software_reliability": AgentName.SOFTWARE_RELIABILITY.value,

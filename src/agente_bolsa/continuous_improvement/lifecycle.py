@@ -9,6 +9,12 @@ acumulaba backlog en vez de mejorar. Reglas:
 - Cierre con rendicion de cuentas: una iniciativa MONITORING sin tareas vivas
   y sin movimiento durante `CI_MONITORING_CLOSE_DAYS` se cierra con outcome
   (mejoro su target_metric o no).
+- Avance de fase: una iniciativa OPEN sin tareas vivas y con propuestas activas
+  pasa a VALIDATING para no planificar otra tanda de agentes sobre el mismo tema.
+- Fragmentacion: una iniciativa cuyo tema es un id interno (`ci_prop_*`,
+  `ci_init_*`, etc.) expira pronto; esos ids son metadatos, no objetivos.
+- Sin salida: una iniciativa OPEN vieja, sin tareas vivas y sin propuestas
+  activas, expira aunque su updated_at se haya refrescado por bookkeeping.
 - Expiracion: una iniciativa abierta mas de `CI_INITIATIVE_TTL_DAYS` dias y sin
   avance en `CI_INITIATIVE_STALL_DAYS` se marca REJECTED (expirada). Puede
   reabrirse despues, pero solo con evidencia nueva.
@@ -23,6 +29,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from ..logging_utils import log_system_event
+from .agents import is_generated_ci_reference
 
 if TYPE_CHECKING:  # pragma: no cover - solo anotaciones.
     from ..config import Settings
@@ -61,6 +68,13 @@ REJECTABLE_PROPOSAL_STATUSES = {
     "WAITING_HUMAN_REVIEW",
     "REQUIRES_HUMAN_REVIEW",
     "FAILED",
+}
+ACTIVE_PROPOSAL_STATUSES = {
+    "PENDING",
+    "VALIDATING",
+    "WAITING_HUMAN_REVIEW",
+    "REQUIRES_HUMAN_REVIEW",
+    "READY_TO_APPLY",
 }
 
 
@@ -172,6 +186,12 @@ def _is_decision_churn(initiative: dict[str, Any]) -> bool:
     )
 
 
+def _is_generated_topic_initiative(initiative: dict[str, Any]) -> bool:
+    key = str(initiative.get("initiative_key") or "")
+    topic = key.split(":", 1)[-1]
+    return is_generated_ci_reference(topic)
+
+
 def _reject_linked_pending_proposals(
     store: "Store",
     initiative: dict[str, Any],
@@ -204,6 +224,17 @@ def _reject_linked_pending_proposals(
     return rejected
 
 
+def _active_linked_proposal_ids(store: "Store", initiative: dict[str, Any]) -> list[str]:
+    active: list[str] = []
+    for proposal_id in list(initiative.get("linked_proposal_ids") or []):
+        proposal = store.continuous_improvement_proposal(str(proposal_id))
+        if not proposal:
+            continue
+        if str(proposal.get("status") or "").upper() in ACTIVE_PROPOSAL_STATUSES:
+            active.append(str(proposal_id))
+    return active
+
+
 def resolve_initiatives(store: "Store", settings: "Settings") -> dict[str, Any]:
     """Cierra iniciativas monitorizadas sin movimiento y expira las estancadas."""
 
@@ -214,6 +245,7 @@ def resolve_initiatives(store: "Store", settings: "Settings") -> dict[str, Any]:
 
     closed: list[dict[str, Any]] = []
     expired: list[dict[str, Any]] = []
+    advanced: list[dict[str, Any]] = []
     for initiative in store.continuous_improvement_initiatives(limit=1000):
         status = str(initiative.get("status") or "")
         if status in {"CLOSED", "REJECTED"}:
@@ -232,6 +264,85 @@ def resolve_initiatives(store: "Store", settings: "Settings") -> dict[str, Any]:
                 next_action="Cerrada por ciclo de vida: monitorizacion completada.",
             )
             closed.append({"initiative_id": initiative_id, "initiative_key": initiative.get("initiative_key"), "outcome": outcome})
+            continue
+
+        active_proposals = _active_linked_proposal_ids(store, initiative)
+        generated_topic_expired = age_days > min(ttl_days, 1.0) and not has_open_tasks and _is_generated_topic_initiative(initiative)
+        no_output_expired = (
+            status == "OPEN"
+            and age_days > ttl_days
+            and not has_open_tasks
+            and not active_proposals
+            and bool(initiative.get("linked_task_ids") or [])
+        )
+        if generated_topic_expired:
+            reason = f"clave de iniciativa generada sin objetivo semantico durante {age_days:.1f} dias"
+            rejected_proposals = _reject_linked_pending_proposals(store, initiative, reason=reason)
+            store.update_continuous_improvement_initiative(
+                initiative_id,
+                status="REJECTED",
+                latest_decision={
+                    "decision": "EXPIRED",
+                    "source": "lifecycle",
+                    "reason": reason,
+                    "rejected_proposal_ids": rejected_proposals,
+                },
+                next_action="Expirada por fragmentacion: reabrir solo como iniciativa semantica.",
+            )
+            expired.append(
+                {
+                    "initiative_id": initiative_id,
+                    "initiative_key": initiative.get("initiative_key"),
+                    "reason": reason,
+                    "rejected_proposal_ids": rejected_proposals,
+                }
+            )
+            continue
+
+        if no_output_expired:
+            reason = f"grupo experto completado sin propuestas activas tras {age_days:.1f} dias"
+            store.update_continuous_improvement_initiative(
+                initiative_id,
+                status="REJECTED",
+                latest_decision={
+                    "decision": "EXPIRED",
+                    "source": "lifecycle",
+                    "reason": reason,
+                    "rejected_proposal_ids": [],
+                },
+                next_action="Expirada sin salida accionable: reabrir solo con evidencia nueva.",
+            )
+            expired.append(
+                {
+                    "initiative_id": initiative_id,
+                    "initiative_key": initiative.get("initiative_key"),
+                    "reason": reason,
+                    "rejected_proposal_ids": [],
+                }
+            )
+            continue
+
+        if status == "OPEN" and not has_open_tasks and active_proposals:
+            store.update_continuous_improvement_initiative(
+                initiative_id,
+                status="VALIDATING",
+                latest_decision={
+                    "decision": "VALIDATING",
+                    "source": "lifecycle",
+                    "reason": "all_tasks_terminal_with_active_proposals",
+                    "active_proposal_ids": active_proposals[:25],
+                    "active_proposal_count": len(active_proposals),
+                },
+                next_action="Validar propuestas vinculadas antes de planificar mas tareas.",
+            )
+            advanced.append(
+                {
+                    "initiative_id": initiative_id,
+                    "initiative_key": initiative.get("initiative_key"),
+                    "status": "VALIDATING",
+                    "active_proposal_count": len(active_proposals),
+                }
+            )
             continue
 
         churn_expired = age_days > ttl_days and not has_open_tasks and _is_decision_churn(initiative)
@@ -263,7 +374,7 @@ def resolve_initiatives(store: "Store", settings: "Settings") -> dict[str, Any]:
                 }
             )
 
-    return {"closed": closed, "expired": expired}
+    return {"closed": closed, "expired": expired, "advanced": advanced}
 
 
 def flow_report(store: "Store") -> dict[str, Any]:
