@@ -64,6 +64,31 @@ def _loser_for_horizon(observation: dict[str, Any], horizon: int) -> bool:
     return value is not None and value < -0.01
 
 
+def _decision_error_example(observation: dict[str, Any], horizon: int) -> dict[str, Any]:
+    features = observation.get("features", {}) or {}
+    gate = observation.get("gate", {}) or {}
+    entry_gate = gate.get("entry_quality_gate", {}) or {}
+    backtest_gate = gate.get("backtest_gate", {}) or {}
+    return {
+        "observation_id": observation.get("observation_id"),
+        "signal_date": observation.get("signal_date"),
+        "symbol": observation.get("symbol"),
+        "source_family": observation.get("source_family"),
+        "decision": observation.get("decision"),
+        "setup": _setup_name(features),
+        "return": _round(_horizon_return(observation, horizon), 4),
+        "best_score": _round(observation.get("best_score"), 2),
+        "selection_score": _round(observation.get("best_selection_score"), 4),
+        "rank_priority_score": _round(observation.get("best_rank_priority_score"), 4),
+        "selection_rank": observation.get("best_selection_rank"),
+        "blocked_reason": (
+            entry_gate.get("reason")
+            or backtest_gate.get("reason")
+            or str(observation.get("explanation") or "")
+        ),
+    }
+
+
 def _decision_error_rates(observations: list[dict[str, Any]], horizon: int) -> dict[str, Any]:
     matured = [item for item in observations if _matured_for_horizon(item, horizon)]
     executed = [item for item in matured if bool(item.get("executed_buy"))]
@@ -83,6 +108,21 @@ def _decision_error_rates(observations: list[dict[str, Any]], horizon: int) -> d
         "false_positive_rate": _round(len(false_positive_executed_losers) / len(executed), 4) if executed else None,
         "false_negative_blocked_winners": len(false_negative_blocked_winners),
         "false_negative_rate": _round(len(false_negative_blocked_winners) / len(blocked), 4) if blocked else None,
+        "false_positive_examples": [
+            _decision_error_example(item, horizon)
+            for item in sorted(
+                false_positive_executed_losers,
+                key=lambda row: _horizon_return(row, horizon) or 0.0,
+            )[:5]
+        ],
+        "false_negative_examples": [
+            _decision_error_example(item, horizon)
+            for item in sorted(
+                false_negative_blocked_winners,
+                key=lambda row: _horizon_return(row, horizon) or 0.0,
+                reverse=True,
+            )[:5]
+        ],
     }
 
 
@@ -175,6 +215,14 @@ def _observation_payload(group: list[dict[str, Any]]) -> dict[str, Any]:
         "last_seen_at": last_seen,
         "best_signal_id": best.get("signal_id"),
         "best_score": _num(best.get("score")),
+        "best_selection_score": _num((best.get("features") or {}).get("selection_score") or best.get("selection_score")),
+        "best_rank_priority_score": _num(
+            (best.get("features") or {}).get("rank_priority_score") or best.get("rank_priority_score")
+        ),
+        "best_selection_rank": (best.get("features") or {}).get("selection_rank") or best.get("selection_rank"),
+        "best_effective_setup_edge_3d": _num(
+            (best.get("features") or {}).get("effective_setup_edge_3d") or best.get("effective_setup_edge_3d")
+        ),
         "decision": "executed_buy" if executed else str(effective_decision.get("decision") or "candidate"),
         "explanation": explanation,
         "llm_considered": any(bool(row.get("considered_by_llm")) for row in group),
@@ -187,6 +235,14 @@ def _observation_payload(group: list[dict[str, Any]]) -> dict[str, Any]:
             {
                 "signal_id": row.get("signal_id"),
                 "score": _num(row.get("score")),
+                "selection_score": _num((row.get("features") or {}).get("selection_score") or row.get("selection_score")),
+                "rank_priority_score": _num(
+                    (row.get("features") or {}).get("rank_priority_score") or row.get("rank_priority_score")
+                ),
+                "selection_rank": (row.get("features") or {}).get("selection_rank") or row.get("selection_rank"),
+                "effective_setup_edge_3d": _num(
+                    (row.get("features") or {}).get("effective_setup_edge_3d") or row.get("effective_setup_edge_3d")
+                ),
                 "score_rank": ((row.get("rank_context") or {}).get("score_rank")),
                 "source_run_id": row.get("source_run_id"),
                 "decision": row.get("decision"),
@@ -575,6 +631,58 @@ def _setup_stats(observations: list[dict[str, Any]], horizon: int) -> list[dict[
     )
 
 
+def _symbol_setup_memory(
+    observations: list[dict[str, Any]],
+    horizon: int,
+    *,
+    min_samples: int = 1,
+) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for observation in observations:
+        symbol = str(observation.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        grouped[(symbol, _setup_name(observation.get("features", {}) or {}))].append(observation)
+
+    rows = []
+    for (symbol, setup), items in grouped.items():
+        matured = [item for item in items if _matured_for_horizon(item, horizon)]
+        if len(matured) < min_samples:
+            continue
+        returns = [_horizon_return(item, horizon) for item in matured]
+        clean_returns = [value for value in returns if value is not None]
+        if not clean_returns:
+            continue
+        executed = [item for item in matured if item.get("executed_buy")]
+        blocked = [item for item in matured if item.get("blocked_entry_quality") or item.get("blocked_backtest")]
+        false_positive_losers = [item for item in executed if _loser_for_horizon(item, horizon)]
+        false_negative_winners = [item for item in blocked if _winner_for_horizon(item, horizon)]
+        rows.append(
+            {
+                "symbol": symbol,
+                "setup": setup,
+                "signals": len(items),
+                "matured": len(matured),
+                "executed_buys": len(executed),
+                "blocked_candidates": len(blocked),
+                "avg_return": _round(sum(clean_returns) / len(clean_returns), 4),
+                "win_rate": _round(sum(1 for item in matured if _winner_for_horizon(item, horizon)) / len(matured), 4),
+                "false_positive_losers": len(false_positive_losers),
+                "false_negative_winners": len(false_negative_winners),
+                "last_signal_date": max(str(item.get("signal_date") or "") for item in items),
+            }
+        )
+    return sorted(
+        rows,
+        key=lambda item: (
+            abs(item["avg_return"] or 0.0),
+            item["matured"],
+            item["signals"],
+        ),
+        reverse=True,
+    )
+
+
 def _prior_profile_key(features: dict[str, Any]) -> str:
     feature_tags = _indicator_tags({"features": features})
     selected = []
@@ -893,6 +1001,7 @@ def _build_digest(
         if int(item.get("duplicate_count") or 0) > 0
     ][:20]
     setup_rows = _setup_stats(observations, 3)
+    symbol_setup_memory_3d = _symbol_setup_memory(observations, 3)
     priors_1d = _setup_priors(observations, 1, min_samples=3)
     priors_3d = _setup_priors(observations, 3, min_samples=3)
     confidence_3d = _confidence_calibration(observations, 3, min_samples=3)
@@ -956,6 +1065,7 @@ def _build_digest(
         "weak_buckets_3d": weak_tags,
         "strong_buckets_5d": stats_5d[:5],
         "setup_stats_3d": setup_rows,
+        "symbol_setup_memory_3d": symbol_setup_memory_3d[:30],
         "setup_priors_1d": priors_1d[:20],
         "setup_priors_3d": priors_3d[:20],
         "confidence_calibration_3d": confidence_3d,
@@ -1155,6 +1265,7 @@ def load_daily_learning_context(data_dir: Path) -> dict[str, Any]:
         "weak_buckets_3d": payload.get("weak_buckets_3d", [])[:5],
         "strong_buckets_3d": payload.get("strong_buckets_3d", [])[:5],
         "setup_stats_3d": payload.get("setup_stats_3d", [])[:8],
+        "symbol_setup_memory_3d": payload.get("symbol_setup_memory_3d", [])[:20],
         "setup_priors_1d": payload.get("setup_priors_1d", [])[:20],
         "setup_priors_3d": payload.get("setup_priors_3d", [])[:20],
         "confidence_calibration_3d": payload.get("confidence_calibration_3d", [])[:8],

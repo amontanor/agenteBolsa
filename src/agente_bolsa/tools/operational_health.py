@@ -467,7 +467,14 @@ def _report_health(settings: Settings, data_dir: Path, now: datetime | None = No
                 ),
             }
         )
-    if pipeline_steps:
+    post_market_session_date = str(post_market.get("session_date") or "")
+    timing_applies_to_current_session = bool(
+        not derived_session_date
+        or not post_market_session_date
+        or post_market_session_date == str(derived_session_date)
+        or post_market_required
+    )
+    if pipeline_steps and timing_applies_to_current_session:
         total = sum(float(value) for value in pipeline_steps.values() if isinstance(value, (int, float)))
         if total > 1200:
             alerts.append(

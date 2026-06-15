@@ -1641,9 +1641,9 @@ def test_entry_quality_gate_blocks_missing_technical_candidate():
     assert "ausente" in reason
 
 
-def test_entry_quality_gate_blocks_overextended_sma20_distance():
+def test_entry_quality_gate_blocks_overextended_sma20_distance(tmp_path):
     approved, reason, checks = validate_entry_quality(
-        Settings(ENTRY_QUALITY_MAX_SMA20_DISTANCE=0.12),
+        Settings(DATA_DIR=tmp_path, ENTRY_QUALITY_MAX_SMA20_DISTANCE=0.12),
         _quality_recommendation(),
         _quality_context(
             technical_state={

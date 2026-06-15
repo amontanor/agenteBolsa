@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 from collections import Counter, defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -55,7 +55,11 @@ def _parse_date(value: str | None) -> date | None:
 
 
 def _today_iso() -> str:
-    return datetime.utcnow().date().isoformat()
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _json_default(value: Any) -> Any:
@@ -1124,7 +1128,7 @@ def build_signal_postmortem_report(
     learning = build_learning_status(store, since_date=since_date, limit=200000)
     report = {
         "run_id": run_id,
-        "as_of": datetime.utcnow().isoformat(),
+        "as_of": _utc_now_iso(),
         "period": {"from": since_date, "to": end_date or max(_session_dates(rows), default=since_date)},
         "update_result": update_result,
         "summary": _summary_from_rows(rows),
@@ -1167,7 +1171,7 @@ def build_missed_opportunities_report(
     backtest_calibration = _filter_calibration(rows, decision="blocked_backtest")
     report = {
         "run_id": run_id,
-        "as_of": datetime.utcnow().isoformat(),
+        "as_of": _utc_now_iso(),
         "period": {"from": since_date, "to": end_date or max(_session_dates(rows), default=since_date)},
         "summary": {
             "missed_opportunities": len(missed),
@@ -1210,7 +1214,7 @@ def build_decision_compare_report(
     comparison = _compare_policy_rows(rows, policy)
     report = {
         "run_id": run_id,
-        "as_of": datetime.utcnow().isoformat(),
+        "as_of": _utc_now_iso(),
         "period": {"from": since_date, "to": end_date or max(_session_dates(rows), default=since_date)},
         "summary": comparison,
     }
@@ -1239,7 +1243,7 @@ def build_walk_forward_validation_report(
     if not session_dates:
         report = {
             "run_id": run_id,
-            "as_of": datetime.utcnow().isoformat(),
+            "as_of": _utc_now_iso(),
             "period": {"from": since_date, "to": end_date or since_date},
             "policy": policy,
             "train_days": train_days,
@@ -1266,7 +1270,7 @@ def build_walk_forward_validation_report(
         )
     report = {
         "run_id": run_id,
-        "as_of": datetime.utcnow().isoformat(),
+        "as_of": _utc_now_iso(),
         "period": {"from": since_date, "to": end_date or session_dates[-1]},
         "policy": policy,
         "train_days": train_days,
@@ -1346,7 +1350,7 @@ def build_session_retrospective_report(
     aggregate_delta = sum(_num(item.get("delta_net_opportunity")) or 0.0 for item in sessions_report)
     report = {
         "run_id": run_id,
-        "as_of": datetime.utcnow().isoformat(),
+        "as_of": _utc_now_iso(),
         "policy": policy,
         "period": {"from": since_date, "to": end_date or max(_session_dates(rows), default=since_date)},
         "sessions": sessions_report,
@@ -1510,7 +1514,7 @@ def build_selector_replay_report(
 
     report = {
         "run_id": run_id,
-        "as_of": datetime.utcnow().isoformat(),
+        "as_of": _utc_now_iso(),
         "period": {
             "from": since_date or (sessions[0]["session_date"] if sessions else None),
             "to": end_date or (sessions[-1]["session_date"] if sessions else None),
@@ -1811,7 +1815,7 @@ def build_winner_coverage_report(
             fallback_blocker_counts[str(blocker.get("reason") or "unknown")] += int(blocker.get("sessions") or 0)
     report = {
         "run_id": run_id,
-        "as_of": datetime.utcnow().isoformat(),
+        "as_of": _utc_now_iso(),
         "period": {
             "from": since_date or (min(reports_by_date) if reports_by_date else None),
             "to": end_date or (max(reports_by_date) if reports_by_date else None),
@@ -2043,7 +2047,7 @@ def build_fallback_blocker_report(
 
     report = {
         "run_id": run_id,
-        "as_of": datetime.utcnow().isoformat(),
+        "as_of": _utc_now_iso(),
         "period": {"from": since_date, "to": end_date},
         "summary": {
             "reports_scanned": sum(len(items) for items in reports_by_date.values()),

@@ -178,6 +178,45 @@ def test_operational_health_requires_post_market_review_after_close(tmp_path):
     assert report["report_health"]["post_market_learning"]["required"] is True
 
 
+def test_operational_health_ignores_old_post_market_timing_before_current_close(tmp_path):
+    settings = Settings(DATA_DIR=tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "latest_closed_market_technical_study.json").write_text(
+        json.dumps(
+            {
+                "symbols_scanned": 10,
+                "symbols_with_data": 10,
+                "market_data": {"requested_count": 10, "missing_symbols_count": 0},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (reports_dir / "latest_daily_learning_digest.json").write_text(json.dumps({"setup_stats_3d": []}), encoding="utf-8")
+    (reports_dir / "latest_post_market_learning.json").write_text(
+        json.dumps(
+            {
+                "session_date": "2026-06-12",
+                "pipeline_steps": {"learning_pipeline_seconds": 50000.0},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = build_operational_health_report(
+        settings,
+        store,
+        reports_dir,
+        "ops_old_post_market_timing",
+        now=datetime(2026, 6, 15, 15, 0, tzinfo=timezone.utc),
+    )
+
+    kinds = {item["kind"] for item in report["alerts"]}
+    assert "post_market_pipeline_slow" not in kinds
+
+
 def test_operational_health_alerts_on_ci_generated_topics_and_backlog(tmp_path):
     settings = Settings(DATA_DIR=tmp_path, CI_MAX_OPEN_INITIATIVES=1)
     store = Store(settings.database_path, settings.agent_logs_dir)

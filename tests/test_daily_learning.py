@@ -285,7 +285,7 @@ def test_learning_digest_exposes_false_positive_and_false_negative_rates(tmp_pat
         symbol="AAPL",
         signal_date="2026-05-04",
         decision="approved_buy",
-        features={"score": 18},
+        features={"score": 18, "selection_score": 0.08, "selection_rank": 1, "orderly_breakout_long": True},
         outcome={"available": True, "return_3d": -0.03, "matured_horizons": {"3d": True}},
     )
     _save_buy_order(store, plan_id="fp_plan", cycle_id="scan_fp", symbol="AAPL", created_at="2026-05-04T15:30:00+00:00")
@@ -296,7 +296,7 @@ def test_learning_digest_exposes_false_positive_and_false_negative_rates(tmp_pat
         symbol="MSFT",
         signal_date="2026-05-04",
         decision="blocked_entry_quality",
-        features={"score": 17},
+        features={"score": 17, "rank_priority_score": 0.06, "selection_rank": 2, "event_momentum_long": True},
         outcome={"available": True, "return_3d": 0.04, "matured_horizons": {"3d": True}},
     )
 
@@ -314,6 +314,14 @@ def test_learning_digest_exposes_false_positive_and_false_negative_rates(tmp_pat
     assert rates["false_positive_rate"] == 1.0
     assert rates["false_negative_blocked_winners"] == 1
     assert rates["false_negative_rate"] == 1.0
+    assert rates["false_positive_examples"][0]["symbol"] == "AAPL"
+    assert rates["false_positive_examples"][0]["setup"] == "orderly_breakout"
+    assert rates["false_positive_examples"][0]["selection_score"] == 0.08
+    assert rates["false_negative_examples"][0]["symbol"] == "MSFT"
+    assert rates["false_negative_examples"][0]["setup"] == "event_momentum"
+    memory = report["digest"]["symbol_setup_memory_3d"]
+    assert {"AAPL", "MSFT"} == {item["symbol"] for item in memory}
+    assert load_daily_learning_context(tmp_path)["symbol_setup_memory_3d"]
 
 
 def test_learning_digest_includes_pre_earnings_context_when_available(tmp_path, monkeypatch):
