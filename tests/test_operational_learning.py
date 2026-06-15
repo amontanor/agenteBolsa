@@ -125,6 +125,53 @@ def test_shadow_rule_promotion_requires_walk_forward_stability(tmp_path):
     assert rule["status"] == "shadow"
 
 
+def test_shadow_rules_evaluate_grouped_decisions_not_individual_fills(tmp_path):
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    store.upsert_strategy_rule(
+        {
+            "rule_id": "rule_grouped_decision",
+            "name": "Grouped decision",
+            "description": "Counts one decision per thesis",
+            "condition": {"all": [{"field": "side", "op": "==", "value": "buy"}]},
+            "effect": "block_buy",
+            "status": "shadow",
+            "source": "test",
+            "evidence": {},
+            "metrics": {},
+        }
+    )
+    for idx, pl in enumerate([-5.0, -2.0], start=1):
+        store.save_trade_memory(
+            {
+                "memory_id": f"frag{idx}",
+                "trade_time": f"2026-06-12T15:3{idx}:00Z",
+                "trade_date": "2026-06-12",
+                "symbol": "FRT",
+                "side": "buy",
+                "qty": idx,
+                "price": 126.0,
+                "notional": 126.0 * idx,
+                "open_pl": pl,
+                "verdict": "loser_open",
+                "features": {"score": 14, "same_symbol_buys_day": 1},
+                "thesis": {"source_order": {"cycle_id": "cycle-frt"}},
+                "outcome": {"pl": pl, "verdict": "loser_open"},
+            }
+        )
+
+    report = evaluate_shadow_rules(store, since_date="2026-06-01", settings=Settings(DATA_DIR=tmp_path))
+    metrics = report["metrics_by_rule"]["rule_grouped_decision"]
+    evaluations = store.rule_evaluations(rule_id="rule_grouped_decision")
+
+    assert report["memories_evaluated"] == 2
+    assert report["decisions_evaluated"] == 1
+    assert metrics["cases"] == 1
+    assert metrics["avoided_loss"] == 7.0
+    assert len(evaluations) == 1
+    assert evaluations[0]["payload"]["source_memory_ids"] == ["frag1", "frag2"]
+
+
 def test_traceability_audit_detects_future_signal_link(tmp_path):
     store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
     store.ensure_schema()

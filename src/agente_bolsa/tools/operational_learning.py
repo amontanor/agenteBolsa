@@ -281,8 +281,19 @@ def build_decision_memory(memories: list[dict[str, Any]]) -> list[dict[str, Any]
         sorted_items = sorted(items, key=lambda item: str(item.get("trade_time") or ""))
         qty = sum(_num(item.get("qty")) or 0.0 for item in sorted_items)
         notional = sum(_num(item.get("notional")) or 0.0 for item in sorted_items)
-        realized_pl_values = [_num(item.get("realized_pl")) for item in sorted_items]
-        open_pl_values = [_num(item.get("open_pl")) for item in sorted_items]
+        realized_pl_values = []
+        open_pl_values = []
+        for item in sorted_items:
+            outcome = item.get("outcome") or {}
+            outcome_pl = _num(outcome.get("pl"))
+            realized_value = _num(item.get("realized_pl"))
+            if realized_value is None and bool(outcome.get("realized")):
+                realized_value = outcome_pl
+            open_value = _num(item.get("open_pl"))
+            if open_value is None and realized_value is None and outcome_pl is not None:
+                open_value = outcome_pl
+            realized_pl_values.append(realized_value)
+            open_pl_values.append(open_value)
         realized_pl = sum(value for value in realized_pl_values if value is not None)
         open_pl = sum(value for value in open_pl_values if value is not None)
         has_realized = any(value is not None for value in realized_pl_values)
@@ -300,6 +311,7 @@ def build_decision_memory(memories: list[dict[str, Any]]) -> list[dict[str, Any]
         features = dict((sorted_items[-1].get("features") or {}))
         decision = {
             "decision_id": f"td_{_stable_id(trade_date, symbol, side, group_ref)}",
+            "memory_id": sorted_items[0].get("memory_id"),
             "trade_date": trade_date,
             "symbol": symbol,
             "side": side,
@@ -318,6 +330,7 @@ def build_decision_memory(memories: list[dict[str, Any]]) -> list[dict[str, Any]
                 "pl": round(pl, 2) if pl is not None else None,
                 "realized": has_realized,
                 "open": has_open and not has_realized,
+                "verdict": verdict,
             },
             "source_memory_ids": [item.get("memory_id") for item in sorted_items],
         }
@@ -720,6 +733,7 @@ def evaluate_shadow_rules(
 ) -> dict[str, Any]:
     settings = settings or Settings()
     memories = store.trade_memory(limit=1000, since_date=since_date)
+    decisions = build_decision_memory(memories)
     rules = [rule for rule in store.strategy_rules(limit=500) if rule["status"] in {"shadow", "active", "rejected"}]
     evaluations = 0
     metrics_by_rule: dict[str, dict[str, Any]] = {}
@@ -734,28 +748,32 @@ def evaluate_shadow_rules(
             "losses_blocked": 0,
             "gains_blocked": 0,
         }
-        for memory in memories:
-            would_block = _condition_matches(rule.get("condition", {}), memory)
+        for decision in decisions:
+            would_block = _condition_matches(rule.get("condition", {}), decision)
             if not would_block:
                 continue
-            pl = _num((memory.get("outcome") or {}).get("pl"))
-            actual_outcome = (memory.get("outcome") or {}).get("verdict") or "unknown"
+            pl = _num((decision.get("outcome") or {}).get("pl"))
+            actual_outcome = (decision.get("outcome") or {}).get("verdict") or decision.get("verdict") or "unknown"
             avoided_loss = abs(pl) if pl is not None and pl < 0 else 0.0
             missed_gain = pl if pl is not None and pl > 0 else 0.0
+            memory_id = str(decision.get("memory_id") or (decision.get("source_memory_ids") or [""])[0])
             evaluation = {
-                "evaluation_id": f"re_{_stable_id(rule['rule_id'], memory['memory_id'])}",
+                "evaluation_id": f"re_{_stable_id(rule['rule_id'], decision['decision_id'])}",
                 "rule_id": rule["rule_id"],
-                "memory_id": memory["memory_id"],
-                "symbol": memory["symbol"],
+                "memory_id": memory_id,
+                "symbol": decision["symbol"],
                 "would_block": True,
                 "actual_outcome": actual_outcome,
                 "avoided_loss": round(avoided_loss, 2),
                 "missed_gain": round(missed_gain, 2),
                 "payload": {
                     "rule": rule["name"],
-                    "trade_time": memory["trade_time"],
-                    "features": memory.get("features", {}),
-                    "outcome": memory.get("outcome", {}),
+                    "decision_id": decision["decision_id"],
+                    "trade_time": decision["last_trade_time"],
+                    "orders": decision.get("orders"),
+                    "source_memory_ids": decision.get("source_memory_ids", []),
+                    "features": decision.get("features", {}),
+                    "outcome": decision.get("outcome", {}),
                 },
             }
             store.save_rule_evaluation(evaluation)
@@ -776,11 +794,11 @@ def evaluate_shadow_rules(
             if rule_metrics["cases"]
             else None
         )
-        matched_memories = [
-            memory for memory in memories if _condition_matches(rule.get("condition", {}), memory)
+        matched_decisions = [
+            decision for decision in decisions if _condition_matches(rule.get("condition", {}), decision)
         ]
         walk_forward = _rule_walk_forward_summary(
-            matched_memories,
+            matched_decisions,
             window_sessions=settings.shadow_rule_walk_forward_window_sessions,
             min_cases_per_window=settings.shadow_rule_walk_forward_min_cases_per_window,
         )
@@ -815,6 +833,7 @@ def evaluate_shadow_rules(
     return {
         "rules_evaluated": len(rules),
         "memories_evaluated": len(memories),
+        "decisions_evaluated": len(decisions),
         "evaluations_saved": evaluations,
         "metrics_by_rule": metrics_by_rule,
     }

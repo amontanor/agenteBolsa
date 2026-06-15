@@ -711,6 +711,7 @@ def _auto_paper_trade(
                 portfolio,
                 decision_context,
                 limit=locals().get("effective_recommendation_limit"),
+                market_state=market_state,
             )
             reporter.emit(
                 "execution_agent",
@@ -747,6 +748,7 @@ def _auto_paper_trade(
             decision_context,
             recommendations,
             limit=locals().get("effective_recommendation_limit"),
+            market_state=market_state,
         )
         if recommendation_augmentation.get("added"):
             reporter.emit(

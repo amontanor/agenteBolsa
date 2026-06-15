@@ -47,6 +47,21 @@ ACTIVE_INITIATIVE_STATUSES = {
     "WAITING_REVIEW",
     "READY_TO_APPLY",
 }
+CHURN_DECISIONS = {
+    "PENDING",
+    "VALIDATING",
+    "WAITING_HUMAN_REVIEW",
+    "REQUIRES_HUMAN_REVIEW",
+    "WAITING_REVIEW",
+    "ESCALATE",
+}
+REJECTABLE_PROPOSAL_STATUSES = {
+    "PENDING",
+    "VALIDATING",
+    "WAITING_HUMAN_REVIEW",
+    "REQUIRES_HUMAN_REVIEW",
+    "FAILED",
+}
 
 
 def _now_iso() -> str:
@@ -135,6 +150,60 @@ def _outcome_for(initiative: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _is_decision_churn(initiative: dict[str, Any]) -> bool:
+    """True when recent updates are bookkeeping, not real progress."""
+
+    latest = initiative.get("latest_decision") or {}
+    decision = str(latest.get("decision") or "").upper()
+    source = str(latest.get("source") or "")
+    next_action = str(initiative.get("next_action") or "").lower()
+    if source == "AutonomyNormalizer":
+        return True
+    if decision in CHURN_DECISIONS and source in {"DecisionCommitteeAgent", "validation", "proposal_persist", "runtime"}:
+        return True
+    return decision in CHURN_DECISIONS and any(
+        token in next_action
+        for token in (
+            "esperar",
+            "revalidar",
+            "revision humana",
+            "validacion objetiva",
+        )
+    )
+
+
+def _reject_linked_pending_proposals(
+    store: "Store",
+    initiative: dict[str, Any],
+    *,
+    reason: str,
+) -> list[str]:
+    rejected: list[str] = []
+    for proposal_id in list(initiative.get("linked_proposal_ids") or []):
+        proposal = store.continuous_improvement_proposal(str(proposal_id))
+        if not proposal:
+            continue
+        current_status = str(proposal.get("status") or "").upper()
+        if current_status not in REJECTABLE_PROPOSAL_STATUSES:
+            continue
+        try:
+            store.update_continuous_improvement_proposal_status(
+                str(proposal_id),
+                status="REJECTED",
+                actor="LifecycleAgent",
+                reason=reason,
+                payload={
+                    "initiative_id": initiative.get("initiative_id"),
+                    "initiative_key": initiative.get("initiative_key"),
+                    "previous_status": current_status,
+                },
+            )
+            rejected.append(str(proposal_id))
+        except KeyError:
+            continue
+    return rejected
+
+
 def resolve_initiatives(store: "Store", settings: "Settings") -> dict[str, Any]:
     """Cierra iniciativas monitorizadas sin movimiento y expira las estancadas."""
 
@@ -165,18 +234,34 @@ def resolve_initiatives(store: "Store", settings: "Settings") -> dict[str, Any]:
             closed.append({"initiative_id": initiative_id, "initiative_key": initiative.get("initiative_key"), "outcome": outcome})
             continue
 
-        if age_days > ttl_days and idle_days > stall_days and not has_open_tasks:
+        churn_expired = age_days > ttl_days and not has_open_tasks and _is_decision_churn(initiative)
+        stalled_expired = age_days > ttl_days and idle_days > stall_days and not has_open_tasks
+        if churn_expired or stalled_expired:
+            reason = (
+                f"churn de decisiones sin avance util durante {age_days:.1f} dias"
+                if churn_expired
+                else f"estancada {idle_days:.1f} dias sin avance (edad {age_days:.1f}d)"
+            )
+            rejected_proposals = _reject_linked_pending_proposals(store, initiative, reason=reason)
             store.update_continuous_improvement_initiative(
                 initiative_id,
                 status="REJECTED",
                 latest_decision={
                     "decision": "EXPIRED",
                     "source": "lifecycle",
-                    "reason": f"estancada {idle_days:.1f} dias sin avance (edad {age_days:.1f}d)",
+                    "reason": reason,
+                    "rejected_proposal_ids": rejected_proposals,
                 },
                 next_action="Expirada por inactividad: reabrir solo con evidencia nueva.",
             )
-            expired.append({"initiative_id": initiative_id, "initiative_key": initiative.get("initiative_key")})
+            expired.append(
+                {
+                    "initiative_id": initiative_id,
+                    "initiative_key": initiative.get("initiative_key"),
+                    "reason": reason,
+                    "rejected_proposal_ids": rejected_proposals,
+                }
+            )
 
     return {"closed": closed, "expired": expired}
 

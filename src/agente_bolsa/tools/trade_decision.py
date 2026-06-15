@@ -308,6 +308,32 @@ def _deterministic_selection_limit(settings: Settings) -> int:
     return max(12, int(settings.news_sentiment_top_n), int(settings.trade_selection_top_n))
 
 
+def _fallback_market_state_block_reason(market_state: dict[str, Any] | None) -> str | None:
+    if not market_state:
+        return None
+    data_quality = (market_state.get("data_quality") or {}) if isinstance(market_state, dict) else {}
+    quality = str(data_quality.get("status") or "").upper()
+    notes = [str(item or "").lower() for item in list(data_quality.get("notes") or [])]
+    vendor_quality = str(data_quality.get("data_vendor_quality") or "").lower()
+    if quality == "INSUFFICIENT":
+        return "market_state_data_quality_insufficient"
+    if quality == "PARTIAL":
+        critical_terms = (
+            "macro",
+            "news",
+            "sentiment",
+            "provider",
+            "vendor",
+            "stale",
+            "missing",
+        )
+        if vendor_quality in {"informal", "unknown", "degraded"} or any(
+            term in note for note in notes for term in critical_terms
+        ):
+            return "market_state_partial_missing_macro_or_news"
+    return None
+
+
 def _compact_sentiment_for_prompt(sentiment_context: dict[str, Any], technical_context: dict[str, Any]) -> dict[str, Any]:
     candidate_symbols = _candidate_symbols(technical_context)
     rows = []
@@ -3552,8 +3578,12 @@ def deterministic_trade_fallback_recommendations(
     technical_context: dict[str, Any],
     *,
     limit: int | None = None,
+    market_state: dict[str, Any] | None = None,
 ) -> list[TradeRecommendation]:
     """Conservative fallback for paper trading when the LLM decision layer is unavailable."""
+
+    if _fallback_market_state_block_reason(market_state):
+        return []
 
     existing_symbols = {
         position.symbol.upper()
@@ -3736,13 +3766,23 @@ def augment_recommendations_with_deterministic_fallback(
     recommendations: list[TradeRecommendation],
     *,
     limit: int | None = None,
+    market_state: dict[str, Any] | None = None,
 ) -> tuple[list[TradeRecommendation], dict[str, Any]]:
     recommendation_limit = max(1, int(limit or _effective_trade_recommendation_limit(settings, technical_context)))
+    block_reason = _fallback_market_state_block_reason(market_state)
+    if block_reason:
+        return recommendations, {
+            "added": [],
+            "replaced_holds": [],
+            "fallback_candidates": 0,
+            "blocked_reason": block_reason,
+        }
     fallback_recommendations = deterministic_trade_fallback_recommendations(
         settings,
         portfolio,
         technical_context,
         limit=recommendation_limit,
+        market_state=market_state,
     )
     if not fallback_recommendations:
         return recommendations, {"added": [], "replaced_holds": [], "fallback_candidates": 0}

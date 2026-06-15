@@ -433,6 +433,48 @@ def test_deterministic_trade_fallback_uses_selected_candidates_without_llm():
     assert recommendations[0].confidence >= 0.65
 
 
+def test_deterministic_trade_fallback_blocks_partial_market_state_with_missing_macro():
+    portfolio = PortfolioSnapshot(
+        account_id="paper",
+        status="ACTIVE",
+        currency="USD",
+        cash=20_000,
+        portfolio_value=20_000,
+        buying_power=20_000,
+        positions=[],
+        open_orders=[],
+    )
+    candidate = _selection_candidate("FRT", score=18, volume_zscore_20=1.2)
+    candidate["selection_score"] = 0.04
+    candidate["selection_rank"] = 1
+    context = {"selected_candidates": [candidate]}
+    market_state = {
+        "data_quality": {
+            "status": "PARTIAL",
+            "notes": ["macro_summary_missing"],
+            "data_vendor_quality": "informal",
+        }
+    }
+
+    recommendations = deterministic_trade_fallback_recommendations(
+        Settings(),
+        portfolio,
+        context,
+        market_state=market_state,
+    )
+    merged, metadata = augment_recommendations_with_deterministic_fallback(
+        Settings(),
+        portfolio,
+        context,
+        [],
+        market_state=market_state,
+    )
+
+    assert recommendations == []
+    assert merged == []
+    assert metadata["blocked_reason"] == "market_state_partial_missing_macro_or_news"
+
+
 def test_deterministic_trade_fallback_skips_existing_positions_when_adds_disabled():
     portfolio = PortfolioSnapshot(
         account_id="paper",

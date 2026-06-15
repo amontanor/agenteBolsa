@@ -117,6 +117,52 @@ def test_stalled_initiative_expires(tmp_path):
     assert rows["trading:vieja"]["latest_decision"]["decision"] == "EXPIRED"
 
 
+def test_churning_initiative_expires_even_when_normalizer_refreshes_updated_at(tmp_path):
+    settings, store = _setup(tmp_path, CI_INITIATIVE_TTL_DAYS=5, CI_INITIATIVE_STALL_DAYS=3)
+    initiative_id = _seed_initiative(
+        store,
+        "software:runtime_reliability",
+        "VALIDATING",
+        created_at=_iso_ago(days=9),
+        updated_at=_iso_ago(hours=0.1),
+    )
+    store.upsert_continuous_improvement_proposal(
+        {
+            "proposal_id": "ci_prop_churn",
+            "cycle_id": "ci_cycle_churn",
+            "fingerprint": "fp_churn",
+            "proposal_type": "CODE_CHANGE",
+            "target_component": "continuous_improvement",
+            "target_identifier": "runtime_reliability",
+            "status": "WAITING_HUMAN_REVIEW",
+            "priority": "HIGH",
+            "risk_level": "LOW",
+            "payload": {"initiative_key": "software:runtime_reliability"},
+            "guard": {"status": "WAITING_HUMAN_REVIEW"},
+        }
+    )
+    store.update_continuous_improvement_initiative(
+        initiative_id,
+        linked_proposal_ids=["ci_prop_churn"],
+        latest_decision={"decision": "PENDING", "source": "AutonomyNormalizer"},
+        next_action="Revalidar y promover a READY_TO_APPLY o REJECTED.",
+    )
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE continuous_improvement_initiatives SET created_at = ?, updated_at = ? WHERE initiative_id = ?",
+            (_iso_ago(days=9), _iso_ago(hours=0.1), initiative_id),
+        )
+
+    result = resolve_initiatives(store, settings)
+
+    assert result["expired"][0]["initiative_key"] == "software:runtime_reliability"
+    initiative = store.continuous_improvement_initiative(initiative_id)
+    proposal = store.continuous_improvement_proposal("ci_prop_churn")
+    assert initiative["status"] == "REJECTED"
+    assert initiative["latest_decision"]["reason"].startswith("churn de decisiones")
+    assert proposal["status"] == "REJECTED"
+
+
 def test_initiative_with_open_tasks_is_not_expired(tmp_path):
     settings, store = _setup(tmp_path, CI_INITIATIVE_TTL_DAYS=5, CI_INITIATIVE_STALL_DAYS=3)
     initiative_id = _seed_initiative(
