@@ -27,6 +27,7 @@ from agente_bolsa.web_app import (
     _latest_llm_context_by_symbol,
     _latest_analyzed_news,
     _latest_daily_equity_change,
+    _learning_compact_summary,
     _local_datetime,
     _llm_status_reason,
     _manual_opportunity_recommendation,
@@ -73,6 +74,25 @@ def test_usage_tokens_estimates_missing_local_backend_usage():
     assert tokens["prompt_tokens"] > 0
     assert tokens["completion_tokens"] > 0
     assert tokens["total_tokens"] == tokens["prompt_tokens"] + tokens["completion_tokens"]
+
+
+def test_learning_compact_summary_includes_symbol_setup_memory():
+    summary = _learning_compact_summary(
+        {
+            "setup_stats_3d": [{"setup": "baseline_trend", "avg_return": 0.01}],
+            "symbol_setup_memory_3d": [
+                {
+                    "symbol": "AAPL",
+                    "setup": "orderly_breakout",
+                    "avg_return": 0.03,
+                    "matured": 4,
+                }
+            ],
+        }
+    )
+
+    assert summary["top_symbol_setup"]["symbol"] == "AAPL"
+    assert summary["top_symbol_setup"]["setup"] == "orderly_breakout"
 
 
 def test_store_daily_llm_usage_counts_requests_and_tokens(tmp_path):

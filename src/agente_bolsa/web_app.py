@@ -473,8 +473,10 @@ def _learning_compact_summary(digest: dict[str, Any]) -> dict[str, Any]:
             ),
         )
     worst_accuracy = ((digest or {}).get("prior_accuracy_3d", []) or [{}])[0]
+    top_symbol_setup = ((digest or {}).get("symbol_setup_memory_3d", []) or [{}])[0]
     return {
         "top_setup": top_setup if isinstance(top_setup, dict) else {},
+        "top_symbol_setup": top_symbol_setup if isinstance(top_symbol_setup, dict) else {},
         "best_confidence_bucket": best_conf if isinstance(best_conf, dict) else {},
         "worst_accuracy": worst_accuracy if isinstance(worst_accuracy, dict) else {},
     }
@@ -3077,9 +3079,10 @@ def page_dashboard() -> None:
         with st.container(border=True):
             _section_title("Aprendizaje reciente", "Una vista minima de edge, confianza y error de estimacion.")
             top_setup = learning_summary.get("top_setup", {}) or {}
+            top_symbol_setup = learning_summary.get("top_symbol_setup", {}) or {}
             best_conf = learning_summary.get("best_confidence_bucket", {}) or {}
             worst_accuracy = learning_summary.get("worst_accuracy", {}) or {}
-            c1, c2, c3 = st.columns(3)
+            c1, c2, c3, c4 = st.columns(4)
             with c1:
                 _compact_metric(
                     "Setup 3d",
@@ -3089,12 +3092,19 @@ def page_dashboard() -> None:
                 )
             with c2:
                 _compact_metric(
+                    "Ticker/setup",
+                    f"{top_symbol_setup.get('symbol', '-')}/{top_symbol_setup.get('setup', '-')}",
+                    _pct_signed(top_symbol_setup.get("avg_return")) if top_symbol_setup.get("avg_return") is not None else "-",
+                    "good" if (_num(top_symbol_setup.get("avg_return")) or 0.0) > 0 else "bad" if top_symbol_setup.get("avg_return") is not None else "neutral",
+                )
+            with c3:
+                _compact_metric(
                     "Confianza",
                     str(best_conf.get("bucket") or "-"),
                     _pct_signed(best_conf.get("avg_return")) if best_conf.get("avg_return") is not None else "-",
                     "good" if (_num(best_conf.get("avg_return")) or 0.0) > 0 else "neutral",
                 )
-            with c3:
+            with c4:
                 error_value = _num(worst_accuracy.get("avg_abs_error"))
                 _compact_metric(
                     "Error prior",
@@ -4003,11 +4013,18 @@ def page_learning() -> None:
         st.caption("Error de estimacion")
         _bar_chart((digest or {}).get("prior_accuracy_3d", [])[:6], "profile_key", "avg_abs_error")
 
-    lower_left, lower_right = st.columns(2)
+    lower_left, lower_mid, lower_right = st.columns(3)
     with lower_left:
         st.subheader("Perfiles con mejor expectativa")
         st.dataframe(
             pd.DataFrame((digest or {}).get("setup_priors_3d", [])[:8]),
+            use_container_width=True,
+            hide_index=True,
+        )
+    with lower_mid:
+        st.subheader("Memoria por ticker/setup")
+        st.dataframe(
+            pd.DataFrame((digest or {}).get("symbol_setup_memory_3d", [])[:10]),
             use_container_width=True,
             hide_index=True,
         )
