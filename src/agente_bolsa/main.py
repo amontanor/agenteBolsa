@@ -1090,6 +1090,7 @@ def command_scan_technical(args: argparse.Namespace) -> None:
         load_daily_learning_context(settings.data_dir),
         load_operational_response_context(settings.data_dir),
         settings.data_dir,
+        settings=settings,
     )
     report["selected_candidates"] = annotated_report.get("selected_candidates", [])
     report["selection_metadata"] = annotated_report.get("selection_metadata", {})

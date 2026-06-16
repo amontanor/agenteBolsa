@@ -51,7 +51,7 @@ def test_selected_candidates_prioritizes_recent_positive_setup_edge(tmp_path):
         ),
         encoding="utf-8",
     )
-    settings = Settings(DATA_DIR=tmp_path)
+    settings = Settings(DATA_DIR=tmp_path, SELECTION_NEGATIVE_POCKET_PENALTY_ENABLED=False)
     report = {
         "top_longs": [
             {
@@ -135,7 +135,7 @@ def test_scheduler_status_includes_overnight_learning_heartbeat(tmp_path):
 
 
 def test_scheduler_status_includes_broker_reconciliation(tmp_path):
-    settings = Settings(DATA_DIR=tmp_path)
+    settings = Settings(DATA_DIR=tmp_path, SELECTION_NEGATIVE_POCKET_PENALTY_ENABLED=False)
 
     status = scheduler_status(settings)
 
@@ -416,7 +416,11 @@ def test_selected_candidates_promotes_repeated_intraday_momentum_not_selected_by
     reports_dir.mkdir(parents=True, exist_ok=True)
     (reports_dir / "latest_daily_learning_digest.json").write_text(json.dumps({}), encoding="utf-8")
     (reports_dir / "latest_operational_health.json").write_text(json.dumps({"responses": []}), encoding="utf-8")
-    settings = Settings(DATA_DIR=tmp_path)
+    settings = Settings(
+        DATA_DIR=tmp_path,
+        SELECTION_NEGATIVE_POCKET_PENALTY_ENABLED=False,
+        INTRADAY_SAME_SESSION_SELECTION_BONUS=0.08,
+    )
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()
     for idx, price in enumerate([100.0, 104.0, 108.0], start=1):
@@ -512,7 +516,11 @@ def test_selected_candidates_promotes_same_session_leader_even_with_lower_score_
     reports_dir.mkdir(parents=True, exist_ok=True)
     (reports_dir / "latest_daily_learning_digest.json").write_text(json.dumps({}), encoding="utf-8")
     (reports_dir / "latest_operational_health.json").write_text(json.dumps({"responses": []}), encoding="utf-8")
-    settings = Settings(DATA_DIR=tmp_path)
+    settings = Settings(
+        DATA_DIR=tmp_path,
+        SELECTION_NEGATIVE_POCKET_PENALTY_ENABLED=False,
+        INTRADAY_SAME_SESSION_LEADER_SELECTION_BONUS=0.08,
+    )
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()
     prices = [100.0, 101.5, 103.0, 104.8, 106.0]

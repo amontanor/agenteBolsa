@@ -21,6 +21,7 @@ from agente_bolsa.tools.trade_decision import (
     load_latest_technical_candidates,
     _prior_profile_key,
     _recommendation_from_dict,
+    _selection_score_for_candidate,
     build_order_plans,
     filter_entry_quality,
     validate_entry_quality,
@@ -202,7 +203,13 @@ def test_select_deterministic_candidates_ranks_lower_score_with_better_edge_firs
         ],
     }
 
-    selected, metadata = _select_deterministic_candidates([weak, strong], digest, {}, limit=2)
+    selected, metadata = _select_deterministic_candidates(
+        [weak, strong],
+        digest,
+        {},
+        limit=2,
+        settings=Settings(SELECTION_NEGATIVE_POCKET_PENALTY_ENABLED=False),
+    )
 
     assert selected[0]["symbol"] == "STRONG"
     assert selected[0]["selection_score"] > selected[1]["selection_score"]
@@ -229,7 +236,13 @@ def test_select_deterministic_candidates_shrinks_small_sample_extreme_edge():
         ],
     }
 
-    selected, _metadata = _select_deterministic_candidates([tiny, stable], digest, {}, limit=2)
+    selected, _metadata = _select_deterministic_candidates(
+        [tiny, stable],
+        digest,
+        {},
+        limit=2,
+        settings=Settings(SELECTION_NEGATIVE_POCKET_PENALTY_ENABLED=False),
+    )
 
     assert selected[0]["symbol"] == "STABLE"
     assert selected[1]["symbol"] == "TINY"
@@ -311,11 +324,7 @@ def test_load_latest_technical_candidates_builds_selected_candidates_from_all_ca
     reports_dir = tmp_path / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
     weak = _selection_candidate("WEAK", score=18)
-    strong = _selection_candidate(
-        "STRONG",
-        score=14,
-        chart_patterns=[{"bias": "bullish", "status": "confirmed"}],
-    )
+    strong = _selection_candidate("STRONG", score=14, volume_zscore_20=1.6, chart_patterns=[])
     report = {
         "run_id": "scan-test",
         "as_of": "2026-05-22T20:00:00Z",
@@ -331,11 +340,11 @@ def test_load_latest_technical_candidates_builds_selected_candidates_from_all_ca
         json.dumps(
             {
                 "setup_stats_3d": [
-                    {"setup": "confirmed_pattern", "avg_return": 0.02, "win_rate": 0.6, "matured": 40},
+                    {"setup": "trend_volume", "avg_return": 0.02, "win_rate": 0.6, "matured": 40},
                     {"setup": "baseline_trend", "avg_return": -0.01, "win_rate": 0.35, "matured": 40},
                 ]
             }
-        ),
+            ),
         encoding="utf-8",
     )
 
@@ -1445,6 +1454,44 @@ def test_build_order_plans_blocks_plain_rotation_exit():
     plans = build_order_plans(Settings(), portfolio, [recommendation])
 
     assert plans == []
+
+
+def test_selection_score_penalizes_known_negative_pockets():
+    candidate = {
+        "symbol": "WEAK",
+        "direction": "long",
+        "score": 16,
+        "setup_quality": "strong",
+        "risk_plan": {"entry_price": 100.0, "stop_loss": 95.0, "take_profit": 112.0},
+        "technical_state": {
+            "close": 103.0,
+            "sma_20": 100.0,
+            "return_20d": 0.08,
+            "return_60d": 0.10,
+            "volume_zscore_20": -0.4,
+            "rsi_14": 66.0,
+            "chart_patterns": [{"bias": "bullish", "status": "confirmed", "label": "doble suelo"}],
+        },
+    }
+
+    base = _selection_score_for_candidate(
+        candidate,
+        {},
+        {},
+        settings=Settings(SELECTION_NEGATIVE_POCKET_PENALTY_ENABLED=False),
+    )
+    penalized = _selection_score_for_candidate(
+        candidate,
+        {},
+        {},
+        settings=Settings(SELECTION_NEGATIVE_POCKET_PENALTY_ENABLED=True),
+    )
+
+    assert penalized["selection_score"] < base["selection_score"]
+    assert penalized["negative_pocket_penalty_total"] > 0
+    assert penalized["negative_pocket_penalties"]["confirmed_pattern"] > 0
+    assert penalized["negative_pocket_penalties"]["volume_z_lt0"] > 0
+    assert penalized["negative_pocket_penalties"]["rsi_60_75"] > 0
 
 
 def test_build_order_plans_allows_exceptional_bearish_exit():
@@ -4033,6 +4080,7 @@ def test_select_deterministic_candidates_promotes_parabolic_leader_momentum():
         {"setup_stats_3d": [{"setup": "baseline_trend", "avg_return": 0.0, "win_rate": 0.5, "matured": 20}]},
         {},
         limit=2,
+        settings=Settings(SELECTION_NEGATIVE_POCKET_PENALTY_ENABLED=False),
     )
 
     assert selected[0]["symbol"] == "INTC"
@@ -4293,12 +4341,10 @@ def test_annotate_technical_context_promotes_same_session_intraday_momentum(tmp_
     repeated = _selection_candidate(
         "HOOD",
         score=14,
-        rsi_14=62.0,
+        rsi_14=78.0,
         volume_zscore_20=0.8,
-        chart_patterns=[
-            {"bias": "bullish", "status": "confirmed"},
-            {"bias": "bullish", "status": "confirmed"},
-        ],
+        chart_patterns=[],
+        event_momentum_long=True,
     )
     repeated["last_date"] = "2026-05-28"
     baseline = _selection_candidate("BASE", score=15, volume_zscore_20=0.1, chart_patterns=[])

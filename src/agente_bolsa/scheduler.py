@@ -319,6 +319,7 @@ def _selected_candidates(report: dict[str, Any], settings: Settings) -> tuple[li
         daily_learning_digest,
         operational_context,
         settings.data_dir,
+        settings=settings,
     )
     selected = list(ranked_report.get("selected_candidates", []) or [])
     top_shorts = list(ranked_report.get("top_shorts", []) or [])
@@ -1674,6 +1675,7 @@ def opportunity_snapshot_job(
         load_daily_learning_context(settings.data_dir),
         load_operational_response_context(settings.data_dir),
         settings.data_dir,
+        settings=settings,
     )
     report["selected_candidates"] = annotated_report.get("selected_candidates", [])
     report["selection_metadata"] = annotated_report.get("selection_metadata", {})

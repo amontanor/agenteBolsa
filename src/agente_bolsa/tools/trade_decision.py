@@ -1862,6 +1862,17 @@ def _selection_score_for_candidate(
     failure_penalty = 0.020 if breakout_failure_risk else 0.0
     setup_risk_penalty = 0.080 if range_expansion else 0.0
     operational_penalty = _float(learning_prior.get("operational_penalty")) or 0.0
+    pocket_penalties: dict[str, float] = {}
+    if settings.selection_negative_pocket_penalty_enabled:
+        if setup_name == "confirmed_pattern":
+            pocket_penalties["confirmed_pattern"] = float(settings.selection_negative_pocket_confirmed_pattern_penalty)
+        if volume_z < 0:
+            pocket_penalties["volume_z_lt0"] = float(settings.selection_negative_pocket_weak_volume_penalty)
+        if distance_sma20 is not None and 0.0 <= distance_sma20 < 0.06:
+            pocket_penalties["sma20_dist_0_6pct"] = float(settings.selection_negative_pocket_tight_sma20_penalty)
+        if 60.0 <= rsi < 75.0:
+            pocket_penalties["rsi_60_75"] = float(settings.selection_negative_pocket_mid_rsi_penalty)
+    pocket_penalty_total = sum(pocket_penalties.values())
 
     selection_score = (
         edge
@@ -1881,6 +1892,7 @@ def _selection_score_for_candidate(
         - failure_penalty
         - setup_risk_penalty
         - operational_penalty
+        - pocket_penalty_total
     )
     if volume_component > 0:
         reasons.append("volume_confirmation")
@@ -1914,10 +1926,14 @@ def _selection_score_for_candidate(
         reasons.append("relative_strength")
     if (leader_momentum_extension or emerging_leader_momentum or parabolic_leader_momentum) and volume_z < 0:
         reasons.append("weak_volume_tolerated_for_leader")
+    for key in pocket_penalties:
+        reasons.append(f"negative_pocket:{key}")
 
     return {
         "selection_score": round(selection_score, 4),
         "selection_reason": ",".join(reasons) if reasons else "baseline",
+        "negative_pocket_penalty_total": round(pocket_penalty_total, 4),
+        "negative_pocket_penalties": pocket_penalties,
         "selection_components": {
             **{key: round(value, 4) if isinstance(value, float) else value for key, value in edge_components.items()},
             "shrunk_edge_3d": round(edge, 4),
@@ -1936,6 +1952,7 @@ def _selection_score_for_candidate(
             "failure_penalty": round(failure_penalty, 4),
             "setup_risk_penalty": round(setup_risk_penalty, 4),
             "operational_penalty": round(operational_penalty, 4),
+            "negative_pocket_penalty_total": round(pocket_penalty_total, 4),
             "same_session_observations": int(same_session_summary.get("observations") or 0),
             "same_session_return": _float(same_session_summary.get("same_session_return")),
         },
@@ -2298,6 +2315,8 @@ def _annotate_technical_context_with_learning(
     daily_learning_digest: dict[str, Any],
     operational_response_context: dict[str, Any],
     data_dir: Path | None = None,
+    *,
+    settings: Settings | None = None,
 ) -> dict[str, Any]:
     base_context = dict(technical_context)
     if isinstance(base_context.get("all_candidates"), list):
@@ -2315,17 +2334,19 @@ def _annotate_technical_context_with_learning(
             base_context.get("top_longs", []) or [],
             base_context.get("top_longs", []) or [],
         )
-    settings = Settings(DATA_DIR=data_dir) if data_dir is not None else None
+    effective_settings = settings
+    if effective_settings is None and data_dir is not None:
+        effective_settings = Settings(DATA_DIR=data_dir)
     same_session_context = _same_session_intraday_context(data_dir, base_context)
     if not base_context.get("selected_candidates") and isinstance(base_context.get("all_candidates"), list):
-        selection_limit = _deterministic_selection_limit(settings) if settings is not None else 8
+        selection_limit = _deterministic_selection_limit(effective_settings) if effective_settings is not None else 8
         selected, metadata = _select_deterministic_candidates(
             base_context.get("all_candidates", []) or [],
             daily_learning_digest,
             operational_response_context,
             limit=selection_limit,
             same_session_context=same_session_context,
-            settings=settings,
+            settings=effective_settings,
         )
         base_context["selected_candidates"] = selected
         base_context["selection_metadata"] = metadata
@@ -2344,7 +2365,7 @@ def _annotate_technical_context_with_learning(
             daily_learning_digest,
             operational_response_context,
             same_session_context=same_session_context,
-            settings=settings,
+            settings=effective_settings,
         )
         setup_edge = _float(prior.get("expected_edge_3d"))
         penalty = _float(prior.get("operational_penalty")) or 0.0
@@ -3481,6 +3502,7 @@ def request_trade_recommendations(
         daily_learning_digest,
         operational_response_context,
         settings.data_dir,
+        settings=settings,
     )
     research_context = _build_research_context(
         settings,
@@ -3944,6 +3966,7 @@ def build_buy_order_plans(
         daily_learning_digest,
         operational_response_context,
         settings.data_dir,
+        settings=settings,
     )
     portfolio_risk_context = _portfolio_risk_context(settings, portfolio)
     planned_buy_exposure = 0.0

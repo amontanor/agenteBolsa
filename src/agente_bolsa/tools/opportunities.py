@@ -435,6 +435,7 @@ def build_opportunity_snapshot(
         load_daily_learning_context(settings.data_dir),
         load_operational_response_context(settings.data_dir),
         settings.data_dir,
+        settings=settings,
     )
     opportunities = opportunity_candidates(annotated_context, limit=limit)
     portfolio_error = None

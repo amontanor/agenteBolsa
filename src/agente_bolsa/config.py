@@ -685,6 +685,26 @@ class Settings(BaseSettings):
         default=False,
         alias="OPPORTUNITY_RANKER_FALLBACK_ENABLED",
     )
+    selection_negative_pocket_penalty_enabled: bool = Field(
+        default=True,
+        alias="SELECTION_NEGATIVE_POCKET_PENALTY_ENABLED",
+    )
+    selection_negative_pocket_confirmed_pattern_penalty: float = Field(
+        default=0.050,
+        alias="SELECTION_NEGATIVE_POCKET_CONFIRMED_PATTERN_PENALTY",
+    )
+    selection_negative_pocket_weak_volume_penalty: float = Field(
+        default=0.025,
+        alias="SELECTION_NEGATIVE_POCKET_WEAK_VOLUME_PENALTY",
+    )
+    selection_negative_pocket_tight_sma20_penalty: float = Field(
+        default=0.030,
+        alias="SELECTION_NEGATIVE_POCKET_TIGHT_SMA20_PENALTY",
+    )
+    selection_negative_pocket_mid_rsi_penalty: float = Field(
+        default=0.020,
+        alias="SELECTION_NEGATIVE_POCKET_MID_RSI_PENALTY",
+    )
     max_risk_per_trade: float = Field(default=0.01, alias="MAX_RISK_PER_TRADE")
     max_total_open_risk: float = Field(default=0.03, alias="MAX_TOTAL_OPEN_RISK")
     max_orders_per_cycle: int = Field(default=4, alias="MAX_ORDERS_PER_CYCLE")
