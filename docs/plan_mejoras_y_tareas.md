@@ -226,7 +226,7 @@ Estado: PENDIENTE salvo indicacion. Marcar aqui al completarlas.
 
 | # | Tarea | Por que | Riesgo | Estado |
 |---|-------|---------|--------|--------|
-| T0 | **Restaurar el stack LLM** (arrancar qwen local en :8080 y/o arreglar credenciales/quota de MiMo). Validar con `llm_health_check.py`. | Es la causa nº1 de no operar. Sin LLM no hay comite ni sentimiento. | Bajo (operativo) | PENDIENTE (requiere maquina del usuario) |
+| T0 | **Restaurar el stack LLM**. Validar con `llm_health_check.py`. | Es la causa nº1 de no operar. Sin LLM no hay comite ni sentimiento. | Bajo (operativo) | **HECHO** (commit `ddb950e`). Causa raiz real: NO era MiMo ni la clave, sino una dependencia rota (`jiter`) que tumbaba el import de `openai` y hacia que el router marcara todos los proveedores como caidos. Ver seccion 10. |
 | T1 | **Alerta de modo degradado** cuando el grupo opera sin LLM. | Hoy la caida del LLM pasa desapercibida. | Bajo | **HECHO** (E10 watchdog + E11 runner). Falta solo registrar el job (hook 4.1) -> T1b |
 | T1b | Registrar `agents_healthcheck_job` en el scheduler con cadencia (hook seccion 4.1). | Activar la vigilancia automatica. | Bajo (edita scheduler, requiere reinicio) | PENDIENTE (requiere reinicio del sistema) |
 | T2 | **Motor de mejores oportunidades determinista** (varios lideres por RS/momentum/tendencia, no un unico nombre sobrecomprado). | El fallback evaluaba un solo nombre. | Medio | **HECHO** (E9 `opportunity_ranker` + tests). Falta conectarlo al fallback -> T2b |
@@ -318,3 +318,81 @@ powershell -ExecutionPolicy Bypass -File scripts\install_web_task.ps1
 
 Desinstalar: `Unregister-ScheduledTask -TaskName "AgenteBolsaScheduler" -Confirm:$false`
 (idem `AgenteBolsaWeb`).
+
+## 10. T0 cerrado: causa raiz del modo degradado (jiter)
+
+Fecha: 2026-06-16. Commit: `ddb950e`.
+
+El sistema llevaba ~10 dias sin llamadas LLM reales de decision/sentimiento. La
+causa **no** era la config de MiMo ni la clave (MiMo respondia por HTTP en el
+health check directo), sino una **dependencia transitiva rota en el venv**:
+`jiter` (parser JSON en Rust que usa internamente el cliente `openai`) impedia
+`import openai`. Como el `llm_router` capturaba ese `ImportError`, marcaba TODOS
+los endpoints como no disponibles y el grupo caia a fallback determinista en
+silencio.
+
+Resolucion y blindaje:
+
+- Reinstalado `jiter==0.13.0` y **pineado** en `requirements.txt` y `pyproject.toml`
+  (era transitiva sin pin; por eso una reinstalacion del venv lo rompio).
+- `tests/test_openai_client_health.py`: test de regresion que importa/crea el
+  cliente OpenAI (detecta este fallo en `pytest`).
+- `llm_router.py` ahora distingue `llm_client_import_broken` de "proveedor caido",
+  para que el modo degradado sea diagnosticable y no se confunda con un endpoint
+  inaccesible.
+
+Validacion: `pip check` limpio, `pytest -q` 650 verdes, `llm_health_check.py`
+MiMo OK + CI OK, `agents_healthcheck.py` `[OK]`, `schedule-status` lista
+`agents_healthcheck`, panel 200, scheduler vivo tras 10 min.
+
+Pendiente operativo (no de codigo): registrar las tareas programadas
+(`install_scheduler_task.ps1` / `install_web_task.ps1`) desde una PowerShell con
+permisos suficientes; desde el contexto del agente Windows devolvia "Acceso
+denegado". Mientras tanto, scheduler y panel quedan arrancados en sesion.
+
+Leccion: un fallo de import de dependencia puede disfrazarse de "LLM caido". El
+watchdog `agents_healthcheck` (E10) fue precisamente lo que hizo visible que el
+grupo llevaba dias sin LLM real; conviene mantenerlo y vigilar su alerta.
+
+## 11. Fase edge: que el grupo gane, no que opere mas
+
+Objetivo: subir la **expectativa real medida por setup**, no el volumen de
+operaciones. Todo en paper, cambios sensibles en SHADOW y detras de flags; no
+tocar `risk.py`/kernel ni `ALLOW_LIVE_TRADING`.
+
+### 11.1 Diagnostico medido (bloques 0-1, commit `1cd7773`) — HECHO
+
+Instrumentacion entregada por Codex: `tools/broker_reconciliation.py`,
+`scripts/trading_block_metrics.py`, `scripts/reconcile_broker_orders.py`, job
+`broker_reconciliation` en el scheduler.
+
+Datos (ultimos 7 dias):
+
+- 99 recomendaciones de compra -> **1 orden enviada**. Cuello de botella claro.
+- Vetos por gate: `backtest_gate` **103**, `deterministic_review` 1. (Ni entry
+  quality ni risk manager son el problema.)
+- Top razones del `backtest_gate`: regimenes negativos 2>max1 (33); hit-rate
+  43,75%<45% (15) y 44,44%<45% (14); profit-factor 1,01<1,05 (9); trade-window
+  alpha −0,25%<0% (9). **Casi todos los vetos son "por poco".**
+
+Reconciliacion (bloque 1): las 32 ordenes pasaron de `PENDING_NEW` a `filled`
+(17 buy / 15 sell). `signal_executed_observations`=320. **P&L realizado FIFO =
+−782,18** en 16 lotes cerrados; equity paper ~70.676 (plano), Sharpe60 negativo.
+
+**Conclusion clave:** el edge actual es marginal/negativo. Relajar el gate a
+secas haria operar mas setups perdedores. El trabajo es **mejorar y medir el
+edge por setup**, ahora posible porque la ejecucion ya se reconcilia.
+
+### 11.2 Backlog "Fase edge" (PENDIENTE salvo indicacion)
+
+| # | Tarea | Criterio de exito | Estado |
+|---|-------|-------------------|--------|
+| F2b | Edge por setup/estrategia con las 320 ejecuciones + outcomes: expectativa, hit-rate, PF, alpha por `setup_quality`/tag/regimen. Subir prioridad/sizing a edge+ y mandar a shadow/vetar edge−. | Tabla de edge por setup; identificados pockets ganadores/perdedores. | PENDIENTE |
+| F2 | Shadow A/B del `backtest_gate` con criterio de **expectativa forward** (1/3/5/10d) del cohorte vetado, por razon de veto. Relajar SOLO los umbrales cuyo cohorte demuestre expectativa positiva. | Recalibracion umbral a umbral basada en evidencia; nada se relaja sin expectativa+. | PENDIENTE |
+| F5 | Disciplina de salida: analizar por que el realized P&L es negativo; revisar `exit_policy_v2`, stops/take-profit/trailing, holding y drawdown por trade. | Cortar perdidas y realizar ganadores; P&L realizado mejora. | PENDIENTE |
+| F3 | A/B `opportunity_ranker` (lideres RS/momentum) vs scanner actual en paper (`OPPORTUNITY_RANKER_FALLBACK_ENABLED=true`). | Comparativa de forward returns; se queda si mejora, se revierte si no. | PENDIENTE |
+| F6 | Cerrar embudo lab: drenar validaciones `PENDING` y promocion champion/challenger que apruebe con expectativa forward+ y estabilidad por regimen. | Reglas con edge pasan de shadow a active; `applied_changes`>0 con criterio. | PENDIENTE |
+| F7 | Scoreboard de rentabilidad (equity, P&L, hit-rate, PF, expectancy, maxDD, alpha vs SPY por setup y regimen). | Panel/reporte para guiar y medir "mas listo". | PENDIENTE |
+
+Orden recomendado: **F2b → F2 → F5 → F3 → F6/F7**. Empezar por el edge por setup:
+dira si algun setup gana de verdad antes de tocar el gate.
