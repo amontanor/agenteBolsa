@@ -75,6 +75,7 @@ from agente_bolsa.tools.pre_earnings import (
 from agente_bolsa.tools.profitability_scoreboard import build_profitability_scoreboard
 from agente_bolsa.tools.retention import cleanup_runtime_data
 from agente_bolsa.tools.signal_learning import build_learning_status, update_signal_outcomes
+from agente_bolsa.tools.system_status import build_status, to_html
 from agente_bolsa.tools.trade_decision import build_buy_order_plans, load_latest_technical_candidates
 from agente_bolsa.tools.trade_history import build_trade_history
 from agente_bolsa.tools.universe import resolve_study_universe
@@ -3370,6 +3371,16 @@ def page_dashboard() -> None:
             st.dataframe(_events_dataframe(events), width="stretch", hide_index=True)
         else:
             st.info("Todavia no hay eventos registrados.")
+
+
+def page_system_status() -> None:
+    _page_header("Estado del sistema", "Semaforo operativo del panel, scheduler, LLM, watchdog, reportes y base de datos.")
+    status = build_status()
+    verdict = status.get("verdict", "--")
+    st.subheader(f"Estado del sistema - {verdict}")
+    if st.button("Actualizar", key="system_status_refresh"):
+        st.rerun()
+    st.markdown(to_html(status), unsafe_allow_html=True)
 
 
 def page_portfolio() -> None:
@@ -7693,6 +7704,7 @@ def main() -> None:
         "Logs",
         "Comandos",
         "Configuracion",
+        "Estado del sistema",
     ]
     if "selected_page" not in st.session_state or st.session_state.selected_page not in page_names:
         st.session_state.selected_page = "Dashboard"
@@ -7728,6 +7740,7 @@ def main() -> None:
         "Logs": page_logs,
         "Comandos": page_commands,
         "Configuracion": page_config,
+        "Estado del sistema": page_system_status,
     }
     _render_refreshable_page(pages[page], refresh_interval_seconds)
 
