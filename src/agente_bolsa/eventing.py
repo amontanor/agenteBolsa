@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -11,6 +12,9 @@ from zoneinfo import ZoneInfo
 
 from .models import AgentEvent
 from .storage import Store
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -44,10 +48,16 @@ class EventReporter:
         )
         self.store.record_agent_event(event)
         if self.verbose and should_display_event(event_type):
-            print(format_live_event(agent, event_type, cycle_id, message), flush=True)
+            try:
+                print(format_live_event(agent, event_type, cycle_id, message), flush=True)
+            except (OSError, ValueError) as exc:
+                LOGGER.debug("Live event print skipped because stdout is unavailable: %s", exc)
 
     def emit_json(self, payload: dict[str, Any]) -> None:
-        print(json.dumps(payload, indent=2, ensure_ascii=True, default=str), flush=True)
+        try:
+            print(json.dumps(payload, indent=2, ensure_ascii=True, default=str), flush=True)
+        except (OSError, ValueError) as exc:
+            LOGGER.debug("JSON event print skipped because stdout is unavailable: %s", exc)
 
 
 def _decode_payload(row: dict[str, Any]) -> dict[str, Any]:
