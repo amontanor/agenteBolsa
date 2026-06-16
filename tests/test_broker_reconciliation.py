@@ -1,0 +1,88 @@
+import json
+
+from agente_bolsa.config import Settings
+from agente_bolsa.storage import Store
+from agente_bolsa.tools.broker_reconciliation import reconcile_broker_orders
+
+
+class _Order:
+    id = "broker-1"
+    client_order_id = "agente-plan-1"
+    status = "filled"
+    filled_qty = "3"
+    filled_avg_price = "101.5"
+    qty = "3"
+    notional = None
+    submitted_at = None
+    filled_at = "2026-06-16T20:00:00+00:00"
+    updated_at = "2026-06-16T20:00:01+00:00"
+
+
+class _Client:
+    def get_order_by_id(self, _order_id):
+        return _Order()
+
+
+def test_reconcile_broker_orders_marks_filled_buy_as_executed(tmp_path, monkeypatch):
+    settings = Settings(DATA_DIR=tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    store.save_broker_order(
+        broker_order_id="broker-1",
+        plan_id="plan-1",
+        cycle_id="cycle-1",
+        symbol="AAPL",
+        side="buy",
+        status="OrderStatus.PENDING_NEW",
+        payload={"broker_order": {"client_order_id": "agente-plan-1"}},
+    )
+    store.save_signal_outcome(
+        signal_id="run-1:AAPL",
+        source_run_id="run-1",
+        source="test",
+        symbol="AAPL",
+        signal_date="2026-06-16",
+        decision="approved_buy",
+        features={},
+        gate={},
+        outcome={},
+    )
+    store.upsert_learning_observation(
+        {
+            "observation_id": "obs-1",
+            "signal_date": "2026-06-16",
+            "symbol": "AAPL",
+            "source_family": "test",
+            "decision": "approved_buy",
+        }
+    )
+
+    class _Factory:
+        def __init__(self, _settings):
+            pass
+
+        def alpaca_trading_client(self):
+            return _Client()
+
+    monkeypatch.setattr("agente_bolsa.tools.broker_reconciliation.BrokerClientFactory", _Factory)
+    monkeypatch.setattr(
+        "agente_bolsa.tools.broker_reconciliation.update_signal_outcomes",
+        lambda *_args, **_kwargs: {"updated": 0, "signals": 0, "symbols": 0, "warnings": []},
+    )
+
+    result = reconcile_broker_orders(settings, store, apply=True)
+
+    assert result["applied"] is True
+    assert len(result["changes"]) == 1
+    assert result["changes"][0]["new"] == "filled"
+    assert result["signal_execution_updates"] == 1
+    assert result["learning_execution_updates"] == 1
+    with store.connect() as conn:
+        order = conn.execute("SELECT status, payload_json FROM broker_orders WHERE broker_order_id = 'broker-1'").fetchone()
+        signal = conn.execute("SELECT gate_json FROM signal_outcomes WHERE signal_id = 'run-1:AAPL'").fetchone()
+        learning = conn.execute("SELECT executed_buy, execution_json FROM learning_observations WHERE observation_id = 'obs-1'").fetchone()
+    assert order["status"] == "filled"
+    assert json.loads(order["payload_json"])["broker_order_reconciled"]["filled_avg_price"] == 101.5
+    assert json.loads(signal["gate_json"])["executed_buy"] is True
+    assert learning["executed_buy"] == 1
+    assert json.loads(learning["execution_json"])["filled_qty"] == 3.0

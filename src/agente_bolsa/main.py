@@ -26,6 +26,7 @@ from .market_calendar import MarketCalendar
 from .models import AgentEvent, Hypothesis, new_id
 from .scheduler import (
     _run_pre_earnings_trade_operation,
+    broker_reconciliation_job,
     closed_market_technical_study_job,
     continuous_improvement_job,
     daily_study_job,
@@ -2814,6 +2815,10 @@ def command_job_once(args: argparse.Namespace) -> None:
         if report and not args.quiet:
             print()
             _print_post_market_review(report)
+    elif args.job == "broker-reconciliation":
+        report = broker_reconciliation_job(settings, store, verbose=not args.quiet, force=args.force)
+        if report and not args.quiet:
+            _print_json({"ok": True, **report})
     elif args.job == "pre-earnings":
         report = pre_earnings_job(
             settings,
@@ -3911,6 +3916,7 @@ def build_parser() -> argparse.ArgumentParser:
             "closed-study",
             "daily",
             "post-market-review",
+            "broker-reconciliation",
             "pre-earnings",
             "opportunity-snapshot",
             "continuous-improvement",

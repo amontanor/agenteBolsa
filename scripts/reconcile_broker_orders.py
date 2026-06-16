@@ -19,24 +19,9 @@ Uso:
 """
 from __future__ import annotations
 
-import argparse
 import json
-import sqlite3
 import sys
-from datetime import datetime, timezone
-
-TERMINAL = {
-    "filled", "canceled", "cancelled", "expired", "rejected",
-    "done_for_day", "replaced", "stopped",
-}
-
-
-def normalize_status(raw: str) -> str:
-    """'OrderStatus.PENDING_NEW' -> 'pending_new'; 'filled' -> 'filled'."""
-    s = str(raw or "").strip()
-    if "." in s:
-        s = s.split(".")[-1]
-    return s.lower()
+import argparse
 
 
 def main() -> int:
@@ -48,100 +33,35 @@ def main() -> int:
 
     try:
         from agente_bolsa.config import get_settings
-        from agente_bolsa.tools.broker import BrokerClientFactory
+        from agente_bolsa.storage import Store
+        from agente_bolsa.tools.broker_reconciliation import reconcile_broker_orders
     except Exception as exc:  # noqa: BLE001
         print(f"ERROR importando el proyecto (¿venv activo?): {exc}", file=sys.stderr)
         return 2
 
     settings = get_settings()
-    db_path = str(settings.database_path)
-
-    con = sqlite3.connect(db_path)
-    con.row_factory = sqlite3.Row
-    rows = con.execute(
-        "SELECT broker_order_id, status, symbol, side FROM broker_orders ORDER BY created_at DESC LIMIT ?",
-        (args.limit,),
-    ).fetchall()
-
-    pending = [r for r in rows if normalize_status(r["status"]) not in TERMINAL]
-    print(f"Ordenes totales revisadas: {len(rows)} | no terminales: {len(pending)}")
-    if not pending:
-        print("No hay ordenes pendientes de reconciliar.")
-        con.close()
-        return 0
-
-    try:
-        client = BrokerClientFactory(settings).alpaca_trading_client()
-    except Exception as exc:  # noqa: BLE001
-        print(f"ERROR conectando con Alpaca: {exc}", file=sys.stderr)
-        con.close()
-        return 2
-
-    changes = []
-    errors = []
-    for r in pending:
-        oid = r["broker_order_id"]
-        new_status = None
-        try:
-            try:
-                order = client.get_order_by_id(oid)
-            except Exception:  # noqa: BLE001 - fallback por client_order_id.
-                order = client.get_order_by_client_id(oid)
-            new_status = normalize_status(getattr(order, "status", ""))
-        except Exception as exc:  # noqa: BLE001
-            errors.append({"broker_order_id": oid, "error": str(exc)[:120]})
-            continue
-        old_status = normalize_status(r["status"])
-        if new_status and new_status != old_status:
-            changes.append(
-                {
-                    "broker_order_id": oid,
-                    "symbol": r["symbol"],
-                    "side": r["side"],
-                    "old": old_status,
-                    "new": new_status,
-                }
-            )
-
-    if args.apply and changes:
-        now = datetime.now(timezone.utc).isoformat()
-        for ch in changes:
-            con.execute(
-                "UPDATE broker_orders SET status = ? WHERE broker_order_id = ?",
-                (ch["new"], ch["broker_order_id"]),
-            )
-        con.execute(
-            "INSERT OR REPLACE INTO runtime_state (key, value_json, updated_at) VALUES (?, ?, ?)",
-            ("broker_orders_reconcile_last_run", json.dumps({"at": now, "updated": len(changes)}), now),
-        ) if _has_runtime_state(con) else None
-        con.commit()
-
-    con.close()
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    result = reconcile_broker_orders(settings, store, apply=args.apply, limit=args.limit)
 
     if args.json:
-        print(json.dumps({"changes": changes, "errors": errors, "applied": bool(args.apply)}, indent=2, ensure_ascii=False))
+        print(json.dumps(result, indent=2, ensure_ascii=False))
     else:
-        if not changes:
+        print(f"Ordenes no terminales: {result['pending']} | cambios: {len(result['changes'])}")
+        if not result["changes"]:
             print("Sin cambios de estado (todas siguen igual en Alpaca).")
-        for ch in changes:
+        for ch in result["changes"]:
             print(f"  {ch['symbol']:<6} {ch['side']:<4} {ch['old']:>12} -> {ch['new']:<12} ({ch['broker_order_id']})")
-        if errors:
-            print(f"\nErrores de consulta: {len(errors)} (orden inexistente o API).")
-        if changes and not args.apply:
+        if result["errors"]:
+            print(f"\nErrores de consulta: {len(result['errors'])} (orden inexistente o API).")
+        if result["changes"] and not args.apply:
             print("\n(DRY-RUN: usa --apply para persistir estos cambios.)")
-        elif changes and args.apply:
-            print(f"\nAPLICADO: {len(changes)} ordenes actualizadas.")
+        elif result["changes"] and args.apply:
+            print(
+                f"\nAPLICADO: {len(result['changes'])} ordenes actualizadas; "
+                f"signal_execution_updates={result['signal_execution_updates']}; "
+                f"learning_execution_updates={result['learning_execution_updates']}."
+            )
     return 0
-
-
-def _has_runtime_state(con: sqlite3.Connection) -> bool:
-    row = con.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_state'"
-    ).fetchone()
-    if not row:
-        return False
-    cols = {r[1] for r in con.execute("PRAGMA table_info('runtime_state')")}
-    return {"key", "value_json", "updated_at"}.issubset(cols)
 
 
 if __name__ == "__main__":

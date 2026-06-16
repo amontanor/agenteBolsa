@@ -131,6 +131,16 @@ def test_scheduler_status_includes_overnight_learning_heartbeat(tmp_path):
 
     job_ids = {job["id"] for job in status["jobs"]}
     assert "overnight_learning_heartbeat" in job_ids
+
+
+def test_scheduler_status_includes_broker_reconciliation(tmp_path):
+    settings = Settings(DATA_DIR=tmp_path)
+
+    status = scheduler_status(settings)
+
+    job_ids = {item["id"] for item in status["jobs"]}
+    assert "broker_reconciliation" in job_ids
+    assert "broker_reconciliation" in status["job_runtime"]
     assert "overnight_learning_heartbeat" in status["job_runtime"]
 
 

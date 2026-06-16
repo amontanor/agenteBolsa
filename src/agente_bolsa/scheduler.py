@@ -28,6 +28,7 @@ from .market_calendar import MarketCalendar
 from .models import new_id
 from .storage import Store
 from .tools.broker import BrokerClientFactory
+from .tools.broker_reconciliation import reconcile_broker_orders
 from .tools.breakout_scanner import build_breakout_scan, merge_breakout_universe
 from .tools.execution import submit_paper_order_plan
 from .tools.daily_learning import build_learning_digest_report, load_daily_learning_context
@@ -1984,6 +1985,17 @@ def post_market_review_job(
         status.as_dict(),
     )
     try:
+        reconciliation = reconcile_broker_orders(settings, store, apply=True, limit=500)
+        reporter.emit(
+            "execution_reconciliation_agent",
+            "broker_orders_reconciled",
+            run_id,
+            (
+                f"Reconciliacion broker: {len(reconciliation.get('changes', []))} cambios; "
+                f"executed_signals={reconciliation.get('signal_execution_updates', 0)}."
+            ),
+            reconciliation,
+        )
         report = build_post_market_review(
             settings,
             settings.data_dir / "reports",
@@ -2016,11 +2028,27 @@ def post_market_review_job(
                 "path": report["path"],
                 "session_date": session_date,
                 "summary": report["summary"],
+                "broker_reconciliation": reconciliation,
                 "proposed_improvements": improvements[:5],
                 "next_session_guidance": report.get("next_session_guidance", [])[:8],
             },
         )
-        _set_job_status(store, "post_market_review", status="completed", run_id=run_id, started_at=started_at, detail="review post-mercado completado", extra={"report_path": report.get("path")})
+        _set_job_status(
+            store,
+            "post_market_review",
+            status="completed",
+            run_id=run_id,
+            started_at=started_at,
+            detail="review post-mercado completado",
+            extra={
+                "report_path": report.get("path"),
+                "broker_reconciliation": {
+                    "changes": len(reconciliation.get("changes", [])),
+                    "signal_execution_updates": reconciliation.get("signal_execution_updates", 0),
+                    "learning_execution_updates": reconciliation.get("learning_execution_updates", 0),
+                },
+            },
+        )
         return report
     except Exception as exc:  # noqa: BLE001 - scheduler must keep running.
         reporter.emit(
@@ -2453,6 +2481,68 @@ def agents_healthcheck_job(settings: Settings, store: Store, *, verbose: bool = 
         )
 
 
+def broker_reconciliation_job(
+    settings: Settings,
+    store: Store,
+    *,
+    verbose: bool = True,
+    force: bool = False,
+) -> dict[str, Any] | None:
+    run_id = new_id("brkrec")
+    started_at = datetime.now(timezone.utc)
+    calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
+    should_run, status = calendar.should_run_daily_study()
+    reporter = _reporter(settings, store, verbose)
+    if not should_run and not force:
+        _set_job_status(
+            store,
+            "broker_reconciliation",
+            status="skipped",
+            run_id=run_id,
+            started_at=started_at,
+            detail="mercado aun no apto para reconciliacion",
+        )
+        return None
+    try:
+        result = reconcile_broker_orders(settings, store, apply=True, limit=500)
+        reporter.emit(
+            "execution_reconciliation_agent",
+            "broker_orders_reconciled",
+            run_id,
+            (
+                f"Reconciliacion broker: {len(result.get('changes', []))} cambios; "
+                f"executed_signals={result.get('signal_execution_updates', 0)}."
+            ),
+            result,
+        )
+        _set_job_status(
+            store,
+            "broker_reconciliation",
+            status="completed",
+            run_id=run_id,
+            started_at=started_at,
+            detail="broker orders reconciliadas",
+            extra={
+                "changes": len(result.get("changes", [])),
+                "signal_execution_updates": result.get("signal_execution_updates", 0),
+                "learning_execution_updates": result.get("learning_execution_updates", 0),
+                "errors": len(result.get("errors", [])),
+            },
+        )
+        return result
+    except Exception as exc:  # noqa: BLE001 - no debe tumbar el scheduler.
+        _set_job_status(
+            store,
+            "broker_reconciliation",
+            status="failed",
+            run_id=run_id,
+            started_at=started_at,
+            detail=str(exc),
+            extra={"error_type": type(exc).__name__},
+        )
+        return None
+
+
 def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose: bool) -> Any:
     if BackgroundScheduler is None or CronTrigger is None or IntervalTrigger is None:
         raise RuntimeError("APScheduler no esta instalado. Instala las dependencias del proyecto para usar schedule.")
@@ -2510,6 +2600,17 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         kwargs={"use_llm": use_crew, "verbose": verbose},
         id="post_market_review",
         name="Post-market trade review once per closed session",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        broker_reconciliation_job,
+        trigger=IntervalTrigger(minutes=settings.closed_market_study_interval_minutes),
+        args=[settings, store],
+        kwargs={"verbose": verbose},
+        id="broker_reconciliation",
+        name="Broker order reconciliation after session",
         max_instances=1,
         coalesce=True,
         replace_existing=True,
@@ -2645,6 +2746,7 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
             "closed_market_technical_study",
             "daily_study",
             "post_market_review",
+            "broker_reconciliation",
             "overnight_learning_heartbeat",
             "pre_earnings",
             "continuous_improvement",
@@ -2682,6 +2784,14 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
                 "id": "post_market_review",
                 "cadence": f"cada {settings.closed_market_study_interval_minutes} minutos como comprobador",
                 "market_behavior": "tras cierre, una vez por sesion, revisa compras/ventas y genera aprendizaje",
+            },
+            {
+                "id": "broker_reconciliation",
+                "cadence": f"cada {settings.closed_market_study_interval_minutes} minutos como comprobador",
+                "market_behavior": (
+                    "tras cierre reconcilia broker_orders contra Alpaca y marca fills reales "
+                    "para aprendizaje; no cambia decisiones de trading"
+                ),
             },
             {
                 "id": "overnight_learning_heartbeat",
