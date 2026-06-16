@@ -1,5 +1,7 @@
+import json
+
 from agente_bolsa.config import Settings
-from agente_bolsa.scheduler import _acquire_scheduler_lock, _release_scheduler_lock
+from agente_bolsa.scheduler import _acquire_scheduler_lock, _read_scheduler_lock, _release_scheduler_lock
 
 
 def test_scheduler_lock_prevents_duplicate_running_pid(tmp_path, monkeypatch):
@@ -10,11 +12,14 @@ def test_scheduler_lock_prevents_duplicate_running_pid(tmp_path, monkeypatch):
 
     monkeypatch.setattr("agente_bolsa.scheduler.os.getpid", lambda: first_pid)
     monkeypatch.setattr("agente_bolsa.scheduler._pid_is_running", lambda pid: pid == first_pid)
+    monkeypatch.setattr("agente_bolsa.scheduler._process_start_token", lambda pid: f"token-{pid}")
 
     acquired, reason = _acquire_scheduler_lock(settings)
 
     assert acquired is True
     assert reason == ""
+    payload = _read_scheduler_lock(settings.state_dir / "scheduler.lock")
+    assert payload["pid"] == first_pid
 
     monkeypatch.setattr("agente_bolsa.scheduler.os.getpid", lambda: second_pid)
     monkeypatch.setattr("agente_bolsa.scheduler._pid_is_running", lambda pid: pid == first_pid)
@@ -43,6 +48,26 @@ def test_scheduler_lock_replaces_stale_pid(tmp_path, monkeypatch):
 
     assert acquired is True
     assert reason == ""
-    assert lock_path.read_text(encoding="utf-8").strip() == str(current_pid)
+    payload = json.loads(lock_path.read_text(encoding="utf-8"))
+    assert payload["pid"] == current_pid
 
     _release_scheduler_lock(settings)
+
+
+def test_scheduler_lock_replaces_pid_reuse_with_mismatched_token(tmp_path, monkeypatch):
+    settings = Settings(DATA_DIR=tmp_path)
+    settings.ensure_runtime_dirs()
+    lock_path = settings.state_dir / "scheduler.lock"
+    lock_path.write_text(json.dumps({"pid": 33333, "token": "old-token", "kind": "scheduler"}), encoding="utf-8")
+
+    monkeypatch.setattr("agente_bolsa.scheduler.os.getpid", lambda: 44444)
+    monkeypatch.setattr("agente_bolsa.scheduler._pid_is_running", lambda pid: pid == 33333)
+    monkeypatch.setattr(
+        "agente_bolsa.scheduler._process_start_token",
+        lambda pid: "new-token" if pid == 33333 else f"token-{pid}",
+    )
+
+    acquired, reason = _acquire_scheduler_lock(settings)
+
+    assert acquired is True
+    assert reason == ""

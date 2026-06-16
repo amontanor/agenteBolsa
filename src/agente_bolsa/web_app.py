@@ -319,8 +319,13 @@ def _schedule_process_status() -> dict[str, Any]:
         if not path.exists():
             continue
         try:
-            pid = int(path.read_text(encoding="utf-8").strip())
-        except ValueError:
+            raw = path.read_text(encoding="utf-8").strip()
+            if source == "scheduler" and raw.startswith("{"):
+                payload = json.loads(raw)
+                pid = int(payload.get("pid") or 0)
+            else:
+                pid = int(raw)
+        except (ValueError, json.JSONDecodeError, TypeError):
             stale_paths.append(path)
             continue
         running = _is_pid_running(pid)

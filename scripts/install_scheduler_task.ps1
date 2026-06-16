@@ -26,17 +26,22 @@ $ErrorActionPreference = "Stop"
 
 $Repo    = "C:\Antonio\Bref\agenteBolsa"
 $Python  = Join-Path $Repo ".venv\Scripts\python.exe"
+$Supervisor = Join-Path $Repo "scripts\run_scheduler_supervisor.ps1"
 $TaskName = "AgenteBolsaScheduler"
 
 if (-not (Test-Path $Python)) {
     Write-Error "No existe el interprete del venv: $Python"
     exit 1
 }
+if (-not (Test-Path $Supervisor)) {
+    Write-Error "No existe el supervisor del scheduler: $Supervisor"
+    exit 1
+}
 
-# Accion: lanzar el scheduler con el python del venv, en el directorio del repo.
+# Accion: lanzar un supervisor PowerShell que reintenta el scheduler si sale.
 $action = New-ScheduledTaskAction `
-    -Execute $Python `
-    -Argument "-m agente_bolsa.main schedule" `
+    -Execute "C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe" `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$Supervisor`"" `
     -WorkingDirectory $Repo
 
 # Disparador: al iniciar sesion el usuario actual.

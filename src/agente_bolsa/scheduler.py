@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import json
 import time
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
@@ -72,6 +73,44 @@ def _scheduler_lock_path(settings: Settings) -> Any:
     return settings.state_dir / "scheduler.lock"
 
 
+def _process_start_token(pid: int) -> str | None:
+    if pid <= 0:
+        return None
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class FILETIME(ctypes.Structure):
+                _fields_ = [("dwLowDateTime", wintypes.DWORD), ("dwHighDateTime", wintypes.DWORD)]
+
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.OpenProcess(0x1000, False, int(pid))
+            if not handle:
+                return None
+            try:
+                creation = FILETIME()
+                exit_time = FILETIME()
+                kernel_time = FILETIME()
+                user_time = FILETIME()
+                ok = kernel32.GetProcessTimes(
+                    handle,
+                    ctypes.byref(creation),
+                    ctypes.byref(exit_time),
+                    ctypes.byref(kernel_time),
+                    ctypes.byref(user_time),
+                )
+                if not ok:
+                    return None
+                token = (int(creation.dwHighDateTime) << 32) | int(creation.dwLowDateTime)
+                return str(token)
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            return None
+    return None
+
+
 def _pid_is_running(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -93,30 +132,66 @@ def _pid_is_running(pid: int) -> bool:
     return True
 
 
+def _read_scheduler_lock(lock_path: Any) -> dict[str, Any] | None:
+    if not lock_path.exists():
+        return None
+    raw = lock_path.read_text(encoding="utf-8").strip()
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        try:
+            return {"pid": int(raw), "token": None, "kind": "legacy"}
+        except ValueError:
+            return None
+    if isinstance(data, dict):
+        return data
+    return None
+
+
+def _write_scheduler_lock(lock_path: Any, *, pid: int) -> None:
+    payload = {
+        "pid": pid,
+        "token": _process_start_token(pid),
+        "kind": "scheduler",
+        "written_at": datetime.now(timezone.utc).isoformat(),
+    }
+    lock_path.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
+
+
+def _lock_matches_running_process(payload: dict[str, Any], *, current_pid: int) -> bool:
+    pid = int(payload.get("pid") or 0)
+    if pid <= 0 or pid == current_pid or not _pid_is_running(pid):
+        return False
+    expected_token = str(payload.get("token") or "").strip() or None
+    if expected_token is None:
+        return True
+    return _process_start_token(pid) == expected_token
+
+
 def _acquire_scheduler_lock(settings: Settings) -> tuple[bool, str]:
     lock_path = _scheduler_lock_path(settings)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     current_pid = os.getpid()
     if lock_path.exists():
-        raw = lock_path.read_text(encoding="utf-8").strip()
-        try:
-            existing_pid = int(raw)
-        except ValueError:
-            existing_pid = 0
-        if existing_pid and existing_pid != current_pid and _pid_is_running(existing_pid):
+        payload = _read_scheduler_lock(lock_path) or {}
+        existing_pid = int(payload.get("pid") or 0)
+        if _lock_matches_running_process(payload, current_pid=current_pid):
             return False, f"Scheduler ya activo en PID {existing_pid}"
         try:
             lock_path.unlink()
         except OSError:
             return False, "No se pudo limpiar un lock antiguo del scheduler"
-    lock_path.write_text(str(current_pid), encoding="utf-8")
+    _write_scheduler_lock(lock_path, pid=current_pid)
     return True, ""
 
 
 def _release_scheduler_lock(settings: Settings) -> None:
     lock_path = _scheduler_lock_path(settings)
     try:
-        if lock_path.exists() and lock_path.read_text(encoding="utf-8").strip() == str(os.getpid()):
+        payload = _read_scheduler_lock(lock_path) or {}
+        if lock_path.exists() and int(payload.get("pid") or 0) == os.getpid():
             lock_path.unlink()
     except OSError:
         LOGGER.warning("No se pudo liberar scheduler.lock")
