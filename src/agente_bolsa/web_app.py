@@ -33,6 +33,7 @@ except ModuleNotFoundError:  # pragma: no cover - import-only test environments 
 from agente_bolsa import __version__
 from agente_bolsa.config import get_settings
 from agente_bolsa.continuous_improvement.runtime import ContinuousImprovementLabRuntime
+from agente_bolsa.continuous_improvement.promotion_readiness import evaluate_promotion_readiness
 from agente_bolsa.eventing import EventReporter
 from agente_bolsa.market_calendar import MarketCalendar
 from agente_bolsa.models import PortfolioSnapshot, TradeRecommendation, new_id
@@ -71,6 +72,7 @@ from agente_bolsa.tools.pre_earnings import (
     target_after_close_session,
     update_pre_earnings_outcomes,
 )
+from agente_bolsa.tools.profitability_scoreboard import build_profitability_scoreboard
 from agente_bolsa.tools.retention import cleanup_runtime_data
 from agente_bolsa.tools.signal_learning import build_learning_status, update_signal_outcomes
 from agente_bolsa.tools.trade_decision import build_buy_order_plans, load_latest_technical_candidates
@@ -2989,6 +2991,43 @@ def _render_code_changes_panel(store: Store) -> None:
     )
 
 
+def _render_profitability_scoreboard_panel(settings: Any, store: Store) -> None:
+    _section_title("Profitability Scoreboard", "P&L paper, edge, alpha vs SPY y estabilidad por setup/regimen.")
+    try:
+        report = build_profitability_scoreboard(settings, store, since_date=DEFAULT_START_DATE)
+    except Exception as exc:  # noqa: BLE001
+        st.markdown(f"<div class='empty-box'>Scoreboard no disponible: {escape(str(exc))}</div>", unsafe_allow_html=True)
+        return
+    perf = report.get("performance") or {}
+    execution = report.get("execution") or {}
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        _compact_metric("Equity", _money(perf.get("latest_equity")) if perf.get("latest_equity") is not None else "-")
+    with c2:
+        _compact_metric("P&L acum.", _pct_signed(perf.get("cumulative_pnl_pct")), _pct_signed(perf.get("cumulative_alpha")))
+    with c3:
+        _compact_metric("Max DD", _pct(perf.get("max_drawdown")) if perf.get("max_drawdown") is not None else "-")
+    with c4:
+        _compact_metric("Fills enlazados", execution.get("linked_executed_buys"), f"SPY pts {execution.get('benchmark_points')}")
+
+    rows = pd.DataFrame(report.get("edge_table") or [])
+    if rows.empty:
+        st.markdown("<div class='empty-box'>Sin operaciones ejecutadas maduras para medir edge.</div>", unsafe_allow_html=True)
+        return
+
+    tab_setup, tab_regime, tab_tags = st.tabs(["Setup", "Regimen", "Tags"])
+    visible_cols = ["key", "horizon", "matured", "expectancy", "hit_rate", "profit_factor", "alpha"]
+    with tab_setup:
+        setup_rows = rows[rows["section"] == "setup"][visible_cols].copy()
+        st.dataframe(setup_rows, use_container_width=True, hide_index=True)
+    with tab_regime:
+        regime_rows = rows[rows["section"] == "regime"][visible_cols].copy()
+        st.dataframe(regime_rows, use_container_width=True, hide_index=True)
+    with tab_tags:
+        tag_rows = rows[rows["section"] == "tag"][visible_cols].copy()
+        st.dataframe(tag_rows, use_container_width=True, hide_index=True)
+
+
 def _render_strategy_lab_panel(store: Store) -> None:
     windows = store.promotion_windows(limit=8)
     rules = store.strategy_rules(limit=200)
@@ -3002,6 +3041,31 @@ def _render_strategy_lab_panel(store: Store) -> None:
         _compact_metric("Shadow rules", shadow_rules)
     with c3:
         _compact_metric("Promotions", len([item for item in windows if item.get("status") == "OPEN"]))
+    try:
+        readiness = evaluate_promotion_readiness(_settings(), store, since_date=DEFAULT_START_DATE)
+        backlog = readiness.get("validation_backlog") or {}
+        st.caption(
+            f"F6 proposal-only | pendientes CI: {backlog.get('pending', 0)} | "
+            f"cierres recomendados: {backlog.get('recommended_closures', 0)}"
+        )
+        decisions = [
+            {
+                "kind": item.get("kind"),
+                "key": item.get("key"),
+                "verdict": item.get("verdict"),
+                "alpha_10d": (item.get("metrics") or {}).get("alpha_10d"),
+                "expectancy_10d": (item.get("metrics") or {}).get("expectancy_10d"),
+                "matured_10d": (item.get("metrics") or {}).get("matured_10d"),
+                "regimes": item.get("stable_regime_count"),
+            }
+            for item in (readiness.get("promotion_candidates") or []) + (readiness.get("retire_candidates") or [])
+        ]
+        if decisions:
+            st.dataframe(pd.DataFrame(decisions), use_container_width=True, hide_index=True)
+        else:
+            st.caption("Sin candidatos de promocion bajo filtros estrictos; retiros se listan al reunir evidencia negativa suficiente.")
+    except Exception as exc:  # noqa: BLE001
+        st.caption(f"Readiness F6 no disponible: {exc}")
     if windows:
         st.dataframe(
             pd.DataFrame(
@@ -3291,6 +3355,9 @@ def page_dashboard() -> None:
             _render_agent_roster_panel(runtime, store)
 
     _render_performance_baseline(store)
+    st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+    with st.container(border=True):
+        _render_profitability_scoreboard_panel(settings, store)
     _render_autonomy_panel(store, settings)
 
     with st.expander("Ver log completo reciente"):
