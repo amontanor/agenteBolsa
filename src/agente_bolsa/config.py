@@ -682,11 +682,10 @@ class Settings(BaseSettings):
         default=True,
         alias="DETERMINISTIC_TRADE_FALLBACK_ENABLED",
     )
-    # T2b: reordenar los candidatos del fallback determinista por score de
-    # oportunidad (fuerza relativa / momentum / tendencia). Default OFF: no cambia
-    # la conducta hasta validarlo en shadow/paper.
+    # T2b/F3: reordenar los candidatos del fallback determinista por score de
+    # oportunidad (fuerza relativa / momentum / tendencia). Reversible por flag.
     opportunity_ranker_fallback_enabled: bool = Field(
-        default=False,
+        default=True,
         alias="OPPORTUNITY_RANKER_FALLBACK_ENABLED",
     )
     selection_negative_pocket_penalty_enabled: bool = Field(
