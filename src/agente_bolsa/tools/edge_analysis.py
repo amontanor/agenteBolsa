@@ -1,0 +1,271 @@
+"""Forward-edge diagnostics for executed buys and backtest veto cohorts."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from collections import defaultdict
+from typing import Any, Callable
+
+from agente_bolsa.config import Settings
+from agente_bolsa.storage import Store
+
+from .execution_linking import match_signal_row_for_buy_order
+from .market_data import download_daily_prices
+from .signal_learning import HORIZONS, _indicator_tags, _setup_key
+
+
+def _num(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _round(value: float | None, digits: int = 4) -> float | None:
+    if value is None:
+        return None
+    return round(value, digits)
+
+
+def _winner(value: float | None) -> bool:
+    return value is not None and value > 0
+
+
+def _profit_factor(values: list[float | None]) -> float | None:
+    gains = sum(value for value in values if value is not None and value > 0)
+    losses = -sum(value for value in values if value is not None and value < 0)
+    if gains <= 0 and losses <= 0:
+        return None
+    if losses <= 0:
+        return None
+    return round(gains / losses, 4)
+
+
+def _mean(values: list[float | None]) -> float | None:
+    clean = [value for value in values if value is not None]
+    if not clean:
+        return None
+    return round(sum(clean) / len(clean), 4)
+
+
+def _date_text(value: str | None) -> str:
+    return str(value or "")[:10]
+
+
+def _loads(raw: str | None) -> dict[str, Any]:
+    try:
+        data = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _order_plan_created_at(payload: dict[str, Any]) -> str | None:
+    return str(((payload.get("plan") or {}).get("created_at")) or "").strip() or None
+
+
+def _build_spy_forward_returns(
+    settings: Settings,
+    *,
+    start: str,
+    end: str,
+) -> dict[tuple[str, int], float | None]:
+    try:
+        frame = download_daily_prices(
+            ["SPY"],
+            start=start,
+            end=end,
+            provider=settings.market_data_provider,
+            fmp_api_key=settings.fmp_api_key,
+        )
+    except Exception:
+        return {}
+    if frame.empty or "Close" not in frame.columns:
+        return {}
+    try:
+        spy = frame["SPY"].copy() if isinstance(frame.columns, type(frame.columns)) and hasattr(frame.columns, "levels") else frame
+    except Exception:
+        spy = frame
+    if "Close" not in spy.columns:
+        return {}
+    closes = spy["Close"].dropna()
+    if closes.empty:
+        return {}
+    returns: dict[tuple[str, int], float | None] = {}
+    values = list(closes.items())
+    for index, (ts, close) in enumerate(values):
+        try:
+            close_float = float(close)
+        except (TypeError, ValueError):
+            continue
+        for horizon in HORIZONS:
+            future_index = index + horizon
+            if future_index >= len(values):
+                returns[(str(ts)[:10], horizon)] = None
+                continue
+            future_close = values[future_index][1]
+            try:
+                future_float = float(future_close)
+            except (TypeError, ValueError):
+                returns[(str(ts)[:10], horizon)] = None
+                continue
+            returns[(str(ts)[:10], horizon)] = round((future_float / close_float) - 1.0, 6)
+    return returns
+
+
+def _metrics(rows: list[dict[str, Any]], benchmark: dict[tuple[str, int], float | None]) -> dict[str, Any]:
+    out: dict[str, Any] = {"n": len(rows)}
+    for horizon in HORIZONS:
+        values = [_num((row.get("outcome") or {}).get(f"return_{horizon}d")) for row in rows]
+        alpha_values = []
+        wins = 0
+        matured = 0
+        for row, value in zip(rows, values):
+            if value is None:
+                continue
+            matured += 1
+            if _winner(value):
+                wins += 1
+            spy_return = benchmark.get((_date_text(row.get("signal_date")), horizon))
+            if spy_return is not None:
+                alpha_values.append(value - spy_return)
+        out[f"matured_{horizon}d"] = matured
+        out[f"expectancy_{horizon}d"] = _mean(values)
+        out[f"hit_rate_{horizon}d"] = _round((wins / matured), 4) if matured else None
+        out[f"profit_factor_{horizon}d"] = _profit_factor(values)
+        out[f"alpha_{horizon}d"] = _mean(alpha_values)
+    return out
+
+
+def summarize_by_group(
+    rows: list[dict[str, Any]],
+    benchmark: dict[tuple[str, int], float | None],
+    *,
+    key_fn: Callable[[dict[str, Any]], str | None],
+    min_rows: int = 1,
+) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        key = key_fn(row)
+        if not key:
+            continue
+        grouped[key].append(row)
+    summaries = []
+    for key, items in grouped.items():
+        if len(items) < min_rows:
+            continue
+        metrics = _metrics(items, benchmark)
+        summaries.append({"key": key, **metrics})
+    return sorted(
+        summaries,
+        key=lambda item: (
+            item.get("expectancy_5d") is not None,
+            item.get("expectancy_5d") or -999,
+            item.get("n") or 0,
+        ),
+        reverse=True,
+    )
+
+
+def linked_executed_buy_signals(
+    settings: Settings,
+    store: Store,
+    *,
+    since_date: str,
+) -> dict[str, Any]:
+    with store.connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT broker_order_id, plan_id, symbol, side, status, created_at, payload_json
+            FROM broker_orders
+            WHERE lower(side) = 'buy'
+              AND lower(status) = 'filled'
+              AND created_at >= ?
+            ORDER BY created_at ASC
+            """,
+            (f"{since_date}T00:00:00",),
+        ).fetchall()
+        linked = []
+        unmatched = []
+        for row in rows:
+            payload = _loads(row["payload_json"])
+            signal = match_signal_row_for_buy_order(
+                conn,
+                symbol=str(row["symbol"]),
+                order_created_at=row["created_at"],
+                plan_created_at=_order_plan_created_at(payload),
+                broker_order_id=str(row["broker_order_id"]),
+            )
+            if not signal:
+                unmatched.append(str(row["broker_order_id"]))
+                continue
+            linked.append(
+                {
+                    **signal,
+                    "broker_order_id": row["broker_order_id"],
+                    "plan_id": row["plan_id"],
+                    "order_created_at": row["created_at"],
+                }
+            )
+    if linked:
+        start = min(_date_text(item.get("signal_date")) for item in linked)
+        end = max(_date_text(item.get("signal_date")) for item in linked)
+    else:
+        start = since_date
+        end = since_date
+    benchmark = _build_spy_forward_returns(settings, start=start, end=end)
+    for row in linked:
+        features = row.get("features") or {}
+        row["setup_quality"] = str(features.get("setup_quality") or "unknown")
+        row["setup_key"] = _setup_key(row)
+        row["tags"] = _indicator_tags(row)
+        row["regime"] = str(features.get("market_regime") or features.get("regime") or "unknown")
+    return {
+        "linked_rows": linked,
+        "unmatched_order_ids": unmatched,
+        "benchmark_points": len(benchmark),
+        "setup_quality": summarize_by_group(linked, benchmark, key_fn=lambda row: row.get("setup_quality")),
+        "setup_key": summarize_by_group(linked, benchmark, key_fn=lambda row: row.get("setup_key")),
+        "tag": summarize_by_group(
+            [
+                {**row, "tag": tag}
+                for row in linked
+                for tag in list(row.get("tags") or [])
+            ],
+            benchmark,
+            key_fn=lambda row: row.get("tag"),
+            min_rows=2,
+        ),
+        "regime": summarize_by_group(linked, benchmark, key_fn=lambda row: row.get("regime")),
+    }
+
+
+def veto_forward_cohorts(
+    settings: Settings,
+    store: Store,
+    *,
+    since_date: str,
+) -> dict[str, Any]:
+    rows = [
+        row
+        for row in store.signal_outcomes(limit=200000, since_date=since_date)
+        if str(row.get("decision") or "") == "blocked_backtest"
+    ]
+    if rows:
+        start = min(_date_text(row.get("signal_date")) for row in rows)
+        end = max(_date_text(row.get("signal_date")) for row in rows)
+    else:
+        start = since_date
+        end = since_date
+    benchmark = _build_spy_forward_returns(settings, start=start, end=end)
+    for row in rows:
+        reason = str((((row.get("gate") or {}).get("backtest_gate") or {}).get("reason")) or "unknown").strip()
+        row["veto_reason"] = reason or "unknown"
+    return {
+        "total_rows": len(rows),
+        "by_reason": summarize_by_group(rows, benchmark, key_fn=lambda row: row.get("veto_reason")),
+    }

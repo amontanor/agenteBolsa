@@ -11,6 +11,7 @@ from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.broker import BrokerClientFactory
 from agente_bolsa.tools.signal_learning import update_signal_outcomes
+from .execution_linking import match_learning_observation_for_signal, match_signal_row_for_buy_order
 
 TERMINAL_STATUSES = {
     "filled",
@@ -115,46 +116,44 @@ def _mark_signal_execution(
     plan_id: str,
     status: str,
     snapshot: dict[str, Any],
+    order_created_at: str | None,
+    plan_created_at: str | None,
     now: str,
 ) -> int:
     if side.lower() != "buy" or status != "filled":
         return 0
-    rows = conn.execute(
+    row = match_signal_row_for_buy_order(
+        conn,
+        symbol=symbol,
+        order_created_at=order_created_at,
+        plan_created_at=plan_created_at,
+        broker_order_id=str(snapshot.get("id") or ""),
+    )
+    if not row:
+        return 0
+    gate = dict(row.get("gate") or {})
+    if gate.get("executed_buy") and gate.get("broker_order_id") == snapshot.get("id"):
+        return 0
+    execution = {
+        "executed_buy": True,
+        "broker_order_id": snapshot.get("id"),
+        "plan_id": plan_id,
+        "filled_qty": snapshot.get("filled_qty"),
+        "filled_avg_price": snapshot.get("filled_avg_price"),
+        "filled_at": snapshot.get("filled_at"),
+    }
+    gate.update(execution)
+    outcome = dict(row.get("outcome") or {})
+    outcome.setdefault("execution", {}).update(execution)
+    conn.execute(
         """
-        SELECT signal_id, gate_json, outcome_json
-        FROM signal_outcomes
-        WHERE symbol = ?
-        ORDER BY signal_date DESC, created_at DESC
-        LIMIT 20
+        UPDATE signal_outcomes
+        SET gate_json = ?, outcome_json = ?, updated_at = ?
+        WHERE signal_id = ?
         """,
-        (symbol.upper(),),
-    ).fetchall()
-    updated = 0
-    for row in rows:
-        gate = _json_loads(row["gate_json"])
-        if gate.get("executed_buy") and gate.get("broker_order_id") == snapshot.get("id"):
-            continue
-        execution = {
-            "executed_buy": True,
-            "broker_order_id": snapshot.get("id"),
-            "plan_id": plan_id,
-            "filled_qty": snapshot.get("filled_qty"),
-            "filled_avg_price": snapshot.get("filled_avg_price"),
-            "filled_at": snapshot.get("filled_at"),
-        }
-        gate.update(execution)
-        outcome = _json_loads(row["outcome_json"])
-        outcome.setdefault("execution", {}).update(execution)
-        conn.execute(
-            """
-            UPDATE signal_outcomes
-            SET gate_json = ?, outcome_json = ?, updated_at = ?
-            WHERE signal_id = ?
-            """,
-            (_json_dumps(gate), _json_dumps(outcome), now, row["signal_id"]),
-        )
-        updated += 1
-    return updated
+        (_json_dumps(gate), _json_dumps(outcome), now, row["signal_id"]),
+    )
+    return 1
 
 
 def _mark_learning_execution(
@@ -165,23 +164,30 @@ def _mark_learning_execution(
     plan_id: str,
     status: str,
     snapshot: dict[str, Any],
+    order_created_at: str | None,
+    plan_created_at: str | None,
     now: str,
 ) -> int:
     if side.lower() != "buy" or status != "filled":
         return 0
-    row = conn.execute(
-        """
-        SELECT observation_id, execution_json
-        FROM learning_observations
-        WHERE symbol = ?
-        ORDER BY signal_date DESC, updated_at DESC
-        LIMIT 1
-        """,
-        (symbol.upper(),),
-    ).fetchone()
+    signal = match_signal_row_for_buy_order(
+        conn,
+        symbol=symbol,
+        order_created_at=order_created_at,
+        plan_created_at=plan_created_at,
+        broker_order_id=str(snapshot.get("id") or ""),
+    )
+    if not signal:
+        return 0
+    row = match_learning_observation_for_signal(
+        conn,
+        symbol=symbol,
+        signal_date=str(signal.get("signal_date") or ""),
+        source=signal.get("source"),
+    )
     if not row:
         return 0
-    execution = _json_loads(row["execution_json"])
+    execution = dict(row.get("execution") or {})
     execution.update(
         {
             "broker_order_id": snapshot.get("id"),
@@ -259,6 +265,7 @@ def reconcile_broker_orders(
                     "new": new_status,
                     "fill": snapshot,
                     "payload": payload,
+                    "created_at": row["created_at"],
                 }
             )
     result["changes"] = [{k: v for k, v in item.items() if k != "payload"} for item in changes]
@@ -270,6 +277,7 @@ def reconcile_broker_orders(
     with store.connect() as conn:
         for change in changes:
             payload = _merge_reconciliation_payload(change["payload"], change["fill"], at=now)
+            plan_created_at = str(((change["payload"].get("plan") or {}).get("created_at")) or "").strip() or None
             conn.execute(
                 """
                 UPDATE broker_orders
@@ -285,6 +293,8 @@ def reconcile_broker_orders(
                 plan_id=change["plan_id"],
                 status=change["new"],
                 snapshot=change["fill"],
+                order_created_at=change.get("created_at"),
+                plan_created_at=plan_created_at,
                 now=now,
             )
             learning_updates += _mark_learning_execution(
@@ -294,6 +304,8 @@ def reconcile_broker_orders(
                 plan_id=change["plan_id"],
                 status=change["new"],
                 snapshot=change["fill"],
+                order_created_at=change.get("created_at"),
+                plan_created_at=plan_created_at,
                 now=now,
             )
         conn.execute(
