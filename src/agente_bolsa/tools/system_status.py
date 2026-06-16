@@ -41,6 +41,18 @@ def _age_min(ts):
     return None if not d else (_now() - d).total_seconds() / 60.0
 
 
+def _waiting_after_scheduler_restart(
+    *,
+    job_age_min: float | None,
+    scheduler_age_min: float | None,
+    cadence_min: float,
+    grace_min: float = 2.0,
+) -> bool:
+    if scheduler_age_min is None or scheduler_age_min > cadence_min + grace_min:
+        return False
+    return job_age_min is None or job_age_min > cadence_min + grace_min
+
+
 def _market_open(now) -> bool:
     if now.weekday() >= 5:
         return False
@@ -108,6 +120,8 @@ def build_status(db_path: Path | None = None, reports_dir: Path | None = None) -
     mc = jobs.get("market_cycle") or {}
     mc_age = _age_min(mc.get("finished_at"))
     st = ((NA, "mercado cerrado") if not market_open else
+          (WARN, f"scheduler reiniciado hace {hb:.1f} min; esperando primer ciclo")
+          if _waiting_after_scheduler_restart(job_age_min=mc_age, scheduler_age_min=hb, cadence_min=15.0) else
           (DOWN, "sin ciclos") if mc_age is None else
           (OK, f"hace {mc_age:.1f} min ({mc.get('status')})") if mc_age <= 20 else
           (WARN, f"hace {mc_age:.0f} min") if mc_age <= 35 else
@@ -115,7 +129,9 @@ def build_status(db_path: Path | None = None, reports_dir: Path | None = None) -
     comps.append({"name": "Ciclo de mercado (15m)", "state": st[0], "detail": st[1], "expected": "cada 15 min con NYSE abierto"})
 
     a = _age_min((jobs.get("agents_healthcheck") or {}).get("finished_at"))
-    st = ((WARN, "sin ejecuciones") if a is None else (OK, f"hace {a:.0f} min") if a <= 40 else
+    st = ((WARN, f"scheduler reiniciado hace {hb:.1f} min; esperando healthcheck")
+          if _waiting_after_scheduler_restart(job_age_min=a, scheduler_age_min=hb, cadence_min=30.0) else
+          (WARN, "sin ejecuciones") if a is None else (OK, f"hace {a:.0f} min") if a <= 40 else
           (WARN, f"hace {a:.0f} min") if a <= 90 else (DOWN, f"hace {a:.0f} min"))
     comps.append({"name": "Watchdog agentes (30m)", "state": st[0], "detail": st[1], "expected": "cada 30 min"})
 
