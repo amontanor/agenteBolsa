@@ -334,6 +334,9 @@ def update_signal_decisions(
                     }
                 else:
                     decision = "blocked_backtest"
+                    shadow = _backtest_near_miss_shadow(settings, backtest)
+                    if shadow:
+                        gate["backtest_near_miss_shadow"] = shadow
             elif entry_micro:
                 decision = "approved_buy_micro"
             else:
@@ -353,6 +356,29 @@ def update_signal_decisions(
         )
         updated += 1
     return updated
+
+
+_BACKTEST_NEAR_MISS_SHADOW_RULES = {
+    "hit-rate 44.00% < minimo 45.00%": "hit_rate_44_vs_45",
+    "trade-window alpha -0.15% < minimo 0.00%": "trade_window_alpha_minus_0_15",
+    "trades 8 < minimo 10": "trades_8_vs_10",
+}
+
+
+def _backtest_near_miss_shadow(settings: Settings, backtest_gate: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not settings.backtest_gate_near_miss_shadow_enabled or not backtest_gate:
+        return None
+    reason = str(backtest_gate.get("reason") or "").strip()
+    rule_id = _BACKTEST_NEAR_MISS_SHADOW_RULES.get(reason)
+    if not rule_id:
+        return None
+    return {
+        "enabled": True,
+        "rule_id": rule_id,
+        "reason": reason,
+        "mode": "shadow_only",
+        "action": "track_forward_outcome_without_relaxing_gate",
+    }
 
 
 def update_signal_execution_status(

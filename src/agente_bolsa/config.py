@@ -656,6 +656,10 @@ class Settings(BaseSettings):
         default=True,
         alias="BACKTEST_GATE_PAPER_SOFT_OVERRIDE_ENABLED",
     )
+    backtest_gate_near_miss_shadow_enabled: bool = Field(
+        default=True,
+        alias="BACKTEST_GATE_NEAR_MISS_SHADOW_ENABLED",
+    )
     exit_policy_v2_enabled: bool = Field(default=True, alias="EXIT_POLICY_V2_ENABLED")
     exit_policy_v2_partial_r: float = Field(default=1.0, alias="EXIT_POLICY_V2_PARTIAL_R")
     exit_policy_v2_trailing_r: float = Field(default=2.0, alias="EXIT_POLICY_V2_TRAILING_R")

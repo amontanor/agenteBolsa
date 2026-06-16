@@ -304,6 +304,89 @@ def test_update_signal_decisions_keeps_hard_backtest_block_when_not_high_convict
     assert row["decision"] == "blocked_backtest"
 
 
+def test_update_signal_decisions_logs_backtest_near_miss_shadow(tmp_path):
+    from agente_bolsa.storage import Store
+
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    store.save_signal_outcome(
+        signal_id="scan-1:AAPL",
+        source_run_id="scan-1",
+        source="test",
+        symbol="AAPL",
+        signal_date="2026-04-27",
+        decision="candidate",
+        features={"score": 12},
+    )
+
+    update_signal_decisions(
+        store,
+        source_run_id="scan-1",
+        recommendations=[
+            TradeRecommendation(symbol="AAPL", action="buy", confidence=0.9, reason="test")
+        ],
+        entry_quality_gate=[
+            {
+                "symbol": "AAPL",
+                "action": "buy",
+                "approved": True,
+                "reason": "entry-quality aprobado",
+                "checks": {"entry_score_v2": {"reward_risk": 1.6}},
+            }
+        ],
+        backtest_gate=[
+            {"symbol": "AAPL", "approved": False, "reason": "trades 8 < minimo 10", "checks": {}}
+        ],
+        settings=Settings(DATA_DIR=tmp_path),
+    )
+    row = store.signal_outcomes()[0]
+
+    assert row["decision"] == "blocked_backtest"
+    assert row["gate"]["backtest_near_miss_shadow"]["rule_id"] == "trades_8_vs_10"
+    assert row["gate"]["backtest_near_miss_shadow"]["mode"] == "shadow_only"
+
+
+def test_update_signal_decisions_does_not_shadow_excluded_near_miss(tmp_path):
+    from agente_bolsa.storage import Store
+
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    store.save_signal_outcome(
+        signal_id="scan-1:AAPL",
+        source_run_id="scan-1",
+        source="test",
+        symbol="AAPL",
+        signal_date="2026-04-27",
+        decision="candidate",
+        features={"score": 12},
+    )
+
+    update_signal_decisions(
+        store,
+        source_run_id="scan-1",
+        recommendations=[
+            TradeRecommendation(symbol="AAPL", action="buy", confidence=0.9, reason="test")
+        ],
+        entry_quality_gate=[
+            {
+                "symbol": "AAPL",
+                "action": "buy",
+                "approved": True,
+                "reason": "entry-quality aprobado",
+                "checks": {"entry_score_v2": {"reward_risk": 1.6}},
+            }
+        ],
+        backtest_gate=[
+            {"symbol": "AAPL", "approved": False, "reason": "hit-rate 44.44% < minimo 45.00%", "checks": {}}
+        ],
+        settings=Settings(DATA_DIR=tmp_path),
+    )
+    row = store.signal_outcomes()[0]
+
+    assert row["decision"] == "blocked_backtest"
+    assert "backtest_near_miss_shadow" not in row["gate"]
+
+
 def test_update_signal_execution_status_marks_plan_rejected(tmp_path):
     from agente_bolsa.storage import Store
 
