@@ -588,6 +588,34 @@ def _exit_policy_v2_time_stop_trigger(
     return None, 0.0
 
 
+def _exit_policy_v2_stale_guard_trigger(
+    settings: Settings,
+    *,
+    position: Any,
+    source_created_at: Any,
+    state: dict[str, Any],
+    entry_price: float,
+) -> tuple[str | None, float]:
+    if not settings.exit_policy_v2_stale_guard_enabled or settings.exit_policy_v2_stale_guard_days <= 0:
+        return None, 0.0
+    created_at = _parse_datetime(source_created_at)
+    current_price = float(getattr(position, "current_price", 0.0) or 0.0)
+    if created_at is None or entry_price <= 0 or current_price <= 0:
+        return None, 0.0
+    held_days = (datetime.now(timezone.utc) - created_at).days
+    if held_days < settings.exit_policy_v2_stale_guard_days:
+        return None, 0.0
+    high_water = max(float(state.get("high_water") or entry_price), entry_price)
+    peak_return = (high_water - entry_price) / entry_price
+    current_return = (current_price - entry_price) / entry_price
+    if (
+        peak_return <= float(settings.exit_policy_v2_stale_guard_max_peak_return)
+        and current_return <= float(settings.exit_policy_v2_stale_guard_min_return)
+    ):
+        return "stale_guard_v2", current_price
+    return None, 0.0
+
+
 def _exit_policy_v2_runtime_trigger(
     settings: Settings,
     store: Store,
@@ -657,6 +685,23 @@ def _exit_policy_v2_runtime_trigger(
         return {
             "trigger": time_trigger,
             "level": time_level,
+            "qty_fraction": 1.0,
+            "state_key": state_key,
+            "state": state,
+        }
+
+    stale_trigger, stale_level = _exit_policy_v2_stale_guard_trigger(
+        settings,
+        position=position,
+        source_created_at=source.get("created_at"),
+        state=state,
+        entry_price=entry,
+    )
+    if stale_trigger:
+        store.set_runtime_value(state_key, state)
+        return {
+            "trigger": stale_trigger,
+            "level": stale_level,
             "qty_fraction": 1.0,
             "state_key": state_key,
             "state": state,

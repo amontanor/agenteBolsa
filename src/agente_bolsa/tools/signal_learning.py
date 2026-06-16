@@ -568,6 +568,10 @@ def _simulate_exit_policy_v2(
     trailing_giveback_r: float = 1.0,
     time_stop_days: int = 5,
     time_stop_min_return: float = 0.0,
+    stale_guard_enabled: bool = False,
+    stale_guard_days: int = 10,
+    stale_guard_max_peak_return: float = 0.05,
+    stale_guard_min_return: float = 0.01,
 ) -> dict[str, Any]:
     if not entry or not closes:
         return {"available": False, "reason": "sin barras"}
@@ -623,6 +627,18 @@ def _simulate_exit_policy_v2(
             exit_day = day
             events.append({"type": "time_stop", "date": date, "days": day, "price": round(exit_price, 4)})
             break
+        if (
+            stale_guard_enabled
+            and day >= stale_guard_days
+            and close is not None
+            and ((peak_price - entry) / entry) <= stale_guard_max_peak_return
+            and ((close - entry) / entry) <= stale_guard_min_return
+        ):
+            exit_price = close
+            exit_reason = "stale_guard"
+            exit_day = day
+            events.append({"type": "stale_guard", "date": date, "days": day, "price": round(exit_price, 4)})
+            break
     gross_return = (exit_price - entry) / entry
     if partial_taken and exit_reason not in {"pending"}:
         partial_price = entry + (partial_r * initial_risk)
@@ -649,6 +665,10 @@ def _simulate_exit_policy_v2(
             "trailing_giveback_r": trailing_giveback_r,
             "time_stop_days": time_stop_days,
             "time_stop_min_return": time_stop_min_return,
+            "stale_guard_enabled": stale_guard_enabled,
+            "stale_guard_days": stale_guard_days,
+            "stale_guard_max_peak_return": stale_guard_max_peak_return,
+            "stale_guard_min_return": stale_guard_min_return,
         },
     }
 

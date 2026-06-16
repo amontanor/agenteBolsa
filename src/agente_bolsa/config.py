@@ -662,6 +662,16 @@ class Settings(BaseSettings):
     exit_policy_v2_trailing_giveback_r: float = Field(default=1.0, alias="EXIT_POLICY_V2_TRAILING_GIVEBACK_R")
     exit_policy_v2_time_stop_days: int = Field(default=5, alias="EXIT_POLICY_V2_TIME_STOP_DAYS")
     exit_policy_v2_time_stop_min_return: float = Field(default=0.0, alias="EXIT_POLICY_V2_TIME_STOP_MIN_RETURN")
+    exit_policy_v2_stale_guard_enabled: bool = Field(default=False, alias="EXIT_POLICY_V2_STALE_GUARD_ENABLED")
+    exit_policy_v2_stale_guard_days: int = Field(default=10, alias="EXIT_POLICY_V2_STALE_GUARD_DAYS")
+    exit_policy_v2_stale_guard_max_peak_return: float = Field(
+        default=0.05,
+        alias="EXIT_POLICY_V2_STALE_GUARD_MAX_PEAK_RETURN",
+    )
+    exit_policy_v2_stale_guard_min_return: float = Field(
+        default=0.01,
+        alias="EXIT_POLICY_V2_STALE_GUARD_MIN_RETURN",
+    )
     auto_paper_trading: bool = Field(default=False, alias="AUTO_PAPER_TRADING")
     require_human_approval: bool = Field(default=True, alias="REQUIRE_HUMAN_APPROVAL")
     deterministic_trade_fallback_enabled: bool = Field(

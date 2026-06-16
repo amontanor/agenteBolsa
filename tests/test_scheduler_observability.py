@@ -8,6 +8,7 @@ from agente_bolsa.config import Settings
 from agente_bolsa.continuous_improvement.runtime import ContinuousImprovementLabRuntime
 from agente_bolsa.continuous_improvement.schemas import Diagnosis, LLMImprovementResponse, LLMJsonResult
 from agente_bolsa.scheduler import (
+    _exit_policy_v2_stale_guard_trigger,
     _exit_policy_v2_runtime_trigger,
     _exit_policy_v2_time_stop_trigger,
     _job_state_key,
@@ -306,6 +307,30 @@ def test_exit_policy_v2_runtime_triggers_trailing_after_high_water(tmp_path):
 
     assert trigger["trigger"] == "trailing_stop_v2"
     assert trigger["level"] == 107.0
+
+
+def test_exit_policy_v2_stale_guard_triggers_for_nonperformer_position(tmp_path):
+    settings = Settings(
+        DATA_DIR=tmp_path,
+        EXIT_POLICY_V2_ENABLED=True,
+        EXIT_POLICY_V2_STALE_GUARD_ENABLED=True,
+        EXIT_POLICY_V2_STALE_GUARD_DAYS=10,
+        EXIT_POLICY_V2_STALE_GUARD_MAX_PEAK_RETURN=0.05,
+        EXIT_POLICY_V2_STALE_GUARD_MIN_RETURN=0.01,
+    )
+    position = SimpleNamespace(current_price=100.5, unrealized_plpc=0.005)
+    source_created_at = (datetime.now(timezone.utc) - timedelta(days=12)).isoformat()
+
+    trigger, level = _exit_policy_v2_stale_guard_trigger(
+        settings,
+        position=position,
+        source_created_at=source_created_at,
+        state={"high_water": 104.0},
+        entry_price=100.0,
+    )
+
+    assert trigger == "stale_guard_v2"
+    assert level == 100.5
 
 
 def test_continuous_improvement_job_persists_retry_metadata_after_failure(tmp_path, monkeypatch):
