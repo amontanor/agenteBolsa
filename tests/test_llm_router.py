@@ -1,7 +1,9 @@
 from agente_bolsa.config import Settings
 from agente_bolsa.llm_router import (
     chat_for_role,
+    classify_llm_client_error,
     configured_llm_endpoints,
+    is_endpoint_available,
     role_endpoints,
     role_max_tokens,
     select_preferred_endpoint,
@@ -51,6 +53,26 @@ def test_select_preferred_endpoint_returns_primary_when_it_is_available(monkeypa
     assert endpoint.name == "primary"
     assert endpoint.model == "mimo-v2.5-pro"
     assert attempts[0]["available"] is True
+
+
+def test_endpoint_import_error_is_reported_as_broken_client(monkeypatch):
+    settings = _role_settings(LLM_PRIMARY_PREFLIGHT_ENABLED=True)
+    endpoint = configured_llm_endpoints(settings)[0]
+
+    def broken_client(_endpoint, _timeout):
+        raise ModuleNotFoundError("No module named 'jiter.jiter'")
+
+    monkeypatch.setattr("agente_bolsa.llm_router.build_openai_client", broken_client)
+
+    available, error = is_endpoint_available(endpoint, settings.llm_timeout_seconds)
+
+    assert available is False
+    assert error.startswith("llm_client_import_broken:")
+    assert "jiter.jiter" in error
+
+
+def test_classify_llm_client_error_keeps_provider_errors_plain():
+    assert classify_llm_client_error(RuntimeError("Connection error.")) == "Connection error."
 
 
 # -- Router por roles (T0.4) ----------------------------------------------

@@ -6,15 +6,18 @@ from types import SimpleNamespace
 
 from agente_bolsa.config import Settings
 from agente_bolsa.continuous_improvement.runtime import ContinuousImprovementLabRuntime
+from agente_bolsa.continuous_improvement.schemas import Diagnosis, LLMImprovementResponse, LLMJsonResult
 from agente_bolsa.scheduler import (
     _exit_policy_v2_runtime_trigger,
     _exit_policy_v2_time_stop_trigger,
     _job_state_key,
     _selected_candidates,
     continuous_improvement_job,
+    overnight_learning_heartbeat_job,
     scheduler_status,
 )
 from agente_bolsa.storage import Store
+from agente_bolsa.tools.overnight_learning import build_overnight_learning_heartbeat
 
 
 def test_selected_candidates_prioritizes_recent_positive_setup_edge(tmp_path):
@@ -120,6 +123,99 @@ def test_scheduler_status_includes_last_job_runtime(tmp_path):
 
     assert status["job_runtime"]["market_cycle"]["status"] == "completed"
     assert status["job_runtime"]["market_cycle"]["extra"]["selected_symbols"] == ["AAPL"]
+
+
+def test_scheduler_status_includes_overnight_learning_heartbeat(tmp_path):
+    settings = Settings(DATA_DIR=tmp_path, OVERNIGHT_LEARNING_TIME_LOCAL="00:10")
+    status = scheduler_status(settings)
+
+    job_ids = {job["id"] for job in status["jobs"]}
+    assert "overnight_learning_heartbeat" in job_ids
+    assert "overnight_learning_heartbeat" in status["job_runtime"]
+
+
+def test_overnight_learning_heartbeat_records_llm_usage(tmp_path, monkeypatch):
+    settings = Settings(
+        DATA_DIR=tmp_path,
+        IMPROVEMENT_LLM_ENABLED=True,
+        OVERNIGHT_LEARNING_USE_LLM=True,
+    )
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+
+    class FakeImprovementLLMClient:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def generate_json(self, messages, schema, *, model, max_tokens):
+            return LLMJsonResult(
+                ok=True,
+                llm_call_id="ci_llm_overnight_test",
+                payload=LLMImprovementResponse(
+                    diagnosis=Diagnosis(summary="aprendizaje nocturno operativo", confidence="HIGH", data_quality="GOOD"),
+                    recommended_next_actions=["mantener observabilidad LLM"],
+                ),
+                raw_response='{"diagnosis":{"summary":"aprendizaje nocturno operativo"}}',
+                provider="fake",
+                model=model,
+                prompt_tokens_estimate=42,
+            )
+
+    monkeypatch.setattr(
+        "agente_bolsa.continuous_improvement.llm_client.ImprovementLLMClient",
+        FakeImprovementLLMClient,
+    )
+
+    report = build_overnight_learning_heartbeat(store, settings, settings.data_dir / "reports", "night_test")
+
+    latest_usage = store.latest_llm_usage(limit=1)[0]
+    assert report["status"] == "ok"
+    assert report["summary"]["llm_usage_recorded"] is True
+    assert latest_usage["source"] == "overnight_learning_heartbeat"
+    assert latest_usage["role"] == "overnight_learning"
+    assert latest_usage["total_tokens"] > 42
+
+
+def test_overnight_learning_heartbeat_job_runs_once_per_session(tmp_path, monkeypatch):
+    settings = Settings(DATA_DIR=tmp_path, OVERNIGHT_LEARNING_ENABLED=True)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+
+    fake_status = SimpleNamespace(
+        now_market="2026-06-15T18:30:00-04:00",
+        as_dict=lambda: {"now_market": "2026-06-15T18:30:00-04:00"},
+    )
+
+    class FakeMarketCalendar:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def should_run_daily_study(self):
+            return True, fake_status
+
+    calls = {"count": 0}
+
+    def fake_build(store_arg, settings_arg, reports_dir, run_id):
+        calls["count"] += 1
+        return {
+            "path": str(reports_dir / "latest_overnight_learning_heartbeat.json"),
+            "status": "ok",
+            "summary": {"llm_usage_recorded": True},
+            "warnings": [],
+        }
+
+    monkeypatch.setattr("agente_bolsa.scheduler.MarketCalendar", FakeMarketCalendar)
+    monkeypatch.setattr("agente_bolsa.scheduler.build_overnight_learning_heartbeat", fake_build)
+
+    first = overnight_learning_heartbeat_job(settings, store, verbose=False)
+    second = overnight_learning_heartbeat_job(settings, store, verbose=False)
+
+    assert first["status"] == "ok"
+    assert second is None
+    assert calls["count"] == 1
+    assert store.get_runtime_value("overnight_learning_heartbeat_last_session") == "2026-06-15"
+    job_state = store.get_runtime_value(_job_state_key("overnight_learning_heartbeat"))
+    assert job_state["status"] == "skipped"
 
 
 def test_exit_policy_v2_time_stop_triggers_for_stale_flat_position(tmp_path):

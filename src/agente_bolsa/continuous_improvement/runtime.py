@@ -32,6 +32,7 @@ from .agents import (
     proposal_fingerprint,
 )
 from .llm_client import ImprovementLLMClient
+from .llm_usage_bridge import record_improvement_llm_usage
 from .memory import SharedMemory
 from .orchestration import LabOrchestrator
 from .experiments import AutoApplyCodeAgent
@@ -910,6 +911,12 @@ class ContinuousImprovementLabRuntime:
             context = self.collector.collect(self.settings, self.store, cycle_id=cycle_id)
             evaluation = self.evaluator.evaluate(context)
             context["evaluation"] = evaluation
+            try:
+                from .lesson_curator import curate_lessons
+
+                context["lesson_curation"] = curate_lessons(self.store, self.settings)
+            except Exception as exc:  # noqa: BLE001 - la curacion no bloquea el ciclo.
+                context["lesson_curation"] = {"error": repr(exc)}
             # Limites de flujo del laboratorio (Etapa 7) para el orquestador.
             settings_ctx = context.setdefault("settings", {})
             if isinstance(settings_ctx, dict):
@@ -1102,6 +1109,12 @@ class ContinuousImprovementLabRuntime:
                 },
             )
             llm_result = self.strategist.propose(context, evaluation)
+            llm_usage = record_improvement_llm_usage(
+                self.store,
+                self.settings,
+                source="continuous_improvement_lab",
+                result=llm_result,
+            )
             self.store.save_continuous_improvement_llm_response(
                 {
                     "llm_call_id": llm_result.llm_call_id,
@@ -1116,7 +1129,10 @@ class ContinuousImprovementLabRuntime:
                     "truncation_report": llm_result.truncation_report,
                     "status": "ok" if llm_result.ok else "failed",
                     "request": llm_result.request_preview,
-                    "response": llm_result.payload.model_dump() if llm_result.payload else {},
+                    "response": {
+                        **(llm_result.payload.model_dump() if llm_result.payload else {}),
+                        "_usage_record": llm_usage,
+                    },
                     "raw_response": (llm_result.raw_response or "")[:20000] or None,
                     "error": llm_result.error,
                 }

@@ -33,6 +33,11 @@ from .tools.execution import submit_paper_order_plan
 from .tools.daily_learning import build_learning_digest_report, load_daily_learning_context
 from .tools.news_sentiment import analyze_news_sentiment_for_candidates
 from .tools.opportunities import build_opportunity_snapshot
+from .tools.overnight_learning import (
+    build_overnight_learning_heartbeat,
+    mark_overnight_session_done,
+    should_run_overnight_for_session,
+)
 from .tools.operational_health import (
     activate_persistent_kill_switch,
     load_operational_response_context,
@@ -2148,6 +2153,108 @@ def continuous_improvement_job(
         return None
 
 
+def overnight_learning_heartbeat_job(
+    settings: Settings,
+    store: Store,
+    *,
+    verbose: bool = True,
+    force: bool = False,
+) -> dict[str, Any] | None:
+    if not settings.overnight_learning_enabled and not force:
+        return None
+
+    run_id = new_id("night")
+    started_at = datetime.now(timezone.utc)
+    calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
+    should_run, status = calendar.should_run_daily_study()
+    reporter = _reporter(settings, store, verbose)
+    if not should_run and not force:
+        _set_job_status(
+            store,
+            "overnight_learning_heartbeat",
+            status="skipped",
+            run_id=run_id,
+            started_at=started_at,
+            detail="mercado aun no apto para heartbeat nocturno",
+        )
+        return None
+
+    session_date = datetime.fromisoformat(status.now_market).date().isoformat()
+    if not should_run_overnight_for_session(store, session_date, force=force):
+        _set_job_status(
+            store,
+            "overnight_learning_heartbeat",
+            status="skipped",
+            run_id=run_id,
+            started_at=started_at,
+            detail="heartbeat nocturno ya ejecutado para la sesion",
+        )
+        return None
+
+    reporter.emit(
+        "overnight_learning_supervisor",
+        "overnight_learning_started",
+        run_id,
+        f"Heartbeat nocturno iniciado para {session_date}: aprendizaje, backlog, frescura LLM y propuestas low-risk.",
+        {**status.as_dict(), "research_only": True},
+    )
+    try:
+        report = build_overnight_learning_heartbeat(store, settings, settings.data_dir / "reports", run_id)
+        mark_overnight_session_done(store, session_date)
+        store.set_runtime_value(
+            "overnight_learning_heartbeat_latest",
+            {
+                "run_id": run_id,
+                "session_date": session_date,
+                "status": report.get("status"),
+                "summary": report.get("summary", {}),
+                "path": report.get("path"),
+                "research_only": True,
+            },
+        )
+        _set_job_status(
+            store,
+            "overnight_learning_heartbeat",
+            status="completed",
+            run_id=run_id,
+            started_at=started_at,
+            detail=f"heartbeat nocturno completado; salud={report.get('status')}",
+            extra={
+                "report_path": report.get("path"),
+                "health_status": report.get("status"),
+                "llm_usage_recorded": (report.get("summary") or {}).get("llm_usage_recorded"),
+                "warnings": report.get("warnings", []),
+                "research_only": True,
+            },
+        )
+        reporter.emit(
+            "overnight_learning_supervisor",
+            "overnight_learning_completed",
+            run_id,
+            f"Heartbeat nocturno guardado. Salud={report.get('status')}; uso LLM registrado={(report.get('summary') or {}).get('llm_usage_recorded')}.",
+            {"path": report.get("path"), "summary": report.get("summary", {}), "warnings": report.get("warnings", [])},
+        )
+        return report
+    except Exception as exc:  # noqa: BLE001 - scheduler must keep running.
+        reporter.emit(
+            "overnight_learning_supervisor",
+            "overnight_learning_failed",
+            run_id,
+            f"Heartbeat nocturno fallido: {exc}",
+            {"error": repr(exc), "session_date": session_date, "research_only": True},
+        )
+        _set_job_status(
+            store,
+            "overnight_learning_heartbeat",
+            status="failed",
+            run_id=run_id,
+            started_at=started_at,
+            detail=str(exc),
+            extra={"error_type": type(exc).__name__, "research_only": True},
+        )
+        return None
+
+
 def _pre_earnings_run_time_reached(settings: Settings, status: Any) -> bool:
     now_utc_raw = getattr(status, "now_utc", None)
     close_raw = getattr(status, "market_close", None) or getattr(status, "next_close", None)
@@ -2313,6 +2420,39 @@ def pre_earnings_job(
         return None
 
 
+def agents_healthcheck_job(settings: Settings, store: Store, *, verbose: bool = True) -> None:
+    """Vigila el modo degradado del LLM y publica las mejores oportunidades.
+
+    Delega el trabajo en `tools.agents_healthcheck` (modulo separado) para no
+    engordar este fichero. La vigilancia nunca debe romper el scheduler.
+    """
+    run_id = new_id("ahc")
+    started_at = datetime.now(timezone.utc)
+    reporter = _reporter(settings, store, verbose)
+    try:
+        from .tools.agents_healthcheck import run_agents_healthcheck
+
+        summary = run_agents_healthcheck(settings, store, reporter, run_id)
+        _set_job_status(
+            store,
+            "agents_healthcheck",
+            status="completed",
+            run_id=run_id,
+            started_at=started_at,
+            detail=("degradado" if summary.get("degraded") else "ok"),
+        )
+    except Exception as exc:  # noqa: BLE001 - la vigilancia nunca debe romper el scheduler
+        _set_job_status(
+            store,
+            "agents_healthcheck",
+            status="failed",
+            run_id=run_id,
+            started_at=started_at,
+            detail=str(exc),
+            extra={"error_type": type(exc).__name__},
+        )
+
+
 def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose: bool) -> Any:
     if BackgroundScheduler is None or CronTrigger is None or IntervalTrigger is None:
         raise RuntimeError("APScheduler no esta instalado. Instala las dependencias del proyecto para usar schedule.")
@@ -2385,6 +2525,18 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         coalesce=True,
         replace_existing=True,
     )
+    overnight_hour, overnight_minute = _daily_hour_minute(settings.overnight_learning_time_local)
+    scheduler.add_job(
+        overnight_learning_heartbeat_job,
+        trigger=CronTrigger(hour=overnight_hour, minute=overnight_minute, timezone=local_tz),
+        args=[settings, store],
+        kwargs={"verbose": verbose},
+        id="overnight_learning_heartbeat",
+        name="Overnight learning heartbeat",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
     if settings.continuous_improvement_schedule_enabled:
         scheduler.add_job(
             continuous_improvement_job,
@@ -2410,6 +2562,17 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
             coalesce=True,
             replace_existing=True,
         )
+    scheduler.add_job(
+        agents_healthcheck_job,
+        trigger=IntervalTrigger(minutes=settings.agents_healthcheck_interval_minutes),
+        args=[settings, store],
+        kwargs={"verbose": verbose},
+        id="agents_healthcheck",
+        name="Agents health + opportunities watchdog",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
     return scheduler
 
 
@@ -2446,6 +2609,7 @@ def run_scheduler_forever(settings: Settings, store: Store, *, use_crew: bool, v
         else:
             closed_market_technical_study_job(settings, store, use_crew=use_crew, verbose=verbose)
             post_market_review_job(settings, store, use_llm=use_crew, verbose=verbose)
+            overnight_learning_heartbeat_job(settings, store, verbose=verbose)
     except Exception as exc:  # noqa: BLE001 - keep scheduler alive and visible.
         EventReporter(store, verbose=verbose).emit(
             "orchestrator",
@@ -2469,6 +2633,7 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
     calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
     market_status = calendar.status()
     daily_hour, daily_minute = _daily_hour_minute(settings.daily_study_time_local)
+    overnight_hour, overnight_minute = _daily_hour_minute(settings.overnight_learning_time_local)
     now_local = datetime.now(ZoneInfo(settings.local_timezone))
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()
@@ -2480,8 +2645,10 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
             "closed_market_technical_study",
             "daily_study",
             "post_market_review",
+            "overnight_learning_heartbeat",
             "pre_earnings",
             "continuous_improvement",
+            "agents_healthcheck",
             *[f"opportunity_snapshot_{slot.replace(':', '')}" for slot in settings.opportunity_snapshot_times],
         ]
     }
@@ -2517,6 +2684,14 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
                 "market_behavior": "tras cierre, una vez por sesion, revisa compras/ventas y genera aprendizaje",
             },
             {
+                "id": "overnight_learning_heartbeat",
+                "cadence": f"cada dia a las {overnight_hour:02d}:{overnight_minute:02d} {settings.local_timezone}",
+                "market_behavior": (
+                    "solo tras cierre; revisa si hay aprendizaje reciente, usa LLM opcional para reflexion "
+                    "low-risk y nunca crea ordenes ni desbloquea live"
+                ),
+            },
+            {
                 "id": "pre_earnings_daily",
                 "cadence": f"cada {settings.closed_market_study_interval_minutes} minutos como comprobador",
                 "market_behavior": (
@@ -2533,6 +2708,14 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
                     else "desactivado"
                 ),
                 "market_behavior": "runtime residente en dry-run; coordina eventos, tareas, hipotesis y propuestas.",
+            },
+            {
+                "id": "agents_healthcheck",
+                "cadence": f"cada {settings.agents_healthcheck_interval_minutes} minutos",
+                "market_behavior": (
+                    "vigila degradacion LLM y publica oportunidades deterministas; no cambia "
+                    "decisiones de trading mientras OPPORTUNITY_RANKER_FALLBACK_ENABLED=false"
+                ),
             },
             *[
                 {

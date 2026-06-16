@@ -17,6 +17,10 @@ AGENTS: dict[str, AgentInfo] = {
     "compliance_guardian": AgentInfo("GUARD", "Seguridad", "control"),
     "market_data_researcher": AgentInfo("DATA", "Datos mercado", "research"),
     "macro_news_researcher": AgentInfo("MACRO", "Macro/noticias", "research"),
+    "web_research_agent": AgentInfo("WEB", "Web research", "research"),
+    "source_reliability_agent": AgentInfo("SRC", "Fuentes", "research"),
+    "fundamental_filings_agent": AgentInfo("FILE", "Filings", "research"),
+    "macro_calendar_agent": AgentInfo("MCAL", "Calendario macro", "research"),
     "technical_analyst": AgentInfo("TECH", "Analisis tecnico", "research"),
     "market_regime_strategist": AgentInfo("REGIME", "Regimen", "research"),
     "opportunity_scout": AgentInfo("SCOUT", "Oportunidades", "research"),
@@ -30,6 +34,7 @@ AGENTS: dict[str, AgentInfo] = {
     "execution_agent": AgentInfo("EXEC", "Ejecucion", "execution"),
     "post_market_review_agent": AgentInfo("REVIEW", "Revision cierre", "learning"),
     "post_trade_analyst": AgentInfo("POST", "Post-mortem", "learning"),
+    "lesson_curator_agent": AgentInfo("LESSON", "Curator lecciones", "learning"),
     "self_improvement_engineer": AgentInfo("IMPR", "Mejora", "learning"),
 }
 

@@ -59,6 +59,14 @@ def build_openai_client(endpoint: LLMEndpoint, timeout_seconds: int):
     )
 
 
+def classify_llm_client_error(exc: Exception) -> str:
+    """Etiqueta fallos locales del cliente para no confundirlos con proveedor caido."""
+
+    if isinstance(exc, (ImportError, ModuleNotFoundError)):
+        return f"llm_client_import_broken: {exc}"
+    return str(exc)
+
+
 def is_endpoint_available(endpoint: LLMEndpoint, timeout_seconds: int) -> tuple[bool, str | None]:
     if not endpoint.preflight:
         return True, None
@@ -66,7 +74,7 @@ def is_endpoint_available(endpoint: LLMEndpoint, timeout_seconds: int) -> tuple[
         client = build_openai_client(endpoint, max(3, min(timeout_seconds, 10)))
         client.models.list()
     except Exception as exc:  # noqa: BLE001 - provider/network errors are fallback triggers
-        return False, str(exc)
+        return False, classify_llm_client_error(exc)
     return True, None
 
 
@@ -295,7 +303,7 @@ def _complete_with_endpoints(
                     "model": endpoint.model,
                     "stage": "completion",
                     "available": False,
-                    "error": str(exc),
+                    "error": classify_llm_client_error(exc),
                 }
             )
     if last_error is None:

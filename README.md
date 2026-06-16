@@ -4,6 +4,14 @@ Sistema multiagente con CrewAI para investigar, generar hipotesis, simular y ope
 
 Este proyecto arranca en modo `paper trading`. No garantiza beneficios y no debe operar dinero real hasta que las estrategias hayan pasado validaciones objetivas, pruebas fuera de muestra y aprobacion humana.
 
+> **Plan de mejoras (fuente unica de verdad):** toda la logica de las mejoras
+> aplicadas hasta la fecha, el diagnostico vigente y las propuestas siguientes
+> (con su estado: terminado / pendiente) se gestionan en
+> [`docs/plan_mejoras_y_tareas.md`](docs/plan_mejoras_y_tareas.md). Las futuras
+> mejoras se anaden como pasos en ese documento. Cada entrega sube la version en
+> `src/agente_bolsa/__init__.py` (visible en el sidebar) y requiere reiniciar el
+> sistema para cargar los cambios.
+
 ## Objetivo
 
 Crear un ciclo continuo:

@@ -12,13 +12,19 @@ from typing import Any
 from agente_bolsa.config import Settings
 from agente_bolsa.llm_router import chat_for_role
 from agente_bolsa.llm_usage import record_llm_response
-from agente_bolsa.models import OrderPlan, PortfolioSnapshot, RiskDecision, TradeRecommendation
+from agente_bolsa.models import OrderPlan, PortfolioSnapshot, RiskDecision, TradeRecommendation, new_id
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.position_sizing import recommended_notional
 from agente_bolsa.tools.daily_learning import load_daily_learning_context
 from agente_bolsa.tools.operational_health import load_operational_block_context, load_operational_response_context
 from agente_bolsa.tools.operational_learning import load_operational_learning_context
 from agente_bolsa.tools.post_market_review import load_post_market_learning_context
+from agente_bolsa.tools.research_evidence import (
+    build_research_evidence_report,
+    compact_research_context_for_prompt,
+    load_research_evidence_context,
+    research_block_reason,
+)
 from agente_bolsa.tools.retention import latest_report_path
 from agente_bolsa.tools.risk import OrderProposal, RiskManager
 from agente_bolsa.tools.signal_learning import _indicator_tags
@@ -383,6 +389,30 @@ def _compact_sentiment_for_prompt(sentiment_context: dict[str, Any], technical_c
     }
 
 
+def _build_research_context(
+    settings: Settings,
+    technical_context: dict[str, Any],
+    sentiment_context: dict[str, Any],
+    market_state: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not getattr(settings, "research_evidence_enabled", True):
+        return load_research_evidence_context(settings.data_dir)
+    try:
+        store = Store(settings.database_path, settings.agent_logs_dir)
+        store.ensure_schema()
+        return build_research_evidence_report(
+            store,
+            settings,
+            settings.data_dir / "reports",
+            new_id("research"),
+            symbols=sorted(_candidate_symbols(technical_context))[:12],
+            market_state=market_state,
+            sentiment_context=sentiment_context,
+        )
+    except Exception:
+        return load_research_evidence_context(settings.data_dir)
+
+
 def _compact_daily_learning_for_prompt(digest: dict[str, Any]) -> dict[str, Any]:
     return {
         "available": digest.get("available"),
@@ -432,6 +462,7 @@ def _llm_prompt_payload(
     decision_learning_context: dict[str, Any],
     operational_response_context: dict[str, Any],
     market_state: dict[str, Any] | None = None,
+    research_context: dict[str, Any] | None = None,
     *,
     compact: bool,
 ) -> dict[str, Any]:
@@ -455,6 +486,7 @@ def _llm_prompt_payload(
         "portfolio": _compact_portfolio_for_prompt(portfolio) if compact else asdict(portfolio),
         "technical_candidates": technical_candidates,
         "news_sentiment": _compact_sentiment_for_prompt(sentiment_context, technical_context) if compact else sentiment_context,
+        "research_evidence": compact_research_context_for_prompt(research_context or {}) if compact else (research_context or {}),
         "market_state": market_state or {},
         "portfolio_rebalance": rebalance_context or {},
         "daily_learning_digest": _compact_daily_learning_for_prompt(daily_learning_digest) if compact else daily_learning_digest,
@@ -3450,6 +3482,12 @@ def request_trade_recommendations(
         operational_response_context,
         settings.data_dir,
     )
+    research_context = _build_research_context(
+        settings,
+        annotated_technical_context,
+        sentiment_context,
+        market_state,
+    )
     decision_learning_context = _build_decision_learning_context(
         daily_learning_digest,
         operational_response_context,
@@ -3465,6 +3503,7 @@ def request_trade_recommendations(
         decision_learning_context,
         operational_response_context,
         market_state,
+        research_context,
         compact=True,
     )
     decision_max_tokens = max(settings.llm_max_tokens or 0, 3000)
@@ -3478,6 +3517,8 @@ def request_trade_recommendations(
         "Debes comparar posiciones actuales contra candidatos nuevos usando "
         "score tecnico, fuerza relativa, sentimiento, riesgo, drawdown, "
         "beneficio/perdida actual y coste estimado de rotacion. "
+        "Usa research_evidence como capa de evidencia externa: si basas una compra en noticias, macro o tesis, "
+        "menciona los evidence_ids relevantes dentro de la reason. "
         "Usa decision_learning_context y los campos rank_priority_score, effective_setup_edge_3d, "
         "setup_edge_3d, setup_win_rate_3d y operational_penalty para priorizar setups con evidencia reciente. "
         "Prioriza technical_candidates.selected_candidates; technical_candidates.top_longs es contexto secundario. "
@@ -3550,6 +3591,7 @@ def request_trade_recommendations(
             decision_learning_context,
             operational_response_context,
             market_state,
+            research_context,
             compact=True,
         )
         fallback_prompt["decision_learning_context"] = {
@@ -3734,6 +3776,23 @@ def deterministic_trade_fallback_recommendations(
         ),
         reverse=True,
     )
+    # T2b (opcional, flag por defecto OFF): reordenar por score de oportunidad
+    # determinista (fuerza relativa / momentum / tendencia) para que el fallback
+    # elija primero el mejor lider y no un nombre arbitrario. No cambia
+    # elegibilidad ni riesgo; solo el orden. Envuelto para no romper el fallback.
+    if getattr(settings, "opportunity_ranker_fallback_enabled", False):
+        try:
+            from agente_bolsa.tools.opportunity_ranker import prioritize_candidates
+
+            _bench_ret = 0.0
+            if isinstance(market_state, dict):
+                _bench_ret = float(
+                    (market_state.get("relative_strength") or {}).get("benchmark_return_20d")
+                    or 0.0
+                )
+            eligible = prioritize_candidates(eligible, benchmark_return_20d=_bench_ret)
+        except Exception:  # noqa: BLE001 - reordenar nunca debe romper el fallback
+            pass
     recommendations: list[TradeRecommendation] = []
     for item in eligible[:recommendation_limit]:
         selection_score = _float(item.get("selection_score"))
@@ -3879,6 +3938,7 @@ def build_buy_order_plans(
     daily_learning_digest = load_daily_learning_context(settings.data_dir)
     operational_response_context = load_operational_response_context(settings.data_dir)
     operational_block_context = load_operational_block_context(settings.data_dir)
+    research_context = load_research_evidence_context(settings.data_dir)
     latest_technical_context = _annotate_technical_context_with_learning(
         load_latest_technical_candidates(settings.data_dir, per_side=50),
         daily_learning_digest,
@@ -3920,6 +3980,22 @@ def build_buy_order_plans(
                             "market_state_quality": ((market_state or {}).get("data_quality") or {}).get("status"),
                             "data_quality_notes": list(((market_state or {}).get("data_quality") or {}).get("notes") or []),
                             "data_vendor_quality": ((market_state or {}).get("data_quality") or {}).get("data_vendor_quality"),
+                        },
+                    }
+                )
+            continue
+        research_reason = research_block_reason(research_context, symbol=recommendation.symbol)
+        if research_reason:
+            if rejected is not None:
+                rejected.append(
+                    {
+                        "symbol": recommendation.symbol,
+                        "action": recommendation.action,
+                        "stage": "research_guard",
+                        "reason": research_reason,
+                        "checks": {
+                            "research_as_of": research_context.get("as_of"),
+                            "research_summary": (research_context.get("summary") or {}),
                         },
                     }
                 )

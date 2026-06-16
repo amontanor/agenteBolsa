@@ -702,6 +702,35 @@ CREATE TABLE IF NOT EXISTS market_thesis (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS research_evidence (
+    evidence_id TEXT PRIMARY KEY,
+    symbol TEXT,
+    scope TEXT NOT NULL,
+    topic TEXT,
+    source_type TEXT NOT NULL,
+    source_name TEXT,
+    provider TEXT,
+    url TEXT,
+    title TEXT,
+    summary TEXT,
+    published_at TEXT,
+    fetched_at TEXT NOT NULL,
+    reliability_score REAL NOT NULL,
+    freshness_hours REAL,
+    staleness_status TEXT NOT NULL,
+    quality_status TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_research_evidence_symbol_updated
+ON research_evidence(symbol, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_research_evidence_scope_updated
+ON research_evidence(scope, updated_at);
+
 CREATE TABLE IF NOT EXISTS factory_runs (
     run_id TEXT PRIMARY KEY,
     run_date TEXT NOT NULL,
@@ -2251,6 +2280,112 @@ class Store:
             "confidence": row["confidence"],
             "created_at": row["created_at"],
         }
+
+    # -- research_evidence -----------------------------------------------
+    def upsert_research_evidence(self, item: dict[str, Any]) -> None:
+        now = _utc_iso()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO research_evidence (
+                    evidence_id, symbol, scope, topic, source_type, source_name, provider,
+                    url, title, summary, published_at, fetched_at, reliability_score,
+                    freshness_hours, staleness_status, quality_status, content_hash,
+                    payload_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(evidence_id) DO UPDATE SET
+                    symbol=excluded.symbol,
+                    scope=excluded.scope,
+                    topic=excluded.topic,
+                    source_type=excluded.source_type,
+                    source_name=excluded.source_name,
+                    provider=excluded.provider,
+                    url=excluded.url,
+                    title=excluded.title,
+                    summary=excluded.summary,
+                    published_at=excluded.published_at,
+                    fetched_at=excluded.fetched_at,
+                    reliability_score=excluded.reliability_score,
+                    freshness_hours=excluded.freshness_hours,
+                    staleness_status=excluded.staleness_status,
+                    quality_status=excluded.quality_status,
+                    content_hash=excluded.content_hash,
+                    payload_json=excluded.payload_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    str(item["evidence_id"]),
+                    item.get("symbol"),
+                    str(item.get("scope", "market")),
+                    item.get("topic"),
+                    str(item.get("source_type", "unknown")),
+                    item.get("source_name"),
+                    item.get("provider"),
+                    item.get("url"),
+                    item.get("title"),
+                    item.get("summary"),
+                    item.get("published_at"),
+                    item.get("fetched_at") or now,
+                    float(item.get("reliability_score", 0.0)),
+                    _num(item.get("freshness_hours")),
+                    str(item.get("staleness_status", "fresh")),
+                    str(item.get("quality_status", "available")),
+                    str(item.get("content_hash", "")),
+                    _dumps(item.get("payload", {})),
+                    item.get("created_at") or now,
+                    now,
+                ),
+            )
+
+    def research_evidence(
+        self,
+        *,
+        symbol: str | None = None,
+        scope: str | None = None,
+        quality_status: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        query = "SELECT * FROM research_evidence WHERE 1 = 1"
+        params: list[Any] = []
+        if symbol:
+            query += " AND upper(coalesce(symbol, '')) = ?"
+            params.append(str(symbol).upper())
+        if scope:
+            query += " AND scope = ?"
+            params.append(scope)
+        if quality_status:
+            query += " AND quality_status = ?"
+            params.append(quality_status)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "evidence_id": row["evidence_id"],
+                "symbol": row["symbol"],
+                "scope": row["scope"],
+                "topic": row["topic"],
+                "source_type": row["source_type"],
+                "source_name": row["source_name"],
+                "provider": row["provider"],
+                "url": row["url"],
+                "title": row["title"],
+                "summary": row["summary"],
+                "published_at": row["published_at"],
+                "fetched_at": row["fetched_at"],
+                "reliability_score": row["reliability_score"],
+                "freshness_hours": row["freshness_hours"],
+                "staleness_status": row["staleness_status"],
+                "quality_status": row["quality_status"],
+                "content_hash": row["content_hash"],
+                "payload": json.loads(row["payload_json"] or "{}"),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
 
     # -- factory_runs (T3.2) ----------------------------------------------
     def save_factory_run(self, item: dict[str, Any]) -> None:

@@ -1,6 +1,7 @@
 crewai>=1.14.0,<2.0.0
 crewai-tools
 openai>=1.13.3
+jiter==0.13.0
 alpaca-py>=0.43.0
 yfinance>=0.2.50
 cffi>=1.16.0,<3.0.0

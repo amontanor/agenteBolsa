@@ -2867,7 +2867,7 @@ def _render_autonomy_panel(store: Any, settings: Any) -> None:
         with a3:
             _compact_metric("Revertidos", state.get("rolled_back"))
         with a4:
-            _compact_metric("Agentes dinamicos", state.get("dynamic_agents"))
+                _compact_metric("Agentes dinamicos", state.get("dynamic_agents"))
         thesis = state.get("market_thesis") or {}
         st.caption(
             f"iq_score: {state.get('iq_score')} | lecciones activas: {state.get('active_lessons')} | "
@@ -2893,9 +2893,166 @@ def _render_autonomy_panel(store: Any, settings: Any) -> None:
                 st.success("Sistema reanudado.")
 
 
+def _render_research_inbox_panel(settings: Any, store: Store) -> None:
+    latest_research = _latest_report_json("latest_research_evidence.json")
+    payload = (latest_research.get("payload") or {}) if latest_research.get("available") else {}
+    summary = payload.get("summary") or {}
+    rows = store.research_evidence(limit=10)
+    _section_title("Research Inbox", "Evidencia externa reciente y calidad de fuentes.")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        _compact_metric("Decision ready", "OK" if summary.get("decision_ready") else "BLOCK", tone="good" if summary.get("decision_ready") else "bad")
+    with c2:
+        _compact_metric("Simbolos frescos", summary.get("symbols_with_fresh_evidence", 0), str(summary.get("symbols_requested", 0)))
+    with c3:
+        providers = summary.get("providers") or {}
+        provider_note = f"macro {((providers.get('macro') or {}).get('quality') or '-')}"
+        _compact_metric("Proveedores", ((providers.get("news") or {}).get("quality") or "-"), provider_note)
+    if summary.get("symbols_missing_fresh_evidence"):
+        st.caption("Sin evidencia fresca: " + ", ".join(list(summary.get("symbols_missing_fresh_evidence") or [])[:8]))
+    if rows:
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "evidence_id": item.get("evidence_id"),
+                        "scope": item.get("scope"),
+                        "symbol": item.get("symbol") or "-",
+                        "source": item.get("source_name") or item.get("provider"),
+                        "title": _short(item.get("title"), 72),
+                        "freshness_h": item.get("freshness_hours"),
+                        "reliability": item.get("reliability_score"),
+                        "status": item.get("staleness_status"),
+                    }
+                    for item in rows
+                ]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.markdown("<div class='empty-box'>Todavia no hay evidencia persistida.</div>", unsafe_allow_html=True)
+
+
+def _render_learning_lab_panel(store: Store) -> None:
+    lessons = store.distilled_lessons(limit=8)
+    policies = store.learning_policy_candidates(limit=8)
+    _section_title("Learning Lab", "Lecciones vivas, hipotesis y memoria operativa.")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        _compact_metric("Lecciones activas", sum(1 for item in lessons if item.get("status") == "ACTIVE"))
+    with c2:
+        _compact_metric("Hipotesis", sum(1 for item in lessons if item.get("status") == "HYPOTHESIS"))
+    with c3:
+        _compact_metric("Shadow policies", sum(1 for item in policies if item.get("status") == "shadow"))
+    if lessons:
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "lesson_id": item.get("lesson_id"),
+                        "scope": item.get("scope"),
+                        "status": item.get("status"),
+                        "confidence": item.get("confidence"),
+                        "statement": _short(item.get("statement"), 84),
+                    }
+                    for item in lessons
+                ]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
+def _render_code_changes_panel(store: Store) -> None:
+    changes = store.continuous_improvement_applied_changes(limit=8)
+    _section_title("Code Changes", "Cambios aplicados, bloqueados o revertidos por el laboratorio.")
+    if not changes:
+        st.markdown("<div class='empty-box'>Sin cambios aplicados todavia.</div>", unsafe_allow_html=True)
+        return
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "proposal_id": item.get("proposal_id"),
+                    "status": item.get("status"),
+                    "component": item.get("target_key"),
+                    "autonomy": ((item.get("decision") or {}).get("autonomy_level")),
+                    "actor": ((item.get("decision") or {}).get("actor")),
+                    "updated_at": _local_datetime(item.get("updated_at")),
+                }
+                for item in changes
+            ]
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def _render_strategy_lab_panel(store: Store) -> None:
+    windows = store.promotion_windows(limit=8)
+    rules = store.strategy_rules(limit=200)
+    active_rules = sum(1 for item in rules if str(item.get("status") or "").lower() == "active")
+    shadow_rules = sum(1 for item in rules if str(item.get("status") or "").lower() == "shadow")
+    _section_title("Strategy Lab", "Champion/challenger, reglas activas y shadow.")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        _compact_metric("Active rules", active_rules)
+    with c2:
+        _compact_metric("Shadow rules", shadow_rules)
+    with c3:
+        _compact_metric("Promotions", len([item for item in windows if item.get("status") == "OPEN"]))
+    if windows:
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "strategy": item.get("strategy"),
+                        "version": item.get("version"),
+                        "status": item.get("status"),
+                        "slot": item.get("slot"),
+                        "started_at": _local_datetime(item.get("started_at")),
+                    }
+                    for item in windows
+                ]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
+def _render_agent_roster_panel(runtime: ContinuousImprovementLabRuntime, store: Store) -> None:
+    rows = runtime.describe_agents()
+    dynamic = store.agent_definitions(limit=20)
+    _section_title("Agent Roster", "Agentes estaticos y dinamicos con estado visible.")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        _compact_metric("Agentes runtime", len(rows))
+    with c2:
+        _compact_metric("Dinamicos", len([item for item in dynamic if item.get("status") == "ACTIVE"]))
+    with c3:
+        _compact_metric("Retirados", len([item for item in dynamic if item.get("status") == "RETIRED"]))
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "agent": item.get("agent_name"),
+                    "kind": item.get("kind"),
+                    "description": _short(item.get("description"), 88),
+                    "heartbeat": _local_time(item.get("runtime_heartbeat")),
+                }
+                for item in rows[:16]
+            ]
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
 def page_dashboard() -> None:
     settings = _settings()
     store = _store()
+    runtime = ContinuousImprovementLabRuntime(settings, store)
     market = MarketCalendar(settings.market_calendar, settings.local_timezone).status().as_dict()
     latest_ci_llm_result = _latest_ci_llm_result(store.latest_events(400))
 
@@ -3112,6 +3269,26 @@ def page_dashboard() -> None:
                     str(worst_accuracy.get("setup") or "-"),
                     "bad" if (error_value or 0.0) >= 0.04 else "neutral",
                 )
+
+        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            _render_research_inbox_panel(settings, store)
+
+        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            _render_learning_lab_panel(store)
+
+        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            _render_strategy_lab_panel(store)
+
+        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            _render_code_changes_panel(store)
+
+        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            _render_agent_roster_panel(runtime, store)
 
     _render_performance_baseline(store)
     _render_autonomy_panel(store, settings)

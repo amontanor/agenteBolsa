@@ -1036,7 +1036,7 @@ def test_build_order_plans_skips_bracket_buy_if_whole_share_too_expensive():
     assert plans == []
 
 
-def test_build_order_plans_blocks_duplicate_buy_symbol_within_same_cycle():
+def test_build_order_plans_blocks_duplicate_buy_symbol_within_same_cycle(tmp_path: Path):
     portfolio = PortfolioSnapshot(
         account_id="paper",
         status="ACTIVE",
@@ -1068,7 +1068,7 @@ def test_build_order_plans_blocks_duplicate_buy_symbol_within_same_cycle():
         target_exposure_pct=0.05,
     )
 
-    plans = build_order_plans(Settings(), portfolio, [first, second])
+    plans = build_order_plans(Settings(DATA_DIR=tmp_path), portfolio, [first, second])
 
     assert len(plans) == 1
     assert plans[0].symbol == "AAPL"
@@ -1182,7 +1182,7 @@ def test_build_order_plans_blocks_existing_position_add_when_disabled():
     assert plans == []
 
 
-def test_build_order_plans_allows_existing_position_add_when_enabled():
+def test_build_order_plans_allows_existing_position_add_when_enabled(tmp_path: Path):
     portfolio = PortfolioSnapshot(
         account_id="paper",
         status="ACTIVE",
@@ -1214,7 +1214,11 @@ def test_build_order_plans_allows_existing_position_add_when_enabled():
         target_exposure_pct=0.05,
     )
 
-    plans = build_order_plans(Settings(ALLOW_POSITION_ADDS=True), portfolio, [recommendation])
+    plans = build_order_plans(
+        Settings(DATA_DIR=tmp_path, ALLOW_POSITION_ADDS=True),
+        portfolio,
+        [recommendation],
+    )
 
     assert len(plans) == 1
     assert plans[0].symbol == "AAPL"

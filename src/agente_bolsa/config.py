@@ -668,6 +668,13 @@ class Settings(BaseSettings):
         default=True,
         alias="DETERMINISTIC_TRADE_FALLBACK_ENABLED",
     )
+    # T2b: reordenar los candidatos del fallback determinista por score de
+    # oportunidad (fuerza relativa / momentum / tendencia). Default OFF: no cambia
+    # la conducta hasta validarlo en shadow/paper.
+    opportunity_ranker_fallback_enabled: bool = Field(
+        default=False,
+        alias="OPPORTUNITY_RANKER_FALLBACK_ENABLED",
+    )
     max_risk_per_trade: float = Field(default=0.01, alias="MAX_RISK_PER_TRADE")
     max_total_open_risk: float = Field(default=0.03, alias="MAX_TOTAL_OPEN_RISK")
     max_orders_per_cycle: int = Field(default=4, alias="MAX_ORDERS_PER_CYCLE")
@@ -798,6 +805,14 @@ class Settings(BaseSettings):
     macro_thesis_enabled: bool = Field(default=True, alias="MACRO_THESIS_ENABLED")
     risk_off_buy_factor: float = Field(default=0.5, alias="RISK_OFF_BUY_FACTOR")
     risk_off_confidence_threshold: float = Field(default=0.7, alias="RISK_OFF_CONFIDENCE_THRESHOLD")
+    # Evidencia externa de investigacion y frescura de fuentes.
+    research_evidence_enabled: bool = Field(default=True, alias="RESEARCH_EVIDENCE_ENABLED")
+    research_evidence_fail_closed_for_buys: bool = Field(
+        default=True,
+        alias="RESEARCH_EVIDENCE_FAIL_CLOSED_FOR_BUYS",
+    )
+    research_evidence_max_age_hours: float = Field(default=48.0, alias="RESEARCH_EVIDENCE_MAX_AGE_HOURS")
+    research_evidence_min_reliability: float = Field(default=0.45, alias="RESEARCH_EVIDENCE_MIN_RELIABILITY")
     # Fabrica de hipotesis + granja de backtests (T3.2).
     factory_max_variants_per_night: int = Field(default=50, alias="FACTORY_MAX_VARIANTS_PER_NIGHT")
     factory_workers: int = Field(default=4, alias="FACTORY_WORKERS")
@@ -867,6 +882,13 @@ class Settings(BaseSettings):
         default=None,
         alias="CONTINUOUS_IMPROVEMENT_WORKSPACE_DIR",
     )
+    overnight_learning_enabled: bool = Field(default=True, alias="OVERNIGHT_LEARNING_ENABLED")
+    overnight_learning_use_llm: bool = Field(default=True, alias="OVERNIGHT_LEARNING_USE_LLM")
+    overnight_learning_time_local: str = Field(default="00:10", alias="OVERNIGHT_LEARNING_TIME_LOCAL")
+    overnight_learning_stale_llm_alert_hours: float = Field(
+        default=24.0,
+        alias="OVERNIGHT_LEARNING_STALE_LLM_ALERT_HOURS",
+    )
 
     run_interval_seconds: int = Field(default=900, alias="RUN_INTERVAL_SECONDS")
     portfolio_watch_interval_seconds: int = Field(
@@ -880,6 +902,10 @@ class Settings(BaseSettings):
     closed_market_study_interval_minutes: int = Field(
         default=15,
         alias="CLOSED_MARKET_STUDY_INTERVAL_MINUTES",
+    )
+    agents_healthcheck_interval_minutes: int = Field(
+        default=30,
+        alias="AGENTS_HEALTHCHECK_INTERVAL_MINUTES",
     )
     closed_market_study_universe: str = Field(
         default="sp500",

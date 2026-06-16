@@ -30,6 +30,7 @@ from .scheduler import (
     continuous_improvement_job,
     daily_study_job,
     market_cycle_job,
+    overnight_learning_heartbeat_job,
     opportunity_snapshot_job,
     post_market_review_job,
     pre_earnings_job,
@@ -2835,6 +2836,10 @@ def command_job_once(args: argparse.Namespace) -> None:
         report = continuous_improvement_job(settings, store, verbose=not args.quiet, force=True)
         if report and not args.quiet:
             _print_json({"ok": True, **report})
+    elif args.job == "overnight-learning":
+        report = overnight_learning_heartbeat_job(settings, store, verbose=not args.quiet, force=args.force)
+        if report and not args.quiet:
+            _print_json({"ok": True, **report})
 
 
 def command_log(args: argparse.Namespace) -> None:
@@ -3909,6 +3914,7 @@ def build_parser() -> argparse.ArgumentParser:
             "pre-earnings",
             "opportunity-snapshot",
             "continuous-improvement",
+            "overnight-learning",
         ],
     )
     job_once.add_argument("--slot", default="16:00", help="Slot HH:MM usado por opportunity-snapshot.")

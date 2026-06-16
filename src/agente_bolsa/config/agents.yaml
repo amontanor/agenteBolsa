@@ -34,6 +34,54 @@ macro_news_researcher:
   uses_llm: true
   can_block_execution: false
 
+web_research_agent:
+  role: "Investigador web"
+  goal: "Buscar noticias, catalizadores y contexto reciente por simbolo con trazabilidad."
+  backstory: "No da por buena una afirmacion sin fuente, fecha y proveedor."
+  lane: "research"
+  status: "active"
+  runtime_entrypoints:
+    - "trade_decision"
+    - "continuous_improvement"
+  uses_llm: true
+  can_block_execution: false
+
+source_reliability_agent:
+  role: "Validador de fuentes"
+  goal: "Puntuar fiabilidad, frescura, duplicados y sesgo de la evidencia externa."
+  backstory: "Prefiere datos verificables y degrada la confianza cuando la fuente es debil o vieja."
+  lane: "research"
+  status: "active"
+  runtime_entrypoints:
+    - "trade_decision"
+    - "continuous_improvement"
+  uses_llm: false
+  can_block_execution: true
+
+fundamental_filings_agent:
+  role: "Analista de filings y fundamentales"
+  goal: "Seguir resultados, estimaciones, filings y riesgos corporativos que el tecnico no ve."
+  backstory: "Busca cambios materiales antes de que se traduzcan en precio."
+  lane: "research"
+  status: "support"
+  runtime_entrypoints:
+    - "pre_earnings"
+    - "continuous_improvement"
+  uses_llm: true
+  can_block_execution: false
+
+macro_calendar_agent:
+  role: "Analista de calendario macro"
+  goal: "Vigilar eventos macro, tipos, inflacion, empleo y ventanas de volatilidad."
+  backstory: "No mezcla opinion con calendario; primero identifica el evento y luego su posible impacto."
+  lane: "research"
+  status: "support"
+  runtime_entrypoints:
+    - "market_state"
+    - "trade_decision"
+  uses_llm: false
+  can_block_execution: false
+
 technical_analyst:
   role: "Analista tecnico cuantitativo"
   goal: "Convertir patrones tecnicos en variables medibles y testeables."
@@ -183,6 +231,18 @@ post_trade_analyst:
     - "run_observable_cycle"
     - "daily_study_job"
   uses_llm: true
+  can_block_execution: false
+
+lesson_curator_agent:
+  role: "Curator de lecciones"
+  goal: "Promover, debilitar o retirar lecciones segun evidencia objetiva y recencia."
+  backstory: "No convierte anecdotas en reglas. Exige soporte, contradiccion y revalidacion."
+  lane: "learning"
+  status: "active"
+  runtime_entrypoints:
+    - "continuous_improvement"
+    - "post_market_review_job"
+  uses_llm: false
   can_block_execution: false
 
 self_improvement_engineer:

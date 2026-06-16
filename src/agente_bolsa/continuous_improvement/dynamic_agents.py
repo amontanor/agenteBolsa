@@ -25,6 +25,7 @@ ALLOWED_INPUT_CATALOG: frozenset[str] = frozenset(
         "latest_signal_learning",
         "latest_daily_learning_digest",
         "latest_post_market_learning",
+        "latest_research_evidence",
         "market_thesis",
         "performance_daily",
         "signal_outcomes",
