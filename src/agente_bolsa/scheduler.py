@@ -1263,6 +1263,14 @@ def market_cycle_job(
         )
         selected_candidates, selected_symbols = _selected_candidates(report, settings)
         report["selected_candidates"] = selected_candidates
+        try:
+            from .tools.market_state import load_latest_market_state
+
+            latest_market_state = load_latest_market_state(settings.data_dir / "reports")
+            if latest_market_state:
+                report["market_state"] = latest_market_state
+        except Exception:  # noqa: BLE001 - el ledger no debe romper el ciclo.
+            pass
         signals_saved = record_signal_candidates(store, report, source="intraday_scan")
         top_longs = ", ".join(item["symbol"] for item in report["top_longs"][:5]) or "sin candidatos"
         top_shorts = ", ".join(item["symbol"] for item in report["top_shorts"][:5]) or "sin candidatos"
@@ -1499,6 +1507,14 @@ def closed_market_technical_study_job(
     )
     selected_candidates, selected_symbols = _selected_candidates(report, settings)
     report["selected_candidates"] = selected_candidates
+    try:
+        from .tools.market_state import load_latest_market_state
+
+        latest_market_state = load_latest_market_state(settings.data_dir / "reports")
+        if latest_market_state:
+            report["market_state"] = latest_market_state
+    except Exception:  # noqa: BLE001 - el ledger no debe romper el estudio.
+        pass
     signals_saved = record_signal_candidates(store, report, source="closed_market_study")
     top_longs = ", ".join(item["symbol"] for item in report["top_longs"][:5]) or "sin candidatos"
     top_shorts = ", ".join(item["symbol"] for item in report["top_shorts"][:5]) or "sin candidatos"
@@ -1679,6 +1695,14 @@ def opportunity_snapshot_job(
     )
     report["selected_candidates"] = annotated_report.get("selected_candidates", [])
     report["selection_metadata"] = annotated_report.get("selection_metadata", {})
+    try:
+        from .tools.market_state import load_latest_market_state
+
+        latest_market_state = load_latest_market_state(settings.data_dir / "reports")
+        if latest_market_state:
+            report["market_state"] = latest_market_state
+    except Exception:  # noqa: BLE001 - el snapshot no debe fallar por regimen ausente.
+        pass
     record_signal_candidates(store, report, source="opportunity_snapshot")
     snapshot = build_opportunity_snapshot(
         settings,

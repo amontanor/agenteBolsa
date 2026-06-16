@@ -101,6 +101,17 @@ def _signal_features(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _market_regime_features(report: dict[str, Any]) -> dict[str, Any]:
+    state = report.get("market_state") if isinstance(report.get("market_state"), dict) else {}
+    return {
+        "market_regime": state.get("market_regime") or report.get("market_regime") or report.get("regime"),
+        "volatility_regime": state.get("volatility_regime") or report.get("volatility_regime"),
+        "risk_posture": state.get("risk_posture") or report.get("risk_posture"),
+        "market_state_quality": ((state.get("data_quality") or {}).get("status") if isinstance(state.get("data_quality"), dict) else None)
+        or report.get("market_state_quality"),
+    }
+
+
 def record_signal_candidates(store: Store, report: dict[str, Any], *, source: str) -> int:
     source_run_id = str(report.get("run_id") or "")
     if not source_run_id:
@@ -113,6 +124,7 @@ def record_signal_candidates(store: Store, report: dict[str, Any], *, source: st
         if str(candidate.get("symbol", "")).strip()
     }
     selection_method = str((report.get("selection_metadata", {}) or {}).get("method") or "").strip() or None
+    regime_features = {key: value for key, value in _market_regime_features(report).items() if value not in (None, "")}
     score_rank_by_symbol = {
         str(candidate.get("symbol", "")).upper(): index
         for index, candidate in enumerate(
@@ -131,6 +143,7 @@ def record_signal_candidates(store: Store, report: dict[str, Any], *, source: st
         if not symbol:
             continue
         features = _signal_features(candidate)
+        features.update(regime_features)
         selected_candidate = selected_by_symbol.get(symbol)
         if selected_candidate:
             features["selected_for_llm"] = True

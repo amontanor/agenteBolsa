@@ -33,7 +33,7 @@ def main() -> int:
                 "setup_key_edge": executed["setup_key"],
                 "tag_edge": executed["tag"],
                 "regime_edge": executed["regime"],
-                "regime_note": "unknown means the current ledger does not persist market_regime on the signal row.",
+                "regime_note": "persisted market_regime is used first; missing historical rows fall back to benchmark trend regime.",
                 "backtest_veto_forward": vetoes["by_reason"],
             },
             ensure_ascii=False,

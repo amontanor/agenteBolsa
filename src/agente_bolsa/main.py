@@ -1094,6 +1094,9 @@ def command_scan_technical(args: argparse.Namespace) -> None:
     )
     report["selected_candidates"] = annotated_report.get("selected_candidates", [])
     report["selection_metadata"] = annotated_report.get("selection_metadata", {})
+    market_state = load_latest_market_state(settings.data_dir / "reports")
+    if market_state:
+        report["market_state"] = market_state
     signals_saved = record_signal_candidates(store, report, source="manual_scan")
     elapsed_seconds = round(time.perf_counter() - started, 2)
     top_longs = [item["symbol"] for item in report["top_longs"][:5]]

@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections import defaultdict
+from datetime import date, timedelta
 from typing import Any, Callable
+
+import pandas as pd
 
 from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
@@ -73,47 +76,83 @@ def _build_spy_forward_returns(
     start: str,
     end: str,
 ) -> dict[tuple[str, int], float | None]:
+    return _build_spy_forward_context(settings, start=start, end=end)["returns"]
+
+
+def _regime_from_benchmark(close: float | None, sma50: float | None, sma200: float | None) -> str:
+    if close is None or sma50 is None or sma200 is None:
+        return "unknown"
+    if close >= sma50 >= sma200:
+        return "bullish"
+    if close <= sma50 <= sma200:
+        return "bearish"
+    return "neutral"
+
+
+def _build_spy_forward_context(
+    settings: Settings,
+    *,
+    start: str,
+    end: str,
+) -> dict[str, dict[Any, Any]]:
+    download_end = end
+    try:
+        download_end = (date.fromisoformat(end[:10]) + timedelta(days=max(HORIZONS) * 3)).isoformat()
+    except ValueError:
+        pass
     try:
         frame = download_daily_prices(
-            ["SPY"],
+            [settings.benchmark_symbol or "SPY"],
             start=start,
-            end=end,
+            end=download_end,
             provider=settings.market_data_provider,
             fmp_api_key=settings.fmp_api_key,
         )
     except Exception:
-        return {}
-    if frame.empty or "Close" not in frame.columns:
-        return {}
-    try:
-        spy = frame["SPY"].copy() if isinstance(frame.columns, type(frame.columns)) and hasattr(frame.columns, "levels") else frame
-    except Exception:
-        spy = frame
+        return {"returns": {}, "regimes": {}}
+    if frame.empty:
+        return {"returns": {}, "regimes": {}}
+    benchmark_symbol = str(settings.benchmark_symbol or "SPY").upper()
+    if isinstance(frame.columns, pd.MultiIndex):
+        if benchmark_symbol not in frame.columns.get_level_values(0):
+            return {"returns": {}, "regimes": {}}
+        spy = frame[benchmark_symbol].copy()
+    else:
+        spy = frame.copy()
     if "Close" not in spy.columns:
-        return {}
+        return {"returns": {}, "regimes": {}}
     closes = spy["Close"].dropna()
     if closes.empty:
-        return {}
+        return {"returns": {}, "regimes": {}}
     returns: dict[tuple[str, int], float | None] = {}
+    regimes: dict[str, str] = {}
+    sma50 = closes.rolling(50, min_periods=20).mean()
+    sma200 = closes.rolling(200, min_periods=50).mean()
     values = list(closes.items())
     for index, (ts, close) in enumerate(values):
         try:
             close_float = float(close)
         except (TypeError, ValueError):
             continue
+        date_key = str(ts)[:10]
+        regimes[date_key] = _regime_from_benchmark(
+            close_float,
+            _num(sma50.iloc[index]),
+            _num(sma200.iloc[index]),
+        )
         for horizon in HORIZONS:
             future_index = index + horizon
             if future_index >= len(values):
-                returns[(str(ts)[:10], horizon)] = None
+                returns[(date_key, horizon)] = None
                 continue
             future_close = values[future_index][1]
             try:
                 future_float = float(future_close)
             except (TypeError, ValueError):
-                returns[(str(ts)[:10], horizon)] = None
+                returns[(date_key, horizon)] = None
                 continue
-            returns[(str(ts)[:10], horizon)] = round((future_float / close_float) - 1.0, 6)
-    return returns
+            returns[(date_key, horizon)] = round((future_float / close_float) - 1.0, 6)
+    return {"returns": returns, "regimes": regimes}
 
 
 def _metrics(rows: list[dict[str, Any]], benchmark: dict[tuple[str, int], float | None]) -> dict[str, Any]:
@@ -217,13 +256,20 @@ def linked_executed_buy_signals(
     else:
         start = since_date
         end = since_date
-    benchmark = _build_spy_forward_returns(settings, start=start, end=end)
+    benchmark_context = _build_spy_forward_context(settings, start=start, end=end)
+    benchmark = benchmark_context["returns"]
+    benchmark_regimes = benchmark_context["regimes"]
     for row in linked:
         features = row.get("features") or {}
         row["setup_quality"] = str(features.get("setup_quality") or "unknown")
         row["setup_key"] = _setup_key(row)
         row["tags"] = _indicator_tags(row)
-        row["regime"] = str(features.get("market_regime") or features.get("regime") or "unknown")
+        row["regime"] = str(
+            features.get("market_regime")
+            or features.get("regime")
+            or benchmark_regimes.get(_date_text(row.get("signal_date")))
+            or "unknown"
+        )
     return {
         "linked_rows": linked,
         "unmatched_order_ids": unmatched,
