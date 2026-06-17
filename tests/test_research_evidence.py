@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 
 from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
@@ -36,7 +37,7 @@ def test_build_research_report_persists_rows_and_latest_file(tmp_path, monkeypat
             {
                 "title": f"{symbol} rallies on demand",
                 "publisher": "Reuters",
-                "published_at": "2026-06-15T10:00:00+00:00",
+                "published_at": datetime.now(timezone.utc).isoformat(),
                 "summary": "Demand remains strong",
                 "link": "https://example.com/news",
             }

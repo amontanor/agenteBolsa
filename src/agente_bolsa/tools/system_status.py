@@ -53,6 +53,15 @@ def _waiting_after_scheduler_restart(
     return job_age_min is None or job_age_min > cadence_min + grace_min
 
 
+def _global_verdict(components: list[dict[str, Any]]) -> str:
+    critical = [c["state"] for c in components if c["name"] in ("Scheduler", "Ciclo de mercado (15m)", "LLM de decision")]
+    if DOWN in critical:
+        return DOWN
+    if any(c["state"] in {WARN, DOWN} for c in components):
+        return WARN
+    return OK
+
+
 def _market_open(now) -> bool:
     if now.weekday() >= 5:
         return False
@@ -173,9 +182,7 @@ def build_status(db_path: Path | None = None, reports_dir: Path | None = None) -
                   "detail": f"{gb:.1f} GB" + ("  (considerar VACUUM)" if gb >= 3 else ""), "expected": "< 3 GB"})
     con.close()
 
-    crit = [c["state"] for c in comps if c["name"] in ("Scheduler", "Ciclo de mercado (15m)", "LLM de decision")]
-    verdict = DOWN if DOWN in crit else (WARN if any(c["state"] == WARN for c in comps) else OK)
-    return {"as_of": now.isoformat(), "market_open": market_open, "components": comps, "verdict": verdict}
+    return {"as_of": now.isoformat(), "market_open": market_open, "components": comps, "verdict": _global_verdict(comps)}
 
 
 def color(state: str) -> str:
