@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     llm_temperature: float = Field(default=0.2, alias="LLM_TEMPERATURE")
     llm_max_tokens: int | None = Field(default=1200, alias="LLM_MAX_TOKENS")
     llm_timeout_seconds: int = Field(default=120, alias="LLM_TIMEOUT_SECONDS")
+    llm_retry_attempts: int = Field(default=2, alias="LLM_RETRY_ATTEMPTS")
+    llm_retry_base_seconds: float = Field(default=1.0, alias="LLM_RETRY_BASE_SECONDS")
+    llm_retry_max_seconds: float = Field(default=30.0, alias="LLM_RETRY_MAX_SECONDS")
 
     # Router LLM por roles (T0.4). Cada rol cae a la cadena por defecto si no se
     # define modelo/base/key, asi que dejarlos vacios mantiene el comportamiento.
@@ -57,6 +60,10 @@ class Settings(BaseSettings):
     llm_role_fast_base_url: str | None = Field(default=None, alias="LLM_ROLE_FAST_BASE_URL")
     llm_role_fast_api_key: str | None = Field(default=None, alias="LLM_ROLE_FAST_API_KEY")
     llm_role_fast_max_tokens: int | None = Field(default=None, alias="LLM_ROLE_FAST_MAX_TOKENS")
+    llm_role_sentiment_model: str | None = Field(default=None, alias="LLM_ROLE_SENTIMENT_MODEL")
+    llm_role_sentiment_base_url: str | None = Field(default=None, alias="LLM_ROLE_SENTIMENT_BASE_URL")
+    llm_role_sentiment_api_key: str | None = Field(default=None, alias="LLM_ROLE_SENTIMENT_API_KEY")
+    llm_role_sentiment_max_tokens: int | None = Field(default=None, alias="LLM_ROLE_SENTIMENT_MAX_TOKENS")
     llm_role_decision_model: str | None = Field(default=None, alias="LLM_ROLE_DECISION_MODEL")
     llm_role_decision_base_url: str | None = Field(default=None, alias="LLM_ROLE_DECISION_BASE_URL")
     llm_role_decision_api_key: str | None = Field(default=None, alias="LLM_ROLE_DECISION_API_KEY")

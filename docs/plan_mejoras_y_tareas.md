@@ -535,6 +535,31 @@ mayor palanca de rentabilidad.
 - **C1.2** LLM continuo: kimi-k2.6 (opencode-go) como primario de DECISION y SENTIMIENTO, con fallback configurado; respetar Retry-After/backoff ante 429/403. Validar con `scripts/llm_health_check.py` antes de apertura.
 - **C1.3** Restaurar la capa de sentimiento (cuota). Fue el bloqueo nº1 de compras (vetó las 3 de APH y ~120 ciclos).
 
+#### Resultado Capa 1 (20-jun-2026, v0.4.15)
+
+- **C1.1 HECHO**: `pip install -r requirements.txt` ejecutado sobre el venv;
+  `pip check` sin dependencias rotas. Smoke real: `build_crew()` crea 6 agentes
+  y 6 tareas sin el error `Instala dependencias...`. Se añade
+  `requirements.lock` con todas las dependencias transitivas fijadas
+  (`crewai==1.14.7`, `crewai-tools==1.14.7`, `openai==2.41.1`,
+  `jiter==0.13.0`).
+- **C1.2 HECHO**: decision y sentimiento quedan fijados como roles separados a
+  `kimi-k2.6` en `https://opencode.ai/zen/go/v1`, con fallback local configurado.
+  El router respeta `Retry-After` y aplica backoff exponencial acotado ante
+  HTTP 429/403. `llm_health_check.py`: decision OK, sentiment OK, mejora
+  continua OK; el fallback local esta configurado pero apagado.
+- **C1.3 HECHO**: ciclo real de sentimiento AAPL con 3 noticias, score `-1`,
+  confianza `0.6`, sin warnings y `sentiment_failed=false`. Se eleva el limite
+  del rol a 4.000 tokens porque Kimi consumia 1.200 en razonamiento y devolvia
+  `{}`; ahora una respuesta incompleta se rechaza explicitamente.
+- **Decision real validada**: `decide-once` genero recomendacion HOOD con
+  `source="llm"`; `llm_usage` registro `trade_decision/decision` sobre
+  `moonshotai/kimi-k2.6-20260420` (57.924 tokens). El ciclo observable cargo y
+  arranco CrewAI correctamente. Una tarea larga de revision agoto su timeout de
+  120 s y uso el fallback LLM directo; no hubo fallback determinista ni ordenes
+  por estar el mercado cerrado. Este timeout queda como optimizacion operativa,
+  no como fallo de dependencias o indisponibilidad LLM.
+
 ### Capa 2 — Mas listo / rentable (con evidencia, en shadow)
 - **C2.1** Alinear horizonte de salida a 5-10d (donde hay edge); medir en shadow contra la politica actual.
 - **C2.2** Activar `stale_guard` en shadow (corta perdedores estancados; FRT tardo 5 dias en cerrar a peor).

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 from .config import Settings
@@ -132,6 +135,7 @@ def select_preferred_endpoint(settings: Settings) -> tuple[LLMEndpoint, list[dic
 # fallback a la cadena por defecto (`configured_llm_endpoints`).
 ROLE_PROFILES: dict[str, dict[str, Any]] = {
     "fast": {"temperature": 0.2, "max_tokens": 1200, "timeout": None},
+    "sentiment": {"temperature": 0.2, "max_tokens": 4000, "timeout": None},
     "decision": {"temperature": 0.2, "max_tokens": None, "timeout": None},
     "deep": {"temperature": 0.2, "max_tokens": 16000, "timeout": 600},
 }
@@ -305,42 +309,94 @@ def _complete_with_endpoints(
         )
         if not available:
             continue
-        try:
-            client = build_openai_client(endpoint, timeout_seconds)
-            request_kwargs = {
-                "model": endpoint.model,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "messages": messages,
-            }
-            if endpoint.reasoning_effort:
-                request_kwargs["reasoning_effort"] = endpoint.reasoning_effort
-            response = client.chat.completions.create(
-                **request_kwargs,
-            )
-            attempts.append(
-                {
-                    "name": endpoint.name,
-                    "base_url": endpoint.base_url,
+        retry_attempts = max(0, int(settings.llm_retry_attempts))
+        for retry_index in range(retry_attempts + 1):
+            try:
+                client = build_openai_client(endpoint, timeout_seconds)
+                request_kwargs = {
                     "model": endpoint.model,
-                    "stage": "completion",
-                    "available": True,
-                    "error": None,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "messages": messages,
                 }
-            )
-            return response, endpoint, attempts
-        except Exception as exc:  # noqa: BLE001 - fallback is intentional here
-            last_error = exc
-            attempts.append(
-                {
-                    "name": endpoint.name,
-                    "base_url": endpoint.base_url,
-                    "model": endpoint.model,
-                    "stage": "completion",
-                    "available": False,
-                    "error": classify_llm_client_error(exc),
-                }
-            )
+                if endpoint.reasoning_effort:
+                    request_kwargs["reasoning_effort"] = endpoint.reasoning_effort
+                response = client.chat.completions.create(**request_kwargs)
+                attempts.append(
+                    {
+                        "name": endpoint.name,
+                        "base_url": endpoint.base_url,
+                        "model": endpoint.model,
+                        "stage": "completion",
+                        "available": True,
+                        "retry_index": retry_index,
+                        "error": None,
+                    }
+                )
+                return response, endpoint, attempts
+            except Exception as exc:  # noqa: BLE001 - fallback is intentional here
+                last_error = exc
+                status_code = _http_status_code(exc)
+                retryable = status_code in {403, 429}
+                can_retry = retryable and retry_index < retry_attempts
+                delay = _retry_delay_seconds(settings, exc, retry_index) if can_retry else None
+                attempts.append(
+                    {
+                        "name": endpoint.name,
+                        "base_url": endpoint.base_url,
+                        "model": endpoint.model,
+                        "stage": "completion",
+                        "available": False,
+                        "retry_index": retry_index,
+                        "status_code": status_code,
+                        "retry_scheduled": can_retry,
+                        "retry_after_seconds": delay,
+                        "error": classify_llm_client_error(exc),
+                    }
+                )
+                if not can_retry:
+                    break
+                time.sleep(delay or 0.0)
     if last_error is None:
         raise RuntimeError("No hay endpoints LLM configurados.")
     raise last_error
+
+
+def _http_status_code(exc: Exception) -> int | None:
+    value = getattr(exc, "status_code", None)
+    if value is None:
+        value = getattr(getattr(exc, "response", None), "status_code", None)
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _retry_after_header(exc: Exception) -> str | None:
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None) or getattr(exc, "headers", None)
+    if headers is None:
+        return None
+    try:
+        return headers.get("Retry-After") or headers.get("retry-after")
+    except AttributeError:
+        return None
+
+
+def _retry_delay_seconds(settings: Settings, exc: Exception, retry_index: int) -> float:
+    maximum = max(0.0, float(settings.llm_retry_max_seconds))
+    header = str(_retry_after_header(exc) or "").strip()
+    if header:
+        try:
+            return min(maximum, max(0.0, float(header)))
+        except ValueError:
+            try:
+                target = parsedate_to_datetime(header)
+                if target.tzinfo is None:
+                    target = target.replace(tzinfo=timezone.utc)
+                seconds = (target - datetime.now(timezone.utc)).total_seconds()
+                return min(maximum, max(0.0, seconds))
+            except (TypeError, ValueError, OverflowError):
+                pass
+    base = max(0.0, float(settings.llm_retry_base_seconds))
+    return min(maximum, base * (2 ** max(0, retry_index)))

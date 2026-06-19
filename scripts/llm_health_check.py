@@ -14,8 +14,8 @@ Uso (no requiere dependencias del proyecto, solo stdlib):
     python scripts/llm_health_check.py --timeout 20
 
 Codigos de salida:
-    0  -> al menos un proveedor de decision (primario o fallback local) responde
-    1  -> ningun proveedor de decision responde  (operativa degradada)
+    0  -> decision y sentimiento tienen proveedor primario o fallback disponible
+    1  -> decision o sentimiento no tienen ningun proveedor disponible
 
 Lee la configuracion de .env (no sobrescribe variables ya presentes en el
 entorno). Nunca imprime claves completas.
@@ -145,17 +145,31 @@ def main() -> int:
         prim_key = cfg(env, "OPENAI_API_KEY")
         prim_model = cfg(env, "OPENAI_MODEL_NAME")
 
+    decision_base = cfg(env, "LLM_ROLE_DECISION_BASE_URL") or prim_base
+    decision_key = cfg(env, "LLM_ROLE_DECISION_API_KEY") or prim_key
+    decision_model = cfg(env, "LLM_ROLE_DECISION_MODEL") or prim_model
+    sentiment_base = cfg(env, "LLM_ROLE_SENTIMENT_BASE_URL") or prim_base
+    sentiment_key = cfg(env, "LLM_ROLE_SENTIMENT_API_KEY") or prim_key
+    sentiment_model = cfg(env, "LLM_ROLE_SENTIMENT_MODEL") or prim_model
+
     providers = [
         {
-            "name": f"primary [{selector}/{prim_model}]",
+            "name": f"decision [{selector}]",
             "role": "decision",
-            "base": prim_base,
-            "key": prim_key,
-            "model": prim_model,
+            "base": decision_base,
+            "key": decision_key,
+            "model": decision_model,
+        },
+        {
+            "name": f"sentiment [{selector}]",
+            "role": "sentiment",
+            "base": sentiment_base,
+            "key": sentiment_key,
+            "model": sentiment_model,
         },
         {
             "name": "local fallback",
-            "role": "decision",
+            "role": "fallback",
             "base": cfg(env, "LLM_LOCAL_FALLBACK_API_BASE"),
             "key": cfg(env, "LLM_LOCAL_FALLBACK_API_KEY"),
             "model": cfg(env, "LLM_LOCAL_FALLBACK_MODEL"),
@@ -189,10 +203,19 @@ def main() -> int:
         res["role"] = p["role"]
         results.append(res)
 
-    decision_ok = any(r.get("ok") for r in results if r.get("role") == "decision")
+    fallback_ok = any(r.get("ok") for r in results if r.get("role") == "fallback")
+    decision_ok = fallback_ok or any(r.get("ok") for r in results if r.get("role") == "decision")
+    sentiment_ok = fallback_ok or any(r.get("ok") for r in results if r.get("role") == "sentiment")
+    overall_ok = decision_ok and sentiment_ok
 
     if args.json:
-        print(json.dumps({"decision_ok": decision_ok, "providers": results}, indent=2, ensure_ascii=False))
+        print(
+            json.dumps(
+                {"decision_ok": decision_ok, "sentiment_ok": sentiment_ok, "providers": results},
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
     else:
         print("=== Chequeo de salud LLM ===")
         for r in results:
@@ -205,15 +228,16 @@ def main() -> int:
             lat = f"{r['latency_ms']}ms" if r.get("latency_ms") else "-"
             print(f"{flag} {r['provider']:<28} {r['model']:<18} {lat:>8}  {r.get('detail')}")
         print()
-        if decision_ok:
-            print("RESULTADO: hay LLM de decision disponible. Operativa LLM normal.")
+        if overall_ok:
+            print("RESULTADO: decision y sentimiento tienen LLM disponible. Operativa normal.")
         else:
-            print("RESULTADO: NINGUN LLM de decision responde -> el sistema operara en")
+            print("RESULTADO: decision o sentimiento no tienen LLM disponible -> modo degradado.")
+            print("           El sistema puede operar en")
             print("           fallback determinista (slate de candidatos muy reducido,")
             print("           sin sentimiento). Revisar proveedor primario y/o arrancar")
             print("           el servidor LLM local antes de esperar operativa normal.")
 
-    return 0 if decision_ok else 1
+    return 0 if overall_ok else 1
 
 
 if __name__ == "__main__":

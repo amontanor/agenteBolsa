@@ -152,6 +152,15 @@ IMPROVEMENT_LLM_ORCHESTRATOR_MODEL=kimi-k2.6
 LLM_TEMPERATURE=0.2
 LLM_MAX_TOKENS=1200
 LLM_TIMEOUT_SECONDS=120
+LLM_RETRY_ATTEMPTS=2
+LLM_RETRY_BASE_SECONDS=1
+LLM_RETRY_MAX_SECONDS=30
+
+LLM_ROLE_SENTIMENT_MODEL=kimi-k2.6
+LLM_ROLE_SENTIMENT_BASE_URL=https://opencode.ai/zen/go/v1
+LLM_ROLE_SENTIMENT_MAX_TOKENS=4000
+LLM_ROLE_DECISION_MODEL=kimi-k2.6
+LLM_ROLE_DECISION_BASE_URL=https://opencode.ai/zen/go/v1
 
 LLM_LOCAL_FALLBACK_ENABLED=true
 LLM_LOCAL_FALLBACK_API_KEY=local-llama
@@ -166,6 +175,7 @@ Si `LLM_MODEL_SELECTOR=custom`, el sistema usa las variables legacy `OPENAI_API_
 Para MiMo en mejora continua, usa `IMPROVEMENT_LLM_PROVIDER=mimo`, `IMPROVEMENT_LLM_MODEL=mimo-v2.5` e `IMPROVEMENT_LLM_ORCHESTRATOR_MODEL=mimo-v2.5-pro`.
 Tambien puedes cambiar proveedor/modelo desde el panel web en `Configuracion` > `Selector LLM`; el formulario persiste los cambios en `.env`.
 El alias local `qwen3.6-27b` debe coincidir con el parametro `--alias qwen3.6-27b` de `llama-server.exe`.
+Decision y sentimiento usan el primario OpenCode Go por defecto. Ante respuestas 429/403, el router respeta `Retry-After` y aplica backoff exponencial acotado antes de pasar al fallback.
 
 Para el modelo local, el planning interno de CrewAI queda desactivado por defecto porque anade llamadas largas. El sistema conserva su propio flujo por fases y su memoria en SQLite/JSONL.
 

@@ -5,6 +5,7 @@ from agente_bolsa.llm_router import (
     configured_llm_endpoints,
     is_endpoint_available,
     primary_llm_endpoint,
+    _retry_delay_seconds,
     role_endpoints,
     role_max_tokens,
     select_preferred_endpoint,
@@ -102,7 +103,7 @@ def _role_settings(**overrides):
         "LLM_PRIMARY_PREFLIGHT_ENABLED": False,
     }
     base.update(overrides)
-    return Settings(**base)
+    return Settings(_env_file=None, **base)
 
 
 def test_role_without_config_uses_default_chain():
@@ -121,6 +122,89 @@ def test_role_with_config_prepends_its_endpoint():
     assert endpoints[0].name == "role:fast"
     assert endpoints[0].model == "tiny-local"
     assert endpoints[0].base_url == "http://127.0.0.1:9000/v1"
+
+
+def test_sentiment_role_can_be_pinned_to_primary_model():
+    settings = _role_settings(
+        LLM_MODEL_SELECTOR="opencode-go",
+        OPENCODE_API_KEY="opencode-key",
+        LLM_ROLE_SENTIMENT_MODEL="kimi-k2.6",
+        LLM_ROLE_SENTIMENT_BASE_URL="https://opencode.ai/zen/go/v1",
+    )
+
+    endpoint = role_endpoints(settings, "sentiment")[0]
+
+    assert endpoint.name == "role:sentiment"
+    assert endpoint.model == "kimi-k2.6"
+    assert endpoint.api_key == "opencode-key"
+
+
+def test_router_honors_retry_after_before_fallback(monkeypatch):
+    settings = _role_settings(
+        LLM_LOCAL_FALLBACK_ENABLED=False,
+        LLM_RETRY_ATTEMPTS=2,
+        LLM_RETRY_BASE_SECONDS=1,
+        LLM_RETRY_MAX_SECONDS=30,
+    )
+    calls: list[int] = []
+    sleeps: list[float] = []
+
+    class _Response:
+        status_code = 429
+        headers = {"Retry-After": "7"}
+
+    class _RateLimitError(Exception):
+        status_code = 429
+        response = _Response()
+
+    class _Message:
+        content = "{}"
+
+    class _Choice:
+        message = _Message()
+
+    class _Result:
+        choices = [_Choice()]
+
+    class _Completions:
+        @staticmethod
+        def create(**_kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise _RateLimitError("quota")
+            return _Result()
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
+    monkeypatch.setattr("agente_bolsa.llm_router.build_openai_client", lambda *_args: _Client())
+    monkeypatch.setattr("agente_bolsa.llm_router.time.sleep", lambda seconds: sleeps.append(seconds))
+
+    _response, _endpoint, attempts = chat_for_role(
+        "decision",
+        settings=settings,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    completion_attempts = [item for item in attempts if item["stage"] == "completion"]
+    assert len(calls) == 2
+    assert sleeps == [7.0]
+    assert completion_attempts[0]["status_code"] == 429
+    assert completion_attempts[0]["retry_scheduled"] is True
+    assert completion_attempts[1]["available"] is True
+
+
+def test_router_uses_bounded_exponential_backoff_for_403():
+    settings = _role_settings(LLM_RETRY_BASE_SECONDS=2, LLM_RETRY_MAX_SECONDS=5)
+
+    class _Forbidden(Exception):
+        status_code = 403
+
+    assert _retry_delay_seconds(settings, _Forbidden(), retry_index=0) == 2.0
+    assert _retry_delay_seconds(settings, _Forbidden(), retry_index=3) == 5.0
 
 
 def test_deep_role_defaults_to_improvement_llm():
