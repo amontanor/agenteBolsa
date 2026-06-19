@@ -140,8 +140,11 @@ def evaluate(
         "recent_recommendations": fallback,
         "reasons": reasons,
         "recommended_action": (
-            "Arrancar/arreglar el LLM (local :8080 y/o proveedor primario) y validar con "
-            "scripts/llm_health_check.py. Hasta entonces, el slate de candidatos es minimo."
-            if degraded else "Sin accion: el grupo de agentes opera con LLM disponible."
+            "El fallback domina y no hay actividad LLM: validar proveedores con "
+            "scripts/llm_health_check.py antes del siguiente ciclo."
+            if severity == "critical"
+            else "No hay actividad LLM reciente; comprobar salud si persiste durante mercado abierto."
+            if degraded
+            else "Sin accion: hay actividad LLM reciente."
         ),
     }

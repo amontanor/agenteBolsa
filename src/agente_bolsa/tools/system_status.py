@@ -22,6 +22,31 @@ REPORTS = ROOT / "data" / "reports"
 OK, WARN, DOWN, NA = "OK", "WARN", "DOWN", "--"
 
 
+def _llm_expected_detail() -> str:
+    try:
+        from agente_bolsa.config import Settings
+        from agente_bolsa.llm_router import primary_llm_endpoint
+
+        settings = Settings()
+        endpoint = primary_llm_endpoint(settings)
+        selector = str(getattr(settings, "llm_model_selector", "custom") or "custom")
+        return f"{selector}/{endpoint.model}/fallback respondiendo"
+    except Exception:
+        return "LLM primario/fallback respondiendo"
+
+
+def _llm_component_status(*, degraded: bool | None, severity: str | None, decision_age_min: float | None) -> tuple[str, str]:
+    if degraded and str(severity or "").lower() == "critical":
+        return DOWN, "DEGRADADO (fallback dominante y sin actividad LLM)"
+    if degraded:
+        return WARN, "sin actividad LLM de decision reciente"
+    if decision_age_min is None:
+        return WARN, "sin llamadas de decision"
+    if decision_age_min <= 1440:
+        return OK, f"ultima decision hace {decision_age_min / 60:.1f} h"
+    return WARN, f"ultima decision hace {decision_age_min / 60:.0f} h"
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -151,17 +176,17 @@ def build_status(db_path: Path | None = None, reports_dir: Path | None = None) -
 
     dec = _age_min(_last_llm(con, ("trade_decision",)))
     degraded = None
+    degraded_severity = None
     ahc = reports / "latest_agents_healthcheck.json"
     if ahc.exists():
         try:
-            degraded = (json.loads(ahc.read_text(encoding="utf-8")).get("watchdog") or {}).get("degraded")
+            watchdog = json.loads(ahc.read_text(encoding="utf-8")).get("watchdog") or {}
+            degraded = watchdog.get("degraded")
+            degraded_severity = watchdog.get("severity")
         except Exception:
             pass
-    st = ((DOWN, "DEGRADADO (sin LLM de decision)") if degraded else
-          (WARN, "sin llamadas de decision") if dec is None else
-          (OK, f"ultima decision hace {dec/60:.1f} h") if dec <= 1440 else
-          (WARN, f"ultima decision hace {dec/60:.0f} h"))
-    comps.append({"name": "LLM de decision", "state": st[0], "detail": st[1], "expected": "MiMo/fallback respondiendo"})
+    st = _llm_component_status(degraded=degraded, severity=degraded_severity, decision_age_min=dec)
+    comps.append({"name": "LLM de decision", "state": st[0], "detail": st[1], "expected": _llm_expected_detail()})
 
     web = _port_open("127.0.0.1", 8501)
     comps.append({"name": "Panel web (8501)", "state": OK if web else WARN,

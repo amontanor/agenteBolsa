@@ -1319,6 +1319,7 @@ class ImprovementStrategistAgent:
             ],
             {},
             model=self.settings.improvement_llm_orchestrator_model,
+            route="orchestrator",
         )
 
 

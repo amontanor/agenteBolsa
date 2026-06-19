@@ -15,9 +15,15 @@ class _StoreStub:
 
 def test_dashboard_llm_pills_show_trading_and_ci_models():
     settings = SimpleNamespace(
+        llm_model_selector="opencode-go",
+        opencode_model="kimi-k2.6",
+        mimo_model="mimo-v2.5-pro",
         openai_model="mimo-v2.5-pro",
         llm_local_fallback_model="qwen3.6-27b",
-        improvement_llm_orchestrator_model="mimo-v2.5-pro",
+        improvement_llm_provider="opencode-go",
+        improvement_llm_model="kimi-k2.6",
+        improvement_llm_orchestrator_provider="opencode-go",
+        improvement_llm_orchestrator_model="kimi-k2.6",
     )
     store = _StoreStub(
         [
@@ -34,7 +40,7 @@ def test_dashboard_llm_pills_show_trading_and_ci_models():
         ]
     )
     ci_result = {
-        "status": "ok",
+        "status": "failed",
         "model": "mimo-v2.5-pro",
         "fallback_used": False,
         "created_at": "2026-06-02T15:47:12+00:00",
@@ -42,9 +48,12 @@ def test_dashboard_llm_pills_show_trading_and_ci_models():
 
     pills = _dashboard_llm_pills(settings, store, ci_result)
 
-    assert len(pills) == 2
-    assert "Trading LLM mimo-v2.5-pro" in pills[0]["text"]
-    assert pills[0]["tone"] == "good"
-    assert "mimo" in pills[0]["text"]
-    assert "CI LLM mimo-v2.5-pro" in pills[1]["text"]
+    assert len(pills) == 3
+    assert "Trading config kimi-k2.6" in pills[0]["text"]
+    assert "ultimo uso mimo-v2.5-pro" in pills[0]["text"]
+    assert pills[0]["tone"] == "neutral"
+    assert "Agentes config kimi-k2.6" in pills[1]["text"]
     assert pills[1]["tone"] == "good"
+    assert "Orquestador config kimi-k2.6" in pills[2]["text"]
+    assert "ultimo fallo historico mimo-v2.5-pro" in pills[2]["text"]
+    assert pills[2]["tone"] == "neutral"

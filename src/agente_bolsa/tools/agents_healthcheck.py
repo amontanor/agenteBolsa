@@ -74,11 +74,16 @@ def run_agents_healthcheck(
     # --- Alerta visible si el grupo opera sin LLM ---
     if reporter is not None and isinstance(watchdog, dict) and watchdog.get("degraded"):
         try:
+            critical = str(watchdog.get("severity") or "").lower() == "critical"
             reporter.emit(
                 "orchestrator",
                 "llm_degraded_alert",
                 run_id or "ahc",
-                "Grupo de agentes en modo degradado: LLM de decision no disponible.",
+                (
+                    "Grupo de agentes degradado: fallback dominante y sin actividad LLM."
+                    if critical
+                    else "Sin actividad LLM de decision reciente; revisar si persiste con mercado abierto."
+                ),
                 watchdog,
             )
         except Exception:  # noqa: BLE001

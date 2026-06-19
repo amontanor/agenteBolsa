@@ -18,15 +18,45 @@ class LLMEndpoint:
     reasoning_effort: str | None = None
 
 
+def _provider_api_key(settings: Settings, provider: str | None) -> str:
+    provider_key = str(provider or "").strip().lower()
+    if provider_key in {"opencode", "opencode-go"}:
+        return str(settings.opencode_api_key or "").strip()
+    if provider_key == "mimo":
+        return str(settings.mimo_api_key or settings.openai_api_key or "").strip()
+    return str(settings.openai_api_key or "").strip()
+
+
+def primary_llm_endpoint(settings: Settings) -> LLMEndpoint:
+    selector = str(getattr(settings, "llm_model_selector", "custom") or "custom").strip().lower()
+    if selector in {"opencode", "opencode-go"}:
+        return LLMEndpoint(
+            name=f"primary:{selector}",
+            api_key=str(settings.opencode_api_key or "").strip(),
+            base_url=settings.opencode_api_base,
+            model=settings.opencode_model,
+            preflight=settings.llm_primary_preflight_enabled,
+        )
+    if selector == "mimo":
+        return LLMEndpoint(
+            name="primary:mimo",
+            api_key=str(settings.mimo_api_key or settings.openai_api_key or "").strip(),
+            base_url=settings.mimo_api_base,
+            model=settings.mimo_model,
+            preflight=settings.llm_primary_preflight_enabled,
+        )
+    return LLMEndpoint(
+        name="primary:custom",
+        api_key=str(settings.openai_api_key or "").strip(),
+        base_url=settings.openai_api_base,
+        model=settings.openai_model,
+        preflight=settings.llm_primary_preflight_enabled,
+    )
+
+
 def configured_llm_endpoints(settings: Settings) -> list[LLMEndpoint]:
     endpoints = [
-        LLMEndpoint(
-            name="primary",
-            api_key=str(settings.openai_api_key or "").strip(),
-            base_url=settings.openai_api_base,
-            model=settings.openai_model,
-            preflight=settings.llm_primary_preflight_enabled,
-        ),
+        primary_llm_endpoint(settings),
     ]
     if settings.llm_local_fallback_enabled:
         endpoints.append(
@@ -127,27 +157,32 @@ def role_endpoints(settings: Settings, role: str) -> list[LLMEndpoint]:
         endpoints.append(
             LLMEndpoint(
                 name=f"role:{role}",
-                api_key=str(api_key or settings.openai_api_key or "").strip(),
+                api_key=str(api_key or primary_llm_endpoint(settings).api_key or "").strip(),
                 base_url=base,
                 model=model,
                 preflight=settings.llm_primary_preflight_enabled,
             )
         )
     elif model:
+        primary = primary_llm_endpoint(settings)
         endpoints.append(
             LLMEndpoint(
                 name=f"role:{role}",
-                api_key=str(settings.openai_api_key or "").strip(),
-                base_url=settings.openai_api_base,
+                api_key=primary.api_key,
+                base_url=primary.base_url,
                 model=model,
                 preflight=settings.llm_primary_preflight_enabled,
             )
         )
     elif role == "deep" and getattr(settings, "improvement_llm_model", None):
+        improvement_key = str(settings.improvement_llm_api_key or "").strip() or _provider_api_key(
+            settings,
+            settings.improvement_llm_provider,
+        )
         endpoints.append(
             LLMEndpoint(
                 name="role:deep",
-                api_key=str(settings.improvement_llm_api_key or settings.openai_api_key or "").strip(),
+                api_key=improvement_key,
                 base_url=settings.improvement_llm_base_url,
                 model=settings.improvement_llm_model,
                 preflight=False,

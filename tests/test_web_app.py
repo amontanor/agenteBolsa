@@ -44,6 +44,7 @@ from agente_bolsa.web_app import (
     _single_symbol_price_frame,
     _study_price,
     _trim_portfolio_chart_range,
+    update_env_file,
 )
 
 
@@ -57,6 +58,30 @@ def test_usage_tokens_reads_compatible_llm_usage_object():
         "completion_tokens": 8,
         "total_tokens": 20,
     }
+
+
+def test_update_env_file_updates_existing_keys_and_appends_missing(tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "# LLM\n"
+        "IMPROVEMENT_LLM_PROVIDER=mimo\n"
+        "KEEP_ME=true\n",
+        encoding="utf-8",
+    )
+
+    update_env_file(
+        env_path,
+        {
+            "IMPROVEMENT_LLM_PROVIDER": "opencode-go",
+            "IMPROVEMENT_LLM_MODEL": "kimi-k2.6",
+        },
+    )
+
+    text = env_path.read_text(encoding="utf-8")
+    assert "# LLM" in text
+    assert "KEEP_ME=true" in text
+    assert "IMPROVEMENT_LLM_PROVIDER=opencode-go" in text
+    assert "IMPROVEMENT_LLM_MODEL=kimi-k2.6" in text
 
 
 def test_usage_tokens_estimates_missing_local_backend_usage():

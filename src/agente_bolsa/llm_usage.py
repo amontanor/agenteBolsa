@@ -86,6 +86,10 @@ DEFAULT_PRICE_PER_MTOKEN: dict[str, float] = {
     "qwen": 0.0,
     "gemini": 0.30,
     "mimo": 0.50,
+    # opencode-go models — precio estimado blended input+output (override via LLM_PRICE_PER_MTOKEN_KIMI_K2_6)
+    "kimi": 1.0,
+    "glm": 0.50,
+    "deepseek": 0.50,
 }
 
 

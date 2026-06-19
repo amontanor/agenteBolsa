@@ -1,4 +1,11 @@
-from agente_bolsa.tools.system_status import DOWN, OK, WARN, _global_verdict, _waiting_after_scheduler_restart
+from agente_bolsa.tools.system_status import (
+    DOWN,
+    OK,
+    WARN,
+    _global_verdict,
+    _llm_component_status,
+    _waiting_after_scheduler_restart,
+)
 
 
 def test_waiting_after_scheduler_restart_hides_stale_first_run():
@@ -31,3 +38,16 @@ def test_global_verdict_down_on_critical_down():
     ]
 
     assert _global_verdict(components) == DOWN
+
+
+def test_llm_activity_warning_is_not_provider_down():
+    assert _llm_component_status(degraded=True, severity="warning", decision_age_min=1500) == (
+        WARN,
+        "sin actividad LLM de decision reciente",
+    )
+
+
+def test_llm_critical_fallback_is_down():
+    state, detail = _llm_component_status(degraded=True, severity="critical", decision_age_min=1500)
+    assert state == DOWN
+    assert "fallback" in detail

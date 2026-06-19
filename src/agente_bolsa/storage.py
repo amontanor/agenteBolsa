@@ -2967,6 +2967,8 @@ class Store:
         return int(row["count"] or 0)
 
     def create_continuous_improvement_cycle(self, item: dict[str, Any]) -> None:
+        from .continuous_improvement.persistence_compaction import compact_cycle_context, compact_cycle_report
+
         now = _utc_iso()
         with self.connect() as conn:
             conn.execute(
@@ -2988,18 +2990,20 @@ class Store:
                     item.get("dedupe_key"),
                     item.get("started_at") or now,
                     item.get("finished_at"),
-                    _dumps(item.get("context", {})),
+                    _dumps(compact_cycle_context(item.get("context", {}))),
                     _dumps(item.get("evaluation", {})),
                     item.get("llm_call_id"),
                     item.get("llm_status"),
                     _dumps(item.get("error", {})),
-                    _dumps(item.get("report", {})),
+                    _dumps(compact_cycle_report(item.get("report", {}))),
                     now,
                     now,
                 ),
             )
 
     def update_continuous_improvement_cycle(self, cycle_id: str, **updates: Any) -> None:
+        from .continuous_improvement.persistence_compaction import compact_cycle_context, compact_cycle_report
+
         allowed = {
             "status": "status",
             "finished_at": "finished_at",
@@ -3019,6 +3023,10 @@ class Store:
             assignments.append(f"{column} = ?")
             value = updates[key]
             if column.endswith("_json"):
+                if key == "context":
+                    value = compact_cycle_context(value)
+                elif key == "report":
+                    value = compact_cycle_report(value)
                 value = _dumps(value if value is not None else ([] if key.startswith("linked_") else {}))
             values.append(value)
         if not assignments:

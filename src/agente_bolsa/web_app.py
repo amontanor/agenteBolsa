@@ -35,6 +35,7 @@ from agente_bolsa.config import get_settings
 from agente_bolsa.continuous_improvement.runtime import ContinuousImprovementLabRuntime
 from agente_bolsa.continuous_improvement.promotion_readiness import evaluate_promotion_readiness
 from agente_bolsa.eventing import EventReporter
+from agente_bolsa.llm_router import primary_llm_endpoint
 from agente_bolsa.market_calendar import MarketCalendar
 from agente_bolsa.models import PortfolioSnapshot, TradeRecommendation, new_id
 from agente_bolsa.scheduler import _run_pre_earnings_trade_operation, scheduler_status
@@ -85,10 +86,82 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_START_DATE = "2026-04-01"
 PORTFOLIO_CHART_START_DATE = "2026-04-28"
 PRE_EARNINGS_CONFIDENCE_THRESHOLD = 0.80
+ENV_PATH = REPO_ROOT / ".env"
+LLM_PROVIDER_CATALOG = {
+    "opencode-go": {
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "models": [
+            "glm-5.2",
+            "glm-5.1",
+            "kimi-k2.7",
+            "kimi-k2.6",
+            "deepseek-v4-pro",
+            "deepseek-v4-flash",
+            "mimo-v2.5",
+            "mimo-v2.5-pro",
+        ],
+    },
+    "mimo": {
+        "base_url": "https://token-plan-ams.xiaomimimo.com/v1",
+        "models": ["mimo-v2.5", "mimo-v2.5-pro"],
+    },
+}
+PRIMARY_LLM_SELECTORS = ["opencode-go", "mimo", "custom"]
 
 
 def _settings():
     return get_settings()
+
+
+def _provider_base_url(provider: str) -> str:
+    return LLM_PROVIDER_CATALOG.get(provider, {}).get("base_url", "")
+
+
+def _provider_models(provider: str) -> list[str]:
+    return list(LLM_PROVIDER_CATALOG.get(provider, {}).get("models", []))
+
+
+def _select_index(options: list[str], current: str | None) -> int:
+    try:
+        return options.index(str(current or ""))
+    except ValueError:
+        return 0
+
+
+def _format_env_value(value: Any) -> str:
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return ""
+    if any(ch.isspace() for ch in text) or "#" in text:
+        escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    return text
+
+
+def update_env_file(path: Path, updates: dict[str, Any]) -> None:
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    lines = existing.splitlines()
+    seen: set[str] = set()
+    updated_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            updated_lines.append(line)
+            continue
+        key = line.split("=", 1)[0].strip()
+        if key in updates:
+            updated_lines.append(f"{key}={_format_env_value(updates[key])}")
+            seen.add(key)
+        else:
+            updated_lines.append(line)
+    missing = [key for key in updates if key not in seen]
+    if missing and updated_lines and updated_lines[-1].strip():
+        updated_lines.append("")
+    for key in missing:
+        updated_lines.append(f"{key}={_format_env_value(updates[key])}")
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+    tmp_path.replace(path)
 
 
 def _store() -> Store:
@@ -235,6 +308,14 @@ def _local_time(value: Any, timezone_name: str | None = None) -> str:
 def _local_datetime(value: Any, timezone_name: str | None = None) -> str:
     parsed = _local_dt(value, timezone_name)
     return parsed.strftime("%Y-%m-%d %H:%M:%S") if parsed else str(value or "-")
+
+
+def _age_minutes(value: Any, timezone_name: str | None = None) -> float | None:
+    parsed = _local_dt(value, timezone_name)
+    if not parsed:
+        return None
+    now = datetime.now(ZoneInfo(timezone_name or _settings().local_timezone))
+    return max(0.0, (now - parsed).total_seconds() / 60.0)
 
 
 def _status_color(ok: bool) -> tuple[str, str, str]:
@@ -1581,43 +1662,71 @@ def _dashboard_header(
     today_pl: float | None = None,
     today_pct: float | None = None,
     llm_pills: list[dict[str, str]] | None = None,
+    operational_status: dict[str, Any] | None = None,
 ) -> None:
-    market_color, market_bg, market_border = _status_color(bool(market.get("is_open")))
-    auto_color, auto_bg, auto_border = _status_color(bool(settings.auto_paper_trading))
-    today_color, today_bg, today_border = _status_color((today_pl or 0.0) >= 0)
     refreshed = datetime.now(ZoneInfo(settings.local_timezone)).strftime("%H:%M:%S")
-    equity_text = _money(current_equity) if current_equity is not None else "-"
-    pct_text = _pct_signed(today_pct) if today_pct is not None else "-"
-    extra_pills = ""
-    for item in llm_pills or []:
-        tone_color, tone_bg, tone_border = _tone_color(str(item.get("tone") or "neutral"))
-        extra_pills += (
-            f"<span style=\"color:{tone_color}; background:{tone_bg}; border-color:{tone_border};\">"
-            f"{escape(str(item.get('text') or ''))}</span>"
+    operational_status = operational_status or {"overall_tone": "neutral", "overall_label": "Estado sin datos", "badges": []}
+
+    def _pill(label: str, tone: str, detail: str = "") -> str:
+        color, bg, border = _tone_color(tone)
+        title_attr = f' title="{escape(detail)}"' if detail else ""
+        return (
+            f'<span{title_attr} style="display:inline-flex;align-items:center;border:1px solid {border};'
+            f"background:{bg};color:{color};border-radius:999px;font-size:0.82rem;font-weight:600;"
+            f'padding:6px 12px;white-space:nowrap;">{escape(label)}</span>'
         )
+
+    pills: list[str] = []
+    pills.append(
+        _pill(
+            "\u25cf " + str(operational_status.get("overall_label") or "Estado"),
+            str(operational_status.get("overall_tone") or "neutral"),
+        )
+    )
+    pills.append(
+        _pill(
+            "Mercado abierto" if market.get("is_open") else "Mercado cerrado",
+            "good" if market.get("is_open") else "neutral",
+        )
+    )
+    pills.append(
+        _pill(
+            "Auto paper activo" if settings.auto_paper_trading else "Auto paper manual",
+            "good" if settings.auto_paper_trading else "neutral",
+        )
+    )
+    for item in operational_status.get("badges", []):
+        pills.append(
+            _pill(
+                str(item.get("label") or "-"),
+                str(item.get("tone") or "neutral"),
+                str(item.get("detail") or ""),
+            )
+        )
+
+    llm_tones = [str(item.get("tone") or "neutral") for item in (llm_pills or [])]
+    if llm_tones:
+        if "bad" in llm_tones:
+            llm_tone, llm_label = "bad", "LLM fallo"
+        elif any(tone != "good" for tone in llm_tones):
+            llm_tone, llm_label = "neutral", "LLM pendiente"
+        else:
+            llm_tone, llm_label = "good", "LLM OK"
+        llm_detail = " - ".join(str(item.get("text") or "").split(" | ")[0] for item in (llm_pills or []))
+        pills.append(_pill(llm_label, llm_tone, llm_detail))
+
+    pills_html = "".join(pills)
     st.markdown(
-        f"""
-        <div class="dashboard-header">
-            <div>
-                <div class="dashboard-title">Resumen operativo</div>
-                <div class="dashboard-subtitle">Lo importante: resultado, cartera abierta y decisiones recientes.</div>
-            </div>
-            <div class="dashboard-pills">
-                <span class="equity-pill">
-                    Equity actual <strong>{equity_text}</strong>
-                    <em style="color:{today_color}; background:{today_bg}; border-color:{today_border};">{pct_text}</em>
-                </span>
-                <span style="color:{market_color}; background:{market_bg}; border-color:{market_border};">
-                    Mercado {'abierto' if market.get("is_open") else 'cerrado'}
-                </span>
-                <span style="color:{auto_color}; background:{auto_bg}; border-color:{auto_border};">
-                    Auto paper {'activo' if settings.auto_paper_trading else 'manual'}
-                </span>
-                {extra_pills}
-                <span>Refresco {refreshed}</span>
+        f'''
+        <div style="padding:4px 0 14px;border-bottom:1px solid var(--ab-border);margin-bottom:16px;">
+            <div class="dashboard-title">Resumen operativo</div>
+            <div class="dashboard-subtitle">Estado del sistema, mercado y modelos de un vistazo.</div>
+            <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:12px;">
+                {pills_html}
+                <span style="margin-left:auto;color:var(--ab-muted);font-size:0.8rem;">Refresco {refreshed}</span>
             </div>
         </div>
-        """,
+        ''',
         unsafe_allow_html=True,
     )
 
@@ -1797,8 +1906,8 @@ def _render_position_price_chart(
         ],
     )
     layers = [
-        base.mark_line(color="#2563eb", strokeWidth=3),
-        base.mark_circle(size=60, color="#2563eb", opacity=0.9),
+        base.mark_line(color="#0e7a47", strokeWidth=3),
+        base.mark_circle(size=60, color="#0e7a47", opacity=0.9),
     ]
     level_rows = []
     for name, value, color in [
@@ -2196,7 +2305,7 @@ def _portfolio_value_chart(
     )
     line = (
         alt.Chart(chart_df)
-        .mark_line(color="#2563eb", strokeWidth=3)
+        .mark_line(color="#0e7a47", strokeWidth=3)
         .encode(
             x=date_axis,
             y=alt.Y(
@@ -2216,15 +2325,10 @@ def _portfolio_value_chart(
     )
     points = (
         alt.Chart(chart_df)
-        .mark_circle(size=76, color="#2563eb", opacity=0.95)
+        .mark_circle(size=76, color="#0e7a47", opacity=0.95)
         .encode(x=date_axis, y="valor_cartera:Q")
     )
-    labels = (
-        alt.Chart(chart_df)
-        .mark_text(align="center", baseline="bottom", dy=-12, color="#111827", fontSize=10)
-        .encode(x=date_axis, y="valor_cartera:Q", text="label:N")
-    )
-    st.altair_chart((line + points + labels).properties(height=292), use_container_width=True)
+    st.altair_chart((line + points).properties(height=292), use_container_width=True)
     if used_estimate:
         st.caption("Grafico estimado desde operaciones/P/L del agente para cuadrar con los valores de cabecera.")
     return visible_summary
@@ -2445,53 +2549,240 @@ def _setup_page() -> None:
     st.markdown(
         """
         <style>
-        .block-container {padding-top: 3.25rem; padding-bottom: 2rem; max-width: 1500px;}
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+        :root {
+            --ab-bg:#f4f6f9;
+            --ab-card:#ffffff;
+            --ab-border:#e9edf3;
+            --ab-ink:#0f1729;
+            --ab-muted:#667085;
+            --ab-accent:#0e7a47;
+            --ab-accent-soft:#e8f6ee;
+            --ab-shadow:0 1px 2px rgba(16,24,40,.04), 0 8px 24px rgba(16,24,40,.06);
+            --ab-radius:16px;
+        }
+        html, body, .stApp, [data-testid="stAppViewContainer"],
+        [data-testid="stSidebar"], button, input, textarea, select {
+            font-family:'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+            -webkit-font-smoothing:antialiased;
+        }
+        .stApp {background:var(--ab-bg);}
+        [data-testid="stSidebar"] {
+            background:#ffffff;
+            border-right:1px solid var(--ab-border);
+        }
+        [data-testid="stSidebar"] h1 {
+            font-size:1.18rem !important;
+            font-weight:800 !important;
+            color:var(--ab-ink) !important;
+            letter-spacing:-0.01em;
+        }
+        [data-testid="stSidebar"] [data-testid="stCaptionContainer"] {color:var(--ab-muted) !important;}
+        [data-testid="stSidebar"] [role="radiogroup"] {gap:2px;}
+        [data-testid="stSidebar"] [role="radiogroup"] > label {
+            display:flex;
+            align-items:center;
+            width:100%;
+            padding:9px 12px;
+            margin:1px 0;
+            border-radius:10px;
+            cursor:pointer;
+            color:#475467;
+            font-size:0.92rem;
+            font-weight:500;
+            transition:background .12s ease, color .12s ease;
+        }
+        [data-testid="stSidebar"] [role="radiogroup"] > label:hover {
+            background:#f3f5f8;
+            color:var(--ab-ink);
+        }
+        [data-testid="stSidebar"] [role="radiogroup"] > label > div:first-child {display:none !important;}
+        [data-testid="stSidebar"] [role="radiogroup"] > label:has(input:checked) {
+            background:var(--ab-accent-soft);
+            color:var(--ab-accent);
+            font-weight:700;
+        }
+        [data-testid="stSidebar"] [role="radiogroup"] > label:has(input:checked) p {
+            color:var(--ab-accent) !important;
+            font-weight:700;
+        }
+        .block-container {padding-top: 2.6rem; padding-bottom: 2rem; max-width: 1560px;}
         div[data-testid="stMetric"] {
-            background: #ffffff;
-            border: 1px solid #e5e7eb;
-            border-radius: 8px;
-            padding: 12px 14px;
+            background: var(--ab-card);
+            border: 1px solid var(--ab-border);
+            border-radius: 14px;
+            padding: 14px 16px;
+            box-shadow: var(--ab-shadow);
         }
         div[data-testid="stMetric"] label {font-size: 0.82rem; color: #6b7280;}
         div[data-testid="stMetricValue"] {font-size: 1.35rem;}
         .stTabs [data-baseweb="tab-list"] {gap: 4px;}
         .dashboard-header {
-            display:flex;
-            justify-content:space-between;
-            gap:24px;
-            align-items:flex-start;
-            padding: 10px 0 18px 0;
+            display:grid;
+            grid-template-columns: minmax(220px, 0.46fr) minmax(640px, 1.54fr);
+            gap:18px;
+            align-items:stretch;
+            padding: 8px 0 18px 0;
             border-bottom: 1px solid #e5e7eb;
             margin-bottom: 16px;
             margin-top: 0.25rem;
         }
+        .dashboard-heading {
+            display:flex;
+            flex-direction:column;
+            justify-content:center;
+            min-width:0;
+        }
         .dashboard-title {font-size: 1.65rem; font-weight: 750; color:#111827; line-height:1.15;}
         .dashboard-subtitle {color:#6b7280; margin-top:4px; font-size:0.96rem;}
-        .dashboard-pills {display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;}
-        .dashboard-pills span {
-            border:1px solid #e5e7eb;
-            background:#f9fafb;
-            color:#374151;
-            border-radius:999px;
-            padding:6px 10px;
-            font-size:0.85rem;
+        .dashboard-summary-grid {
+            display:grid;
+            grid-template-columns: minmax(150px, 0.58fr) minmax(270px, 1.05fr) minmax(210px, 0.82fr) minmax(360px, 1.45fr);
+            gap:10px;
+            min-width:0;
+        }
+        .dashboard-summary-card {
+            border:1px solid #d1d5db;
+            border-radius:8px;
+            background:#ffffff;
+            padding:11px 12px;
+            min-width:0;
+            min-height:104px;
+            box-sizing:border-box;
+        }
+        .dashboard-card-label {
+            color:#6b7280;
+            font-size:0.75rem;
+            font-weight:700;
+            text-transform:uppercase;
+            letter-spacing:0;
+            margin-bottom:7px;
+        }
+        .dashboard-equity {
+            color:#111827;
+            font-weight:780;
+            font-size:1.18rem;
+            line-height:1.15;
             white-space:nowrap;
         }
-        .dashboard-pills .equity-pill {
-            display:flex;
-            align-items:center;
-            gap:7px;
-            background:#ffffff;
-            border-color:#d1d5db;
-            color:#111827;
-        }
-        .dashboard-pills .equity-pill strong {font-weight:760;}
-        .dashboard-pills .equity-pill em {
+        .dashboard-delta {
             border:1px solid;
-            border-radius:999px;
-            font-style:normal;
+            border-radius:8px;
+            display:inline-block;
             font-size:0.78rem;
-            padding:2px 6px;
+            margin-top:8px;
+            padding:4px 7px;
+        }
+        .dashboard-status-line {
+            display:flex;
+            gap:7px;
+            flex-wrap:wrap;
+        }
+        .dashboard-status-line span {
+            border:1px solid;
+            border-radius:8px;
+            font-size:0.8rem;
+            padding:5px 7px;
+            white-space:nowrap;
+        }
+        .dashboard-refresh {
+            color:#6b7280;
+            font-size:0.78rem;
+            margin-top:10px;
+        }
+        .dashboard-system-title {
+            color:#111827;
+            font-weight:780;
+            font-size:1rem;
+            margin-bottom:8px;
+        }
+        .dashboard-summary-card.health.good {border-color:#bbf7d0; background:#f7fef9;}
+        .dashboard-summary-card.health.bad {border-color:#fecaca; background:#fff7f7;}
+        .dashboard-health-list {
+            display:grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap:6px;
+        }
+        .dashboard-health-item {
+            border:1px solid #e5e7eb;
+            border-radius:8px;
+            padding:6px 7px;
+            background:#ffffff;
+            min-width:0;
+        }
+        .dashboard-health-item strong {
+            display:block;
+            color:#111827;
+            font-size:0.76rem;
+            line-height:1.05;
+            margin-bottom:2px;
+        }
+        .dashboard-health-item span {
+            display:block;
+            color:#6b7280;
+            font-size:0.7rem;
+            line-height:1.15;
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }
+        .dashboard-health-item.good {border-color:#bbf7d0; background:#f0fdf4;}
+        .dashboard-health-item.good strong {color:#166534;}
+        .dashboard-health-item.bad {border-color:#fecaca; background:#fef2f2;}
+        .dashboard-health-item.bad strong {color:#991b1b;}
+        .dashboard-health-item.neutral {border-color:#e5e7eb; background:#f9fafb;}
+        .dashboard-llm-list {
+            display:grid;
+            gap:6px;
+        }
+        .dashboard-llm-row {
+            display:grid;
+            grid-template-columns:minmax(0, 1fr) auto;
+            gap:10px;
+            align-items:center;
+            border:1px solid #e5e7eb;
+            border-radius:8px;
+            padding:7px 8px;
+            background:#f9fafb;
+            min-width:0;
+        }
+        .dashboard-llm-row strong {
+            display:block;
+            color:#111827;
+            font-size:0.82rem;
+            line-height:1.1;
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }
+        .dashboard-llm-row span {
+            display:block;
+            color:#6b7280;
+            font-size:0.74rem;
+            line-height:1.15;
+            margin-top:2px;
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }
+        .dashboard-llm-row em {
+            border-radius:8px;
+            font-style:normal;
+            font-size:0.72rem;
+            font-weight:700;
+            padding:4px 6px;
+            border:1px solid #d1d5db;
+            color:#374151;
+            background:#ffffff;
+        }
+        .dashboard-llm-row.good {border-color:#bbf7d0; background:#f0fdf4;}
+        .dashboard-llm-row.good em {color:#166534; border-color:#bbf7d0; background:#dcfce7;}
+        .dashboard-llm-row.bad {border-color:#fecaca; background:#fef2f2;}
+        .dashboard-llm-row.bad em {color:#991b1b; border-color:#fecaca; background:#fee2e2;}
+        .dashboard-llm-row.neutral {border-color:#e5e7eb; background:#f9fafb;}
+        @media (max-width: 1100px) {
+            .dashboard-header {grid-template-columns:1fr;}
+            .dashboard-summary-grid {grid-template-columns:1fr;}
         }
         .dashboard-panel {
             border:1px solid #e5e7eb;
@@ -2769,7 +3060,110 @@ def _setup_page() -> None:
             -webkit-box-orient:vertical;
             overflow:hidden;
         }
-        .dashboard-divider {height:12px;}
+        .dashboard-divider {height:16px;}
+
+        /* ===== MODERN THEME REFRESH (acento verde financiero) - solo visual ===== */
+        [data-testid="stVerticalBlockBorderWrapper"] {
+            background:var(--ab-card);
+            border:1px solid var(--ab-border) !important;
+            border-radius:var(--ab-radius) !important;
+            box-shadow:var(--ab-shadow);
+            padding:6px 4px;
+        }
+        .dashboard-header {border-bottom:none; padding-bottom:14px; margin-bottom:18px; gap:22px;}
+        .dashboard-title {font-size:2rem; font-weight:800; letter-spacing:0; color:var(--ab-ink);}
+        .dashboard-subtitle {font-size:0.95rem; color:var(--ab-muted);}
+        .dashboard-summary-card {
+            border:1px solid var(--ab-border);
+            border-radius:8px;
+            box-shadow:var(--ab-shadow);
+            padding:14px 15px;
+            min-height:112px;
+        }
+        .dashboard-card-label {color:var(--ab-muted); font-size:0.7rem; font-weight:700; letter-spacing:0.04em;}
+        .dashboard-equity {font-size:1.5rem; font-weight:800; letter-spacing:0;}
+        .dashboard-delta {border-radius:999px; font-weight:600; padding:4px 10px;}
+        .dashboard-status-line span {border-radius:999px; font-weight:600; padding:5px 10px;}
+        .dashboard-summary-card.health.good {border-color:#bfe9cf; background:#f4fcf7;}
+        .dashboard-summary-card.health.bad {border-color:#fbd5d5; background:#fff8f8;}
+        .dashboard-health-item, .dashboard-llm-row {border-radius:10px;}
+        .account-strip {
+            border:1px solid var(--ab-border);
+            border-radius:var(--ab-radius);
+            box-shadow:var(--ab-shadow);
+            padding:16px 18px;
+        }
+        .account-items {grid-template-columns:repeat(4, minmax(0,1fr)); gap:8px 18px;}
+        .account-items div {border-top:none; padding-top:0;}
+        .account-items span {font-size:0.72rem; margin-bottom:2px;}
+        .account-items strong {font-size:1.1rem; font-weight:800; letter-spacing:0;}
+        .account-strip {padding:16px 18px 14px;}
+        .account-title {margin-bottom:14px;}
+        .account-kpis {grid-template-columns:repeat(3, minmax(0,1fr)); gap:14px; margin-top:14px; padding-top:14px;}
+        .account-kpi {border-radius:8px; min-height:58px; padding:10px 12px;}
+        .account-kpi span {margin-bottom:3px;}
+        .account-kpi strong {font-size:1.12rem; font-weight:800;}
+        .account-kpi.good {background:var(--ab-accent-soft); border-color:#bfe9cf;}
+        .account-kpi.good strong {color:var(--ab-accent);}
+        .mini-metric {border-radius:8px; box-shadow:none; min-height:96px; overflow:hidden;}
+        .mini-metric-label {color:var(--ab-muted); font-size:0.76rem; font-weight:600;}
+        .mini-metric-value {font-size:1.32rem; font-weight:800; letter-spacing:0; overflow-wrap:anywhere;}
+        .section-title {font-size:1.08rem; font-weight:800; letter-spacing:0; color:var(--ab-ink);}
+        .section-subtitle {color:var(--ab-muted);}
+        .dashboard-panel {border-radius:var(--ab-radius); box-shadow:var(--ab-shadow); border-color:var(--ab-border);}
+        .portfolio-table {
+            border-radius:8px;
+            border-color:var(--ab-border);
+            box-shadow:0 1px 2px rgba(16,24,40,.04);
+            overflow:hidden;
+        }
+        .portfolio-table th {
+            background:#f7f9fc;
+            color:var(--ab-muted);
+            font-weight:700;
+            text-transform:uppercase;
+            font-size:0.72rem;
+            letter-spacing:0.03em;
+        }
+        .pl-chip {border-radius:999px; padding:4px 10px;}
+        .pl-chip.gain {background:var(--ab-accent-soft); color:var(--ab-accent);}
+        .compact-order {border-radius:8px; box-shadow:0 1px 2px rgba(16,24,40,.04);}
+        .position-thesis {border-radius:8px; border-color:var(--ab-border);}
+        .empty-box {border-radius:8px; background:#f7f9fc;}
+        div[data-testid="stMetricValue"] {font-weight:800; letter-spacing:0;}
+        .stTabs [data-baseweb="tab-list"] {gap:6px; border-bottom:1px solid var(--ab-border);}
+        .stTabs [data-baseweb="tab"] {font-weight:600; color:var(--ab-muted);}
+        .stTabs [aria-selected="true"] {color:var(--ab-accent) !important;}
+        .stTabs [data-baseweb="tab-highlight"] {background:var(--ab-accent) !important;}
+        .stButton > button {
+            border-radius:8px;
+            font-weight:600;
+            border:1px solid var(--ab-border);
+            transition:all .12s ease;
+        }
+        .stButton > button:hover {border-color:var(--ab-accent); color:var(--ab-accent);}
+        [data-testid="stDataFrame"] {border-radius:8px; overflow:hidden;}
+        [data-baseweb="select"] > div {border-radius:8px;}
+        /* --- Densidad y limpieza extra (acercar al preview) --- */
+        .block-container {padding-top:3.5rem !important;}
+        [data-testid="stVerticalBlock"] {gap:0.7rem;}
+        [data-testid="stVerticalBlockBorderWrapper"] {padding:14px 16px;}
+        [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stVerticalBlock"] {gap:0.55rem;}
+        .dashboard-divider {height:10px;}
+        .mini-metric {min-height:82px; padding:10px 12px;}
+        .mini-metric-value {font-size:1.22rem;}
+        .dashboard-subtitle {margin-bottom:2px;}
+        .section-subtitle {margin-bottom:8px;}
+        @media (max-width: 700px) {
+            .block-container {padding-left:1rem !important; padding-right:1rem !important;}
+            .dashboard-title {font-size:1.65rem;}
+            .account-items {grid-template-columns:repeat(2, minmax(0,1fr)); gap:10px 14px;}
+            .account-items div {border-top:1px solid var(--ab-border); padding-top:8px;}
+            .account-items strong {font-size:1rem; white-space:normal; overflow-wrap:anywhere;}
+            .account-kpis {grid-template-columns:repeat(3, minmax(0,1fr)); gap:8px;}
+            .account-kpi {padding:9px 8px;}
+            .account-kpi strong {font-size:1rem;}
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -3170,6 +3564,7 @@ def page_dashboard() -> None:
         today_pl=today_total,
         today_pct=today_pct,
         llm_pills=_dashboard_llm_pills(settings, store, latest_ci_llm_result),
+        operational_status=_dashboard_operational_status(settings, store, latest_ci_llm_result),
     )
 
     latest_orders = _latest_order_details(limit=12)
@@ -3182,34 +3577,30 @@ def page_dashboard() -> None:
     sells = [item for item in latest_orders if item.get("side") == "sell"]
     last_order = latest_orders[0] if latest_orders else None
 
+    # ===== KPIs de cuenta: prioridad maxima, ancho completo =====
+    _account_group(
+        initial_equity=initial_equity,
+        current_equity=current_equity,
+        cash=current_cash,
+        exposure=_num(exposure),
+        exposure_pct=_num(exposure_pct),
+        total_pl=total_pl,
+        total_pct=total_pct,
+        today_pl=today_total,
+        today_pct=today_pct,
+        positions_count=len(portfolio.positions) if portfolio else 0,
+        orders_count=len(portfolio.open_orders) if portfolio else 0,
+    )
+
+    st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+
+    # ===== Nucleo del overview: cartera (izq) + actividad (der) =====
     main_left, main_right = st.columns([1.72, 1.0], gap="large")
     with main_left:
-        _account_group(
-            initial_equity=initial_equity,
-            current_equity=current_equity,
-            cash=current_cash,
-            exposure=_num(exposure),
-            exposure_pct=_num(exposure_pct),
-            total_pl=total_pl,
-            total_pct=total_pct,
-            today_pl=today_total,
-            today_pct=today_pct,
-            positions_count=len(portfolio.positions) if portfolio else 0,
-            orders_count=len(portfolio.open_orders) if portfolio else 0,
-        )
-
-        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
-        with st.container(border=True):
-            _section_title("Cartera abierta", None)
-            selected_position = _portfolio_action_table(position_rows, key_prefix="dashboard_position")
-            if selected_position:
-                _position_detail_dialog(settings, history, position_rows, selected_position)
-
-        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
         with st.container(border=True):
             chart_title, chart_control = st.columns([3, 1])
             with chart_title:
-                _section_title("Valor de cartera", "Evolucion diaria. Las etiquetas muestran valor total y % del dia.")
+                _section_title("Valor de cartera", "Evolucion diaria del valor total y % del dia.")
             with chart_control:
                 chart_days = st.selectbox(
                     "Rango",
@@ -3244,38 +3635,37 @@ def page_dashboard() -> None:
                 realized_pl = _num(stats.get("realized_pl")) if stats else 0.0
                 _compact_metric("P/L realizado", _money(realized_pl), tone="good" if realized_pl > 0 else "bad" if realized_pl < 0 else "neutral")
 
+        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            _section_title("Cartera abierta", "Posiciones activas y su P/L no realizado.")
+            selected_position = _portfolio_action_table(position_rows, key_prefix="dashboard_position")
+            if selected_position:
+                _position_detail_dialog(settings, history, position_rows, selected_position)
+
     with main_right:
         with st.container(border=True):
-            _section_title("Compras y ventas recientes", None)
-            c1, c2, c3 = st.columns(3)
+            _section_title("Actividad reciente", "Ultimas ordenes y eventos del sistema.")
+            c1, c2 = st.columns(2)
             with c1:
                 _compact_metric("Compras", len(buys))
             with c2:
                 _compact_metric("Ventas", len(sells))
-            with c3:
-                _compact_metric(
-                    "Ultima",
-                    f"{last_order.get('side', '-').upper()} {last_order.get('symbol', '')}" if last_order else "-",
-                )
-            _compact_order_list(latest_orders, max_items=3)
-
-        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
-        with st.container(border=True):
-            _section_title("Actividad del sistema", "Eventos relevantes, sin ruido minuto a minuto.")
-            relevant_events = _latest_relevant_events(store, limit=6)
+            _compact_metric(
+                "Ultima orden",
+                f"{last_order.get('side', '-').upper()} {last_order.get('symbol', '')}" if last_order else "-",
+            )
+            _compact_order_list(latest_orders, max_items=4)
+            relevant_events = _latest_relevant_events(store, limit=5)
             if relevant_events:
+                st.markdown(
+                    "<div class='section-subtitle' style='margin-top:8px;'>Eventos del sistema</div>",
+                    unsafe_allow_html=True,
+                )
                 st.dataframe(pd.DataFrame(relevant_events), width="stretch", hide_index=True)
-            else:
-                st.markdown("<div class='empty-box'>Sin eventos relevantes recientes.</div>", unsafe_allow_html=True)
 
         st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
         with st.container(border=True):
-            _section_title("Ultimas noticias analizadas", "Titulares usados por el analisis de sentimiento.")
-            _render_latest_news_panel(settings, limit=20)
-
-        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
-        with st.container(border=True):
-            _section_title("Controles operativos", "Cobertura de datos, readiness y ultimo resumen semanal.")
+            _section_title("Estado operativo", "Cobertura de datos, readiness y bloqueos de la semana.")
             q = (latest_quality.get("payload") or {}).get("summary", {}) if latest_quality.get("available") else {}
             r = (latest_readiness.get("payload") or {}).get("summary", {}) if latest_readiness.get("available") else {}
             w = (latest_weekly.get("payload") or {}).get("summary", {}) if latest_weekly.get("available") else {}
@@ -3302,69 +3692,67 @@ def page_dashboard() -> None:
                     str(w.get("benchmark_symbol") or "-"),
                 )
 
-        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
-        with st.container(border=True):
-            _section_title("Aprendizaje reciente", "Una vista minima de edge, confianza y error de estimacion.")
-            top_setup = learning_summary.get("top_setup", {}) or {}
-            top_symbol_setup = learning_summary.get("top_symbol_setup", {}) or {}
-            best_conf = learning_summary.get("best_confidence_bucket", {}) or {}
-            worst_accuracy = learning_summary.get("worst_accuracy", {}) or {}
-            c1, c2, c3, c4 = st.columns(4)
-            with c1:
-                _compact_metric(
-                    "Setup 3d",
-                    str(top_setup.get("setup") or "-"),
-                    _pct_signed(top_setup.get("avg_return")) if top_setup.get("avg_return") is not None else "-",
-                    "good" if (_num(top_setup.get("avg_return")) or 0.0) > 0 else "neutral",
-                )
-            with c2:
-                _compact_metric(
-                    "Ticker/setup",
-                    f"{top_symbol_setup.get('symbol', '-')}/{top_symbol_setup.get('setup', '-')}",
-                    _pct_signed(top_symbol_setup.get("avg_return")) if top_symbol_setup.get("avg_return") is not None else "-",
-                    "good" if (_num(top_symbol_setup.get("avg_return")) or 0.0) > 0 else "bad" if top_symbol_setup.get("avg_return") is not None else "neutral",
-                )
-            with c3:
-                _compact_metric(
-                    "Confianza",
-                    str(best_conf.get("bucket") or "-"),
-                    _pct_signed(best_conf.get("avg_return")) if best_conf.get("avg_return") is not None else "-",
-                    "good" if (_num(best_conf.get("avg_return")) or 0.0) > 0 else "neutral",
-                )
-            with c4:
-                error_value = _num(worst_accuracy.get("avg_abs_error"))
-                _compact_metric(
-                    "Error prior",
-                    _pct(error_value) if error_value is not None else "-",
-                    str(worst_accuracy.get("setup") or "-"),
-                    "bad" if (error_value or 0.0) >= 0.04 else "neutral",
-                )
-
-        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
-        with st.container(border=True):
-            _render_research_inbox_panel(settings, store)
-
-        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
-        with st.container(border=True):
-            _render_learning_lab_panel(store)
-
-        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
-        with st.container(border=True):
-            _render_strategy_lab_panel(store)
-
-        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
-        with st.container(border=True):
-            _render_code_changes_panel(store)
-
-        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
-        with st.container(border=True):
-            _render_agent_roster_panel(runtime, store)
-
-    _render_performance_baseline(store)
+    # ===== Detalle avanzado: progressive disclosure (plegado por defecto) =====
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
-    with st.container(border=True):
-        _render_profitability_scoreboard_panel(settings, store)
-    _render_autonomy_panel(store, settings)
+    _section_title("Detalle avanzado", "Analitica de I+D del agente. Desplegable bajo demanda.")
+
+    with st.expander("Noticias analizadas"):
+        _render_latest_news_panel(settings, limit=20)
+
+    with st.expander("Aprendizaje y mejora continua"):
+        top_setup = learning_summary.get("top_setup", {}) or {}
+        top_symbol_setup = learning_summary.get("top_symbol_setup", {}) or {}
+        best_conf = learning_summary.get("best_confidence_bucket", {}) or {}
+        worst_accuracy = learning_summary.get("worst_accuracy", {}) or {}
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            _compact_metric(
+                "Setup 3d",
+                str(top_setup.get("setup") or "-"),
+                _pct_signed(top_setup.get("avg_return")) if top_setup.get("avg_return") is not None else "-",
+                "good" if (_num(top_setup.get("avg_return")) or 0.0) > 0 else "neutral",
+            )
+        with c2:
+            _compact_metric(
+                "Ticker/setup",
+                f"{top_symbol_setup.get('symbol', '-')}/{top_symbol_setup.get('setup', '-')}",
+                _pct_signed(top_symbol_setup.get("avg_return")) if top_symbol_setup.get("avg_return") is not None else "-",
+                "good" if (_num(top_symbol_setup.get("avg_return")) or 0.0) > 0 else "bad" if top_symbol_setup.get("avg_return") is not None else "neutral",
+            )
+        with c3:
+            _compact_metric(
+                "Confianza",
+                str(best_conf.get("bucket") or "-"),
+                _pct_signed(best_conf.get("avg_return")) if best_conf.get("avg_return") is not None else "-",
+                "good" if (_num(best_conf.get("avg_return")) or 0.0) > 0 else "neutral",
+            )
+        with c4:
+            error_value = _num(worst_accuracy.get("avg_abs_error"))
+            _compact_metric(
+                "Error prior",
+                _pct(error_value) if error_value is not None else "-",
+                str(worst_accuracy.get("setup") or "-"),
+                "bad" if (error_value or 0.0) >= 0.04 else "neutral",
+            )
+        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+        _render_research_inbox_panel(settings, store)
+        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+        _render_learning_lab_panel(store)
+        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+        _render_strategy_lab_panel(store)
+        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+        _render_code_changes_panel(store)
+
+    with st.expander("Agentes y autonomia"):
+        _render_agent_roster_panel(runtime, store)
+        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+        _render_autonomy_panel(store, settings)
+
+    with st.expander("Rendimiento avanzado"):
+        _render_performance_baseline(store)
+        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            _render_profitability_scoreboard_panel(settings, store)
 
     with st.expander("Ver log completo reciente"):
         st.caption(
@@ -3376,6 +3764,7 @@ def page_dashboard() -> None:
             st.dataframe(_events_dataframe(events), width="stretch", hide_index=True)
         else:
             st.info("Todavia no hay eventos registrados.")
+
 
 
 def page_system_status() -> None:
@@ -6896,60 +7285,170 @@ def _dashboard_llm_pills(
 ) -> list[dict[str, str]]:
     pills: list[dict[str, str]] = []
     latest_trade_llm = _latest_trade_decision_llm_usage(store)
-    primary_model = str(getattr(settings, "openai_model", "") or "").strip()
+    selector = str(getattr(settings, "llm_model_selector", "custom") or "custom").strip()
+    if selector == "opencode-go":
+        primary_model = str(getattr(settings, "opencode_model", "") or "").strip()
+    elif selector == "mimo":
+        primary_model = str(getattr(settings, "mimo_model", "") or "").strip()
+    else:
+        primary_model = str(getattr(settings, "openai_model", "") or "").strip()
     local_model = str(getattr(settings, "llm_local_fallback_model", "") or "").strip()
-    trade_model = str(latest_trade_llm.get("model") or settings.openai_model or "-").strip()
+    trade_model = str(latest_trade_llm.get("model") or primary_model or "-").strip()
     trade_created_at = latest_trade_llm.get("created_at")
     if latest_trade_llm:
         if trade_model == primary_model:
-            trade_route = "mimo"
+            trade_route = selector
             trade_tone = "good"
         elif trade_model == local_model:
             trade_route = "local"
             trade_tone = "good"
         else:
-            trade_route = "historico"
+            trade_route = f"ultimo uso {trade_model}"
             trade_tone = "neutral"
         pills.append(
             {
                 "tone": trade_tone,
-                "text": f"Trading LLM {trade_model} | {trade_route} {_local_time(trade_created_at)}",
+                "text": f"Trading config {primary_model or '-'} | {trade_route} {_local_time(trade_created_at)}",
             }
         )
     else:
         pills.append(
             {
                 "tone": "neutral",
-                "text": f"Trading LLM {trade_model} | sin uso reciente",
+                "text": f"Trading config {primary_model or '-'} | sin uso reciente",
             }
         )
 
+    agents_provider = str(getattr(settings, "improvement_llm_provider", "") or "-").strip()
+    agents_model = str(getattr(settings, "improvement_llm_model", "") or "-").strip()
+    pills.append(
+        {
+            "tone": "good" if agents_provider and agents_model and agents_model != "-" else "neutral",
+            "text": f"Agentes config {agents_model} | {agents_provider}",
+        }
+    )
+
     ci_result = latest_ci_llm_result or {}
-    ci_model = str(ci_result.get("model") or settings.improvement_llm_orchestrator_model or "-").strip()
+    configured_ci_provider = str(
+        getattr(settings, "improvement_llm_orchestrator_provider", None)
+        or getattr(settings, "improvement_llm_provider", "")
+        or "-"
+    ).strip()
+    configured_ci_model = str(getattr(settings, "improvement_llm_orchestrator_model", "") or "-").strip()
+    ci_model = str(ci_result.get("model") or configured_ci_model or "-").strip()
     ci_status = str(ci_result.get("status") or "").lower().strip()
     if ci_status == "ok":
         ci_route = "fallback local" if ci_result.get("fallback_used") else "primario"
+        if ci_model != configured_ci_model:
+            ci_route = f"ultimo ok {ci_model}"
         pills.append(
             {
                 "tone": "good",
-                "text": f"CI LLM {ci_model} | {ci_route} {_local_time(ci_result.get('created_at'))}",
+                "text": f"Orquestador config {configured_ci_model} | {configured_ci_provider} | {ci_route} {_local_time(ci_result.get('created_at'))}",
             }
         )
     elif ci_status == "failed":
+        same_config = ci_model == configured_ci_model
+        failure_suffix = "fallo reciente" if same_config else f"ultimo fallo historico {ci_model}"
         pills.append(
             {
-                "tone": "bad",
-                "text": f"CI LLM {ci_model} | fallo reciente",
+                "tone": "bad" if same_config else "neutral",
+                "text": f"Orquestador config {configured_ci_model} | {configured_ci_provider} | {failure_suffix}",
             }
         )
     else:
         pills.append(
             {
                 "tone": "neutral",
-                "text": f"CI LLM {ci_model} | pendiente",
+                "text": f"Orquestador config {configured_ci_model} | {configured_ci_provider} | pendiente",
             }
         )
     return pills
+
+
+def _job_runtime_status(store: Store, job_name: str) -> dict[str, Any]:
+    try:
+        return store.get_runtime_value(f"scheduler_job_status:{job_name}") or {}
+    except Exception:
+        return {}
+
+
+def _status_badge(label: str, tone: str, detail: str) -> str:
+    return (
+        f"<div class=\"dashboard-health-item {escape(tone)}\">"
+        f"<strong>{escape(label)}</strong>"
+        f"<span>{escape(detail or '-')}</span>"
+        "</div>"
+    )
+
+
+def _dashboard_operational_status(settings: Any, store: Store, latest_ci_llm_result: dict[str, Any]) -> dict[str, Any]:
+    tz = settings.local_timezone
+    portfolio_job = _job_runtime_status(store, "portfolio_watch")
+    market_job = _job_runtime_status(store, "market_cycle")
+    ci_job = _job_runtime_status(store, "continuous_improvement")
+    ci_runtime = store.continuous_improvement_runtime_state() or {}
+    healthcheck = _latest_report_json("latest_agents_healthcheck.json")
+    watchdog = (healthcheck.get("payload") or {}).get("watchdog") or {}
+
+    portfolio_age = _age_minutes(portfolio_job.get("finished_at"), tz)
+    scheduler_ok = portfolio_age is not None and portfolio_age <= 3
+    market_age = _age_minutes(market_job.get("finished_at"), tz)
+    market_ok = market_age is not None and market_age <= 20
+    ci_heartbeat_age = _age_minutes(ci_runtime.get("heartbeat_at"), tz)
+    ci_job_age = _age_minutes(ci_job.get("started_at") or ci_job.get("finished_at"), tz)
+    ci_job_status = str(ci_job.get("status") or "").lower()
+    ci_runtime_status = str(ci_runtime.get("status") or "").upper()
+    ci_recent = (ci_heartbeat_age is not None and ci_heartbeat_age <= 3) or (ci_job_age is not None and ci_job_age <= 3)
+    ci_ok = ci_recent and (ci_job_status in {"running", "completed"} or ci_runtime_status in {"RUNNING", "COMPLETED", "IDLE"})
+    watchdog_degraded = bool(watchdog.get("degraded"))
+    watchdog_age = _age_minutes(watchdog.get("as_of") or healthcheck.get("created_at"), tz)
+    watchdog_ok = not watchdog_degraded and (watchdog_age is None or watchdog_age <= 45)
+    ci_status = str((latest_ci_llm_result or {}).get("status") or "").lower()
+    ci_model = str((latest_ci_llm_result or {}).get("model") or "").strip()
+    current_ci_model = str(getattr(settings, "improvement_llm_orchestrator_model", "") or "").strip()
+    ci_llm_ok = ci_status == "ok" and (not ci_model or ci_model == current_ci_model)
+    decision_age_hours = watchdog.get("hours_since_decision_llm")
+    decision_recent = isinstance(decision_age_hours, (int, float)) and decision_age_hours <= 2
+    llm_ok = watchdog_ok and (ci_llm_ok or decision_recent)
+
+    badges = [
+        {
+            "label": "Scheduler",
+            "tone": "good" if scheduler_ok else "bad",
+            "detail": f"latido hace {portfolio_age:.1f} min" if portfolio_age is not None else "sin latido",
+        },
+        {
+            "label": "Ciclo mercado",
+            "tone": "good" if market_ok else "bad",
+            "detail": f"{market_job.get('status') or '-'} hace {market_age:.1f} min" if market_age is not None else "sin ejecucion",
+        },
+        {
+            "label": "Agentes",
+            "tone": "good" if ci_ok else "bad",
+            "detail": (
+                f"ultimo tick hace {min(v for v in [ci_heartbeat_age, ci_job_age] if v is not None):.1f} min"
+                if ci_ok
+                else f"CI {ci_job.get('status') or ci_runtime.get('status') or 'sin estado'}"
+            ),
+        },
+        {
+            "label": "Watchdog",
+            "tone": "good" if watchdog_ok else "bad",
+            "detail": str(watchdog.get("recommended_action") or ("ok" if watchdog_ok else "degradado"))[:90],
+        },
+        {
+            "label": "LLM",
+            "tone": "good" if llm_ok else "neutral",
+            "detail": "decision reciente / API disponible" if llm_ok else "pendiente de nueva llamada con config actual",
+        },
+    ]
+    overall_ok = scheduler_ok and market_ok and ci_ok and watchdog_ok
+    return {
+        "overall_tone": "good" if overall_ok else "bad",
+        "overall_label": "Sistema funcionando" if overall_ok else "Revisar sistema",
+        "badges": badges,
+    }
 
 
 def _ci_llm_responses(store: Store, *, limit: int = 10000) -> list[dict[str, Any]]:
@@ -7296,7 +7795,16 @@ def page_continuous_improvement() -> None:
                 st.write(f"API LLM: {api_detail}")
                 st.write(f"Proveedor: {settings.improvement_llm_provider}")
                 st.write(f"Modelo especialistas: {settings.improvement_llm_model}")
+                st.write(f"Base especialistas: {settings.improvement_llm_base_url}")
+                st.write(
+                    "Proveedor orquestador: "
+                    f"{settings.improvement_llm_orchestrator_provider or settings.improvement_llm_provider}"
+                )
                 st.write(f"Modelo orquestador: {settings.improvement_llm_orchestrator_model}")
+                st.write(
+                    "Base orquestador: "
+                    f"{settings.improvement_llm_orchestrator_base_url or settings.improvement_llm_base_url}"
+                )
                 st.write(f"Fallback local CI: {'activo' if settings.improvement_llm_local_fallback_enabled else 'off'}")
                 st.write(f"Ruta LLM activa: {_ci_llm_route_label(settings, latest_llm_result)}")
                 st.write(f"Tokens prompt CI: {_ci_llm_usage_label(latest_llm_result)}")
@@ -7641,6 +8149,9 @@ def page_commands() -> None:
 def page_config() -> None:
     settings = _settings()
     store = _store()
+    primary_llm = primary_llm_endpoint(settings)
+    orchestrator_provider = settings.improvement_llm_orchestrator_provider or settings.improvement_llm_provider
+    orchestrator_base = settings.improvement_llm_orchestrator_base_url or settings.improvement_llm_base_url
     _page_header("Configuracion", "Modo operativo, LLM, riesgo, broker y base de datos.")
     rows = [
         {"clave": "trading_mode", "valor": settings.trading_mode},
@@ -7651,6 +8162,16 @@ def page_config() -> None:
         {"clave": "broker", "valor": settings.broker},
         {"clave": "alpaca_paper", "valor": settings.alpaca_paper},
         {"clave": "alpaca_endpoint", "valor": settings.alpaca_endpoint},
+        {"clave": "llm_model_selector", "valor": settings.llm_model_selector},
+        {"clave": "llm_primary_endpoint", "valor": primary_llm.name},
+        {"clave": "llm_primary_model", "valor": primary_llm.model},
+        {"clave": "llm_primary_api_base", "valor": primary_llm.base_url},
+        {"clave": "ci_agents_provider", "valor": settings.improvement_llm_provider},
+        {"clave": "ci_agents_model", "valor": settings.improvement_llm_model},
+        {"clave": "ci_agents_api_base", "valor": settings.improvement_llm_base_url},
+        {"clave": "ci_orchestrator_provider", "valor": orchestrator_provider},
+        {"clave": "ci_orchestrator_model", "valor": settings.improvement_llm_orchestrator_model},
+        {"clave": "ci_orchestrator_api_base", "valor": orchestrator_base},
         {"clave": "openai_model", "valor": settings.openai_model},
         {"clave": "openai_api_base", "valor": settings.openai_api_base},
         {"clave": "llm_local_fallback_model", "valor": settings.llm_local_fallback_model},
@@ -7665,6 +8186,89 @@ def page_config() -> None:
         {"clave": "database", "valor": str(settings.database_path)},
     ]
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.subheader("Selector LLM")
+    st.caption("Guarda cambios en `.env` local. En la nube replica los mismos valores como variables/secrets de Fly.")
+    col_primary, col_agents, col_orchestrator = st.columns(3)
+    with col_primary:
+        primary_selector = st.selectbox(
+            "LLM primario",
+            PRIMARY_LLM_SELECTORS,
+            index=_select_index(PRIMARY_LLM_SELECTORS, settings.llm_model_selector),
+        )
+        primary_models = _provider_models(primary_selector)
+        if primary_models:
+            current_primary_model = (
+                settings.opencode_model if primary_selector == "opencode-go" else settings.mimo_model
+            )
+            primary_model = st.selectbox(
+                "Modelo primario",
+                primary_models,
+                index=_select_index(primary_models, current_primary_model),
+            )
+        else:
+            primary_model = st.text_input("Modelo primario", value=settings.openai_model)
+    with col_agents:
+        agent_provider_options = list(LLM_PROVIDER_CATALOG)
+        agents_provider = st.selectbox(
+            "Proveedor agentes",
+            agent_provider_options,
+            index=_select_index(agent_provider_options, settings.improvement_llm_provider),
+        )
+        agent_models = _provider_models(agents_provider)
+        agents_model = st.selectbox(
+            "Modelo agentes",
+            agent_models,
+            index=_select_index(agent_models, settings.improvement_llm_model),
+        )
+    with col_orchestrator:
+        orchestrator_provider_value = settings.improvement_llm_orchestrator_provider or settings.improvement_llm_provider
+        orchestrator_provider_choice = st.selectbox(
+            "Proveedor orquestador",
+            agent_provider_options,
+            index=_select_index(agent_provider_options, orchestrator_provider_value),
+        )
+        orchestrator_models = _provider_models(orchestrator_provider_choice)
+        orchestrator_model = st.selectbox(
+            "Modelo orquestador",
+            orchestrator_models,
+            index=_select_index(orchestrator_models, settings.improvement_llm_orchestrator_model),
+        )
+    save_llm_config = st.button("Guardar configuracion LLM", type="primary", use_container_width=True)
+    if save_llm_config:
+        updates = {
+            "LLM_MODEL_SELECTOR": primary_selector,
+            "IMPROVEMENT_LLM_PROVIDER": agents_provider,
+            "IMPROVEMENT_LLM_BASE_URL": _provider_base_url(agents_provider),
+            "IMPROVEMENT_LLM_MODEL": agents_model,
+            "IMPROVEMENT_LLM_ORCHESTRATOR_PROVIDER": orchestrator_provider_choice,
+            "IMPROVEMENT_LLM_ORCHESTRATOR_BASE_URL": _provider_base_url(orchestrator_provider_choice),
+            "IMPROVEMENT_LLM_ORCHESTRATOR_MODEL": orchestrator_model,
+        }
+        if primary_selector == "opencode-go":
+            updates["OPENCODE_API_BASE"] = _provider_base_url("opencode-go")
+            updates["OPENCODE_MODEL"] = primary_model
+        elif primary_selector == "mimo":
+            updates["MIMO_API_BASE"] = _provider_base_url("mimo")
+            updates["MIMO_MODEL"] = primary_model
+        else:
+            updates["OPENAI_MODEL_NAME"] = primary_model
+        update_env_file(ENV_PATH, updates)
+        get_settings.cache_clear()
+        st.success("Configuracion LLM guardada en .env. Reinicia scheduler si estaba corriendo.")
+        st.rerun()
+    model_rows = [
+        {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "glm-5.2"},
+        {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "glm-5.1"},
+        {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "kimi-k2.7"},
+        {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "kimi-k2.6"},
+        {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "deepseek-v4-pro"},
+        {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "deepseek-v4-flash"},
+        {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "mimo-v2.5"},
+        {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "mimo-v2.5-pro"},
+        {"proveedor": "mimo", "base_url": "https://token-plan-ams.xiaomimimo.com/v1", "modelo": "mimo-v2.5"},
+        {"proveedor": "mimo", "base_url": "https://token-plan-ams.xiaomimimo.com/v1", "modelo": "mimo-v2.5-pro"},
+    ]
+    st.dataframe(pd.DataFrame(model_rows), use_container_width=True, hide_index=True)
     latest_quality = _latest_report_json("latest_market_data_quality.json")
     latest_readiness = _latest_report_json("latest_live_readiness.json")
     latest_backup = _latest_report_json("latest_database_backup.json")

@@ -127,23 +127,45 @@ python -m agente_bolsa.main execute-approved --confirm-paper
 
 El comando solo funciona en `TRADING_MODE=paper` y `ALPACA_PAPER=true`. Si NYSE esta cerrado, bloquea el envio salvo que anadas `--queue-closed-market` para dejar las ordenes en cola. Las compras se envian como market bracket orders si `USE_BRACKET_ORDERS=true`; las ventas/reducciones de posiciones existentes se envian como market orders simples.
 
-## LLM local
+## LLM
 
-Todos los agentes usan el mismo LLM configurado en `.env`. La configuracion por defecto espera tu servidor local de `llama.cpp`:
+El primario general se elige con `LLM_MODEL_SELECTOR`. Los valores soportados son `opencode-go`, `opencode`, `mimo` y `custom`.
+Por defecto se usa OpenCode Go con un endpoint OpenAI-compatible; MiMo queda como perfil alternativo.
 
 ```env
-OPENAI_API_KEY=local-llama
-OPENAI_API_BASE=http://127.0.0.1:8080/v1
-OPENAI_MODEL_NAME=qwen3.6-27b
+LLM_MODEL_SELECTOR=opencode-go
+OPENCODE_API_KEY=
+OPENCODE_API_BASE=https://opencode.ai/zen/go/v1
+OPENCODE_MODEL=kimi-k2.6
+
+MIMO_API_KEY=
+MIMO_API_BASE=https://token-plan-ams.xiaomimimo.com/v1
+MIMO_MODEL=mimo-v2.5-pro
+
+IMPROVEMENT_LLM_PROVIDER=opencode-go
+IMPROVEMENT_LLM_BASE_URL=https://opencode.ai/zen/go/v1
+IMPROVEMENT_LLM_MODEL=kimi-k2.6
+IMPROVEMENT_LLM_ORCHESTRATOR_PROVIDER=opencode-go
+IMPROVEMENT_LLM_ORCHESTRATOR_BASE_URL=https://opencode.ai/zen/go/v1
+IMPROVEMENT_LLM_ORCHESTRATOR_MODEL=kimi-k2.6
+
 LLM_TEMPERATURE=0.2
 LLM_MAX_TOKENS=1200
 LLM_TIMEOUT_SECONDS=120
+
+LLM_LOCAL_FALLBACK_ENABLED=true
+LLM_LOCAL_FALLBACK_API_KEY=local-llama
+LLM_LOCAL_FALLBACK_API_BASE=http://127.0.0.1:8080/v1
+LLM_LOCAL_FALLBACK_MODEL=qwen3.6-27b
 CREWAI_PLANNING=false
 CREW_AGENT_MAX_ITER=1
 CREW_AGENT_MAX_EXECUTION_SECONDS=120
 ```
 
-El alias `qwen3.6-27b` debe coincidir con el parametro `--alias qwen3.6-27b` de `llama-server.exe`.
+Si `LLM_MODEL_SELECTOR=custom`, el sistema usa las variables legacy `OPENAI_API_KEY`, `OPENAI_API_BASE` y `OPENAI_MODEL_NAME`.
+Para MiMo en mejora continua, usa `IMPROVEMENT_LLM_PROVIDER=mimo`, `IMPROVEMENT_LLM_MODEL=mimo-v2.5` e `IMPROVEMENT_LLM_ORCHESTRATOR_MODEL=mimo-v2.5-pro`.
+Tambien puedes cambiar proveedor/modelo desde el panel web en `Configuracion` > `Selector LLM`; el formulario persiste los cambios en `.env`.
+El alias local `qwen3.6-27b` debe coincidir con el parametro `--alias qwen3.6-27b` de `llama-server.exe`.
 
 Para el modelo local, el planning interno de CrewAI queda desactivado por defecto porque anade llamadas largas. El sistema conserva su propio flujo por fases y su memoria en SQLite/JSONL.
 

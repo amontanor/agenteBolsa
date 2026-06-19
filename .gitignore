@@ -12,6 +12,7 @@ data/state/*.sqlite3
 data/state/*.db
 data/state/*.json
 data/state/*.sqlite3-*
+data/backups/
 data/checkpoints/*.json
 data/backtests/*.csv
 data/backtests/*.parquet

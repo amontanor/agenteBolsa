@@ -8,6 +8,7 @@ import time
 from typing import Any
 from urllib import error, request
 
+from openai import OpenAI
 from pydantic import BaseModel
 from pydantic import ValidationError
 
@@ -60,12 +61,12 @@ class ImprovementLLMClient:
         model: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        route: str = "agents",
         response_model: type[BaseModel] = LLMImprovementResponse,
     ) -> LLMJsonResult:
         llm_call_id = new_id("ci_llm")
-        primary_provider = self.settings.improvement_llm_provider
         model_name = model or self.settings.improvement_llm_model
-        endpoints = self._endpoints(model_name)
+        endpoints = self._endpoints(model_name, route=route)
         primary = endpoints[0]
         request_preview = {
             "provider": primary.provider,
@@ -85,7 +86,7 @@ class ImprovementLLMClient:
                 for endpoint in endpoints
             ],
         }
-        if not self.settings.improvement_llm_enabled or primary_provider.lower() in {"disabled", "mock"}:
+        if not self.settings.improvement_llm_enabled or primary.provider.lower() in {"disabled", "mock"}:
             payload = LLMImprovementResponse(
                 diagnosis={
                     "summary": "LLM externo de mejora continua desactivado; ciclo ejecutado en modo seguro.",
@@ -120,7 +121,7 @@ class ImprovementLLMClient:
             )
 
         final_preview = request_preview
-        config_error = self._configuration_error(primary.provider)
+        config_error = self._configuration_error(primary.provider, primary.api_key, primary.base_url)
         if config_error:
             LOGGER.warning("Improvement primary LLM configuration invalid: %s", config_error)
             last_error = config_error
@@ -195,13 +196,28 @@ class ImprovementLLMClient:
             request_preview=final_preview,
         )
 
-    def _endpoints(self, model_name: str) -> list[_ImprovementEndpoint]:
+    def _endpoints(self, model_name: str, *, route: str = "agents") -> list[_ImprovementEndpoint]:
+        is_orchestrator = route == "orchestrator"
+        provider = (
+            self.settings.improvement_llm_orchestrator_provider
+            if is_orchestrator and self.settings.improvement_llm_orchestrator_provider
+            else self.settings.improvement_llm_provider
+        )
+        base_url = (
+            self.settings.improvement_llm_orchestrator_base_url
+            if is_orchestrator and self.settings.improvement_llm_orchestrator_base_url
+            else self.settings.improvement_llm_base_url
+        )
+        if is_orchestrator:
+            api_key = self.settings.improvement_llm_orchestrator_api_key or self._provider_api_key(provider)
+        else:
+            api_key = self.settings.improvement_llm_api_key or self._provider_api_key(provider)
         endpoints = [
             _ImprovementEndpoint(
                 name="primary",
-                provider=self.settings.improvement_llm_provider,
-                base_url=self.settings.improvement_llm_base_url,
-                api_key=self.settings.improvement_llm_api_key,
+                provider=provider,
+                base_url=base_url,
+                api_key=api_key,
                 model=model_name,
                 fallback_used=False,
             )
@@ -218,6 +234,14 @@ class ImprovementLLMClient:
                 )
             )
         return endpoints
+
+    def _provider_api_key(self, provider: str) -> str | None:
+        provider_key = provider.strip().lower()
+        if provider_key in {"opencode", "opencode-go"}:
+            return self.settings.opencode_api_key
+        if provider_key == "mimo":
+            return self.settings.mimo_api_key or self.settings.openai_api_key
+        return None
 
     def _try_endpoint(
         self,
@@ -303,8 +327,11 @@ class ImprovementLLMClient:
         last_error = ""
         for attempt in range(retries + 1):
             try:
-                raw = self._post_json(target, request_body, headers)
-                content = self._extract_content(raw)
+                if self._use_openai_sdk(endpoint.provider):
+                    content = self._sdk_chat_completion_content(endpoint, request_body)
+                else:
+                    raw = self._post_json(target, request_body, headers)
+                    content = self._extract_content(raw)
                 parsed = self._parse_json_content(content)
                 payload = response_model.model_validate(parsed)
                 log_system_event(
@@ -341,6 +368,8 @@ class ImprovementLLMClient:
             except (OSError, ValueError, ValidationError) as exc:
                 last_error = str(exc)
                 LOGGER.warning("Improvement LLM call failed on %s attempt %s: %s", endpoint.name, attempt + 1, exc)
+                if _is_quota_exhausted_error(last_error):
+                    break
                 if attempt < retries:
                     time.sleep(min(2**attempt, 8))
         return LLMJsonResult(
@@ -359,12 +388,12 @@ class ImprovementLLMClient:
             request_preview=request_preview,
         )
 
-    def _configuration_error(self, provider: str) -> str | None:
+    def _configuration_error(self, provider: str, api_key: str | None, base_url: str) -> str | None:
         provider_key = provider.strip().lower()
         if provider_key != "mimo":
             return None
-        api_key = str(self.settings.improvement_llm_api_key or "").strip()
-        base_url = self.settings.improvement_llm_base_url.rstrip("/")
+        api_key = str(api_key or "").strip()
+        base_url = base_url.rstrip("/")
         if api_key.startswith("tp-") and "api.xiaomimimo.com" in base_url:
             return (
                 "MiMo Token Plan keys starting with tp- must use a token-plan base URL, "
@@ -411,6 +440,37 @@ class ImprovementLLMClient:
         else:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
+
+    def _use_openai_sdk(self, provider: str) -> bool:
+        return provider.strip().lower() in {"opencode", "opencode-go", "openai", "openai-local"}
+
+    def _sdk_chat_completion_content(self, endpoint: _ImprovementEndpoint, body: dict[str, Any]) -> str:
+        default_headers = None
+        provider_key = endpoint.provider.strip().lower()
+        if provider_key == "mimo" and endpoint.api_key:
+            default_headers = {"api-key": endpoint.api_key}
+        client = OpenAI(
+            api_key=endpoint.api_key or "missing",
+            base_url=endpoint.base_url,
+            timeout=self.settings.improvement_llm_timeout_seconds,
+            default_headers=default_headers,
+        )
+        response = client.chat.completions.create(**body)
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            raise ValueError("LLM response without choices")
+        message = getattr(choices[0], "message", None)
+        content = getattr(message, "content", None)
+        if isinstance(content, list):
+            text_parts = []
+            for item in content:
+                text = getattr(item, "text", None)
+                if text:
+                    text_parts.append(text)
+            content = "".join(text_parts)
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("LLM response without text content")
+        return content
 
     def _post_json(self, endpoint: str, body: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
         payload = json.dumps(body, ensure_ascii=True).encode("utf-8")

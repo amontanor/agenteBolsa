@@ -39,7 +39,8 @@ def _settings(tmp_path, **overrides):
         "CONTINUOUS_IMPROVEMENT_RUNTIME_LOOP_SLEEP_SECONDS": 5,
     }
     values.update(overrides)
-    return Settings(**values)
+    # Unit tests must not inherit real provider credentials from the project .env.
+    return Settings(_env_file=None, **values)
 
 
 def _open_market_window():
@@ -121,7 +122,7 @@ def test_initiative_topic_key_ignores_generated_ci_identifiers():
 
 def test_improvement_llm_client_disabled_returns_valid_json_payload(tmp_path):
     settings = _settings(tmp_path)
-    assert settings.improvement_llm_orchestrator_model == "mimo-v2.5-pro"
+    assert settings.improvement_llm_orchestrator_model == "kimi-k2.6"
     result = ImprovementLLMClient(settings).generate_json(
         [{"role": "user", "content": "context"}],
         {},
@@ -130,6 +131,32 @@ def test_improvement_llm_client_disabled_returns_valid_json_payload(tmp_path):
     assert result.ok is True
     assert result.payload is not None
     assert result.payload.proposals[0].proposal_type == "MONITORING_CHANGE"
+
+
+def test_improvement_llm_client_can_route_orchestrator_to_separate_provider(tmp_path):
+    settings = _settings(
+        tmp_path,
+        OPENCODE_API_KEY="opencode-token",
+        IMPROVEMENT_LLM_PROVIDER="mimo",
+        IMPROVEMENT_LLM_BASE_URL="https://token-plan-ams.xiaomimimo.com/v1",
+        IMPROVEMENT_LLM_API_KEY="mimo-token",
+        IMPROVEMENT_LLM_MODEL="mimo-v2.5",
+        IMPROVEMENT_LLM_ORCHESTRATOR_PROVIDER="opencode-go",
+        IMPROVEMENT_LLM_ORCHESTRATOR_BASE_URL="https://opencode.ai/zen/go/v1",
+        IMPROVEMENT_LLM_ORCHESTRATOR_MODEL="kimi-k2.6",
+    )
+    client = ImprovementLLMClient(settings)
+
+    agent_endpoint = client._endpoints("mimo-v2.5", route="agents")[0]
+    orchestrator_endpoint = client._endpoints("kimi-k2.6", route="orchestrator")[0]
+
+    assert agent_endpoint.provider == "mimo"
+    assert agent_endpoint.model == "mimo-v2.5"
+    assert agent_endpoint.api_key == "mimo-token"
+    assert orchestrator_endpoint.provider == "opencode-go"
+    assert orchestrator_endpoint.base_url == "https://opencode.ai/zen/go/v1"
+    assert orchestrator_endpoint.model == "kimi-k2.6"
+    assert orchestrator_endpoint.api_key == "opencode-token"
 
 
 def test_improvement_llm_client_rejects_invalid_json(tmp_path):
@@ -259,6 +286,53 @@ def test_improvement_llm_client_generate_json_model_override_is_reflected(tmp_pa
     assert body_calls["body"]["model"] == "mimo-v2.5-pro"
 
 
+def test_improvement_llm_client_uses_openai_sdk_for_opencode_go(tmp_path, monkeypatch):
+    settings = _settings(
+        tmp_path,
+        IMPROVEMENT_LLM_ENABLED=True,
+        OPENCODE_API_KEY="opencode-token",
+        IMPROVEMENT_LLM_API_KEY="opencode-token",
+        IMPROVEMENT_LLM_PROVIDER="opencode-go",
+        IMPROVEMENT_LLM_BASE_URL="https://opencode.ai/zen/go/v1",
+        IMPROVEMENT_LLM_MODEL="kimi-k2.6",
+        IMPROVEMENT_LLM_LOCAL_FALLBACK_ENABLED=False,
+    )
+    client = ImprovementLLMClient(settings)
+    sdk_calls = {}
+
+    class _FakeResponse:
+        def __init__(self):
+            self.choices = [type("Choice", (), {"message": type("Message", (), {"content": '{"diagnosis":{"summary":"ok","confidence":"LOW","data_quality":"PARTIAL"},"detected_issues":[],"proposals":[],"recommended_next_actions":[]}'})()})]
+
+    class _FakeCompletions:
+        def create(self, **kwargs):
+            sdk_calls["kwargs"] = kwargs
+            return _FakeResponse()
+
+    class _FakeChat:
+        def __init__(self):
+            self.completions = _FakeCompletions()
+
+    class _FakeOpenAI:
+        def __init__(self, **kwargs):
+            sdk_calls["init"] = kwargs
+            self.chat = _FakeChat()
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("urllib path should not be used for opencode-go")
+
+    monkeypatch.setattr("agente_bolsa.continuous_improvement.llm_client.OpenAI", _FakeOpenAI)
+    monkeypatch.setattr(client, "_post_json", _boom)
+    result = client.generate_json([{"role": "user", "content": "hola"}], {})
+
+    assert result.ok is True
+    assert result.provider == "opencode-go"
+    assert sdk_calls["init"]["api_key"] == "opencode-token"
+    assert sdk_calls["init"]["base_url"] == "https://opencode.ai/zen/go/v1"
+    assert sdk_calls["kwargs"]["model"] == "kimi-k2.6"
+    assert sdk_calls["kwargs"]["response_format"] == {"type": "json_object"}
+
+
 def test_improvement_llm_client_rejects_mimo_token_plan_key_on_payg_base_url(tmp_path):
     settings = _settings(
         tmp_path,
@@ -267,6 +341,7 @@ def test_improvement_llm_client_rejects_mimo_token_plan_key_on_payg_base_url(tmp
         IMPROVEMENT_LLM_BASE_URL="https://api.xiaomimimo.com/v1",
         IMPROVEMENT_LLM_API_KEY="tp-test",
         IMPROVEMENT_LLM_MODEL="mimo-v2.5",
+        IMPROVEMENT_LLM_LOCAL_FALLBACK_ENABLED=False,
     )
     result = ImprovementLLMClient(settings).generate_json([{"role": "user", "content": "hola"}], {})
 
@@ -1782,6 +1857,8 @@ def test_status_payload_reports_runtime(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CONTINUOUS_IMPROVEMENT_ENABLED", "true")
     monkeypatch.setenv("IMPROVEMENT_DRY_RUN", "true")
+    monkeypatch.setenv("IMPROVEMENT_LLM_PROVIDER", settings.improvement_llm_provider)
+    monkeypatch.setenv("IMPROVEMENT_LLM_MODEL", settings.improvement_llm_model)
     monkeypatch.setenv("ALLOW_AUTO_APPLY_IMPROVEMENTS", "false")
     monkeypatch.setenv("ALLOW_LIVE_TRADING", "false")
     get_settings.cache_clear()

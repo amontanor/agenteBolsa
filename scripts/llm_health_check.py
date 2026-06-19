@@ -90,6 +90,10 @@ def ping_provider(name: str, base: str, key: str, model: str, timeout: float) ->
     ).encode("utf-8")
     req = urllib.request.Request(url, data=payload, method="POST")
     req.add_header("Content-Type", "application/json")
+    req.add_header("Accept", "application/json")
+    # User-Agent normal: algunos proveedores estan tras Cloudflare y bloquean
+    # con 403 el UA por defecto de urllib (Python-urllib/x.y).
+    req.add_header("User-Agent", "agente-bolsa-healthcheck/1.0 (+openai-compatible)")
     if key:
         req.add_header("Authorization", f"Bearer {key}")
 
@@ -128,13 +132,26 @@ def main() -> int:
 
     env = load_env(ENV_PATH)
 
+    # El proveedor primario depende de LLM_MODEL_SELECTOR (igual que llm_router.py):
+    # con opencode/opencode-go se usa el bloque OPENCODE_*, no OPENAI_* (que puede
+    # quedar obsoleto apuntando a otro proveedor).
+    selector = (cfg(env, "LLM_MODEL_SELECTOR", "custom") or "custom").strip().lower()
+    if selector in ("opencode", "opencode-go"):
+        prim_base = cfg(env, "OPENCODE_API_BASE", "https://opencode.ai/zen/go/v1")
+        prim_key = cfg(env, "OPENCODE_API_KEY")
+        prim_model = cfg(env, "OPENCODE_MODEL", "kimi-k2.6")
+    else:
+        prim_base = cfg(env, "OPENAI_API_BASE")
+        prim_key = cfg(env, "OPENAI_API_KEY")
+        prim_model = cfg(env, "OPENAI_MODEL_NAME")
+
     providers = [
         {
-            "name": "primary (decision/sentiment)",
+            "name": f"primary [{selector}/{prim_model}]",
             "role": "decision",
-            "base": cfg(env, "OPENAI_API_BASE"),
-            "key": cfg(env, "OPENAI_API_KEY"),
-            "model": cfg(env, "OPENAI_MODEL_NAME"),
+            "base": prim_base,
+            "key": prim_key,
+            "model": prim_model,
         },
         {
             "name": "local fallback",
@@ -148,7 +165,7 @@ def main() -> int:
             "name": "continuous improvement",
             "role": "improvement",
             "base": cfg(env, "IMPROVEMENT_LLM_BASE_URL"),
-            "key": cfg(env, "IMPROVEMENT_LLM_API_KEY"),
+            "key": cfg(env, "IMPROVEMENT_LLM_API_KEY") or cfg(env, "OPENCODE_API_KEY"),
             "model": cfg(env, "IMPROVEMENT_LLM_MODEL"),
             "enabled": cfg(env, "IMPROVEMENT_LLM_ENABLED", "true").lower() == "true",
         },

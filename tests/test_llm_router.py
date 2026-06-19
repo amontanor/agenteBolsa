@@ -4,6 +4,7 @@ from agente_bolsa.llm_router import (
     classify_llm_client_error,
     configured_llm_endpoints,
     is_endpoint_available,
+    primary_llm_endpoint,
     role_endpoints,
     role_max_tokens,
     select_preferred_endpoint,
@@ -12,8 +13,19 @@ from agente_bolsa.llm_usage import record_llm_response
 from agente_bolsa.storage import Store
 
 
-def test_configured_llm_endpoints_return_primary_and_local_fallback():
+def test_default_primary_llm_endpoint_uses_opencode_go_profile():
+    settings = Settings(LLM_LOCAL_FALLBACK_ENABLED=False)
+
+    endpoint = primary_llm_endpoint(settings)
+
+    assert endpoint.name == "primary:opencode-go"
+    assert endpoint.base_url == "https://opencode.ai/zen/go/v1"
+    assert endpoint.model == "kimi-k2.6"
+
+
+def test_configured_llm_endpoints_return_custom_primary_and_local_fallback():
     settings = Settings(
+        LLM_MODEL_SELECTOR="custom",
         OPENAI_API_KEY="mimo-key",
         OPENAI_API_BASE="https://token-plan-ams.xiaomimimo.com/v1",
         OPENAI_MODEL_NAME="mimo-v2.5-pro",
@@ -25,18 +37,19 @@ def test_configured_llm_endpoints_return_primary_and_local_fallback():
 
     endpoints = configured_llm_endpoints(settings)
 
-    assert [endpoint.name for endpoint in endpoints] == ["primary", "local_fallback"]
+    assert [endpoint.name for endpoint in endpoints] == ["primary:custom", "local_fallback"]
     assert endpoints[0].base_url == "https://token-plan-ams.xiaomimimo.com/v1"
     assert endpoints[0].model == "mimo-v2.5-pro"
     assert endpoints[1].base_url == "http://127.0.0.1:8080/v1"
     assert endpoints[1].model == "qwen3.6-27b"
 
 
-def test_select_preferred_endpoint_returns_primary_when_it_is_available(monkeypatch):
+def test_select_preferred_endpoint_returns_mimo_profile_when_it_is_available(monkeypatch):
     settings = Settings(
-        OPENAI_API_KEY="mimo-key",
-        OPENAI_API_BASE="https://token-plan-ams.xiaomimimo.com/v1",
-        OPENAI_MODEL_NAME="mimo-v2.5-pro",
+        LLM_MODEL_SELECTOR="mimo",
+        MIMO_API_KEY="mimo-key",
+        MIMO_API_BASE="https://token-plan-ams.xiaomimimo.com/v1",
+        MIMO_MODEL="mimo-v2.5-pro",
         LLM_LOCAL_FALLBACK_ENABLED=True,
         LLM_LOCAL_FALLBACK_API_KEY="local-llama",
         LLM_LOCAL_FALLBACK_API_BASE="http://127.0.0.1:8080/v1",
@@ -50,7 +63,7 @@ def test_select_preferred_endpoint_returns_primary_when_it_is_available(monkeypa
 
     endpoint, attempts = select_preferred_endpoint(settings)
 
-    assert endpoint.name == "primary"
+    assert endpoint.name == "primary:mimo"
     assert endpoint.model == "mimo-v2.5-pro"
     assert attempts[0]["available"] is True
 
@@ -78,6 +91,7 @@ def test_classify_llm_client_error_keeps_provider_errors_plain():
 # -- Router por roles (T0.4) ----------------------------------------------
 def _role_settings(**overrides):
     base = {
+        "LLM_MODEL_SELECTOR": "custom",
         "OPENAI_API_KEY": "mimo-key",
         "OPENAI_API_BASE": "https://token-plan-ams.xiaomimimo.com/v1",
         "OPENAI_MODEL_NAME": "mimo-v2.5-pro",
@@ -94,7 +108,7 @@ def _role_settings(**overrides):
 def test_role_without_config_uses_default_chain():
     settings = _role_settings()
     endpoints = role_endpoints(settings, "fast")
-    assert [endpoint.name for endpoint in endpoints] == ["primary", "local_fallback"]
+    assert [endpoint.name for endpoint in endpoints] == ["primary:custom", "local_fallback"]
 
 
 def test_role_with_config_prepends_its_endpoint():
@@ -119,6 +133,21 @@ def test_deep_role_defaults_to_improvement_llm():
     assert endpoints[0].name == "role:deep"
     assert endpoints[0].model == "mimo-deep"
     assert role_max_tokens(settings, "deep") == 16000
+
+
+def test_deep_role_uses_opencode_key_when_improvement_key_is_empty():
+    settings = _role_settings(
+        OPENCODE_API_KEY="opencode-key",
+        IMPROVEMENT_LLM_PROVIDER="opencode-go",
+        IMPROVEMENT_LLM_BASE_URL="https://opencode.ai/zen/go/v1",
+        IMPROVEMENT_LLM_API_KEY="",
+        IMPROVEMENT_LLM_MODEL="glm-5.2",
+    )
+
+    endpoint = role_endpoints(settings, "deep")[0]
+
+    assert endpoint.name == "role:deep"
+    assert endpoint.api_key == "opencode-key"
 
 
 def test_chat_for_role_selects_role_endpoint_and_records_role(tmp_path, monkeypatch):
