@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import signal
 import subprocess
 import sys
 from dataclasses import asdict
@@ -39,27 +38,17 @@ from agente_bolsa import __version__
 from agente_bolsa.config import get_settings
 from agente_bolsa.continuous_improvement.promotion_readiness import evaluate_promotion_readiness
 from agente_bolsa.continuous_improvement.runtime import ContinuousImprovementLabRuntime
-from agente_bolsa.eventing import EventReporter
 from agente_bolsa.llm_router import primary_llm_endpoint
 from agente_bolsa.market_calendar import MarketCalendar
 from agente_bolsa.models import PortfolioSnapshot, TradeRecommendation, new_id
-from agente_bolsa.scheduler import _run_pre_earnings_trade_operation, scheduler_status
+from agente_bolsa.scheduler import scheduler_status
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.adaptive_tuning import adaptive_status, update_adaptive_config
-from agente_bolsa.tools.backtest import build_symbol_backtest
 from agente_bolsa.tools.broker import BrokerClientFactory
-from agente_bolsa.tools.command_catalog import available_command_catalog
 from agente_bolsa.tools.daily_learning import (
-    build_learning_digest_report,
     load_daily_learning_context,
 )
 from agente_bolsa.tools.news_sentiment import fetch_symbol_news
-from agente_bolsa.tools.operational_learning import build_operational_learning_review
-from agente_bolsa.tools.opportunities import (
-    build_opportunity_snapshot,
-    opportunity_assessment,
-    opportunity_entry_risk,
-)
 from agente_bolsa.tools.portfolio_insights import (
     latest_analyzed_news as build_latest_analyzed_news,
 )
@@ -82,31 +71,14 @@ from agente_bolsa.tools.portfolio_insights import (
     single_symbol_price_frame as build_single_symbol_price_frame,
 )
 from agente_bolsa.tools.pre_earnings import (
-    backfill_pending_pre_earnings_estimates,
-    build_pre_earnings_estimation_history,
-    build_pre_earnings_event_study,
-    build_pre_earnings_learning_digest,
-    build_pre_earnings_report,
     build_pre_earnings_resolved_history,
-    build_pre_earnings_score_study,
-    build_pre_earnings_tracking_status,
-    enrich_report_with_local_analyst_revisions,
-    enrich_report_with_pre_earnings_score_v2,
-    record_pre_earnings_analyst_snapshots,
-    record_pre_earnings_predictions,
-    target_after_close_session,
-    update_pre_earnings_outcomes,
 )
 from agente_bolsa.tools.profitability_scoreboard import build_profitability_scoreboard
 from agente_bolsa.tools.retention import cleanup_runtime_data
 from agente_bolsa.tools.signal_learning import build_learning_status, update_signal_outcomes
 from agente_bolsa.tools.system_status import build_status, to_html
-from agente_bolsa.tools.trade_decision import (
-    build_buy_order_plans,
-    load_latest_technical_candidates,
-)
+from agente_bolsa.tools.trade_decision import build_buy_order_plans
 from agente_bolsa.tools.trade_history import build_trade_history
-from agente_bolsa.tools.universe import resolve_study_universe
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_START_DATE = "2026-04-01"
@@ -357,18 +329,6 @@ def _tone_color(tone: str) -> tuple[str, str, str]:
     return palette.get(tone, palette["neutral"])
 
 
-def _run_command(args: list[str], timeout: int = 120) -> tuple[int, str]:
-    command = [sys.executable, "-m", "agente_bolsa.main", *args]
-    completed = subprocess.run(
-        command,
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-        check=False,
-    )
-    output = "\n".join(part for part in [completed.stdout, completed.stderr] if part.strip())
-    return completed.returncode, output.strip()
 
 
 def _pid_file() -> Path:
@@ -465,17 +425,6 @@ def _start_schedule() -> dict[str, Any]:
     return {"running": True, "pid": process.pid, "log": str(log_path)}
 
 
-def _stop_schedule() -> dict[str, Any]:
-    status = _schedule_process_status()
-    pid = status.get("pid")
-    if not pid:
-        return {"stopped": False, "reason": "No hay proceso schedule lanzado desde la web."}
-    if os.name == "nt":
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False, capture_output=True)
-    else:
-        os.kill(int(pid), signal.SIGTERM)
-    _pid_file().unlink(missing_ok=True)
-    return {"stopped": True, "pid": pid}
 
 
 def _events_dataframe(events: list[dict[str, Any]]) -> pd.DataFrame:
@@ -500,75 +449,12 @@ def _events_dataframe(events: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _signal_outcome_status(outcome: dict[str, Any]) -> str:
-    if not outcome:
-        return "pendiente de actualizar"
-    if outcome.get("available") is False:
-        reason = outcome.get("reason") or "sin resultado"
-        return f"sin datos: {reason}"
-    verdict = outcome.get("verdict")
-    if verdict and verdict != "pending":
-        return str(verdict)
-    horizons = [outcome.get("return_5d"), outcome.get("return_10d")]
-    if all(value is None for value in horizons):
-        return "sin horizonte suficiente"
-    return "pendiente"
 
 
-def _signal_value(value: Any, *, pct: bool = False) -> Any:
-    if value is None:
-        return "pendiente"
-    if pct:
-        return _pct(value)
-    return value
 
 
-def _latest_signal_per_symbol(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    latest: dict[str, dict[str, Any]] = {}
-    for item in signals:
-        symbol = str(item.get("symbol") or "")
-        current = latest.get(symbol)
-        if current is None or str(item.get("created_at") or "") > str(current.get("created_at") or ""):
-            latest[symbol] = item
-    return sorted(
-        latest.values(),
-        key=lambda item: (str(item.get("signal_date") or ""), str(item.get("created_at") or "")),
-        reverse=True,
-    )
 
 
-def _signals_dataframe(signals: list[dict[str, Any]]) -> pd.DataFrame:
-    rows = []
-    for signal_row in signals:
-        features = signal_row.get("features") or {}
-        gate = signal_row.get("gate") or {}
-        outcome = signal_row.get("outcome") or {}
-        chart = features.get("chart_patterns") or {}
-        first_hit = outcome.get("first_hit") or {}
-        rows.append(
-            {
-                "fecha": signal_row.get("signal_date"),
-                "hora": _local_time(signal_row.get("created_at")),
-                "simbolo": signal_row.get("symbol"),
-                "fuente": signal_row.get("source"),
-                "run": signal_row.get("source_run_id"),
-                "decision": signal_row.get("decision"),
-                "score": features.get("score"),
-                "setup": features.get("setup_quality"),
-                "rsi": features.get("rsi_14"),
-                "dist_sma20": features.get("distance_sma20"),
-                "macd_diff": features.get("macd_diff"),
-                "vol_z": features.get("volume_zscore_20"),
-                "figuras": chart.get("labels"),
-                "estado_resultado": _signal_outcome_status(outcome),
-                "ret_5d": _signal_value(outcome.get("return_5d"), pct=True),
-                "mfe_10d": _signal_value(outcome.get("mfe_10d"), pct=True),
-                "mae_10d": _signal_value(outcome.get("mae_10d"), pct=True),
-                "primer_evento": first_hit.get("type") or "pendiente",
-                "llm": (gate.get("llm") or {}).get("reason") or "no aplica",
-            }
-        )
-    return pd.DataFrame(rows)
 
 
 def _latest_learning_digest() -> dict[str, Any]:
@@ -747,17 +633,6 @@ def _latest_order_details(limit: int = 50, start_date: str = DEFAULT_START_DATE)
     return result
 
 
-def _empty_portfolio_snapshot() -> PortfolioSnapshot:
-    return PortfolioSnapshot(
-        account_id="unavailable",
-        status="unavailable",
-        currency="USD",
-        cash=0.0,
-        portfolio_value=0.0,
-        buying_power=0.0,
-        positions=[],
-        open_orders=[],
-    )
 
 
 def _opportunity_sort_key(candidate: dict[str, Any]) -> tuple[float, float, float]:
@@ -789,106 +664,16 @@ def _opportunity_candidates(technical_context: dict[str, Any], *, limit: int = 2
     return rows[:limit]
 
 
-def _opportunity_risk_plan(candidate: dict[str, Any]) -> dict[str, Any]:
-    risk_plan = candidate.get("risk_plan", {}) or {}
-    entry = _num(risk_plan.get("entry_price"))
-    close = _num((candidate.get("technical_state", {}) or {}).get("close"))
-    stop = _num(risk_plan.get("stop_loss"))
-    take = _num(risk_plan.get("take_profit"))
-    reward_risk = _num(risk_plan.get("reward_risk"))
-    if reward_risk is None and entry is not None and stop is not None and take is not None and entry > stop:
-        reward_risk = round((take - entry) / (entry - stop), 2)
-    return {
-        "entry_price": entry if entry is not None else close,
-        "current_price": close if close is not None else entry,
-        "stop_loss": stop,
-        "take_profit": take,
-        "reward_risk": reward_risk,
-        "invalidation": risk_plan.get("invalidation"),
-        "time_stop": risk_plan.get("time_stop"),
-    }
 
 
-def _opportunity_summary_row(candidate: dict[str, Any]) -> dict[str, Any]:
-    risk = _opportunity_risk_plan(candidate)
-    technical = candidate.get("technical_state", {}) or {}
-    assessment = opportunity_assessment(candidate)
-    entry_risk = opportunity_entry_risk(candidate)
-    score_value = _num(candidate.get("selection_score"))
-    if score_value is None:
-        score_value = _num(candidate.get("rank_priority_score"))
-    if score_value is None:
-        score_value = _num(candidate.get("score"))
-    return {
-        "simbolo": candidate.get("symbol"),
-        "ranking": candidate.get("selection_rank"),
-        "puntuacion": round(score_value, 4) if score_value is not None else None,
-        "score_compra": candidate.get("selection_score"),
-        "score_tecnico": candidate.get("score"),
-        "oportunidad": assessment["label"],
-        "riesgo_entrada": entry_risk["label"],
-        "lectura": assessment["summary"],
-        "setup": candidate.get("setup_name"),
-        "calidad": candidate.get("setup_quality"),
-        "precio_actual": risk.get("current_price"),
-        "entrada": risk.get("entry_price"),
-        "stop_loss": risk.get("stop_loss"),
-        "take_profit": risk.get("take_profit"),
-        "rr": risk.get("reward_risk"),
-        "rsi": technical.get("rsi_14"),
-        "ret_20d": technical.get("return_20d"),
-        "vol_z": technical.get("volume_zscore_20"),
-    }
 
 
-def _fallback_opportunity_snapshot(settings: Any, store: Store) -> dict[str, Any] | None:
-    technical_context = load_latest_technical_candidates(settings.data_dir, per_side=50)
-    if not technical_context.get("path"):
-        return None
-    snapshot = build_opportunity_snapshot(
-        settings,
-        store,
-        technical_context,
-        slot_time="sin_archivar",
-        limit=20,
-    )
-    snapshot["summary"]["archived"] = False
-    return snapshot
 
 
-def _group_snapshots_by_slot(snapshots: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    grouped: dict[str, dict[str, Any]] = {}
-    for snapshot in snapshots:
-        slot_time = str(snapshot.get("slot_time") or "")
-        if slot_time:
-            grouped[slot_time] = snapshot
-    return grouped
 
 
-def _next_opportunity_snapshot_run_text(settings: Any, now_local: datetime | None = None) -> str:
-    local_tz = ZoneInfo(settings.local_timezone)
-    current = now_local.astimezone(local_tz) if now_local and now_local.tzinfo else now_local.replace(tzinfo=local_tz) if now_local else datetime.now(local_tz)
-    slots = []
-    for slot in settings.opportunity_snapshot_times:
-        hour_text, minute_text = str(slot).split(":")
-        candidate = current.replace(hour=int(hour_text), minute=int(minute_text), second=0, microsecond=0)
-        if candidate > current:
-            slots.append(candidate)
-    if slots:
-        return min(slots).strftime("%Y-%m-%d %H:%M")
-    first_slot = str(settings.opportunity_snapshot_times[0])
-    hour_text, minute_text = first_slot.split(":")
-    next_day = current + pd.Timedelta(days=1)
-    return next_day.replace(hour=int(hour_text), minute=int(minute_text), second=0, microsecond=0).strftime("%Y-%m-%d %H:%M")
 
 
-def _pending_buy_plans_by_symbol(store: Store) -> dict[str, dict[str, Any]]:
-    result: dict[str, dict[str, Any]] = {}
-    for item in store.pending_order_plans(limit=500):
-        symbol = str(item.get("symbol") or "").upper().strip()
-        if symbol and symbol not in result:
-            result[symbol] = item
-    return result
 
 
 def _latest_llm_context_by_symbol(store: Store, symbols: list[str]) -> dict[str, dict[str, Any]]:
@@ -958,280 +743,16 @@ def _latest_llm_context_by_symbol(store: Store, symbols: list[str]) -> dict[str,
     return result
 
 
-def _llm_status_reason(llm_context: dict[str, Any] | None) -> tuple[str, str, str]:
-    if not llm_context:
-        return (
-            "neutral",
-            "Sin revision LLM",
-            "No hay una decision LLM reciente guardada para este simbolo.",
-        )
-    decision = str(llm_context.get("decision") or "").lower()
-    explanation = str(llm_context.get("explanation") or "").strip()
-    llm_gate = llm_context.get("llm_gate", {}) or {}
-    llm_reason = str(llm_gate.get("reason") or "").strip()
-    detail = explanation or llm_reason or "Sin explicacion LLM guardada."
-    if llm_context.get("approved_buy") or decision == "buy":
-        return ("good", "LLM aprobo compra", detail)
-    if llm_context.get("blocked_entry_quality"):
-        return ("bad", "LLM bloqueada calidad", detail)
-    if llm_context.get("blocked_backtest"):
-        return ("bad", "LLM bloqueada backtest", detail)
-    if decision in {"hold", "watch", "candidate"}:
-        return ("neutral", f"LLM {decision}", detail)
-    if decision:
-        return ("neutral", f"LLM {decision}", detail)
-    return ("neutral", "LLM sin dictamen", detail)
 
 
-def _study_price(features: dict[str, Any]) -> float | None:
-    return _num(features.get("close")) or _num(features.get("entry_price"))
 
 
-def _company_study_signal_rows(
-    store: Store,
-    *,
-    since_date: str | None,
-    sources: list[str] | None = None,
-    symbol: str | None = None,
-    limit: int = 200000,
-) -> list[dict[str, Any]]:
-    query = """
-        SELECT signal_id, source_run_id, source, symbol, signal_date,
-               decision, features_json, gate_json, outcome_json,
-               created_at, updated_at
-        FROM signal_outcomes
-        WHERE 1 = 1
-    """
-    params: list[Any] = []
-    if since_date:
-        query += " AND signal_date >= ?"
-        params.append(since_date)
-    if sources:
-        placeholders = ",".join("?" for _ in sources)
-        query += f" AND source IN ({placeholders})"
-        params.extend(sources)
-    if symbol:
-        query += " AND symbol = ?"
-        params.append(symbol.upper())
-    query += " ORDER BY signal_date DESC, created_at DESC LIMIT ?"
-    params.append(limit)
-    with store.connect() as conn:
-        rows = conn.execute(query, params).fetchall()
-    return [
-        {
-            "signal_id": row["signal_id"],
-            "source_run_id": row["source_run_id"],
-            "source": row["source"],
-            "symbol": row["symbol"],
-            "signal_date": row["signal_date"],
-            "decision": row["decision"],
-            "features": json.loads(row["features_json"] or "{}"),
-            "gate": json.loads(row["gate_json"] or "{}"),
-            "outcome": json.loads(row["outcome_json"] or "{}"),
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-        }
-        for row in rows
-    ]
 
 
-def _company_study_symbol_summary(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for item in signals:
-        symbol = str(item.get("symbol") or "").upper().strip()
-        if symbol:
-            grouped.setdefault(symbol, []).append(item)
-    rows = []
-    for symbol, items in grouped.items():
-        latest = max(items, key=lambda item: (str(item.get("signal_date") or ""), str(item.get("created_at") or "")))
-        features = latest.get("features") or {}
-        rows.append(
-            {
-                "simbolo": symbol,
-                "iteraciones": len(items),
-                "ultima_fecha": latest.get("signal_date"),
-                "ultima_hora": _local_time(latest.get("created_at")),
-                "ultimo_precio": _study_price(features),
-                "ultimo_score": features.get("score"),
-                "ultima_decision": latest.get("decision"),
-                "ultima_fuente": latest.get("source"),
-                "ultimo_motivo": _company_study_reason(latest, {}, {}, {})["reason"],
-            }
-        )
-    return sorted(rows, key=lambda item: (str(item.get("ultima_fecha") or ""), str(item.get("simbolo") or "")), reverse=True)
 
 
-def _company_study_reason(
-    signal: dict[str, Any],
-    learning_by_signal: dict[str, dict[str, Any]],
-    recommendations_by_cycle_symbol: dict[tuple[str, str], dict[str, Any]],
-    plans_by_cycle_symbol: dict[tuple[str, str], dict[str, Any]],
-) -> dict[str, Any]:
-    signal_id = str(signal.get("signal_id") or "")
-    symbol = str(signal.get("symbol") or "").upper()
-    run_id = str(signal.get("source_run_id") or "")
-    learning = learning_by_signal.get(signal_id)
-    if learning:
-        if learning.get("executed_buy"):
-            label = "Compra ejecutada"
-            tone = "good"
-        elif learning.get("approved_buy"):
-            label = "Compra aprobada"
-            tone = "good"
-        elif learning.get("blocked_entry_quality"):
-            label = "No compra: calidad"
-            tone = "bad"
-        elif learning.get("blocked_backtest"):
-            label = "No compra: backtest"
-            tone = "bad"
-        else:
-            label = f"No compra: {learning.get('decision') or 'decision'}"
-            tone = "neutral"
-        return {
-            "source": "learning_observations",
-            "label": label,
-            "reason": learning.get("explanation") or "Decision de aprendizaje sin explicacion.",
-            "tone": tone,
-            "payload": learning,
-        }
-
-    recommendation = recommendations_by_cycle_symbol.get((run_id, symbol))
-    if recommendation:
-        payload = _load_json_cell(recommendation.get("payload_json"))
-        action = str(recommendation.get("action") or payload.get("action") or "").lower()
-        tone = "good" if action == "buy" else "neutral"
-        return {
-            "source": "trade_recommendations",
-            "label": f"LLM {action or 'decision'}",
-            "reason": payload.get("reason") or "Recomendacion LLM sin motivo guardado.",
-            "tone": tone,
-            "payload": payload,
-        }
-
-    plan = plans_by_cycle_symbol.get((run_id, symbol))
-    if plan:
-        payload = _load_json_cell(plan.get("payload_json"))
-        risk = payload.get("risk_decision") or {}
-        recommendation_payload = payload.get("recommendation") or {}
-        approved = bool(plan.get("approved"))
-        return {
-            "source": "order_plans",
-            "label": "Plan aprobado" if approved else "Plan bloqueado",
-            "reason": risk.get("reason") or recommendation_payload.get("reason") or "Plan sin motivo detallado.",
-            "tone": "good" if approved else "bad",
-            "payload": payload,
-        }
-
-    gate = signal.get("gate") or {}
-    llm_gate = gate.get("llm") if isinstance(gate, dict) else {}
-    if isinstance(llm_gate, dict) and llm_gate:
-        return {
-            "source": "signal_outcomes",
-            "label": f"Senal {signal.get('decision') or 'candidate'}",
-            "reason": llm_gate.get("reason") or "Senal con gate LLM sin motivo.",
-            "tone": "good" if str(signal.get("decision") or "").lower() == "buy" else "neutral",
-            "payload": gate,
-        }
-
-    return {
-        "source": "fallback",
-        "label": "Candidato tecnico",
-        "reason": "Candidato tecnico; no llego a compra/recomendacion registrada.",
-        "tone": "neutral",
-        "payload": signal,
-    }
 
 
-def _company_study_decision_context(store: Store, signals: list[dict[str, Any]]) -> dict[str, Any]:
-    signal_ids = [str(item.get("signal_id") or "") for item in signals if item.get("signal_id")]
-    cycle_symbols = {
-        (str(item.get("source_run_id") or ""), str(item.get("symbol") or "").upper())
-        for item in signals
-        if item.get("source_run_id") and item.get("symbol")
-    }
-    learning_by_signal: dict[str, dict[str, Any]] = {}
-    recommendations_by_cycle_symbol: dict[tuple[str, str], dict[str, Any]] = {}
-    plans_by_cycle_symbol: dict[tuple[str, str], dict[str, Any]] = {}
-    orders_by_plan_id: dict[str, dict[str, Any]] = {}
-    if not signals:
-        return {
-            "learning_by_signal": learning_by_signal,
-            "recommendations_by_cycle_symbol": recommendations_by_cycle_symbol,
-            "plans_by_cycle_symbol": plans_by_cycle_symbol,
-            "orders_by_plan_id": orders_by_plan_id,
-        }
-    with store.connect() as conn:
-        if signal_ids:
-            for start in range(0, len(signal_ids), 500):
-                chunk = signal_ids[start : start + 500]
-                placeholders = ",".join("?" for _ in chunk)
-                rows = conn.execute(
-                    f"""
-                    SELECT observation_id, signal_date, symbol, source_family, best_signal_id,
-                           decision, explanation, llm_considered, approved_buy,
-                           blocked_entry_quality, blocked_backtest, executed_buy,
-                           gate_json, outcome_json, execution_json, updated_at
-                    FROM learning_observations
-                    WHERE best_signal_id IN ({placeholders})
-                    """,
-                    chunk,
-                ).fetchall()
-                for row in rows:
-                    learning_by_signal[str(row["best_signal_id"])] = {
-                        **dict(row),
-                        "llm_considered": bool(row["llm_considered"]),
-                        "approved_buy": bool(row["approved_buy"]),
-                        "blocked_entry_quality": bool(row["blocked_entry_quality"]),
-                        "blocked_backtest": bool(row["blocked_backtest"]),
-                        "executed_buy": bool(row["executed_buy"]),
-                        "gate": _load_json_cell(row["gate_json"]),
-                        "outcome": _load_json_cell(row["outcome_json"]),
-                        "execution": _load_json_cell(row["execution_json"]),
-                    }
-        for run_id, symbol in cycle_symbols:
-            rec = conn.execute(
-                """
-                SELECT symbol, action, confidence, payload_json, created_at
-                FROM trade_recommendations
-                WHERE cycle_id = ? AND symbol = ?
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                (run_id, symbol),
-            ).fetchone()
-            if rec:
-                recommendations_by_cycle_symbol[(run_id, symbol)] = dict(rec)
-            plan = conn.execute(
-                """
-                SELECT plan_id, symbol, side, notional, approved, dry_run, payload_json, created_at
-                FROM order_plans
-                WHERE cycle_id = ? AND symbol = ?
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                (run_id, symbol),
-            ).fetchone()
-            if plan:
-                plan_dict = dict(plan)
-                plans_by_cycle_symbol[(run_id, symbol)] = plan_dict
-                order = conn.execute(
-                    """
-                    SELECT broker_order_id, plan_id, symbol, side, status, payload_json, created_at
-                    FROM broker_orders
-                    WHERE plan_id = ?
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                    """,
-                    (plan_dict["plan_id"],),
-                ).fetchone()
-                if order:
-                    orders_by_plan_id[str(plan_dict["plan_id"])] = dict(order)
-    return {
-        "learning_by_signal": learning_by_signal,
-        "recommendations_by_cycle_symbol": recommendations_by_cycle_symbol,
-        "plans_by_cycle_symbol": plans_by_cycle_symbol,
-        "orders_by_plan_id": orders_by_plan_id,
-    }
 
 
 def _company_study_news_files(reports_dir: Path) -> list[Path]:
@@ -1277,271 +798,16 @@ def _company_study_news_for_symbol(reports_dir: Path, symbol: str, run_id: str |
     return matches
 
 
-@_safe_cache_data(show_spinner=False, ttl=120)
-def _company_study_news_by_symbol(reports_dir: Path) -> dict[str, list[dict[str, Any]]]:
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for path in _company_study_news_files(reports_dir):
-        try:
-            report = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        for item in report.get("results", []) or []:
-            symbol = str(item.get("symbol") or "").upper().strip()
-            if not symbol:
-                continue
-            grouped.setdefault(symbol, []).append(
-                {**item, "report_path": str(path), "run_id": report.get("run_id"), "as_of": report.get("as_of")}
-            )
-    return grouped
 
 
-def _company_study_export_payload(
-    *,
-    symbol: str,
-    signals: list[dict[str, Any]],
-    reasons: list[dict[str, Any]],
-    symbol_news: list[dict[str, Any]],
-    filters: dict[str, Any],
-    generated_at: str | None = None,
-) -> dict[str, Any]:
-    iterations = []
-    approved_count = 0
-    blocked_count = 0
-    for sig, reason in zip(signals, reasons, strict=False):
-        run_id = str(sig.get("source_run_id") or "")
-        news_items = [item for item in symbol_news if str(item.get("run_id") or "") == run_id]
-        if not news_items:
-            news_items = symbol_news[:1]
-        if reason.get("tone") == "good":
-            approved_count += 1
-        if reason.get("tone") == "bad":
-            blocked_count += 1
-        features = sig.get("features") or {}
-        iterations.append(
-            {
-                "signal_id": sig.get("signal_id"),
-                "run_id": run_id,
-                "source": sig.get("source"),
-                "signal_date": sig.get("signal_date"),
-                "created_at": sig.get("created_at"),
-                "price": _study_price(features),
-                "entry_price": _num(features.get("entry_price")),
-                "decision": sig.get("decision"),
-                "decision_reason": reason,
-                "technical_features": features,
-                "gate": sig.get("gate") or {},
-                "outcome": sig.get("outcome") or {},
-                "news_sentiment": news_items,
-            }
-        )
-    latest_features = (signals[0].get("features") or {}) if signals else {}
-    return {
-        "schema": "agente_bolsa.company_studies.deepresearch.v1",
-        "generated_at": generated_at or datetime.now(timezone.utc).isoformat(),
-        "intended_consumer": "LLM/deepresearch",
-        "symbol": str(symbol or "").upper(),
-        "filters": filters,
-        "summary": {
-            "iterations": len(iterations),
-            "approved_or_bought": approved_count,
-            "blocked": blocked_count,
-            "latest_signal_date": signals[0].get("signal_date") if signals else None,
-            "latest_price": _study_price(latest_features),
-            "latest_score": latest_features.get("score"),
-            "sources": sorted({str(item.get("source") or "") for item in signals if item.get("source")}),
-            "news_reports_matched": len(symbol_news),
-        },
-        "iterations": iterations,
-    }
 
 
-def _company_study_global_export_payload(
-    *,
-    signals: list[dict[str, Any]],
-    context: dict[str, Any],
-    news_by_symbol: dict[str, list[dict[str, Any]]],
-    filters: dict[str, Any],
-    generated_at: str | None = None,
-) -> dict[str, Any]:
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for sig in signals:
-        symbol = str(sig.get("symbol") or "").upper().strip()
-        if symbol:
-            grouped.setdefault(symbol, []).append(sig)
-
-    companies = []
-    total_iterations = 0
-    total_approved = 0
-    total_blocked = 0
-    for symbol in sorted(grouped):
-        symbol_signals = sorted(
-            grouped[symbol],
-            key=lambda item: (str(item.get("signal_date") or ""), str(item.get("created_at") or "")),
-            reverse=True,
-        )
-        reasons = [
-            _company_study_reason(
-                signal,
-                context["learning_by_signal"],
-                context["recommendations_by_cycle_symbol"],
-                context["plans_by_cycle_symbol"],
-            )
-            for signal in symbol_signals
-        ]
-        payload = _company_study_export_payload(
-            symbol=symbol,
-            signals=symbol_signals,
-            reasons=reasons,
-            symbol_news=news_by_symbol.get(symbol, []),
-            filters=filters,
-            generated_at=generated_at,
-        )
-        total_iterations += int(payload["summary"]["iterations"])
-        total_approved += int(payload["summary"]["approved_or_bought"])
-        total_blocked += int(payload["summary"]["blocked"])
-        companies.append(payload)
-
-    return {
-        "schema": "agente_bolsa.company_studies.deepresearch.all_companies.v1",
-        "generated_at": generated_at or datetime.now(timezone.utc).isoformat(),
-        "intended_consumer": "LLM/deepresearch",
-        "filters": filters,
-        "summary": {
-            "companies": len(companies),
-            "iterations": total_iterations,
-            "approved_or_bought": total_approved,
-            "blocked": total_blocked,
-            "sources": sorted({str(item.get("source") or "") for item in signals if item.get("source")}),
-        },
-        "companies": companies,
-    }
 
 
-def _manual_opportunity_recommendation(candidate: dict[str, Any], settings: Any) -> TradeRecommendation:
-    risk = _opportunity_risk_plan(candidate)
-    reason = "; ".join((candidate.get("reasons", []) or [])[:4]) or "oportunidad tecnica seleccionada manualmente"
-    return TradeRecommendation(
-        symbol=str(candidate.get("symbol") or "").upper(),
-        action="buy",
-        confidence=float(settings.min_llm_confidence_to_trade),
-        reason=reason,
-        entry_price=risk.get("entry_price"),
-        stop_loss=risk.get("stop_loss"),
-        take_profit=risk.get("take_profit"),
-        time_horizon=str((candidate.get("risk_plan", {}) or {}).get("time_stop") or "5-10 sesiones"),
-        invalidation=str((candidate.get("risk_plan", {}) or {}).get("invalidation") or "") or None,
-        source="manual_opportunity_screen",
-    )
 
 
-def _opportunity_status(
-    candidate: dict[str, Any],
-    *,
-    portfolio: PortfolioSnapshot,
-    pending_plans_by_symbol: dict[str, dict[str, Any]],
-    settings: Any,
-    llm_context: dict[str, Any] | None = None,
-) -> dict[str, str]:
-    symbol = str(candidate.get("symbol") or "").upper()
-    open_order_symbols = {str(item.symbol or "").upper() for item in portfolio.open_orders}
-    position_symbols = {
-        str(item.symbol or "").upper()
-        for item in portfolio.positions
-        if str(item.side or "long").lower() == "long" and float(item.qty or 0.0) > 0
-    }
-    if symbol in pending_plans_by_symbol:
-        return {"tone": "neutral", "label": "Plan pendiente", "reason": "Ya existe un plan pendiente de ejecucion."}
-    if symbol in open_order_symbols:
-        return {"tone": "neutral", "label": "Orden abierta", "reason": "Ya hay una orden abierta en broker para este simbolo."}
-    if symbol in position_symbols:
-        return {"tone": "neutral", "label": "Posicion abierta", "reason": "Ya existe una posicion larga y no se deberia duplicar."}
-    if candidate.get("blocked_auto_buy"):
-        return {
-            "tone": "bad",
-            "label": "Bloqueada auto-compra",
-            "reason": str(candidate.get("blocked_auto_buy_reason") or "La configuracion marca este setup como shadow/watch."),
-        }
-    if not settings.auto_paper_trading:
-        return {
-            "tone": "neutral",
-            "label": "Manual por configuracion",
-            "reason": "AUTO_PAPER_TRADING=false: el sistema no compra automaticamente.",
-        }
-    if settings.require_human_approval:
-        return {
-            "tone": "neutral",
-            "label": "Requiere aprobacion",
-            "reason": "REQUIRE_HUMAN_APPROVAL=true: necesita confirmacion humana antes de ejecucion.",
-        }
-    tone, label, reason = _llm_status_reason(llm_context)
-    return {"tone": tone, "label": label, "reason": reason}
 
 
-def _create_manual_opportunity_plan(
-    *,
-    candidate: dict[str, Any],
-    settings: Any,
-    store: Store,
-    portfolio: PortfolioSnapshot,
-) -> dict[str, Any]:
-    symbol = str(candidate.get("symbol") or "").upper().strip()
-    pending = _pending_buy_plans_by_symbol(store)
-    if symbol in pending:
-        return {
-            "ok": False,
-            "reason": "Ya existe un plan pendiente para este simbolo.",
-            "code": "duplicate_pending_plan",
-            "plan_id": pending[symbol].get("plan_id"),
-        }
-
-    recommendation = _manual_opportunity_recommendation(candidate, settings)
-    rejected: list[dict[str, Any]] = []
-    plans = build_buy_order_plans(
-        settings,
-        portfolio,
-        [recommendation],
-        dry_run=True,
-        rejected=rejected,
-    )
-    if not plans:
-        rejected_item = rejected[0] if rejected else {}
-        return {
-            "ok": False,
-            "reason": rejected_item.get("reason") or "No se pudo crear el plan.",
-            "stage": rejected_item.get("stage"),
-            "checks": rejected_item.get("checks", {}),
-            "recommendation": asdict(recommendation),
-        }
-
-    plan = plans[0]
-    cycle_id = f"manual_opportunity_{datetime.now(ZoneInfo(settings.local_timezone)).strftime('%Y%m%d_%H%M%S')}"
-    recommendation_id = new_id("rec")
-    plan_id = new_id("plan")
-    store.save_trade_recommendation(
-        recommendation_id=recommendation_id,
-        cycle_id=cycle_id,
-        symbol=recommendation.symbol,
-        action=recommendation.action,
-        confidence=recommendation.confidence,
-        payload=asdict(recommendation),
-    )
-    store.save_order_plan(
-        plan_id=plan_id,
-        cycle_id=cycle_id,
-        symbol=plan.symbol,
-        side=plan.side,
-        notional=plan.notional,
-        approved=plan.risk_decision.approved,
-        dry_run=plan.dry_run,
-        payload=asdict(plan),
-    )
-    return {
-        "ok": True,
-        "plan_id": plan_id,
-        "cycle_id": cycle_id,
-        "recommendation_id": recommendation_id,
-        "plan": asdict(plan),
-    }
 
 
 def _order_cards(orders: list[dict[str, Any]], *, max_items: int = 8) -> None:
@@ -2551,13 +1817,6 @@ def _page_header(title: str, subtitle: str) -> None:
     st.caption(subtitle)
 
 
-def _screen_help(title: str, body: str) -> None:
-    if hasattr(st, "popover"):
-        with st.popover(f"Info: {title}"):
-            st.markdown(body)
-    else:
-        with st.expander(f"Info: {title}", expanded=False):
-            st.markdown(body)
 
 
 def _info_icon(title: str, body: str) -> None:
@@ -3543,6 +2802,577 @@ def _render_agent_roster_panel(runtime: ContinuousImprovementLabRuntime, store: 
     )
 
 
+def _opportunity_risk_plan(candidate: dict[str, Any]) -> dict[str, Any]:
+    risk_plan = candidate.get("risk_plan", {}) or {}
+    entry = _num(risk_plan.get("entry_price"))
+    close = _num((candidate.get("technical_state", {}) or {}).get("close"))
+    stop = _num(risk_plan.get("stop_loss"))
+    take = _num(risk_plan.get("take_profit"))
+    reward_risk = _num(risk_plan.get("reward_risk"))
+    if reward_risk is None and entry is not None and stop is not None and take is not None and entry > stop:
+        reward_risk = round((take - entry) / (entry - stop), 2)
+    return {
+        "entry_price": entry if entry is not None else close,
+        "current_price": close if close is not None else entry,
+        "stop_loss": stop,
+        "take_profit": take,
+        "reward_risk": reward_risk,
+        "invalidation": risk_plan.get("invalidation"),
+        "time_stop": risk_plan.get("time_stop"),
+    }
+
+
+def _next_opportunity_snapshot_run_text(settings: Any, now_local: datetime | None = None) -> str:
+    local_tz = ZoneInfo(settings.local_timezone)
+    current = now_local.astimezone(local_tz) if now_local and now_local.tzinfo else now_local.replace(tzinfo=local_tz) if now_local else datetime.now(local_tz)
+    slots = []
+    for slot in settings.opportunity_snapshot_times:
+        hour_text, minute_text = str(slot).split(":")
+        candidate = current.replace(hour=int(hour_text), minute=int(minute_text), second=0, microsecond=0)
+        if candidate > current:
+            slots.append(candidate)
+    if slots:
+        return min(slots).strftime("%Y-%m-%d %H:%M")
+    first_slot = str(settings.opportunity_snapshot_times[0])
+    hour_text, minute_text = first_slot.split(":")
+    next_day = current + pd.Timedelta(days=1)
+    return next_day.replace(hour=int(hour_text), minute=int(minute_text), second=0, microsecond=0).strftime("%Y-%m-%d %H:%M")
+
+
+def _pending_buy_plans_by_symbol(store: Store) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for item in store.pending_order_plans(limit=500):
+        symbol = str(item.get("symbol") or "").upper().strip()
+        if symbol and symbol not in result:
+            result[symbol] = item
+    return result
+
+
+def _llm_status_reason(llm_context: dict[str, Any] | None) -> tuple[str, str, str]:
+    if not llm_context:
+        return (
+            "neutral",
+            "Sin revision LLM",
+            "No hay una decision LLM reciente guardada para este simbolo.",
+        )
+    decision = str(llm_context.get("decision") or "").lower()
+    explanation = str(llm_context.get("explanation") or "").strip()
+    llm_gate = llm_context.get("llm_gate", {}) or {}
+    llm_reason = str(llm_gate.get("reason") or "").strip()
+    detail = explanation or llm_reason or "Sin explicacion LLM guardada."
+    if llm_context.get("approved_buy") or decision == "buy":
+        return ("good", "LLM aprobo compra", detail)
+    if llm_context.get("blocked_entry_quality"):
+        return ("bad", "LLM bloqueada calidad", detail)
+    if llm_context.get("blocked_backtest"):
+        return ("bad", "LLM bloqueada backtest", detail)
+    if decision in {"hold", "watch", "candidate"}:
+        return ("neutral", f"LLM {decision}", detail)
+    if decision:
+        return ("neutral", f"LLM {decision}", detail)
+    return ("neutral", "LLM sin dictamen", detail)
+
+
+def _study_price(features: dict[str, Any]) -> float | None:
+    return _num(features.get("close")) or _num(features.get("entry_price"))
+
+
+def _company_study_signal_rows(
+    store: Store,
+    *,
+    since_date: str | None,
+    sources: list[str] | None = None,
+    symbol: str | None = None,
+    limit: int = 200000,
+) -> list[dict[str, Any]]:
+    query = """
+        SELECT signal_id, source_run_id, source, symbol, signal_date,
+               decision, features_json, gate_json, outcome_json,
+               created_at, updated_at
+        FROM signal_outcomes
+        WHERE 1 = 1
+    """
+    params: list[Any] = []
+    if since_date:
+        query += " AND signal_date >= ?"
+        params.append(since_date)
+    if sources:
+        placeholders = ",".join("?" for _ in sources)
+        query += f" AND source IN ({placeholders})"
+        params.extend(sources)
+    if symbol:
+        query += " AND symbol = ?"
+        params.append(symbol.upper())
+    query += " ORDER BY signal_date DESC, created_at DESC LIMIT ?"
+    params.append(limit)
+    with store.connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [
+        {
+            "signal_id": row["signal_id"],
+            "source_run_id": row["source_run_id"],
+            "source": row["source"],
+            "symbol": row["symbol"],
+            "signal_date": row["signal_date"],
+            "decision": row["decision"],
+            "features": json.loads(row["features_json"] or "{}"),
+            "gate": json.loads(row["gate_json"] or "{}"),
+            "outcome": json.loads(row["outcome_json"] or "{}"),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+        for row in rows
+    ]
+
+
+def _company_study_symbol_summary(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in signals:
+        symbol = str(item.get("symbol") or "").upper().strip()
+        if symbol:
+            grouped.setdefault(symbol, []).append(item)
+    rows = []
+    for symbol, items in grouped.items():
+        latest = max(items, key=lambda item: (str(item.get("signal_date") or ""), str(item.get("created_at") or "")))
+        features = latest.get("features") or {}
+        rows.append(
+            {
+                "simbolo": symbol,
+                "iteraciones": len(items),
+                "ultima_fecha": latest.get("signal_date"),
+                "ultima_hora": _local_time(latest.get("created_at")),
+                "ultimo_precio": _study_price(features),
+                "ultimo_score": features.get("score"),
+                "ultima_decision": latest.get("decision"),
+                "ultima_fuente": latest.get("source"),
+                "ultimo_motivo": _company_study_reason(latest, {}, {}, {})["reason"],
+            }
+        )
+    return sorted(rows, key=lambda item: (str(item.get("ultima_fecha") or ""), str(item.get("simbolo") or "")), reverse=True)
+
+
+def _company_study_reason(
+    signal: dict[str, Any],
+    learning_by_signal: dict[str, dict[str, Any]],
+    recommendations_by_cycle_symbol: dict[tuple[str, str], dict[str, Any]],
+    plans_by_cycle_symbol: dict[tuple[str, str], dict[str, Any]],
+) -> dict[str, Any]:
+    signal_id = str(signal.get("signal_id") or "")
+    symbol = str(signal.get("symbol") or "").upper()
+    run_id = str(signal.get("source_run_id") or "")
+    learning = learning_by_signal.get(signal_id)
+    if learning:
+        if learning.get("executed_buy"):
+            label = "Compra ejecutada"
+            tone = "good"
+        elif learning.get("approved_buy"):
+            label = "Compra aprobada"
+            tone = "good"
+        elif learning.get("blocked_entry_quality"):
+            label = "No compra: calidad"
+            tone = "bad"
+        elif learning.get("blocked_backtest"):
+            label = "No compra: backtest"
+            tone = "bad"
+        else:
+            label = f"No compra: {learning.get('decision') or 'decision'}"
+            tone = "neutral"
+        return {
+            "source": "learning_observations",
+            "label": label,
+            "reason": learning.get("explanation") or "Decision de aprendizaje sin explicacion.",
+            "tone": tone,
+            "payload": learning,
+        }
+
+    recommendation = recommendations_by_cycle_symbol.get((run_id, symbol))
+    if recommendation:
+        payload = _load_json_cell(recommendation.get("payload_json"))
+        action = str(recommendation.get("action") or payload.get("action") or "").lower()
+        tone = "good" if action == "buy" else "neutral"
+        return {
+            "source": "trade_recommendations",
+            "label": f"LLM {action or 'decision'}",
+            "reason": payload.get("reason") or "Recomendacion LLM sin motivo guardado.",
+            "tone": tone,
+            "payload": payload,
+        }
+
+    plan = plans_by_cycle_symbol.get((run_id, symbol))
+    if plan:
+        payload = _load_json_cell(plan.get("payload_json"))
+        risk = payload.get("risk_decision") or {}
+        recommendation_payload = payload.get("recommendation") or {}
+        approved = bool(plan.get("approved"))
+        return {
+            "source": "order_plans",
+            "label": "Plan aprobado" if approved else "Plan bloqueado",
+            "reason": risk.get("reason") or recommendation_payload.get("reason") or "Plan sin motivo detallado.",
+            "tone": "good" if approved else "bad",
+            "payload": payload,
+        }
+
+    gate = signal.get("gate") or {}
+    llm_gate = gate.get("llm") if isinstance(gate, dict) else {}
+    if isinstance(llm_gate, dict) and llm_gate:
+        return {
+            "source": "signal_outcomes",
+            "label": f"Senal {signal.get('decision') or 'candidate'}",
+            "reason": llm_gate.get("reason") or "Senal con gate LLM sin motivo.",
+            "tone": "good" if str(signal.get("decision") or "").lower() == "buy" else "neutral",
+            "payload": gate,
+        }
+
+    return {
+        "source": "fallback",
+        "label": "Candidato tecnico",
+        "reason": "Candidato tecnico; no llego a compra/recomendacion registrada.",
+        "tone": "neutral",
+        "payload": signal,
+    }
+
+
+def _company_study_decision_context(store: Store, signals: list[dict[str, Any]]) -> dict[str, Any]:
+    signal_ids = [str(item.get("signal_id") or "") for item in signals if item.get("signal_id")]
+    cycle_symbols = {
+        (str(item.get("source_run_id") or ""), str(item.get("symbol") or "").upper())
+        for item in signals
+        if item.get("source_run_id") and item.get("symbol")
+    }
+    learning_by_signal: dict[str, dict[str, Any]] = {}
+    recommendations_by_cycle_symbol: dict[tuple[str, str], dict[str, Any]] = {}
+    plans_by_cycle_symbol: dict[tuple[str, str], dict[str, Any]] = {}
+    orders_by_plan_id: dict[str, dict[str, Any]] = {}
+    if not signals:
+        return {
+            "learning_by_signal": learning_by_signal,
+            "recommendations_by_cycle_symbol": recommendations_by_cycle_symbol,
+            "plans_by_cycle_symbol": plans_by_cycle_symbol,
+            "orders_by_plan_id": orders_by_plan_id,
+        }
+    with store.connect() as conn:
+        if signal_ids:
+            for start in range(0, len(signal_ids), 500):
+                chunk = signal_ids[start : start + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = conn.execute(
+                    f"""
+                    SELECT observation_id, signal_date, symbol, source_family, best_signal_id,
+                           decision, explanation, llm_considered, approved_buy,
+                           blocked_entry_quality, blocked_backtest, executed_buy,
+                           gate_json, outcome_json, execution_json, updated_at
+                    FROM learning_observations
+                    WHERE best_signal_id IN ({placeholders})
+                    """,
+                    chunk,
+                ).fetchall()
+                for row in rows:
+                    learning_by_signal[str(row["best_signal_id"])] = {
+                        **dict(row),
+                        "llm_considered": bool(row["llm_considered"]),
+                        "approved_buy": bool(row["approved_buy"]),
+                        "blocked_entry_quality": bool(row["blocked_entry_quality"]),
+                        "blocked_backtest": bool(row["blocked_backtest"]),
+                        "executed_buy": bool(row["executed_buy"]),
+                        "gate": _load_json_cell(row["gate_json"]),
+                        "outcome": _load_json_cell(row["outcome_json"]),
+                        "execution": _load_json_cell(row["execution_json"]),
+                    }
+        for run_id, symbol in cycle_symbols:
+            rec = conn.execute(
+                """
+                SELECT symbol, action, confidence, payload_json, created_at
+                FROM trade_recommendations
+                WHERE cycle_id = ? AND symbol = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (run_id, symbol),
+            ).fetchone()
+            if rec:
+                recommendations_by_cycle_symbol[(run_id, symbol)] = dict(rec)
+            plan = conn.execute(
+                """
+                SELECT plan_id, symbol, side, notional, approved, dry_run, payload_json, created_at
+                FROM order_plans
+                WHERE cycle_id = ? AND symbol = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (run_id, symbol),
+            ).fetchone()
+            if plan:
+                plan_dict = dict(plan)
+                plans_by_cycle_symbol[(run_id, symbol)] = plan_dict
+                order = conn.execute(
+                    """
+                    SELECT broker_order_id, plan_id, symbol, side, status, payload_json, created_at
+                    FROM broker_orders
+                    WHERE plan_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (plan_dict["plan_id"],),
+                ).fetchone()
+                if order:
+                    orders_by_plan_id[str(plan_dict["plan_id"])] = dict(order)
+    return {
+        "learning_by_signal": learning_by_signal,
+        "recommendations_by_cycle_symbol": recommendations_by_cycle_symbol,
+        "plans_by_cycle_symbol": plans_by_cycle_symbol,
+        "orders_by_plan_id": orders_by_plan_id,
+    }
+
+
+def _company_study_export_payload(
+    *,
+    symbol: str,
+    signals: list[dict[str, Any]],
+    reasons: list[dict[str, Any]],
+    symbol_news: list[dict[str, Any]],
+    filters: dict[str, Any],
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    iterations = []
+    approved_count = 0
+    blocked_count = 0
+    for sig, reason in zip(signals, reasons, strict=False):
+        run_id = str(sig.get("source_run_id") or "")
+        news_items = [item for item in symbol_news if str(item.get("run_id") or "") == run_id]
+        if not news_items:
+            news_items = symbol_news[:1]
+        if reason.get("tone") == "good":
+            approved_count += 1
+        if reason.get("tone") == "bad":
+            blocked_count += 1
+        features = sig.get("features") or {}
+        iterations.append(
+            {
+                "signal_id": sig.get("signal_id"),
+                "run_id": run_id,
+                "source": sig.get("source"),
+                "signal_date": sig.get("signal_date"),
+                "created_at": sig.get("created_at"),
+                "price": _study_price(features),
+                "entry_price": _num(features.get("entry_price")),
+                "decision": sig.get("decision"),
+                "decision_reason": reason,
+                "technical_features": features,
+                "gate": sig.get("gate") or {},
+                "outcome": sig.get("outcome") or {},
+                "news_sentiment": news_items,
+            }
+        )
+    latest_features = (signals[0].get("features") or {}) if signals else {}
+    return {
+        "schema": "agente_bolsa.company_studies.deepresearch.v1",
+        "generated_at": generated_at or datetime.now(timezone.utc).isoformat(),
+        "intended_consumer": "LLM/deepresearch",
+        "symbol": str(symbol or "").upper(),
+        "filters": filters,
+        "summary": {
+            "iterations": len(iterations),
+            "approved_or_bought": approved_count,
+            "blocked": blocked_count,
+            "latest_signal_date": signals[0].get("signal_date") if signals else None,
+            "latest_price": _study_price(latest_features),
+            "latest_score": latest_features.get("score"),
+            "sources": sorted({str(item.get("source") or "") for item in signals if item.get("source")}),
+            "news_reports_matched": len(symbol_news),
+        },
+        "iterations": iterations,
+    }
+
+
+def _company_study_global_export_payload(
+    *,
+    signals: list[dict[str, Any]],
+    context: dict[str, Any],
+    news_by_symbol: dict[str, list[dict[str, Any]]],
+    filters: dict[str, Any],
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for sig in signals:
+        symbol = str(sig.get("symbol") or "").upper().strip()
+        if symbol:
+            grouped.setdefault(symbol, []).append(sig)
+
+    companies = []
+    total_iterations = 0
+    total_approved = 0
+    total_blocked = 0
+    for symbol in sorted(grouped):
+        symbol_signals = sorted(
+            grouped[symbol],
+            key=lambda item: (str(item.get("signal_date") or ""), str(item.get("created_at") or "")),
+            reverse=True,
+        )
+        reasons = [
+            _company_study_reason(
+                signal,
+                context["learning_by_signal"],
+                context["recommendations_by_cycle_symbol"],
+                context["plans_by_cycle_symbol"],
+            )
+            for signal in symbol_signals
+        ]
+        payload = _company_study_export_payload(
+            symbol=symbol,
+            signals=symbol_signals,
+            reasons=reasons,
+            symbol_news=news_by_symbol.get(symbol, []),
+            filters=filters,
+            generated_at=generated_at,
+        )
+        total_iterations += int(payload["summary"]["iterations"])
+        total_approved += int(payload["summary"]["approved_or_bought"])
+        total_blocked += int(payload["summary"]["blocked"])
+        companies.append(payload)
+
+    return {
+        "schema": "agente_bolsa.company_studies.deepresearch.all_companies.v1",
+        "generated_at": generated_at or datetime.now(timezone.utc).isoformat(),
+        "intended_consumer": "LLM/deepresearch",
+        "filters": filters,
+        "summary": {
+            "companies": len(companies),
+            "iterations": total_iterations,
+            "approved_or_bought": total_approved,
+            "blocked": total_blocked,
+            "sources": sorted({str(item.get("source") or "") for item in signals if item.get("source")}),
+        },
+        "companies": companies,
+    }
+
+
+def _manual_opportunity_recommendation(candidate: dict[str, Any], settings: Any) -> TradeRecommendation:
+    risk = _opportunity_risk_plan(candidate)
+    reason = "; ".join((candidate.get("reasons", []) or [])[:4]) or "oportunidad tecnica seleccionada manualmente"
+    return TradeRecommendation(
+        symbol=str(candidate.get("symbol") or "").upper(),
+        action="buy",
+        confidence=float(settings.min_llm_confidence_to_trade),
+        reason=reason,
+        entry_price=risk.get("entry_price"),
+        stop_loss=risk.get("stop_loss"),
+        take_profit=risk.get("take_profit"),
+        time_horizon=str((candidate.get("risk_plan", {}) or {}).get("time_stop") or "5-10 sesiones"),
+        invalidation=str((candidate.get("risk_plan", {}) or {}).get("invalidation") or "") or None,
+        source="manual_opportunity_screen",
+    )
+
+
+def _opportunity_status(
+    candidate: dict[str, Any],
+    *,
+    portfolio: PortfolioSnapshot,
+    pending_plans_by_symbol: dict[str, dict[str, Any]],
+    settings: Any,
+    llm_context: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    symbol = str(candidate.get("symbol") or "").upper()
+    open_order_symbols = {str(item.symbol or "").upper() for item in portfolio.open_orders}
+    position_symbols = {
+        str(item.symbol or "").upper()
+        for item in portfolio.positions
+        if str(item.side or "long").lower() == "long" and float(item.qty or 0.0) > 0
+    }
+    if symbol in pending_plans_by_symbol:
+        return {"tone": "neutral", "label": "Plan pendiente", "reason": "Ya existe un plan pendiente de ejecucion."}
+    if symbol in open_order_symbols:
+        return {"tone": "neutral", "label": "Orden abierta", "reason": "Ya hay una orden abierta en broker para este simbolo."}
+    if symbol in position_symbols:
+        return {"tone": "neutral", "label": "Posicion abierta", "reason": "Ya existe una posicion larga y no se deberia duplicar."}
+    if candidate.get("blocked_auto_buy"):
+        return {
+            "tone": "bad",
+            "label": "Bloqueada auto-compra",
+            "reason": str(candidate.get("blocked_auto_buy_reason") or "La configuracion marca este setup como shadow/watch."),
+        }
+    if not settings.auto_paper_trading:
+        return {
+            "tone": "neutral",
+            "label": "Manual por configuracion",
+            "reason": "AUTO_PAPER_TRADING=false: el sistema no compra automaticamente.",
+        }
+    if settings.require_human_approval:
+        return {
+            "tone": "neutral",
+            "label": "Requiere aprobacion",
+            "reason": "REQUIRE_HUMAN_APPROVAL=true: necesita confirmacion humana antes de ejecucion.",
+        }
+    tone, label, reason = _llm_status_reason(llm_context)
+    return {"tone": tone, "label": label, "reason": reason}
+
+
+def _create_manual_opportunity_plan(
+    *,
+    candidate: dict[str, Any],
+    settings: Any,
+    store: Store,
+    portfolio: PortfolioSnapshot,
+) -> dict[str, Any]:
+    symbol = str(candidate.get("symbol") or "").upper().strip()
+    pending = _pending_buy_plans_by_symbol(store)
+    if symbol in pending:
+        return {
+            "ok": False,
+            "reason": "Ya existe un plan pendiente para este simbolo.",
+            "code": "duplicate_pending_plan",
+            "plan_id": pending[symbol].get("plan_id"),
+        }
+
+    recommendation = _manual_opportunity_recommendation(candidate, settings)
+    rejected: list[dict[str, Any]] = []
+    plans = build_buy_order_plans(
+        settings,
+        portfolio,
+        [recommendation],
+        dry_run=True,
+        rejected=rejected,
+    )
+    if not plans:
+        rejected_item = rejected[0] if rejected else {}
+        return {
+            "ok": False,
+            "reason": rejected_item.get("reason") or "No se pudo crear el plan.",
+            "stage": rejected_item.get("stage"),
+            "checks": rejected_item.get("checks", {}),
+            "recommendation": asdict(recommendation),
+        }
+
+    plan = plans[0]
+    cycle_id = f"manual_opportunity_{datetime.now(ZoneInfo(settings.local_timezone)).strftime('%Y%m%d_%H%M%S')}"
+    recommendation_id = new_id("rec")
+    plan_id = new_id("plan")
+    store.save_trade_recommendation(
+        recommendation_id=recommendation_id,
+        cycle_id=cycle_id,
+        symbol=recommendation.symbol,
+        action=recommendation.action,
+        confidence=recommendation.confidence,
+        payload=asdict(recommendation),
+    )
+    store.save_order_plan(
+        plan_id=plan_id,
+        cycle_id=cycle_id,
+        symbol=plan.symbol,
+        side=plan.side,
+        notional=plan.notional,
+        approved=plan.risk_decision.approved,
+        dry_run=plan.dry_run,
+        payload=asdict(plan),
+    )
+    return {
+        "ok": True,
+        "plan_id": plan_id,
+        "cycle_id": cycle_id,
+        "recommendation_id": recommendation_id,
+        "plan": asdict(plan),
+    }
+
+
 def page_dashboard() -> None:
     settings = _settings()
     store = _store()
@@ -3870,64 +3700,6 @@ def page_portfolio() -> None:
         st.info("No hay ordenes locales desde abril de 2026.")
 
 
-def page_history() -> None:
-    settings = _settings()
-    _page_header("Historico", "Compras, ventas, P/L realizado, P/L abierto y resumen global.")
-    limit = st.slider("Operaciones a cargar", 50, 1000, 300, 50)
-    history = build_trade_history(settings, limit=limit, start_date=DEFAULT_START_DATE)
-    stats = history.get("current_statistics", {})
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        _metric_card("P/L total", _money(stats.get("total_pl")), _pct(stats.get("total_plpc_on_equity")))
-    with c2:
-        _metric_card("P/L realizado", _money(stats.get("realized_pl")))
-    with c3:
-        _metric_card("P/L abierto", _money(stats.get("unrealized_pl")))
-    with c4:
-        _metric_card("Exposicion", _money(stats.get("exposure")), _pct(stats.get("exposure_pct")))
-
-    c5, c6, c7, c8 = st.columns(4)
-    with c5:
-        _metric_card("Cash", _money(stats.get("cash")), _pct(stats.get("cash_pct")))
-    with c6:
-        _metric_card("Comprado", _money(stats.get("buy_notional")))
-    with c7:
-        _metric_card("Vendido", _money(stats.get("sell_notional")))
-    with c8:
-        _metric_card("Posiciones abiertas", stats.get("open_positions", 0))
-
-    st.subheader("Resumen por dia")
-    daily_rows = []
-    for day in history.get("days", []):
-        daily_rows.append(
-            {
-                "fecha": day.get("date"),
-                "comprado": day.get("buy_notional"),
-                "vendido": day.get("sell_notional"),
-                "P/L realizado": day.get("realized_pl"),
-                "P/L realizado %": day.get("realized_plpc"),
-                "P/L abierto": day.get("open_unrealized_pl"),
-                "P/L abierto %": day.get("open_unrealized_plpc"),
-                "trades": len(day.get("trades", [])),
-                "posiciones abiertas": len(day.get("open_positions", [])),
-            }
-        )
-    if daily_rows:
-        st.dataframe(pd.DataFrame(daily_rows).sort_values("fecha", ascending=False), use_container_width=True, hide_index=True)
-    else:
-        st.info("No hay historico visible desde abril de 2026.")
-
-    st.subheader("Operaciones")
-    trades = pd.DataFrame(history.get("trades", []))
-    if not trades.empty:
-        st.dataframe(trades.sort_values("time", ascending=False), use_container_width=True, hide_index=True)
-    else:
-        st.info("No hay fills de Alpaca para el filtro actual.")
-
-    with st.expander("Resumen tecnico completo"):
-        st.json(history.get("summary", {}))
-        st.json(history.get("current_statistics", {}))
 
 
 def page_recent_trades() -> None:
@@ -3965,674 +3737,18 @@ def page_recent_trades() -> None:
             st.info("No hay fills de Alpaca para el filtro actual.")
 
 
-def page_opportunities() -> None:
-    settings = _settings()
-    store = _store()
-    _page_header(
-        "Oportunidades",
-        "Snapshots historicos de oportunidades largas, organizados por dia y por hora de captura.",
-    )
-    _screen_help(
-        "Oportunidades de compra",
-        (
-            "Cada snapshot guarda un escaneo tecnico nuevo y su top 20. "
-            "Puedes navegar por fecha y hora, y crear planes de compra desde cualquier snapshot. "
-            "Si aun no existe historico, la pantalla cae temporalmente al ultimo estudio tecnico como vista no archivada."
-        ),
-    )
-
-    latest_snapshot = store.latest_opportunity_snapshot()
-    fallback_snapshot = None
-    archived_mode = latest_snapshot is not None
-    if latest_snapshot is None:
-        fallback_snapshot = _fallback_opportunity_snapshot(settings, store)
-        if fallback_snapshot is None:
-            st.info("Todavia no hay snapshots de oportunidades ni estudio tecnico reciente.")
-            st.code(r".\.venv\Scripts\python.exe -m agente_bolsa.main opportunity-snapshot --slot 16:00", language="powershell")
-            return
-
-    active_snapshot = latest_snapshot or fallback_snapshot
-    opportunities = list(active_snapshot.get("opportunities", []) or [])
-    if not opportunities:
-        st.info("No hay oportunidades disponibles para el snapshot seleccionado.")
-        return
-
-    portfolio = _empty_portfolio_snapshot()
-    portfolio_error = None
-    try:
-        portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
-    except Exception as exc:  # noqa: BLE001
-        portfolio_error = str(exc)
-        st.warning(f"No se pudo leer la cartera Alpaca. La compra quedara deshabilitada: {exc}")
-
-    pending_plans = _pending_buy_plans_by_symbol(store)
-    summary = active_snapshot.get("summary", {}) or {}
-
-    if archived_mode:
-        available_dates = store.opportunity_snapshot_dates(limit=60)
-        default_date = str(active_snapshot.get("session_date") or available_dates[0])
-        selected_date = st.selectbox(
-            "Dia",
-            available_dates,
-            index=available_dates.index(default_date) if default_date in available_dates else 0,
-            key="opportunity_snapshot_date",
-        )
-        day_snapshots = store.opportunity_snapshots(session_date=selected_date, limit=10)
-        snapshots_by_slot = _group_snapshots_by_slot(day_snapshots)
-        visible_slots = [slot for slot in settings.opportunity_snapshot_times if slot in snapshots_by_slot]
-        for slot in snapshots_by_slot:
-            if slot not in visible_slots:
-                visible_slots.append(slot)
-        if not visible_slots:
-            st.info("No hay snapshots guardados para el dia seleccionado.")
-            return
-        default_slot = str(active_snapshot.get("slot_time") or visible_slots[0])
-        selected_slot = st.selectbox(
-            "Listado horario",
-            visible_slots,
-            index=visible_slots.index(default_slot) if default_slot in visible_slots else 0,
-            key="opportunity_snapshot_slot",
-        )
-        active_snapshot = snapshots_by_slot[selected_slot]
-        opportunities = list(active_snapshot.get("opportunities", []) or [])
-        summary = active_snapshot.get("summary", {}) or {}
-    else:
-        st.caption("Vista temporal no archivada basada en el ultimo estudio tecnico disponible.")
-
-    summary_rows = []
-    for candidate in opportunities:
-        row = dict(candidate.get("summary_row") or _opportunity_summary_row(candidate))
-        ranking_value = row.get("ranking")
-        score_value = row.get("puntuacion")
-        ranking_text = f"#{int(ranking_value)}" if isinstance(ranking_value, (int, float)) else str(ranking_value or "-")
-        score_text = f"{float(score_value):.4f}" if isinstance(score_value, (int, float)) else "-"
-        row["ranking"] = f"{ranking_text} | {score_text}"
-        row.setdefault("riesgo_entrada", opportunity_entry_risk(candidate)["label"])
-        row["estado"] = ((candidate.get("operational_status") or {}).get("label") or "-")
-        summary_rows.append(row)
-
-    next_snapshot_run = _next_opportunity_snapshot_run_text(settings)
-    m1, m2, m3, m4, m5, m6 = st.columns(6)
-    with m1:
-        _metric_card("Fecha", summary.get("session_date") or "-")
-    with m2:
-        _metric_card("Hora listado", summary.get("slot_time") or "-")
-    with m3:
-        _metric_card("Top oportunidades", summary.get("opportunities_count") if summary.get("opportunities_count") is not None else len(opportunities))
-    with m4:
-        _metric_card("Accionables", summary.get("actionable_count") if summary.get("actionable_count") is not None else "-")
-    with m5:
-        best_score = summary.get("best_puntuacion")
-        _metric_card("Mejor puntuacion", f"{float(best_score):.4f}" if isinstance(best_score, (int, float)) else "-")
-    with m6:
-        _metric_card("Siguiente ejecucion", next_snapshot_run)
-
-    st.subheader("Resumen")
-    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
-    st.caption(
-        f"Fuente: {active_snapshot.get('report_path') or '-'} | "
-        f"as_of {_local_datetime(summary.get('as_of'))} | "
-        f"seleccion {summary.get('selection_method') or '-'} | "
-        f"{'archivado' if archived_mode else 'no archivado'}"
-    )
-
-    if portfolio_error:
-        st.caption("Sin cartera Alpaca no se puede calcular sizing/riesgo real; por eso el boton de crear plan queda deshabilitado.")
-
-    for index, candidate in enumerate(opportunities, start=1):
-        symbol = str(candidate.get("symbol") or "").upper()
-        risk = candidate.get("risk_snapshot") or _opportunity_risk_plan(candidate)
-        technical = candidate.get("technical_state", {}) or {}
-        status = candidate.get("operational_status") or _opportunity_status(
-            candidate,
-            portfolio=portfolio,
-            pending_plans_by_symbol=pending_plans,
-            settings=settings,
-            llm_context=(candidate.get("llm_context") or {}),
-        )
-        llm_context = candidate.get("llm_context", {})
-        assessment = candidate.get("assessment") or opportunity_assessment(candidate)
-        entry_risk = opportunity_entry_risk(candidate)
-        confirmed_patterns = [
-            str(item.get("label") or item.get("pattern"))
-            for item in (technical.get("chart_patterns", []) or [])
-            if isinstance(item, dict)
-        ]
-        score_value = candidate.get("puntuacion")
-        if not isinstance(score_value, (int, float)):
-            score_value = _num(candidate.get("selection_score"))
-        if not isinstance(score_value, (int, float)):
-            score_value = _num(candidate.get("rank_priority_score"))
-        title = (
-            f"{index}. {symbol} | {assessment['label']} | puntuacion {f'{float(score_value):.4f}' if isinstance(score_value, (int, float)) else '-'}"
-            f" | tecnico {candidate.get('score', '-')}"
-        )
-        with st.expander(title, expanded=index <= 3):
-            top_left, top_mid, top_right = st.columns([1.1, 1.2, 0.9])
-            with top_left:
-                _compact_metric("Lectura", assessment["label"], assessment["summary"], tone=assessment["tone"])
-                _compact_metric("Setup", candidate.get("setup_name") or "-", candidate.get("setup_quality") or "-")
-                _compact_metric("Estado", status["label"], tone=status["tone"])
-            with top_mid:
-                _compact_metric("Precio actual", _money(risk.get("current_price")))
-                _compact_metric("Entrada / stop / take", f"{_money(risk.get('entry_price'))} / {_money(risk.get('stop_loss'))} / {_money(risk.get('take_profit'))}")
-            with top_right:
-                _compact_metric("Reward/Risk", risk.get("reward_risk") if risk.get("reward_risk") is not None else "-")
-                _compact_metric("Riesgo entrada", entry_risk["label"], entry_risk["reason"], tone="bad" if entry_risk["level"] == "alto" else "neutral")
-                _compact_metric("Fuerza relativa 20d", _pct_signed(candidate.get("relative_return_20d")))
-
-            st.markdown(f"**Conclusion:** {assessment['summary']}")
-            st.markdown(f"**Por que:** {assessment['reason']}")
-
-            tech_a, tech_b, tech_c, tech_d = st.columns(4)
-            with tech_a:
-                _compact_metric("RSI", technical.get("rsi_14"))
-                _compact_metric("Vol z-score", technical.get("volume_zscore_20"))
-            with tech_b:
-                _compact_metric("Ret 5d", _pct_signed(technical.get("return_5d")))
-                _compact_metric("Ret 20d", _pct_signed(technical.get("return_20d")))
-            with tech_c:
-                _compact_metric("SMA20", _money(technical.get("sma_20")))
-                _compact_metric("SMA50", _money(technical.get("sma_50")))
-            with tech_d:
-                _compact_metric("SMA200", _money(technical.get("sma_200")))
-                _compact_metric("ATR14", _money(technical.get("atr_14")))
-
-            st.markdown(f"**Motivo de no compra automatica:** {status['reason']}")
-            st.markdown(
-                f"**Contexto LLM:** "
-                f"{status['label']} | decision {str(llm_context.get('decision') or '-')} | "
-                f"fecha {str(llm_context.get('signal_date') or '-')}"
-            )
-            if llm_context:
-                llm_reason = str(llm_context.get("explanation") or ((llm_context.get("llm_gate") or {}).get("reason")) or "").strip()
-                st.markdown(f"**Explicacion LLM:** {llm_reason or 'Sin explicacion guardada.'}")
-            st.markdown(f"**Invalidacion:** {risk.get('invalidation') or '-'}")
-            st.markdown(f"**Time stop:** {risk.get('time_stop') or '-'}")
-            st.markdown(f"**Razones tecnicas:** {'; '.join(candidate.get('reasons', []) or []) or '-'}")
-            st.markdown(
-                f"**Patrones / velas:** "
-                f"{', '.join(confirmed_patterns) if confirmed_patterns else '-'} | "
-                f"velas {', '.join(technical.get('candle_patterns', []) or []) or '-'}"
-            )
-            st.markdown(
-                f"**Riesgos detectados:** "
-                f"{'breakout_failure_risk' if technical.get('breakout_failure_risk') else 'sin riesgo de fallo de ruptura destacado'}"
-            )
-
-            button_disabled = portfolio_error is not None
-            if st.button("Crear plan de compra", key=f"create_opportunity_plan_{symbol}_{index}", disabled=button_disabled):
-                result = _create_manual_opportunity_plan(
-                    candidate=candidate,
-                    settings=settings,
-                    store=store,
-                    portfolio=portfolio,
-                )
-                if result.get("ok"):
-                    plan = (result.get("plan") or {})
-                    st.success(
-                        "Plan creado: "
-                        f"{plan.get('symbol')} | qty {plan.get('qty')} | "
-                        f"notional {_money(plan.get('notional'))} | "
-                        f"entrada {_money(plan.get('entry_price'))} | "
-                        f"stop {_money(plan.get('stop_loss'))} | take {_money(plan.get('take_profit'))}"
-                    )
-                else:
-                    stage = result.get("stage")
-                    suffix = f" [{stage}]" if stage else ""
-                    st.error(f"No se pudo crear el plan{suffix}: {result.get('reason')}")
-                    checks = result.get("checks")
-                    if checks:
-                        st.json(checks)
 
 
-def _company_study_iteration_title(signal: dict[str, Any], reason: dict[str, Any]) -> str:
-    features = signal.get("features") or {}
-    price = _study_price(features)
-    price_text = _money(price) if price is not None else "-"
-    score = features.get("score")
-    rank = features.get("score_rank") or features.get("source_rank") or "-"
-    return (
-        f"{signal.get('signal_date')} {_local_time(signal.get('created_at'))} | "
-        f"{signal.get('source')} | precio {price_text} | score {score if score is not None else '-'} | "
-        f"rank {rank} | {reason['label']}"
-    )
 
 
-def _render_company_study_news(news_items: list[dict[str, Any]]) -> None:
-    if not news_items:
-        st.caption("No hay noticias/sentimiento guardado para esta iteracion o simbolo.")
-        return
-    latest = news_items[0]
-    sentiment = latest.get("sentiment") or {}
-    material = latest.get("material_risk") or {}
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        _compact_metric("Sentimiento", sentiment.get("sentiment") or "-", tone="bad" if sentiment.get("sentiment") == "negative" else "neutral")
-    with c2:
-        _compact_metric("Score noticias", sentiment.get("sentiment_score", "-"))
-    with c3:
-        _compact_metric("Apoya setup", "Si" if sentiment.get("supports_technical_setup") else "No")
-    with c4:
-        _compact_metric("Riesgo material", "Si" if material.get("material") else material.get("severity") or "No", tone="bad" if material.get("material") else "neutral")
-    rows = []
-    for news in latest.get("news", []) or []:
-        rows.append(
-            {
-                "fecha": news.get("published_at"),
-                "medio": news.get("publisher"),
-                "titular": news.get("title"),
-                "resumen": _short(news.get("summary"), 180),
-                "link": news.get("link"),
-            }
-        )
-    if rows:
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    st.caption(f"Informe noticias: {latest.get('report_path') or '-'}")
 
 
-def _render_company_study_iteration(
-    signal: dict[str, Any],
-    reason: dict[str, Any],
-    news_items: list[dict[str, Any]],
-    *,
-    expanded: bool,
-) -> None:
-    features = signal.get("features") or {}
-    outcome = signal.get("outcome") or {}
-    price = _study_price(features)
-    entry = _num(features.get("entry_price"))
-    stop = _num(features.get("stop_loss"))
-    take = _num(features.get("take_profit"))
-    title = _company_study_iteration_title(signal, reason)
-    with st.expander(title, expanded=expanded):
-        meta1, meta2, meta3, meta4, meta5 = st.columns(5)
-        with meta1:
-            _compact_metric("Precio", _money(price))
-        with meta2:
-            _compact_metric("Entrada", _money(entry))
-        with meta3:
-            _compact_metric("Stop / Take", f"{_money(stop)} / {_money(take)}")
-        with meta4:
-            _compact_metric("Direccion", features.get("direction") or "-")
-        with meta5:
-            _compact_metric("Decision", reason["label"], _short(reason["reason"], 80), tone=reason["tone"])
-
-        st.markdown(f"**Motivo:** {reason['reason']}")
-        if reason["source"] == "order_plans":
-            plan_id = str((reason.get("payload") or {}).get("plan_id") or "")
-            if plan_id:
-                st.caption(f"Plan: {plan_id}")
-
-        tech1, tech2, tech3, tech4 = st.columns(4)
-        with tech1:
-            _compact_metric("Score", features.get("score"))
-            _compact_metric("Setup", features.get("setup_name") or "-", features.get("setup_quality") or "-")
-        with tech2:
-            _compact_metric("RSI", features.get("rsi_14"))
-            _compact_metric("Vol z-score", features.get("volume_zscore_20"))
-        with tech3:
-            _compact_metric("Ret 5d", _pct_signed(features.get("return_5d")))
-            _compact_metric("Ret 20d", _pct_signed(features.get("return_20d")))
-        with tech4:
-            _compact_metric("Ret 60d", _pct_signed(features.get("return_60d")))
-            _compact_metric("Dist SMA20", _pct_signed(features.get("distance_sma20")))
-
-        ma1, ma2, ma3, ma4 = st.columns(4)
-        with ma1:
-            _compact_metric("SMA20", _money(features.get("sma_20")))
-        with ma2:
-            _compact_metric("SMA50", _money(features.get("sma_50")))
-        with ma3:
-            _compact_metric("SMA200", _money(features.get("sma_200")))
-        with ma4:
-            _compact_metric("MACD diff", features.get("macd_diff"))
-
-        patterns = features.get("chart_patterns") or {}
-        pattern_text = patterns.get("labels") if isinstance(patterns, dict) else patterns
-        st.markdown(f"**Razones tecnicas:** {'; '.join(features.get('reasons', []) or []) or '-'}")
-        st.markdown(f"**Patrones:** {pattern_text or '-'}")
-        if outcome:
-            st.markdown(
-                f"**Resultado posterior:** {_signal_outcome_status(outcome)} | "
-                f"ret 5d {_signal_value(outcome.get('return_5d'), pct=True)} | "
-                f"MFE 10d {_signal_value(outcome.get('mfe_10d'), pct=True)} | "
-                f"MAE 10d {_signal_value(outcome.get('mae_10d'), pct=True)}"
-            )
-
-        with st.expander("Noticias y sentimiento", expanded=False):
-            _render_company_study_news(news_items)
-        with st.expander("Ver JSON bruto", expanded=False):
-            st.json({"signal": signal, "decision_reason": reason, "news": news_items})
 
 
-def page_company_studies() -> None:
-    settings = _settings()
-    store = _store()
-    _page_header("Estudios", "Todas las empresas, sus iteraciones tecnicas, noticias y motivo de compra/no compra.")
-    _screen_help(
-        "Estudios por empresa",
-        (
-            "La tabla inicial sale de SQLite y no lee los informes tecnicos completos. "
-            "Selecciona una empresa para cargar solo sus iteraciones; las noticias se leen bajo demanda."
-        ),
-    )
-    all_sources = ["intraday_scan", "closed_market_study", "opportunity_snapshot", "manual_scan", "closed_market_study_backfill"]
-    c1, c2, c3, c4 = st.columns([0.9, 1.4, 0.9, 1.2])
-    with c1:
-        since = st.text_input("Desde", DEFAULT_START_DATE, key="company_studies_since")
-    with c2:
-        selected_sources = st.multiselect("Fuentes", all_sources, default=all_sources[:4], key="company_studies_sources")
-    with c3:
-        detail_limit = st.slider("Iteraciones detalle", 10, 500, 80, 10)
-    with c4:
-        search = st.text_input("Buscar simbolo/texto", "", key="company_studies_search")
-
-    signals = _company_study_signal_rows(
-        store,
-        since_date=since,
-        sources=selected_sources,
-        limit=200000,
-    )
-    if search.strip():
-        needle = search.strip().upper()
-        signals = [
-            item
-            for item in signals
-            if needle in str(item.get("symbol") or "").upper()
-            or needle in " ".join(str(x) for x in (item.get("features") or {}).get("reasons", [])).upper()
-        ]
-    if not signals:
-        st.info("No hay estudios para los filtros seleccionados.")
-        return
-
-    summary_rows = _company_study_symbol_summary(signals)
-    m1, m2, m3, m4 = st.columns(4)
-    with m1:
-        _metric_card("Empresas", len(summary_rows))
-    with m2:
-        _metric_card("Iteraciones", len(signals))
-    with m3:
-        _metric_card("Fuentes", len({item.get("source") for item in signals}))
-    with m4:
-        _metric_card("Ultima fecha", summary_rows[0].get("ultima_fecha") if summary_rows else "-")
-
-    st.subheader("Empresas")
-    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
-
-    global_filters = {
-        "since_date": since,
-        "sources": selected_sources,
-        "search": search,
-        "signal_rows_loaded": len(signals),
-    }
-    if st.checkbox("Preparar descarga global de todas las empresas", value=False, key="company_studies_prepare_global_export"):
-        with st.spinner("Preparando JSON global para deepresearch..."):
-            global_context = _company_study_decision_context(store, signals)
-            global_news_by_symbol = _company_study_news_by_symbol(settings.data_dir / "reports")
-            global_payload = _company_study_global_export_payload(
-                signals=signals,
-                context=global_context,
-                news_by_symbol=global_news_by_symbol,
-                filters=global_filters,
-            )
-        st.download_button(
-            "Descargar informe completo global JSON",
-            data=_json(global_payload),
-            file_name=f"estudios_todas_empresas_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json",
-            mime="application/json",
-            use_container_width=True,
-        )
-
-    symbols = [row["simbolo"] for row in summary_rows]
-    selected_symbol = st.selectbox("Empresa", symbols, key="company_studies_symbol")
-    symbol_signals = _company_study_signal_rows(
-        store,
-        since_date=since,
-        sources=selected_sources,
-        symbol=selected_symbol,
-        limit=detail_limit,
-    )
-    if not symbol_signals:
-        st.info("No hay iteraciones para la empresa seleccionada.")
-        return
-    context = _company_study_decision_context(store, symbol_signals)
-    approved_count = 0
-    blocked_count = 0
-    reasons_by_signal = []
-    for sig in symbol_signals:
-        reason = _company_study_reason(
-            sig,
-            context["learning_by_signal"],
-            context["recommendations_by_cycle_symbol"],
-            context["plans_by_cycle_symbol"],
-        )
-        reasons_by_signal.append(reason)
-        if reason["tone"] == "good":
-            approved_count += 1
-        if reason["tone"] == "bad":
-            blocked_count += 1
-
-    latest_features = symbol_signals[0].get("features") or {}
-    d1, d2, d3, d4, d5 = st.columns(5)
-    with d1:
-        _compact_metric("Empresa", selected_symbol)
-    with d2:
-        _compact_metric("Iteraciones cargadas", len(symbol_signals))
-    with d3:
-        _compact_metric("Compras/aprobadas", approved_count, tone="good" if approved_count else "neutral")
-    with d4:
-        _compact_metric("Bloqueos", blocked_count, tone="bad" if blocked_count else "neutral")
-    with d5:
-        _compact_metric("Ultimo precio", _money(_study_price(latest_features)))
-
-    symbol_news = _company_study_news_for_symbol(settings.data_dir / "reports", selected_symbol)
-    export_payload = _company_study_export_payload(
-        symbol=selected_symbol,
-        signals=symbol_signals,
-        reasons=reasons_by_signal,
-        symbol_news=symbol_news,
-        filters={
-            "since_date": since,
-            "sources": selected_sources,
-            "detail_limit": detail_limit,
-            "search": search,
-            "scope": "single_company",
-        },
-    )
-    st.download_button(
-        "Descargar informe completo JSON",
-        data=_json(export_payload),
-        file_name=f"estudios_{selected_symbol}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json",
-        mime="application/json",
-        use_container_width=True,
-    )
-
-    st.subheader("Iteraciones")
-    for index, (sig, reason) in enumerate(
-        zip(symbol_signals, reasons_by_signal, strict=False),
-        start=1,
-    ):
-        run_id = str(sig.get("source_run_id") or "")
-        news_items = [item for item in symbol_news if str(item.get("run_id") or "") == run_id]
-        if not news_items:
-            news_items = symbol_news[:1]
-        _render_company_study_iteration(sig, reason, news_items[:3], expanded=index == 1)
 
 
-def page_signals() -> None:
-    settings = _settings()
-    store = _store()
-    _page_header("Senales", "Candidatos, decisiones, puertas de calidad, resultado posterior y razon del LLM.")
-    c1, c2, c3 = st.columns([1.0, 1.0, 1.25])
-    with c1:
-        limit = st.slider("Senales a cargar", 50, 10000, 2000, 50)
-    with c2:
-        since = st.text_input("Desde", DEFAULT_START_DATE)
-    with c3:
-        view_mode = st.selectbox(
-            "Vista",
-            ["Ultima por simbolo", "Solo decisiones relevantes", "Todas las senales"],
-            index=0,
-        )
-    signals = store.signal_outcomes(limit=limit, since_date=since)
-    if not signals:
-        st.info("Todavia no hay senales registradas.")
-        return
-    if st.button("Actualizar resultados posteriores"):
-        with st.spinner("Actualizando outcomes con precios posteriores..."):
-            result = update_signal_outcomes(settings, store, since_date=since)
-        st.success(f"Actualizadas {result.get('updated', 0)} senales de {result.get('signals', 0)}.")
-        if result.get("warnings"):
-            st.warning(result["warnings"])
-        signals = store.signal_outcomes(limit=limit, since_date=since)
-
-    all_sources = sorted({str(item.get("source") or "unknown") for item in signals})
-    all_decisions = sorted({str(item.get("decision") or "unknown") for item in signals})
-    f1, f2 = st.columns(2)
-    with f1:
-        selected_sources = st.multiselect("Fuentes", all_sources, default=all_sources)
-    with f2:
-        selected_decisions = st.multiselect("Decisiones", all_decisions, default=all_decisions)
-
-    filtered = [
-        item
-        for item in signals
-        if str(item.get("source") or "unknown") in selected_sources
-        and str(item.get("decision") or "unknown") in selected_decisions
-    ]
-    if view_mode == "Ultima por simbolo":
-        visible = _latest_signal_per_symbol(filtered)
-    elif view_mode == "Solo decisiones relevantes":
-        visible = [
-            item
-            for item in filtered
-            if item.get("decision") not in {"candidate"}
-            or item.get("source") not in {"intraday_scan", "closed_market_study"}
-        ]
-    else:
-        visible = filtered
-
-    pending = sum(1 for item in visible if _signal_outcome_status(item.get("outcome") or {}).startswith("pendiente"))
-    with_data = sum(1 for item in visible if (item.get("outcome") or {}).get("available") is True)
-    llm_rows = sum(1 for item in visible if ((item.get("gate") or {}).get("llm") or {}).get("reason"))
-    m1, m2, m3, m4 = st.columns(4)
-    with m1:
-        _metric_card("Mostradas", len(visible))
-    with m2:
-        _metric_card("Simbolos", len({item.get("symbol") for item in visible}))
-    with m3:
-        _metric_card("Con resultado", with_data)
-    with m4:
-        _metric_card("Con LLM", llm_rows)
-
-    if pending or len(visible) != len(filtered):
-        st.caption(
-            "Nota: las senales intradia son candidatos tecnicos repetidos por cada escaneo. "
-            "La vista recomendada muestra solo la ultima por simbolo; los retornos futuros quedan pendientes hasta tener barras posteriores."
-        )
-
-    if not visible:
-        st.info("No hay senales para los filtros seleccionados.")
-        return
-
-    df = _signals_dataframe(visible)
-    st.dataframe(df, use_container_width=True, hide_index=True)
-
-    selected = st.selectbox(
-        "Detalle de senal",
-        [
-            f"{item['signal_date']} { _local_time(item.get('created_at')) } | {item['symbol']} | {item['decision']} | {item.get('source')}"
-            for item in visible
-        ],
-    )
-    if selected:
-        labels = [
-            f"{item['signal_date']} { _local_time(item.get('created_at')) } | {item['symbol']} | {item['decision']} | {item.get('source')}"
-            for item in visible
-        ]
-        index = labels.index(selected)
-        st.json(visible[index])
 
 
-def page_breakouts() -> None:
-    settings = _settings()
-    _page_header("Rupturas", "Rupturas confirmadas o inminentes de resistencia, con filtro conservador de riesgo.")
-    _screen_help(
-        "Rupturas",
-        (
-            "Esta pantalla no ejecuta compras. Muestra el ultimo escaneo de resistencias 20/55 sesiones. "
-            "`confirmed_breakout` significa cierre sobre resistencia; `watch_breakout` significa que el precio "
-            "esta cerca pero aun no confirma. Una ruptura solo se marca operable si no esta demasiado extendida, "
-            "tiene riesgo acotado y volumen suficiente."
-        ),
-    )
-    latest_path = settings.data_dir / "reports" / "latest_breakout_scan.json"
-    if not latest_path.exists():
-        st.info("Todavia no hay escaneo de rupturas. Ejecuta breakout-scan o espera al siguiente ciclo de mercado.")
-        st.code(r".\.venv\Scripts\python.exe -m agente_bolsa.main breakout-scan")
-        return
-    try:
-        report = json.loads(latest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        st.error(f"No se pudo leer el ultimo escaneo de rupturas: {exc}")
-        return
-
-    alerts = report.get("alerts", []) or []
-    confirmed = report.get("confirmed", []) or []
-    watch = report.get("watch", []) or []
-    tradable = [item for item in confirmed if item.get("tradable")]
-    blocked = report.get("blocked_or_failed", []) or []
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        _metric_card("Confirmadas", len(confirmed))
-    with c2:
-        _metric_card("Operables", len(tradable))
-    with c3:
-        _metric_card("Vigilancia", len(watch))
-    with c4:
-        _metric_card("Bloqueadas/fallidas", len(blocked))
-    st.caption(
-        f"Ultimo escaneo: {_local_datetime(report.get('as_of'))} | "
-        f"simbolos con datos {report.get('symbols_with_data', 0)}/{report.get('symbols_scanned', 0)}"
-    )
-
-    if st.button("Lanzar escaneo ahora"):
-        with st.spinner("Ejecutando breakout-scan..."):
-            code, output = _run_command(["breakout-scan"], timeout=180)
-        if code == 0:
-            st.success("Escaneo completado.")
-            st.code(output)
-            st.rerun()
-        else:
-            st.error("El escaneo fallo.")
-            st.code(output)
-
-    if not alerts:
-        st.info("No hay rupturas ni precios suficientemente cerca de resistencia en el ultimo escaneo.")
-        return
-
-    rows = []
-    for item in alerts:
-        rows.append(
-            {
-                "simbolo": item.get("symbol"),
-                "estado": item.get("status"),
-                "operable": "si" if item.get("tradable") else "no",
-                "riesgo": item.get("risk_level"),
-                "cierre": item.get("close"),
-                "resistencia": item.get("resistance"),
-                "% ruptura": _pct_signed(item.get("breakout_pct")),
-                "vol_z": item.get("volume_zscore_20"),
-                "RSI": item.get("rsi_14"),
-                "dist SMA20": _pct_signed(item.get("sma20_distance")),
-                "stop": item.get("stop_loss"),
-                "take": item.get("take_profit"),
-                "plan": item.get("entry_style"),
-                "motivos": "; ".join(item.get("reasons", []) or []),
-            }
-        )
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 def page_learning() -> None:
@@ -4746,383 +3862,16 @@ def page_adaptive() -> None:
         st.json(status)
 
 
-def page_operational_learning() -> None:
-    settings = _settings()
-    store = _store()
-    _page_header(
-        "Aprendizaje operativo",
-        "Memoria de operaciones, reglas en shadow mode y aprendizaje que modifica el razonamiento del LLM.",
-    )
-    col_a, col_b = st.columns([1, 1])
-    with col_a:
-        if st.button("Actualizar aprendizaje operativo"):
-            with st.spinner("Sincronizando memoria y evaluando reglas shadow..."):
-                report = build_operational_learning_review(
-                    settings,
-                    store,
-                    settings.data_dir / "reports",
-                    "web",
-                    since_date=DEFAULT_START_DATE,
-                    use_llm=False,
-                )
-            st.success(f"Actualizado. Memorias: {report['summary'].get('trade_memories', 0)}")
-    with col_b:
-        if st.button("Actualizar con LLM"):
-            with st.spinner("Pidiendo revision LLM y reglas candidatas..."):
-                report = build_operational_learning_review(
-                    settings,
-                    store,
-                    settings.data_dir / "reports",
-                    "web_llm",
-                    since_date=DEFAULT_START_DATE,
-                    use_llm=True,
-                )
-            st.success(f"Revision LLM guardada. Reglas nuevas: {len(report.get('llm_rules_created', []))}")
-
-    latest_path = settings.data_dir / "reports" / "latest_operational_learning.json"
-    latest = {}
-    if latest_path.exists():
-        try:
-            latest = json.loads(latest_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            st.warning("latest_operational_learning.json no es JSON valido.")
-
-    rules = store.strategy_rules(limit=300)
-    memories = store.trade_memory(limit=200, since_date=DEFAULT_START_DATE)
-    active = [rule for rule in rules if rule.get("status") == "active"]
-    shadow = [rule for rule in rules if rule.get("status") == "shadow"]
-    rejected = [rule for rule in rules if rule.get("status") == "rejected"]
-    m1, m2, m3, m4 = st.columns(4)
-    with m1:
-        _metric_card("Memorias", len(memories))
-    with m2:
-        _metric_card("Activas", len(active))
-    with m3:
-        _metric_card("Shadow", len(shadow))
-    with m4:
-        _metric_card("Rechazadas", len(rejected))
-
-    st.subheader("Reglas")
-    if rules:
-        rows = []
-        for rule in rules:
-            metrics = rule.get("metrics", {}) or {}
-            rows.append(
-                {
-                    "estado": rule.get("status"),
-                    "regla": rule.get("rule_id"),
-                    "nombre": rule.get("name"),
-                    "efecto": rule.get("effect"),
-                    "casos": metrics.get("cases", 0),
-                    "net_shadow_pl": metrics.get("net_shadow_pl", 0),
-                    "hit_rate": metrics.get("hit_rate"),
-                    "descripcion": rule.get("description"),
-                }
-            )
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    else:
-        st.info("Todavia no hay reglas. Pulsa actualizar aprendizaje operativo.")
-
-    st.subheader("Memoria reciente")
-    if memories:
-        rows = []
-        for item in memories[:80]:
-            thesis = item.get("thesis", {}) or {}
-            features = item.get("features", {}) or {}
-            rows.append(
-                {
-                    "fecha": _local_datetime(item.get("trade_time"), settings.local_timezone),
-                    "simbolo": item.get("symbol"),
-                    "lado": item.get("side"),
-                    "notional": item.get("notional"),
-                    "veredicto": item.get("verdict"),
-                    "P/L": (item.get("outcome") or {}).get("pl"),
-                    "score": features.get("score"),
-                    "rsi": features.get("rsi_14"),
-                    "dist_sma20": features.get("distance_sma20"),
-                    "vol_z": features.get("volume_zscore_20"),
-                    "motivo": _short(thesis.get("reason"), 120),
-                }
-            )
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    else:
-        st.info("Todavia no hay memoria operativa.")
-
-    if latest.get("llm_review"):
-        st.subheader("Ultima opinion LLM")
-        st.json(latest["llm_review"])
-    with st.expander("Informe operativo completo"):
-        st.json(latest or {"available": False})
 
 
-def _local_date(value: Any, timezone_name: str | None = None) -> str | None:
-    parsed = _local_dt(value, timezone_name)
-    return parsed.date().isoformat() if parsed else None
 
 
-def _learning_diary_dates(
-    memories: list[dict[str, Any]],
-    evaluations: list[dict[str, Any]],
-    rules: list[dict[str, Any]],
-) -> list[str]:
-    dates = {
-        date
-        for date in [
-            *[_local_date(item.get("trade_time")) for item in memories],
-            *[_local_date(item.get("created_at")) for item in evaluations],
-            *[_local_date(item.get("updated_at")) for item in rules],
-        ]
-        if date
-    }
-    today = datetime.now(ZoneInfo(_settings().local_timezone)).date().isoformat()
-    dates.add(today)
-    return sorted(dates, reverse=True)
 
 
-def _learning_diary_bullets(
-    *,
-    selected_date: str,
-    day_memories: list[dict[str, Any]],
-    day_evaluations: list[dict[str, Any]],
-    day_rules: list[dict[str, Any]],
-    latest: dict[str, Any],
-) -> list[str]:
-    bullets = []
-    if day_memories:
-        winners = sum(1 for item in day_memories if str(item.get("verdict", "")).startswith("winner"))
-        losers = sum(1 for item in day_memories if str(item.get("verdict", "")).startswith("loser"))
-        pending = sum(1 for item in day_memories if item.get("verdict") == "pending")
-        bullets.append(
-            f"Se revisaron {len(day_memories)} memorias de operaciones del dia: "
-            f"{winners} ganadoras, {losers} perdedoras y {pending} pendientes."
-        )
-    else:
-        bullets.append("No hay nuevas memorias de operaciones para este dia; si no hubo fills nuevos, es normal.")
-    if day_evaluations:
-        would_block = sum(1 for item in day_evaluations if item.get("would_block"))
-        avoided = sum(_num(item.get("avoided_loss")) or 0.0 for item in day_evaluations)
-        missed = sum(_num(item.get("missed_gain")) or 0.0 for item in day_evaluations)
-        bullets.append(
-            f"Se evaluaron {len(day_evaluations)} casos de reglas shadow; "
-            f"{would_block} habrian bloqueado operaciones. Impacto shadow neto: {_money(avoided - missed)}."
-        )
-    else:
-        bullets.append("No se registraron nuevas evaluaciones shadow en esta fecha.")
-    if day_rules:
-        statuses = {}
-        for rule in day_rules:
-            statuses[rule.get("status")] = statuses.get(rule.get("status"), 0) + 1
-        status_text = ", ".join(f"{key}: {value}" for key, value in sorted(statuses.items()))
-        bullets.append(f"Reglas actualizadas en el dia: {len(day_rules)} ({status_text}).")
-    else:
-        bullets.append("No hubo cambios de estado ni recalculo de reglas ese dia.")
-    if latest.get("as_of"):
-        bullets.append(f"Ultimo informe operativo disponible: {_local_datetime(latest.get('as_of'))}.")
-    if selected_date == datetime.now(ZoneInfo(_settings().local_timezone)).date().isoformat() and not day_memories:
-        bullets.append("Hoy puede seguir aprendiendo al cierre o al pulsar actualizar, pero necesita nuevas operaciones o P/L actualizado.")
-    return bullets
 
 
-def page_learning_diary() -> None:
-    settings = _settings()
-    store = _store()
-    _page_header("Diario de aprendizaje", "Resumen diario de lo que el sistema aprendio y que podria cambiar.")
-    _screen_help(
-        "Diario de aprendizaje",
-        """
-Esta pantalla esta pensada para revisarla una vez al dia.
-
-Como interpretarla:
-- **Memorias** son operaciones paper/fills enriquecidos con tesis, indicadores y resultado.
-- **Reglas shadow** son reglas que el sistema prueba sin aplicarlas todavia.
-- **Impacto shadow** estima si una regla habria evitado perdidas o bloqueado ganancias.
-- Si no hay datos de hoy, normalmente significa que no hubo nuevas operaciones o que aun no se ejecuto la revision.
-- Una regla solo deberia activarse cuando acumula evidencia suficiente; mientras tanto queda en `shadow`.
-        """,
-    )
-
-    latest_path = settings.data_dir / "reports" / "latest_operational_learning.json"
-    latest = {}
-    if latest_path.exists():
-        try:
-            latest = json.loads(latest_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            st.warning("latest_operational_learning.json no es JSON valido.")
-
-    memories = store.trade_memory(limit=5000, since_date=DEFAULT_START_DATE)
-    rules = store.strategy_rules(limit=500)
-    evaluations = store.rule_evaluations(limit=5000)
-    dates = _learning_diary_dates(memories, evaluations, rules)
-
-    col_date, col_action = st.columns([1, 1])
-    with col_date:
-        selected_date = st.selectbox("Fecha", dates, index=0 if dates else None)
-    with col_action:
-        if st.button("Actualizar aprendizaje operativo ahora"):
-            with st.spinner("Sincronizando memoria y evaluando reglas..."):
-                latest = build_operational_learning_review(
-                    settings,
-                    store,
-                    settings.data_dir / "reports",
-                    "web_diary",
-                    since_date=DEFAULT_START_DATE,
-                    use_llm=False,
-                )
-            memories = store.trade_memory(limit=5000, since_date=DEFAULT_START_DATE)
-            rules = store.strategy_rules(limit=500)
-            evaluations = store.rule_evaluations(limit=5000)
-            st.success("Diario actualizado.")
-
-    if not dates:
-        st.info("Todavia no hay datos de aprendizaje operativo.")
-        return
-
-    day_memories = [item for item in memories if _local_date(item.get("trade_time"), settings.local_timezone) == selected_date]
-    day_evaluations = [
-        item for item in evaluations if _local_date(item.get("created_at"), settings.local_timezone) == selected_date
-    ]
-    day_rules = [item for item in rules if _local_date(item.get("updated_at"), settings.local_timezone) == selected_date]
-    active = [rule for rule in rules if rule.get("status") == "active"]
-    shadow = [rule for rule in rules if rule.get("status") == "shadow"]
-    rejected = [rule for rule in rules if rule.get("status") == "rejected"]
-
-    m1, m2, m3, m4 = st.columns(4)
-    with m1:
-        _metric_card("Memorias del dia", len(day_memories))
-    with m2:
-        _metric_card("Eval. shadow", len(day_evaluations))
-    with m3:
-        _metric_card("Reglas shadow", len(shadow))
-    with m4:
-        _metric_card("Activas/Rechazadas", f"{len(active)}/{len(rejected)}")
-
-    st.subheader("Aprendido en la fecha")
-    for bullet in _learning_diary_bullets(
-        selected_date=selected_date,
-        day_memories=day_memories,
-        day_evaluations=day_evaluations,
-        day_rules=day_rules,
-        latest=latest,
-    ):
-        st.markdown(f"- {bullet}")
-
-    st.subheader("Cambios o reglas observadas")
-    if day_rules:
-        rows = []
-        for rule in day_rules:
-            metrics = rule.get("metrics", {}) or {}
-            rows.append(
-                {
-                    "estado": rule.get("status"),
-                    "regla": rule.get("name"),
-                    "efecto": rule.get("effect"),
-                    "casos": metrics.get("cases"),
-                    "net_shadow_pl": metrics.get("net_shadow_pl"),
-                    "hit_rate": metrics.get("hit_rate"),
-                    "descripcion": rule.get("description"),
-                }
-            )
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    else:
-        st.info("No se actualizaron reglas en esta fecha.")
-
-    st.subheader("Operaciones usadas para aprender")
-    if day_memories:
-        rows = []
-        for item in day_memories:
-            thesis = item.get("thesis", {}) or {}
-            features = item.get("features", {}) or {}
-            rows.append(
-                {
-                    "hora": _local_time(item.get("trade_time"), settings.local_timezone),
-                    "simbolo": item.get("symbol"),
-                    "lado": item.get("side"),
-                    "notional": item.get("notional"),
-                    "veredicto": item.get("verdict"),
-                    "P/L": (item.get("outcome") or {}).get("pl"),
-                    "score": features.get("score"),
-                    "rsi": features.get("rsi_14"),
-                    "vol_z": features.get("volume_zscore_20"),
-                    "motivo": _short(thesis.get("reason"), 160),
-                }
-            )
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    else:
-        st.info("No hay operaciones nuevas en memoria para la fecha seleccionada.")
-
-    st.subheader("Evaluaciones shadow del dia")
-    if day_evaluations:
-        rows = []
-        for item in day_evaluations:
-            rows.append(
-                {
-                    "hora": _local_time(item.get("created_at"), settings.local_timezone),
-                    "regla": item.get("rule_id"),
-                    "simbolo": item.get("symbol"),
-                    "bloquearia": item.get("would_block"),
-                    "resultado_real": item.get("actual_outcome"),
-                    "evita_perdida": item.get("avoided_loss"),
-                    "pierde_ganancia": item.get("missed_gain"),
-                }
-            )
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    else:
-        st.info("No hubo evaluaciones shadow registradas ese dia.")
-
-    with st.expander("Ultimo informe operativo completo"):
-        st.json(latest or {"available": False})
 
 
-def page_backtest() -> None:
-    settings = _settings()
-    _page_header("Backtest", "Prueba historica de la regla tecnica actual con stop, take, costes y slippage.")
-    with st.form("backtest_form"):
-        col1, col2, col3, col4, col5 = st.columns(5)
-        symbol = col1.text_input("Simbolo", "AAPL").upper()
-        start = col2.text_input("Desde", "2024-01-01")
-        min_score = col3.number_input("Score minimo", min_value=1, max_value=30, value=7)
-        max_holding = col4.number_input("Max dias", min_value=1, max_value=60, value=10)
-        setup_name = col5.selectbox(
-            "Setup",
-            ["todos", "trend_volume", "orderly_breakout", "event_momentum", "momentum_confirmation", "momentum_shakeout_hold", "range_expansion_breakout"],
-        )
-        submitted = st.form_submit_button("Ejecutar backtest")
-    if submitted:
-        with st.spinner(f"Ejecutando backtest de {symbol}..."):
-            result = build_symbol_backtest(
-                symbol=symbol,
-                output_dir=settings.data_dir / "reports",
-                run_id="web",
-                start=start,
-                min_score=int(min_score),
-                max_holding_days=int(max_holding),
-                allowed_setup_names=None if setup_name == "todos" else {setup_name},
-            )
-        metrics = result.get("metrics", {})
-        c1, c2, c3, c4, c5, c6 = st.columns(6)
-        with c1:
-            _metric_card("Trades", metrics.get("trades"))
-        with c2:
-            _metric_card("P/L", _pct(metrics.get("total_return")))
-        with c3:
-            _metric_card("Hit rate", _pct(metrics.get("hit_rate")))
-        with c4:
-            _metric_card("Sharpe", metrics.get("sharpe"))
-        with c5:
-            _metric_card("Sortino", metrics.get("sortino"))
-        with c6:
-            _metric_card("Calmar", metrics.get("calmar"))
-        d1, d2, d3 = st.columns(3)
-        with d1:
-            _metric_card("Expectancy", _money(metrics.get("expectancy_per_trade")))
-        with d2:
-            _metric_card("Turnover", _pct(metrics.get("turnover")))
-        with d3:
-            _metric_card("Exposure time", _pct(metrics.get("exposure_time_pct")))
-        st.json(metrics)
-        trades = pd.DataFrame(result.get("trades", []))
-        if not trades.empty:
-            st.dataframe(trades, use_container_width=True, hide_index=True)
 
 
 def _pre_earnings_history_panel(events: list[dict[str, Any]]) -> None:
@@ -5242,31 +3991,6 @@ def _pre_earnings_prediction_line(row: dict[str, Any]) -> str:
     )
 
 
-def _pre_earnings_official_from_history(
-    item: dict[str, Any],
-    history: dict[str, Any],
-) -> dict[str, Any]:
-    rows = history.get("rows", []) or []
-    official_id = history.get("official_prediction_id")
-    official = next((row for row in rows if row.get("prediction_id") == official_id), None)
-    if official:
-        return official
-    return {
-        "prediction_date": item.get("estimated_on") or item.get("session_date"),
-        "hypothesis": item.get("hypothesis"),
-        "score": item.get("score"),
-        "max_score": item.get("max_score"),
-        "reason": item.get("reason"),
-        "outcome": item.get("outcome") or {},
-        "features": {
-            "pre_earnings_score_v2": item.get("pre_earnings_score_v2"),
-            "score_v2_label": item.get("score_v2_label"),
-            "high_conviction_pre_earnings_long": item.get("high_conviction_pre_earnings_long"),
-            "high_conviction_pre_earnings_reason": item.get("high_conviction_pre_earnings_reason"),
-            "score_v2_components": item.get("score_v2_components"),
-            "score_v2_drivers": item.get("score_v2_drivers"),
-        },
-    }
 
 
 def _pre_earnings_result_label(hypothesis: Any, return_pct: Any, confidence_pct: Any) -> str:
@@ -5285,247 +4009,12 @@ def _pre_earnings_result_label(hypothesis: Any, return_pct: Any, confidence_pct:
         return "pendiente"
 
 
-def _pre_earnings_event_groups(store: Store) -> dict[str, list[dict[str, Any]]]:
-    predictions = store.pre_earnings_predictions(limit=5000)
-    by_event: dict[str, list[dict[str, Any]]] = {}
-    for prediction in predictions:
-        features = prediction.get("features") or {}
-        key = "|".join(
-            [
-                str(prediction.get("symbol") or "").upper(),
-                str(features.get("earnings_date") or prediction.get("earnings_datetime") or "")[:10],
-                str(features.get("earnings_session") or "post-market"),
-            ]
-        )
-        by_event.setdefault(key, []).append(prediction)
-    for event_rows in by_event.values():
-        event_rows.sort(key=lambda row: (str(row.get("prediction_date") or ""), str(row.get("created_at") or "")))
-    return by_event
 
 
-def _pre_earnings_confident_metrics(store: Store) -> dict[str, Any]:
-    resolved_count = 0
-    confident_count = 0
-    hits = 0
-    misses = 0
-    random_count = 0
-    for event_rows in _pre_earnings_event_groups(store).values():
-        resolved = [row for row in event_rows if (row.get("outcome") or {}).get("return_pct") is not None]
-        if not resolved:
-            continue
-        official = resolved[-1]
-        outcome = official.get("outcome") or {}
-        result = _pre_earnings_result_label(
-            official.get("hypothesis"),
-            outcome.get("return_pct"),
-            _score_percent(official.get("score"), official.get("max_score")),
-        )
-        resolved_count += 1
-        if result == "acierto":
-            hits += 1
-            confident_count += 1
-        elif result == "fallo":
-            misses += 1
-            confident_count += 1
-        elif result == "azar":
-            random_count += 1
-    success_rate = (hits / confident_count) if confident_count else None
-    return {
-        "resolved_count": resolved_count,
-        "confident_count": confident_count,
-        "success_rate": success_rate,
-        "hits": hits,
-        "misses": misses,
-        "random_count": random_count,
-    }
 
 
-def _pre_earnings_next_day_block(
-    sessions: list[dict[str, Any]],
-    estimation_history: dict[str, dict[str, Any]],
-) -> None:
-    if not sessions:
-        return
-    session = sessions[0]
-    session_date = str(session.get("session_date") or "-")
-    rows = []
-    details: list[dict[str, Any]] = []
-    for item in session.get("items", []) or []:
-        event_key = _pre_earnings_event_key(item)
-        history = estimation_history.get(event_key, {})
-        official = _pre_earnings_official_from_history(item, history)
-        score = official.get("score")
-        max_score = official.get("max_score")
-        pct = _score_percent(score, max_score)
-        official_features = official.get("features") or {}
-        v2_score = official_features.get("pre_earnings_score_v2") or item.get("pre_earnings_score_v2")
-        v2_label = official_features.get("score_v2_label") or item.get("score_v2_label")
-        timeline_rows = history.get("rows", []) or [official]
-        outcome = item.get("outcome", {}) or official.get("outcome", {}) or {}
-        result_text = _pre_earnings_result_label(official.get("hypothesis"), outcome.get("return_pct"), pct)
-        rows.append(
-            {
-                "simbolo": item.get("symbol"),
-                "earnings": (
-                    f"{item.get('earnings_date') or item.get('session_date')} "
-                    f"{item.get('earnings_session') or 'post-market'} "
-                    f"{item.get('earnings_time') or str(item.get('earnings_datetime') or '')[11:16]}"
-                ),
-                "estimaciones diarias": " -> ".join(_pre_earnings_prediction_line(row) for row in timeline_rows),
-                "valor final": official.get("hypothesis"),
-                "score final": _pre_earnings_score_text(score, max_score),
-                "% final": pct,
-                "valor v2": v2_label,
-                "score v2": v2_score,
-                "fecha final": official.get("prediction_date"),
-                "resultado": result_text,
-            }
-        )
-        details.append({"item": item, "history": history, "official": official, "timeline_rows": timeline_rows})
-
-    st.subheader(f"1. Siguiente dia de earnings ({session_date})")
-    st.caption("Incluye los resultados de hoy post-market y los de la siguiente sesion pre-market.")
-    if not rows:
-        st.info("No hay earnings detectados para el siguiente dia de estimacion.")
-        return
-
-    frame = pd.DataFrame(rows)
-
-    def color_estimation(value: float | None) -> str:
-        if value is None:
-            return ""
-        color = "#047857" if value >= 0.8 else "#b45309" if value >= 0.5 else "#b91c1c"
-        background = "#ecfdf5" if value >= 0.8 else "#fffbeb" if value >= 0.5 else "#fef2f2"
-        return f"color: {color}; background-color: {background}; font-weight: 700;"
-
-    styled = (
-        frame.style.format(
-            {
-                "% final": lambda value: "sin datos" if pd.isna(value) else f"{value:.1%}",
-                "score v2": lambda value: "sin datos" if pd.isna(value) else f"{value:.1f}/100",
-            }
-        )
-        .map(color_estimation, subset=["% final"])
-    )
-    st.dataframe(styled, use_container_width=True, hide_index=True)
-
-    with st.expander("Ver estimaciones diarias por simbolo", expanded=False):
-        for detail in details:
-            item = detail["item"]
-            symbol = str(item.get("symbol") or "")
-            st.markdown(f"**{symbol}**")
-            timeline = []
-            official_id = (detail.get("history") or {}).get("official_prediction_id")
-            for row in detail["timeline_rows"]:
-                pct = _score_percent(row.get("score"), row.get("max_score"))
-                timeline.append(
-                    {
-                        "fecha estimacion": row.get("prediction_date"),
-                        "hipotesis": row.get("hypothesis"),
-                        "score": _pre_earnings_score_text(row.get("score"), row.get("max_score")),
-                        "%": pct,
-                        "valor v2": (row.get("features") or {}).get("score_v2_label"),
-                        "score v2": (row.get("features") or {}).get("pre_earnings_score_v2"),
-                        "final": "si" if row.get("prediction_id") == official_id else "",
-                        "motivo": row.get("reason") or item.get("reason"),
-                    }
-                )
-            st.dataframe(
-                pd.DataFrame(timeline).style.format(
-                    {
-                        "%": lambda value: "sin datos" if pd.isna(value) else f"{value:.1%}",
-                        "score v2": lambda value: "sin datos" if pd.isna(value) else f"{value:.1f}/100",
-                    }
-                ),
-                use_container_width=True,
-                hide_index=True,
-            )
 
 
-def _pre_earnings_previous_events_block(store: Store) -> None:
-    rows_by_date: dict[str, list[dict[str, Any]]] = {}
-    details_by_date: dict[str, list[dict[str, Any]]] = {}
-    for key, event_rows in _pre_earnings_event_groups(store).items():
-        resolved = [row for row in event_rows if (row.get("outcome") or {}).get("return_pct") is not None]
-        if not resolved:
-            continue
-        official = resolved[-1]
-        features = official.get("features") or {}
-        outcome = official.get("outcome") or {}
-        return_pct = outcome.get("return_pct")
-        score_pct = _score_percent(official.get("score"), official.get("max_score"))
-        result_text = _pre_earnings_result_label(official.get("hypothesis"), return_pct, score_pct)
-        timeline = " -> ".join(_pre_earnings_prediction_line(row) for row in event_rows)
-        earnings_date = str(features.get("earnings_date") or str(official.get("earnings_datetime") or "")[:10])
-        row = {
-            "simbolo": official.get("symbol"),
-            "sesion": features.get("earnings_session") or "post-market",
-            "evolucion": timeline,
-            "valor final": official.get("hypothesis"),
-            "score final": _pre_earnings_score_text(official.get("score"), official.get("max_score")),
-            "% final": score_pct,
-            "fecha final": official.get("prediction_date"),
-            "resultado real": _pct_signed(return_pct),
-            "evaluacion": result_text,
-        }
-        detail = {"key": key, "rows": event_rows, "official": official, "outcome": outcome}
-        rows_by_date.setdefault(earnings_date, []).append(row)
-        details_by_date.setdefault(earnings_date, []).append(detail)
-
-    st.subheader("2. Earnings anteriores: evolucion, final y resultado real")
-    if not rows_by_date:
-        st.info("Todavia no hay earnings anteriores resueltos con predicciones guardadas.")
-        return
-
-    def color_result(value: str) -> str:
-        if value == "acierto":
-            return "color: #047857; background-color: #ecfdf5; font-weight: 700;"
-        if value == "fallo":
-            return "color: #b91c1c; background-color: #fef2f2; font-weight: 700;"
-        if value == "azar":
-            return "color: #92400e; background-color: #fffbeb; font-weight: 700;"
-        return "color: #6b7280; background-color: #f9fafb;"
-
-    for earnings_date in sorted(rows_by_date.keys(), reverse=True):
-        date_rows = sorted(
-            rows_by_date[earnings_date],
-            key=lambda item: (
-                -float(item.get("% final") or 0),
-                str(item.get("simbolo") or ""),
-            ),
-        )
-        with st.expander(f"{earnings_date} ({len(date_rows)} simbolos)", expanded=False):
-            frame = pd.DataFrame(date_rows)
-            styled = (
-                frame.style.format({"% final": lambda value: "sin datos" if pd.isna(value) else f"{value:.1%}"})
-                .map(color_result, subset=["evaluacion"])
-            )
-            st.dataframe(styled, use_container_width=True, hide_index=True)
-
-            with st.expander("Detalle de predicciones de este dia", expanded=False):
-                for detail in details_by_date.get(earnings_date, [])[:50]:
-                    official = detail["official"]
-                    st.markdown(f"**{official.get('symbol')}**")
-                    rows_detail = []
-                    official_id = official.get("prediction_id")
-                    for row in detail["rows"]:
-                        rows_detail.append(
-                            {
-                                "fecha estimacion": row.get("prediction_date"),
-                                "hipotesis": row.get("hypothesis"),
-                                "score": _pre_earnings_score_text(row.get("score"), row.get("max_score")),
-                                "%": _score_percent(row.get("score"), row.get("max_score")),
-                                "final": "si" if row.get("prediction_id") == official_id else "",
-                                "motivo": row.get("reason"),
-                            }
-                        )
-                    st.dataframe(
-                        pd.DataFrame(rows_detail).style.format(
-                            {"%": lambda value: "sin datos" if pd.isna(value) else f"{value:.1%}"}
-                        ),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
 
 
 def _pre_earnings_previous_events_block_old(store: Store) -> None:
@@ -5671,100 +4160,16 @@ def _pre_earnings_next_day_block_old(
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
 
-def _pre_earnings_target_session(settings: Any) -> str:
-    calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
-    return target_after_close_session(calendar).isoformat()
 
 
-def _is_stale_pre_earnings_report(report: dict[str, Any], settings: Any) -> bool:
-    session_date = str(report.get("session_date") or "")
-    if not session_date:
-        return True
-    return session_date < _pre_earnings_target_session(settings)
 
 
-def _latest_pre_earnings_report(settings: Any) -> dict[str, Any] | None:
-    files = sorted(
-        [
-            path
-            for path in (settings.data_dir / "reports").glob("pre_earnings_*.json")
-            if not path.name.startswith("pre_earnings_event_study_")
-        ],
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    if not files:
-        return None
-    try:
-        report = json.loads(files[0].read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    report["path"] = str(files[0])
-    return report
 
 
-def _format_pre_earnings_dt(value: str | None, settings: Any) -> str:
-    if not value:
-        return "sin datos"
-    try:
-        parsed = datetime.fromisoformat(str(value))
-    except ValueError:
-        return str(value)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=ZoneInfo(settings.local_timezone))
-    return parsed.astimezone(ZoneInfo(settings.local_timezone)).strftime("%Y-%m-%d %H:%M")
 
 
-def _next_pre_earnings_run_text(settings: Any) -> str:
-    calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
-    now_utc = datetime.now(ZoneInfo("UTC"))
-    minutes = int(settings.pre_earnings_before_close_minutes)
-    calendar_obj = getattr(calendar, "_calendar", None)
-    if calendar_obj is not None:
-        start = now_utc.astimezone(calendar.market_tz).date().isoformat()
-        end = (now_utc.astimezone(calendar.market_tz).date() + pd.Timedelta(days=14)).isoformat()
-        schedule = calendar_obj.schedule(start_date=start, end_date=end)
-        for _, row in schedule.iterrows():
-            close_utc = row["market_close"].to_pydatetime().astimezone(ZoneInfo("UTC"))
-            run_utc = close_utc - pd.Timedelta(minutes=minutes)
-            if run_utc > now_utc:
-                return run_utc.astimezone(ZoneInfo(settings.local_timezone)).strftime("%Y-%m-%d %H:%M")
-
-    status = calendar.status()
-    close_raw = status.market_close or status.next_close
-    if not close_raw:
-        return "sin proxima sesion"
-    try:
-        close_dt = datetime.fromisoformat(close_raw)
-    except ValueError:
-        return "sin datos"
-    run_dt = close_dt - pd.Timedelta(minutes=minutes)
-    return run_dt.astimezone(ZoneInfo(settings.local_timezone)).strftime("%Y-%m-%d %H:%M")
 
 
-def _pre_earnings_top_summary(settings: Any) -> None:
-    latest = _latest_pre_earnings_report(settings)
-    next_run = _next_pre_earnings_run_text(settings)
-    col1, col2 = st.columns(2)
-    with col1:
-        if latest:
-            summary = latest.get("summary", {}) or {}
-            st.metric(
-                "Ultimo analisis pre-earnings",
-                _format_pre_earnings_dt(latest.get("as_of"), settings),
-                f"Sesion {latest.get('session_date') or '-'} | {summary.get('total_events', latest.get('events_found', 0))} eventos",
-            )
-            st.caption(f"Archivo: {latest.get('path')}")
-        else:
-            st.metric("Ultimo analisis pre-earnings", "sin informe")
-            st.caption("Se creara automaticamente cuando llegue la ventana programada.")
-    with col2:
-        st.metric(
-            "Siguiente analisis automatico",
-            next_run,
-            f"{settings.pre_earnings_before_close_minutes} min antes del cierre NYSE",
-        )
-        st.caption("El scheduler lo ejecuta una vez por sesion si esta activo.")
 
 
 def _pre_earnings_resolved_history_block(store: Store) -> None:
@@ -5818,415 +4223,10 @@ def _pre_earnings_resolved_history_block(store: Store) -> None:
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
 
-def _pre_earnings_score_v2_block(settings: Any, store: Store) -> None:
-    with st.expander("Estudio Score V2", expanded=False):
-        st.caption(
-            "Analiza las predicciones pre-earnings guardadas, subidas >5%, falsos positivos y score V2. "
-            "No usa informacion posterior para puntuar eventos futuros."
-        )
-        c1, c2, c3 = st.columns([1, 1, 1])
-        with c1:
-            since = st.text_input("Desde prediccion", "", key="pre_earnings_score_since")
-        with c2:
-            limit = st.number_input(
-                "Limite predicciones",
-                min_value=100,
-                max_value=50000,
-                value=10000,
-                step=100,
-                key="pre_earnings_score_limit",
-            )
-        with c3:
-            run_score = st.button("Calcular Score V2", key="pre_earnings_score_run")
-        if not run_score:
-            st.info("Ejecuta el estudio para ver captura de subidas >5%, falsos positivos y score V2 diario.")
-            return
-
-        with st.spinner("Calculando estudio Score V2..."):
-            study = build_pre_earnings_score_study(
-                store,
-                settings.data_dir / "reports",
-                f"web-score-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
-                since_date=since.strip() or None,
-                limit=int(limit),
-            )
-
-        metrics = study.get("metrics", {}) or {}
-        m1, m2, m3, m4, m5, m6 = st.columns(6)
-        with m1:
-            _metric_card("Eventos resueltos", metrics.get("resolved_events", 0))
-        with m2:
-            _metric_card("Subidas >5%", metrics.get("big_winners_gt_5", 0))
-        with m3:
-            rate = metrics.get("legacy_big_winner_capture_rate")
-            _metric_card("Captura antigua", _pct(rate) if rate is not None else "sin datos")
-        with m4:
-            rate = metrics.get("v2_big_winner_capture_rate")
-            _metric_card("Captura V2", _pct(rate) if rate is not None else "sin datos")
-        with m5:
-            rate = metrics.get("v2_false_positive_rate")
-            _metric_card("FP V2", _pct(rate) if rate is not None else "sin datos")
-        with m6:
-            rate = metrics.get("v2_high_conviction_capture_rate")
-            _metric_card("Alta conviccion", _pct(rate) if rate is not None else "sin datos")
-        st.caption(f"Informe: {study.get('path')}")
-
-        winners = study.get("big_winners", []) or []
-        if winners:
-            rows = [
-                {
-                    "simbolo": item.get("symbol"),
-                    "fecha earnings": item.get("earnings_date"),
-                    "retorno": item.get("return_pct"),
-                    "valor antiguo": item.get("legacy_hypothesis"),
-                    "score antiguo": item.get("legacy_score_pct"),
-                    "valor v2": item.get("final_label_v2"),
-                    "score v2": item.get("final_score_v2"),
-                    "alta conviccion": item.get("high_conviction_pre_earnings_long"),
-                    "accionable": item.get("actionable_pre_earnings_long"),
-                    "fallo/acierto": item.get("classification"),
-                    "diagnostico": item.get("failure_analysis"),
-                }
-                for item in winners
-            ]
-            frame = pd.DataFrame(rows)
-            st.dataframe(
-                frame.style.format(
-                    {
-                        "retorno": lambda value: "sin datos" if pd.isna(value) else f"{value:+.2%}",
-                        "score antiguo": lambda value: "sin datos" if pd.isna(value) else f"{value:.1f}",
-                        "score v2": lambda value: "sin datos" if pd.isna(value) else f"{value:.1f}",
-                    }
-                ),
-                use_container_width=True,
-                hide_index=True,
-            )
-        false_positive = study.get("false_positive_bullish", []) or []
-        blocked_big_winners = study.get("blocked_big_winners", []) or []
-        if blocked_big_winners:
-            with st.expander("Ganadores fuertes vetados por actionable"):
-                st.dataframe(
-                    pd.DataFrame(
-                        [
-                            {
-                                "simbolo": item.get("symbol"),
-                                "fecha earnings": item.get("earnings_date"),
-                                "retorno": item.get("return_pct"),
-                                "valor v2": item.get("final_label_v2"),
-                                "score v2": item.get("final_score_v2"),
-                                "motivo veto": item.get("actionable_pre_earnings_reason"),
-                                "diagnostico": item.get("failure_analysis"),
-                            }
-                            for item in blocked_big_winners
-                        ]
-                    ),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-        if false_positive:
-            with st.expander("Falsos positivos alcistas"):
-                st.dataframe(
-                    pd.DataFrame(
-                        [
-                            {
-                                "simbolo": item.get("symbol"),
-                                "fecha earnings": item.get("earnings_date"),
-                                "retorno": item.get("return_pct"),
-                                "valor antiguo": item.get("legacy_hypothesis"),
-                                "valor v2": item.get("final_label_v2"),
-                                "score v2": item.get("final_score_v2"),
-                                "diagnostico": item.get("failure_analysis"),
-                            }
-                            for item in false_positive
-                        ]
-                    ),
-                    use_container_width=True,
-                    hide_index=True,
-                )
 
 
-def _build_and_store_pre_earnings_report(
-    settings: Any,
-    store: Store,
-    universe_name: str,
-    max_symbols: int,
-    days: int,
-) -> dict[str, Any]:
-    symbols = resolve_study_universe(
-        universe_name,
-        settings.universe,
-        int(max_symbols),
-        settings.data_dir / "cache",
-    )
-    report = build_pre_earnings_report(
-        symbols=symbols,
-        output_dir=settings.data_dir / "reports",
-        run_id=f"web-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
-        calendar_name=settings.market_calendar,
-        local_timezone=settings.local_timezone,
-        session_count=int(days),
-        cache_dir=settings.data_dir / "cache",
-        fmp_api_key=settings.fmp_api_key,
-    )
-    report["tracking_update"] = update_pre_earnings_outcomes(store)
-    report["local_analyst_revisions"] = enrich_report_with_local_analyst_revisions(store, report)
-    report["score_v2_items_updated"] = enrich_report_with_pre_earnings_score_v2(store, report)
-    report["predictions_saved"] = record_pre_earnings_predictions(store, report)
-    report["analyst_snapshots_saved"] = record_pre_earnings_analyst_snapshots(store, report)
-    report["estimates_backfill"] = backfill_pending_pre_earnings_estimates(
-        store,
-        settings.data_dir / "reports",
-        f"{report['run_id']}_backfill",
-        api_key=settings.fmp_api_key,
-    )
-    report["learning_digest"] = build_pre_earnings_learning_digest(
-        store,
-        settings.data_dir / "reports",
-        f"{report['run_id']}_digest",
-    )
-    build_learning_digest_report(store, settings.data_dir / "reports", f"{report['run_id']}_learn_refresh")
-    report["mode"] = (
-        "operativo_pre_earnings" if settings.pre_earnings_trade_enabled else "informativo_no_operativo"
-    )
-    report["operation_allowed"] = settings.pre_earnings_trade_enabled
-    report["trading_operation"] = _run_pre_earnings_trade_operation(
-        settings,
-        store,
-        EventReporter(store, verbose=False),
-        report["run_id"],
-        report,
-    )
-    return report
 
 
-def page_pre_earnings() -> None:
-    settings = _settings()
-    store = _store()
-    tracking_update = update_pre_earnings_outcomes(store)
-    _page_header(
-        "Pre-earnings",
-        "Acciones que presentan resultados en el proximo cierre de mercado. Solo informativo, sin compras.",
-    )
-    _screen_help(
-        "Pre-earnings",
-        (
-            "Esta pantalla es solo informativa: no compra, no crea planes y no envia ordenes.\n\n"
-            "**Controles**\n\n"
-            "- `Universo`: grupo de simbolos a revisar, por ejemplo `sp500_top300`, `default` o `AAPL,MSFT,NVDA`.\n"
-            "- `Max simbolos`: limite de empresas consultadas.\n"
-            "- `Dias`: cuantos dias futuros se calculan, aunque la vista principal muestra el siguiente.\n"
-            "- `Actualizar`: recalcula el informe.\n\n"
-            "**1. Siguiente dia de earnings**\n\n"
-            "Muestra una fila por simbolo. Junta los earnings de hoy `post-market` y los de la siguiente sesion "
-            "`pre-market`, porque ambos se pueden valorar con la informacion disponible antes del cierre. "
-            "`estimaciones diarias` muestra todas las valoraciones guardadas para ese mismo earnings. "
-            "`valor final` es la ultima valoracion guardada antes de la publicacion.\n\n"
-            "**2. Earnings anteriores**\n\n"
-            "Muestra eventos ya resueltos. Para cada simbolo se ve la evolucion de la prediccion, el valor final, "
-            "el retorno real tras el earnings y la evaluacion. Solo cuenta como acierto o fallo si el valor final "
-            "supero el 80%; por debajo se marca como azar."
-        ),
-    )
-    st.warning("Este apartado no genera recomendaciones operativas, planes de orden ni compras paper/live.")
-    _pre_earnings_top_summary(settings)
-    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
-    with col1:
-        universe_name = st.text_input(
-            "Universo",
-            settings.pre_earnings_universe or settings.closed_market_study_universe,
-        )
-    with col2:
-        max_symbols = st.number_input(
-            "Max simbolos",
-            min_value=1,
-            max_value=505,
-            value=int(settings.pre_earnings_max_symbols or settings.closed_market_study_max_symbols),
-        )
-    with col3:
-        days = st.number_input("Dias", min_value=1, max_value=15, value=int(settings.pre_earnings_days))
-    with col4:
-        run = st.button("Actualizar")
-
-    latest_files = sorted(
-        [
-            path
-            for path in (settings.data_dir / "reports").glob("pre_earnings_*.json")
-            if not path.name.startswith("pre_earnings_event_study_")
-        ],
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    report: dict[str, Any] | None = None
-    if run:
-        with st.spinner("Buscando earnings AMC y calculando hipotesis..."):
-            report = _build_and_store_pre_earnings_report(
-                settings,
-                store,
-                universe_name,
-                int(max_symbols),
-                int(days),
-            )
-        st.success("Informe actualizado.")
-    elif latest_files:
-        try:
-            report = json.loads(latest_files[0].read_text(encoding="utf-8"))
-            report["path"] = str(latest_files[0])
-            if _is_stale_pre_earnings_report(report, settings):
-                with st.spinner("El informe pre-earnings estaba caducado. Recalculando automaticamente..."):
-                    report = _build_and_store_pre_earnings_report(
-                        settings,
-                        store,
-                        universe_name,
-                        int(max_symbols),
-                        int(days),
-                    )
-                st.info("Informe pre-earnings recalculado automaticamente.")
-        except (OSError, json.JSONDecodeError):
-            report = None
-
-    if not report:
-        with st.spinner("No habia informe pre-earnings disponible. Creandolo automaticamente..."):
-            report = _build_and_store_pre_earnings_report(
-                settings,
-                store,
-                universe_name,
-                int(max_symbols),
-                int(days),
-            )
-        st.info("Informe pre-earnings creado automaticamente.")
-
-    summary = report.get("summary", {}) or {}
-    total_events = summary.get("total_events", report.get("events_found", 0))
-    tracking = build_pre_earnings_tracking_status(store)
-    confident_metrics = _pre_earnings_confident_metrics(store)
-    success_rate = confident_metrics.get("success_rate")
-    success_value = _pct(success_rate) if success_rate is not None else "sin datos"
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    trading_operation = report.get("trading_operation", {}) or {}
-    with c1:
-        _metric_card("Exito >=80%", success_value)
-    with c2:
-        _metric_card("Aciertos >=80%", confident_metrics.get("hits", 0))
-    with c3:
-        _metric_card("Fallos >=80%", confident_metrics.get("misses", 0))
-    with c4:
-        _metric_card("Azar <80%", confident_metrics.get("random_count", 0))
-    with c5:
-        _metric_card("Eventos", total_events)
-    with c6:
-        operable = "SI" if report.get("operation_allowed") else "NO"
-        if report.get("operation_allowed"):
-            operable = f"SI ({len(trading_operation.get('buy_order_plans', []))})"
-        _metric_card("Operable", operable)
-    st.caption(f"Informe: {report.get('path')}")
-    if report.get("operation_allowed"):
-        st.caption(
-            "Operacion pre-earnings activa: "
-            f"recomendaciones {len(trading_operation.get('recommendations', []))} | "
-            f"planes buy {len(trading_operation.get('buy_order_plans', []))} | "
-            f"enviadas {len(trading_operation.get('submitted', []))}"
-        )
-    quality = report.get("data_quality", {}) or {}
-    if quality:
-        st.caption(
-            "Datos: "
-            f"fuente {quality.get('calendar_source')} | "
-            f"cache {quality.get('cache_hits', 0)} | "
-            f"consultas {quality.get('yfinance_calls', 0)} | "
-            f"errores {quality.get('calendar_errors', 0)}"
-        )
-        if quality.get("analyst_source") != "none":
-            st.caption(
-                "Analistas: "
-                f"fuente {quality.get('analyst_source')} | "
-                f"cache {quality.get('analyst_cache_hits', 0)} | "
-                f"consultas {quality.get('analyst_calls', 0)} | "
-                f"errores {quality.get('analyst_errors', 0)}"
-    )
-    if tracking.get("total_predictions"):
-        st.caption(
-            "Seguimiento persistente: "
-            f"hipotesis guardadas {tracking.get('total_predictions', 0)} | "
-            f"resueltas {tracking.get('resolved_count', 0)} | "
-            f"pendientes {tracking.get('pending_count', 0)} | "
-            f"evaluables >=80% {confident_metrics.get('confident_count', 0)} | "
-            f"azar <80% {confident_metrics.get('random_count', 0)} | "
-            f"exito >=80% {success_value} | "
-            f"actualizadas ahora {tracking_update.get('updated', 0)}"
-        )
-
-    sessions = report.get("sessions") or [
-        {
-            "session_date": report.get("session_date"),
-            "events_found": report.get("events_found", 0),
-            "items": report.get("items", []) or [],
-        }
-    ]
-    estimation_history = build_pre_earnings_estimation_history(store, report)
-    _pre_earnings_next_day_block(sessions, estimation_history)
-    _pre_earnings_previous_events_block(store)
-    _pre_earnings_score_v2_block(settings, store)
-    if report.get("warnings"):
-        with st.expander("Avisos"):
-            st.json(report["warnings"])
-
-    with st.expander("Event-study historico"):
-        st.caption("Analisis historico de hipotesis pre-earnings AMC. Sirve para validar scoring, no para ejecutar compras pasadas.")
-        b1, b2, b3, b4 = st.columns([1, 2, 1, 1])
-        with b1:
-            start = st.text_input("Desde", "2025-01-01", key="pre_earnings_backtest_start")
-        with b2:
-            bt_universe = st.text_input("Universo backtest", universe_name, key="pre_earnings_backtest_universe")
-        with b3:
-            bt_max_symbols = st.number_input(
-                "Max backtest",
-                min_value=1,
-                max_value=505,
-                value=int(max_symbols),
-                key="pre_earnings_backtest_max",
-            )
-        with b4:
-            run_backtest = st.button("Medir", key="pre_earnings_backtest_run")
-        if run_backtest:
-            symbols = resolve_study_universe(
-                bt_universe,
-                settings.universe,
-                int(bt_max_symbols),
-                settings.data_dir / "cache",
-            )
-            with st.spinner("Ejecutando event-study pre-earnings..."):
-                study = build_pre_earnings_event_study(
-                    symbols=symbols,
-                    output_dir=settings.data_dir / "reports",
-                    run_id=f"web-bt-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
-                    start=start,
-                    calendar_name=settings.market_calendar,
-                    local_timezone=settings.local_timezone,
-                    cache_dir=settings.data_dir / "cache",
-                    fmp_api_key=settings.fmp_api_key,
-                )
-            metrics = study.get("metrics", {}) or {}
-            m1, m2, m3, m4, m5 = st.columns(5)
-            with m1:
-                _metric_card("Eventos hist.", metrics.get("events", 0))
-            with m2:
-                _metric_card("Resueltos", metrics.get("resolved", 0))
-            with m3:
-                rate = metrics.get("success_rate")
-                _metric_card("Exito alcista", _pct(rate) if rate is not None else "sin datos")
-            with m4:
-                avg = metrics.get("avg_return")
-                _metric_card("Ret medio", _pct_signed(avg) if avg is not None else "sin datos")
-            with m5:
-                bull_avg = metrics.get("bullish_avg_return")
-                _metric_card("Ret alcista", _pct_signed(bull_avg) if bull_avg is not None else "sin datos")
-            st.caption(f"Informe: {study.get('path')}")
-            by_hypothesis = metrics.get("by_hypothesis", {}) or {}
-            if by_hypothesis:
-                rows = [{"hipotesis": name, **values} for name, values in by_hypothesis.items()]
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-            else:
-                st.info("No hay eventos historicos resueltos para ese filtro.")
 
 
 def _cycle_summaries(store: Store, *, since_date: str, limit: int) -> list[dict[str, Any]]:
@@ -8092,23 +6092,6 @@ def page_continuous_improvement() -> None:
             st.info("No hay informe disponible.")
 
 
-def page_logs() -> None:
-    store = _store()
-    _page_header("Logs", "Eventos recientes sin el ruido de CrewAI ni mensajes minuto a minuto sin actividad.")
-    limit = st.slider("Lineas", 20, 1000, 100, 20)
-    events = store.latest_events(limit)
-    if events:
-        st.dataframe(_events_dataframe(events), use_container_width=True, hide_index=True)
-        with st.expander("Evento bruto"):
-            labels = [
-                f"{_local_datetime(item.get('created_at'))} | {item['agent']} | {item['event_type']}"
-                for item in events
-            ]
-            selected = st.selectbox("Selecciona evento", labels)
-            if selected:
-                st.json(events[labels.index(selected)])
-    else:
-        st.info("No hay eventos.")
 
 
 def page_llm() -> None:
@@ -8133,50 +6116,6 @@ def page_llm() -> None:
     st.dataframe(daily, use_container_width=True, hide_index=True)
 
 
-def page_commands() -> None:
-    _page_header("Comandos", "Lanzar o consultar las mismas acciones disponibles por consola.")
-    status = _schedule_process_status()
-    left, right = st.columns([2, 1])
-    with left:
-        st.subheader("Sistema desatendido")
-        st.code(r".\.venv\Scripts\python.exe -m agente_bolsa.main schedule", language="powershell")
-        st.write(f"Estado desde web: {'corriendo' if status['running'] else 'parado'}")
-        if status.get("pid"):
-            st.write(f"PID: {status['pid']}")
-    with right:
-        if st.button("Iniciar schedule"):
-            result = _start_schedule()
-            st.success(f"Schedule iniciado. PID: {result.get('pid')}")
-        if st.button("Detener schedule iniciado desde web"):
-            result = _stop_schedule()
-            if result.get("stopped"):
-                st.success(f"Schedule detenido. PID: {result.get('pid')}")
-            else:
-                st.info(result.get("reason"))
-
-    st.subheader("Acciones rapidas")
-    command_options = {
-        "Estado general": ["status"],
-        "Broker status": ["broker-status"],
-        "Cartera": ["portfolio-status"],
-        "Historico": ["trade-history", "--json"],
-        "Aprendizaje": ["learning-status", "--update", "--json"],
-        "Adaptativo": ["adaptive-status", "--json"],
-        "Schedule status": ["schedule-status"],
-    }
-    choice = st.selectbox("Comando", list(command_options))
-    if st.button("Ejecutar comando seleccionado"):
-        with st.spinner("Ejecutando..."):
-            code, output = _run_command(command_options[choice])
-        if code == 0:
-            st.success("Comando ejecutado.")
-        else:
-            st.error(f"Fallo con codigo {code}.")
-        st.code(output or "(sin salida)", language="json" if output.strip().startswith("{") else "text")
-
-    st.subheader("Catalogo completo")
-    catalog = pd.DataFrame(available_command_catalog())
-    st.dataframe(catalog, use_container_width=True, hide_index=True)
 
 
 def page_config() -> None:
@@ -8329,24 +6268,13 @@ def main() -> None:
         "Dashboard",
         "Cartera",
         "Compras/Ventas",
-        "Oportunidades",
-        "Estudios",
         "Decisiones",
-        "Rupturas",
-        "Pre-earnings",
-        "Historico",
-        "Senales",
         "Aprendizaje",
-        "Diario aprendizaje",
-        "Aprendizaje operativo",
         "Mejora continua",
         "Adaptativo",
-        "Backtest",
         "LLM",
-        "Logs",
-        "Comandos",
-        "Configuracion",
         "Estado del sistema",
+        "Configuracion",
     ]
     if "selected_page" not in st.session_state or st.session_state.selected_page not in page_names:
         st.session_state.selected_page = "Dashboard"
@@ -8365,24 +6293,13 @@ def main() -> None:
         "Dashboard": page_dashboard,
         "Cartera": page_portfolio,
         "Compras/Ventas": page_recent_trades,
-        "Oportunidades": page_opportunities,
-        "Estudios": page_company_studies,
         "Decisiones": page_cycle_decisions,
-        "Rupturas": page_breakouts,
-        "Pre-earnings": page_pre_earnings,
-        "Historico": page_history,
-        "Senales": page_signals,
         "Aprendizaje": page_learning,
-        "Diario aprendizaje": page_learning_diary,
-        "Aprendizaje operativo": page_operational_learning,
         "Mejora continua": page_continuous_improvement,
         "Adaptativo": page_adaptive,
-        "Backtest": page_backtest,
         "LLM": page_llm,
-        "Logs": page_logs,
-        "Comandos": page_commands,
-        "Configuracion": page_config,
         "Estado del sistema": page_system_status,
+        "Configuracion": page_config,
     }
     _render_refreshable_page(pages[page], refresh_interval_seconds)
 
