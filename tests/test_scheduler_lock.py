@@ -1,7 +1,11 @@
 import json
 
 from agente_bolsa.config import Settings
-from agente_bolsa.scheduler import _acquire_scheduler_lock, _read_scheduler_lock, _release_scheduler_lock
+from agente_bolsa.scheduler import (
+    _acquire_scheduler_lock,
+    _read_scheduler_lock,
+    _release_scheduler_lock,
+)
 
 
 def test_scheduler_lock_prevents_duplicate_running_pid(tmp_path, monkeypatch):

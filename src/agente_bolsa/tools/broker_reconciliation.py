@@ -11,6 +11,7 @@ from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.broker import BrokerClientFactory
 from agente_bolsa.tools.signal_learning import update_signal_outcomes
+
 from .execution_linking import match_learning_observation_for_signal, match_signal_row_for_buy_order
 
 TERMINAL_STATUSES = {

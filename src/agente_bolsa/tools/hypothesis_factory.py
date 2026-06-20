@@ -15,8 +15,9 @@ import hashlib
 import json
 import math
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from ..models import new_id
 
@@ -43,7 +44,7 @@ SURVIVAL_MIN_IMPROVEMENT = 0.10  # 10% sobre la variante vigente
 
 
 def generate_variants(
-    settings: "Settings",
+    settings: Settings,
     *,
     base_params: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
@@ -205,8 +206,8 @@ def run_batch(
 
 
 def run_factory(
-    store: "Store",
-    settings: "Settings",
+    store: Store,
+    settings: Settings,
     *,
     backtester: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     base_params: dict[str, float] | None = None,
@@ -253,7 +254,7 @@ def run_factory(
     }
 
 
-def _persist_survivors(store: "Store", survivors: list[dict[str, Any]], run_date: str) -> list[str]:
+def _persist_survivors(store: Store, survivors: list[dict[str, Any]], run_date: str) -> list[str]:
     inserted: list[str] = []
     for item in survivors:
         params = item["variant"].get("params", {})
@@ -284,7 +285,7 @@ def _persist_survivors(store: "Store", survivors: list[dict[str, Any]], run_date
     return inserted
 
 
-def _default_backtester(settings: "Settings") -> Callable[[dict[str, Any]], dict[str, Any]]:
+def _default_backtester(settings: Settings) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """Backtester real (placeholder defensivo).
 
     El cableado completo a `build_symbol_backtest` sobre el universo cacheado se

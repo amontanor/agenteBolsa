@@ -10,8 +10,9 @@ inyectable para tests.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - solo anotaciones.
     from ..config import Settings
@@ -29,7 +30,7 @@ DEFAULT_THESIS_PROMPT = (
 _VALID_STANCES = {"risk_on", "neutral", "risk_off"}
 
 
-def fetch_macro_events(settings: "Settings") -> dict[str, Any]:
+def fetch_macro_events(settings: Settings) -> dict[str, Any]:
     """Calendario economico, earnings de la semana y titulares generales.
 
     Best-effort: si no hay FMP configurado o falla la red, devuelve listas vacias
@@ -58,8 +59,8 @@ def fetch_macro_events(settings: "Settings") -> dict[str, Any]:
 
 
 def build_market_thesis(
-    store: "Store",
-    settings: "Settings",
+    store: Store,
+    settings: Settings,
     *,
     macro_events: dict[str, Any] | None = None,
     market_state: dict[str, Any] | None = None,
@@ -101,7 +102,7 @@ def build_market_thesis(
     return {"thesis_date": thesis_date, "stance": stance, "confidence": confidence, "payload": payload}
 
 
-def risk_off_buy_factor(settings: "Settings", thesis: dict[str, Any] | None) -> float:
+def risk_off_buy_factor(settings: Settings, thesis: dict[str, Any] | None) -> float:
     """Factor multiplicativo del limite de compras segun la tesis (T3.1)."""
 
     if not thesis:
@@ -114,7 +115,7 @@ def risk_off_buy_factor(settings: "Settings", thesis: dict[str, Any] | None) -> 
     return 1.0
 
 
-def load_latest_thesis(settings: "Settings") -> dict[str, Any] | None:
+def load_latest_thesis(settings: Settings) -> dict[str, Any] | None:
     try:
         from ..storage import Store
 
@@ -149,7 +150,7 @@ def _extract_obj(raw: str) -> dict[str, Any]:
         return {}
 
 
-def _default_llm(settings: "Settings", messages: list[dict[str, str]]) -> str:
+def _default_llm(settings: Settings, messages: list[dict[str, str]]) -> str:
     try:
         from ..llm_router import chat_for_role
 

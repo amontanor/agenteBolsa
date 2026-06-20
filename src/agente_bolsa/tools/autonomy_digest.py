@@ -19,13 +19,13 @@ if TYPE_CHECKING:  # pragma: no cover - solo anotaciones.
 LAB_ENABLED_KEY = "continuous_improvement_enabled"
 
 
-def _llm_cost_today(settings: "Settings") -> float:
+def _llm_cost_today(settings: Settings) -> float:
     from ..llm_usage import today_llm_spend
 
     return today_llm_spend(settings)
 
 
-def collect_autonomy_state(store: "Store", settings: "Settings") -> dict[str, Any]:
+def collect_autonomy_state(store: Store, settings: Settings) -> dict[str, Any]:
     """Reune el estado de autonomia para el dashboard y el digest."""
 
     def _safe(fn, default):
@@ -66,13 +66,13 @@ def collect_autonomy_state(store: "Store", settings: "Settings") -> dict[str, An
     }
 
 
-def _lab_flow(store: "Store") -> dict[str, Any]:
+def _lab_flow(store: Store) -> dict[str, Any]:
     from ..continuous_improvement.lifecycle import flow_report
 
     return flow_report(store)
 
 
-def build_autonomy_digest(store: "Store", settings: "Settings") -> dict[str, Any]:
+def build_autonomy_digest(store: Store, settings: Settings) -> dict[str, Any]:
     """Genera el digest diario de autonomia (markdown) y lo guarda."""
 
     state = collect_autonomy_state(store, settings)
@@ -103,7 +103,7 @@ def build_autonomy_digest(store: "Store", settings: "Settings") -> dict[str, Any
     return {"date": date, "markdown": digest_md, "path": str(path) if path else None, "state": state}
 
 
-def pause_all(store: "Store", settings: "Settings", *, reason: str = "pausa manual desde dashboard") -> dict[str, Any]:
+def pause_all(store: Store, settings: Settings, *, reason: str = "pausa manual desde dashboard") -> dict[str, Any]:
     """Boton rojo: kill switch + congelar laboratorio + cancelar ordenes (T4.2)."""
 
     actions: dict[str, Any] = {}
@@ -123,7 +123,7 @@ def pause_all(store: "Store", settings: "Settings", *, reason: str = "pausa manu
     return {"paused": True, "actions": actions}
 
 
-def resume_all(store: "Store", settings: "Settings") -> dict[str, Any]:
+def resume_all(store: Store, settings: Settings) -> dict[str, Any]:
     actions: dict[str, Any] = {}
     try:
         from .operational_health import clear_persistent_kill_switch
@@ -140,7 +140,7 @@ def resume_all(store: "Store", settings: "Settings") -> dict[str, Any]:
     return {"resumed": True, "actions": actions}
 
 
-def _cancel_open_orders(settings: "Settings") -> int:
+def _cancel_open_orders(settings: Settings) -> int:
     """Cancela ordenes abiertas en el broker (best-effort)."""
 
     try:

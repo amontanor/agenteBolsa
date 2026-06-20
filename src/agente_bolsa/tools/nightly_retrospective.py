@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from ..models import new_id
 
@@ -37,7 +38,7 @@ def _decision(signal: dict[str, Any]) -> str:
     return str(signal.get("decision") or "").lower()
 
 
-def collect_evidence(store: "Store", settings: "Settings", session_date: str) -> dict[str, Any]:
+def collect_evidence(store: Store, settings: Settings, session_date: str) -> dict[str, Any]:
     """Empaqueta perdidas, misses y ganadores no comprados del dia."""
 
     rows = [item for item in store.signal_outcomes(limit=5000, since_date=session_date) if item["signal_date"] == session_date]
@@ -63,7 +64,7 @@ def collect_evidence(store: "Store", settings: "Settings", session_date: str) ->
 
 def generate_hypotheses(
     evidence: dict[str, Any],
-    settings: "Settings",
+    settings: Settings,
     *,
     llm: Callable[[list[dict[str, str]]], str] | None = None,
 ) -> list[dict[str, Any]]:
@@ -95,7 +96,7 @@ def generate_hypotheses(
     return valid
 
 
-def persist_hypotheses(store: "Store", hypotheses: list[dict[str, Any]], session_date: str) -> list[str]:
+def persist_hypotheses(store: Store, hypotheses: list[dict[str, Any]], session_date: str) -> list[str]:
     """Inserta hipotesis (dedup por fingerprint) con prioridad por nº de casos."""
 
     inserted: list[str] = []
@@ -131,8 +132,8 @@ def persist_hypotheses(store: "Store", hypotheses: list[dict[str, Any]], session
 
 
 def run_nightly_retrospective(
-    store: "Store",
-    settings: "Settings",
+    store: Store,
+    settings: Settings,
     session_date: str,
     *,
     llm: Callable[[list[dict[str, str]]], str] | None = None,
@@ -163,7 +164,7 @@ def _extract_obj(raw: str) -> dict[str, Any]:
         return {}
 
 
-def _default_llm(settings: "Settings", messages: list[dict[str, str]]) -> str:
+def _default_llm(settings: Settings, messages: list[dict[str, str]]) -> str:
     try:
         from ..llm_router import chat_for_role
 

@@ -18,7 +18,6 @@ from agente_bolsa.tools.counterfactual_analysis import (
     build_walk_forward_validation_report,
 )
 
-from .sandbox import GitSandbox, GitSandboxError, sandbox_supported
 from .autonomy import (
     ALWAYS_BLOCKED_EXACT,
     ALWAYS_BLOCKED_PREFIXES,
@@ -26,6 +25,7 @@ from .autonomy import (
     ast_import_violation,
     path_violation,
 )
+from .sandbox import GitSandbox, GitSandboxError, sandbox_supported
 
 
 class ExperimentRunner:

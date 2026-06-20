@@ -6,10 +6,14 @@ from types import SimpleNamespace
 
 from agente_bolsa.config import Settings
 from agente_bolsa.continuous_improvement.runtime import ContinuousImprovementLabRuntime
-from agente_bolsa.continuous_improvement.schemas import Diagnosis, LLMImprovementResponse, LLMJsonResult
+from agente_bolsa.continuous_improvement.schemas import (
+    Diagnosis,
+    LLMImprovementResponse,
+    LLMJsonResult,
+)
 from agente_bolsa.scheduler import (
-    _exit_policy_v2_stale_guard_trigger,
     _exit_policy_v2_runtime_trigger,
+    _exit_policy_v2_stale_guard_trigger,
     _exit_policy_v2_time_stop_trigger,
     _job_state_key,
     _selected_candidates,

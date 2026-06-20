@@ -12,7 +12,8 @@ Nucleo stdlib; la llamada al modelo es inyectable para tests.
 from __future__ import annotations
 
 import statistics
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from ..models import new_id
 
@@ -102,8 +103,8 @@ def aggregate_by_setup(outcomes: list[dict[str, Any]]) -> dict[str, dict[str, An
 
 
 def distill_lessons(
-    store: "Store",
-    settings: "Settings",
+    store: Store,
+    settings: Settings,
     *,
     since_date: str | None = None,
     llm: Callable[[list[dict[str, str]]], str] | None = None,
@@ -167,8 +168,8 @@ def distill_lessons(
 
 
 def promote_qualified_lessons(
-    store: "Store",
-    settings: "Settings",
+    store: Store,
+    settings: Settings,
     *,
     base_hit_rate: float = SYSTEM_BASE_HIT_RATE,
 ) -> dict[str, Any]:
@@ -206,8 +207,8 @@ def promote_qualified_lessons(
 
 
 def revalidate_lessons(
-    store: "Store",
-    settings: "Settings",
+    store: Store,
+    settings: Settings,
     *,
     since_date: str | None = None,
 ) -> dict[str, Any]:
@@ -266,7 +267,7 @@ def revalidate_lessons(
     return {"revalidated": True, "transitions": transitions}
 
 
-def relevant_lessons(store: "Store", *, setup: str | None = None, k: int = 5) -> list[dict[str, Any]]:
+def relevant_lessons(store: Store, *, setup: str | None = None, k: int = 5) -> list[dict[str, Any]]:
     """Top-K lecciones ACTIVE, opcionalmente filtradas por setup."""
 
     lessons = store.distilled_lessons(status="ACTIVE", limit=200)
@@ -293,7 +294,7 @@ def _extract_obj(raw: str) -> dict[str, Any]:
         return {}
 
 
-def _default_llm(settings: "Settings", messages: list[dict[str, str]]) -> str:
+def _default_llm(settings: Settings, messages: list[dict[str, str]]) -> str:
     try:
         from ..llm_router import chat_for_role
 

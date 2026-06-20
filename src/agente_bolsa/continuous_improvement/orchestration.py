@@ -15,7 +15,6 @@ from .agents import (
 )
 from .schemas import AgentName, TaskStatus
 
-
 POST_ANALYSIS_INITIATIVE_STATUSES = {
     "EXPERIMENTING",
     "VALIDATING",

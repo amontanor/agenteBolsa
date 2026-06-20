@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from decimal import Decimal, ROUND_DOWN
+from decimal import ROUND_DOWN, Decimal
 
 from agente_bolsa.config import Settings
 from agente_bolsa.models import PortfolioSnapshot, TradeRecommendation

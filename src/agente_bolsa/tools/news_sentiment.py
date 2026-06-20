@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from agente_bolsa.config import Settings
 from agente_bolsa.llm_router import chat_for_role
 from agente_bolsa.llm_usage import record_llm_response
-from .reporting import write_json_report
 
+from .reporting import write_json_report
 
 ProgressCallback = Callable[[int, int, str], None]
 

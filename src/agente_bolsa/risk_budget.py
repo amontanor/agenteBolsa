@@ -32,7 +32,7 @@ class RiskBudget:
     max_correlated_cluster_pct: float = 0.012
 
     @classmethod
-    def from_settings(cls, settings: "Settings") -> "RiskBudget":
+    def from_settings(cls, settings: Settings) -> RiskBudget:
         limits = KernelLimits()
         # El presupuesto jamas excede el suelo del kernel.
         daily = min(
@@ -127,7 +127,7 @@ def _plan_risk_pct(plan: dict[str, Any]) -> tuple[float, str]:
     return 0.0, sector
 
 
-def check_order(store: "Store", settings: "Settings", plan: dict[str, Any]) -> tuple[bool, str]:
+def check_order(store: Store, settings: Settings, plan: dict[str, Any]) -> tuple[bool, str]:
     """Consulta el presupuesto para una compra; si cabe, lo consume."""
 
     if not getattr(settings, "risk_budget_enabled", False):
@@ -143,18 +143,18 @@ def check_order(store: "Store", settings: "Settings", plan: dict[str, Any]) -> t
     return ok, reason
 
 
-def release_position(store: "Store", settings: "Settings", risk_pct: float, sector: str = "unknown") -> None:
+def release_position(store: Store, settings: Settings, risk_pct: float, sector: str = "unknown") -> None:
     state = _ensure_today(store.get_runtime_value(RUNTIME_KEY) or fresh_state())
     store.set_runtime_value(RUNTIME_KEY, release(state, risk_pct, sector))
 
 
-def available_now(store: "Store", settings: "Settings") -> dict[str, Any]:
+def available_now(store: Store, settings: Settings) -> dict[str, Any]:
     budget = RiskBudget.from_settings(settings)
     state = store.get_runtime_value(RUNTIME_KEY) or fresh_state()
     return {"budget": budget.__dict__, **available(budget, state)}
 
 
-def risk_budget_throttle(store: "Store", settings: "Settings", factor: float) -> dict[str, Any]:
+def risk_budget_throttle(store: Store, settings: Settings, factor: float) -> dict[str, Any]:
     """Ajusta el presupuesto persistido por un factor (>1 amplia, <1 recorta).
 
     El resultado se acota a los limites del kernel via `RiskBudget.from_settings`

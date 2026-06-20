@@ -1,4 +1,3 @@
-import json
 from datetime import datetime, timezone
 
 from agente_bolsa.config import Settings

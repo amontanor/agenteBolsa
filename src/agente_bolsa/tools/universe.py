@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import json
-from io import StringIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
+from io import StringIO
 from pathlib import Path
 from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
-
 
 FALLBACK_SP500_LARGE_CAPS = [
     "MSFT", "NVDA", "AAPL", "AMZN", "GOOGL", "GOOG", "META", "AVGO", "TSLA", "BRK-B",

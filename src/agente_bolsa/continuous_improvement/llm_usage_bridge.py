@@ -21,11 +21,11 @@ def _estimated_completion_tokens(raw_response: str | None) -> int:
 
 
 def record_improvement_llm_usage(
-    store: "Store",
-    settings: "Settings",
+    store: Store,
+    settings: Settings,
     *,
     source: str,
-    result: "LLMJsonResult",
+    result: LLMJsonResult,
     role: str = "continuous_improvement",
 ) -> dict[str, int | bool | str | None]:
     """Persist estimated usage for ImprovementLLMClient calls.

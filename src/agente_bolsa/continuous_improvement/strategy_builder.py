@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
-from ..models import new_id
 from .._utils import log_swallow
+from ..models import new_id
 from .repo_context import OUTPUT_CONTRACT, build_repo_context
 
 if TYPE_CHECKING:  # pragma: no cover - solo anotaciones.
@@ -58,8 +59,8 @@ def _has_test_file(file_edits: Any) -> bool:
 class StrategyBuilder:
     def __init__(
         self,
-        store: "Store",
-        settings: "Settings",
+        store: Store,
+        settings: Settings,
         *,
         applier: Any = None,
         llm: Callable[[list[dict[str, str]]], str] | None = None,
@@ -181,8 +182,8 @@ class StrategyBuilder:
 
 
 def build_strategy_from_spec(
-    store: "Store",
-    settings: "Settings",
+    store: Store,
+    settings: Settings,
     spec: dict[str, Any],
     *,
     applier: Any = None,

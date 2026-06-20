@@ -69,8 +69,8 @@ def validate_agent_definition(
 
 
 def create_agent(
-    store: "Store",
-    settings: "Settings",
+    store: Store,
+    settings: Settings,
     definition: dict[str, Any],
     *,
     created_by: str = "DecisionCommitteeAgent",
@@ -110,10 +110,10 @@ class DynamicSpecialistAgent:
         self.output_schema = dict(definition.get("output_schema") or {})
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> "DynamicSpecialistAgent":
+    def from_row(cls, row: dict[str, Any]) -> DynamicSpecialistAgent:
         return cls(row)
 
-    def build_messages(self, settings: "Settings", context: dict[str, Any]) -> list[dict[str, str]]:
+    def build_messages(self, settings: Settings, context: dict[str, Any]) -> list[dict[str, str]]:
         import json
 
         from ..prompt_store import get_prompt
@@ -146,7 +146,7 @@ class DynamicSpecialistAgent:
         return True, "ok"
 
 
-def instantiate_active(store: "Store") -> list[DynamicSpecialistAgent]:
+def instantiate_active(store: Store) -> list[DynamicSpecialistAgent]:
     return [DynamicSpecialistAgent.from_row(row) for row in store.agent_definitions(status="ACTIVE")]
 
 
@@ -161,7 +161,7 @@ def _utility_score(performance: dict[str, Any]) -> float:
 
 
 def score_dynamic_agents(
-    store: "Store",
+    store: Store,
     *,
     min_score: float = DEFAULT_MIN_UTILITY_SCORE,
     min_calls: int = 10,

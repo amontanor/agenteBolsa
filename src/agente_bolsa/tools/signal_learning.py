@@ -16,7 +16,6 @@ from agente_bolsa.storage import Store
 
 from .market_data import download_daily_prices
 
-
 HORIZONS = (1, 3, 5, 10)
 
 
@@ -563,7 +562,10 @@ def _outcome_for_signal(signal: dict[str, Any], frame: pd.DataFrame) -> dict[str
     window_highs = [value for value in highs[:10] if value is not None]
     window_lows = [value for value in lows[:10] if value is not None]
     first_hit = None
-    for index, (date, high, low) in enumerate(zip(dates[:10], highs[:10], lows[:10]), start=1):
+    for index, (date, high, low) in enumerate(
+        zip(dates[:10], highs[:10], lows[:10], strict=False),
+        start=1,
+    ):
         if low is not None and stop is not None and low <= stop:
             first_hit = {"type": "stop_loss", "date": date, "days": index}
             break

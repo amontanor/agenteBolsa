@@ -9,9 +9,8 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
 
-from .config import Settings
 from ._utils import log_swallow
-
+from .config import Settings
 
 LOGGER = logging.getLogger(__name__)
 

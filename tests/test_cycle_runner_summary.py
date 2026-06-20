@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from agente_bolsa.config import Settings
 from agente_bolsa.cycle_runner import (
     _apply_daily_buy_limit,
@@ -5,7 +7,6 @@ from agente_bolsa.cycle_runner import (
     _record_trade_summary,
     _submitted_order_summary,
 )
-from types import SimpleNamespace
 
 
 def test_submitted_order_summary_includes_trade_evidence():

@@ -5,9 +5,9 @@ import builtins
 import pandas as pd
 import pytest
 
+from agente_bolsa.config import Settings
 from agente_bolsa.tools.errors import MarketDataFetchError, MarketDataValidationError
 from agente_bolsa.tools.market_data import download_daily_prices_with_metadata
-from agente_bolsa.config import Settings
 from agente_bolsa.tools.ops_reports import build_market_data_reconciliation_report
 
 

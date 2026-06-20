@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import ast
 import importlib
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from .base import Strategy
 
@@ -70,7 +71,7 @@ def validate_strategy_file(path: Path) -> str | None:
 
 
 def register(
-    store: "Store",
+    store: Store,
     *,
     name: str,
     version: str = "1",
@@ -122,7 +123,7 @@ def _load_registered_strategy(row: dict[str, Any]) -> Strategy | None:
     return strategy
 
 
-def discover(store: "Store | None") -> list[Strategy]:
+def discover(store: Store | None) -> list[Strategy]:
     """Lista de estrategias instanciadas (ACTIVE + SHADOW, sin RETIRED)."""
 
     rows_by_name: dict[str, dict[str, Any]] = {}
@@ -162,7 +163,7 @@ def discover(store: "Store | None") -> list[Strategy]:
     return strategies
 
 
-def discover_active(store: "Store | None") -> list[Strategy]:
+def discover_active(store: Store | None) -> list[Strategy]:
     return [s for s in discover(store) if str(s.status).upper() == "ACTIVE"]
 
 
@@ -175,7 +176,7 @@ def strategy_matches_regime(strategy: Strategy, regime: str | None) -> bool:
     return target == str(regime).lower()
 
 
-def discover_active_for_regime(store: "Store | None", regime: str | None) -> list[Strategy]:
+def discover_active_for_regime(store: Store | None, regime: str | None) -> list[Strategy]:
     """Estrategias ACTIVE cuyo target_regime coincide con el regimen vigente."""
 
     return [s for s in discover_active(store) if strategy_matches_regime(s, regime)]

@@ -5,14 +5,15 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import date, timedelta
-from typing import Any, Callable
+from typing import Any
 
 import pandas as pd
 
+from agente_bolsa._utils import to_float
 from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
-from agente_bolsa._utils import to_float
 
 from .execution_linking import match_signal_row_for_buy_order
 from .market_data import download_daily_prices
@@ -201,7 +202,7 @@ def _metrics(rows: list[dict[str, Any]], benchmark: dict[tuple[str, int], float 
         alpha_values = []
         wins = 0
         matured = 0
-        for row, value in zip(rows, values):
+        for row, value in zip(rows, values, strict=False):
             if value is None:
                 continue
             matured += 1

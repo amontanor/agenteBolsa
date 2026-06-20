@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from agente_bolsa._utils import to_float
 from agente_bolsa.models import TradeRecommendation
 

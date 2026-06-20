@@ -31,16 +31,16 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from ..logging_utils import log_system_event
 from .._utils import log_swallow
-
-
-LOGGER = logging.getLogger(__name__)
+from ..logging_utils import log_system_event
 from .agents import is_generated_ci_reference
 
 if TYPE_CHECKING:  # pragma: no cover - solo anotaciones.
     from ..config import Settings
     from ..storage import Store
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 NON_TERMINAL_TASK_STATUSES = [
@@ -102,7 +102,7 @@ def _age_hours(value: Any) -> float | None:
     return (datetime.now(timezone.utc) - moment).total_seconds() / 3600.0
 
 
-def sweep_stale_tasks(store: "Store", settings: "Settings") -> dict[str, Any]:
+def sweep_stale_tasks(store: Store, settings: Settings) -> dict[str, Any]:
     """Cancela tareas no terminales vencidas y sus dependientes huerfanos."""
 
     ttl_hours = float(getattr(settings, "ci_task_ttl_hours", 48.0))
@@ -145,7 +145,7 @@ def sweep_stale_tasks(store: "Store", settings: "Settings") -> dict[str, Any]:
     return {"expired": expired, "cancelled_dependents": cancelled_dependents}
 
 
-def _open_tasks_by_initiative(store: "Store") -> dict[str, int]:
+def _open_tasks_by_initiative(store: Store) -> dict[str, int]:
     counts: dict[str, int] = {}
     for task in store.continuous_improvement_tasks(statuses=NON_TERMINAL_TASK_STATUSES, limit=2000):
         initiative_id = str((task.get("payload") or {}).get("initiative_id") or "")
@@ -215,7 +215,7 @@ def _is_validation_backlog_churn(initiative: dict[str, Any]) -> bool:
 
 
 def _reject_linked_pending_proposals(
-    store: "Store",
+    store: Store,
     initiative: dict[str, Any],
     *,
     reason: str,
@@ -250,7 +250,7 @@ def _reject_linked_pending_proposals(
     return rejected
 
 
-def _proposal_status_by_id(store: "Store") -> dict[str, str]:
+def _proposal_status_by_id(store: Store) -> dict[str, str]:
     return {
         str(proposal["proposal_id"]): str(proposal.get("status") or "").upper()
         for proposal in store.continuous_improvement_proposals(limit=10000)
@@ -273,7 +273,7 @@ def _ready_linked_proposal_ids(initiative: dict[str, Any], proposal_status_by_id
     return ready
 
 
-def resolve_initiatives(store: "Store", settings: "Settings") -> dict[str, Any]:
+def resolve_initiatives(store: Store, settings: Settings) -> dict[str, Any]:
     """Cierra iniciativas monitorizadas sin movimiento y expira las estancadas."""
 
     ttl_days = float(getattr(settings, "ci_initiative_ttl_days", 5.0))
@@ -497,7 +497,7 @@ def resolve_initiatives(store: "Store", settings: "Settings") -> dict[str, Any]:
     return {"closed": closed, "expired": expired, "advanced": advanced}
 
 
-def flow_report(store: "Store") -> dict[str, Any]:
+def flow_report(store: Store) -> dict[str, Any]:
     """WIP, edades y throughput del laboratorio: la salud del flujo en numeros."""
 
     initiatives = store.continuous_improvement_initiatives(limit=1000)
@@ -526,7 +526,7 @@ def flow_report(store: "Store") -> dict[str, Any]:
     }
 
 
-def run_lifecycle(store: "Store", settings: "Settings") -> dict[str, Any]:
+def run_lifecycle(store: Store, settings: Settings) -> dict[str, Any]:
     """Tick completo de ciclo de vida; idempotente y barato. Se llama por ciclo."""
 
     swept = sweep_stale_tasks(store, settings)

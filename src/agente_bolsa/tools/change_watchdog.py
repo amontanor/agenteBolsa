@@ -56,7 +56,7 @@ def _trades_in_window(rows: list[dict[str, Any]]) -> int:
     return total
 
 
-def evaluate_applied_changes(store: "Store", settings: "Settings") -> list[dict[str, Any]]:
+def evaluate_applied_changes(store: Store, settings: Settings) -> list[dict[str, Any]]:
     """Evalua los cambios APPLIED recientes y marca los daninos como ROLLBACK_REQUESTED.
 
     Devuelve una lista de decisiones (incluye los que esperan y los que se
@@ -158,7 +158,7 @@ def evaluate_applied_changes(store: "Store", settings: "Settings") -> list[dict[
     return decisions
 
 
-def execute_rollbacks(store: "Store", settings: "Settings") -> list[dict[str, Any]]:
+def execute_rollbacks(store: Store, settings: Settings) -> list[dict[str, Any]]:
     """Revierte los cambios marcados ROLLBACK_REQUESTED (mas reciente primero)."""
 
     from ..continuous_improvement.experiments import AutoApplyCodeAgent
@@ -192,7 +192,7 @@ def execute_rollbacks(store: "Store", settings: "Settings") -> list[dict[str, An
     return results
 
 
-def run_change_watchdog(store: "Store", settings: "Settings") -> dict[str, Any]:
+def run_change_watchdog(store: Store, settings: Settings) -> dict[str, Any]:
     """Punto de entrada del scheduler: evalua y luego ejecuta rollbacks."""
 
     if not getattr(settings, "change_watchdog_enabled", True):

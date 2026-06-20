@@ -12,7 +12,6 @@ from agente_bolsa.storage import Store
 
 from .signal_learning import build_learning_status
 
-
 ADAPTIVE_PARAMETERS = {
     "ENTRY_QUALITY_MIN_SCORE": {
         "settings_attr": "entry_quality_min_score",

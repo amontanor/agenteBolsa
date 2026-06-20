@@ -16,7 +16,7 @@ momentum, extension respecto a la SMA20 y confirmacion de volumen.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from agente_bolsa._utils import to_float

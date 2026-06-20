@@ -51,7 +51,7 @@ def _autonomous_metrics(settings: Settings, store: Store) -> dict[str, Any]:
     rolled = sum(
         1
         for c in applied
-        if c.get("status") == "ROLLED_BACK" and str(((c.get("decision") or {}).get("rollback_actor"))) == "change_watchdog"
+        if c.get("status") == "ROLLED_BACK" and str((c.get("decision") or {}).get("rollback_actor")) == "change_watchdog"
     )
     total_changes = applied_n + rolled
     rollback_ratio = (rolled / total_changes) if total_changes else 0.0

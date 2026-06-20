@@ -70,7 +70,7 @@ def _read(path: Path, *, limit: int) -> str:
 
 
 def build_repo_context(
-    settings: "Settings",
+    settings: Settings,
     targets: list[str] | None = None,
     *,
     char_budget: int = 16000,

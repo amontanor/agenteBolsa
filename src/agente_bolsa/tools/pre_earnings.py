@@ -20,7 +20,6 @@ from agente_bolsa.models import PortfolioSnapshot, TradeRecommendation
 from .market_data import download_daily_prices
 from .technical_analysis import add_basic_technical_features
 
-
 MARKET_TZ = ZoneInfo("America/New_York")
 BULLISH_HYPOTHESES = {"subida_probable", "neutral_alcista"}
 CALENDAR_CACHE_MAX_AGE_HOURS = 18

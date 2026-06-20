@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-import json
 import time
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
@@ -20,32 +20,34 @@ except ModuleNotFoundError:  # pragma: no cover - exercised by import-only test 
     CronTrigger = None  # type: ignore[assignment]
     IntervalTrigger = None  # type: ignore[assignment]
 
-from .config import Settings
 from ._utils import log_swallow
+from .config import Settings
 from .continuous_improvement.runtime import ContinuousImprovementLabRuntime
 from .cycle_runner import run_observable_cycle
 from .eventing import EventReporter
+from .kernel import kernel_integrity
 from .logging_utils import log_system_event
 from .market_calendar import MarketCalendar
 from .models import new_id
 from .storage import Store
+from .tools.breakout_scanner import build_breakout_scan, merge_breakout_universe
 from .tools.broker import BrokerClientFactory
 from .tools.broker_reconciliation import reconcile_broker_orders
-from .tools.breakout_scanner import build_breakout_scan, merge_breakout_universe
-from .tools.execution import submit_paper_order_plan
 from .tools.daily_learning import build_learning_digest_report, load_daily_learning_context
+from .tools.execution import submit_paper_order_plan
 from .tools.news_sentiment import analyze_news_sentiment_for_candidates
+from .tools.operational_health import (
+    activate_persistent_kill_switch,
+    load_operational_response_context,
+)
 from .tools.opportunities import build_opportunity_snapshot
 from .tools.overnight_learning import (
     build_overnight_learning_heartbeat,
     mark_overnight_session_done,
     should_run_overnight_for_session,
 )
-from .tools.operational_health import (
-    activate_persistent_kill_switch,
-    load_operational_response_context,
-)
-from .kernel import kernel_integrity
+from .tools.performance_baseline import build_daily_performance, fetch_spy_daily_return
+from .tools.post_market_review import build_post_market_review
 from .tools.pre_earnings import (
     backfill_pending_pre_earnings_estimates,
     build_pre_earnings_learning_digest,
@@ -58,14 +60,11 @@ from .tools.pre_earnings import (
     record_pre_earnings_predictions,
     update_pre_earnings_outcomes,
 )
-from .tools.performance_baseline import build_daily_performance, fetch_spy_daily_return
-from .tools.post_market_review import build_post_market_review
 from .tools.retention import cleanup_runtime_data
 from .tools.signal_learning import record_signal_candidates
 from .tools.technical_study import build_closed_market_technical_study
 from .tools.trade_decision import _annotate_technical_context_with_learning
 from .tools.universe import resolve_study_universe
-
 
 LOGGER = logging.getLogger(__name__)
 

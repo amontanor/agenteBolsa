@@ -15,7 +15,6 @@ import pandas as pd
 
 from .errors import MarketDataFetchError, MarketDataValidationError
 
-
 _LAST_DOWNLOAD_METADATA: dict[str, Any] = {}
 MAX_REASONABLE_DAILY_GAP_PCT = 0.60
 

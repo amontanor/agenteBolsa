@@ -37,8 +37,8 @@ except ModuleNotFoundError:  # pragma: no cover - import-only test environments 
 
 from agente_bolsa import __version__
 from agente_bolsa.config import get_settings
-from agente_bolsa.continuous_improvement.runtime import ContinuousImprovementLabRuntime
 from agente_bolsa.continuous_improvement.promotion_readiness import evaluate_promotion_readiness
+from agente_bolsa.continuous_improvement.runtime import ContinuousImprovementLabRuntime
 from agente_bolsa.eventing import EventReporter
 from agente_bolsa.llm_router import primary_llm_endpoint
 from agente_bolsa.market_calendar import MarketCalendar
@@ -49,23 +49,42 @@ from agente_bolsa.tools.adaptive_tuning import adaptive_status, update_adaptive_
 from agente_bolsa.tools.backtest import build_symbol_backtest
 from agente_bolsa.tools.broker import BrokerClientFactory
 from agente_bolsa.tools.command_catalog import available_command_catalog
-from agente_bolsa.tools.daily_learning import build_learning_digest_report, load_daily_learning_context
+from agente_bolsa.tools.daily_learning import (
+    build_learning_digest_report,
+    load_daily_learning_context,
+)
 from agente_bolsa.tools.news_sentiment import fetch_symbol_news
 from agente_bolsa.tools.operational_learning import build_operational_learning_review
-from agente_bolsa.tools.opportunities import build_opportunity_snapshot, opportunity_assessment, opportunity_entry_risk
+from agente_bolsa.tools.opportunities import (
+    build_opportunity_snapshot,
+    opportunity_assessment,
+    opportunity_entry_risk,
+)
 from agente_bolsa.tools.portfolio_insights import (
     latest_analyzed_news as build_latest_analyzed_news,
+)
+from agente_bolsa.tools.portfolio_insights import (
     position_chart_start_date as build_position_chart_start_date,
+)
+from agente_bolsa.tools.portfolio_insights import (
     position_entry_date as build_position_entry_date,
+)
+from agente_bolsa.tools.portfolio_insights import (
     position_evolution_summary as build_position_evolution_summary,
+)
+from agente_bolsa.tools.portfolio_insights import (
     position_first_buy_time as build_position_first_buy_time,
+)
+from agente_bolsa.tools.portfolio_insights import (
     position_price_series as build_position_price_series,
+)
+from agente_bolsa.tools.portfolio_insights import (
     single_symbol_price_frame as build_single_symbol_price_frame,
 )
 from agente_bolsa.tools.pre_earnings import (
     backfill_pending_pre_earnings_estimates,
-    build_pre_earnings_event_study,
     build_pre_earnings_estimation_history,
+    build_pre_earnings_event_study,
     build_pre_earnings_learning_digest,
     build_pre_earnings_report,
     build_pre_earnings_resolved_history,
@@ -82,10 +101,12 @@ from agente_bolsa.tools.profitability_scoreboard import build_profitability_scor
 from agente_bolsa.tools.retention import cleanup_runtime_data
 from agente_bolsa.tools.signal_learning import build_learning_status, update_signal_outcomes
 from agente_bolsa.tools.system_status import build_status, to_html
-from agente_bolsa.tools.trade_decision import build_buy_order_plans, load_latest_technical_candidates
+from agente_bolsa.tools.trade_decision import (
+    build_buy_order_plans,
+    load_latest_technical_candidates,
+)
 from agente_bolsa.tools.trade_history import build_trade_history
 from agente_bolsa.tools.universe import resolve_study_universe
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_START_DATE = "2026-04-01"
@@ -1286,7 +1307,7 @@ def _company_study_export_payload(
     iterations = []
     approved_count = 0
     blocked_count = 0
-    for sig, reason in zip(signals, reasons):
+    for sig, reason in zip(signals, reasons, strict=False):
         run_id = str(sig.get("source_run_id") or "")
         news_items = [item for item in symbol_news if str(item.get("run_id") or "") == run_id]
         if not news_items:
@@ -1798,7 +1819,11 @@ def _portfolio_action_table(rows: list[dict[str, Any]], *, key_prefix: str = "po
     clicked_symbol = None
     sorted_rows = sorted(rows, key=lambda item: abs(_num(item.get("P/L $")) or 0), reverse=True)
     header = st.columns([1.0, 1.25, 1.25, 1.25, 1.0, 1.0])
-    for column, label in zip(header, ["Accion", "Valor", "Precio", "P/L", "Stop", "Take"]):
+    for column, label in zip(
+        header,
+        ["Accion", "Valor", "Precio", "P/L", "Stop", "Take"],
+        strict=False,
+    ):
         column.markdown(f"<div class='portfolio-native-header'>{escape(label)}</div>", unsafe_allow_html=True)
     for item in sorted_rows:
         pl = _num(item.get("P/L $")) or 0.0
@@ -2119,7 +2144,7 @@ def _portfolio_value_series_from_alpaca(
 
     by_date: dict[str, float] = {}
     timezone_name = _settings().local_timezone
-    for raw_ts, raw_equity in zip(timestamps, equities):
+    for raw_ts, raw_equity in zip(timestamps, equities, strict=False):
         equity = _num(raw_equity)
         if equity is None:
             continue
@@ -4424,7 +4449,10 @@ def page_company_studies() -> None:
     )
 
     st.subheader("Iteraciones")
-    for index, (sig, reason) in enumerate(zip(symbol_signals, reasons_by_signal), start=1):
+    for index, (sig, reason) in enumerate(
+        zip(symbol_signals, reasons_by_signal, strict=False),
+        start=1,
+    ):
         run_id = str(sig.get("source_run_id") or "")
         news_items = [item for item in symbol_news if str(item.get("run_id") or "") == run_id]
         if not news_items:

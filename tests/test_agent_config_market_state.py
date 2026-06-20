@@ -3,8 +3,7 @@ import os
 
 from agente_bolsa.agent_config import validate_agent_task_config
 from agente_bolsa.config import Settings
-from agente_bolsa.tools.market_state import build_market_state
-from agente_bolsa.tools.market_state import load_latest_market_state
+from agente_bolsa.tools.market_state import build_market_state, load_latest_market_state
 
 
 def _settings(tmp_path):

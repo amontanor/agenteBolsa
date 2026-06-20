@@ -24,15 +24,15 @@ _CACHE: dict[tuple[str, str], str] = {}
 LOGGER = logging.getLogger(__name__)
 
 
-def _store(settings: "Settings") -> Store:
+def _store(settings: Settings) -> Store:
     return Store(settings.database_path, settings.agent_logs_dir)
 
 
-def _invalidate(settings: "Settings", key: str) -> None:
+def _invalidate(settings: Settings, key: str) -> None:
     _CACHE.pop((str(settings.database_path), key), None)
 
 
-def get_prompt(settings: "Settings", key: str, default: str = "") -> str:
+def get_prompt(settings: Settings, key: str, default: str = "") -> str:
     """Devuelve el template ACTIVE de ``key`` o ``default`` si no hay ninguno."""
 
     cache_key = (str(settings.database_path), key)
@@ -50,7 +50,7 @@ def get_prompt(settings: "Settings", key: str, default: str = "") -> str:
 
 
 def propose(
-    settings: "Settings",
+    settings: Settings,
     key: str,
     template: str,
     *,
@@ -77,14 +77,14 @@ def propose(
     return version
 
 
-def promote(settings: "Settings", key: str, version: int) -> None:
+def promote(settings: Settings, key: str, version: int) -> None:
     """Promueve una version a ACTIVE (retira la ACTIVE previa)."""
 
     _store(settings).set_prompt_status(key, version, "ACTIVE")
     _invalidate(settings, key)
 
 
-def import_prompts(settings: "Settings", prompts: dict[str, str], *, created_by: str = "import") -> dict[str, Any]:
+def import_prompts(settings: Settings, prompts: dict[str, str], *, created_by: str = "import") -> dict[str, Any]:
     """Carga prompts actuales como version 1 ACTIVE (idempotente)."""
 
     store = _store(settings)
@@ -111,7 +111,7 @@ def import_prompts(settings: "Settings", prompts: dict[str, str], *, created_by:
     return {"imported": imported, "skipped": skipped}
 
 
-def list_prompts(settings: "Settings") -> list[dict[str, Any]]:
+def list_prompts(settings: Settings) -> list[dict[str, Any]]:
     return _store(settings).prompt_versions(limit=500)
 
 

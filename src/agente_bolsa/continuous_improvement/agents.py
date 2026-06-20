@@ -13,22 +13,21 @@ from agente_bolsa.config import Settings
 from agente_bolsa.models import new_id
 from agente_bolsa.storage import Store
 
-from .llm_client import ImprovementLLMClient
 from .context_compaction import compact_ci_context_for_llm
+from .llm_client import ImprovementLLMClient
 from .schemas import (
     AgentName,
     ImprovementProposalPayload,
     LLMJsonResult,
-    ProgrammerAgentResponse,
+    MarketEstimatorResponse,
     ParameterCalibrationResponse,
+    ProgrammerAgentResponse,
+    SentimentAnalystResponse,
     SpecialistResponseBase,
     StrategyEvaluatorResponse,
     TechnicalAnalystResponse,
-    MarketEstimatorResponse,
-    SentimentAnalystResponse,
     specialist_response_json_schema,
 )
-
 
 SPECIALIST_RESPONSE_MODELS = {
     AgentName.MARKET: MarketEstimatorResponse,

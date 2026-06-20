@@ -12,7 +12,6 @@ from typing import Any
 from .logging_utils import AgentHistoryLogger
 from .models import AgentEvent, Hypothesis
 
-
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 
@@ -2488,7 +2487,7 @@ class Store:
                 "SELECT MAX(version) AS v FROM prompt_versions WHERE prompt_key = ?",
                 (prompt_key,),
             ).fetchone()
-        return int((row["v"] or 0)) + 1
+        return int(row["v"] or 0) + 1
 
     def upsert_prompt_version(self, item: dict[str, Any]) -> None:
         now = _utc_iso()
@@ -2967,7 +2966,10 @@ class Store:
         return int(row["count"] or 0)
 
     def create_continuous_improvement_cycle(self, item: dict[str, Any]) -> None:
-        from .continuous_improvement.persistence_compaction import compact_cycle_context, compact_cycle_report
+        from .continuous_improvement.persistence_compaction import (
+            compact_cycle_context,
+            compact_cycle_report,
+        )
 
         now = _utc_iso()
         with self.connect() as conn:
@@ -3002,7 +3004,10 @@ class Store:
             )
 
     def update_continuous_improvement_cycle(self, cycle_id: str, **updates: Any) -> None:
-        from .continuous_improvement.persistence_compaction import compact_cycle_context, compact_cycle_report
+        from .continuous_improvement.persistence_compaction import (
+            compact_cycle_context,
+            compact_cycle_report,
+        )
 
         allowed = {
             "status": "status",

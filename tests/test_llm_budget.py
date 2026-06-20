@@ -62,7 +62,7 @@ def test_no_budget_means_no_limit(tmp_path):
     # Sin presupuesto no se lanza LLMBudgetExhausted (fallara luego por red, no por budget).
     try:
         chat_for_role("deep", settings=settings, messages=[{"role": "user", "content": "x"}])
-    except LLMBudgetExhausted:
-        raise AssertionError("no deberia agotar presupuesto con limite 0")
+    except LLMBudgetExhausted as exc:
+        raise AssertionError("no deberia agotar presupuesto con limite 0") from exc
     except Exception:
         pass  # fallo de red/endpoint es aceptable en el test

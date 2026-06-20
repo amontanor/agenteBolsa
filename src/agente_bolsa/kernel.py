@@ -118,7 +118,7 @@ def _portfolio_exposure(portfolio: Any) -> float | None:
 def kernel_check_order(
     plan: dict[str, Any],
     portfolio: Any,
-    settings: "Settings",
+    settings: Settings,
 ) -> tuple[bool, str]:
     """Ultima validacion antes de enviar una orden al broker.
 
@@ -248,11 +248,11 @@ def _critical_file_hashes() -> dict[str, str | None]:
     return {rel: _sha256_file(root / rel) for rel in _CRITICAL_RELATIVE_FILES}
 
 
-def kernel_manifest_path(settings: "Settings") -> Path:
+def kernel_manifest_path(settings: Settings) -> Path:
     return settings.state_dir / MANIFEST_FILENAME
 
 
-def kernel_seal(settings: "Settings") -> dict[str, Any]:
+def kernel_seal(settings: Settings) -> dict[str, Any]:
     """Regenera el manifest de integridad. Solo se invoca manualmente."""
 
     from datetime import datetime, timezone
@@ -268,7 +268,7 @@ def kernel_seal(settings: "Settings") -> dict[str, Any]:
     return {"path": str(path), **manifest}
 
 
-def kernel_integrity(settings: "Settings") -> dict[str, Any]:
+def kernel_integrity(settings: Settings) -> dict[str, Any]:
     """Calcula los hashes actuales y los compara con el manifest sellado.
 
     Si no existe manifest, devuelve ``status="unsealed"`` sin violaciones (no se

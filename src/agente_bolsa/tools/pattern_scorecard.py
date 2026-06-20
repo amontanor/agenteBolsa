@@ -63,7 +63,7 @@ def _win_rate(signals: list[dict[str, Any]]) -> float | None:
     return sum(1 for s in decided if _is_winner(s)) / len(decided)
 
 
-def build_pattern_scorecard(store: "Store", *, min_occurrences: int = 30) -> dict[str, Any]:
+def build_pattern_scorecard(store: Store, *, min_occurrences: int = 30) -> dict[str, Any]:
     """Calcula y persiste lift por patron sobre outcomes madurados."""
 
     signals = [item for item in store.signal_outcomes(limit=10000) if _is_matured(item)]
@@ -100,8 +100,8 @@ def build_pattern_scorecard(store: "Store", *, min_occurrences: int = 30) -> dic
 
 
 def pattern_weight(
-    store: "Store",
-    settings: "Settings",
+    store: Store,
+    settings: Settings,
     pattern: str,
     base_weight: float,
     *,
@@ -130,7 +130,7 @@ def pattern_weight(
     return max(0.0, min(weight, 2.0 * base_weight))
 
 
-def dynamic_pattern_weights(store: "Store", settings: "Settings", base_weight: float = 1.0) -> dict[str, float]:
+def dynamic_pattern_weights(store: Store, settings: Settings, base_weight: float = 1.0) -> dict[str, float]:
     """Mapa patron -> peso dinamico (para inspeccion/uso por el laboratorio)."""
 
     return {row["pattern"]: pattern_weight(store, settings, row["pattern"], base_weight) for row in store.pattern_stats(limit=1000)}

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 SCHEMA_VERSION = 1
 MAX_REFERENCES = 200
 

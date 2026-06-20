@@ -6,7 +6,7 @@ import json
 import logging
 import math
 from dataclasses import asdict, replace
-from decimal import Decimal, ROUND_DOWN
+from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
 from typing import Any
 
@@ -14,12 +14,21 @@ from agente_bolsa._utils import log_swallow
 from agente_bolsa.config import Settings
 from agente_bolsa.llm_router import chat_for_role
 from agente_bolsa.llm_usage import record_llm_response
-from agente_bolsa.models import OrderPlan, PortfolioSnapshot, RiskDecision, TradeRecommendation, new_id
+from agente_bolsa.models import (
+    OrderPlan,
+    PortfolioSnapshot,
+    RiskDecision,
+    TradeRecommendation,
+    new_id,
+)
 from agente_bolsa.storage import Store
-from agente_bolsa.tools.position_sizing import recommended_notional
 from agente_bolsa.tools.daily_learning import load_daily_learning_context
-from agente_bolsa.tools.operational_health import load_operational_block_context, load_operational_response_context
+from agente_bolsa.tools.operational_health import (
+    load_operational_block_context,
+    load_operational_response_context,
+)
 from agente_bolsa.tools.operational_learning import load_operational_learning_context
+from agente_bolsa.tools.position_sizing import recommended_notional
 from agente_bolsa.tools.post_market_review import load_post_market_learning_context
 from agente_bolsa.tools.research_evidence import (
     build_research_evidence_report,
@@ -27,12 +36,11 @@ from agente_bolsa.tools.research_evidence import (
     load_research_evidence_context,
     research_block_reason,
 )
-
-LOGGER = logging.getLogger(__name__)
 from agente_bolsa.tools.retention import latest_report_path
 from agente_bolsa.tools.risk import OrderProposal, RiskManager
 from agente_bolsa.tools.signal_learning import _indicator_tags
 
+LOGGER = logging.getLogger(__name__)
 
 VALID_ACTIONS = {"buy", "sell", "hold", "reduce", "exit"}
 
@@ -551,8 +559,8 @@ def _lessons_block_for_prompt(settings: Settings, technical_context: dict[str, A
     if not getattr(settings, "lessons_injection_enabled", True):
         return []
     try:
-        from ..continuous_improvement.lesson_distiller import relevant_lessons
         from ..continuous_improvement.context_compaction import truncate_string
+        from ..continuous_improvement.lesson_distiller import relevant_lessons
         from ..storage import Store
 
         store = Store(settings.database_path, settings.agent_logs_dir)

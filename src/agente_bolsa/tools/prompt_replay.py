@@ -9,7 +9,8 @@ violaciones de formato (deben ser 0). El "decider" es inyectable para tests.
 from __future__ import annotations
 
 import statistics
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - solo anotaciones.
     from ..config import Settings
@@ -35,8 +36,8 @@ def _recorded_action(signal: dict[str, Any]) -> str:
 
 
 def replay_decisions(
-    store: "Store",
-    settings: "Settings",
+    store: Store,
+    settings: Settings,
     prompt_key: str,
     candidate_version: int,
     *,
@@ -124,7 +125,7 @@ def evaluate_prompt_promotion(
     return {"promote": promote, "reasons": reasons, "expectancy_sim": expectancy}
 
 
-def _default_decider(settings: "Settings") -> Decider:
+def _default_decider(settings: Settings) -> Decider:
     """Decider real: usa el LLM (rol decision) con el template candidato.
 
     Por defecto es conservador: si no hay LLM disponible, marca la decision como

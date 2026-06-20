@@ -13,7 +13,6 @@ from zoneinfo import ZoneInfo
 from .models import AgentEvent
 from .storage import Store
 
-
 LOGGER = logging.getLogger(__name__)
 
 

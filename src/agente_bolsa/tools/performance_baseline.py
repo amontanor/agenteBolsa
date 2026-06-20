@@ -42,7 +42,7 @@ def _return_pct(signal: dict[str, Any]) -> float | None:
 
 
 def _matured_window(
-    store: "Store",
+    store: Store,
     *,
     window_sessions: int,
     lookback_limit: int = 4000,
@@ -105,7 +105,7 @@ def _max_drawdown(equity_series: list[float]) -> float | None:
     return round(max_dd, 4)
 
 
-def _count_signals(store: "Store", session_date: str) -> dict[str, int]:
+def _count_signals(store: Store, session_date: str) -> dict[str, int]:
     rows = store.signal_outcomes(limit=2000, since_date=session_date)
     same_day = [item for item in rows if item["signal_date"] == session_date]
     buys = sum(1 for item in same_day if str(item.get("decision", "")).lower() in {"buy", "long", "enter"})
@@ -126,8 +126,8 @@ def _avg_exposure(portfolio: Any, equity: float | None) -> float | None:
 
 
 def build_daily_performance(
-    store: "Store",
-    settings: "Settings",
+    store: Store,
+    settings: Settings,
     session_date: str,
     *,
     equity: float | None = None,
@@ -221,7 +221,7 @@ def _normalize_alpha(alpha_values: list[float]) -> float:
     return max(0.0, min(1.0, scaled))
 
 
-def _lab_promotion_quality(store: "Store") -> float:
+def _lab_promotion_quality(store: Store) -> float:
     """Calidad de promociones corregida anti-Goodhart (T5.3).
 
     Una promocion solo SUMA si su ventana post (medida por el watchdog) mejoro
@@ -249,7 +249,7 @@ def _lab_promotion_quality(store: "Store") -> float:
 
 
 def system_iq_score(
-    store: "Store",
+    store: Store,
     *,
     window_days: int = 20,
     extra_today: dict[str, Any] | None = None,
@@ -291,7 +291,7 @@ def system_iq_score(
     return round(score * 100.0, 2)
 
 
-def fetch_spy_daily_return(settings: "Settings", session_date: str) -> float | None:
+def fetch_spy_daily_return(settings: Settings, session_date: str) -> float | None:
     """Retorno diario de SPY para la sesion. Degrada a ``None`` si falla."""
 
     try:

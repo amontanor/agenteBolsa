@@ -2,19 +2,20 @@ import json
 
 import pytest
 
-from agente_bolsa.config import Settings
-from agente_bolsa.config import get_settings
-from agente_bolsa.continuous_improvement.agents import DataCollectorAgent
-from agente_bolsa.continuous_improvement.agents import DecisionCommitteeAgent
-from agente_bolsa.continuous_improvement.agents import ExperimentDesignerAgent
-from agente_bolsa.continuous_improvement.agents import ImprovementStrategistAgent
-from agente_bolsa.continuous_improvement.agents import MarketEstimatorAgent
-from agente_bolsa.continuous_improvement.agents import ParameterCalibrationAgent
-from agente_bolsa.continuous_improvement.agents import ReportAgent
-from agente_bolsa.continuous_improvement.agents import TechnicalEdgeAgent
-from agente_bolsa.continuous_improvement.agents import RiskGuardAgent
-from agente_bolsa.continuous_improvement.agents import ValidationAgent
-from agente_bolsa.continuous_improvement.agents import initiative_topic_key
+from agente_bolsa.config import Settings, get_settings
+from agente_bolsa.continuous_improvement.agents import (
+    DataCollectorAgent,
+    DecisionCommitteeAgent,
+    ExperimentDesignerAgent,
+    ImprovementStrategistAgent,
+    MarketEstimatorAgent,
+    ParameterCalibrationAgent,
+    ReportAgent,
+    RiskGuardAgent,
+    TechnicalEdgeAgent,
+    ValidationAgent,
+    initiative_topic_key,
+)
 from agente_bolsa.continuous_improvement.api import status_payload
 from agente_bolsa.continuous_improvement.experiments import AutoApplyCodeAgent
 from agente_bolsa.continuous_improvement.llm_client import ImprovementLLMClient

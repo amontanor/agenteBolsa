@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import logging
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from agente_bolsa.config import Settings
 from agente_bolsa._utils import log_swallow
+from agente_bolsa.config import Settings
 from agente_bolsa.kernel import kernel_check_order
-from agente_bolsa.tools.operational_health import load_operational_block_context
 from agente_bolsa.tools.broker import BrokerClientFactory
-
+from agente_bolsa.tools.operational_health import load_operational_block_context
 
 LOGGER = logging.getLogger(__name__)
 

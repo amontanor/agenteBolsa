@@ -39,7 +39,7 @@ def build_crew(settings: Settings):
     os.environ.setdefault("OTEL_SDK_DISABLED", "true")
 
     try:
-        from crewai import Agent, Crew, LLM, Process, Task
+        from crewai import LLM, Agent, Crew, Process, Task
     except ImportError as exc:
         raise RuntimeError("Instala dependencias con `pip install -r requirements.txt`.") from exc
 

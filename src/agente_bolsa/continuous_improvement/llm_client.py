@@ -9,8 +9,7 @@ from typing import Any
 from urllib import error, request
 
 from openai import OpenAI
-from pydantic import BaseModel
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from agente_bolsa.config import Settings
 from agente_bolsa.logging_utils import log_system_event
@@ -18,7 +17,6 @@ from agente_bolsa.models import new_id
 
 from .context_compaction import compact_messages_for_token_budget, estimate_json_tokens
 from .schemas import LLMImprovementResponse, LLMJsonResult
-
 
 LOGGER = logging.getLogger(__name__)
 

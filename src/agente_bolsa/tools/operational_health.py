@@ -13,7 +13,6 @@ from agente_bolsa.storage import Store
 
 from .reporting import write_json_report
 
-
 JOB_NAMES = [
     "portfolio_watch",
     "market_cycle",

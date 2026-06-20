@@ -12,8 +12,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only.
 
 
 def curate_lessons(
-    store: "Store",
-    settings: "Settings",
+    store: Store,
+    settings: Settings,
     *,
     since_date: str | None = None,
 ) -> dict[str, Any]:

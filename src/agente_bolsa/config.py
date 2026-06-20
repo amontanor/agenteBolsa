@@ -12,7 +12,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from agente_bolsa._utils import log_swallow
 
-
 LOGGER = logging.getLogger(__name__)
 
 

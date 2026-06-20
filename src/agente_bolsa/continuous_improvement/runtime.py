@@ -9,38 +9,41 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from agente_bolsa.config import Settings
 from agente_bolsa._utils import log_swallow
+from agente_bolsa.config import Settings
 from agente_bolsa.logging_utils import log_system_event
 from agente_bolsa.market_calendar import MarketCalendar
 from agente_bolsa.models import AgentEvent, new_id
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.backtest import build_symbol_backtest
-from agente_bolsa.tools.counterfactual_analysis import build_session_retrospective_report, build_walk_forward_validation_report
+from agente_bolsa.tools.counterfactual_analysis import (
+    build_session_retrospective_report,
+    build_walk_forward_validation_report,
+)
 
 from .agents import (
-    DataCollectorAgent,
+    SPECIALIST_AGENT_CLASSES,
     ChiefInvestmentOrchestratorAgent,
+    DataCollectorAgent,
     PerformanceEvaluatorAgent,
     ReportAgent,
     RiskGuardAgent,
-    SPECIALIST_AGENT_CLASSES,
     ValidationAgent,
+    event_fingerprint,
     initiative_owner_from_key,
     initiative_title_from_key,
     initiative_topic_key,
     is_generated_ci_reference,
-    event_fingerprint,
     proposal_fingerprint,
 )
-
-LOGGER = logging.getLogger(__name__)
+from .experiments import AutoApplyCodeAgent
 from .llm_client import ImprovementLLMClient
 from .llm_usage_bridge import record_improvement_llm_usage
 from .memory import SharedMemory
 from .orchestration import LabOrchestrator
-from .experiments import AutoApplyCodeAgent
 from .schemas import CycleStatus, ImprovementProposalPayload, RuntimeStatus, TaskStatus
+
+LOGGER = logging.getLogger(__name__)
 
 
 class ContinuousImprovementLabRuntime:

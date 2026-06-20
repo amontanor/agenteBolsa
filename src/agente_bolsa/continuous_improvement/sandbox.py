@@ -42,7 +42,7 @@ class GitSandboxError(RuntimeError):
 class GitSandbox:
     """Worktree git aislado para validar y fusionar un cambio autonomo."""
 
-    def __init__(self, settings: "Settings", repo_root: Path | None = None) -> None:
+    def __init__(self, settings: Settings, repo_root: Path | None = None) -> None:
         self.settings = settings
         self.repo_root = Path(repo_root or settings.improvement_workspace_dir).resolve()
         self.change_id: str | None = None
@@ -149,7 +149,7 @@ class GitSandbox:
         return default_validation_steps(self.settings)
 
 
-def default_validation_steps(settings: "Settings") -> list[tuple[str, list[str]]]:
+def default_validation_steps(settings: Settings) -> list[tuple[str, list[str]]]:
     """Pasos de validacion: ruff + pytest (suite completa) + smoke run-once."""
 
     full_suite = bool(getattr(settings, "ci_sandbox_full_suite", True))
@@ -168,7 +168,7 @@ def default_validation_steps(settings: "Settings") -> list[tuple[str, list[str]]
 
 
 def run_validation_steps(
-    settings: "Settings",
+    settings: Settings,
     cwd: Path,
     *,
     steps: list[tuple[str, list[str]]] | None = None,

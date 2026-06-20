@@ -130,8 +130,8 @@ def _evidence_row(
 
 
 def build_research_evidence_report(
-    store: "Store",
-    settings: "Settings",
+    store: Store,
+    settings: Settings,
     reports_dir: Path,
     run_id: str,
     *,

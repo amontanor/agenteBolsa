@@ -5,41 +5,41 @@ import pandas as pd
 
 from agente_bolsa import __version__
 from agente_bolsa.config import Settings
+from agente_bolsa.eventing import _format_time
 from agente_bolsa.llm_usage import usage_tokens
 from agente_bolsa.models import OrderSnapshot, PortfolioSnapshot, PositionSnapshot
 from agente_bolsa.storage import Store
-from agente_bolsa.eventing import _format_time
 from agente_bolsa.web_app import (
     _ci_conversation_groups,
     _ci_global_export_payload,
     _ci_runtime_alert,
     _ci_task_activity,
-    _company_study_news_files,
-    _company_study_news_for_symbol,
+    _company_study_decision_context,
     _company_study_export_payload,
     _company_study_global_export_payload,
-    _company_study_decision_context,
+    _company_study_news_files,
+    _company_study_news_for_symbol,
     _company_study_reason,
     _company_study_signal_rows,
     _company_study_symbol_summary,
     _create_manual_opportunity_plan,
     _estimated_portfolio_value_series,
-    _latest_llm_context_by_symbol,
     _latest_analyzed_news,
     _latest_daily_equity_change,
+    _latest_llm_context_by_symbol,
     _learning_compact_summary,
-    _local_datetime,
     _llm_status_reason,
+    _local_datetime,
     _manual_opportunity_recommendation,
     _next_opportunity_snapshot_run_text,
     _opportunity_candidates,
     _opportunity_risk_plan,
     _opportunity_status,
     _portfolio_chart_visible_summary,
+    _portfolio_value_series_from_alpaca,
     _position_chart_start_date,
     _position_entry_date,
     _position_evolution_summary,
-    _portfolio_value_series_from_alpaca,
     _sidebar_version_label,
     _single_symbol_price_frame,
     _study_price,

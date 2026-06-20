@@ -98,7 +98,7 @@ def clamp_level(level: int) -> int:
     return max(MIN_LEVEL, min(MAX_LEVEL, int(level)))
 
 
-def active_autonomy_level(store: "Store", settings: "Settings") -> int:
+def active_autonomy_level(store: Store, settings: Settings) -> int:
     override = None
     try:
         override = store.get_runtime_value(RUNTIME_LEVEL_KEY)
@@ -164,7 +164,7 @@ def ast_import_violation(before_text: str, after_text: str) -> str | None:
     return None
 
 
-def _recent_watchdog_rollbacks(store: "Store", sessions: int) -> int:
+def _recent_watchdog_rollbacks(store: Store, sessions: int) -> int:
     """Cuenta rollbacks recientes ejecutados por el watchdog (T0.5).
 
     ``continuous_improvement_applied_changes`` ya viene ordenada por
@@ -184,7 +184,7 @@ def _recent_watchdog_rollbacks(store: "Store", sessions: int) -> int:
     return count
 
 
-def _iq_trend_ok(store: "Store") -> bool:
+def _iq_trend_ok(store: Store) -> bool:
     """iq_score medio de las ultimas 10 sesiones >= al de las 10 previas."""
 
     try:
@@ -199,7 +199,7 @@ def _iq_trend_ok(store: "Store") -> bool:
     return (sum(recent) / 10.0) >= (sum(previous) / 10.0)
 
 
-def _applied_in_level(store: "Store", level: int) -> int:
+def _applied_in_level(store: Store, level: int) -> int:
     try:
         changes = store.continuous_improvement_applied_changes(statuses=["APPLIED"], limit=1000)
     except Exception:  # noqa: BLE001
@@ -211,7 +211,7 @@ def _applied_in_level(store: "Store", level: int) -> int:
     )
 
 
-def autonomy_promotion_check(store: "Store", settings: "Settings", *, persist: bool = True) -> dict[str, Any]:
+def autonomy_promotion_check(store: Store, settings: Settings, *, persist: bool = True) -> dict[str, Any]:
     """Sube o baja el nivel de autonomia automaticamente segun el historial.
 
     Sube si: >= AUTONOMY_PROMOTION_MIN_APPLIED cambios APPLIED en el nivel actual,

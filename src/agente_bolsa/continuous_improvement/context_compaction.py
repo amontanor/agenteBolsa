@@ -6,7 +6,6 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
-
 DEFAULT_STRING_LIMIT = 1500
 DEFAULT_ERROR_LIMIT = 3000
 

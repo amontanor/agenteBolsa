@@ -15,7 +15,7 @@ if TYPE_CHECKING:  # pragma: no cover - solo anotaciones.
 
 
 def target_cash_pct(
-    settings: "Settings",
+    settings: Settings,
     *,
     regime: str | None = None,
     stance: str | None = None,

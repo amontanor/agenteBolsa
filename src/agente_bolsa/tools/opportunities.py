@@ -174,7 +174,7 @@ def opportunity_assessment(candidate: dict[str, Any]) -> dict[str, Any]:
     if reward_risk is None:
         reward_risk = opportunity_risk_plan(candidate).get("reward_risk")
     setup_quality = str(candidate.get("setup_quality") or "").lower()
-    breakout_failure_risk = bool(((candidate.get("technical_state", {}) or {}).get("breakout_failure_risk")))
+    breakout_failure_risk = bool((candidate.get("technical_state", {}) or {}).get("breakout_failure_risk"))
     entry_risk = opportunity_entry_risk(candidate)
 
     if entry_risk["level"] == "alto":

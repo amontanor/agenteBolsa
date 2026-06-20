@@ -1,18 +1,19 @@
 import json
 
-from agente_bolsa.tools.signal_learning import (
-    backfill_signal_candidates_from_reports,
-    _outcome_for_signal,
-    _combo_key,
-    _indicator_tags,
-    build_learning_status,
-    record_signal_candidates,
-    update_signal_execution_status,
-    update_signal_decisions,
-)
+import pandas as pd
+
 from agente_bolsa.config import Settings
 from agente_bolsa.models import TradeRecommendation
-import pandas as pd
+from agente_bolsa.tools.signal_learning import (
+    _combo_key,
+    _indicator_tags,
+    _outcome_for_signal,
+    backfill_signal_candidates_from_reports,
+    build_learning_status,
+    record_signal_candidates,
+    update_signal_decisions,
+    update_signal_execution_status,
+)
 
 
 def test_record_signal_candidates_persists_features(tmp_path):

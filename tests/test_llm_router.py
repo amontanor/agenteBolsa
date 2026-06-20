@@ -1,11 +1,11 @@
 from agente_bolsa.config import Settings
 from agente_bolsa.llm_router import (
+    _retry_delay_seconds,
     chat_for_role,
     classify_llm_client_error,
     configured_llm_endpoints,
     is_endpoint_available,
     primary_llm_endpoint,
-    _retry_delay_seconds,
     role_endpoints,
     role_max_tokens,
     select_preferred_endpoint,

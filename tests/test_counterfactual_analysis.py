@@ -1,17 +1,17 @@
 import json
 
 from agente_bolsa.config import Settings
+from agente_bolsa.main import _print_counterfactual_summary, build_parser
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.counterfactual_analysis import (
-    build_fallback_blocker_report,
     build_decision_compare_report,
+    build_fallback_blocker_report,
     build_missed_opportunities_report,
     build_selector_replay_report,
-    build_signal_postmortem_report,
     build_session_retrospective_report,
+    build_signal_postmortem_report,
     build_winner_coverage_report,
 )
-from agente_bolsa.main import _print_counterfactual_summary, build_parser
 
 
 def _save_buy_order(store: Store, *, plan_id: str, cycle_id: str, symbol: str, created_at: str) -> None:

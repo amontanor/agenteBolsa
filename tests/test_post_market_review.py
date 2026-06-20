@@ -1,5 +1,5 @@
-from agente_bolsa.models import PortfolioSnapshot
 from agente_bolsa.main import _post_market_review_text
+from agente_bolsa.models import PortfolioSnapshot
 from agente_bolsa.tools.post_market_review import _learning_candidates, _mandatory_market_review
 
 

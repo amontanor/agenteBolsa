@@ -17,9 +17,8 @@ import statistics
 from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
-from ..models import new_id
 from .._utils import log_swallow
-
+from ..models import new_id
 
 LOGGER = logging.getLogger(__name__)
 
@@ -98,7 +97,7 @@ def _two_proportion_p(wins_a: int, n_a: int, wins_b: int, n_b: int) -> float:
 
 
 class PromotionManager:
-    def __init__(self, store: "Store", settings: "Settings") -> None:
+    def __init__(self, store: Store, settings: Settings) -> None:
         self.store = store
         self.settings = settings
         self.min_sessions = int(getattr(settings, "promotion_min_sessions", 10))

@@ -276,7 +276,7 @@ def build_decision_memory(memories: list[dict[str, Any]]) -> list[dict[str, Any]
         groups[_decision_group_key(memory)].append(memory)
 
     decisions = []
-    for index, (key, items) in enumerate(groups.items()):
+    for _index, (key, items) in enumerate(groups.items()):
         trade_date, symbol, side, group_ref = key
         sorted_items = sorted(items, key=lambda item: str(item.get("trade_time") or ""))
         qty = sum(_num(item.get("qty")) or 0.0 for item in sorted_items)
@@ -308,7 +308,7 @@ def build_decision_memory(memories: list[dict[str, Any]]) -> list[dict[str, Any]
         else:
             verdict = "flat"
 
-        features = dict((sorted_items[-1].get("features") or {}))
+        features = dict(sorted_items[-1].get("features") or {})
         decision = {
             "decision_id": f"td_{_stable_id(trade_date, symbol, side, group_ref)}",
             "memory_id": sorted_items[0].get("memory_id"),

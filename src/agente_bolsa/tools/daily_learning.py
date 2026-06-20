@@ -710,7 +710,7 @@ def _setup_priors(observations: list[dict[str, Any]], horizon: int, *, min_sampl
         clean_returns = [value for value in clean_returns if value is not None]
         if not clean_returns:
             continue
-        setup = _setup_name((matured[0].get("features", {}) or {}))
+        setup = _setup_name(matured[0].get("features", {}) or {})
         base = setup_base.get(setup, {})
         profile_avg = sum(clean_returns) / len(clean_returns)
         setup_avg = _num(base.get("avg_return")) or 0.0

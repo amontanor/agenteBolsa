@@ -3,7 +3,6 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VERSION_FILE = "src/agente_bolsa/__init__.py"
 WATCHED_PREFIXES = ("src/agente_bolsa/", "tests/")

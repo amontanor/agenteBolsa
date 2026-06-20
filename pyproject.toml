@@ -41,6 +41,17 @@ version = {attr = "agente_bolsa.__version__"}
 line-length = 100
 target-version = "py310"
 
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# TODO(audit-D2): activar BLE001/C901 y reducir el baseline E501 por modulo;
+# hoy son avisos de deuda y no deben bloquear CI.
+ignore = ["BLE001", "C901", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# El dashboard degrada imports opcionales de Streamlit/Altair antes de cargar
+# sus modulos internos; reordenarlos cambiaria su comportamiento import-only.
+"src/agente_bolsa/web_app.py" = ["E402"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]

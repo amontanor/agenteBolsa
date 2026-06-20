@@ -884,7 +884,7 @@ def _rank_shadow_replacements(rows: list[dict[str, Any]]) -> list[dict[str, Any]
             key=lambda row: (_shadow_rank_priority(row), row["score"]),
             reverse=True,
         )
-        for executed_row, candidate_row in zip(ordered_executed, ordered_candidates):
+        for executed_row, candidate_row in zip(ordered_executed, ordered_candidates, strict=False):
             candidate_priority = _shadow_rank_priority(candidate_row)
             executed_priority = _shadow_rank_priority(executed_row)
             if candidate_priority <= executed_priority:
@@ -1281,7 +1281,7 @@ def build_walk_forward_validation_report(
             "stable_windows": sum(
                 1
                 for window in windows
-                if (_num(((window.get("test_comparison") or {}).get("delta_net_opportunity"))) or 0.0) >= 0
+                if (_num((window.get("test_comparison") or {}).get("delta_net_opportunity")) or 0.0) >= 0
             ),
         },
     }
@@ -1549,8 +1549,8 @@ def build_winner_coverage_report(
     from .trade_decision import (
         _annotate_candidates_with_top_long_rank,
         _same_session_intraday_context,
-        _selection_eligible,
         _select_deterministic_candidates,
+        _selection_eligible,
         deterministic_trade_fallback_recommendations,
     )
 

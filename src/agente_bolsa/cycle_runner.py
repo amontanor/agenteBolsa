@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import asdict, replace
 import hashlib
 import json
 import logging
+from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -19,23 +19,22 @@ from .logging_utils import log_system_event
 from .market_calendar import MarketCalendar
 from .models import Hypothesis, new_id
 from .storage import Store
-from .tools.backtest import build_symbol_backtest
 from .tools.adversarial_reviewer import review_recommendations_adversarial
+from .tools.backtest import build_symbol_backtest
 from .tools.broker import BrokerClientFactory
 from .tools.costs import TransactionCostModel
+from .tools.deterministic_reviewer import recommendation_input_fingerprint, review_recommendations
 from .tools.execution import submit_paper_order_plan
 from .tools.market_snapshot import build_market_snapshot, compact_snapshot_for_prompt
 from .tools.market_state import build_market_state, compact_market_state_for_prompt
 from .tools.operational_health import load_operational_block_context
 from .tools.portfolio_optimizer import build_portfolio_rebalance_context
-from .tools.signal_learning import update_signal_decisions
-from .tools.signal_learning import update_signal_execution_status
-from .tools.deterministic_reviewer import recommendation_input_fingerprint, review_recommendations
+from .tools.signal_learning import update_signal_decisions, update_signal_execution_status
 from .tools.trade_decision import (
     _compact_technical_context_for_prompt,
     _effective_buy_plan_limit,
-    _effective_trade_recommendation_limit,
     _effective_daily_buy_limit,
+    _effective_trade_recommendation_limit,
     augment_recommendations_with_deterministic_fallback,
     build_order_plans,
     deterministic_trade_fallback_recommendations,
@@ -44,7 +43,6 @@ from .tools.trade_decision import (
     load_latest_technical_candidates,
     request_trade_recommendations,
 )
-
 
 PHASES = [
     AgentPhase(

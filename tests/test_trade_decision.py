@@ -2,32 +2,32 @@ import json
 from pathlib import Path
 
 from agente_bolsa.config import Settings
-from agente_bolsa.storage import Store
 from agente_bolsa.models import PortfolioSnapshot, PositionSnapshot, TradeRecommendation
+from agente_bolsa.storage import Store
+from agente_bolsa.tools.adversarial_reviewer import review_recommendations_adversarial
+from agente_bolsa.tools.deterministic_reviewer import review_recommendations
 from agente_bolsa.tools.trade_decision import (
-    _compact_sentiment_for_prompt,
-    _compact_technical_context_for_prompt,
-    _candidate_learning_features,
-    _candidate_learning_prior,
     _annotate_technical_context_with_learning,
     _build_decision_learning_context,
-    augment_recommendations_with_deterministic_fallback,
-    deterministic_trade_fallback_recommendations,
-    _llm_prompt_payload,
-    _select_deterministic_candidates,
-    _sizing_adjustment_for_recommendation,
+    _candidate_learning_features,
+    _candidate_learning_prior,
+    _compact_sentiment_for_prompt,
+    _compact_technical_context_for_prompt,
     _floor_qty,
     _latest_report,
-    load_latest_technical_candidates,
+    _llm_prompt_payload,
     _prior_profile_key,
     _recommendation_from_dict,
+    _select_deterministic_candidates,
     _selection_score_for_candidate,
+    _sizing_adjustment_for_recommendation,
+    augment_recommendations_with_deterministic_fallback,
     build_order_plans,
+    deterministic_trade_fallback_recommendations,
     filter_entry_quality,
+    load_latest_technical_candidates,
     validate_entry_quality,
 )
-from agente_bolsa.tools.deterministic_reviewer import review_recommendations
-from agente_bolsa.tools.adversarial_reviewer import review_recommendations_adversarial
 
 
 def test_recommendation_normalizes_percent_exposure_to_fraction():

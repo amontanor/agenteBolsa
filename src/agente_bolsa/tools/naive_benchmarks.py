@@ -14,14 +14,15 @@ from __future__ import annotations
 
 import math
 import statistics
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - solo anotaciones.
     from ..config import Settings
 
 
 def compute_daily_benchmarks(
-    settings: "Settings",
+    settings: Settings,
     session_date: str,
     *,
     spy_pct: float | None = None,
@@ -83,12 +84,12 @@ def edge_report(store: Any, sessions: int = 60) -> dict[str, Any]:
 
     diff_spy = [
         p - s
-        for p, s in zip(pnl, spy)
+        for p, s in zip(pnl, spy, strict=False)
         if isinstance(p, (int, float)) and isinstance(s, (int, float))
     ]
     diff_naive = [
         p - n
-        for p, n in zip(pnl, naive)
+        for p, n in zip(pnl, naive, strict=False)
         if isinstance(p, (int, float)) and isinstance(n, (int, float))
     ]
 

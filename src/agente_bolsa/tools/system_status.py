@@ -18,7 +18,6 @@ from typing import Any
 
 from agente_bolsa._utils import log_swallow, parse_iso, sqlite_connect_ro
 
-
 LOGGER = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[3]

@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-
-from agente_bolsa.models import new_id
 
 from .reporting import write_json_report
 
@@ -32,7 +30,7 @@ def _latest_report(path: Path) -> dict[str, Any]:
     }
 
 
-def _latest_llm_age_hours(store: "Store") -> float | None:
+def _latest_llm_age_hours(store: Store) -> float | None:
     rows = store.latest_llm_usage(limit=1)
     if not rows:
         return None
@@ -46,7 +44,7 @@ def _latest_llm_age_hours(store: "Store") -> float | None:
     return round((datetime.now(timezone.utc) - created.astimezone(timezone.utc)).total_seconds() / 3600.0, 3)
 
 
-def _build_snapshot(store: "Store", settings: "Settings") -> dict[str, Any]:
+def _build_snapshot(store: Store, settings: Settings) -> dict[str, Any]:
     reports_dir = settings.data_dir / "reports"
     latest_age = _latest_llm_age_hours(store)
     stale_threshold = float(getattr(settings, "overnight_learning_stale_llm_alert_hours", 24.0))
@@ -122,8 +120,8 @@ def _llm_messages(snapshot: dict[str, Any]) -> list[dict[str, str]]:
 
 
 def build_overnight_learning_heartbeat(
-    store: "Store",
-    settings: "Settings",
+    store: Store,
+    settings: Settings,
     reports_dir: Path,
     run_id: str,
 ) -> dict[str, Any]:
@@ -135,7 +133,9 @@ def build_overnight_learning_heartbeat(
     if snapshot["llm"]["enabled"]:
         try:
             from agente_bolsa.continuous_improvement.llm_client import ImprovementLLMClient
-            from agente_bolsa.continuous_improvement.llm_usage_bridge import record_improvement_llm_usage
+            from agente_bolsa.continuous_improvement.llm_usage_bridge import (
+                record_improvement_llm_usage,
+            )
             from agente_bolsa.continuous_improvement.schemas import llm_response_json_schema
 
             client = ImprovementLLMClient(settings)
@@ -208,11 +208,11 @@ def build_overnight_learning_heartbeat(
     )
 
 
-def should_run_overnight_for_session(store: "Store", session_key: str, *, force: bool = False) -> bool:
+def should_run_overnight_for_session(store: Store, session_key: str, *, force: bool = False) -> bool:
     if force:
         return True
     return store.get_runtime_value("overnight_learning_heartbeat_last_session") != session_key
 
 
-def mark_overnight_session_done(store: "Store", session_key: str) -> None:
+def mark_overnight_session_done(store: Store, session_key: str) -> None:
     store.set_runtime_value("overnight_learning_heartbeat_last_session", session_key)

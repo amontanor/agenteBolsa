@@ -13,7 +13,6 @@ from agente_bolsa.tools.execution_linking import match_signal_row_for_buy_order
 from agente_bolsa.tools.profitability_scoreboard import build_profitability_scoreboard
 from agente_bolsa.tools.signal_learning import _indicator_tags, _setup_key
 
-
 PROMOTION_MIN_MATURED = 20
 PROMOTION_MIN_DAYS = 10
 PROMOTION_MIN_REGIMES = 2

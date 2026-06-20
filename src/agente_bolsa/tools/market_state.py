@@ -16,7 +16,6 @@ from .retention import latest_report_path
 from .technical_analysis import add_basic_technical_features
 from .trade_decision import load_latest_sentiment
 
-
 SECTOR_ETFS = ["XLB", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU", "XLV", "XLY", "XLC"]
 PROMPT_VERSION = "market_state.v2"
 
