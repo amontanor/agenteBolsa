@@ -8,6 +8,7 @@ from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
 
 from .edge_analysis import build_spy_daily_returns, linked_executed_buy_signals
+from .exit_horizon_shadow import build_exit_horizon_shadow
 from .signal_learning import HORIZONS
 
 
@@ -138,6 +139,12 @@ def build_profitability_scoreboard(
     since_date: str = "2026-04-01",
 ) -> dict[str, Any]:
     executed = linked_executed_buy_signals(settings, store, since_date=since_date)
+    horizon_shadow = build_exit_horizon_shadow(
+        settings,
+        store,
+        since_date=since_date,
+        linked_rows=executed["linked_rows"],
+    )
     edge_tables = {
         "setup_quality": executed["setup_quality"],
         "setup": executed["setup_key"],
@@ -158,4 +165,5 @@ def build_profitability_scoreboard(
         },
         "edge": edge_tables,
         "edge_table": flat_rows,
+        "exit_horizon_shadow": horizon_shadow,
     }

@@ -9,6 +9,7 @@ import json
 from agente_bolsa.config import get_settings
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.edge_analysis import linked_executed_buy_signals, veto_forward_cohorts
+from agente_bolsa.tools.exit_horizon_shadow import build_exit_horizon_shadow
 
 
 def main() -> int:
@@ -20,6 +21,12 @@ def main() -> int:
     store = Store(settings.database_path, settings.agent_logs_dir)
     executed = linked_executed_buy_signals(settings, store, since_date=args.since_date)
     vetoes = veto_forward_cohorts(settings, store, since_date=args.since_date)
+    horizon_shadow = build_exit_horizon_shadow(
+        settings,
+        store,
+        since_date=args.since_date,
+        linked_rows=executed["linked_rows"],
+    )
     print(
         json.dumps(
             {
@@ -36,6 +43,7 @@ def main() -> int:
                 "regime_edge": executed["regime"],
                 "regime_note": "persisted market_regime is used first; missing historical rows fall back to benchmark trend regime.",
                 "backtest_veto_forward": vetoes["by_reason"],
+                "exit_horizon_shadow": horizon_shadow,
             },
             ensure_ascii=False,
             indent=2,

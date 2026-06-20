@@ -580,6 +580,14 @@ mayor palanca de rentabilidad.
   analizador usa tendencia SPY con 300 días de contexto y declara el origen;
   cobertura actual de compras enlazadas: 4/4, todas `bullish`.
 
+#### Resultado C2.1 (20-jun-2026, v0.4.17)
+
+- Se incorpora una comparación contrafactual sobre compras paper reconciliadas:
+  último outcome maduro de la ventana actual 1-3d frente al último de 5-10d.
+  Reporta expectativa, hit-rate, profit-factor, alpha y delta pareada.
+- Es análisis `SHADOW` puro (`changes_trading_behavior=false`) y nunca promociona
+  la política automáticamente; requiere ampliar la muestra paper madura.
+
 ### Capa 3 — Mas autonomo
 - **C3.1** Promocion/democion automatica del lab con guardas (champion/challenger) cuando haya muestra y expectativa+.
 - **C3.2** El watchdog (`agents_healthcheck`) debe ALERTAR de forma visible si el grupo vuelve a quedarse en fallback varios ciclos (lo de 11-15 paso desapercibido).
