@@ -567,6 +567,19 @@ mayor palanca de rentabilidad.
 - **C2.4** Configurar fetcher de benchmark SPY para que `alpha vs SPY` deje de ser None.
 - **C2.5** Persistir `market_regime` real (esta semana 100% "unknown").
 
+#### Resultado C2.4-C2.5 (20-jun-2026, v0.4.16)
+
+- **C2.4 HECHO**: el fetcher de SPY usa el cache de mercado y amplía el rango
+  para cubrir retornos forward y tendencia de régimen. `edge_shadow_analysis`
+  obtiene 932 puntos benchmark; alpha a 1/3/5/10d: `+0,80%`, `-1,01%`,
+  `-0,45%`, `+4,33%`. El scoreboard rellena SPY sin convertir ausencias en
+  cero: cobertura 7/7 y alpha acumulado `-1,6839%`.
+- **C2.5 HECHO**: el ciclo real ya copia `market_state` al ledger. El lote
+  `opp_80c74db42155`, creado el 19-jun sobre la última sesión disponible
+  (17-jun), persiste `market_regime=bullish`. Para históricos sin régimen, el
+  analizador usa tendencia SPY con 300 días de contexto y declara el origen;
+  cobertura actual de compras enlazadas: 4/4, todas `bullish`.
+
 ### Capa 3 — Mas autonomo
 - **C3.1** Promocion/democion automatica del lab con guardas (champion/challenger) cuando haya muestra y expectativa+.
 - **C3.2** El watchdog (`agents_healthcheck`) debe ALERTAR de forma visible si el grupo vuelve a quedarse en fallback varios ciclos (lo de 11-15 paso desapercibido).

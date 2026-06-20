@@ -95,16 +95,19 @@ def _build_spy_forward_context(
     start: str,
     end: str,
 ) -> dict[str, dict[Any, Any]]:
+    download_start = start
     download_end = end
     try:
+        download_start = (date.fromisoformat(start[:10]) - timedelta(days=300)).isoformat()
         download_end = (date.fromisoformat(end[:10]) + timedelta(days=max(HORIZONS) * 3)).isoformat()
     except ValueError:
         pass
     try:
         frame = download_daily_prices(
             [settings.benchmark_symbol or "SPY"],
-            start=start,
+            start=download_start,
             end=download_end,
+            cache_dir=settings.data_dir / "cache" / "market_data",
             provider=settings.market_data_provider,
             fmp_api_key=settings.fmp_api_key,
         )
@@ -153,6 +156,50 @@ def _build_spy_forward_context(
                 continue
             returns[(date_key, horizon)] = round((future_float / close_float) - 1.0, 6)
     return {"returns": returns, "regimes": regimes}
+
+
+def build_spy_daily_returns(
+    settings: Settings,
+    *,
+    start: str,
+    end: str,
+) -> dict[str, float]:
+    """Return close-to-close SPY returns keyed by trading session."""
+
+    download_start = start
+    download_end = end
+    try:
+        download_start = (date.fromisoformat(start[:10]) - timedelta(days=10)).isoformat()
+        download_end = (date.fromisoformat(end[:10]) + timedelta(days=1)).isoformat()
+    except ValueError:
+        pass
+    try:
+        frame = download_daily_prices(
+            [settings.benchmark_symbol or "SPY"],
+            start=download_start,
+            end=download_end,
+            cache_dir=settings.data_dir / "cache" / "market_data",
+            provider=settings.market_data_provider,
+            fmp_api_key=settings.fmp_api_key,
+        )
+    except Exception:
+        return {}
+    if frame is None or frame.empty:
+        return {}
+    benchmark_symbol = str(settings.benchmark_symbol or "SPY").upper()
+    if isinstance(frame.columns, pd.MultiIndex):
+        if benchmark_symbol not in frame.columns.get_level_values(0):
+            return {}
+        frame = frame[benchmark_symbol].copy()
+    if "Close" not in frame.columns:
+        return {}
+    closes = pd.to_numeric(frame["Close"], errors="coerce").dropna()
+    returns = closes.pct_change()
+    return {
+        str(timestamp)[:10]: round(float(value), 6)
+        for timestamp, value in returns.items()
+        if pd.notna(value) and start[:10] <= str(timestamp)[:10] <= end[:10]
+    }
 
 
 def _metrics(rows: list[dict[str, Any]], benchmark: dict[tuple[str, int], float | None]) -> dict[str, Any]:
@@ -259,21 +306,37 @@ def linked_executed_buy_signals(
     benchmark_context = _build_spy_forward_context(settings, start=start, end=end)
     benchmark = benchmark_context["returns"]
     benchmark_regimes = benchmark_context["regimes"]
+    regime_sources: dict[str, int] = {"persisted": 0, "benchmark": 0, "unknown": 0}
     for row in linked:
         features = row.get("features") or {}
         row["setup_quality"] = str(features.get("setup_quality") or "unknown")
         row["setup_key"] = _setup_key(row)
         row["tags"] = _indicator_tags(row)
-        row["regime"] = str(
-            features.get("market_regime")
-            or features.get("regime")
-            or benchmark_regimes.get(_date_text(row.get("signal_date")))
-            or "unknown"
+        persisted_regime = features.get("market_regime") or features.get("regime")
+        benchmark_regime = benchmark_regimes.get(_date_text(row.get("signal_date")))
+        row["regime"] = str(persisted_regime or benchmark_regime or "unknown")
+        regime_source = (
+            "persisted"
+            if persisted_regime
+            else "benchmark"
+            if benchmark_regime and benchmark_regime != "unknown"
+            else "unknown"
         )
+        row["regime_source"] = regime_source
+        regime_sources[regime_source] += 1
     return {
         "linked_rows": linked,
         "unmatched_order_ids": unmatched,
         "benchmark_points": len(benchmark),
+        "regime_coverage": {
+            **regime_sources,
+            "known_ratio": round(
+                (regime_sources["persisted"] + regime_sources["benchmark"]) / len(linked),
+                4,
+            )
+            if linked
+            else 0.0,
+        },
         "setup_quality": summarize_by_group(linked, benchmark, key_fn=lambda row: row.get("setup_quality")),
         "setup_key": summarize_by_group(linked, benchmark, key_fn=lambda row: row.get("setup_key")),
         "tag": summarize_by_group(

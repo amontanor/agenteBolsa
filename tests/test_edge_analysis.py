@@ -30,7 +30,7 @@ def test_build_spy_forward_returns_extends_end_date_and_reads_multiindex(monkeyp
         axis=1,
     )
 
-    def _download(symbols, *, start, end, provider, fmp_api_key):
+    def _download(symbols, *, start, end, cache_dir, provider, fmp_api_key):
         captured["symbols"] = symbols
         captured["start"] = start
         captured["end"] = end
@@ -45,6 +45,23 @@ def test_build_spy_forward_returns_extends_end_date_and_reads_multiindex(monkeyp
     )
 
     assert captured["symbols"] == ["SPY"]
+    assert captured["start"] < "2026-06-01"
     assert captured["end"] > "2026-06-03"
     assert returns[("2026-06-01", 1)] == 0.01
     assert returns[("2026-06-01", 10)] == 0.1
+
+
+def test_build_spy_daily_returns_maps_session_returns(monkeypatch, tmp_path):
+    dates = pd.bdate_range("2026-06-01", periods=4)
+    frame = pd.DataFrame({"Close": [100.0, 102.0, 101.0, 103.0]}, index=dates)
+
+    monkeypatch.setattr(edge_analysis, "download_daily_prices", lambda *args, **kwargs: frame)
+
+    result = edge_analysis.build_spy_daily_returns(
+        Settings(DATA_DIR=tmp_path, BENCHMARK_SYMBOL="SPY"),
+        start="2026-06-02",
+        end="2026-06-04",
+    )
+
+    assert result["2026-06-02"] == 0.02
+    assert result["2026-06-03"] == -0.009804

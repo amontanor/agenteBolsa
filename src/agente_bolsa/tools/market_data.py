@@ -359,6 +359,7 @@ def download_daily_prices(
     start: str | datetime,
     end: str | datetime | None = None,
     *,
+    cache_dir: Path | None = None,
     provider: str | None = None,
     fmp_api_key: str | None = None,
 ) -> pd.DataFrame:
@@ -366,6 +367,7 @@ def download_daily_prices(
         symbols,
         start,
         end,
+        cache_dir=cache_dir,
         provider=provider,
         fmp_api_key=fmp_api_key,
     )

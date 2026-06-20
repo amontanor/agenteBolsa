@@ -28,6 +28,7 @@ def main() -> int:
                     "linked": len(executed["linked_rows"]),
                     "unmatched": len(executed["unmatched_order_ids"]),
                     "benchmark_points": executed["benchmark_points"],
+                    "regime_coverage": executed["regime_coverage"],
                 },
                 "setup_quality_edge": executed["setup_quality"],
                 "setup_key_edge": executed["setup_key"],

@@ -7,7 +7,7 @@ from typing import Any
 from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
 
-from .edge_analysis import linked_executed_buy_signals
+from .edge_analysis import build_spy_daily_returns, linked_executed_buy_signals
 from .signal_learning import HORIZONS
 
 
@@ -34,7 +34,7 @@ def _max_drawdown_from_returns(values: list[float]) -> float | None:
     return round(max_dd, 4)
 
 
-def _performance_summary(store: Store, *, since_date: str) -> dict[str, Any]:
+def _performance_summary(settings: Settings, store: Store, *, since_date: str) -> dict[str, Any]:
     rows = store.performance_daily(limit=0, since_date=since_date)
     if not rows:
         return {
@@ -47,17 +47,46 @@ def _performance_summary(store: Store, *, since_date: str) -> dict[str, Any]:
             "max_drawdown": None,
             "latest_iq_score": None,
         }
-    pnl_values = [_num(row.get("pnl_pct")) or 0.0 for row in rows]
-    spy_values = [_num(row.get("spy_pct")) or 0.0 for row in rows]
+    benchmark = build_spy_daily_returns(
+        settings,
+        start=str(rows[0].get("session_date") or since_date),
+        end=str(rows[-1].get("session_date") or since_date),
+    )
+    enriched_rows = []
+    for original in rows:
+        row = dict(original)
+        session_date = str(row.get("session_date") or "")[:10]
+        pnl = _num(row.get("pnl_pct"))
+        spy = _num(row.get("spy_pct"))
+        benchmark_source = "persisted"
+        if spy is None:
+            spy = benchmark.get(session_date)
+            benchmark_source = "fetched" if spy is not None else "missing"
+        alpha = _num(row.get("alpha"))
+        if alpha is None and pnl is not None and spy is not None:
+            alpha = round(pnl - spy, 6)
+        row["spy_pct"] = spy
+        row["alpha"] = alpha
+        row["benchmark_source"] = benchmark_source
+        enriched_rows.append(row)
+    rows = enriched_rows
+    pnl_values = [_num(row.get("pnl_pct")) for row in rows]
+    spy_values = [_num(row.get("spy_pct")) for row in rows]
     alpha_values = [_num(row.get("alpha")) for row in rows]
     explicit_dd = [_num(row.get("max_dd")) for row in rows if _num(row.get("max_dd")) is not None]
     latest = rows[-1]
-    cumulative_pnl = round(sum(pnl_values), 6)
-    cumulative_spy = round(sum(spy_values), 6)
+    cumulative_pnl = round(sum(value for value in pnl_values if value is not None), 6)
+    cumulative_spy = (
+        round(sum(value for value in spy_values if value is not None), 6)
+        if any(value is not None for value in spy_values)
+        else None
+    )
     cumulative_alpha = (
         round(sum(value for value in alpha_values if value is not None), 6)
         if any(value is not None for value in alpha_values)
         else round(cumulative_pnl - cumulative_spy, 6)
+        if cumulative_spy is not None
+        else None
     )
     return {
         "available": True,
@@ -68,6 +97,11 @@ def _performance_summary(store: Store, *, since_date: str) -> dict[str, Any]:
         "cumulative_pnl_pct": cumulative_pnl,
         "cumulative_spy_pct": cumulative_spy,
         "cumulative_alpha": cumulative_alpha,
+        "benchmark_coverage": {
+            "available": sum(value is not None for value in spy_values),
+            "total": len(rows),
+            "ratio": round(sum(value is not None for value in spy_values) / len(rows), 4),
+        },
         "max_drawdown": max(explicit_dd) if explicit_dd else _max_drawdown_from_returns(pnl_values),
         "latest_iq_score": latest.get("iq_score"),
         "latest_hit_rate_20": latest.get("hit_rate_20"),
@@ -115,11 +149,12 @@ def build_profitability_scoreboard(
         flat_rows.extend(_table_rows(section, rows))
     return {
         "since_date": since_date,
-        "performance": _performance_summary(store, since_date=since_date),
+        "performance": _performance_summary(settings, store, since_date=since_date),
         "execution": {
             "linked_executed_buys": len(executed["linked_rows"]),
             "unmatched_order_ids": len(executed["unmatched_order_ids"]),
             "benchmark_points": executed["benchmark_points"],
+            "regime_coverage": executed["regime_coverage"],
         },
         "edge": edge_tables,
         "edge_table": flat_rows,
