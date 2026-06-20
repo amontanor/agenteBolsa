@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from agente_bolsa._utils import log_swallow
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -1426,6 +1432,6 @@ def get_settings() -> Settings:
         if overrides:
             settings = settings.model_copy(update=overrides)
             settings.ensure_runtime_dirs()
-    except Exception:
-        pass
+    except Exception as exc:
+        log_swallow(LOGGER, "aplicar overrides de configuracion runtime", exc)
     return settings

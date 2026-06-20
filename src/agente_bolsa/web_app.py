@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -15,6 +16,10 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+
+from agente_bolsa._utils import log_swallow
+
+LOGGER = logging.getLogger(__name__)
 try:
     import altair as alt
 except ModuleNotFoundError:  # pragma: no cover - import-only test environments may omit dashboard extras.
@@ -185,8 +190,8 @@ def _streamlit_fallback_notice(key: str, message: str) -> None:
         if key in notices:
             return
         notices.add(key)
-    except Exception:
-        pass
+    except Exception as exc:
+        log_swallow(LOGGER, "deduplicar aviso del panel", exc)
     st.caption(message)
 
 
@@ -1982,8 +1987,8 @@ def _render_position_news(settings: Any, symbol: str) -> None:
     kwargs: dict[str, Any] = {"use_container_width": True, "hide_index": True}
     try:
         kwargs["column_config"] = {"enlace": st.column_config.LinkColumn("enlace", display_text="abrir")}
-    except Exception:
-        pass
+    except Exception as exc:
+        log_swallow(LOGGER, "configurar enlaces de evidencia", exc)
     st.dataframe(pd.DataFrame(rows[:8]), **kwargs)
 
 
@@ -2477,8 +2482,8 @@ def _render_latest_news_panel(settings: Any, limit: int = 20) -> None:
         kwargs["column_config"] = {
             "enlace": st.column_config.LinkColumn("enlace", display_text="abrir"),
         }
-    except Exception:
-        pass
+    except Exception as exc:
+        log_swallow(LOGGER, "configurar enlaces de investigacion", exc)
     st.dataframe(frame, **kwargs)
 
 
@@ -3281,8 +3286,8 @@ def _render_autonomy_panel(store: Any, settings: Any) -> None:
             edge = _edge_report(store, sessions=60)
             freeze = "ON" if getattr(settings, "system_freeze_mode", False) else "off"
             st.caption(f"Edge base (T5.1): **{edge['verdict']}** | freeze={freeze} | t_vs_SPY={edge['t_stat_vs_spy']}")
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            log_swallow(LOGGER, "renderizar edge base del laboratorio", exc)
         paused = bool(state.get("lab_enabled") is False)
         col_pause, col_resume = st.columns(2)
         with col_pause:

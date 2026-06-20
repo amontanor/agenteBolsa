@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -9,6 +10,10 @@ from email.utils import parsedate_to_datetime
 from typing import Any
 
 from .config import Settings
+from ._utils import log_swallow
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -253,8 +258,8 @@ def chat_for_role(
                 degrade_to_local = True  # degradar al endpoint local barato
     except LLMBudgetExhausted:
         raise
-    except Exception:  # noqa: BLE001 - sin contabilidad disponible, no bloquear.
-        pass
+    except Exception as exc:  # noqa: BLE001 - sin contabilidad disponible, no bloquear.
+        log_swallow(LOGGER, "consultar presupuesto LLM", exc)
 
     endpoints = configured_llm_endpoints(settings) if degrade_to_local else role_endpoints(settings, role)
     return _complete_with_endpoints(

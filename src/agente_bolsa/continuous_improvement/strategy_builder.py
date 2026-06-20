@@ -10,9 +10,11 @@ hasta `PROGRAMMER_MAX_REPAIR_ATTEMPTS`; agotados, archiva `FAILED_BUILD`.
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING, Any, Callable
 
 from ..models import new_id
+from .._utils import log_swallow
 from .repo_context import OUTPUT_CONTRACT, build_repo_context
 
 if TYPE_CHECKING:  # pragma: no cover - solo anotaciones.
@@ -26,6 +28,8 @@ SYSTEM_PROMPT = (
     "un archivo de test nuevo. No tocas codigo del kernel ni de ejecucion/broker.\n\n"
     + OUTPUT_CONTRACT
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _extract_json(raw: str) -> dict[str, Any] | None:
@@ -171,8 +175,8 @@ class StrategyBuilder:
                     "payload": {"attempts": attempts},
                 }
             )
-        except Exception:  # noqa: BLE001 - el archivo no debe romper el flujo.
-            pass
+        except Exception as exc:  # noqa: BLE001 - el archivo no debe romper el flujo.
+            log_swallow(LOGGER, "archivar fallo de build de estrategia", exc)
         return {"ok": False, "status": "FAILED_BUILD", "error": last_error, "attempts": attempts}
 
 

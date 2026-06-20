@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from agente_bolsa.config import Settings
+from agente_bolsa._utils import log_swallow
 from agente_bolsa.logging_utils import log_system_event
 from agente_bolsa.market_calendar import MarketCalendar
 from agente_bolsa.models import AgentEvent, new_id
@@ -31,6 +33,8 @@ from .agents import (
     event_fingerprint,
     proposal_fingerprint,
 )
+
+LOGGER = logging.getLogger(__name__)
 from .llm_client import ImprovementLLMClient
 from .llm_usage_bridge import record_improvement_llm_usage
 from .memory import SharedMemory
@@ -137,8 +141,8 @@ class ContinuousImprovementLabRuntime:
                         "runtime_heartbeat": (heartbeat or {}).get("heartbeat_at"),
                     }
                 )
-        except Exception:  # noqa: BLE001 - sin tabla seguimos con los estaticos.
-            pass
+        except Exception as exc:  # noqa: BLE001 - sin tabla seguimos con los estaticos.
+            log_swallow(LOGGER, "cargar definiciones dinamicas de agentes", exc)
         return agents
 
     def _should_skip_task(
@@ -730,8 +734,8 @@ class ContinuousImprovementLabRuntime:
                 cycle_id=cycle_id,
                 payload={"strategy": strategy_name, "window_id": window.get("window_id")},
             )
-        except Exception:  # noqa: BLE001 - abrir ventana no debe romper el tick.
-            pass
+        except Exception as exc:  # noqa: BLE001 - abrir ventana no debe romper el tick.
+            log_swallow(LOGGER, "abrir ventana de promocion shadow", exc)
 
     def _update_runtime(self, *, status: RuntimeStatus, payload: dict[str, Any]) -> None:
         self.store.upsert_continuous_improvement_runtime_state(

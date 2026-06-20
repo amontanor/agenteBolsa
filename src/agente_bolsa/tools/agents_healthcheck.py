@@ -8,8 +8,14 @@ con el minimo de cambios. Nunca lanza excepciones hacia el caller.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any
+
+from agente_bolsa._utils import log_swallow
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def run_agents_healthcheck(
@@ -68,8 +74,8 @@ def run_agents_healthcheck(
             json.dumps(opportunities, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-    except Exception:  # noqa: BLE001 - persistir nunca debe romper la vigilancia
-        pass
+    except Exception as exc:  # noqa: BLE001 - persistir nunca debe romper la vigilancia
+        log_swallow(LOGGER, "persistir informe agents_healthcheck", exc)
 
     # --- Alerta visible si el grupo opera sin LLM ---
     if reporter is not None and isinstance(watchdog, dict) and watchdog.get("degraded"):
@@ -86,8 +92,8 @@ def run_agents_healthcheck(
                 ),
                 watchdog,
             )
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            log_swallow(LOGGER, "emitir alerta visible de degradacion LLM", exc)
 
     opp_count = len(opportunities.get("opportunities", [])) if isinstance(opportunities, dict) else 0
     return {

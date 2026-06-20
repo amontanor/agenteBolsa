@@ -27,10 +27,15 @@ Todo es stdlib y deterministico: testeable sin LLM.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from ..logging_utils import log_system_event
+from .._utils import log_swallow
+
+
+LOGGER = logging.getLogger(__name__)
 from .agents import is_generated_ci_reference
 
 if TYPE_CHECKING:  # pragma: no cover - solo anotaciones.
@@ -530,6 +535,6 @@ def run_lifecycle(store: "Store", settings: "Settings") -> dict[str, Any]:
     result = {"tasks": swept, "initiatives": resolved, "flow": report}
     try:
         log_system_event(settings.logs_dir, "ci_lifecycle_tick", result)
-    except Exception:  # noqa: BLE001 - el logging no debe romper el tick.
-        pass
+    except Exception as exc:  # noqa: BLE001 - el logging no debe romper el tick.
+        log_swallow(LOGGER, "persistir evento del lifecycle CI", exc)
     return result

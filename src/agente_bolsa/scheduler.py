@@ -21,6 +21,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised by import-only test 
     IntervalTrigger = None  # type: ignore[assignment]
 
 from .config import Settings
+from ._utils import log_swallow
 from .continuous_improvement.runtime import ContinuousImprovementLabRuntime
 from .cycle_runner import run_observable_cycle
 from .eventing import EventReporter
@@ -1344,8 +1345,8 @@ def market_cycle_job(
             latest_market_state = load_latest_market_state(settings.data_dir / "reports")
             if latest_market_state:
                 report["market_state"] = latest_market_state
-        except Exception:  # noqa: BLE001 - el ledger no debe romper el ciclo.
-            pass
+        except Exception as exc:  # noqa: BLE001 - el ledger no debe romper el ciclo.
+            log_swallow(LOGGER, "adjuntar regimen al ledger intradia", exc)
         signals_saved = record_signal_candidates(store, report, source="intraday_scan")
         top_longs = ", ".join(item["symbol"] for item in report["top_longs"][:5]) or "sin candidatos"
         top_shorts = ", ".join(item["symbol"] for item in report["top_shorts"][:5]) or "sin candidatos"
@@ -1588,8 +1589,8 @@ def closed_market_technical_study_job(
         latest_market_state = load_latest_market_state(settings.data_dir / "reports")
         if latest_market_state:
             report["market_state"] = latest_market_state
-    except Exception:  # noqa: BLE001 - el ledger no debe romper el estudio.
-        pass
+    except Exception as exc:  # noqa: BLE001 - el ledger no debe romper el estudio.
+        log_swallow(LOGGER, "adjuntar regimen al estudio de mercado cerrado", exc)
     signals_saved = record_signal_candidates(store, report, source="closed_market_study")
     top_longs = ", ".join(item["symbol"] for item in report["top_longs"][:5]) or "sin candidatos"
     top_shorts = ", ".join(item["symbol"] for item in report["top_shorts"][:5]) or "sin candidatos"
@@ -1776,8 +1777,8 @@ def opportunity_snapshot_job(
         latest_market_state = load_latest_market_state(settings.data_dir / "reports")
         if latest_market_state:
             report["market_state"] = latest_market_state
-    except Exception:  # noqa: BLE001 - el snapshot no debe fallar por regimen ausente.
-        pass
+    except Exception as exc:  # noqa: BLE001 - el snapshot no debe fallar por regimen ausente.
+        log_swallow(LOGGER, "adjuntar regimen al snapshot de oportunidades", exc)
     record_signal_candidates(store, report, source="opportunity_snapshot")
     snapshot = build_opportunity_snapshot(
         settings,
@@ -1920,8 +1921,8 @@ def _persist_daily_performance(
 
             state = load_latest_market_state(settings.data_dir / "reports") or {}
             payload["regime"] = state.get("market_regime") or state.get("regime")
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            log_swallow(LOGGER, "adjuntar regimen al baseline diario", exc)
         store.upsert_performance_daily(payload)
         reporter.emit(
             "performance_baseline_agent",

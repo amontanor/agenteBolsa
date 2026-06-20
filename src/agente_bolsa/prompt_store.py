@@ -9,8 +9,10 @@ CANDIDATE y `promote` la mejor tras medir su efecto (replay, T2.1).
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
+from ._utils import log_swallow
 from .storage import Store
 
 if TYPE_CHECKING:  # pragma: no cover - solo anotaciones.
@@ -19,6 +21,7 @@ if TYPE_CHECKING:  # pragma: no cover - solo anotaciones.
 
 # Cache simple por (db_path, key). Se invalida al proponer/promover/importar.
 _CACHE: dict[tuple[str, str], str] = {}
+LOGGER = logging.getLogger(__name__)
 
 
 def _store(settings: "Settings") -> Store:
@@ -124,12 +127,12 @@ def default_prompt_catalog() -> dict[str, str]:
         from .tools.nightly_retrospective import DEFAULT_RETROSPECTIVE_PROMPT
 
         catalog["nightly_retrospective"] = DEFAULT_RETROSPECTIVE_PROMPT
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        log_swallow(LOGGER, "cargar prompt nightly_retrospective", exc)
     try:
         from .continuous_improvement.lesson_distiller import DEFAULT_DISTILLER_PROMPT
 
         catalog["lesson_distiller"] = DEFAULT_DISTILLER_PROMPT
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        log_swallow(LOGGER, "cargar prompt lesson_distiller", exc)
     return catalog

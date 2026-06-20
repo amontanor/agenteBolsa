@@ -8,6 +8,7 @@ global. No toca nada y no lanza excepciones hacia el caller.
 from __future__ import annotations
 
 import json
+import logging
 import socket
 import sqlite3
 from datetime import datetime, timezone
@@ -15,7 +16,10 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-from agente_bolsa._utils import parse_iso, sqlite_connect_ro
+from agente_bolsa._utils import log_swallow, parse_iso, sqlite_connect_ro
+
+
+LOGGER = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[3]
 DB = ROOT / "data" / "state" / "agente_bolsa.sqlite3"
@@ -92,8 +96,8 @@ def _job_status(con):
         for k, v in con.execute("SELECT key,value_json FROM runtime_state WHERE key LIKE 'scheduler_job_status:%'"):
             try:
                 out[k.split(":", 1)[1]] = json.loads(v)
-            except Exception:
-                pass
+            except Exception as exc:
+                log_swallow(LOGGER, "decodificar estado de job del scheduler", exc)
     except sqlite3.OperationalError:
         pass
     return out
@@ -174,8 +178,8 @@ def build_status(db_path: Path | None = None, reports_dir: Path | None = None) -
             watchdog = json.loads(ahc.read_text(encoding="utf-8")).get("watchdog") or {}
             degraded = watchdog.get("degraded")
             degraded_severity = watchdog.get("severity")
-        except Exception:
-            pass
+        except Exception as exc:
+            log_swallow(LOGGER, "leer estado del watchdog LLM", exc)
     st = _llm_component_status(degraded=degraded, severity=degraded_severity, decision_age_min=dec)
     comps.append({"name": "LLM de decision", "state": st[0], "detail": st[1], "expected": _llm_expected_detail()})
 

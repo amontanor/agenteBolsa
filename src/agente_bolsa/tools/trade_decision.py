@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from dataclasses import asdict, replace
 from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
 from typing import Any
 
+from agente_bolsa._utils import log_swallow
 from agente_bolsa.config import Settings
 from agente_bolsa.llm_router import chat_for_role
 from agente_bolsa.llm_usage import record_llm_response
@@ -25,6 +27,8 @@ from agente_bolsa.tools.research_evidence import (
     load_research_evidence_context,
     research_block_reason,
 )
+
+LOGGER = logging.getLogger(__name__)
 from agente_bolsa.tools.retention import latest_report_path
 from agente_bolsa.tools.risk import OrderProposal, RiskManager
 from agente_bolsa.tools.signal_learning import _indicator_tags
@@ -3818,8 +3822,8 @@ def deterministic_trade_fallback_recommendations(
                     or 0.0
                 )
             eligible = prioritize_candidates(eligible, benchmark_return_20d=_bench_ret)
-        except Exception:  # noqa: BLE001 - reordenar nunca debe romper el fallback
-            pass
+        except Exception as exc:  # noqa: BLE001 - reordenar nunca debe romper el fallback
+            log_swallow(LOGGER, "priorizar fallback con opportunity ranker", exc)
     recommendations: list[TradeRecommendation] = []
     for item in eligible[:recommendation_limit]:
         selection_score = _float(item.get("selection_score"))

@@ -11,12 +11,17 @@ Nucleo stdlib para ser testeable con outcomes sinteticos.
 
 from __future__ import annotations
 
+import logging
 import math
 import statistics
 from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from ..models import new_id
+from .._utils import log_swallow
+
+
+LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover - solo anotaciones.
     from ..config import Settings
@@ -115,8 +120,8 @@ class PromotionManager:
                 # La estrategia aun no esta en el registro (p. ej. recien construida
                 # por el StrategyBuilder): darla de alta directamente en SHADOW.
                 self.store.upsert_strategy_version({"name": strategy_name, "version": version, "status": "SHADOW"})
-        except Exception:  # noqa: BLE001 - el registro no debe bloquear la ventana.
-            pass
+        except Exception as exc:  # noqa: BLE001 - el registro no debe bloquear la ventana.
+            log_swallow(LOGGER, "registrar estrategia shadow", exc)
         # Change budget (T5.2): si ya hay demasiadas ventanas abiertas, encolar.
         open_windows = len(self.store.promotion_windows(status="OPEN", limit=500))
         status = "QUEUED" if open_windows >= self.max_concurrent else "OPEN"
@@ -225,8 +230,8 @@ class PromotionManager:
                     self._resolve(window, "REJECTED_SHADOW", result)
                     try:
                         self.store.set_strategy_status(strategy, "RETIRED")
-                    except Exception:  # noqa: BLE001
-                        pass
+                    except Exception as exc:  # noqa: BLE001
+                        log_swallow(LOGGER, "retirar estrategia rechazada en shadow", exc)
                     decisions.append({"window_id": window["window_id"], "strategy": strategy, "verdict": "REJECTED_SHADOW", **result})
                 else:
                     decisions.append(
@@ -268,16 +273,16 @@ class PromotionManager:
                     if champion and champion != strategy:
                         # Degradacion reversible del champion reemplazado (T1.3).
                         self.store.set_strategy_status(champion, "SHADOW")
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    log_swallow(LOGGER, "actualizar champion y challenger", exc)
                 self._resolve(window, "PROMOTED", result)
                 decisions.append({"window_id": window["window_id"], "strategy": strategy, "verdict": "PROMOTED", **result})
             else:
                 self._resolve(window, "REJECTED_SHADOW", result)
                 try:
                     self.store.set_strategy_status(strategy, "RETIRED")
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    log_swallow(LOGGER, "retirar challenger rechazado", exc)
                 decisions.append({"window_id": window["window_id"], "strategy": strategy, "verdict": "REJECTED_SHADOW", **result})
         return decisions
 

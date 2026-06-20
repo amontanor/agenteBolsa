@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from agente_bolsa.config import Settings
+from agente_bolsa._utils import log_swallow
 from agente_bolsa.kernel import kernel_check_order
 from agente_bolsa.tools.operational_health import load_operational_block_context
 from agente_bolsa.tools.broker import BrokerClientFactory
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _kernel_portfolio_snapshot(settings: Settings) -> Any:
@@ -171,8 +176,8 @@ def submit_paper_order_plan(
                     "reason": kernel_reason,
                 },
             )
-        except Exception:  # noqa: BLE001 - el bloqueo no depende del logging.
-            pass
+        except Exception as exc:  # noqa: BLE001 - el bloqueo no depende del logging.
+            log_swallow(LOGGER, "persistir bloqueo del kernel", exc)
         raise RuntimeError(f"Orden bloqueada por el kernel inmutable: {kernel_reason}")
 
     # Presupuesto de riesgo (T4.1): para compras, la orden debe caber en el VaR.
@@ -199,8 +204,8 @@ def submit_paper_order_plan(
                         "reason": budget_reason,
                     },
                 )
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                log_swallow(LOGGER, "persistir bloqueo de presupuesto", exc)
             raise RuntimeError(f"Compra bloqueada por presupuesto de riesgo: {budget_reason}")
 
     client = BrokerClientFactory(settings).alpaca_trading_client()
