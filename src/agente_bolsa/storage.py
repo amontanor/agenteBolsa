@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -165,6 +166,9 @@ ON signal_outcomes(symbol, signal_date);
 
 CREATE INDEX IF NOT EXISTS idx_signal_outcomes_decision
 ON signal_outcomes(decision);
+
+CREATE INDEX IF NOT EXISTS idx_signal_outcomes_recent
+ON signal_outcomes(signal_date DESC, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS trade_memory (
     memory_id TEXT PRIMARY KEY,
@@ -797,6 +801,7 @@ class Store:
         self.database_path = database_path
         self.agent_history = AgentHistoryLogger(agent_logs_dir)
         self._db_dir_ready = False
+        self._reader_state = threading.local()
 
     def _ensure_db_dir(self) -> None:
         # D4: crear el directorio una sola vez, no en cada connect() (camino caliente).
@@ -810,6 +815,32 @@ class Store:
         conn.execute("PRAGMA busy_timeout=30000")
         conn.row_factory = sqlite3.Row
         return conn
+
+    def read_connection(self) -> sqlite3.Connection:
+        """Reuse one read-only SQLite connection per Store and worker thread."""
+
+        conn = getattr(self._reader_state, "connection", None)
+        if conn is not None:
+            try:
+                conn.execute("SELECT 1")
+                return conn
+            except sqlite3.Error:
+                conn.close()
+
+        database_uri = self.database_path.resolve().as_uri() + "?mode=ro"
+        conn = sqlite3.connect(database_uri, uri=True, timeout=30.0)
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA query_only=ON")
+        conn.row_factory = sqlite3.Row
+        self._reader_state.connection = conn
+        return conn
+
+    def close_read_connection(self) -> None:
+        conn = getattr(self._reader_state, "connection", None)
+        if conn is None:
+            return
+        conn.close()
+        del self._reader_state.connection
 
     def ensure_schema(self) -> None:
         with self.connect() as conn:
@@ -2174,8 +2205,7 @@ class Store:
             params.append(since_date)
         query += " ORDER BY signal_date DESC, created_at DESC LIMIT ?"
         params.append(limit)
-        with self.connect() as conn:
-            rows = conn.execute(query, params).fetchall()
+        rows = self.read_connection().execute(query, params).fetchall()
         return [
             {
                 "signal_id": row["signal_id"],
