@@ -796,9 +796,16 @@ class Store:
     def __init__(self, database_path: Path, agent_logs_dir: Path) -> None:
         self.database_path = database_path
         self.agent_history = AgentHistoryLogger(agent_logs_dir)
+        self._db_dir_ready = False
+
+    def _ensure_db_dir(self) -> None:
+        # D4: crear el directorio una sola vez, no en cada connect() (camino caliente).
+        if not self._db_dir_ready:
+            self.database_path.parent.mkdir(parents=True, exist_ok=True)
+            self._db_dir_ready = True
 
     def connect(self) -> sqlite3.Connection:
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        self._ensure_db_dir()
         conn = sqlite3.connect(self.database_path, timeout=30.0)
         conn.execute("PRAGMA busy_timeout=30000")
         conn.row_factory = sqlite3.Row
