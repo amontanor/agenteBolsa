@@ -4056,7 +4056,15 @@ def deterministic_trade_fallback_recommendations(
     )
     # Reordenado determinista opcional. El sesgo por setup usa la misma base de
     # ranker, pero añade edge_table medida en walk-forward y deja shadow report.
-    if getattr(settings, "opportunity_ranker_fallback_enabled", False) or getattr(settings, "setup_edge_bias_enabled", False):
+    # Reordenado determinista opcional con tres modos independientes:
+    #  - opportunity_ranker_fallback: reordena por score de oportunidad (sin sesgo).
+    #  - setup_edge_bias_shadow: SOLO mide (escribe shadow report) sin tocar la
+    #    selección real -> paso previo de validación (shadow).
+    #  - setup_edge_bias (activo): aplica el sesgo por setup a la selección real.
+    use_ranker = getattr(settings, "opportunity_ranker_fallback_enabled", False)
+    apply_bias = getattr(settings, "setup_edge_bias_enabled", False)
+    measure_shadow = apply_bias or getattr(settings, "setup_edge_bias_shadow_enabled", False)
+    if use_ranker or apply_bias or measure_shadow:
         try:
             from agente_bolsa.tools.opportunity_ranker import prioritize_candidates
 
@@ -4066,8 +4074,9 @@ def deterministic_trade_fallback_recommendations(
                     (market_state.get("relative_strength") or {}).get("benchmark_return_20d")
                     or 0.0
                 )
+            original_eligible = eligible
             baseline_ranked = prioritize_candidates(eligible, benchmark_return_20d=_bench_ret)
-            if getattr(settings, "setup_edge_bias_enabled", False):
+            if measure_shadow:
                 edge_table = load_setup_edge_table(
                     settings.database_path,
                     as_of=_setup_edge_shadow_as_of(technical_context),
@@ -4079,7 +4088,6 @@ def deterministic_trade_fallback_recommendations(
                     benchmark_return_20d=_bench_ret,
                     edge_table=edge_table,
                 )
-                eligible = biased_ranked
                 _record_setup_edge_shadow_report(
                     settings,
                     technical_context,
@@ -4088,8 +4096,14 @@ def deterministic_trade_fallback_recommendations(
                     baseline_ranked=baseline_ranked,
                     biased_ranked=biased_ranked,
                 )
-            else:
+            # Selección REAL: solo el modo activo aplica el sesgo; el modo shadow
+            # mide pero deja la conducta intacta.
+            if apply_bias:
+                eligible = biased_ranked
+            elif use_ranker:
                 eligible = baseline_ranked
+            else:
+                eligible = original_eligible
         except Exception as exc:  # noqa: BLE001 - reordenar nunca debe romper el fallback
             log_swallow(LOGGER, "priorizar fallback con opportunity ranker", exc)
     recommendations: list[TradeRecommendation] = []

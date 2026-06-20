@@ -140,6 +140,10 @@ class Settings(BaseSettings):
     # y docs/auditoria_codigo_2026-06-21.md "HALLAZGO ESTRATÉGICO"). Solo se activa tras
     # validar en shadow que reorientar hacia sin_patron|strong/mixed mejora la expectativa.
     setup_edge_bias_enabled: bool = Field(default=False, alias="SETUP_EDGE_BIAS_ENABLED")
+    # Modo SOLO-MEDICIÓN: calcula y registra el shadow report del sesgo por setup
+    # SIN cambiar la selección real del fallback. Paso previo (shadow) antes de
+    # activar `setup_edge_bias_enabled`. Default OFF.
+    setup_edge_bias_shadow_enabled: bool = Field(default=False, alias="SETUP_EDGE_BIAS_SHADOW_ENABLED")
     setup_edge_bias_train_window_days: int = Field(
         default=120,
         alias="SETUP_EDGE_BIAS_TRAIN_WINDOW_DAYS",
