@@ -24,8 +24,6 @@ from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
 
-from agente_bolsa._utils import parse_iso, sqlite_connect_ro
-
 ROOT = Path(__file__).resolve().parents[1]
 DB = ROOT / "data" / "state" / "agente_bolsa.sqlite3"
 REPORTS = ROOT / "data" / "reports"
@@ -38,6 +36,8 @@ def _now():
 
 
 def _age_min(ts):
+    from agente_bolsa._utils import parse_iso
+
     d = parse_iso(ts)
     return None if not d else (_now() - d).total_seconds() / 60.0
 
@@ -80,6 +80,8 @@ def _port_open(host, port, timeout=1.0):
 
 
 def build_status():
+    from agente_bolsa._utils import sqlite_connect_ro
+
     now = _now()
     market_open = _market_open(now)
     comps = []

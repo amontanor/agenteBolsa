@@ -21,18 +21,14 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from agente_bolsa.config import Settings
-from agente_bolsa.storage import Store
-from agente_bolsa._utils import sqlite_connect_ro, table_exists
-from agente_bolsa.tools.c2_shadow_reporting import build_c2_shadow_report
-from agente_bolsa.tools.profitability_scoreboard import build_profitability_scoreboard
-
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = ROOT / "data" / "state" / "agente_bolsa.sqlite3"
 C2_SHADOW_SINCE_DATE = "2026-04-01"
 
 
 def count_since(con, table, date_col, cutoff, where_extra="") -> int:
+    from agente_bolsa._utils import table_exists
+
     if not table_exists(con, table):
         return 0
     try:
@@ -43,6 +39,8 @@ def count_since(con, table, date_col, cutoff, where_extra="") -> int:
 
 
 def group_since(con, table, col, date_col, cutoff):
+    from agente_bolsa._utils import table_exists
+
     if not table_exists(con, table):
         return []
     try:
@@ -53,11 +51,17 @@ def group_since(con, table, col, date_col, cutoff):
 
 
 def build_markdown(db_path: Path, days: int) -> str:
+    from agente_bolsa._utils import sqlite_connect_ro, table_exists
+    from agente_bolsa.config import Settings
+    from agente_bolsa.storage import Store
+    from agente_bolsa.tools.c2_shadow_reporting import build_c2_shadow_report
+    from agente_bolsa.tools.profitability_scoreboard import build_profitability_scoreboard
+
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     today = datetime.now(timezone.utc).date().isoformat()
     con = sqlite_connect_ro(db_path)
     out: list[str] = []
-    out.append(f"# Informe semanal de mejora del sistema")
+    out.append("# Informe semanal de mejora del sistema")
     out.append("")
 
     out.append(f"- Fecha de generacion: {today}")

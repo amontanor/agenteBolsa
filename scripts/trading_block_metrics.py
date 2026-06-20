@@ -9,8 +9,6 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from agente_bolsa.config import get_settings
-
 
 def _loads(raw: str | None) -> dict:
     try:
@@ -85,6 +83,8 @@ def _realized_pnl_from_fills(rows: list[sqlite3.Row]) -> dict[str, Any]:
 
 
 def main() -> int:
+    from agente_bolsa.config import get_settings
+
     settings = get_settings()
     since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
     con = sqlite3.connect(settings.database_path)

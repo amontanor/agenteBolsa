@@ -9,13 +9,6 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from agente_bolsa.config import get_settings
-from agente_bolsa.storage import Store
-from agente_bolsa.tools.edge_analysis import _build_spy_forward_context
-from agente_bolsa.tools.market_data import download_daily_prices
-from agente_bolsa.tools.opportunity_ranker import score_symbol
-from agente_bolsa.tools.signal_learning import HORIZONS
-
 
 def _num(value: Any) -> float | None:
     if value is None or value == "":
@@ -31,6 +24,8 @@ def _date_text(value: Any) -> str:
 
 
 def _benchmark_return_20d(settings, *, start: str, end: str) -> dict[str, float]:
+    from agente_bolsa.tools.market_data import download_daily_prices
+
     try:
         download_start = (date.fromisoformat(start[:10]) - timedelta(days=80)).isoformat()
     except ValueError:
@@ -85,6 +80,8 @@ def _candidate_metrics(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _opportunity_score(row: dict[str, Any], benchmark_20d: dict[str, float]) -> float:
+    from agente_bolsa.tools.opportunity_ranker import score_symbol
+
     signal_date = _date_text(row.get("signal_date"))
     score = score_symbol(
         str(row.get("symbol") or ""),
@@ -95,6 +92,8 @@ def _opportunity_score(row: dict[str, Any], benchmark_20d: dict[str, float]) -> 
 
 
 def _metrics(rows: list[dict[str, Any]], benchmark_forward: dict[tuple[str, int], float | None]) -> dict[str, Any]:
+    from agente_bolsa.tools.signal_learning import HORIZONS
+
     out: dict[str, Any] = {"n": len(rows), "symbols": sorted({str(row.get("symbol")) for row in rows})[:20]}
     for horizon in HORIZONS:
         values: list[float] = []
@@ -121,6 +120,11 @@ def _metrics(rows: list[dict[str, Any]], benchmark_forward: dict[tuple[str, int]
 
 
 def build_report(*, since_date: str, top_n: int) -> dict[str, Any]:
+    from agente_bolsa.config import get_settings
+    from agente_bolsa.storage import Store
+    from agente_bolsa.tools.edge_analysis import _build_spy_forward_context
+    from agente_bolsa.tools.signal_learning import HORIZONS
+
     settings = get_settings()
     store = Store(settings.database_path, settings.agent_logs_dir)
     rows = [

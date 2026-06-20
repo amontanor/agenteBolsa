@@ -6,13 +6,13 @@ from __future__ import annotations
 import argparse
 import json
 
-from agente_bolsa.config import get_settings
-from agente_bolsa.storage import Store
-from agente_bolsa.tools.edge_analysis import linked_executed_buy_signals, veto_forward_cohorts
-from agente_bolsa.tools.exit_horizon_shadow import build_exit_horizon_shadow
-
 
 def main() -> int:
+    from agente_bolsa.config import get_settings
+    from agente_bolsa.storage import Store
+    from agente_bolsa.tools.edge_analysis import linked_executed_buy_signals, veto_forward_cohorts
+    from agente_bolsa.tools.exit_horizon_shadow import build_exit_horizon_shadow
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--since-date", default="2026-04-01")
     args = parser.parse_args()

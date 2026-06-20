@@ -9,10 +9,6 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Any
 
-from agente_bolsa.config import get_settings
-from agente_bolsa.tools.execution_linking import match_signal_row_for_buy_order
-from agente_bolsa.tools.trade_history import build_trade_history
-
 
 def _loads(raw: str | None) -> dict[str, Any]:
     try:
@@ -105,6 +101,10 @@ def _metrics(rows: list[dict[str, Any]], value_key: str) -> dict[str, Any]:
 
 
 def main() -> int:
+    from agente_bolsa.config import get_settings
+    from agente_bolsa.tools.execution_linking import match_signal_row_for_buy_order
+    from agente_bolsa.tools.trade_history import build_trade_history
+
     settings = get_settings()
     con = sqlite3.connect(settings.database_path)
     con.row_factory = sqlite3.Row

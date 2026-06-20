@@ -7,11 +7,6 @@ import argparse
 import json
 from pathlib import Path
 
-from agente_bolsa.config import Settings
-from agente_bolsa.tools.daily_learning import load_daily_learning_context
-from agente_bolsa.tools.operational_health import load_operational_response_context
-from agente_bolsa.tools.trade_decision import _select_deterministic_candidates
-
 
 def _is_negative_pocket(candidate: dict) -> dict[str, bool]:
     technical = candidate.get("technical_state", {}) or {}
@@ -60,6 +55,11 @@ def _summary(rows: list[dict]) -> dict:
 
 
 def main() -> int:
+    from agente_bolsa.config import Settings
+    from agente_bolsa.tools.daily_learning import load_daily_learning_context
+    from agente_bolsa.tools.operational_health import load_operational_response_context
+    from agente_bolsa.tools.trade_decision import _select_deterministic_candidates
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=None)
     args = parser.parse_args()

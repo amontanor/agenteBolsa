@@ -46,8 +46,6 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from agente_bolsa._utils import human_bytes, sqlite_connect_ro, table_exists
-
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = ROOT / "data" / "state" / "agente_bolsa.sqlite3"
 
@@ -67,6 +65,8 @@ DEFAULT_RETENTION = {
 
 def connect(db_path: Path, read_only: bool) -> sqlite3.Connection:
     if read_only:
+        from agente_bolsa._utils import sqlite_connect_ro
+
         return sqlite_connect_ro(db_path, timeout=30)
     con = sqlite3.connect(str(db_path), timeout=60)
     con.execute("PRAGMA busy_timeout=60000")
@@ -80,6 +80,8 @@ def _retention_plan(global_days):
 
 
 def analyze(db_path: Path, global_days) -> dict:
+    from agente_bolsa._utils import human_bytes, table_exists
+
     plan = _retention_plan(global_days)
     now = datetime.now(timezone.utc)
     con = connect(db_path, read_only=True)
@@ -150,6 +152,8 @@ def set_incremental_autovacuum(db_path: Path) -> None:
 
 
 def compact_ci_cycles(cur: sqlite3.Cursor) -> dict[str, int]:
+    from agente_bolsa._utils import table_exists
+
     """Replace duplicated cycle payloads with bounded audit snapshots."""
 
     if not table_exists(cur, "continuous_improvement_cycles"):
@@ -202,6 +206,8 @@ def compact_ci_cycles(cur: sqlite3.Cursor) -> dict[str, int]:
 
 
 def apply_maintenance(db_path: Path, global_days, force: bool, incremental: bool) -> dict:
+    from agente_bolsa._utils import table_exists
+
     blocked = _wal_blocks(db_path, force)
     if blocked:
         return {"applied": False, "error": blocked}
@@ -237,6 +243,8 @@ def apply_maintenance(db_path: Path, global_days, force: bool, incremental: bool
 
 
 def main() -> int:
+    from agente_bolsa._utils import human_bytes
+
     parser = argparse.ArgumentParser(description="Mantenimiento de la BD de estado.")
     parser.add_argument("--db", default=str(DEFAULT_DB), help="Ruta a la BD sqlite.")
     parser.add_argument("--days", type=int, default=None,
