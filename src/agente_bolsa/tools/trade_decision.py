@@ -6,6 +6,7 @@ import json
 import logging
 import math
 from dataclasses import asdict, replace
+from datetime import datetime, timezone
 from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,7 @@ from agente_bolsa.tools.operational_health import (
 from agente_bolsa.tools.operational_learning import load_operational_learning_context
 from agente_bolsa.tools.position_sizing import recommended_notional
 from agente_bolsa.tools.post_market_review import load_post_market_learning_context
+from agente_bolsa.tools.reporting import write_json_report
 from agente_bolsa.tools.research_evidence import (
     build_research_evidence_report,
     compact_research_context_for_prompt,
@@ -38,6 +40,7 @@ from agente_bolsa.tools.research_evidence import (
 )
 from agente_bolsa.tools.retention import latest_report_path
 from agente_bolsa.tools.risk import OrderProposal, RiskManager
+from agente_bolsa.tools.setup_edge import load_setup_edge_table
 from agente_bolsa.tools.signal_learning import _indicator_tags
 
 LOGGER = logging.getLogger(__name__)
@@ -2637,6 +2640,19 @@ def validate_entry_quality(
     }
     if close and sma20:
         checks["sma20_distance"] = round((close - sma20) / sma20, 4)
+    checks["confirmed_pattern_requirement_shadow"] = _confirmed_pattern_shadow_signals(
+        settings,
+        candidate,
+        score=score,
+        return_20d=return_20d,
+        relative_return_20d=relative_return_20d,
+        rsi=rsi,
+        sma20_distance=checks["sma20_distance"],
+        volume_z=volume_z,
+        close_position=close_position,
+        breakout_failure_risk=breakout_failure_risk,
+        confirmed_patterns=len(confirmed_patterns),
+    )
     fallback_constructive_extension = (
         recommendation.source == "deterministic_fallback"
         and _fallback_constructive_extension_exception(
@@ -3658,6 +3674,229 @@ def request_trade_recommendations(
     }
 
 
+def _setup_edge_shadow_as_of(technical_context: dict[str, Any] | None) -> str:
+    for bucket in ("selected_candidates", "top_longs", "all_candidates"):
+        for item in list((technical_context or {}).get(bucket, []) or []):
+            if not isinstance(item, dict):
+                continue
+            last_date = str(item.get("last_date") or "").strip()
+            if last_date:
+                return last_date[:10]
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def _record_setup_edge_shadow_report(
+    settings: Settings,
+    technical_context: dict[str, Any] | None,
+    *,
+    benchmark_return_20d: float,
+    edge_table: dict[str, float],
+    baseline_ranked: list[dict[str, Any]],
+    biased_ranked: list[dict[str, Any]],
+) -> None:
+    run_id = str((technical_context or {}).get("run_id") or "").strip() or new_id("setup_edge_shadow")
+    baseline_top = [str(item.get("symbol") or "") for item in baseline_ranked[:5] if item.get("symbol")]
+    biased_top = [str(item.get("symbol") or "") for item in biased_ranked[:5] if item.get("symbol")]
+    baseline_ranks = {
+        str(item.get("symbol") or ""): index
+        for index, item in enumerate(baseline_ranked, start=1)
+        if item.get("symbol")
+    }
+    comparisons = []
+    for index, item in enumerate(biased_ranked[:10], start=1):
+        symbol = str(item.get("symbol") or "")
+        if not symbol:
+            continue
+        baseline_rank = baseline_ranks.get(symbol)
+        comparisons.append(
+            {
+                "symbol": symbol,
+                "biased_rank": index,
+                "baseline_rank": baseline_rank,
+                "rank_delta": baseline_rank - index if baseline_rank is not None else None,
+                "setup_edge_key": item.get("setup_edge_key"),
+                "setup_edge_bias": item.get("setup_edge_bias"),
+                "opportunity_score": item.get("opportunity_score"),
+                "opportunity_score_adjusted": item.get("opportunity_score_adjusted"),
+            }
+        )
+    report = {
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "source_run_id": str((technical_context or {}).get("run_id") or "") or None,
+        "selection_method": "deterministic_fallback_shadow",
+        "benchmark_return_20d": round(float(benchmark_return_20d), 4),
+        "edge_table_rows": len(edge_table),
+        "train_as_of": _setup_edge_shadow_as_of(technical_context),
+        "baseline_top_symbols": baseline_top,
+        "biased_top_symbols": biased_top,
+        "changed": baseline_top != biased_top,
+        "comparisons": comparisons,
+    }
+    write_json_report(
+        report,
+        settings.data_dir / "reports",
+        "setup_edge_shadow",
+        run_id,
+        latest_filename="latest_setup_edge_shadow.json",
+        manifest={"flag": "SETUP_EDGE_BIAS_ENABLED", "mode": "shadow_measurement"},
+    )
+
+
+def _confirmed_pattern_shadow_signals(
+    settings: Settings,
+    candidate: dict[str, Any],
+    *,
+    score: int,
+    return_20d: float | None,
+    relative_return_20d: float | None,
+    rsi: float | None,
+    sma20_distance: float | None,
+    volume_z: float | None,
+    close_position: float | None,
+    breakout_failure_risk: bool,
+    confirmed_patterns: int,
+) -> dict[str, Any]:
+    if not settings.setup_edge_bias_enabled:
+        return {"enabled": False}
+    if confirmed_patterns >= 1:
+        return {
+            "enabled": True,
+            "actual_confirmed_patterns": confirmed_patterns,
+            "shadow_confirmed_patterns": confirmed_patterns,
+            "would_unlock": False,
+            "paths": [],
+        }
+
+    shadow_confirmed = 1
+    paths: list[str] = []
+    if _fallback_constructive_extension_exception(
+        settings,
+        candidate,
+        score=score,
+        return_20d=return_20d,
+        rsi=rsi,
+        sma20_distance=sma20_distance,
+        volume_z=volume_z,
+        confirmed_patterns=shadow_confirmed,
+    ):
+        paths.append("fallback_constructive_extension")
+    if _fallback_momentum_extension_exception(
+        settings,
+        candidate,
+        score=score,
+        return_20d=return_20d,
+        rsi=rsi,
+        sma20_distance=sma20_distance,
+        volume_z=volume_z,
+        confirmed_patterns=shadow_confirmed,
+    ):
+        paths.append("fallback_momentum_extension")
+    if _fallback_weak_volume_momentum_extension_exception(
+        settings,
+        candidate,
+        score=score,
+        return_20d=return_20d,
+        rsi=rsi,
+        sma20_distance=sma20_distance,
+        volume_z=volume_z,
+        confirmed_patterns=shadow_confirmed,
+    ):
+        paths.append("fallback_weak_volume_momentum_extension")
+    if _fallback_relative_strength_pullback_extension_exception(
+        settings,
+        candidate,
+        score=score,
+        return_20d=return_20d,
+        relative_return_20d=relative_return_20d,
+        rsi=rsi,
+        sma20_distance=sma20_distance,
+        volume_z=volume_z,
+        confirmed_patterns=shadow_confirmed,
+    ):
+        paths.append("fallback_relative_strength_pullback_extension")
+    if _fallback_leader_pullback_extension_exception(
+        settings,
+        candidate,
+        score=score,
+        return_20d=return_20d,
+        rsi=rsi,
+        sma20_distance=sma20_distance,
+        volume_z=volume_z,
+        confirmed_patterns=shadow_confirmed,
+    ):
+        paths.append("fallback_leader_pullback_extension")
+    if _fallback_top_long_follow_through_exception(
+        settings,
+        candidate,
+        score=score,
+        return_20d=return_20d,
+        rsi=rsi,
+        volume_z=volume_z,
+        confirmed_patterns=shadow_confirmed,
+    ):
+        paths.append("fallback_top_long_follow_through")
+    if _prior_error_volume_confirmation_override_exception(
+        settings,
+        candidate,
+        score=score,
+        return_20d=return_20d,
+        rsi=rsi,
+        volume_z=volume_z,
+        confirmed_patterns=shadow_confirmed,
+    ):
+        paths.append("prior_error_volume_confirmation_override")
+    if _reward_risk_follow_through_override_exception(
+        settings,
+        candidate,
+        score=score,
+        return_20d=return_20d,
+        rsi=rsi,
+        sma20_distance=sma20_distance,
+        confirmed_patterns=shadow_confirmed,
+    ):
+        paths.append("reward_risk_follow_through_override")
+    if _missing_relative_strength_follow_through_exception(
+        settings,
+        candidate,
+        score=score,
+        return_20d=return_20d,
+        rsi=rsi,
+        sma20_distance=sma20_distance,
+        confirmed_patterns=shadow_confirmed,
+    ):
+        paths.append("missing_relative_strength_follow_through")
+    if (
+        return_20d is not None
+        and return_20d >= settings.entry_quality_momentum_confirmation_min_return_20d
+        and volume_z is not None
+        and volume_z >= settings.entry_quality_momentum_confirmation_min_volume_z
+        and close_position is not None
+        and close_position >= 0.75
+    ):
+        paths.append("momentum_confirmation_without_pattern")
+    if (
+        sma20_distance is not None
+        and relative_return_20d is None
+        and score >= settings.entry_quality_momentum_confirmation_min_score
+        and return_20d is not None
+        and return_20d >= settings.entry_quality_momentum_confirmation_min_return_20d
+        and volume_z is not None
+        and volume_z >= settings.entry_quality_momentum_confirmation_min_volume_z
+        and rsi is not None
+        and rsi <= settings.entry_quality_momentum_confirmation_max_rsi
+        and sma20_distance <= settings.entry_quality_momentum_confirmation_max_sma20_distance
+        and not breakout_failure_risk
+    ):
+        paths.append("relative_strength_missing_confirmed_momentum")
+    return {
+        "enabled": True,
+        "actual_confirmed_patterns": confirmed_patterns,
+        "shadow_confirmed_patterns": shadow_confirmed,
+        "would_unlock": bool(paths),
+        "paths": paths,
+    }
+
+
 def deterministic_trade_fallback_recommendations(
     settings: Settings,
     portfolio: PortfolioSnapshot,
@@ -3815,11 +4054,9 @@ def deterministic_trade_fallback_recommendations(
         ),
         reverse=True,
     )
-    # T2b (opcional, flag por defecto OFF): reordenar por score de oportunidad
-    # determinista (fuerza relativa / momentum / tendencia) para que el fallback
-    # elija primero el mejor lider y no un nombre arbitrario. No cambia
-    # elegibilidad ni riesgo; solo el orden. Envuelto para no romper el fallback.
-    if getattr(settings, "opportunity_ranker_fallback_enabled", False):
+    # Reordenado determinista opcional. El sesgo por setup usa la misma base de
+    # ranker, pero añade edge_table medida en walk-forward y deja shadow report.
+    if getattr(settings, "opportunity_ranker_fallback_enabled", False) or getattr(settings, "setup_edge_bias_enabled", False):
         try:
             from agente_bolsa.tools.opportunity_ranker import prioritize_candidates
 
@@ -3829,7 +4066,30 @@ def deterministic_trade_fallback_recommendations(
                     (market_state.get("relative_strength") or {}).get("benchmark_return_20d")
                     or 0.0
                 )
-            eligible = prioritize_candidates(eligible, benchmark_return_20d=_bench_ret)
+            baseline_ranked = prioritize_candidates(eligible, benchmark_return_20d=_bench_ret)
+            if getattr(settings, "setup_edge_bias_enabled", False):
+                edge_table = load_setup_edge_table(
+                    settings.database_path,
+                    as_of=_setup_edge_shadow_as_of(technical_context),
+                    train_window_days=int(settings.setup_edge_bias_train_window_days),
+                    min_samples=int(settings.setup_edge_bias_min_samples),
+                )
+                biased_ranked = prioritize_candidates(
+                    eligible,
+                    benchmark_return_20d=_bench_ret,
+                    edge_table=edge_table,
+                )
+                eligible = biased_ranked
+                _record_setup_edge_shadow_report(
+                    settings,
+                    technical_context,
+                    benchmark_return_20d=_bench_ret,
+                    edge_table=edge_table,
+                    baseline_ranked=baseline_ranked,
+                    biased_ranked=biased_ranked,
+                )
+            else:
+                eligible = baseline_ranked
         except Exception as exc:  # noqa: BLE001 - reordenar nunca debe romper el fallback
             log_swallow(LOGGER, "priorizar fallback con opportunity ranker", exc)
     recommendations: list[TradeRecommendation] = []

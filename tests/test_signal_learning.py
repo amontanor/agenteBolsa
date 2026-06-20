@@ -100,6 +100,39 @@ def test_record_signal_candidates_persists_market_regime_from_report(tmp_path):
     assert features["market_state_quality"] == "GOOD"
 
 
+def test_record_signal_candidates_uses_candidate_market_regime_when_report_lacks_it(tmp_path):
+    from agente_bolsa.storage import Store
+
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    report = {
+        "run_id": "scan-candidate-regime",
+        "all_candidates": [
+            {
+                "symbol": "AAPL",
+                "direction": "long",
+                "score": 15,
+                "setup_quality": "strong",
+                "market_regime": "neutral",
+                "volatility_regime": "compressed",
+                "risk_posture": "balanced",
+                "market_state_quality": "GOOD",
+                "last_date": "2026-04-27",
+                "technical_state": {"close": 100, "sma_20": 95},
+                "risk_plan": {"entry_price": 100, "stop_loss": 95, "take_profit": 115},
+            }
+        ],
+    }
+
+    record_signal_candidates(store, report, source="test")
+    features = store.signal_outcomes()[0]["features"]
+
+    assert features["market_regime"] == "neutral"
+    assert features["volatility_regime"] == "compressed"
+    assert features["risk_posture"] == "balanced"
+    assert features["market_state_quality"] == "GOOD"
+
+
 def test_record_signal_candidates_persists_score_rank_independent_of_source_order(tmp_path):
     from agente_bolsa.storage import Store
 

@@ -75,6 +75,10 @@ def _signal_features(candidate: dict[str, Any]) -> dict[str, Any]:
         "blocked_auto_buy": bool(candidate.get("blocked_auto_buy")),
         "blocked_auto_buy_reason": candidate.get("blocked_auto_buy_reason"),
         "setup_quality": candidate.get("setup_quality"),
+        "market_regime": candidate.get("market_regime") or technical_state.get("market_regime"),
+        "volatility_regime": candidate.get("volatility_regime") or technical_state.get("volatility_regime"),
+        "risk_posture": candidate.get("risk_posture") or technical_state.get("risk_posture"),
+        "market_state_quality": candidate.get("market_state_quality") or technical_state.get("market_state_quality"),
         "last_date": _date(candidate.get("last_date")),
         "close": close,
         "entry_price": _num(risk.get("entry_price"), close),
@@ -105,7 +109,12 @@ def _signal_features(candidate: dict[str, Any]) -> dict[str, Any]:
 def _market_regime_features(report: dict[str, Any]) -> dict[str, Any]:
     state = report.get("market_state") if isinstance(report.get("market_state"), dict) else {}
     return {
-        "market_regime": state.get("market_regime") or report.get("market_regime") or report.get("regime"),
+        "market_regime": (
+            state.get("market_regime")
+            or report.get("market_regime")
+            or report.get("regime")
+            or ((report.get("summary") or {}).get("market_regime") if isinstance(report.get("summary"), dict) else None)
+        ),
         "volatility_regime": state.get("volatility_regime") or report.get("volatility_regime"),
         "risk_posture": state.get("risk_posture") or report.get("risk_posture"),
         "market_state_quality": ((state.get("data_quality") or {}).get("status") if isinstance(state.get("data_quality"), dict) else None)
@@ -323,8 +332,13 @@ def update_signal_decisions(
             entry_gate = gate.get("entry_quality_gate")
             backtest = gate.get("backtest_gate")
             entry_score = ((entry_gate or {}).get("checks") or {}).get("entry_score_v2") or {}
+            # Bug telemetria: un rechazo de entry-quality no debe etiquetarse como
+            # aprobado solo porque la recomendacion arrastre micro_experiment desde el
+            # soft-override de backtest. El bloqueo de entry-quality solo se exime si la
+            # propia entry-quality concede micro (entry_score.micro_experiment).
+            entry_origin_micro = bool(entry_score.get("micro_experiment"))
             entry_micro = bool(entry_score.get("micro_experiment") or recommendation.micro_experiment)
-            if entry_gate and not entry_gate.get("approved") and not entry_micro:
+            if entry_gate and not entry_gate.get("approved") and not entry_origin_micro:
                 decision = "blocked_entry_quality"
             elif backtest and not backtest.get("approved"):
                 if _paper_backtest_soft_override(settings, recommendation, gate):

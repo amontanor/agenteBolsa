@@ -541,6 +541,69 @@ def test_deterministic_trade_fallback_skips_plain_overextended_candidates():
     assert recommendations[0].symbol == "OK"
 
 
+def test_deterministic_trade_fallback_applies_setup_edge_bias_and_writes_shadow_report(tmp_path):
+    settings = Settings(
+        DATA_DIR=tmp_path,
+        SETUP_EDGE_BIAS_ENABLED=True,
+        OPPORTUNITY_RANKER_FALLBACK_ENABLED=False,
+        SETUP_EDGE_BIAS_TRAIN_WINDOW_DAYS=120,
+        SETUP_EDGE_BIAS_MIN_SAMPLES=1,
+    )
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    store.save_signal_outcome(
+        signal_id="train:GOOD1",
+        source_run_id="train",
+        source="test",
+        symbol="GOOD1",
+        signal_date="2026-06-10",
+        decision="candidate",
+        features={"setup_quality": "strong", "chart_patterns": {"bullish_confirmed_count": 0}},
+        outcome={"return_5d": 0.03},
+    )
+    store.save_signal_outcome(
+        signal_id="train:BAD1",
+        source_run_id="train",
+        source="test",
+        symbol="BAD1",
+        signal_date="2026-06-11",
+        decision="candidate",
+        features={"setup_quality": "strong", "chart_patterns": {"bullish_confirmed_count": 2}},
+        outcome={"return_5d": -0.02},
+    )
+    portfolio = PortfolioSnapshot(
+        account_id="paper",
+        status="ACTIVE",
+        currency="USD",
+        cash=20_000,
+        portfolio_value=20_000,
+        buying_power=20_000,
+        positions=[],
+        open_orders=[],
+    )
+    good = _selection_candidate("GOOD", score=17, volume_zscore_20=1.0, chart_patterns=[])
+    bad = _selection_candidate(
+        "BAD",
+        score=17,
+        volume_zscore_20=1.0,
+        chart_patterns=[{"bias": "bullish", "status": "confirmed"}],
+    )
+    good["selection_score"] = 0.05
+    bad["selection_score"] = 0.05
+    good["selection_rank"] = 1
+    bad["selection_rank"] = 2
+    context = {"run_id": "scan-setup-edge", "selected_candidates": [bad, good]}
+
+    recommendations = deterministic_trade_fallback_recommendations(settings, portfolio, context, limit=1)
+
+    assert len(recommendations) == 1
+    assert recommendations[0].symbol == "GOOD"
+    shadow_payload = json.loads((tmp_path / "reports" / "latest_setup_edge_shadow.json").read_text(encoding="utf-8"))
+    assert shadow_payload["changed"] is True
+    assert shadow_payload["baseline_top_symbols"][0] == "BAD"
+    assert shadow_payload["biased_top_symbols"][0] == "GOOD"
+
+
 def test_deterministic_trade_fallback_allows_constructive_extension_for_selected_score_thirteen(tmp_path):
     # DATA_DIR aislado: el test no debe depender de los priors del data/ vivo.
     portfolio = PortfolioSnapshot(
@@ -1717,6 +1780,53 @@ def test_entry_quality_gate_blocks_overextended_sma20_distance(tmp_path):
     assert approved is False
     assert "extendido" in reason
     assert checks["sma20_distance"] == 0.2
+
+
+def test_entry_quality_records_confirmed_pattern_shadow_when_relaxation_would_unlock(tmp_path):
+    settings = Settings(
+        DATA_DIR=tmp_path,
+        SETUP_EDGE_BIAS_ENABLED=True,
+        ENTRY_QUALITY_MAX_SMA20_DISTANCE=0.12,
+    )
+    recommendation = TradeRecommendation(
+        symbol="AAPL",
+        action="buy",
+        confidence=0.9,
+        reason="fallback",
+        entry_price=100.0,
+        stop_loss=95.0,
+        take_profit=110.0,
+        target_exposure_pct=0.05,
+        source="deterministic_fallback",
+    )
+    candidate = _quality_context(
+        score=13,
+        selection_rank=3,
+        technical_state={
+            "close": 112.5,
+            "return_20d": 0.24,
+            "sma_20": 100.0,
+            "rsi_14": 74.0,
+            "macd": 2.0,
+            "macd_signal": 1.0,
+            "volume_zscore_20": 0.8,
+            "close_position_in_range": 0.82,
+            "chart_patterns": [],
+        },
+    )
+
+    approved, reason, checks = validate_entry_quality(
+        settings,
+        recommendation,
+        candidate,
+        {"results": []},
+    )
+
+    assert approved is False
+    assert "extendido" in reason
+    assert checks["confirmed_pattern_requirement_shadow"]["enabled"] is True
+    assert checks["confirmed_pattern_requirement_shadow"]["would_unlock"] is True
+    assert "fallback_constructive_extension" in checks["confirmed_pattern_requirement_shadow"]["paths"]
 
 
 def test_entry_quality_gate_allows_fallback_momentum_extension(tmp_path):

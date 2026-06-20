@@ -136,6 +136,18 @@ class Settings(BaseSettings):
     backtest_gate_min_trade_window_alpha: float = Field(default=0.0, alias="BACKTEST_GATE_MIN_TRADE_WINDOW_ALPHA")
     backtest_gate_min_regime_trades: int = Field(default=2, alias="BACKTEST_GATE_MIN_REGIME_TRADES")
     backtest_gate_max_negative_regimes: int = Field(default=1, alias="BACKTEST_GATE_MAX_NEGATIVE_REGIMES")
+    # Sesgo de selección por edge medido por setup (default OFF; ver tools/setup_edge.py
+    # y docs/auditoria_codigo_2026-06-21.md "HALLAZGO ESTRATÉGICO"). Solo se activa tras
+    # validar en shadow que reorientar hacia sin_patron|strong/mixed mejora la expectativa.
+    setup_edge_bias_enabled: bool = Field(default=False, alias="SETUP_EDGE_BIAS_ENABLED")
+    setup_edge_bias_train_window_days: int = Field(
+        default=120,
+        alias="SETUP_EDGE_BIAS_TRAIN_WINDOW_DAYS",
+    )
+    setup_edge_bias_min_samples: int = Field(
+        default=20,
+        alias="SETUP_EDGE_BIAS_MIN_SAMPLES",
+    )
     entry_quality_gate_enabled: bool = Field(default=True, alias="ENTRY_QUALITY_GATE_ENABLED")
     entry_quality_min_score: int = Field(default=12, alias="ENTRY_QUALITY_MIN_SCORE")
     entry_quality_max_rsi: float = Field(default=85.0, alias="ENTRY_QUALITY_MAX_RSI")

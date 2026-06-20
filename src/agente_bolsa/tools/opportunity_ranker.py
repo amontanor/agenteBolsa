@@ -20,6 +20,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from agente_bolsa._utils import to_float
+from agente_bolsa.tools.setup_edge import setup_edge_bias, setup_quality_key
 
 # ETFs de indice/sector que normalmente no queremos como "oportunidad" individual.
 DEFAULT_EXCLUDE = {
@@ -286,6 +287,7 @@ def prioritize_candidates(
     *,
     benchmark_return_20d: float = 0.0,
     config: OpportunityConfig | None = None,
+    edge_table: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     """Reordena una lista de candidatos (con `technical_state`) por score de
     oportunidad determinista, de mejor a peor.
@@ -294,6 +296,12 @@ def prioritize_candidates(
     por fuerza relativa / momentum / tendencia en lugar de un orden arbitrario.
     No filtra ni cambia elegibilidad: solo reordena. Cada item conserva todos
     sus campos originales y gana `opportunity_score`.
+
+    Si se pasa `edge_table` (mapa setup->retorno medio medido, ver
+    `tools/setup_edge.py` y `scripts/shadow_setup_edge_reweight.py`), se aplica un
+    sesgo acotado por edge de setup al orden: prioriza setups con edge positivo
+    (p.ej. sin_patron|strong) y posterga los de edge negativo (confirmed_pattern).
+    Sin tabla, el comportamiento es idéntico al previo (retrocompatible).
     """
     cfg = config or OpportunityConfig()
     scored: list[tuple[float, dict[str, Any]]] = []
@@ -306,6 +314,15 @@ def prioritize_candidates(
         s = score_symbol(symbol, ts, benchmark_return_20d, cfg)
         enriched = dict(item)
         enriched["opportunity_score"] = s.score
-        scored.append((s.score, enriched))
+        # Sesgo por edge de setup (neutral si no hay tabla o faltan campos).
+        bias = 0.0
+        if edge_table:
+            key = setup_quality_key({**ts, **item})
+            bias = setup_edge_bias(key, edge_table)
+            enriched["setup_edge_key"] = key
+            enriched["setup_edge_bias"] = bias
+        final_score = s.score + bias
+        enriched["opportunity_score_adjusted"] = round(final_score, 2)
+        scored.append((final_score, enriched))
     scored.sort(key=lambda pair: pair[0], reverse=True)
     return [item for _score, item in scored]
