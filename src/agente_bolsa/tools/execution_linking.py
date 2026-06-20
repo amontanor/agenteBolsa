@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any
+
+# Antiguedad maxima (dias naturales) de una senal para enlazarse a una orden.
+# Evita heredar fills de senales historicas: una orden pertenece al mismo evento
+# (mismo dia o pocos dias antes), no de semanas atras.
+DEFAULT_MAX_SIGNAL_AGE_DAYS = 5
 
 
 def _json_loads(raw: str | None) -> dict[str, Any]:
@@ -41,22 +46,46 @@ def match_signal_row_for_buy_order(
     plan_created_at: str | None = None,
     broker_order_id: str | None = None,
     limit: int = 50,
+    max_signal_age_days: int | None = DEFAULT_MAX_SIGNAL_AGE_DAYS,
 ) -> dict[str, Any] | None:
     signal_date_cutoff, timestamp_cutoff = _cutoff(order_created_at, plan_created_at)
     if not signal_date_cutoff:
         return None
-    rows = conn.execute(
-        """
-        SELECT signal_id, source_run_id, source, symbol, signal_date, decision,
-               features_json, gate_json, outcome_json, created_at, updated_at
-        FROM signal_outcomes
-        WHERE symbol = ?
-          AND signal_date <= ?
-        ORDER BY signal_date DESC, created_at DESC, signal_id DESC
-        LIMIT ?
-        """,
-        (symbol.upper(), signal_date_cutoff, limit),
-    ).fetchall()
+    floor_date: str | None = None
+    if max_signal_age_days is not None and max_signal_age_days >= 0:
+        try:
+            floor_date = (
+                date.fromisoformat(signal_date_cutoff) - timedelta(days=max_signal_age_days)
+            ).isoformat()
+        except ValueError:
+            floor_date = None
+    if floor_date is not None:
+        rows = conn.execute(
+            """
+            SELECT signal_id, source_run_id, source, symbol, signal_date, decision,
+                   features_json, gate_json, outcome_json, created_at, updated_at
+            FROM signal_outcomes
+            WHERE symbol = ?
+              AND signal_date <= ?
+              AND signal_date >= ?
+            ORDER BY signal_date DESC, created_at DESC, signal_id DESC
+            LIMIT ?
+            """,
+            (symbol.upper(), signal_date_cutoff, floor_date, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT signal_id, source_run_id, source, symbol, signal_date, decision,
+                   features_json, gate_json, outcome_json, created_at, updated_at
+            FROM signal_outcomes
+            WHERE symbol = ?
+              AND signal_date <= ?
+            ORDER BY signal_date DESC, created_at DESC, signal_id DESC
+            LIMIT ?
+            """,
+            (symbol.upper(), signal_date_cutoff, limit),
+        ).fetchall()
     fallback = None
     for row in rows:
         gate = _json_loads(row["gate_json"])
