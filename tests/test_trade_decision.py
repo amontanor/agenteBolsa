@@ -1492,6 +1492,9 @@ def test_selection_score_penalizes_known_negative_pockets():
     assert penalized["negative_pocket_penalties"]["confirmed_pattern"] > 0
     assert penalized["negative_pocket_penalties"]["volume_z_lt0"] > 0
     assert penalized["negative_pocket_penalties"]["rsi_60_75"] > 0
+    assert base["negative_pocket_penalty_total"] == 0
+    assert base["negative_pocket_shadow_penalties"]["confirmed_pattern"] > 0
+    assert base["negative_pocket_penalty_applied"] is False
 
 
 def test_build_order_plans_allows_exceptional_bearish_exit():

@@ -71,6 +71,8 @@ def _signal_features(candidate: dict[str, Any]) -> dict[str, Any]:
         "selection_score": _num(candidate.get("selection_score")),
         "selection_rank": candidate.get("selection_rank"),
         "selection_reason": candidate.get("selection_reason"),
+        "negative_pocket_shadow_penalties": candidate.get("negative_pocket_shadow_penalties", {}),
+        "negative_pocket_penalty_applied": bool(candidate.get("negative_pocket_penalty_applied")),
         "blocked_auto_buy": bool(candidate.get("blocked_auto_buy")),
         "blocked_auto_buy_reason": candidate.get("blocked_auto_buy_reason"),
         "setup_quality": candidate.get("setup_quality"),

@@ -1862,16 +1862,16 @@ def _selection_score_for_candidate(
     failure_penalty = 0.020 if breakout_failure_risk else 0.0
     setup_risk_penalty = 0.080 if range_expansion else 0.0
     operational_penalty = _float(learning_prior.get("operational_penalty")) or 0.0
-    pocket_penalties: dict[str, float] = {}
-    if settings.selection_negative_pocket_penalty_enabled:
-        if setup_name == "confirmed_pattern":
-            pocket_penalties["confirmed_pattern"] = float(settings.selection_negative_pocket_confirmed_pattern_penalty)
-        if volume_z < 0:
-            pocket_penalties["volume_z_lt0"] = float(settings.selection_negative_pocket_weak_volume_penalty)
-        if distance_sma20 is not None and 0.0 <= distance_sma20 < 0.06:
-            pocket_penalties["sma20_dist_0_6pct"] = float(settings.selection_negative_pocket_tight_sma20_penalty)
-        if 60.0 <= rsi < 75.0:
-            pocket_penalties["rsi_60_75"] = float(settings.selection_negative_pocket_mid_rsi_penalty)
+    shadow_pocket_penalties: dict[str, float] = {}
+    if setup_name == "confirmed_pattern":
+        shadow_pocket_penalties["confirmed_pattern"] = float(settings.selection_negative_pocket_confirmed_pattern_penalty)
+    if volume_z < 0:
+        shadow_pocket_penalties["volume_z_lt0"] = float(settings.selection_negative_pocket_weak_volume_penalty)
+    if distance_sma20 is not None and 0.0 <= distance_sma20 < 0.06:
+        shadow_pocket_penalties["sma20_dist_0_6pct"] = float(settings.selection_negative_pocket_tight_sma20_penalty)
+    if 60.0 <= rsi < 75.0:
+        shadow_pocket_penalties["rsi_60_75"] = float(settings.selection_negative_pocket_mid_rsi_penalty)
+    pocket_penalties = shadow_pocket_penalties if settings.selection_negative_pocket_penalty_enabled else {}
     pocket_penalty_total = sum(pocket_penalties.values())
 
     selection_score = (
@@ -1928,12 +1928,17 @@ def _selection_score_for_candidate(
         reasons.append("weak_volume_tolerated_for_leader")
     for key in pocket_penalties:
         reasons.append(f"negative_pocket:{key}")
+    if not settings.selection_negative_pocket_penalty_enabled:
+        for key in shadow_pocket_penalties:
+            reasons.append(f"negative_pocket_shadow:{key}")
 
     return {
         "selection_score": round(selection_score, 4),
         "selection_reason": ",".join(reasons) if reasons else "baseline",
         "negative_pocket_penalty_total": round(pocket_penalty_total, 4),
         "negative_pocket_penalties": pocket_penalties,
+        "negative_pocket_shadow_penalties": shadow_pocket_penalties,
+        "negative_pocket_penalty_applied": bool(settings.selection_negative_pocket_penalty_enabled),
         "selection_components": {
             **{key: round(value, 4) if isinstance(value, float) else value for key, value in edge_components.items()},
             "shrunk_edge_3d": round(edge, 4),

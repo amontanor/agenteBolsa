@@ -588,6 +588,17 @@ mayor palanca de rentabilidad.
 - Es análisis `SHADOW` puro (`changes_trading_behavior=false`) y nunca promociona
   la política automáticamente; requiere ampliar la muestra paper madura.
 
+#### Resultado C2.2-C2.3 (20-jun-2026, v0.4.18)
+
+- `stale_guard` permanece con conducta OFF y se calcula contrafactualmente en
+  el informe semanal, con elegibles, disparos y métricas actual vs shadow.
+- La penalización de `confirmed_pattern` queda formalmente en shadow: el flag de
+  conducta pasa a OFF por defecto; el routing calcula y persiste la penalización
+  que habría aplicado, pero no la resta del score. El informe semanal muestra
+  muestra madura y edge por 1/3/5/10d.
+- El informe semanal integra scoreboard, alpha SPY, régimen y comparación de
+  horizonte. Ningún cálculo de esta sección modifica compras o ventas.
+
 ### Capa 3 — Mas autonomo
 - **C3.1** Promocion/democion automatica del lab con guardas (champion/challenger) cuando haya muestra y expectativa+.
 - **C3.2** El watchdog (`agents_healthcheck`) debe ALERTAR de forma visible si el grupo vuelve a quedarse en fallback varios ciclos (lo de 11-15 paso desapercibido).

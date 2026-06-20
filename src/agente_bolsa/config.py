@@ -707,7 +707,7 @@ class Settings(BaseSettings):
         alias="OPPORTUNITY_RANKER_FALLBACK_ENABLED",
     )
     selection_negative_pocket_penalty_enabled: bool = Field(
-        default=True,
+        default=False,
         alias="SELECTION_NEGATIVE_POCKET_PENALTY_ENABLED",
     )
     selection_negative_pocket_confirmed_pattern_penalty: float = Field(

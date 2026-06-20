@@ -21,8 +21,14 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from agente_bolsa.config import Settings
+from agente_bolsa.storage import Store
+from agente_bolsa.tools.c2_shadow_reporting import build_c2_shadow_report
+from agente_bolsa.tools.profitability_scoreboard import build_profitability_scoreboard
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = ROOT / "data" / "state" / "agente_bolsa.sqlite3"
+C2_SHADOW_SINCE_DATE = "2026-04-01"
 
 
 def connect_ro(db_path: Path) -> sqlite3.Connection:
@@ -64,6 +70,7 @@ def build_markdown(db_path: Path, days: int) -> str:
     out: list[str] = []
     out.append(f"# Informe semanal de mejora del sistema")
     out.append("")
+
     out.append(f"- Fecha de generacion: {today}")
     out.append(f"- Ventana: ultimos {days} dias (desde {cutoff[:10]})")
     out.append("")
@@ -160,6 +167,44 @@ def build_markdown(db_path: Path, days: int) -> str:
                f"{con.execute('SELECT COUNT(*) FROM distilled_lessons').fetchone()[0] if table_exists(con,'distilled_lessons') else 'n/d'}")
     out.append(f"- Resumenes diarios de aprendizaje en ventana: "
                f"{count_since(con, 'learning_daily_summaries', 'created_at', cutoff)}")
+    out.append("")
+
+    # --- Capa 2 shadow ---
+    out.append("## 6. Capa 2: medicion shadow")
+    out.append("")
+    try:
+        data_dir = db_path.parent.parent
+        settings = Settings(DATA_DIR=data_dir)
+        store = Store(db_path, settings.agent_logs_dir)
+        scoreboard = build_profitability_scoreboard(settings, store, since_date=C2_SHADOW_SINCE_DATE)
+        horizon = scoreboard.get("exit_horizon_shadow") or {}
+        perf = scoreboard.get("performance") or {}
+        shadow = build_c2_shadow_report(settings, store, since_date=C2_SHADOW_SINCE_DATE)
+        out.append(f"- Ventana Capa 2: desde {C2_SHADOW_SINCE_DATE} (necesaria para madurar 5-10 sesiones).")
+        out.append(
+            f"- Alpha acumulado vs SPY: {perf.get('cumulative_alpha')} "
+            f"(cobertura {((perf.get('benchmark_coverage') or {}).get('available', 0))}/"
+            f"{((perf.get('benchmark_coverage') or {}).get('total', 0))})."
+        )
+        out.append(
+            f"- Horizonte actual 1-3d: {horizon.get('current_1_3d')}; "
+            f"shadow 5-10d: {horizon.get('shadow_5_10d')}; "
+            f"pareado: {horizon.get('paired_comparison')}."
+        )
+        stale = shadow.get("stale_guard") or {}
+        out.append(
+            f"- stale_guard SHADOW: flag conducta={((shadow.get('flags') or {}).get('stale_guard_behavior_enabled'))}, "
+            f"elegibles={stale.get('eligible')}, disparos={stale.get('triggered')}, "
+            f"actual={stale.get('current')}, shadow={stale.get('shadow')}."
+        )
+        confirmed = shadow.get("confirmed_pattern") or {}
+        out.append(
+            f"- confirmed_pattern SHADOW: aplicada={confirmed.get('applied')}, "
+            f"senales={confirmed.get('signals')}, penalizacion={confirmed.get('shadow_penalty')}, "
+            f"metricas={confirmed.get('metrics')}."
+        )
+    except Exception as exc:  # noqa: BLE001 - el informe base debe seguir disponible.
+        out.append(f"_Medicion Capa 2 no disponible: {exc!r}._")
     out.append("")
 
     out.append("---")
