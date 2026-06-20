@@ -1,0 +1,4 @@
+interface:
+  display_name: "Arrancar agenteBolsa"
+  short_description: "Arranca y valida agenteBolsa de extremo a extremo"
+  default_prompt: "Usa $start-agente-bolsa para arrancar completamente el proyecto y verificar que todo queda operativo."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Buenas practicas agenteBolsa"
+  short_description: "Aplica las convenciones tecnicas de agenteBolsa"
+  default_prompt: "Usa $buenas-practicas para realizar este cambio siguiendo las convenciones del proyecto."
