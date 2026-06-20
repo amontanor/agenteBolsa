@@ -480,6 +480,21 @@ reversible). A/B (`opportunity_ranker_ab.py`):
 
 Tests: 660 verdes.
 
+**Setup-edge bias (commit `d7dba99`, v0.4.27)**:
+- `tools/setup_edge.py` queda como fuente comun para clasificar setups y
+  calcular `edge_table` desde `signal_outcomes` con ventana train walk-forward.
+- `trade_decision.py` lo cablea al fallback solo detras de
+  `SETUP_EDGE_BIAS_ENABLED` (default **OFF**); al activarlo reordena el slate y
+  deja comparativa shadow en `data/reports/latest_setup_edge_shadow.json`.
+- `entry_quality` no se relaja en real: solo registra en shadow que rutas se
+  desbloquearian al retirar el requisito duro de `confirmed_pattern`.
+- Telemetria: `signal_learning` persiste `market_regime` y
+  `volatility_regime` desde el reporte o el candidato para evitar cobertura
+  cero por regimen.
+- Config registrada: `SETUP_EDGE_BIAS_ENABLED=false`,
+  `SETUP_EDGE_BIAS_TRAIN_WINDOW_DAYS=120`,
+  `SETUP_EDGE_BIAS_MIN_SAMPLES=20`.
+
 ### 11.7 Siguiente: F6 (sistema de mejora sólido) + F7 (scoreboard)
 
 Ahora que hay alpha y régimen, toca cerrar el lazo de mejora con **guardas
@@ -551,21 +566,23 @@ mayor palanca de rentabilidad.
 - **C1.3 HECHO**: ciclo real de sentimiento AAPL con 3 noticias, score `-1`,
   confianza `0.6`, sin warnings y `sentiment_failed=false`. Se eleva el limite
   del rol a 4.000 tokens porque Kimi consumia 1.200 en razonamiento y devolvia
-  `{}`; ahora una respuesta incompleta se rechaza explicitamente.
-- **Decision real validada**: `decide-once` genero recomendacion HOOD con
-  `source="llm"`; `llm_usage` registro `trade_decision/decision` sobre
-  `moonshotai/kimi-k2.6-20260420` (57.924 tokens). El ciclo observable cargo y
-  arranco CrewAI correctamente. Una tarea larga de revision agoto su timeout de
-  120 s y uso el fallback LLM directo; no hubo fallback determinista ni ordenes
-  por estar el mercado cerrado. Este timeout queda como optimizacion operativa,
-  no como fallo de dependencias o indisponibilidad LLM.
+  `{}`; ahora una respuesta incompleta se rechaza explic
+### 12.1 Capa 2 — HECHA (medicion + shadow, commits ee51f8e/0411ce0/fb0d927/efcf8ee)
 
-### Capa 2 — Mas listo / rentable (con evidencia, en shadow)
-- **C2.1** Alinear horizonte de salida a 5-10d (donde hay edge); medir en shadow contra la politica actual.
-- **C2.2** Activar `stale_guard` en shadow (corta perdedores estancados; FRT tardo 5 dias en cerrar a peor).
-- **C2.3** Formalizar shadow-penalty de `confirmed_pattern` (13.978 senales maduras, edge -0,56%).
-- **C2.4** Configurar fetcher de benchmark SPY para que `alpha vs SPY` deje de ser None.
-- **C2.5** Persistir `market_regime` real (esta semana 100% "unknown").
+- Alpha vs SPY numerico (1d +0,80% / 3d -1,01% / 5d -0,45% / 10d +4,33%); cobertura SPY 7/7.
+- Regimen real persistido (ej. AAPL -> bullish); ya no "unknown".
+- **Hallazgo clave confirmado (horizonte):** salida actual 1-3d expectativa -1,78% (PF 0,25) vs shadow 5-10d +1,18% (PF 1,34). Mejora pareada +2,95% retorno / +1,54% alpha. NO promovido (n=4).
+- stale_guard y shadow-penalty confirmed_pattern: OFF, midiendo en el informe semanal.
+
+### 12.2 Decisiones a tomar el viernes 26-jun (con mas muestra)
+
+1. **Activar horizonte de salida 5-10d** si la ventaja se mantiene con n>=20 (palanca nº1 de rentabilidad).
+2. Valorar activar `stale_guard` si corta perdedores sin dañar ganadores.
+3. Formalizar/activar penalizacion de `confirmed_pattern` si sigue con edge negativo y muestra alta.
+4. Comparar calidad de decision kimi vs etapa MiMo (primera semana limpia con kimi).
+
+Hasta el viernes: NO tocar nada; dejar acumular muestra con Capa 1 estable + Capa 2 en shadow.
+unknown").
 
 #### Resultado C2.4-C2.5 (20-jun-2026, v0.4.16)
 
