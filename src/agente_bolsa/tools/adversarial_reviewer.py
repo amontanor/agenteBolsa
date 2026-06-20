@@ -2,18 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
-
+from agente_bolsa._utils import to_float
 from agente_bolsa.models import TradeRecommendation
-
-
-def _float(value: Any) -> float | None:
-    if value is None or value == "":
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _candidate_for_symbol(technical_context: dict[str, Any] | None, symbol: str) -> dict[str, Any]:
@@ -32,9 +22,9 @@ def review_recommendation_adversarial(
     market_state: dict[str, Any] | None,
 ) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
-    entry = _float(recommendation.entry_price)
-    stop = _float(recommendation.stop_loss)
-    take = _float(recommendation.take_profit)
+    entry = to_float(recommendation.entry_price)
+    stop = to_float(recommendation.stop_loss)
+    take = to_float(recommendation.take_profit)
     candidate = _candidate_for_symbol(technical_context, recommendation.symbol)
     policy = (market_state or {}).get("market_regime_policy") or {}
     quality = ((market_state or {}).get("data_quality") or {}).get("status")

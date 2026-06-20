@@ -46,6 +46,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from agente_bolsa._utils import human_bytes, sqlite_connect_ro, table_exists
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = ROOT / "data" / "state" / "agente_bolsa.sqlite3"
 
@@ -63,28 +65,12 @@ DEFAULT_RETENTION = {
 }
 
 
-def human(n_bytes: float) -> str:
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if abs(n_bytes) < 1024.0:
-            return f"{n_bytes:.1f}{unit}"
-        n_bytes /= 1024.0
-    return f"{n_bytes:.1f}PB"
-
-
 def connect(db_path: Path, read_only: bool) -> sqlite3.Connection:
     if read_only:
-        uri = f"file:{db_path}?mode=ro"
-        return sqlite3.connect(uri, uri=True, timeout=30)
+        return sqlite_connect_ro(db_path, timeout=30)
     con = sqlite3.connect(str(db_path), timeout=60)
     con.execute("PRAGMA busy_timeout=60000")
     return con
-
-
-def table_exists(cur: sqlite3.Cursor, name: str) -> bool:
-    row = cur.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
-    ).fetchone()
-    return row is not None
 
 
 def _retention_plan(global_days):
@@ -124,8 +110,8 @@ def analyze(db_path: Path, global_days) -> dict:
     con.close()
     return {"db_path": str(db_path),
             "auto_vacuum": {0: "NONE", 1: "FULL", 2: "INCREMENTAL"}.get(auto_vac, auto_vac),
-            "file_bytes": total_bytes, "file_human": human(total_bytes),
-            "free_bytes": free_bytes, "free_human": human(free_bytes),
+            "file_bytes": total_bytes, "file_human": human_bytes(total_bytes),
+            "free_bytes": free_bytes, "free_human": human_bytes(free_bytes),
             "free_ratio": round(free_bytes / total_bytes, 4) if total_bytes else 0.0,
             "tables": tables, "total_prunable_rows": total_prunable}
 
@@ -323,7 +309,7 @@ def main() -> int:
             after_bytes = int(compaction.get("bytes_after") or 0)
             print(
                 f"\nSnapshots CI compactados: {compaction.get('compacted', 0)}/"
-                f"{compaction.get('scanned', 0)} ({human(before)} -> {human(after_bytes)})"
+                f"{compaction.get('scanned', 0)} ({human_bytes(before)} -> {human_bytes(after_bytes)})"
             )
             print(f"\nAPLICADO ({res.get('vacuum_mode')}). Filas borradas:")
             for tbl, n in res.get("deleted", {}).items():

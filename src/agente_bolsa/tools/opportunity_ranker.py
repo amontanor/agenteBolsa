@@ -19,6 +19,8 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from typing import Any
 
+from agente_bolsa._utils import to_float
+
 # ETFs de indice/sector que normalmente no queremos como "oportunidad" individual.
 DEFAULT_EXCLUDE = {
     "SPY", "QQQ", "DIA", "IWM", "VTI", "VOO",
@@ -39,15 +41,6 @@ class OpportunityConfig:
     require_above_sma20: bool = True
     require_uptrend_200: bool = False
     atr_stop_multiple: float = 2.0
-
-
-def _f(value: Any) -> float | None:
-    try:
-        if value is None:
-            return None
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:
@@ -78,13 +71,13 @@ def score_symbol(
 ) -> ScoredOpportunity:
     """Puntua un simbolo. Score mayor = mejor oportunidad de largo."""
     cfg = config or OpportunityConfig()
-    close = _f(metrics.get("close"))
-    ret20 = _f(metrics.get("return_20d"))
-    sma20 = _f(metrics.get("sma_20"))
-    sma50 = _f(metrics.get("sma_50"))
-    sma200 = _f(metrics.get("sma_200"))
-    vol_z = _f(metrics.get("volume_zscore_20"))
-    atr = _f(metrics.get("atr_14"))
+    close = to_float(metrics.get("close"))
+    ret20 = to_float(metrics.get("return_20d"))
+    sma20 = to_float(metrics.get("sma_20"))
+    sma50 = to_float(metrics.get("sma_50"))
+    sma200 = to_float(metrics.get("sma_200"))
+    vol_z = to_float(metrics.get("volume_zscore_20"))
+    atr = to_float(metrics.get("atr_14"))
     trend_positive = bool(metrics.get("trend_positive"))
     above_long = bool(metrics.get("above_long_trend"))
 
@@ -189,10 +182,10 @@ def rank_opportunities(
     if benchmark_return_20d is not None:
         bench_ret = float(benchmark_return_20d)
     else:
-        bench_ret = _f(snapshot.get("benchmark_return_20d"))
+        bench_ret = to_float(snapshot.get("benchmark_return_20d"))
         if bench_ret is None:
             bench_metrics = symbols.get(benchmark) or {}
-            bench_ret = _f(bench_metrics.get("return_20d")) or 0.0
+            bench_ret = to_float(bench_metrics.get("return_20d")) or 0.0
 
     scored: list[ScoredOpportunity] = []
     for symbol, metrics in symbols.items():
@@ -221,9 +214,9 @@ def rank_opportunities(
 def _derive_trend_flags(metrics: dict[str, Any]) -> dict[str, Any]:
     """Deriva trend_positive / above_long_trend si vienen vacios (close vs SMA)."""
     out = dict(metrics)
-    close = _f(metrics.get("close"))
-    sma20 = _f(metrics.get("sma_20"))
-    sma200 = _f(metrics.get("sma_200"))
+    close = to_float(metrics.get("close"))
+    sma20 = to_float(metrics.get("sma_20"))
+    sma200 = to_float(metrics.get("sma_200"))
     if out.get("trend_positive") is None and close is not None and sma20:
         out["trend_positive"] = close > sma20
     if out.get("above_long_trend") is None and close is not None and sma200:
@@ -251,7 +244,7 @@ def snapshot_from_technical_study(study: dict[str, Any]) -> dict[str, Any]:
     return {
         "as_of": study.get("as_of"),
         "benchmark": str(study.get("benchmark_symbol") or "SPY").upper(),
-        "benchmark_return_20d": _f(study.get("benchmark_return_20d")),
+        "benchmark_return_20d": to_float(study.get("benchmark_return_20d")),
         "symbols": symbols,
     }
 
@@ -268,17 +261,17 @@ def snapshot_from_breakout_scan(scan: dict[str, Any]) -> dict[str, Any]:
         symbol = str(row.get("symbol") or "").upper().strip()
         if not symbol or symbol in symbols:
             continue
-        close = _f(row.get("close"))
-        dist = _f(row.get("sma20_distance"))
+        close = to_float(row.get("close"))
+        dist = to_float(row.get("sma20_distance"))
         sma20 = None
         if close is not None and dist is not None and (1.0 + dist) != 0:
             sma20 = close / (1.0 + dist)
         symbols[symbol] = {
             "close": close,
-            "return_20d": _f(row.get("return_20d")),
+            "return_20d": to_float(row.get("return_20d")),
             "sma_20": sma20,
-            "volume_zscore_20": _f(row.get("volume_zscore_20")),
-            "atr_14": _f(row.get("atr_14")),
+            "volume_zscore_20": to_float(row.get("volume_zscore_20")),
+            "atr_14": to_float(row.get("atr_14")),
             "trend_positive": (close > sma20) if (close is not None and sma20) else None,
         }
     return {

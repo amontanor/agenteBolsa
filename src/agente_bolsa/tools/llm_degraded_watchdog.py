@@ -16,27 +16,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from agente_bolsa._utils import parse_iso, sqlite_connect_ro
+
 # Fuentes de LLM consideradas criticas para operar bien.
 DECISION_SOURCES = ("trade_decision",)
 SENTIMENT_SOURCES = ("news_sentiment",)
-
-
-def _connect_ro(db_path: str | Path) -> sqlite3.Connection:
-    con = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
-    con.row_factory = sqlite3.Row
-    return con
-
-
-def _parse_iso(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except ValueError:
-        return None
 
 
 def _last_usage_at(con: sqlite3.Connection, sources: tuple[str, ...]) -> str | None:
@@ -84,7 +68,7 @@ def evaluate(
     Devuelve un dict con `degraded` (bool), severidad y detalle accionable.
     """
     now = now or datetime.now(timezone.utc)
-    con = _connect_ro(db_path)
+    con = sqlite_connect_ro(db_path)
     try:
         last_decision = _last_usage_at(con, DECISION_SOURCES)
         last_sentiment = _last_usage_at(con, SENTIMENT_SOURCES)
@@ -94,8 +78,8 @@ def evaluate(
     finally:
         con.close()
 
-    dt_decision = _parse_iso(last_decision)
-    dt_sentiment = _parse_iso(last_sentiment)
+    dt_decision = parse_iso(last_decision)
+    dt_sentiment = parse_iso(last_sentiment)
 
     hours_decision = (now - dt_decision).total_seconds() / 3600 if dt_decision else None
     hours_sentiment = (now - dt_sentiment).total_seconds() / 3600 if dt_sentiment else None

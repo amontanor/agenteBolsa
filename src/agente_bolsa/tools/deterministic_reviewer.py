@@ -7,6 +7,7 @@ import json
 from dataclasses import asdict, replace
 from typing import Any
 
+from agente_bolsa._utils import to_float
 from agente_bolsa.config import Settings
 from agente_bolsa.models import TradeRecommendation
 
@@ -34,15 +35,6 @@ def recommendation_input_fingerprint(
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
 
-def _float(value: Any) -> float | None:
-    if value is None or value == "":
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def _candidate_for_symbol(technical_context: dict[str, Any] | None, symbol: str) -> dict[str, Any]:
     symbol = str(symbol or "").upper()
     for bucket in ("selected_candidates", "top_longs", "all_candidates"):
@@ -61,9 +53,9 @@ def _sentiment_for_symbol(sentiment_context: dict[str, Any] | None, symbol: str)
 
 
 def _reward_risk(recommendation: TradeRecommendation) -> float | None:
-    entry = _float(recommendation.entry_price)
-    stop = _float(recommendation.stop_loss)
-    take = _float(recommendation.take_profit)
+    entry = to_float(recommendation.entry_price)
+    stop = to_float(recommendation.stop_loss)
+    take = to_float(recommendation.take_profit)
     if entry is None or stop is None or take is None or entry <= 0 or stop >= entry or take <= entry:
         return None
     risk = entry - stop
@@ -97,11 +89,12 @@ def review_recommendations(
         reward_risk = _reward_risk(recommendation)
         score = int(candidate.get("score") or 0)
         duplicate_count = int(candidate.get("duplicate_count") or candidate.get("source_duplicate_count") or 0)
-        sentiment_score = _float(sentiment.get("sentiment_score"))
+        sentiment_score = to_float(sentiment.get("sentiment_score"))
         data_quality_notes = list(((market_state or {}).get("data_quality") or {}).get("notes") or [])
         checks = {
             "entry_stop_take_present": all(
-                _float(value) is not None for value in [recommendation.entry_price, recommendation.stop_loss, recommendation.take_profit]
+                to_float(value) is not None
+                for value in [recommendation.entry_price, recommendation.stop_loss, recommendation.take_profit]
             ),
             "reward_risk": reward_risk,
             "score": score,

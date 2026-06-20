@@ -23,24 +23,13 @@ from pathlib import Path
 
 from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
+from agente_bolsa._utils import sqlite_connect_ro, table_exists
 from agente_bolsa.tools.c2_shadow_reporting import build_c2_shadow_report
 from agente_bolsa.tools.profitability_scoreboard import build_profitability_scoreboard
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = ROOT / "data" / "state" / "agente_bolsa.sqlite3"
 C2_SHADOW_SINCE_DATE = "2026-04-01"
-
-
-def connect_ro(db_path: Path) -> sqlite3.Connection:
-    con = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
-    con.row_factory = sqlite3.Row
-    return con
-
-
-def table_exists(con: sqlite3.Connection, name: str) -> bool:
-    return con.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
-    ).fetchone() is not None
 
 
 def count_since(con, table, date_col, cutoff, where_extra="") -> int:
@@ -66,7 +55,7 @@ def group_since(con, table, col, date_col, cutoff):
 def build_markdown(db_path: Path, days: int) -> str:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     today = datetime.now(timezone.utc).date().isoformat()
-    con = connect_ro(db_path)
+    con = sqlite_connect_ro(db_path)
     out: list[str] = []
     out.append(f"# Informe semanal de mejora del sistema")
     out.append("")

@@ -12,19 +12,11 @@ import pandas as pd
 
 from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
+from agente_bolsa._utils import to_float
 
 from .execution_linking import match_signal_row_for_buy_order
 from .market_data import download_daily_prices
 from .signal_learning import HORIZONS, _indicator_tags, _setup_key
-
-
-def _num(value: Any) -> float | None:
-    if value is None or value == "":
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _round(value: float | None, digits: int = 4) -> float | None:
@@ -140,8 +132,8 @@ def _build_spy_forward_context(
         date_key = str(ts)[:10]
         regimes[date_key] = _regime_from_benchmark(
             close_float,
-            _num(sma50.iloc[index]),
-            _num(sma200.iloc[index]),
+            to_float(sma50.iloc[index]),
+            to_float(sma200.iloc[index]),
         )
         for horizon in HORIZONS:
             future_index = index + horizon
@@ -205,7 +197,7 @@ def build_spy_daily_returns(
 def _metrics(rows: list[dict[str, Any]], benchmark: dict[tuple[str, int], float | None]) -> dict[str, Any]:
     out: dict[str, Any] = {"n": len(rows)}
     for horizon in HORIZONS:
-        values = [_num((row.get("outcome") or {}).get(f"return_{horizon}d")) for row in rows]
+        values = [to_float((row.get("outcome") or {}).get(f"return_{horizon}d")) for row in rows]
         alpha_values = []
         wins = 0
         matured = 0

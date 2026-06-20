@@ -15,6 +15,8 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
+from agente_bolsa._utils import parse_iso, sqlite_connect_ro
+
 ROOT = Path(__file__).resolve().parents[3]
 DB = ROOT / "data" / "state" / "agente_bolsa.sqlite3"
 REPORTS = ROOT / "data" / "reports"
@@ -51,18 +53,8 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _parse(ts):
-    if not ts:
-        return None
-    try:
-        d = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
-
-
 def _age_min(ts):
-    d = _parse(ts)
+    d = parse_iso(ts)
     return None if not d else (_now() - d).total_seconds() / 60.0
 
 
@@ -136,8 +128,7 @@ def build_status(db_path: Path | None = None, reports_dir: Path | None = None) -
                 "components": [{"name": "Base de datos", "state": DOWN, "detail": f"no existe {db}", "expected": ""}],
                 "verdict": DOWN}
     try:
-        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
-        con.execute("PRAGMA query_only=ON")
+        con = sqlite_connect_ro(db, timeout=5)
         jobs = _job_status(con)
     except sqlite3.Error as exc:
         return {"as_of": now.isoformat(), "market_open": market_open,
