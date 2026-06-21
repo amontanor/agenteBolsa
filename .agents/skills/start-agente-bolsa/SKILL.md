@@ -47,6 +47,29 @@ No arrancar si falla un gate critico. Si hay violaciones de kernel, informar los
 
 Nunca cambiar `TRADING_MODE`, `ALLOW_LIVE_TRADING` ni credenciales para conseguir que el arranque pase.
 
+### `.env` esta sellado por el kernel
+
+`.env` forma parte del manifest del kernel (junto a `kernel.py`, `broker.py`, `execution.py`). **Cualquier** edicion de `.env` (cambiar proveedor/modelo LLM, activar un flag de experimento, etc.) hara que `kernel-status` devuelva `ok:false` con `.env` en `violations`. Eso es esperado, no es un fallo.
+
+Procedimiento tras editar `.env` a proposito:
+
+```powershell
+# 1) editar .env (cambio intencionado y revisado)
+.\.venv\Scripts\python.exe -m agente_bolsa.main kernel-seal
+.\.venv\Scripts\python.exe -m agente_bolsa.main kernel-status --json   # debe quedar ok:true
+```
+
+Antes de re-sellar, verificar siempre que `TRADING_MODE=paper` y `ALLOW_LIVE_TRADING=false` siguen intactos. Nunca re-sellar para ocultar un cambio no revisado.
+
+### Flags de experimento (shadow)
+
+Los experimentos de seleccion se activan por flags en `.env` (ver `.env.example`), siempre primero en modo medicion (shadow) sin tocar la conducta real:
+
+- `SETUP_EDGE_BIAS_SHADOW_ENABLED=true` -> mide y escribe `data/reports/latest_setup_edge_shadow.json` por ciclo, sin cambiar la seleccion.
+- `SETUP_EDGE_BIAS_ENABLED=true` -> activa el sesgo de verdad (solo tras validar el shadow). Disciplina: shadow -> guarded -> active.
+
+Como tocan `.env`, aplicar despues el procedimiento de re-sellado de arriba. Tras cambiar flags hay que **reiniciar** scheduler y panel (no recogen cambios en caliente).
+
 ## 3. Resolver el LLM
 
 Leer solo las claves no secretas necesarias:
