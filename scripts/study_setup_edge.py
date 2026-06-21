@@ -44,14 +44,18 @@ def _f(value):
 def _summary(returns):
     if not returns:
         return {"n": 0}
+    from agente_bolsa.tools.trade_costs import net_return
+
     wins = [r for r in returns if r > 0]
     losses = [-r for r in returns if r < 0]
     pf = (sum(wins) / sum(losses)) if losses else float("inf")
+    nets = [net_return(r) for r in returns]
     return {
         "n": len(returns),
         "mean": round(mean(returns), 4),
         "hit": round(len(wins) / len(returns), 3),
         "pf": round(pf, 3) if pf != float("inf") else "inf",
+        "net_mean": round(mean(nets), 4),
     }
 
 
