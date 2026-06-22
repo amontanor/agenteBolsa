@@ -623,3 +623,14 @@ unknown").
 Orden: Capa 1 (antes del lunes) -> Capa 2 (durante la semana, shadow + medir) ->
 Capa 3 (cuando 1 y 2 esten estables). Nada que cambie compras/ventas reales sin
 shadow + evidencia; no tocar risk.py/kernel ni ALLOW_LIVE_TRADING.
+
+### 11.10 Publicacion manual en LLM Trading Leaderboard (21-jun-2026, v0.4.34) — HECHO
+
+- El dashboard publica manualmente `model=AMR` y `gain_pct` usando el P/L porcentual
+  de referencia calculado desde el 1 de abril (`DEFAULT_START_DATE=2026-04-01`).
+- El ultimo envio confirmado queda trazado en `agent_events` y visible junto al boton.
+- La eliminacion remota mediante `DELETE /api/data` exige casilla de advertencia y
+  escribir exactamente `BORRAR TODO`; exitos y errores tambien quedan auditados.
+- Rutas verificadas contra OpenAPI: `POST /api/submit` y `DELETE /api/data`;
+  host configurable con `LEADERBOARD_API_BASE_URL`. Verificacion: tests unitarios de
+  POST, DELETE y recuperacion del ultimo envio, sin llamadas reales a red.

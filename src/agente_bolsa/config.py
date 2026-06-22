@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     secondary_review_llm_model: str = Field(default="", alias="SECONDARY_REVIEW_LLM_MODEL")
     llm_temperature: float = Field(default=0.2, alias="LLM_TEMPERATURE")
     llm_max_tokens: int | None = Field(default=1200, alias="LLM_MAX_TOKENS")
-    llm_timeout_seconds: int = Field(default=120, alias="LLM_TIMEOUT_SECONDS")
+    llm_timeout_seconds: int = Field(default=300, alias="LLM_TIMEOUT_SECONDS")
     llm_retry_attempts: int = Field(default=2, alias="LLM_RETRY_ATTEMPTS")
     llm_retry_base_seconds: float = Field(default=1.0, alias="LLM_RETRY_BASE_SECONDS")
     llm_retry_max_seconds: float = Field(default=30.0, alias="LLM_RETRY_MAX_SECONDS")
@@ -72,7 +72,10 @@ class Settings(BaseSettings):
     llm_role_decision_model: str | None = Field(default=None, alias="LLM_ROLE_DECISION_MODEL")
     llm_role_decision_base_url: str | None = Field(default=None, alias="LLM_ROLE_DECISION_BASE_URL")
     llm_role_decision_api_key: str | None = Field(default=None, alias="LLM_ROLE_DECISION_API_KEY")
-    llm_role_decision_max_tokens: int | None = Field(default=None, alias="LLM_ROLE_DECISION_MAX_TOKENS")
+    # Tope de salida del rol decision: antes None (ilimitado) -> generaciones largas
+    # que se cortaban (JSON truncado). Con el prompt ya reducido, 3000 es suficiente
+    # y acota la latencia. El parseo tolera truncado igualmente.
+    llm_role_decision_max_tokens: int | None = Field(default=3000, alias="LLM_ROLE_DECISION_MAX_TOKENS")
     llm_role_deep_model: str | None = Field(default=None, alias="LLM_ROLE_DEEP_MODEL")
     llm_role_deep_base_url: str | None = Field(default=None, alias="LLM_ROLE_DEEP_BASE_URL")
     llm_role_deep_api_key: str | None = Field(default=None, alias="LLM_ROLE_DEEP_API_KEY")
@@ -82,7 +85,7 @@ class Settings(BaseSettings):
     llm_role_deep_daily_budget_usd: float = Field(default=3.0, alias="LLM_ROLE_DEEP_DAILY_BUDGET_USD")
     crewai_planning: bool = Field(default=False, alias="CREWAI_PLANNING")
     crew_agent_max_iter: int = Field(default=1, alias="CREW_AGENT_MAX_ITER")
-    crew_agent_max_execution_seconds: int = Field(default=120, alias="CREW_AGENT_MAX_EXECUTION_SECONDS")
+    crew_agent_max_execution_seconds: int = Field(default=300, alias="CREW_AGENT_MAX_EXECUTION_SECONDS")
 
     trading_mode: Literal["paper", "live"] = Field(default="paper", alias="TRADING_MODE")
     trade_aggressiveness_profile: Literal["conservative", "opportunistic", "aggressive"] = Field(

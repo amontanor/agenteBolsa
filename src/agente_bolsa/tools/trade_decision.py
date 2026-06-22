@@ -213,6 +213,35 @@ def _compact_candidate_for_prompt(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _strip_empty_for_prompt(value: Any) -> Any:
+    """Elimina recursivamente claves/valores vacios (None, "", {}, []) para
+    reducir el tamano del prompt sin perder informacion util. Conserva False y 0,
+    que si son significativos (p.ej. trend_positive=False)."""
+    if isinstance(value, dict):
+        cleaned: dict[str, Any] = {}
+        for key, item in value.items():
+            reduced = _strip_empty_for_prompt(item)
+            if reduced is None or reduced == "" or reduced == {} or reduced == []:
+                continue
+            cleaned[key] = reduced
+        return cleaned
+    if isinstance(value, list):
+        items = [_strip_empty_for_prompt(item) for item in value]
+        return [item for item in items if item is not None and item != "" and item != {} and item != []]
+    return value
+
+
+def _compact_breakout_for_prompt(row: dict[str, Any]) -> dict[str, Any]:
+    """Reduce una fila de ruptura a lo esencial (evita volcar ~20 campos por fila)."""
+    return {
+        "symbol": row.get("symbol"),
+        "status": row.get("status"),
+        "tradable": row.get("tradable"),
+        "close": row.get("close"),
+        "reward_risk": row.get("reward_risk"),
+    }
+
+
 def _compact_technical_context_for_prompt(
     technical_context: dict[str, Any],
     *,
@@ -233,7 +262,10 @@ def _compact_technical_context_for_prompt(
         for item in list(technical_context.get("top_shorts", []) or [])[:3]
         if isinstance(item, dict)
     ]
-    return {
+    # Nota: `analysis_plan_counts` se omite a proposito (ruido de diagnostico que
+    # inflaba el prompt del LLM y provocaba timeouts). Las rupturas se reducen a
+    # campos esenciales y todo el contexto se limpia de valores vacios.
+    compact = {
         "source": technical_context.get("source"),
         "run_id": technical_context.get("run_id"),
         "as_of": technical_context.get("as_of"),
@@ -241,12 +273,20 @@ def _compact_technical_context_for_prompt(
         "top_longs": top_longs,
         "top_shorts": top_shorts,
         "selection_metadata": technical_context.get("selection_metadata", {}),
-        "analysis_plan_counts": technical_context.get("analysis_plan_counts", {}),
-        "breakout_confirmed": list(technical_context.get("breakout_confirmed", []) or [])[:5],
-        "breakout_watch": list(technical_context.get("breakout_watch", []) or [])[:5],
+        "breakout_confirmed": [
+            _compact_breakout_for_prompt(row)
+            for row in list(technical_context.get("breakout_confirmed", []) or [])[:5]
+            if isinstance(row, dict)
+        ],
+        "breakout_watch": [
+            _compact_breakout_for_prompt(row)
+            for row in list(technical_context.get("breakout_watch", []) or [])[:5]
+            if isinstance(row, dict)
+        ],
         "news_supportive_symbols": list(technical_context.get("news_supportive_symbols", []) or [])[:8],
         "warnings": list(technical_context.get("warnings", []) or [])[:4],
     }
+    return _strip_empty_for_prompt(compact)
 
 
 def _candidate_symbols(technical_context: dict[str, Any]) -> set[str]:
@@ -678,12 +718,59 @@ def _extract_json_object(text: str) -> dict[str, Any]:
             parsed = json.loads(clean_text[start : end + 1])
             if isinstance(parsed, dict):
                 return parsed
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                "La respuesta del LLM contiene JSON incompleto o mal formado: "
-                f"{exc}. Preview: {clean_text[:240]}"
-            ) from exc
+        except json.JSONDecodeError:
+            pass
+
+    # Recuperacion de JSON truncado (p.ej. "Unterminated string" por respuesta
+    # cortada del LLM): equilibrar comillas/llaves desde el primer '{'. Mejor
+    # recuperar un objeto parcial que perder el ciclo entero.
+    if start >= 0:
+        repaired = _repair_truncated_json(clean_text[start:])
+        if repaired is not None:
+            return repaired
+
     raise ValueError(f"La respuesta del LLM no contiene un objeto JSON valido. Preview: {clean_text[:240]}")
+
+
+def _repair_truncated_json(text: str) -> dict[str, Any] | None:
+    """Intenta cerrar un JSON truncado (cadena/llaves sin cerrar) y parsearlo.
+
+    Recorre el texto respetando cadenas y escapes, cierra lo que quede abierto y
+    reintenta `json.loads`. Devuelve el dict si lo consigue, o None si no.
+    """
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+    for ch in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            stack.append("}")
+        elif ch == "[":
+            stack.append("]")
+        elif ch in "}]" and stack:
+            stack.pop()
+    repaired = text.rstrip()
+    # Quitar una posible coma colgante antes de cerrar estructuras.
+    if repaired.endswith(","):
+        repaired = repaired[:-1]
+    if in_string:
+        repaired += '"'
+    for closer in reversed(stack):
+        repaired += closer
+    try:
+        parsed = json.loads(repaired)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def _float(value: Any) -> float | None:

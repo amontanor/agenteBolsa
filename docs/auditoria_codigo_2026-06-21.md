@@ -156,6 +156,49 @@ medir). Añadido `SETUP_EDGE_BIAS_SHADOW_ENABLED` (default OFF): mide y escribe
 **fallback determinista** (LLM caído/degradado), no al camino LLM. Edits en `.env`
 re-disparan el sello del kernel → re-sellar tras cada toggle. (v0.4.31)
 
+**VERIFICACIÓN NETA DE COSTES (M6, round-trip 15bps, OOS):** `politica setups-buenos`
+net_mean **+0.17%**, net_pf **1.10** vs `confirmed` net_mean −0.40%, net_pf 0.83.
+Por setup: `sin_patron|strong` net +0.16% (n=11.209), `confirmed_pattern|strong` net
+−0.43% (n=70.205). **El edge sobrevive a costes**, pero es FINO: margen ~17 bps (rompe
+a ~32 bps round-trip). Implicación de director: la selección está validada; lo que hará
+que componga es **entrar de verdad + tamaño + buenas salidas**, no solo reordenar.
+
+**Decisión de promoción:** justificada por datos (neta, robusta, OOS). Protocolo:
+1) `SETUP_EDGE_BIAS_SHADOW_ENABLED=true` unas sesiones (vivo, sin tocar conducta),
+2) confirmar que el shadow en vivo elige mejor, 3) `SETUP_EDGE_BIAS_ENABLED=true` (guarded)
+y medir P&L real en paper. M2 (relajar `confirmed_pattern`) es la MISMA evidencia desde
+el gate; se secuencia DESPUÉS de validar M1 en vivo, para atribución limpia.
+
+## FIABILIDAD LLM (22-jun, lunes noche) — bloque 1-4
+
+Diagnóstico del lunes: 0 compras + LLM con timeouts. Prueba clave: el lab de mejora
+(prompt ~7k tokens, compactado) SÍ funcionó con kimi-k2.6; el crew de DECISIÓN, con el
+`technical_context` crudo, dio timeout a 120s. → No es el proveedor, es el prompt.
+
+Cambios (v0.4.35; correr pytest + reiniciar):
+1. **Prompt más pequeño** (`trade_decision.py`): `_compact_technical_context_for_prompt`
+   ahora omite `analysis_plan_counts`, reduce rupturas a campos esenciales
+   (`_compact_breakout_for_prompt`) y limpia valores vacíos (`_strip_empty_for_prompt`).
+2. **Tope de tokens del rol decisión**: `LLM_ROLE_DECISION_MAX_TOKENS` None→3000.
+3. **Timeouts**: `LLM_TIMEOUT_SECONDS` y `CREW_AGENT_MAX_EXECUTION_SECONDS` 120→300.
+4. **Parseo tolerante a truncado** (`_extract_json_object` + `_repair_truncated_json`):
+   un JSON cortado ("Unterminated string") se repara en vez de tumbar el ciclo.
+Tests: `tests/test_prompt_compaction.py`. `.env.example` actualizado.
+
+Pendiente de investigar (no bloquea): `market_state` siempre PARTIAL/regime unknown
+(fuerza defensivo); post_market_review lento (23 min) + `database is locked`.
+
+## PRÓXIMOS PASOS CON FECHAS (roadmap; backlog canónico en plan_mejoras_y_tareas.md)
+
+- **Dom 21-jun:** arrancar en standby (mercado cerrado) + activar `SETUP_EDGE_BIAS_SHADOW_ENABLED=true` + re-sellar kernel.
+- **Lun 22-jun:** mercado abre. El shadow de M1 empieza a acumular (`latest_setup_edge_shadow.json`). Validar el embudo en vivo (#32): que entren candidatos y se vean fills. Confirmar scheduler/panel sanos.
+- **Mar–Jue 23–25 jun:** 3-4 sesiones de shadow en vivo. Revisar si el ranking sesgado elige mejor que el baseline.
+- **Vie 26-jun (estudio semanal):** decisión de promoción M1 → `SETUP_EDGE_BIAS_ENABLED=true` (guarded) si el shadow vivo confirma el OOS neto. Revisar también n del horizonte de salida 5-10d (M3): si n≥20, decidir activación.
+- **Semana 29-jun–3-jul:** medir P&L real en paper de M1 activo. Arrancar **M2** (relajar requisito `confirmed_pattern`) en shadow — misma evidencia, atribución separada. Montar **M4** (report del embudo en el panel).
+- **Julio:** **M5** (¿el LLM bate al fallback determinista? experimento offline). Afinar **M6** (costes) con slippage real de los fills. Retomar **D1** (trocear god-files) de forma oportunista.
+
+Criterio de promoción (de buenas-practicas): shadow → guarded → active, nunca saltar pasos; edge positivo NETO de costes; muestra no concentrada; sin degradar gates/kill-switch.
+
 **Cableado seguro hecho (default-OFF, retrocompatible):** `opportunity_ranker.prioritize_candidates`
 acepta `edge_table` opcional y aplica `setup_edge_bias` (neutral sin tabla). Tests en
 `tests/test_setup_edge.py`. Pendiente (entorno con pytest): en el call-site del fallback,

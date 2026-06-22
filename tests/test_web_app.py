@@ -26,7 +26,9 @@ from agente_bolsa.web_app import (
     _estimated_portfolio_value_series,
     _latest_analyzed_news,
     _latest_daily_equity_change,
+    _latest_leaderboard_submission,
     _latest_llm_context_by_symbol,
+    _leaderboard_request,
     _learning_compact_summary,
     _llm_status_reason,
     _local_datetime,
@@ -46,6 +48,74 @@ from agente_bolsa.web_app import (
     _trim_portfolio_chart_range,
     update_env_file,
 )
+
+
+class _FakeHttpResponse:
+    def __init__(self, payload: bytes = b'{"ok":true}', status: int = 200):
+        self.payload = payload
+        self.status = status
+
+    def read(self):
+        return self.payload
+
+    def getcode(self):
+        return self.status
+
+    def close(self):
+        return None
+
+
+def test_leaderboard_post_sends_amr_and_percentage(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return _FakeHttpResponse()
+
+    monkeypatch.setattr("agente_bolsa.web_app.urlopen", fake_urlopen)
+
+    result = _leaderboard_request("POST", gain_pct=2.34567)
+
+    assert result == {"status": 200, "response": {"ok": True}}
+    assert captured["request"].method == "POST"
+    assert captured["request"].full_url.endswith("/api/submit")
+    assert captured["request"].data == b'{"model": "AMR", "gain_pct": 2.3457}'
+    assert captured["timeout"] == 15
+
+
+def test_leaderboard_delete_has_no_body(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        return _FakeHttpResponse(status=204, payload=b"")
+
+    monkeypatch.setattr("agente_bolsa.web_app.urlopen", fake_urlopen)
+
+    result = _leaderboard_request("DELETE")
+
+    assert result == {"status": 204, "response": None}
+    assert captured["request"].method == "DELETE"
+    assert captured["request"].full_url.endswith("/api/data")
+    assert captured["request"].data is None
+
+
+def test_latest_leaderboard_submission_returns_most_recent_success():
+    events = [
+        {"event_type": "other", "payload_json": "{}", "created_at": "2026-06-21T11:00:00+00:00"},
+        {
+            "event_type": "leaderboard_gain_submitted",
+            "payload_json": '{"model":"AMR","gain_pct":1.25}',
+            "created_at": "2026-06-21T10:00:00+00:00",
+        },
+    ]
+
+    assert _latest_leaderboard_submission(events) == {
+        "model": "AMR",
+        "gain_pct": 1.25,
+        "created_at": "2026-06-21T10:00:00+00:00",
+    }
 
 
 def test_usage_tokens_reads_compatible_llm_usage_object():

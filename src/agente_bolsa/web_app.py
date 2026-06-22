@@ -7,11 +7,14 @@ import logging
 import os
 import subprocess
 import sys
+from contextlib import closing
 from dataclasses import asdict
 from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -40,7 +43,7 @@ from agente_bolsa.continuous_improvement.promotion_readiness import evaluate_pro
 from agente_bolsa.continuous_improvement.runtime import ContinuousImprovementLabRuntime
 from agente_bolsa.llm_router import primary_llm_endpoint
 from agente_bolsa.market_calendar import MarketCalendar
-from agente_bolsa.models import PortfolioSnapshot, TradeRecommendation, new_id
+from agente_bolsa.models import AgentEvent, PortfolioSnapshot, TradeRecommendation, new_id
 from agente_bolsa.scheduler import scheduler_status
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.adaptive_tuning import adaptive_status, update_adaptive_config
@@ -85,6 +88,13 @@ DEFAULT_START_DATE = "2026-04-01"
 PORTFOLIO_CHART_START_DATE = "2026-04-28"
 PRE_EARNINGS_CONFIDENCE_THRESHOLD = 0.80
 ENV_PATH = REPO_ROOT / ".env"
+LEADERBOARD_API_BASE_URL = os.getenv(
+    "LEADERBOARD_API_BASE_URL",
+    "https://llm-trading-leaderboard-brdqzuvsz-barbados.vercel.app",
+).rstrip("/")
+LEADERBOARD_SUBMIT_URL = f"{LEADERBOARD_API_BASE_URL}/api/submit"
+LEADERBOARD_DATA_URL = f"{LEADERBOARD_API_BASE_URL}/api/data"
+LEADERBOARD_MODEL = "AMR"
 LLM_PROVIDER_CATALOG = {
     "opencode-go": {
         "base_url": "https://opencode.ai/zen/go/v1",
@@ -501,6 +511,135 @@ def _bar_chart(data: list[dict[str, Any]], x: str, y: str, color_field: str | No
     st.altair_chart(chart.properties(height=height), use_container_width=True)
 
 
+def _leaderboard_request(method: str, *, gain_pct: float | None = None) -> dict[str, Any]:
+    payload: dict[str, Any] | None = None
+    if method == "POST":
+        if gain_pct is None:
+            raise ValueError("gain_pct es obligatorio para publicar en el leaderboard")
+        payload = {"model": LEADERBOARD_MODEL, "gain_pct": round(float(gain_pct), 4)}
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    url = LEADERBOARD_SUBMIT_URL if method == "POST" else LEADERBOARD_DATA_URL
+    request = Request(
+        url,
+        data=data,
+        method=method,
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+    )
+    try:
+        with closing(urlopen(request, timeout=15)) as response:  # noqa: S310 - URL fija/configurada por operador.
+            raw = response.read().decode("utf-8", errors="replace")
+            try:
+                response_payload = json.loads(raw) if raw else None
+            except json.JSONDecodeError:
+                response_payload = raw
+            return {"status": response.getcode(), "response": response_payload}
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"API leaderboard HTTP {exc.code}: {detail[:300]}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"No se pudo conectar con la API leaderboard: {exc.reason}") from exc
+
+
+def _latest_leaderboard_submission(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for event in events:
+        if event.get("event_type") != "leaderboard_gain_submitted":
+            continue
+        try:
+            payload = json.loads(event.get("payload_json") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        return {**payload, "created_at": event.get("created_at")}
+    return None
+
+
+def _render_leaderboard_controls(store: Store, total_pct: float | None) -> None:
+    with st.container(border=True):
+        _section_title(
+            "LLM Trading Leaderboard",
+            f"Publica el rendimiento del grupo desde el {DEFAULT_START_DATE} como {LEADERBOARD_MODEL}.",
+        )
+        action, last_sent = st.columns([1, 2], gap="large")
+        with action:
+            gain_pct = round(float(total_pct) * 100, 4) if total_pct is not None else None
+            if st.button(
+                "Enviar ganancia",
+                key="leaderboard_submit_gain",
+                type="primary",
+                disabled=gain_pct is None,
+                use_container_width=True,
+            ):
+                try:
+                    result = _leaderboard_request("POST", gain_pct=gain_pct)
+                    event = AgentEvent(
+                        agent="dashboard",
+                        event_type="leaderboard_gain_submitted",
+                        payload={
+                            "model": LEADERBOARD_MODEL,
+                            "gain_pct": gain_pct,
+                            "api_status": result["status"],
+                            "api_response": result["response"],
+                        },
+                    )
+                    store.record_agent_event(event)
+                    st.success(f"Enviado: {LEADERBOARD_MODEL} · {gain_pct:+.2f}%")
+                except (RuntimeError, ValueError) as exc:
+                    store.record_agent_event(
+                        AgentEvent(
+                            agent="dashboard",
+                            event_type="leaderboard_gain_submit_failed",
+                            payload={"model": LEADERBOARD_MODEL, "gain_pct": gain_pct, "error": str(exc)},
+                        )
+                    )
+                    st.error(str(exc))
+        with last_sent:
+            latest = _latest_leaderboard_submission(store.latest_events(500))
+            if latest:
+                timestamp = _local_datetime(latest.get("created_at"), _settings().local_timezone)
+                st.caption("Último envío confirmado")
+                st.markdown(
+                    f"**{latest.get('model', LEADERBOARD_MODEL)} · "
+                    f"{float(latest.get('gain_pct', 0.0)):+.2f}%** · {timestamp}"
+                )
+            else:
+                st.caption("Último envío confirmado")
+                st.markdown("**Todavía no hay envíos registrados.**")
+
+        with st.expander("Zona peligrosa: borrar todos los datos remotos"):
+            st.warning("Esta acción ejecuta DELETE /api/data y no se puede deshacer.")
+            confirm_checkbox = st.checkbox(
+                "Entiendo que se borrarán todos los datos del leaderboard",
+                key="leaderboard_delete_understood",
+            )
+            confirm_text = st.text_input(
+                "Escribe BORRAR TODO para confirmar",
+                key="leaderboard_delete_confirmation",
+            )
+            delete_confirmed = confirm_checkbox and confirm_text.strip() == "BORRAR TODO"
+            if st.button(
+                "Borrar todos los datos",
+                key="leaderboard_delete_all",
+                disabled=not delete_confirmed,
+                use_container_width=True,
+            ):
+                try:
+                    result = _leaderboard_request("DELETE")
+                    store.record_agent_event(
+                        AgentEvent(
+                            agent="dashboard",
+                            event_type="leaderboard_data_deleted",
+                            payload={"api_status": result["status"], "api_response": result["response"]},
+                        )
+                    )
+                    st.success("Todos los datos remotos del leaderboard han sido borrados.")
+                except RuntimeError as exc:
+                    store.record_agent_event(
+                        AgentEvent(
+                            agent="dashboard",
+                            event_type="leaderboard_data_delete_failed",
+                            payload={"error": str(exc)},
+                        )
+                    )
+                    st.error(str(exc))
 def _orders_dataframe(orders: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(
         [
@@ -3451,6 +3590,9 @@ def page_dashboard() -> None:
         positions_count=len(portfolio.positions) if portfolio else 0,
         orders_count=len(portfolio.open_orders) if portfolio else 0,
     )
+
+    st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+    _render_leaderboard_controls(store, total_pct)
 
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
 
