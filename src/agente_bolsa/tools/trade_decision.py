@@ -248,24 +248,25 @@ def _compact_technical_context_for_prompt(
     selected_limit: int = 12,
 ) -> dict[str, Any]:
     selected = [
-        _compact_candidate_for_prompt(item)
+        _strip_empty_for_prompt(_compact_candidate_for_prompt(item))
         for item in list(technical_context.get("selected_candidates", []) or [])[: max(1, int(selected_limit))]
         if isinstance(item, dict)
     ]
     top_longs = [
-        _compact_candidate_for_prompt(item)
+        _strip_empty_for_prompt(_compact_candidate_for_prompt(item))
         for item in list(technical_context.get("top_longs", []) or [])[:5]
         if isinstance(item, dict)
     ]
     top_shorts = [
-        _compact_candidate_for_prompt(item)
+        _strip_empty_for_prompt(_compact_candidate_for_prompt(item))
         for item in list(technical_context.get("top_shorts", []) or [])[:3]
         if isinstance(item, dict)
     ]
-    # Nota: `analysis_plan_counts` se omite a proposito (ruido de diagnostico que
-    # inflaba el prompt del LLM y provocaba timeouts). Las rupturas se reducen a
-    # campos esenciales y todo el contexto se limpia de valores vacios.
-    compact = {
+    # `analysis_plan_counts` se omite (ruido que inflaba el prompt y causaba
+    # timeouts); las rupturas se reducen a campos esenciales y los nulos de cada
+    # candidato se eliminan. Las claves de nivel superior se CONSERVAN para no
+    # cambiar la estructura que esperan los consumidores (p.ej. selection_metadata).
+    return {
         "source": technical_context.get("source"),
         "run_id": technical_context.get("run_id"),
         "as_of": technical_context.get("as_of"),
@@ -274,19 +275,18 @@ def _compact_technical_context_for_prompt(
         "top_shorts": top_shorts,
         "selection_metadata": technical_context.get("selection_metadata", {}),
         "breakout_confirmed": [
-            _compact_breakout_for_prompt(row)
+            _strip_empty_for_prompt(_compact_breakout_for_prompt(row))
             for row in list(technical_context.get("breakout_confirmed", []) or [])[:5]
             if isinstance(row, dict)
         ],
         "breakout_watch": [
-            _compact_breakout_for_prompt(row)
+            _strip_empty_for_prompt(_compact_breakout_for_prompt(row))
             for row in list(technical_context.get("breakout_watch", []) or [])[:5]
             if isinstance(row, dict)
         ],
         "news_supportive_symbols": list(technical_context.get("news_supportive_symbols", []) or [])[:8],
         "warnings": list(technical_context.get("warnings", []) or [])[:4],
     }
-    return _strip_empty_for_prompt(compact)
 
 
 def _candidate_symbols(technical_context: dict[str, Any]) -> set[str]:
