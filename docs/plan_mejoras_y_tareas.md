@@ -634,3 +634,16 @@ shadow + evidencia; no tocar risk.py/kernel ni ALLOW_LIVE_TRADING.
 - Rutas verificadas contra OpenAPI: `POST /api/submit` y `DELETE /api/data`;
   host configurable con `LEADERBOARD_API_BASE_URL`. Verificacion: tests unitarios de
   POST, DELETE y recuperacion del ultimo envio, sin llamadas reales a red.
+
+### 11.11 Correccion de regresiones de decision y reconciliacion (22-jun-2026, v0.4.37) — HECHO
+
+- El error medio del prior deja de ser un veto duro de entrada. El digest vigente
+  contiene 19.930 observaciones, 0 compras ejecutadas y 90,03 % de duplicados: la
+  metrica sirve como senal auxiliar, pero no justifica bloquear compras. Se conserva
+  la penalizacion existente en ranking y sizing (20 % al superar 0,04) y se expone
+  `prior_error_advisory` en la trazabilidad del gate.
+- Los tests de entry-quality que no prueban aprendizaje quedan aislados de los
+  reportes operativos de `data/`, evitando resultados dependientes de la maquina.
+- El fixture de reconciliacion incluye la fecha real del plan, respetando el guard
+  de antiguedad maxima de cinco dias que evita asociar fills a senales historicas.
+- Verificacion: tests dirigidos, suite completa, Ruff y smokes operativos.

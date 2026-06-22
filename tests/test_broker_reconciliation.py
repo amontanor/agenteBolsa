@@ -34,7 +34,10 @@ def test_reconcile_broker_orders_marks_filled_buy_as_executed(tmp_path, monkeypa
         symbol="AAPL",
         side="buy",
         status="OrderStatus.PENDING_NEW",
-        payload={"broker_order": {"client_order_id": "agente-plan-1"}},
+        payload={
+            "broker_order": {"client_order_id": "agente-plan-1"},
+            "plan": {"created_at": "2026-06-16T19:59:00+00:00"},
+        },
     )
     store.save_signal_outcome(
         signal_id="run-1:AAPL",

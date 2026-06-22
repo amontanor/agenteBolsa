@@ -1733,9 +1733,9 @@ def _quality_context(**overrides):
     return {"top_longs": [candidate], "top_shorts": []}
 
 
-def test_entry_quality_gate_approves_clean_strong_setup():
+def test_entry_quality_gate_approves_clean_strong_setup(tmp_path):
     approved, reason, checks = validate_entry_quality(
-        Settings(),
+        Settings(DATA_DIR=tmp_path),
         _quality_recommendation(),
         _quality_context(),
         {"results": []},
@@ -2297,7 +2297,7 @@ def test_entry_quality_gate_allows_weak_volume_momentum_despite_prior_error(tmp_
     assert checks["fallback_weak_volume_momentum_extension_exception"]["eligible"] is True
 
 
-def test_entry_quality_gate_keeps_prior_error_block_without_weak_volume_momentum_exception(tmp_path):
+def test_entry_quality_gate_keeps_extension_block_despite_prior_error_advisory(tmp_path):
     candidate = _quality_context(
         symbol="JBL",
         score=15,
@@ -2365,7 +2365,8 @@ def test_entry_quality_gate_keeps_prior_error_block_without_weak_volume_momentum
     )
 
     assert approved is False
-    assert reason == "perfil reciente sobreestima el edge con demasiada frecuencia"
+    assert reason == "precio demasiado extendido sobre SMA20 (18.00%)"
+    assert checks["prior_error_advisory"]["high_error"] is True
     assert checks["fallback_weak_volume_momentum_extension_exception"]["eligible"] is False
 
 
@@ -2438,7 +2439,7 @@ def test_entry_quality_gate_allows_prior_error_volume_confirmation_override(tmp_
     assert checks["prior_error_volume_confirmation_override_exception"]["eligible"] is True
 
 
-def test_entry_quality_gate_keeps_prior_error_block_without_volume_confirmation_override(tmp_path):
+def test_entry_quality_gate_does_not_block_high_prior_error_without_volume_override(tmp_path):
     candidate = _quality_context(
         symbol="HWM",
         score=15,
@@ -2502,8 +2503,9 @@ def test_entry_quality_gate_keeps_prior_error_block_without_volume_confirmation_
         {"results": []},
     )
 
-    assert approved is False
-    assert reason == "perfil reciente sobreestima el edge con demasiada frecuencia"
+    assert approved is True
+    assert reason == "entry-quality aprobado"
+    assert checks["prior_error_advisory"]["high_error"] is True
     assert checks["prior_error_volume_confirmation_override_exception"]["eligible"] is False
 
 
@@ -3016,9 +3018,9 @@ def test_entry_quality_gate_blocks_negative_confirmed_sentiment():
     assert checks["sentiment_score"] == -0.8
 
 
-def test_entry_quality_gate_penalizes_sentiment_failure_by_default():
+def test_entry_quality_gate_penalizes_sentiment_failure_by_default(tmp_path):
     approved, reason, checks = validate_entry_quality(
-        Settings(),
+        Settings(DATA_DIR=tmp_path),
         _quality_recommendation(),
         _quality_context(),
         {
@@ -3107,7 +3109,7 @@ def test_entry_quality_gate_can_fail_closed_on_sentiment_failure():
     assert checks["sentiment_data_quality"]["status"] == "missing_or_failed"
 
 
-def test_entry_quality_gate_allows_sentiment_failure_for_deterministic_fallback():
+def test_entry_quality_gate_allows_sentiment_failure_for_deterministic_fallback(tmp_path):
     recommendation = TradeRecommendation(
         symbol="AAPL",
         action="buy",
@@ -3121,7 +3123,7 @@ def test_entry_quality_gate_allows_sentiment_failure_for_deterministic_fallback(
     )
 
     approved, reason, checks = validate_entry_quality(
-        Settings(),
+        Settings(DATA_DIR=tmp_path),
         recommendation,
         _quality_context(),
         {
@@ -3239,9 +3241,9 @@ def test_entry_quality_gate_keeps_blocking_marginal_reward_risk_without_high_con
     assert "reward_risk_bajo" in checks["entry_score_v2"]["hard_blocks"]
 
 
-def test_entry_quality_gate_allows_follow_through_reward_risk_override_for_constructive_pattern():
+def test_entry_quality_gate_allows_follow_through_reward_risk_override_for_constructive_pattern(tmp_path):
     approved, reason, checks = validate_entry_quality(
-        Settings(),
+        Settings(DATA_DIR=tmp_path),
         TradeRecommendation(
             symbol="AAPL",
             action="buy",
@@ -3443,9 +3445,9 @@ def test_entry_quality_gate_allows_low_score_volume_rebound_reward_risk_override
     assert checks["entry_score_v2"]["hard_blocks"] == []
 
 
-def test_entry_quality_gate_allows_missing_relative_strength_follow_through_alignment():
+def test_entry_quality_gate_allows_missing_relative_strength_follow_through_alignment(tmp_path):
     approved, reason, checks = validate_entry_quality(
-        Settings(),
+        Settings(DATA_DIR=tmp_path),
         TradeRecommendation(
             symbol="AAPL",
             action="buy",
@@ -3485,9 +3487,9 @@ def test_entry_quality_gate_allows_missing_relative_strength_follow_through_alig
     assert checks["relative_strength_missing_exception"]["follow_through_exception"]["allowed"] is True
 
 
-def test_entry_quality_gate_keeps_blocking_missing_relative_strength_without_alignment_exception():
+def test_entry_quality_gate_keeps_blocking_missing_relative_strength_without_alignment_exception(tmp_path):
     approved, reason, checks = validate_entry_quality(
-        Settings(),
+        Settings(DATA_DIR=tmp_path),
         TradeRecommendation(
             symbol="AAPL",
             action="buy",
@@ -4558,7 +4560,7 @@ def test_entry_quality_gate_blocks_weak_rsi_with_weak_volume(tmp_path):
     assert checks["volume_zscore_20"] == -0.4
 
 
-def test_entry_quality_gate_blocks_high_prior_estimation_error(tmp_path):
+def test_entry_quality_gate_treats_high_prior_estimation_error_as_advisory(tmp_path):
     settings = Settings(DATA_DIR=tmp_path)
     candidate = _quality_context(
         technical_state={
@@ -4612,9 +4614,14 @@ def test_entry_quality_gate_blocks_high_prior_estimation_error(tmp_path):
         {"results": []},
     )
 
-    assert approved is False
-    assert "sobreestima el edge" in reason
+    assert approved is True
+    assert reason == "entry-quality aprobado"
     assert checks["prior_accuracy"]["avg_abs_error"] == 0.05
+    assert checks["prior_error_advisory"] == {
+        "high_error": True,
+        "hard_block": False,
+        "handled_by": "ranking_and_position_sizing",
+    }
 
 
 def test_entry_quality_gate_keeps_strong_prior_even_with_error_signal(tmp_path):

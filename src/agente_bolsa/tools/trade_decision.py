@@ -3167,22 +3167,19 @@ def validate_entry_quality(
             and not fallback_leader_pullback_extension
         ):
             return False, "setup prior reciente debil sin confirmacion suficiente", checks
-    if (
-        prior_avg_abs_error is not None
-        and prior_accuracy_sample >= settings.entry_quality_prior_error_min_samples
-        and prior_avg_abs_error >= settings.entry_quality_max_prior_avg_abs_error
-        and (prior_edge_3d is None or prior_edge_3d < 0.02)
-        and not event_momentum_long
-        and not range_expansion_breakout_long
-        and not orderly_breakout_long
-        and not momentum_shakeout_hold_long
-        and not momentum_confirmation_long
-        and not fallback_weak_volume_momentum_extension
-        and not prior_error_volume_confirmation_override
-        and not low_score_volume_rebound_override
-        and not fallback_leader_pullback_extension
-    ):
-        return False, "perfil reciente sobreestima el edge con demasiada frecuencia", checks
+    # La precision del prior se calcula sobre candidatos observados, no sobre
+    # compras ejecutadas. Es una senal util para ranking y sizing, pero no tiene
+    # calidad causal suficiente para vetar por si sola una entrada. El sizing ya
+    # aplica una penalizacion del 20 % cuando este indicador supera el umbral.
+    checks["prior_error_advisory"] = {
+        "high_error": bool(
+            prior_avg_abs_error is not None
+            and prior_accuracy_sample >= settings.entry_quality_prior_error_min_samples
+            and prior_avg_abs_error >= settings.entry_quality_max_prior_avg_abs_error
+        ),
+        "hard_block": False,
+        "handled_by": "ranking_and_position_sizing",
+    }
 
     if close and sma20:
         sma20_distance = (close - sma20) / sma20
