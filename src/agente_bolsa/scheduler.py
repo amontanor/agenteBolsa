@@ -170,21 +170,51 @@ def _lock_matches_running_process(payload: dict[str, Any], *, current_pid: int) 
     return _process_start_token(pid) == expected_token
 
 
+def _try_create_lock_exclusive(lock_path: Any, *, pid: int) -> bool:
+    """Crea el lock de forma ATOMICA (O_CREAT|O_EXCL): devuelve True si este
+    proceso lo creo, False si ya existia. Cierra la condicion de carrera del
+    patron 'comprobar-y-luego-escribir', que permitia que dos schedulers
+    arrancados a la vez (p.ej. la tarea programada y una copia de codex-runtime)
+    se creyeran ambos duenos del lock y operaran en paralelo."""
+    payload = {
+        "pid": pid,
+        "token": _process_start_token(pid),
+        "kind": "scheduler",
+        "written_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        return False
+    try:
+        os.write(fd, json.dumps(payload, ensure_ascii=True).encode("utf-8"))
+    finally:
+        os.close(fd)
+    return True
+
+
 def _acquire_scheduler_lock(settings: Settings) -> tuple[bool, str]:
     lock_path = _scheduler_lock_path(settings)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     current_pid = os.getpid()
-    if lock_path.exists():
+    # Dos intentos: el segundo cubre el caso de limpiar un lock huerfano y volver
+    # a crearlo de forma atomica sin reabrir la ventana de carrera.
+    for _attempt in range(2):
+        if _try_create_lock_exclusive(lock_path, pid=current_pid):
+            return True, ""
+        # El lock ya existe: ¿lo tiene un proceso vivo?
         payload = _read_scheduler_lock(lock_path) or {}
         existing_pid = int(payload.get("pid") or 0)
         if _lock_matches_running_process(payload, current_pid=current_pid):
             return False, f"Scheduler ya activo en PID {existing_pid}"
+        # Lock huerfano (PID muerto): limpiarlo y reintentar la creacion atomica.
         try:
             lock_path.unlink()
+        except FileNotFoundError:
+            continue  # otro proceso lo limpio antes; reintentar crear
         except OSError:
             return False, "No se pudo limpiar un lock antiguo del scheduler"
-    _write_scheduler_lock(lock_path, pid=current_pid)
-    return True, ""
+    return False, "No se pudo adquirir el lock del scheduler (otro arranque gano la carrera)"
 
 
 def _release_scheduler_lock(settings: Settings) -> None:

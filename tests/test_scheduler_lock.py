@@ -5,7 +5,18 @@ from agente_bolsa.scheduler import (
     _acquire_scheduler_lock,
     _read_scheduler_lock,
     _release_scheduler_lock,
+    _try_create_lock_exclusive,
 )
+
+
+def test_try_create_lock_exclusive_is_atomic(tmp_path):
+    # Cierra la carrera: solo el PRIMER creador gana; el segundo (otro arranque
+    # simultaneo, p.ej. una copia de codex-runtime) no puede crear el mismo lock.
+    lock_path = tmp_path / "scheduler.lock"
+    assert _try_create_lock_exclusive(lock_path, pid=111) is True
+    assert _try_create_lock_exclusive(lock_path, pid=222) is False
+    payload = _read_scheduler_lock(lock_path)
+    assert payload["pid"] == 111  # el primero conserva la propiedad
 
 
 def test_scheduler_lock_prevents_duplicate_running_pid(tmp_path, monkeypatch):
