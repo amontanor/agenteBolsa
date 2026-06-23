@@ -58,7 +58,11 @@ def build_market_snapshot(
         "warnings": [],
     }
 
-    for symbol in symbols:
+    # Iterar sobre unique_symbols (candidatos + benchmark): el benchmark se
+    # descarga en la linea de arriba pero antes NO se anadia a snapshot["symbols"]
+    # si no estaba en el universo de candidatos -> el market_state quedaba sin
+    # benchmark (regime="unknown", benchmark_return_20d=0) y forzaba modo defensivo.
+    for symbol in unique_symbols:
         try:
             frame = _symbol_frame(data, symbol, multi_symbol)
             if frame.empty:

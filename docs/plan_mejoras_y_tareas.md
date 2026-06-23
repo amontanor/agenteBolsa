@@ -647,3 +647,39 @@ shadow + evidencia; no tocar risk.py/kernel ni ALLOW_LIVE_TRADING.
 - El fixture de reconciliacion incluye la fecha real del plan, respetando el guard
   de antiguedad maxima de cinco dias que evita asociar fills a senales historicas.
 - Verificacion: tests dirigidos, suite completa, Ruff y smokes operativos.
+
+## 12. Plan de mejora 24-jun — desatascar la entrada (el dinero)
+
+Contexto: tras arreglar el LLM (deepseek), los ciclos completan y el gate trabaja
+con criterio, pero siguen 0 compras. Dos causas reales:
+1. **El `market_state` sale PARTIAL / regime=unknown CADA ciclo** -> fuerza modo
+   defensivo (`requires_micro_experiment`, size 0.5x, soft-override OFF) y NUNCA
+   puede clasificar bullish, aunque la amplitud sea 95-100% positiva. Es un BUG de
+   datos: el benchmark (SPY) no trae `close/sma_50/sma_200/atr` poblados
+   (`benchmark_return_20d=0.0`), y `_quality_status` queda en PARTIAL por falta de
+   earnings/macro/cobertura (FMP).
+2. **El universo de candidatos es 100% `confirmed_pattern`** (lideres extendidos
+   que el gate rechaza con razon); el edge validado OOS esta en `sin_patron|strong`
+   y no se surfacea ni opera.
+
+### A1 — Arreglar dato de benchmark + quality del market_state (BUG, max prioridad)
+Poblar tecnicas de SPY en `build_market_snapshot`/`build_market_state` y revisar por
+que `quality_status=PARTIAL`. Es arreglo de datos (no cambia conducta), de altisimo
+impacto: destraba el modo defensivo y re-habilita el soft-override. Con test.
+Estado: EN CURSO (estudio + codigo).
+
+### A2 — Surfacear setups con edge + promocionar el sesgo (shadow->active)
+- Verificar si la SELECCION surfacea `sin_patron|strong` (en logs eran 100%
+  confirmed_pattern -> posible cuello aguas arriba).
+- `SETUP_EDGE_BIAS_SHADOW_ENABLED=true` (mide en vivo sin tocar conducta) varias
+  sesiones; si confirma OOS, `SETUP_EDGE_BIAS_ENABLED=true` (guarded). Relajar el
+  requisito duro de `confirmed_pattern` (M2) tras flag, medido. Neto de costes.
+Estado: EN CURSO (A2 empieza por verificar la seleccion).
+
+### B1 — A/B de modelo en decision (flash vs deepseek-pro vs glm), midiendo edge. PENDIENTE.
+### B2 — Report diario del embudo en el panel (candidatos->gates->decision->fill). PENDIENTE.
+### C1 — Experimento: el LLM bate al fallback determinista? (offline). PENDIENTE.
+### C2 — Paralelizar sentimiento (~20s/simbolo secuencial) y revisar propuestas del lab. PENDIENTE.
+
+Orden: A1 (bug, destraba) -> A2 (shadow del sesgo) -> B2 -> B1/C. Disciplina:
+shadow -> guarded -> active; nunca tocar risk.py/kernel/ALLOW_LIVE; pytest verde.

@@ -104,6 +104,44 @@ Si el usuario pide arrancar y ya esta vivo, no duplicar. Si pide reiniciar, dete
 
 No borrar `scheduler.lock` a ciegas. Considerarlo huerfano solo tras verificar que su PID no existe.
 
+### Servicios y reinicio fiable (IMPORTANTE — leer)
+
+El sistema son DOS servicios persistentes, ambos lanzados por **tareas
+programadas de Windows** que usan el python del `.venv`:
+
+- `AgenteBolsaScheduler` -> `python -m agente_bolsa.main schedule` (el cerebro:
+  ciclos de mercado, vigilancia intradia, estudios, aprendizaje).
+- `AgenteBolsaWeb` -> `python -m agente_bolsa.main web` (panel Streamlit en
+  `127.0.0.1:8501`).
+
+**Regla de oro: solo la tarea programada debe lanzar los servicios.** Nunca
+ejecutar `agente_bolsa.main schedule`/`web` a mano ni desde otro entorno (p.ej.
+el runtime de Codex, `...\codex-runtimes\...`), porque deja procesos duplicados.
+
+**Leccion 23-jun** (3 dias creyendo que "no cambiaba nada"): un proceso de
+scheduler quedo vivo desde un runtime distinto, **acaparando `scheduler.lock`
+con codigo viejo**; los cambios nuevos no se cargaban. Ademas `Stop-ScheduledTask`
+NO siempre mata el python hijo. Por eso el reinicio fiable hace `taskkill /F /T`
+de TODOS los procesos del proyecto y limpia el lock.
+
+Helpers (en `scripts/`):
+- `scripts\check_services.ps1` -> diagnostico: cuantos scheduler/web hay,
+  procesos rogue de `codex-runtimes`, lock y HTTP del panel. Solo lee.
+- `scripts\restart_services.ps1` -> reinicio LIMPIO e idempotente (para tareas,
+  mata TODOS los procesos del proyecto, borra lock obsoleto, arranca las tareas,
+  verifica que queda una sola instancia + HTTP). Seguro con mercado abierto (paper).
+
+Procedimiento recomendado para cualquier reinicio o tras cambios de codigo/`.env`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\restart_services.ps1
+```
+
+Importante: tras tocar codigo o `.env`, el proceso DEBE reiniciarse para recoger
+los cambios (Python no recarga en caliente). Confirmar que el codigo nuevo esta
+vivo en el siguiente `market_cycle` del log (p.ej. el modelo/timeouts nuevos
+aparecen ahi). Un solo scheduler del `.venv` + lock con su PID = estado sano.
+
 ## 5. Levantar servicios
 
 Usar procesos ocultos persistentes y arrays de argumentos de PowerShell:
