@@ -41,6 +41,7 @@ from .tools.trade_decision import (
     filter_entry_quality,
     load_latest_sentiment,
     load_latest_technical_candidates,
+    record_setup_edge_cycle_shadow,
     request_trade_recommendations,
 )
 
@@ -736,6 +737,28 @@ def _auto_paper_trade(
                 {"error": repr(exc)},
             )
             return {"submitted": [], "failed": [{"stage": "decision", "error": str(exc)}]}
+
+    # Medicion shadow A2 (cada ciclo, no solo en fallback): mide el funnel de
+    # setup-quality y como reordenaria el sesgo de edge, sin tocar la seleccion.
+    # Gobernado por SETUP_EDGE_BIAS_SHADOW_ENABLED; la funcion traga sus errores.
+    try:
+        _cycle_shadow = record_setup_edge_cycle_shadow(settings, decision_context, market_state)
+        if _cycle_shadow.get("enabled") and not _cycle_shadow.get("error"):
+            reporter.emit(
+                "execution_agent",
+                "setup_edge_cycle_shadow",
+                run_id,
+                (
+                    "Shadow setup-edge por ciclo: "
+                    f"{_cycle_shadow.get('candidates_total', 0)} candidatos, "
+                    f"sin_patron|strong={_cycle_shadow.get('sin_patron_strong_count', 0)}, "
+                    f"edge_table={_cycle_shadow.get('edge_table_rows', 0)} filas, "
+                    f"cambia_top={_cycle_shadow.get('changed')}."
+                ),
+                _cycle_shadow,
+            )
+    except Exception:  # noqa: BLE001 - la medicion shadow nunca corta el ciclo
+        pass
 
     recommendations = decision["recommendations"]
     recommendation_augmentation = {"added": [], "replaced_holds": [], "fallback_candidates": 0}

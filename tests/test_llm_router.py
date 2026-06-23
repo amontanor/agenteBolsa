@@ -21,7 +21,9 @@ def test_default_primary_llm_endpoint_uses_opencode_go_profile():
 
     assert endpoint.name == "primary:opencode-go"
     assert endpoint.base_url == "https://opencode.ai/zen/go/v1"
-    assert endpoint.model == "kimi-k2.6"
+    # El modelo lo dicta la configuracion (.env puede sobreescribir el default),
+    # asi que verificamos el cableado, no un string fijo (evita romper al cambiar de modelo).
+    assert endpoint.model == settings.opencode_model
 
 
 def test_configured_llm_endpoints_return_custom_primary_and_local_fallback():

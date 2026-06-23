@@ -3826,6 +3826,132 @@ def _record_setup_edge_shadow_report(
     )
 
 
+def record_setup_edge_cycle_shadow(
+    settings: Settings,
+    technical_context: dict[str, Any] | None,
+    market_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Mide por ciclo el funnel de setup-quality y el efecto del sesgo de edge,
+    SIN tocar la seleccion real (A2, paso shadow).
+
+    A diferencia del shadow del fallback (que solo corre cuando el LLM cae), esta
+    medicion se ejecuta en CADA ciclo cuando el flag shadow (o el activo) esta
+    encendido, para responder con datos reales:
+      - cuantos candidatos `sin_patron|strong` (edge positivo medido) aparecen,
+      - como reordenaria el sesgo el ranking frente al baseline,
+      - si las claves de setup de los candidatos en vivo casan con la `edge_table`
+        (si no casan, el sesgo seria 0 y habria que arreglar el etiquetado antes
+        de promover nada).
+
+    Es pura observabilidad: escribe `data/reports/latest_setup_edge_cycle_shadow.json`
+    y nunca cambia recomendaciones ni propaga excepciones al ciclo.
+    """
+    enabled = bool(
+        getattr(settings, "setup_edge_bias_shadow_enabled", False)
+        or getattr(settings, "setup_edge_bias_enabled", False)
+    )
+    if not enabled:
+        return {"enabled": False}
+    try:
+        from agente_bolsa.tools.opportunity_ranker import prioritize_candidates
+        from agente_bolsa.tools.setup_edge import setup_quality_key
+
+        candidates = [
+            cand
+            for cand in _candidate_items(technical_context or {})
+            if str(cand.get("direction") or "long").lower() == "long"
+        ]
+        bench_ret = 0.0
+        if isinstance(market_state, dict):
+            bench_ret = float(
+                (market_state.get("relative_strength") or {}).get("benchmark_return_20d") or 0.0
+            )
+
+        # Funnel de calidad de setup (clave estable: confirmed_pattern|q vs sin_patron|q).
+        counts: dict[str, int] = {}
+        for cand in candidates:
+            technical_state = dict(cand.get("technical_state") or {})
+            key = setup_quality_key({**technical_state, **cand})
+            counts[key] = counts.get(key, 0) + 1
+
+        edge_table = load_setup_edge_table(
+            settings.database_path,
+            as_of=_setup_edge_shadow_as_of(technical_context),
+            train_window_days=int(settings.setup_edge_bias_train_window_days),
+            min_samples=int(settings.setup_edge_bias_min_samples),
+        )
+        baseline_ranked = prioritize_candidates(candidates, benchmark_return_20d=bench_ret)
+        biased_ranked = prioritize_candidates(
+            candidates, benchmark_return_20d=bench_ret, edge_table=edge_table
+        )
+
+        baseline_top = [str(i.get("symbol") or "") for i in baseline_ranked[:5] if i.get("symbol")]
+        biased_top = [str(i.get("symbol") or "") for i in biased_ranked[:5] if i.get("symbol")]
+        baseline_ranks = {
+            str(i.get("symbol") or ""): idx
+            for idx, i in enumerate(baseline_ranked, start=1)
+            if i.get("symbol")
+        }
+        comparisons = []
+        for idx, item in enumerate(biased_ranked[:10], start=1):
+            symbol = str(item.get("symbol") or "")
+            if not symbol:
+                continue
+            base_rank = baseline_ranks.get(symbol)
+            comparisons.append(
+                {
+                    "symbol": symbol,
+                    "biased_rank": idx,
+                    "baseline_rank": base_rank,
+                    "rank_delta": base_rank - idx if base_rank is not None else None,
+                    "setup_edge_key": item.get("setup_edge_key"),
+                    "setup_edge_bias": item.get("setup_edge_bias"),
+                }
+            )
+        # Claves presentes en candidatos pero ausentes en la edge_table -> bias 0.
+        keys_without_edge = sorted(k for k in counts if k not in edge_table)
+
+        report = {
+            "as_of": datetime.now(timezone.utc).isoformat(),
+            "source_run_id": str((technical_context or {}).get("run_id") or "") or None,
+            "selection_method": "cycle_shadow",
+            "mode": "active" if getattr(settings, "setup_edge_bias_enabled", False) else "shadow",
+            "candidates_total": len(candidates),
+            "setup_quality_counts": dict(sorted(counts.items())),
+            "sin_patron_strong_count": counts.get("sin_patron|strong", 0),
+            "benchmark_return_20d": round(bench_ret, 4),
+            "edge_table_rows": len(edge_table),
+            "edge_table": {k: edge_table[k] for k in sorted(edge_table)},
+            "keys_without_edge_match": keys_without_edge,
+            "baseline_top_symbols": baseline_top,
+            "biased_top_symbols": biased_top,
+            "changed": baseline_top != biased_top,
+            "comparisons": comparisons,
+        }
+        run_id = (
+            str((technical_context or {}).get("run_id") or "").strip()
+            or new_id("setup_edge_cycle_shadow")
+        )
+        write_json_report(
+            report,
+            settings.data_dir / "reports",
+            "setup_edge_cycle_shadow",
+            run_id,
+            latest_filename="latest_setup_edge_cycle_shadow.json",
+            manifest={"flag": "SETUP_EDGE_BIAS_SHADOW_ENABLED", "mode": "cycle_shadow"},
+        )
+        return {
+            "enabled": True,
+            "candidates_total": len(candidates),
+            "sin_patron_strong_count": counts.get("sin_patron|strong", 0),
+            "edge_table_rows": len(edge_table),
+            "changed": report["changed"],
+        }
+    except Exception as exc:  # noqa: BLE001 - la medicion shadow nunca debe afectar al ciclo
+        log_swallow(LOGGER, "registrar shadow de setup-edge por ciclo", exc)
+        return {"enabled": True, "error": str(exc)}
+
+
 def _confirmed_pattern_shadow_signals(
     settings: Settings,
     candidate: dict[str, Any],

@@ -666,7 +666,15 @@ con criterio, pero siguen 0 compras. Dos causas reales:
 Poblar tecnicas de SPY en `build_market_snapshot`/`build_market_state` y revisar por
 que `quality_status=PARTIAL`. Es arreglo de datos (no cambia conducta), de altisimo
 impacto: destraba el modo defensivo y re-habilita el soft-override. Con test.
-Estado: EN CURSO (estudio + codigo).
+Estado: **HECHO (v0.4.38, A1a).** Bug encontrado y corregido: `build_market_snapshot`
+descargaba el benchmark (SPY) pero el bucle iteraba solo `symbols` (candidatos), asi
+que SPY NUNCA entraba en `snapshot["symbols"]` -> regime="unknown" + `benchmark_return_20d=0`
++ fuerza relativa rota. Fix: iterar `unique_symbols`. Test `test_market_snapshot_benchmark.py`.
+- **A1b (decision tomada): NO conectar FMP por ahora.** El plan gratuito de FMP NO
+  incluye calendario de earnings (es de pago), asi que no arreglaria `has_earnings`.
+  Ademas PARTIAL **no bloquea** comprar (solo baja size a 0.5x y apaga soft-override):
+  no es la causa de los 0 trades. Se aparca FMP hasta ver el sistema operar y tener
+  evidencia de que earnings/macro mejoran decisiones en paper.
 
 ### A2 — Surfacear setups con edge + promocionar el sesgo (shadow->active)
 - Verificar si la SELECCION surfacea `sin_patron|strong` (en logs eran 100%
@@ -674,7 +682,19 @@ Estado: EN CURSO (estudio + codigo).
 - `SETUP_EDGE_BIAS_SHADOW_ENABLED=true` (mide en vivo sin tocar conducta) varias
   sesiones; si confirma OOS, `SETUP_EDGE_BIAS_ENABLED=true` (guarded). Relajar el
   requisito duro de `confirmed_pattern` (M2) tras flag, medido. Neto de costes.
-Estado: EN CURSO (A2 empieza por verificar la seleccion).
+Estado: **EN CURSO (v0.4.39, shadow por ciclo implementado).** Estudio del funnel:
+el ranker (`opportunity_ranker`) NO prefiere confirmed_pattern; el selector
+(`_selection_score_for_candidate`) tiene perfiles que SI exigen patron confirmado
+(high_conviction, leader_momentum, top_long_alignment) y otros que NO (emerging/parabolic
+leader), asi que sin_patron PUEDE pasar pero los perfiles de patron dominan. El
+shadow del sesgo ya existia pero **solo corria en el fallback del LLM**. Nueva funcion
+`record_setup_edge_cycle_shadow` (en `trade_decision.py`, llamada desde `cycle_runner`)
+mide en CADA ciclo, tras `SETUP_EDGE_BIAS_SHADOW_ENABLED=true`, el funnel de
+setup-quality (cuantos `sin_patron|strong` aparecen), el reorden baseline-vs-sesgo y
+si las claves casan con la `edge_table`; escribe `latest_setup_edge_cycle_shadow.json`.
+Pura observabilidad, sin tocar la seleccion. Test `test_setup_edge_cycle_shadow.py`.
+Pendiente: encender el flag, recoger varias sesiones, y decidir promover (o arreglar
+el etiquetado de `setup_quality` si las claves no casan).
 
 ### B1 — A/B de modelo en decision (flash vs deepseek-pro vs glm), midiendo edge. PENDIENTE.
 ### B2 — Report diario del embudo en el panel (candidatos->gates->decision->fill). PENDIENTE.

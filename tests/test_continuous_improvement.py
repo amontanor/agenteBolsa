@@ -1860,6 +1860,11 @@ def test_status_payload_reports_runtime(tmp_path, monkeypatch):
     monkeypatch.setenv("IMPROVEMENT_DRY_RUN", "true")
     monkeypatch.setenv("IMPROVEMENT_LLM_PROVIDER", settings.improvement_llm_provider)
     monkeypatch.setenv("IMPROVEMENT_LLM_MODEL", settings.improvement_llm_model)
+    # Fijar tambien el modelo orquestador para no depender del valor del .env real
+    # (que puede haber cambiado de modelo); asi payload y settings comparan lo mismo.
+    monkeypatch.setenv(
+        "IMPROVEMENT_LLM_ORCHESTRATOR_MODEL", settings.improvement_llm_orchestrator_model
+    )
     monkeypatch.setenv("ALLOW_AUTO_APPLY_IMPROVEMENTS", "false")
     monkeypatch.setenv("ALLOW_LIVE_TRADING", "false")
     get_settings.cache_clear()
