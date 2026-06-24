@@ -3826,6 +3826,25 @@ def _record_setup_edge_shadow_report(
     )
 
 
+def _load_all_candidates_for_shadow(settings: Settings) -> list[dict[str, Any]]:
+    """Carga `all_candidates` del ultimo estudio tecnico (~universo completo) para el
+    analisis shadow A2 sobre TODO el slate, no solo los finalistas. Best-effort: si no
+    hay reporte o falla la lectura, devuelve []."""
+    try:
+        path = settings.data_dir / "reports" / "latest_closed_market_technical_study.json"
+        if not path.exists():
+            return []
+        data = json.loads(path.read_text(encoding="utf-8"))
+        cands = data.get("all_candidates") or []
+        return [
+            c
+            for c in cands
+            if isinstance(c, dict) and str(c.get("direction") or "long").lower() == "long"
+        ]
+    except Exception:  # noqa: BLE001 - lectura best-effort, nunca rompe el ciclo.
+        return []
+
+
 def record_setup_edge_cycle_shadow(
     settings: Settings,
     technical_context: dict[str, Any] | None,
@@ -3911,6 +3930,40 @@ def record_setup_edge_cycle_shadow(
         # Claves presentes en candidatos pero ausentes en la edge_table -> bias 0.
         keys_without_edge = sorted(k for k in counts if k not in edge_table)
 
+        # --- Paso 1 A2: analisis sobre TODOS los candidatos (~500), no solo finalistas ---
+        # Responde: cuantos setups de cada clave genera el scan en todo el S&P500, y
+        # cuales de las claves con edge POSITIVO medido (p.ej. sin_patron|mixed) quedan
+        # fuera del corte top-N. Pura observabilidad; no cambia la seleccion.
+        all_cands = _load_all_candidates_for_shadow(settings)
+        all_candidates_total = len(all_cands)
+        all_candidates_setup_counts: dict[str, int] = {}
+        for cand in all_cands:
+            k = setup_quality_key({**(cand.get("technical_state") or {}), **cand})
+            all_candidates_setup_counts[k] = all_candidates_setup_counts.get(k, 0) + 1
+        positive_edge_keys = {k: v for k, v in edge_table.items() if v > 0}
+        selected_syms = {str(c.get("symbol") or "").upper() for c in candidates}
+        positive_edge_top: list[dict[str, Any]] = []
+        for key in sorted(positive_edge_keys, key=lambda k: positive_edge_keys[k], reverse=True):
+            matching = [
+                c
+                for c in all_cands
+                if setup_quality_key({**(c.get("technical_state") or {}), **c}) == key
+            ]
+            matching.sort(key=lambda c: float(c.get("score") or 0.0), reverse=True)
+            for c in matching[:5]:
+                sym = str(c.get("symbol") or "").upper()
+                positive_edge_top.append(
+                    {
+                        "symbol": sym,
+                        "setup_edge_key": key,
+                        "edge": round(positive_edge_keys[key], 6),
+                        "score": c.get("score"),
+                        "setup_quality": c.get("setup_quality"),
+                        "return_20d": (c.get("technical_state") or {}).get("return_20d"),
+                        "already_finalist": sym in selected_syms,
+                    }
+                )
+
         report = {
             "as_of": datetime.now(timezone.utc).isoformat(),
             "source_run_id": str((technical_context or {}).get("run_id") or "") or None,
@@ -3927,6 +3980,9 @@ def record_setup_edge_cycle_shadow(
             "biased_top_symbols": biased_top,
             "changed": baseline_top != biased_top,
             "comparisons": comparisons,
+            "all_candidates_total": all_candidates_total,
+            "all_candidates_setup_counts": dict(sorted(all_candidates_setup_counts.items())),
+            "positive_edge_top_candidates": positive_edge_top,
         }
         run_id = (
             str((technical_context or {}).get("run_id") or "").strip()
@@ -3946,6 +4002,8 @@ def record_setup_edge_cycle_shadow(
             "sin_patron_strong_count": counts.get("sin_patron|strong", 0),
             "edge_table_rows": len(edge_table),
             "changed": report["changed"],
+            "all_candidates_total": all_candidates_total,
+            "positive_edge_found": len(positive_edge_top),
         }
     except Exception as exc:  # noqa: BLE001 - la medicion shadow nunca debe afectar al ciclo
         log_swallow(LOGGER, "registrar shadow de setup-edge por ciclo", exc)

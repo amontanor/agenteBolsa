@@ -709,6 +709,29 @@ confirmado (benchmark_return_20d=-0.0178, ya poblado, no 0). Siguiente: validar 
 v0.4.41 `keys_without_edge_match` se vacia, y luego atacar el surfaceo de `sin_patron`
 (cuello estructural en la seleccion).
 
+**Estudio 24-jun (`docs/estudio_universo_y_seleccion_2026-06-24.md`):** el universo
+NO es el cuello (es S&P500 ~500; el `default_universe` de 9 no se usa en el ciclo).
+`builtin_breakout` genera un candidato por CADA simbolo (incluidos `sin_patron`), pero
+el corte **top-N por `score`** + la seleccion premian `confirmed_pattern|strong` y
+dejan fuera `sin_patron|mixed` (edge +). El sesgo de A2 solo actua en el fallback y el
+shadow, NO en el ranking del scan. Mejora propuesta: aplicar el sesgo de edge sobre
+`all_candidates` ANTES del corte, primero en shadow (medir que `sin_patron|mixed`
+entrarian), luego guarded, luego active. Disciplina shadow->guarded->active.
+
+#### A2.S — Surfacear setups con edge positivo (sin_patron|mixed). Pasos:
+- **Paso 1 — Shadow sobre `all_candidates` (observabilidad).** Extender
+  `record_setup_edge_cycle_shadow` para analizar TODOS los candidatos (~500) del
+  `latest_closed_market_technical_study.json`, no solo los 24 finalistas: distribucion
+  completa de `setup_quality`, y listar los mejores candidatos (por `score`) de las
+  claves con edge positivo medido (`sin_patron|mixed`, `confirmed_pattern|watchlist`,
+  `sin_patron|weak`) que el corte top-N deja fuera. Sin tocar la seleccion real.
+  Estado: EN CURSO.
+- **Paso 2 — Guarded.** Si el shadow muestra (varias sesiones) que hay setups
+  `sin_patron|mixed` de calidad por debajo del corte, reservar K plazas del slate para
+  el mejor de ese grupo, midiendo forward returns netos de costes. Estado: PENDIENTE.
+- **Paso 3 — Active/promote.** Promover solo si el cohorte surfaceado mantiene
+  expectativa positiva OOS neta de costes; revertir si no. Estado: PENDIENTE.
+
 ### B1 — A/B de modelo en decision (flash vs deepseek-pro vs glm), midiendo edge. PENDIENTE.
 ### B2 — Report diario del embudo en el panel (candidatos->gates->decision->fill). PENDIENTE.
 ### C1 — Experimento: el LLM bate al fallback determinista? (offline). PENDIENTE.

@@ -85,3 +85,49 @@ def test_cycle_shadow_counts_funnel_and_writes_report(tmp_path, monkeypatch):
     assert report["setup_quality_counts"]["confirmed_pattern|strong"] == 1
     # Las dos claves casan con la edge_table -> no debe haber claves sin match.
     assert report["keys_without_edge_match"] == []
+
+
+def test_cycle_shadow_surfaces_positive_edge_candidates_from_all_candidates(tmp_path, monkeypatch):
+    # Paso 1 A2: el shadow debe analizar TODO el slate (no solo finalistas) y
+    # destacar los setups con edge positivo (sin_patron|mixed) que quedan fuera del corte.
+    monkeypatch.setattr(
+        td,
+        "load_setup_edge_table",
+        lambda *a, **k: {"sin_patron|mixed": 0.0049, "confirmed_pattern|strong": -0.0015},
+    )
+    settings = Settings(DATA_DIR=str(tmp_path), SETUP_EDGE_BIAS_SHADOW_ENABLED=True)
+
+    # Estudio tecnico con un sin_patron|mixed de calidad que NO esta entre los finalistas.
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    study = {
+        "all_candidates": [
+            {
+                "symbol": "AAA",  # finalista confirmed_pattern (en el contexto)
+                "direction": "long",
+                "setup_quality": "strong",
+                "score": 18.0,
+                "technical_state": {"chart_patterns": [{"bias": "bullish", "status": "confirmed"}], "return_20d": 0.12},
+            },
+            {
+                "symbol": "ZZZ",  # sin_patron|mixed con buen score, NO finalista
+                "direction": "long",
+                "setup_quality": "mixed",
+                "score": 15.0,
+                "technical_state": {"chart_patterns": [], "return_20d": 0.08},
+            },
+        ]
+    }
+    (reports_dir / "latest_closed_market_technical_study.json").write_text(
+        json.dumps(study), encoding="utf-8"
+    )
+
+    td.record_setup_edge_cycle_shadow(settings, _technical_context(), _market_state())
+
+    report = json.loads((reports_dir / "latest_setup_edge_cycle_shadow.json").read_text(encoding="utf-8"))
+    assert report["all_candidates_total"] == 2
+    assert report["all_candidates_setup_counts"]["sin_patron|mixed"] == 1
+    surfaced = {c["symbol"]: c for c in report["positive_edge_top_candidates"]}
+    assert "ZZZ" in surfaced  # el sin_patron|mixed de edge+ se destaca
+    assert surfaced["ZZZ"]["setup_edge_key"] == "sin_patron|mixed"
+    assert surfaced["ZZZ"]["already_finalist"] is False

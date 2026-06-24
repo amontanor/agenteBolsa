@@ -750,8 +750,9 @@ def _auto_paper_trade(
                 run_id,
                 (
                     "Shadow setup-edge por ciclo: "
-                    f"{_cycle_shadow.get('candidates_total', 0)} candidatos, "
-                    f"sin_patron|strong={_cycle_shadow.get('sin_patron_strong_count', 0)}, "
+                    f"{_cycle_shadow.get('candidates_total', 0)} finalistas / "
+                    f"{_cycle_shadow.get('all_candidates_total', 0)} totales, "
+                    f"setups con edge+ fuera del corte={_cycle_shadow.get('positive_edge_found', 0)}, "
                     f"edge_table={_cycle_shadow.get('edge_table_rows', 0)} filas, "
                     f"cambia_top={_cycle_shadow.get('changed')}."
                 ),
