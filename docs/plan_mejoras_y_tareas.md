@@ -725,12 +725,26 @@ entrarian), luego guarded, luego active. Disciplina shadow->guarded->active.
   completa de `setup_quality`, y listar los mejores candidatos (por `score`) de las
   claves con edge positivo medido (`sin_patron|mixed`, `confirmed_pattern|watchlist`,
   `sin_patron|weak`) que el corte top-N deja fuera. Sin tocar la seleccion real.
-  Estado: EN CURSO.
-- **Paso 2 — Guarded.** Si el shadow muestra (varias sesiones) que hay setups
-  `sin_patron|mixed` de calidad por debajo del corte, reservar K plazas del slate para
-  el mejor de ese grupo, midiendo forward returns netos de costes. Estado: PENDIENTE.
-- **Paso 3 — Active/promote.** Promover solo si el cohorte surfaceado mantiene
-  expectativa positiva OOS neta de costes; revertir si no. Estado: PENDIENTE.
+  Estado: **HECHO (v0.4.42).**
+- **Paso 2 — Guarded.** Estado: **DESCARTADO con evidencia.** El shadow sobre los 343
+  candidatos mostro que `sin_patron|mixed` son solo 2 nombres en todo el S&P 500
+  (score 7 vs 16-18) y que el 87% cae en `confirmed_pattern|strong` (taxonomia
+  degenerada). Promoverlo seria perseguir ruido. Ver
+  `docs/estudio_universo_y_seleccion_2026-06-24.md` seccion 6.
+- **Paso 3 — Active/promote.** Estado: DESCARTADO (dependia del Paso 2).
+
+#### A2.E — Buscar el edge donde SI discrimina (redireccion 24-jun)
+Como `setup_quality` es degenerada, medir el edge por dimensiones que varian. Script
+`scripts/study_edge_by_score.py` (read-only): forward return_5d neto de costes por
+bucket de `score`, por `setup_quality` y por extension `return_20d`. Decide si el
+ranking por score ya captura señal (0 trades defendible) o si compra extension que
+revierte (problema en el scoring). Estado: ENTREGADO, pendiente de que Antonio lo
+ejecute.
+
+#### A2.C — Clasificador degenerado (tarea derivada)
+Revisar `technical_state_validator.py:322-332`: umbral `setup_quality="strong"` en
+score>=7 (bajo) y detector de patrones que marca "confirmado" en casi todo -> 87% en
+un solo cajon. Solo tras ver el estudio de edge por score. Estado: PENDIENTE.
 
 ### B1 — A/B de modelo en decision (flash vs deepseek-pro vs glm), midiendo edge. PENDIENTE.
 ### B2 — Report diario del embudo en el panel (candidatos->gates->decision->fill). PENDIENTE.

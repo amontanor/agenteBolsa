@@ -89,4 +89,46 @@ sobre `all_candidates`. Disciplina: shadow → guarded → active.
 - Universo: estudiado → no es el cuello (es S&P 500 ~500). **HECHO.**
 - Causa de 0 `sin_patron`: el ranking/selección por `score`, no la generación.
   **HECHO.**
-- Diseño de mejora: shadow sobre `all_candidates` → guarded → active. **SIGUIENTE.**
+- Diseño de mejora: shadow sobre `all_candidates` → guarded → active.
+  **HECHO (Paso 1, v0.4.42).**
+
+## 6. Resultado del Paso 1 (shadow sobre all_candidates) — REDIRECCIÓN
+
+Primer dato real sobre los 343 candidatos del S&P 500:
+
+| setup_quality_key | nº | % |
+|---|---|---|
+| confirmed_pattern\|strong | 298 | 87% |
+| confirmed_pattern\|mixed | 39 | 11% |
+| sin_patron\|mixed | 2 | 0.6% |
+| sin_patron\|strong | 3 | 0.9% |
+| confirmed_pattern\|watchlist | 1 | — |
+
+**Dos conclusiones que cambian el rumbo:**
+
+1. **El Paso 2 (promover `sin_patron|mixed`) NO está justificado.** En vivo son
+   **2 nombres** en todo el S&P 500 (BA, J), con score 7 (vs 16-18 de los
+   finalistas). El "+0.49%" de la `edge_table` está medido sobre un subconjunto
+   minúsculo → ruido, no señal accionable. El shadow nos ahorró meter en producción
+   una "ventaja" de 2 acciones. **Paso 2: DESCARTADO con evidencia.**
+
+2. **La clasificación es degenerada.** El 87% cae en `confirmed_pattern|strong`. La
+   causa está en `technical_state_validator.py:322-332`: `setup_quality="strong"`
+   con **score ≥ 7** (umbral bajo), y `confirmed_pattern` si hay ≥1 patrón alcista
+   confirmado. En mercado alcista casi todo acumula ≥7 puntos y un patrón → un solo
+   cajón. La taxonomía `setup_quality` **no discrimina**, así que el `setup_edge`
+   (que reordena por ella) tiene poco recorrido, y la `edge_table` histórica está
+   medida sobre esa clasificación degenerada.
+
+**Nueva dirección (medir antes de tocar):** el `score` (continuo, 6→18) SÍ varía.
+Estudio `scripts/study_edge_by_score.py` (read-only sobre `signal_outcomes`): mide
+el forward `return_5d` neto de costes por **bucket de score**, por `setup_quality`
+y por **extensión `return_20d`** (hipótesis: los líderes más extendidos revierten a
+corto). Output: `data/reports/edge_by_score_study.json`. Según el resultado:
+- si el score alto bate al bajo → el ranking ya captura señal; el "0 trades" es
+  defendible (mercado sin edge claro ahora);
+- si el score alto es plano/negativo (reversión) → el problema es el scoring (compra
+  extensión que revierte), y ahí está el trabajo real.
+
+Tarea derivada anotada: revisar el clasificador degenerado (umbral `strong`=7 y el
+detector de patrones que marca "confirmado" en casi todo).
