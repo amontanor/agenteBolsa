@@ -109,7 +109,7 @@ def main() -> None:
             where = "WHERE signal_date >= ?"
             params = (start,)
         rows = conn.execute(
-            f"SELECT features_json, outcome_json FROM signal_outcomes {where}", params
+            f"SELECT signal_date, features_json, outcome_json FROM signal_outcomes {where}", params
         ).fetchall()
     finally:
         conn.close()
@@ -117,10 +117,15 @@ def main() -> None:
     by_score: dict[str, list[float]] = {}
     by_quality: dict[str, list[float]] = {}
     by_ext: dict[str, list[float]] = {}
+    by_year_ext: dict[str, dict[str, list[float]]] = {}
     total = 0
     for row in rows:
-        features = _loads(row[0] if not hasattr(row, "keys") else row["features_json"])
-        outcome = _loads(row[1] if not hasattr(row, "keys") else row["outcome_json"])
+        if hasattr(row, "keys"):
+            sdate, fjson, ojson = row["signal_date"], row["features_json"], row["outcome_json"]
+        else:
+            sdate, fjson, ojson = row[0], row[1], row[2]
+        features = _loads(fjson)
+        outcome = _loads(ojson)
         fwd = to_float(outcome.get(args.horizon))
         if fwd is None:
             continue
@@ -128,18 +133,52 @@ def main() -> None:
         score = to_float(features.get("score"))
         quality = str(features.get("setup_quality") or "n/d")
         ext = to_float(features.get("return_20d"))
+        ext_bucket = _bucket(ext, EXT_EDGES, EXT_LABELS)
         by_score.setdefault(_bucket(score, SCORE_EDGES, SCORE_LABELS), []).append(fwd)
         by_quality.setdefault(quality, []).append(fwd)
-        by_ext.setdefault(_bucket(ext, EXT_EDGES, EXT_LABELS), []).append(fwd)
+        by_ext.setdefault(ext_bucket, []).append(fwd)
+        year = str(sdate or "")[:4]
+        if year.isdigit():
+            by_year_ext.setdefault(year, {}).setdefault(ext_bucket, []).append(fwd)
 
     score_rows = _summarize(by_score, cost, args.min_samples)
     quality_rows = _summarize(by_quality, cost, args.min_samples)
     ext_rows = _summarize(by_ext, cost, args.min_samples)
 
+    # Robustez temporal: spread pullback(<0%) - extendido(>=20%) por año.
+    # Si el spread es positivo año tras año, el edge de reversion no es un artefacto
+    # de un regimen concreto.
+    by_year_spread: list[dict] = []
+    for year in sorted(by_year_ext):
+        pull = by_year_ext[year].get("<0%", [])
+        ext_g = by_year_ext[year].get(">=20%", [])
+        if len(pull) < args.min_samples or len(ext_g) < args.min_samples:
+            continue
+        net_pull = sum(pull) / len(pull) - cost
+        net_ext = sum(ext_g) / len(ext_g) - cost
+        by_year_spread.append(
+            {
+                "year": year,
+                "n_pull": len(pull),
+                "net_pull": round(net_pull, 6),
+                "n_ext": len(ext_g),
+                "net_ext": round(net_ext, 6),
+                "spread": round(net_pull - net_ext, 6),
+            }
+        )
+
     print(f"\nMuestras con outcome {args.horizon}: {total}  |  coste neto: {args.cost_bps} bps")
     _print("Edge por bucket de SCORE", score_rows)
     _print("Edge por setup_quality (degeneracion)", quality_rows)
     _print("Edge por extension return_20d (reversion)", ext_rows)
+
+    print(f"\n=== Robustez por año: spread pullback(<0%) menos extendido(>=20%) [{args.horizon}] ===")
+    print(f"{'anio':<8}{'n_pull':>8}{'neto_pull':>11}{'n_ext':>8}{'neto_ext':>11}{'spread':>10}")
+    for r in by_year_spread:
+        print(
+            f"{r['year']:<8}{r['n_pull']:>8}{r['net_pull']*100:>10.2f}%"
+            f"{r['n_ext']:>8}{r['net_ext']*100:>10.2f}%{r['spread']*100:>9.2f}%"
+        )
 
     out = {
         "horizon": args.horizon,
@@ -149,6 +188,7 @@ def main() -> None:
         "by_score": score_rows,
         "by_setup_quality": quality_rows,
         "by_extension_return_20d": ext_rows,
+        "by_year_pullback_vs_extended_spread": by_year_spread,
     }
     reports_dir = settings.data_dir / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)

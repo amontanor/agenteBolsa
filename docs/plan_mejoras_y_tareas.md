@@ -736,10 +736,13 @@ entrarian), luego guarded, luego active. Disciplina shadow->guarded->active.
 #### A2.E — Buscar el edge donde SI discrimina (redireccion 24-jun)
 Como `setup_quality` es degenerada, medir el edge por dimensiones que varian. Script
 `scripts/study_edge_by_score.py` (read-only): forward return_5d neto de costes por
-bucket de `score`, por `setup_quality` y por extension `return_20d`. Decide si el
-ranking por score ya captura señal (0 trades defendible) o si compra extension que
-revierte (problema en el scoring). Estado: ENTREGADO, pendiente de que Antonio lo
-ejecute.
+bucket de `score`, por `setup_quality` y por extension `return_20d`. Estado: **HECHO
+y CONCLUIDO.** Resultado: el "edge" (extension toxica / pullbacks ganan) **NO es
+robusto** — `signal_outcomes` solo cubre 2026-05-06 a 2026-06-24 (7 semanas, 2 meses) y
+el efecto lo dispara el selloff de junio (en mayo la extension OUTPERFORMO). Lo unico
+consistente ambos meses: score medio 8-16 ~+0.87% a 10d (modesto). **DECISION: NO
+cambiar la seleccion** (habria sido overfit a junio); seguir midiendo y revisar con
+varios meses/regimenes. Ver `docs/estudio_universo_y_seleccion_2026-06-24.md` sec. 8.
 
 #### A2.C — Clasificador degenerado (tarea derivada)
 Revisar `technical_state_validator.py:322-332`: umbral `setup_quality="strong"` en
@@ -747,7 +750,12 @@ score>=7 (bajo) y detector de patrones que marca "confirmado" en casi todo -> 87
 un solo cajon. Solo tras ver el estudio de edge por score. Estado: PENDIENTE.
 
 ### B1 — A/B de modelo en decision (flash vs deepseek-pro vs glm), midiendo edge. PENDIENTE.
-### B2 — Report diario del embudo en el panel (candidatos->gates->decision->fill). PENDIENTE.
+### B2 — Report del embudo (candidatos->gates->decision->fill). **HECHO (v0.4.43).**
+Lector `tools/cycle_funnel.py` + comando `cycle-funnel` (y `--json`): ensambla el
+embudo del ultimo `market_cycle` desde el evento `paper_auto_trade_completed` + el
+estudio tecnico, con conteos por etapa, motivos de rechazo y deteccion del CUELLO
+("por que no se compro"). Solo lectura, no toca el ciclo. Pendiente opcional: seccion
+en el panel web (el comando ya da el valor). Test `test_cycle_funnel.py`.
 ### C1 — Experimento: el LLM bate al fallback determinista? (offline). PENDIENTE.
 ### C2 — Paralelizar sentimiento (~20s/simbolo secuencial) y revisar propuestas del lab. PENDIENTE.
 

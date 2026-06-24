@@ -132,3 +132,64 @@ corto). Output: `data/reports/edge_by_score_study.json`. Según el resultado:
 
 Tarea derivada anotada: revisar el clasificador degenerado (umbral `strong`=7 y el
 detector de patrones que marca "confirmado" en casi todo).
+
+## 7. Resultado del estudio de edge (HALLAZGO PRINCIPAL)
+
+`scripts/study_edge_by_score.py` sobre **250.233** muestras (5d) y **202.705** (10d).
+`return_20d` no existe en outcomes (solo hasta 10d).
+
+**Edge forward neto de costes por bucket de SCORE:**
+
+| score | 5d neto | 10d neto | hit 10d |
+|---|---|---|---|
+| 8-10 | +0.14% | +0.83% | 59% |
+| 10-12 | −0.18% | +0.75% | 59% |
+| 12-14 | −0.26% | +0.95% | 58% |
+| 14-16 | −0.75% | +0.33% | 54% |
+| **16-18** | **−2.79%** | **−1.74%** | 51% |
+| **>=18** | **−1.89%** | **−4.99%** | **32%** |
+
+**Edge por extensión `return_20d` (10d neto):** `<0%` (pullback) **+1.42%, hit 62.5%**;
+`0-5%` +0.30%; `>=15%` negativo; `>=20%` −0.52%. Monótono: a más extensión, peor.
+
+### Conclusión
+1. **El sistema elige el único cohorte tóxico.** Sus finalistas tienen score **16-18**,
+   que a 5d dan **−2.79%** y a 10d **−1.74%** (y ≥18 da −4.99%). El resto del mercado
+   (score 8-16) es **positivo** a 10d. El "0 trades" te ha estado **protegiendo**.
+2. **El edge dominante y robusto es la REVERSIÓN/PULLBACK:** comprar nombres caídos
+   (return_20d<0) bate con +1.42% neto y 62.5% de aciertos a 10d; comprar extensión
+   pierde. El sistema hace lo contrario (compra fuerza extendida).
+3. La taxonomía `setup_quality` es ruido (degenerada); la señal está en `score`
+   (sobre todo evitar el extremo alto) y en `extensión`.
+
+### Implicación de diseño (preliminar, ANTES de la robustez)
+Parecía: dejar de comprar el extremo extendido y tiltar hacia pullbacks. **PERO esto
+NO sobrevivió a la comprobación de robustez (sección 8).**
+
+## 8. ROBUSTEZ: el "edge" NO aguanta — es un artefacto de junio-2026
+
+Rango real de `signal_outcomes`: **2026-05-06 → 2026-06-24 (7 semanas, 2 meses)**. Los
+"250k-328k samples" son candidatos diarios solapados de **un solo régimen**, no muestra
+independiente. Desglose por mes (forward 10d, neto):
+
+| dimensión | mayo-2026 | junio-2026 |
+|---|---|---|
+| pullback (r20<0) vs extendido (r20>=20%), spread | **−0.96%** (extensión gana) | **+7.20%** (pullback gana) |
+| score >=16 | +0.03% | **−5.47%** |
+| score 8-16 | +0.89% | +0.86% |
+
+**Conclusiones (corrigen la sección 7):**
+1. El "edge de reversión / extensión tóxica" es **casi todo junio** (mes de caída de
+   los extendidos). En mayo la extensión OUTPERFORMÓ. **No es durable.**
+2. El score >=16 no es "tóxico" estructuralmente: fue neutral en mayo, malo en junio.
+3. **Lo único consistente** en ambos meses: el score medio (8-16) ~**+0.87%** a 10d.
+   Modesto y plausible, pero 2 meses no bastan para apostar.
+4. **Decisión: NO cambiar la selección.** Con 7 semanas habríamos sobreajustado a
+   junio. El sistema no esta roto; faltan datos/regímenes. Seguir midiendo (shadow +
+   signal_outcomes acumulan) y revisar con varios meses y al menos un par de regímenes
+   distintos. Posible micro-guardia defensiva (no alpha): limitar el extremo `>=18`
+   (parabólico), que fue plano/malo — pero incluso eso es fino; mejor esperar datos.
+
+**Lección de método:** el conteo de muestras (328k) era una ilusión; lo que importa es
+el nº de regímenes/periodos independientes (2 meses). Medir-primero + check temporal
+evitó promover una estrategia overfit al selloff de junio.

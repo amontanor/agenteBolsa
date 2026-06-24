@@ -4507,6 +4507,20 @@ class Store:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def latest_event_of_type(self, event_types: list[str]) -> dict[str, Any] | None:
+        """Ultimo evento cuyo tipo este en event_types (o None)."""
+        if not event_types:
+            return None
+        placeholders = ",".join("?" for _ in event_types)
+        sql = (
+            "SELECT event_id, agent, event_type, cycle_id, payload_json, created_at "
+            "FROM agent_events WHERE event_type IN (" + placeholders + ") "
+            "ORDER BY created_at DESC LIMIT 1"
+        )
+        with self.connect() as conn:
+            row = conn.execute(sql, tuple(event_types)).fetchone()
+        return dict(row) if row else None
+
 
 def event_from_dict(
     agent: str,

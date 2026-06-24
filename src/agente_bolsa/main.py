@@ -2790,6 +2790,20 @@ def command_schedule_status(_: argparse.Namespace) -> None:
     _print_json(scheduler_status(settings))
 
 
+def command_cycle_funnel(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    from .tools.cycle_funnel import build_cycle_funnel, format_cycle_funnel
+
+    funnel = build_cycle_funnel(store, settings)
+    if getattr(args, "json", False):
+        _print_json(funnel)
+    else:
+        print(format_cycle_funnel(funnel))
+
+
 def command_job_once(args: argparse.Namespace) -> None:
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
@@ -2916,6 +2930,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = subparsers.add_parser("status", help="Muestra estado basico.")
     status.set_defaults(func=command_status)
+
+    cycle_funnel = subparsers.add_parser(
+        "cycle-funnel",
+        help="Embudo del ultimo market_cycle: universo->candidatos->gates->fills con motivos de rechazo.",
+    )
+    cycle_funnel.add_argument("--json", action="store_true", help="Salida JSON en vez de texto.")
+    cycle_funnel.set_defaults(func=command_cycle_funnel)
 
     retention_cleanup = subparsers.add_parser(
         "retention-cleanup",
