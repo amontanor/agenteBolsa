@@ -78,3 +78,47 @@ def test_funnel_reports_no_recommendations(tmp_path):
     funnel = build_cycle_funnel(_FakeStore(payload), settings)
     assert funnel["stages"]["recomendaciones"] == 0
     assert "decision" in funnel["cuello"]
+
+
+class _FakeStoreHistory:
+    def __init__(self, events):
+        self._events = events
+
+    def latest_events(self, limit):
+        return self._events[:limit]
+
+
+def _completed_event(reason: str, submitted: int = 0) -> dict:
+    return {
+        "event_type": "paper_auto_trade_completed",
+        "cycle_id": "c",
+        "created_at": "t",
+        "payload_json": json.dumps(
+            {
+                "recommendations": [{"symbol": "A", "action": "buy"}],
+                "entry_quality_gate": [{"symbol": "A", "approved": False, "reason": reason}],
+                "submitted": [{"symbol": "A"}] if submitted else [],
+            }
+        ),
+    }
+
+
+def test_cycle_funnel_history_aggregates_rejection_reasons(tmp_path):
+    from agente_bolsa.tools.cycle_funnel import (
+        build_cycle_funnel_history,
+        format_cycle_funnel_history,
+    )
+
+    settings = Settings(DATA_DIR=str(tmp_path))
+    events = [
+        _completed_event("reward_risk_bajo"),
+        _completed_event("reward_risk_bajo"),
+        _completed_event("extension_alta"),
+        {"event_type": "portfolio_watch", "payload_json": "{}"},  # ruido: se ignora
+    ]
+    agg = build_cycle_funnel_history(_FakeStoreHistory(events), settings, limit=10)
+    assert agg["cycles_analizados"] == 3  # el portfolio_watch queda fuera
+    assert agg["ciclos_con_ordenes"] == 0
+    assert agg["total_recomendaciones"] == 3
+    assert agg["motivos_rechazo_top"]["entry_quality: reward_risk_bajo"] == 2
+    assert "EMBUDO AGREGADO" in format_cycle_funnel_history(agg)

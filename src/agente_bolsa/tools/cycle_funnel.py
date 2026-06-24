@@ -176,3 +176,84 @@ def format_cycle_funnel(funnel: dict[str, Any]) -> str:
     if funnel.get("setup_counts"):
         lines.append(f"  setups: {funnel.get('setup_counts')}")
     return "\n".join(lines)
+
+
+def _cycle_outcome_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Resumen de una ronda: nº de recomendaciones, bloqueos por etapa+motivo, enviadas."""
+    recs = payload.get("recommendations")
+    n_rec = len(recs) if isinstance(recs, list) else None
+    submitted = len(payload.get("submitted") or [])
+    reasons: Counter = Counter()
+    for stage, key in (
+        ("determinista", "deterministic_review"),
+        ("adversarial", "adversarial_review"),
+        ("entry_quality", "entry_quality_gate"),
+        ("backtest", "backtest_gate"),
+    ):
+        for item in _as_decision_list(payload.get(key)):
+            if not _is_ok(item):
+                reasons[f"{stage}: {_reason_of(item)}"] += 1
+    for plan in payload.get("rejected_order_plans") or []:
+        if isinstance(plan, dict):
+            motivo = plan.get("reason") or plan.get("rejection_reason") or "sin motivo"
+            reasons[f"plan: {motivo}"] += 1
+    return {"recommendations": n_rec, "submitted": submitted, "reasons": reasons}
+
+
+def build_cycle_funnel_history(store: Any, settings: Settings, limit: int = 20) -> dict[str, Any]:
+    """Agrega los ultimos `limit` ciclos con decision (paper_auto_trade_completed)."""
+    limit = max(1, int(limit))
+    raw = store.latest_events(max(limit * 50, 200))
+    events = [e for e in raw if e.get("event_type") == "paper_auto_trade_completed"][:limit]
+
+    agg_reasons: Counter = Counter()
+    cycles = 0
+    with_orders = 0
+    total_rec = 0
+    total_sub = 0
+    per_cycle: list[dict[str, Any]] = []
+    for event in events:
+        try:
+            payload = json.loads(event.get("payload_json") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        outcome = _cycle_outcome_from_payload(payload)
+        cycles += 1
+        if outcome["submitted"] > 0:
+            with_orders += 1
+        total_rec += outcome["recommendations"] or 0
+        total_sub += outcome["submitted"]
+        agg_reasons.update(outcome["reasons"])
+        per_cycle.append(
+            {
+                "run_id": event.get("cycle_id"),
+                "as_of": event.get("created_at"),
+                "recomendaciones": outcome["recommendations"],
+                "enviadas": outcome["submitted"],
+            }
+        )
+    return {
+        "cycles_analizados": cycles,
+        "ciclos_con_ordenes": with_orders,
+        "total_recomendaciones": total_rec,
+        "total_enviadas": total_sub,
+        "motivos_rechazo_top": dict(agg_reasons.most_common(12)),
+        "por_ciclo": per_cycle,
+    }
+
+
+def format_cycle_funnel_history(agg: dict[str, Any]) -> str:
+    n = agg.get("cycles_analizados", 0)
+    lines = [
+        f"EMBUDO AGREGADO  ultimos {n} ciclos con decision",
+        "-" * 64,
+        f"  ciclos con ordenes : {agg.get('ciclos_con_ordenes', 0)}/{n}",
+        f"  recomendaciones    : {agg.get('total_recomendaciones', 0)}  (enviadas: {agg.get('total_enviadas', 0)})",
+        "  motivos de rechazo (agregados, etapa: motivo):",
+    ]
+    motivos = agg.get("motivos_rechazo_top") or {}
+    if not motivos:
+        lines.append("    (ninguno)")
+    for k, v in motivos.items():
+        lines.append(f"    {v:>4}x  {k}")
+    return "\n".join(lines)

@@ -2795,6 +2795,16 @@ def command_cycle_funnel(args: argparse.Namespace) -> None:
     configure_logging(settings.logs_dir, settings.log_level)
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()
+    if getattr(args, "history", 0) and args.history > 0:
+        from .tools.cycle_funnel import build_cycle_funnel_history, format_cycle_funnel_history
+
+        agg = build_cycle_funnel_history(store, settings, limit=args.history)
+        if getattr(args, "json", False):
+            _print_json(agg)
+        else:
+            print(format_cycle_funnel_history(agg))
+        return
+
     from .tools.cycle_funnel import build_cycle_funnel, format_cycle_funnel
 
     funnel = build_cycle_funnel(store, settings)
@@ -2936,6 +2946,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Embudo del ultimo market_cycle: universo->candidatos->gates->fills con motivos de rechazo.",
     )
     cycle_funnel.add_argument("--json", action="store_true", help="Salida JSON en vez de texto.")
+    cycle_funnel.add_argument(
+        "--history",
+        type=int,
+        default=0,
+        help="Agrega los ultimos N ciclos (motivos de rechazo acumulados) en vez del ultimo.",
+    )
     cycle_funnel.set_defaults(func=command_cycle_funnel)
 
     retention_cleanup = subparsers.add_parser(
