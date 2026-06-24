@@ -696,6 +696,19 @@ Pura observabilidad, sin tocar la seleccion. Test `test_setup_edge_cycle_shadow.
 Pendiente: encender el flag, recoger varias sesiones, y decidir promover (o arreglar
 el etiquetado de `setup_quality` si las claves no casan).
 
+**Hallazgo 24-jun (primer shadow en vivo, `mkt_6305f7697897`):** el shadow funciona y
+revelo dos cosas. (1) BUG de etiquetado: los candidatos en vivo daban la clave
+`confirmed_pattern` (sin calidad, por el short-circuit de `setup_name` en
+`setup_quality_key`) mientras la `edge_table` usa `confirmed_pattern|strong` etc. ->
+no casaban -> `setup_edge_bias=0` en todo, mecanismo INERTE. Corregido en **v0.4.41**
+(la clave ahora es siempre `{base}|{quality}`, ignorando setup_name). (2) ESTRUCTURAL:
+la seleccion surfacea 24/24 `confirmed_pattern` y **0 `sin_patron`**; los grupos de
+edge positivo (sin_patron|mixed +0.49%, confirmed_pattern|watchlist +0.21%) no aparecen,
+y el grupo que si aparece (confirmed_pattern|strong) tiene edge medido -0.15%. Bonus: A1
+confirmado (benchmark_return_20d=-0.0178, ya poblado, no 0). Siguiente: validar que tras
+v0.4.41 `keys_without_edge_match` se vacia, y luego atacar el surfaceo de `sin_patron`
+(cuello estructural en la seleccion).
+
 ### B1 — A/B de modelo en decision (flash vs deepseek-pro vs glm), midiendo edge. PENDIENTE.
 ### B2 — Report diario del embudo en el panel (candidatos->gates->decision->fill). PENDIENTE.
 ### C1 — Experimento: el LLM bate al fallback determinista? (offline). PENDIENTE.

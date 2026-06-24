@@ -19,11 +19,18 @@ from agente_bolsa._utils import sqlite_connect_ro, table_exists, to_float
 
 
 def setup_quality_key(features: dict[str, Any] | None) -> str:
-    """Build a stable setup key from signal features."""
+    """Build a stable setup key from signal features, en el espacio `{base}|{quality}`.
+
+    `base` = confirmed_pattern / sin_patron segun si hay patron alcista confirmado.
+    NO se usa `setup_name` como clave: el estudio de edge y la `edge_table` viven en
+    este espacio `{base}|{quality}`, y los candidatos en vivo SI traen `setup_name`
+    mientras que las features historicas NO. Usar setup_name dejaba la clave en vivo
+    como p.ej. "confirmed_pattern" (sin calidad) y nunca casaba con
+    "confirmed_pattern|strong" de la tabla -> el sesgo quedaba SIEMPRE en 0 (inerte).
+    Mantener ambos lados en el mismo espacio garantiza el match (medido por el shadow
+    por ciclo: keys_without_edge_match).
+    """
     feats = features or {}
-    name = str(feats.get("setup_name") or "").strip()
-    if name and name.lower() != "null":
-        return name
     patterns = feats.get("chart_patterns") or {}
     if isinstance(patterns, list):
         confirmed = float(

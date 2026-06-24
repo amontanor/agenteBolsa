@@ -21,8 +21,18 @@ def test_key_sin_patron():
     assert setup_quality_key(feats) == "sin_patron|mixed"
 
 
-def test_key_uses_explicit_setup_name_when_present():
-    assert setup_quality_key({"setup_name": "orderly_breakout"}) == "orderly_breakout"
+def test_key_ignores_setup_name_to_match_edge_table_space():
+    # setup_name NO debe usarse como clave: rompia el casado con la edge_table
+    # ({base}|{quality}). Aunque venga setup_name, la clave se calcula por
+    # patron+calidad para que candidatos en vivo y tabla historica casen.
+    feats = {
+        "setup_name": "confirmed_pattern",
+        "chart_patterns": {"bullish_confirmed_count": 2},
+        "setup_quality": "strong",
+    }
+    assert setup_quality_key(feats) == "confirmed_pattern|strong"
+    # Un setup_name de ruptura sin patron confirmado cae en sin_patron|{quality}.
+    assert setup_quality_key({"setup_name": "orderly_breakout"}) == "sin_patron|n/d"
 
 
 def test_key_handles_empty():
