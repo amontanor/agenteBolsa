@@ -1336,10 +1336,15 @@ class Store:
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(signal_id) DO UPDATE SET
+                    source_run_id=excluded.source_run_id,
+                    source=excluded.source,
                     decision=excluded.decision,
                     features_json=excluded.features_json,
                     gate_json=excluded.gate_json,
-                    outcome_json=excluded.outcome_json,
+                    outcome_json=CASE
+                        WHEN excluded.outcome_json = '{}' THEN signal_outcomes.outcome_json
+                        ELSE excluded.outcome_json
+                    END,
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -1387,10 +1392,15 @@ class Store:
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(signal_id) DO UPDATE SET
+                    source_run_id=excluded.source_run_id,
+                    source=excluded.source,
                     decision=excluded.decision,
                     features_json=excluded.features_json,
                     gate_json=excluded.gate_json,
-                    outcome_json=excluded.outcome_json,
+                    outcome_json=CASE
+                        WHEN excluded.outcome_json = '{}' THEN signal_outcomes.outcome_json
+                        ELSE excluded.outcome_json
+                    END,
                     updated_at=excluded.updated_at
                 """,
                 payload,

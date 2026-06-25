@@ -13,6 +13,7 @@ from agente_bolsa.tools.signal_learning import (
     record_signal_candidates,
     update_signal_decisions,
     update_signal_execution_status,
+    update_signal_outcomes,
 )
 
 
@@ -207,6 +208,120 @@ def test_record_signal_candidates_marks_selected_for_llm_and_copies_selection_me
     assert row["features"]["selection_rank"] == 1
     assert row["features"]["selection_reason"] == "high_conviction_confirmed_momentum"
     assert row["features"]["selection_method"] == "selection_score_with_shrunk_learning_prior"
+
+
+def test_record_signal_candidates_dedupes_same_symbol_strategy_day(tmp_path):
+    from agente_bolsa.storage import Store
+
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    base_candidate = {
+        "symbol": "AAPL",
+        "direction": "long",
+        "score": 15,
+        "strategy_name": "builtin_breakout",
+        "strategy_version": "1",
+        "setup_quality": "strong",
+        "last_date": "2026-04-27",
+        "technical_state": {"close": 100, "sma_20": 95},
+        "risk_plan": {"entry_price": 100, "stop_loss": 95, "take_profit": 115},
+    }
+
+    first = record_signal_candidates(store, {"run_id": "scan-1", "all_candidates": [base_candidate]}, source="test")
+    second = record_signal_candidates(
+        store,
+        {"run_id": "scan-2", "all_candidates": [{**base_candidate, "score": 17}]},
+        source="test",
+    )
+    rows = store.signal_outcomes()
+
+    assert first == 1
+    assert second == 1
+    assert len(rows) == 1
+    assert rows[0]["signal_id"] == "test:2026-04-27:BUILTIN_BREAKOUT:AAPL"
+    assert rows[0]["source_run_id"] == "scan-2"
+    assert rows[0]["features"]["score"] == 17
+
+
+def test_deduped_signal_keeps_decision_and_outcome_matching(tmp_path, monkeypatch):
+    from agente_bolsa.storage import Store
+
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    candidate = {
+        "symbol": "AAPL",
+        "direction": "long",
+        "score": 15,
+        "strategy_name": "builtin_breakout",
+        "strategy_version": "1",
+        "setup_quality": "strong",
+        "last_date": "2026-04-27",
+        "technical_state": {"close": 100, "sma_20": 95},
+        "risk_plan": {"entry_price": 100, "stop_loss": 95, "take_profit": 115},
+    }
+    record_signal_candidates(store, {"run_id": "scan-1", "all_candidates": [candidate]}, source="test")
+    record_signal_candidates(store, {"run_id": "scan-2", "all_candidates": [{**candidate, "score": 16}]}, source="test")
+
+    updated_decisions = update_signal_decisions(
+        store,
+        source_run_id="scan-2",
+        recommendations=[TradeRecommendation(symbol="AAPL", action="buy", confidence=0.9, reason="test")],
+        entry_quality_gate=[{"symbol": "AAPL", "approved": True, "reason": "entry-quality aprobado", "checks": {}}],
+        backtest_gate=[],
+    )
+
+    frame = pd.DataFrame(
+        {
+            "Open": [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110],
+            "High": [101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111],
+            "Low": [99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109],
+            "Close": [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110],
+        },
+        index=pd.date_range("2026-04-27", periods=11, freq="D"),
+    )
+    monkeypatch.setattr("agente_bolsa.tools.signal_learning.download_daily_prices", lambda symbols, start, end: frame)
+
+    updated_outcomes = update_signal_outcomes(Settings(DATA_DIR=tmp_path), store, since_date="2026-04-01")
+    row = store.signal_outcomes()[0]
+
+    assert updated_decisions == 1
+    assert updated_outcomes["updated"] == 1
+    assert row["decision"] == "approved_buy"
+    assert row["outcome"]["return_5d"] == 0.05
+    assert row["outcome"]["verdict"] == "winner_open"
+
+
+def test_record_signal_candidates_tracks_shadow_without_decision_source_run_id(tmp_path):
+    from agente_bolsa.storage import Store
+
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    report = {
+        "run_id": "scan-shadow",
+        "all_candidates": [],
+        "shadow_candidates": [
+            {
+                "symbol": "AAPL",
+                "direction": "long",
+                "score": 13,
+                "strategy_name": "builtin_pullback",
+                "strategy_version": "1",
+                "setup_quality": "strong",
+                "last_date": "2026-04-27",
+                "technical_state": {"close": 100, "sma_20": 98},
+                "risk_plan": {"entry_price": 100, "stop_loss": 96, "take_profit": 108},
+            }
+        ],
+    }
+
+    count = record_signal_candidates(store, report, source="test")
+    row = store.signal_outcomes()[0]
+
+    assert count == 1
+    assert row["source_run_id"] == "scan-shadow:shadow"
+    assert row["features"]["strategy_name"] == "builtin_pullback"
+    assert row["features"]["shadow_candidate"] is True
+    assert row["features"]["selected_for_llm"] is False
 
 
 def test_update_signal_decisions_marks_blocked_entry_quality(tmp_path):

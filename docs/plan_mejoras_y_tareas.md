@@ -246,7 +246,7 @@ Estado: PENDIENTE salvo indicacion. Marcar aqui al completarlas.
 | T3 | **Integrar `refresh_research_evidence` como job** (junto al daily_study o inicio de sesion) y conectar la evidencia a mas capas que `trade_decision`. | La capa de evidencia esta inerte. | Bajo-Medio | PENDIENTE |
 | T4 | **Revisar calibracion del backtest-gate** para paper/micro-experimentos: permitir entradas SHADOW que no consuman el veto, con reporting. | Hoy el gate bloquea incluso el unico candidato. | Medio (toca gates) | PENDIENTE |
 | T5 | **Integrar `reconcile_broker_orders` como job** post-sesion y enlazar fills con `signal_outcomes.executed_buy`. | Sin reconciliacion no se sabe que se ejecuto; el aprendizaje no ve ejecuciones. | Bajo-Medio | PENDIENTE |
-| T6 | **Dedupe de ejecucion same-symbol** antes de generar el plan (no despues). | `duplicate_ratio` 0,90; HSIC repetido cada ciclo. | Bajo | DIAGNOSTICADO 25-jun: el plan ya tiene `duplicate_symbol_cycle_guard` (no genera 2 planes/símbolo/ciclo). El 90% de duplicados es OTRA cosa: `record_signal_candidates` graba TODOS los ~343 candidatos en CADA ciclo (15 min) -> mismo símbolo ~26x/día. Script `scripts/study_signal_duplication.py` lo cuantifica (muestra independiente real = símbolo×día). FIX (dedup por símbolo-día via upsert) toca pipeline de aprendizaje + matching de outcomes -> riesgo medio, hacer con validación cuidadosa, no a ciegas. |
+| T6 | **Dedupe de ejecucion same-symbol** antes de generar el plan (no despues). | `duplicate_ratio` 0,90; HSIC repetido cada ciclo. | Bajo | HECHO v0.4.51: el plan ya tenia `duplicate_symbol_cycle_guard`; el duplicado real venia de `record_signal_candidates` grabando cada candidato en cada ciclo. Se cambio a `signal_id` estable por fuente+dia+estrategia+simbolo con UPSERT, preservando outcomes y separando SHADOW de decision por `source_run_id=:shadow`. El historico no se compacta automaticamente para no perder outcomes; ver `docs/informe_codex_2026-06-25.md`. |
 | T7 | **Desatascar el embudo del laboratorio**: drenar 1.203 validaciones PENDING y definir gates de promocion que de hecho aprueben en paper. | 0 applied_changes, 0 reglas activas: la mejora continua no mejora nada. | Medio | PENDIENTE |
 | T8 | **Champion/challenger end-to-end**: ventanas, metricas de promocion, rechazo y rollback automaticos para paper. | Cerrar el ciclo idea -> shadow -> promocion. | Medio-Alto | PENDIENTE |
 | T9 | **Programar `weekly_improvement_report`** (cron semanal) y publicarlo en el dashboard. | Reporting de que cambio/mejoro/empeoro/revertido. | Bajo | PENDIENTE |
@@ -791,18 +791,32 @@ código que cambian conducta quedan DISEÑADOS, pendientes de pytest + 15:30):
 - **Lab de mejora continua** → DIAGNOSTICADO (no está roto, es conservador por diseño):
   `docs/diagnostico_lab_mejora_continua_2026-06-25.md`. Aplica 0 cambios por
   `ALLOW_AUTO_APPLY=false` (seguridad) + validaciones que no llegan a READY_TO_APPLY por
-  falta de datos maduros. Palanca: revisar propuestas READY_TO_APPLY a mano + generar
-  trades reales.
-- **Desbloqueo del embudo** → mapa de blockers + diseños listos:
-  `docs/plan_desbloqueo_embudo_2026-06-25.md`. Tras material_risk, los siguientes son
-  §1 reward_risk (construcción de entrada con R:R≥1.5, shadow) y §2 market_state_partial
-  (bloqueo de plan en duro **incoherente** con la revisión que lo trata como micro en
-  paper; relajar a micro en paper, medido). Extensión y RSI/volumen NO se tocan (gates
-  legítimos).
+  falta de datos maduros. Palanca: revisar propuestas READY_TO_APPLY a mano
+---
 
-### Cuando vuelvas (pendiente de TI en Windows)
-1. A las **15:30+**: `cycle-funnel --history 20` para ver el embudo SIN material_risk.
-2. Decidir e implementar §2 (market_state_partial→micro en paper) — el desbloqueo más
-   claro — con pytest verde + bump + restart.
-3. §1 (R:R) en shadow.
-4. Revisar propuestas READY_TO_APPLY del lab: `continuous-improvement --json`.
+## 14. Estado fin de jornada 25-jun (mercado abierto)
+
+**Implementado y desplegado hoy (todo paper, pytest verde, commiteado):**
+- **3 paredes de datos abajo:** material_risk (bug, v0.4.45), market_state_partial (§2, v0.4.46),
+  research_guard (§3 flag, v0.4.48). Ver `docs/plan_desbloqueo_embudo_2026-06-25.md`.
+- **§1 — construir take a R:R minimo (v0.4.49):** `_construct_min_reward_risk` en compras paper
+  con buen setup pero take conservador (sube el take a 1.5R, nunca empeora). Experimento
+  reversible (git revert). Validado en vivo: el blocker `reward_risk_bajo` **desaparecio** del
+  embudo. Test `tests/test_entry_rr_construction.py`.
+- **builtin_pullback en SHADOW (v0.4.50, B3):** estrategia de candidatos de pullback, mide sin
+  tocar conducta. Registry: breakout=ACTIVE, pullback=SHADOW.
+- **BD:** mantenimiento + autovacuum + tarea semanal. **Lab:** diagnosticado (conservador por
+  diseno). **Duplicacion:** cuantificada (96.3%; `scripts/study_signal_duplication.py`).
+
+**Resultado en vivo (embudo, mercado abierto):** las 3 paredes desaparecieron; §1 quito
+`reward_risk_bajo`. Ahora **100% de rechazos son EXTENSION** (16-29% sobre SMA20). 0 trades =
+**disciplina correcta**: el sistema genera momentum extendido (que pierde) y el gate lo rechaza
+bien. El lever real es generar candidatos NO extendidos (pullback) — por eso builtin_pullback
+en shadow, a validar con dias/regimenes.
+
+**PENDIENTE (siguiente):**
+1. Verificar que builtin_pullback genera candidatos no vacios y que sus outcomes se trackean.
+2. **T6 — dedup de signal_outcomes por simbolo-dia** (96% duplicados arruinan la potencia de los
+   estudios de edge). Cuidando el matching senal->outcome. Con test.
+3. Medir (en dias) pullback-shadow vs breakout, y los forward outcomes de §1. Promover solo con
+   evidencia OOS neta de costes.

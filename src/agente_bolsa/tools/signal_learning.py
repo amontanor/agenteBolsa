@@ -70,6 +70,10 @@ def _signal_features(candidate: dict[str, Any]) -> dict[str, Any]:
         "selection_score": _num(candidate.get("selection_score")),
         "selection_rank": candidate.get("selection_rank"),
         "selection_reason": candidate.get("selection_reason"),
+        "strategy_name": candidate.get("strategy_name"),
+        "strategy_version": candidate.get("strategy_version"),
+        "strategy_status": candidate.get("strategy_status"),
+        "shadow_candidate": bool(candidate.get("shadow_candidate")),
         "negative_pocket_shadow_penalties": candidate.get("negative_pocket_shadow_penalties", {}),
         "negative_pocket_penalty_applied": bool(candidate.get("negative_pocket_penalty_applied")),
         "blocked_auto_buy": bool(candidate.get("blocked_auto_buy")),
@@ -127,7 +131,15 @@ def record_signal_candidates(store: Store, report: dict[str, Any], *, source: st
     if not source_run_id:
         return 0
     rows = []
-    candidates = list(report.get("all_candidates", []) or [])
+    active_candidates = list(report.get("all_candidates", []) or [])
+    shadow_candidates = list(report.get("shadow_candidates", []) or [])
+    candidates = [
+        {**candidate, "shadow_candidate": False}
+        for candidate in active_candidates
+    ] + [
+        {**candidate, "shadow_candidate": True, "strategy_status": str(candidate.get("strategy_status") or "SHADOW")}
+        for candidate in shadow_candidates
+    ]
     selected_by_symbol = {
         str(candidate.get("symbol", "")).upper(): candidate
         for candidate in list(report.get("selected_candidates", []) or [])
@@ -135,8 +147,12 @@ def record_signal_candidates(store: Store, report: dict[str, Any], *, source: st
     }
     selection_method = str((report.get("selection_metadata", {}) or {}).get("method") or "").strip() or None
     regime_features = {key: value for key, value in _market_regime_features(report).items() if value not in (None, "")}
-    score_rank_by_symbol = {
-        str(candidate.get("symbol", "")).upper(): index
+    score_rank_by_key = {
+        (
+            str(candidate.get("symbol", "")).upper(),
+            str(candidate.get("strategy_name") or "unknown"),
+            bool(candidate.get("shadow_candidate")),
+        ): index
         for index, candidate in enumerate(
             sorted(
                 candidates,
@@ -154,7 +170,8 @@ def record_signal_candidates(store: Store, report: dict[str, Any], *, source: st
             continue
         features = _signal_features(candidate)
         features.update(regime_features)
-        selected_candidate = selected_by_symbol.get(symbol)
+        is_shadow = bool(features.get("shadow_candidate"))
+        selected_candidate = None if is_shadow else selected_by_symbol.get(symbol)
         if selected_candidate:
             features["selected_for_llm"] = True
             if features.get("selection_score") is None:
@@ -167,7 +184,13 @@ def record_signal_candidates(store: Store, report: dict[str, Any], *, source: st
             features["selected_for_llm"] = False
         if selection_method:
             features["selection_method"] = selection_method
-        score_rank = score_rank_by_symbol.get(symbol)
+        score_rank = score_rank_by_key.get(
+            (
+                symbol,
+                str(candidate.get("strategy_name") or "unknown"),
+                is_shadow,
+            )
+        )
         features["source_rank"] = original_index
         features["score_rank"] = score_rank
         features["source_candidate_count"] = candidate_count
@@ -177,11 +200,13 @@ def record_signal_candidates(store: Store, report: dict[str, Any], *, source: st
             else None
         )
         signal_date = _date(features.get("last_date"))
-        signal_id = f"{source_run_id}:{_slug(symbol)}"
+        strategy_name = _slug(str(features.get("strategy_name") or "unknown"))
+        signal_id = f"{source}:{signal_date}:{strategy_name}:{_slug(symbol)}"
+        row_source_run_id = f"{source_run_id}:shadow" if is_shadow else source_run_id
         rows.append(
             {
                 "signal_id": signal_id,
-                "source_run_id": source_run_id,
+                "source_run_id": row_source_run_id,
                 "source": source,
                 "symbol": symbol,
                 "signal_date": signal_date,
