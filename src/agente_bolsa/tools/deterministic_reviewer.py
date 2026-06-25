@@ -65,6 +65,15 @@ def _reward_risk(recommendation: TradeRecommendation) -> float | None:
     return round(reward / risk, 4)
 
 
+def _material_flag(sentiment_row: dict[str, Any]) -> bool:
+    """True solo si HAY riesgo material de noticias (lee el bool .material del dict;
+    antes se evaluaba bool(dict) -> siempre True -> bloqueaba toda compra)."""
+    mr = sentiment_row.get("material_risk")
+    if isinstance(mr, dict):
+        return bool(mr.get("material"))
+    return bool(mr)
+
+
 def review_recommendations(
     settings: Settings,
     recommendations: list[TradeRecommendation],
@@ -104,7 +113,7 @@ def review_recommendations(
             "market_state_quality_notes": data_quality_notes,
             "market_regime_policy": regime_policy,
             "sentiment_score": sentiment_score,
-            "material_risk": bool(sentiment_row.get("material_risk")),
+            "material_risk": _material_flag(sentiment_row),
         }
         approved = True
         reason = "deterministic_review_aprobado"
@@ -122,7 +131,7 @@ def review_recommendations(
         elif sentiment_score is not None and sentiment_score <= -0.5:
             approved = False
             reason = "sentimiento_negativo_material"
-        elif bool(sentiment_row.get("material_risk")):
+        elif _material_flag(sentiment_row):
             approved = False
             reason = "material_risk"
         elif quality == "INSUFFICIENT":

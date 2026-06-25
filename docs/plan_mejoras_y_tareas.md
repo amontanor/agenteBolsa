@@ -749,15 +749,19 @@ Revisar `technical_state_validator.py:322-332`: umbral `setup_quality="strong"` 
 score>=7 (bajo) y detector de patrones que marca "confirmado" en casi todo -> 87% en
 un solo cajon. Solo tras ver el estudio de edge por score. Estado: PENDIENTE.
 
+### BUG material_risk (review determinista) — ARREGLADO (v0.4.45)
+`deterministic_reviewer` evaluaba `bool(sentiment_row["material_risk"])`, pero ese
+campo es un DICT (siempre truthy) -> bloqueaba TODA compra con reason="material_risk".
+Detectado con `cycle-funnel --history` (8/8 recomendaciones bloqueadas). Fix: leer el
+booleano interno `.material` (`_material_flag`). Test `test_deterministic_reviewer_material.py`.
+Consecuencia: ahora solo bloquea con riesgo material real; quedan 2 blockers visibles en
+el embudo (entry_quality reward_risk, y plan market_state_partial_missing_macro). Vigilar
+con `cycle-funnel` si empiezan a entrar trades paper.
+
 ### B1 — A/B de modelo en decision (flash vs deepseek-pro vs glm), midiendo edge. PENDIENTE.
 ### B2 — Report del embudo (candidatos->gates->decision->fill). **HECHO (v0.4.43).**
 Lector `tools/cycle_funnel.py` + comando `cycle-funnel` (y `--json`): ensambla el
 embudo del ultimo `market_cycle` desde el evento `paper_auto_trade_completed` + el
 estudio tecnico, con conteos por etapa, motivos de rechazo y deteccion del CUELLO
 ("por que no se compro"). Solo lectura, no toca el ciclo. Pendiente opcional: seccion
-en el panel web (el comando ya da el valor). Test `test_cycle_funnel.py`.
-### C1 — Experimento: el LLM bate al fallback determinista? (offline). PENDIENTE.
-### C2 — Paralelizar sentimiento (~20s/simbolo secuencial) y revisar propuestas del lab. PENDIENTE.
-
-Orden: A1 (bug, destraba) -> A2 (shadow del sesgo) -> B2 -> B1/C. Disciplina:
-shadow -> guarded -> active; nunca tocar risk.py/kernel/ALLOW_LIVE; pytest verde.
+en el panel web (el com
