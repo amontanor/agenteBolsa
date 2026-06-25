@@ -415,6 +415,19 @@ def _effective_market_state_block_reason(settings: Settings, market_state: dict[
     return reason
 
 
+def _effective_research_block_reason(
+    settings: Settings, context: dict[str, Any] | None, *, symbol: str | None = None
+) -> str | None:
+    """Como `research_block_reason` pero, en PAPER, NO bloquea por evidencia de research
+    no-lista/obsoleta/poco-fiable: es un gate de CONTEXTO (frescura externa), no de
+    integridad ni de calidad del trade. Bloquearlo dejaba el sistema en 0 trades en
+    cuanto se relajaba market_state (§2). Se mantiene intacto en live. (§3, 25-jun)."""
+    reason = research_block_reason(context, symbol=symbol)
+    if reason and str(getattr(settings, "trading_mode", "")).lower() == "paper":
+        return None
+    return reason
+
+
 def _compact_sentiment_for_prompt(sentiment_context: dict[str, Any], technical_context: dict[str, Any]) -> dict[str, Any]:
     candidate_symbols = _candidate_symbols(technical_context)
     rows = []
@@ -4581,7 +4594,7 @@ def build_buy_order_plans(
                     }
                 )
             continue
-        research_reason = research_block_reason(research_context, symbol=recommendation.symbol)
+        research_reason = _effective_research_block_reason(settings, research_context, symbol=recommendation.symbol)
         if research_reason:
             if rejected is not None:
                 rejected.append(

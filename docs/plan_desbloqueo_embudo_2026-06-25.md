@@ -73,3 +73,16 @@ Ficheros: `tools/trade_decision.py` (`build_buy_order_plans`), gobernado por
 
 **Disciplina:** todo cambio de conducta con pytest verde + shadow/medición + bump de
 versión; paper-only; jamás risk.py/kernel/broker/execution/ALLOW_LIVE.
+
+## §3 — research_guard: 3ª pared oculta (ARREGLADA v0.4.47)
+
+Hallado en premarket: tras §2, las recomendaciones llegaban por primera vez al
+`research_guard` (`build_buy_order_plans:4597`). El fichero `latest_research_evidence.json`
+existe con `required=True, decision_ready=False` → `research_block_reason` bloqueaba TODA
+compra (`research_evidence_not_ready`). Era la 3ª pared, invisible hasta ahora porque
+`market_state_guard` bloqueaba antes. Fix idéntico a §2: helper
+`_effective_research_block_reason` que en PAPER no bloquea por contexto de research
+(frescura/fiabilidad), manteniéndolo en live. Test `test_research_guard_paper.py`.
+Coherente con §2: en paper retiramos los gates de CONTEXTO de datos (macro/news/research)
+que no podemos satisfacer sin feeds, dejando intactos los de CALIDAD (R:R, extensión) e
+INTEGRIDAD/seguridad (INSUFFICIENT, risk). En live todo sigue estricto.
