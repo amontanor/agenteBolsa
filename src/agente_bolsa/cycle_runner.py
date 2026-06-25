@@ -32,6 +32,7 @@ from .tools.portfolio_optimizer import build_portfolio_rebalance_context
 from .tools.signal_learning import update_signal_decisions, update_signal_execution_status
 from .tools.trade_decision import (
     _compact_technical_context_for_prompt,
+    _construct_min_reward_risk,
     _effective_buy_plan_limit,
     _effective_daily_buy_limit,
     _effective_trade_recommendation_limit,
@@ -762,6 +763,13 @@ def _auto_paper_trade(
         pass
 
     recommendations = decision["recommendations"]
+    # §1 (experimento paper): construir objetivo a R:R minimo en compras de buen setup
+    # cuyo take del LLM era demasiado conservador. Solo sube el take; nunca empeora.
+    if str(getattr(settings, "trading_mode", "")).lower() == "paper":
+        recommendations = [
+            _construct_min_reward_risk(item, settings) if str(item.action).lower() == "buy" else item
+            for item in recommendations
+        ]
     recommendation_augmentation = {"added": [], "replaced_holds": [], "fallback_candidates": 0}
     if settings.deterministic_trade_fallback_enabled:
         recommendations, recommendation_augmentation = augment_recommendations_with_deterministic_fallback(

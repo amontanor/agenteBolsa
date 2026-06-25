@@ -1202,6 +1202,29 @@ def _entry_score_v2(
     }
 
 
+def _construct_min_reward_risk(recommendation: TradeRecommendation, settings: Settings) -> TradeRecommendation:
+    """§1 (experimento paper): si el setup es bueno pero el R:R del LLM < minimo, SUBE el
+    take_profit hasta alcanzar el R:R minimo (respetando el stop del LLM; nunca empeora ni
+    toca el stop). Practica estandar: fijar el objetivo a un multiplo R minimo del riesgo.
+    Solo afecta a compras; los buenos R:R quedan intactos. Reversible (gate en paper)."""
+    from dataclasses import replace as _dc_replace
+
+    entry = _float(recommendation.entry_price)
+    stop = _float(recommendation.stop_loss)
+    take = _float(recommendation.take_profit)
+    min_rr = float(getattr(settings, "entry_score_v2_min_reward_risk", 1.5))
+    if entry is None or stop is None or stop >= entry or min_rr <= 0:
+        return recommendation
+    rr = _entry_reward_risk(recommendation)
+    if rr is not None and rr >= min_rr:
+        return recommendation
+    target_rr = min_rr + 0.05  # margen para no caer por redondeo justo en el umbral
+    new_take = round(entry + target_rr * (entry - stop), 4)
+    if take is not None and new_take <= take:
+        return recommendation
+    return _dc_replace(recommendation, take_profit=new_take)
+
+
 def _fallback_constructive_extension_exception(
     settings: Settings,
     candidate: dict[str, Any],
