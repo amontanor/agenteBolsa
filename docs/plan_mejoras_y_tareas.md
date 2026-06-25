@@ -239,7 +239,7 @@ Estado: PENDIENTE salvo indicacion. Marcar aqui al completarlas.
 | T7 | **Desatascar el embudo del laboratorio**: drenar 1.203 validaciones PENDING y definir gates de promocion que de hecho aprueben en paper. | 0 applied_changes, 0 reglas activas: la mejora continua no mejora nada. | Medio | PENDIENTE |
 | T8 | **Champion/challenger end-to-end**: ventanas, metricas de promocion, rechazo y rollback automaticos para paper. | Cerrar el ciclo idea -> shadow -> promocion. | Medio-Alto | PENDIENTE |
 | T9 | **Programar `weekly_improvement_report`** (cron semanal) y publicarlo en el dashboard. | Reporting de que cambio/mejoro/empeoro/revertido. | Bajo | PENDIENTE |
-| T10 | **Mantenimiento de BD periodico**: VACUUM + retencion automatizados con el scheduler parado (ventana de mantenimiento). | Evitar que la BD vuelva a inflarse. | Bajo | PENDIENTE |
+| T10 | **Mantenimiento de BD periodico**: VACUUM + retencion automatizados con el scheduler parado (ventana de mantenimiento). | Evitar que la BD vuelva a inflarse. | Bajo | HECHO 25-jun: apply+autovacuum INCREMENTAL (1.9->1.8GB, freelist ya 0), backup consistente, y tarea semanal `AgenteBolsaDBMaintenance` (dom 3am). |
 
 ---
 
@@ -765,3 +765,33 @@ embudo del ultimo `market_cycle` desde el evento `paper_auto_trade_completed` + 
 estudio tecnico, con conteos por etapa, motivos de rechazo y deteccion del CUELLO
 ("por que no se compro"). Solo lectura, no toca el ciclo. Pendiente opcional: seccion
 en el panel web (el com
+---
+
+## 13. Sesión autónoma 25-jun (mañana, mercado cerrado)
+
+Avances sin tocar conducta de trading (todo read-only / docs / scripts; los cambios de
+código que cambian conducta quedan DISEÑADOS, pendientes de pytest + 15:30):
+
+- **material_risk (BUG)** → ARREGLADO y desplegado (v0.4.45). `deterministic_reviewer`
+  evaluaba `bool(dict)` (siempre True) y bloqueaba toda compra. Detectado con
+  `cycle-funnel --history`.
+- **Mantenimiento de BD (T10)** → HECHO: apply + autovacuum INCREMENTAL + tarea semanal
+  `AgenteBolsaDBMaintenance`. La BD (1.8GB) es dato real, no bloat.
+- **Lab de mejora continua** → DIAGNOSTICADO (no está roto, es conservador por diseño):
+  `docs/diagnostico_lab_mejora_continua_2026-06-25.md`. Aplica 0 cambios por
+  `ALLOW_AUTO_APPLY=false` (seguridad) + validaciones que no llegan a READY_TO_APPLY por
+  falta de datos maduros. Palanca: revisar propuestas READY_TO_APPLY a mano + generar
+  trades reales.
+- **Desbloqueo del embudo** → mapa de blockers + diseños listos:
+  `docs/plan_desbloqueo_embudo_2026-06-25.md`. Tras material_risk, los siguientes son
+  §1 reward_risk (construcción de entrada con R:R≥1.5, shadow) y §2 market_state_partial
+  (bloqueo de plan en duro **incoherente** con la revisión que lo trata como micro en
+  paper; relajar a micro en paper, medido). Extensión y RSI/volumen NO se tocan (gates
+  legítimos).
+
+### Cuando vuelvas (pendiente de TI en Windows)
+1. A las **15:30+**: `cycle-funnel --history 20` para ver el embudo SIN material_risk.
+2. Decidir e implementar §2 (market_state_partial→micro en paper) — el desbloqueo más
+   claro — con pytest verde + bump + restart.
+3. §1 (R:R) en shadow.
+4. Revisar propuestas READY_TO_APPLY del lab: `continuous-improvement --json`.

@@ -400,6 +400,21 @@ def _fallback_market_state_block_reason(market_state: dict[str, Any] | None) -> 
     return None
 
 
+def _effective_market_state_block_reason(settings: Settings, market_state: dict[str, Any] | None) -> str | None:
+    """Como `_fallback_market_state_block_reason` pero, en PAPER, NO bloquea en duro el
+    PARTIAL por falta de macro/news (hueco de CONTEXTO, no de integridad): la revision
+    determinista ya lo trata como micro-experimento, asi que bloquearlo en el plan era
+    incoherente y dejaba el sistema en 0 trades. Mantiene el bloqueo para INSUFFICIENT
+    (integridad) y en modo live (sin cambios). (§2, 25-jun-2026)."""
+    reason = _fallback_market_state_block_reason(market_state)
+    if (
+        reason == "market_state_partial_missing_macro_or_news"
+        and str(getattr(settings, "trading_mode", "")).lower() == "paper"
+    ):
+        return None
+    return reason
+
+
 def _compact_sentiment_for_prompt(sentiment_context: dict[str, Any], technical_context: dict[str, Any]) -> dict[str, Any]:
     candidate_symbols = _candidate_symbols(technical_context)
     rows = []
@@ -4530,7 +4545,7 @@ def build_buy_order_plans(
     portfolio_risk_context = _portfolio_risk_context(settings, portfolio)
     planned_buy_exposure = 0.0
     planned_buy_risk_amount = 0.0
-    market_state_block_reason = _fallback_market_state_block_reason(market_state)
+    market_state_block_reason = _effective_market_state_block_reason(settings, market_state)
 
     for recommendation in recommendations:
         if len(plans) >= buy_plan_limit:
