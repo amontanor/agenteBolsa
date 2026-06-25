@@ -820,3 +820,38 @@ en shadow, a validar con dias/regimenes.
    estudios de edge). Cuidando el matching senal->outcome. Con test.
 3. Medir (en dias) pullback-shadow vs breakout, y los forward outcomes de §1. Promover solo con
    evidencia OOS neta de costes.
+                                                                                          
+## 15. Cierre 25-jun (tarde): cadena de medicion pullback verificada end-to-end
+
+Tras pullback (B3) y T6, se cerro el riesgo de que la medicion del pullback fuese inutil dentro
+de una semana. Tres entregas (Codex, paper-only, sin tocar ficheros bloqueados, suite verde):
+
+- **Herramienta de medicion (v0.4.52):** `scripts/study_strategy_edge_compare.py`, read-only
+  (`mode=ro`). Compara expectativa forward pullback(SHADOW) vs breakout(ACTIVE), por simbolo-dia,
+  neta de costes (`--cost-bps`), horizontes 1/3/5/10. Dedup por `(signal_date, symbol, strategy)`.
+  Hallazgo de esquema: `strategy/status/shadow` viven en `features_json`, returns en `outcome_json`.
+  Estado 25-jun: 538 filas deduplicadas desde 2026-06-25 (42 pullback + 496 breakout), **0% maduro**
+  (esperado; datos recien creados). Test sintetico cubre la matematica. `informe_codex_medicion_2026-06-25.md`.
+- **Verificacion de maduracion (v0.4.53):** confirmado que `update_signal_outcomes` NO filtra por
+  `source_run_id`/`decision`/`shadow_candidate` → las filas `:shadow` de pullback **si maduran**.
+  No habia gap funcional; blindado con `test_update_signal_outcomes_matures_pullback_shadow_candidate`.
+  Matiz: una llamada manual con `limit` bajo podria no cubrir filas; los jobs reales usan 200000/LEDGER_LIMIT.
+  `informe_codex_maduracion_2026-06-25.md`.
+- **Scoreboard de shadow (v0.4.54):** `cycle-funnel --shadow-scoreboard --history N`, read-only sobre
+  reportes `closed_market_technical_study_*.json` (excluye manifests). Por ciclo/estrategia: nº de
+  shadow_candidates + distribucion de `distance_sma20` y `rsi_14` (min/p50/max). 25-jun: pullback=42
+  estable, dist -4.5%/0.7%/7.9%, RSI 40.4/53.0/58.6. Vigilar que varie dia a dia (no quede estancado).
+  `informe_codex_scoreboard_2026-06-25.md`.
+
+**Cadena verificada end-to-end:** genera (pullback 42) → trackea shadow (T6) → madura forward returns
+(verificado) → mide (study_strategy_edge_compare). En ~1 semana el veredicto pullback-vs-breakout sera fiable.
+
+**Recordatorio programado:** tarea `medicion-pullback-vs-breakout` para el **lun 6-jul 09:00 CEST**:
+re-correr `study_strategy_edge_compare.py --since 2026-06-25 --horizons 1,3,5,10 --cost-bps 10` y analizar.
+
+**PENDIENTE actualizado:**
+1. (lun 6-jul) Leer la medicion pullback-vs-breakout con coverage maduro; promover a ACTIVE solo con
+   evidencia OOS robusta, varios regimenes, neta de costes.
+2. Vigilar con el scoreboard que el generador pullback sigue produciendo y varia dia a dia.
+3. Backlog NO data-gated restante (riesgo/supervisar): migracion historica de T6 (320k filas 96%
+   duplicadas, sin perder outcomes); C2 paralelizar sentimiento (cambio de conducta runtime).

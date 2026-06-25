@@ -4,7 +4,12 @@ from __future__ import annotations
 import json
 
 from agente_bolsa.config import Settings
-from agente_bolsa.tools.cycle_funnel import build_cycle_funnel, format_cycle_funnel
+from agente_bolsa.tools.cycle_funnel import (
+    build_cycle_funnel,
+    build_shadow_scoreboard_from_reports,
+    format_cycle_funnel,
+    format_shadow_scoreboard,
+)
 
 
 class _FakeStore:
@@ -122,3 +127,46 @@ def test_cycle_funnel_history_aggregates_rejection_reasons(tmp_path):
     assert agg["total_recomendaciones"] == 3
     assert agg["motivos_rechazo_top"]["entry_quality: reward_risk_bajo"] == 2
     assert "EMBUDO AGREGADO" in format_cycle_funnel_history(agg)
+
+
+def test_shadow_scoreboard_groups_strategy_and_quartiles():
+    reports = [
+        {
+            "run_id": "mkt_1",
+            "as_of": "2026-06-25T17:00:00Z",
+            "shadow_candidates": [
+                {
+                    "symbol": "AAA",
+                    "strategy_name": "builtin_pullback",
+                    "technical_state": {"close": 101, "sma_20": 100, "rsi_14": 45},
+                },
+                {
+                    "symbol": "BBB",
+                    "strategy_name": "builtin_pullback",
+                    "technical_state": {"close": 104, "sma_20": 100, "rsi_14": 55},
+                },
+                {
+                    "symbol": "CCC",
+                    "strategy_name": "experimental_shadow",
+                    "technical_state": {"distance_sma20": -0.02, "rsi_14": 40},
+                },
+            ],
+        }
+    ]
+
+    scoreboard = build_shadow_scoreboard_from_reports(reports)
+    rows = {row["strategy_name"]: row for row in scoreboard["rows"]}
+
+    assert scoreboard["cycles"] == 1
+    assert rows["builtin_pullback"]["shadow_candidates"] == 2
+    assert rows["builtin_pullback"]["distance_sma20"] == {
+        "min": 0.01,
+        "q1": 0.01,
+        "median": 0.025,
+        "q3": 0.04,
+        "max": 0.04,
+    }
+    assert rows["builtin_pullback"]["rsi_14"]["median"] == 50
+    assert rows["experimental_shadow"]["shadow_candidates"] == 1
+    assert rows["experimental_shadow"]["distance_sma20"]["median"] == -0.02
+    assert "SHADOW SCOREBOARD" in format_shadow_scoreboard(scoreboard)

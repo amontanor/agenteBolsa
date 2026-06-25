@@ -324,6 +324,50 @@ def test_record_signal_candidates_tracks_shadow_without_decision_source_run_id(t
     assert row["features"]["selected_for_llm"] is False
 
 
+def test_update_signal_outcomes_matures_pullback_shadow_candidate(tmp_path, monkeypatch):
+    from agente_bolsa.storage import Store
+
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    store.save_signal_outcome(
+        signal_id="test:2026-04-27:BUILTIN_PULLBACK:AAPL",
+        source_run_id="scan-shadow:shadow",
+        source="test",
+        symbol="AAPL",
+        signal_date="2026-04-27",
+        decision="candidate",
+        features={
+            "strategy_name": "builtin_pullback",
+            "strategy_status": "SHADOW",
+            "shadow_candidate": True,
+            "entry_price": 100.0,
+            "close": 100.0,
+            "stop_loss": 95.0,
+            "take_profit": 120.0,
+        },
+    )
+    frame = pd.DataFrame(
+        {
+            "Open": [100, 101, 102, 103, 104, 105, 106],
+            "High": [101, 102, 103, 104, 105, 106, 107],
+            "Low": [99, 100, 101, 102, 103, 104, 105],
+            "Close": [100, 101, 102, 103, 104, 105, 106],
+        },
+        index=pd.date_range("2026-04-27", periods=7, freq="B"),
+    )
+    monkeypatch.setattr("agente_bolsa.tools.signal_learning.download_daily_prices", lambda symbols, start, end: frame)
+
+    result = update_signal_outcomes(Settings(DATA_DIR=tmp_path), store, since_date="2026-04-01")
+    row = store.signal_outcomes()[0]
+
+    assert result["updated"] == 1
+    assert row["source_run_id"] == "scan-shadow:shadow"
+    assert row["features"]["strategy_name"] == "builtin_pullback"
+    assert row["features"]["shadow_candidate"] is True
+    assert row["outcome"]["return_5d"] == 0.05
+    assert row["outcome"]["matured_horizons"]["5d"] is True
+
+
 def test_update_signal_decisions_marks_blocked_entry_quality(tmp_path):
     from agente_bolsa.storage import Store
 

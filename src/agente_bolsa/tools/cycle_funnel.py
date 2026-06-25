@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from pathlib import Path
+from statistics import median
 from typing import Any
 
 from ..config import Settings
@@ -25,6 +27,13 @@ def _load_latest_study(settings: Settings) -> dict[str, Any]:
             return {}
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001 - best-effort
+        return {}
+
+
+def _load_study_file(path: Path) -> dict[str, Any]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - best-effort read-only.
         return {}
 
 
@@ -71,6 +80,137 @@ def _summarize(value: Any) -> dict[str, Any]:
         "blocked_reasons": dict(reasons.most_common(5)),
         "blocked_symbols": [str(it.get("symbol") or "?") for it in blocked][:10],
     }
+
+
+def _num(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _distance_sma20(candidate: dict[str, Any]) -> float | None:
+    technical = candidate.get("technical_state") or {}
+    existing = _num(technical.get("distance_sma20"))
+    if existing is not None:
+        return existing
+    close = _num(technical.get("close"))
+    sma20 = _num(technical.get("sma_20"))
+    if close is None or not sma20:
+        return None
+    return (close - sma20) / sma20
+
+
+def _quartiles(values: list[float]) -> dict[str, float | None]:
+    if not values:
+        return {"min": None, "q1": None, "median": None, "q3": None, "max": None}
+    ordered = sorted(values)
+    n = len(ordered)
+    mid = n // 2
+    lower = ordered[:mid] if n > 1 else ordered
+    upper = ordered[mid + (n % 2) :] if n > 1 else ordered
+    return {
+        "min": round(ordered[0], 4),
+        "q1": round(median(lower), 4),
+        "median": round(median(ordered), 4),
+        "q3": round(median(upper), 4),
+        "max": round(ordered[-1], 4),
+    }
+
+
+def build_shadow_scoreboard_from_reports(reports: list[dict[str, Any]]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for report in reports:
+        run_id = report.get("run_id")
+        as_of = report.get("as_of")
+        by_strategy: dict[str, dict[str, Any]] = {}
+        for candidate in report.get("shadow_candidates") or []:
+            if not isinstance(candidate, dict):
+                continue
+            strategy = str(candidate.get("strategy_name") or "unknown")
+            item = by_strategy.setdefault(strategy, {"count": 0, "distance_sma20": [], "rsi_14": []})
+            item["count"] += 1
+            distance = _distance_sma20(candidate)
+            if distance is not None:
+                item["distance_sma20"].append(distance)
+            rsi = _num((candidate.get("technical_state") or {}).get("rsi_14"))
+            if rsi is not None:
+                item["rsi_14"].append(rsi)
+        for strategy, item in sorted(by_strategy.items()):
+            rows.append(
+                {
+                    "run_id": run_id,
+                    "as_of": as_of,
+                    "strategy_name": strategy,
+                    "shadow_candidates": item["count"],
+                    "distance_sma20": _quartiles(item["distance_sma20"]),
+                    "rsi_14": _quartiles(item["rsi_14"]),
+                }
+            )
+        if not by_strategy:
+            rows.append(
+                {
+                    "run_id": run_id,
+                    "as_of": as_of,
+                    "strategy_name": "(sin shadow)",
+                    "shadow_candidates": 0,
+                    "distance_sma20": _quartiles([]),
+                    "rsi_14": _quartiles([]),
+                }
+            )
+    return {"cycles": len(reports), "rows": rows}
+
+
+def build_shadow_scoreboard(settings: Settings, limit: int = 10) -> dict[str, Any]:
+    reports_dir = settings.data_dir / "reports"
+    paths = sorted(
+        [
+            path
+            for path in reports_dir.glob("closed_market_technical_study_*.json")
+            if path.name != "latest_closed_market_technical_study.json"
+            and not path.name.endswith(".manifest.json")
+        ],
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )[: max(1, int(limit))]
+    reports = [report for report in (_load_study_file(path) for path in paths) if report]
+    return build_shadow_scoreboard_from_reports(reports)
+
+
+def _fmt(value: Any, *, percent: bool = False) -> str:
+    number = _num(value)
+    if number is None:
+        return "n/d"
+    if percent:
+        return f"{number * 100:.1f}%"
+    return f"{number:.1f}"
+
+
+def format_shadow_scoreboard(scoreboard: dict[str, Any]) -> str:
+    rows = scoreboard.get("rows") or []
+    lines = [
+        f"SHADOW SCOREBOARD  ultimos {scoreboard.get('cycles', 0)} reportes tecnicos",
+        "-" * 108,
+        (
+            f"{'run_id':<18}{'strategy':<20}{'n':>5}"
+            f"{'dist min':>10}{'dist p50':>10}{'dist max':>10}"
+            f"{'rsi min':>9}{'rsi p50':>9}{'rsi max':>9}"
+        ),
+    ]
+    for row in rows:
+        dist = row.get("distance_sma20") or {}
+        rsi = row.get("rsi_14") or {}
+        lines.append(
+            f"{str(row.get('run_id') or 'n/d'):<18}{str(row.get('strategy_name') or 'n/d'):<20}"
+            f"{int(row.get('shadow_candidates') or 0):>5}"
+            f"{_fmt(dist.get('min'), percent=True):>10}{_fmt(dist.get('median'), percent=True):>10}{_fmt(dist.get('max'), percent=True):>10}"
+            f"{_fmt(rsi.get('min')):>9}{_fmt(rsi.get('median')):>9}{_fmt(rsi.get('max')):>9}"
+        )
+    if not rows:
+        lines.append("(sin reportes)")
+    return "\n".join(lines)
 
 
 def build_cycle_funnel(store: Any, settings: Settings) -> dict[str, Any]:
