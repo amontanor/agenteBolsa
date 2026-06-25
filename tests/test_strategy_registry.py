@@ -70,7 +70,9 @@ def test_discover_defaults_to_builtin_breakout(tmp_path):
     strategies = discover(store)
     names = {s.name: s.status for s in strategies}
     assert names.get("builtin_breakout") == "ACTIVE"
+    assert names.get("builtin_pullback") == "SHADOW"
     assert discover_active(store)  # al menos una ACTIVE
+    assert "builtin_pullback" not in {s.name for s in discover_active(store)}
 
 
 def test_register_and_status_transitions(tmp_path):

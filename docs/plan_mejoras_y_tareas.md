@@ -14,6 +14,17 @@
 - Ultima actualizacion: 2026-06-16
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
+### B3 â€” Estrategia `builtin_pullback` en SHADOW. **HECHO (v0.4.50).**
+Nueva estrategia builtin en `src/agente_bolsa/strategies/builtin_pullback.py`,
+registrada por defecto como `SHADOW` en el registry. Reutiliza
+`validate_symbol_technical_state` para construir candidatos long y filtra solo
+pullbacks de calidad: tendencia mayor intacta (`close > sma_50 > sma_200`),
+precio cerca de SMA20 sin extension toxica (`distance_sma20` entre `-5%` y `+8%`),
+RSI moderado (`40-60`), retroceso reciente (`return_5d <= 2%`) y exclusion de
+perfiles de breakout/evento. No cambia la conducta real de trading: los candidatos
+van solo a `shadow_candidates` y sirven para medir edge antes de cualquier
+promocion. Verificado con `tests/test_builtin_pullback.py`, `tests/test_strategy_registry.py`,
+`ruff`, `pytest`, bump de version y reinicio operativo.
 ---
 
 ## 1. Vision y punto de vista

@@ -27,8 +27,15 @@ def _builtin_breakout_factory() -> Strategy:
     return get_strategy()
 
 
+def _builtin_pullback_factory() -> Strategy:
+    from .builtin_pullback import get_strategy
+
+    return get_strategy()
+
+
 BUILTIN_FACTORIES: dict[str, Callable[[], Strategy]] = {
     "builtin_breakout": _builtin_breakout_factory,
+    "builtin_pullback": _builtin_pullback_factory,
 }
 
 _FORBIDDEN_IMPORT_SUBSTRINGS = (
@@ -139,12 +146,12 @@ def discover(store: Store | None) -> list[Strategy]:
 
     # Builtins primero (ACTIVE por defecto salvo que el registro diga otra cosa).
     for name, factory in BUILTIN_FACTORIES.items():
+        strategy = factory()
         row = rows_by_name.get(name)
-        status = str((row or {}).get("status") or "ACTIVE").upper()
+        status = str((row or {}).get("status") or strategy.status).upper()
         if status == "RETIRED":
             seen.add(name)
             continue
-        strategy = factory()
         strategy.status = status
         if row and row.get("version"):
             strategy.version = str(row["version"])
