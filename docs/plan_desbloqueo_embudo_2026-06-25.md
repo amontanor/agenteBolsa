@@ -88,3 +88,18 @@ el flag: el helper `_effective_research_block_reason` bloquea solo si el flag es
 paper sin feed de research, se pone el flag a **False** en `.env` (decision reversible del
 operador) + kernel-seal + restart. Test `test_research_guard_paper.py` (flag-based). El
 test existente del flag vuelve a verde. Misma filosofia que §2 pero por el knob previsto.
+
+## Wall-check final (premarket 25-jun) — NO quedan más paredes ocultas
+
+Trazado completo de `build_buy_order_plans` tras relajar market_state (§2) y research (§3).
+Gates restantes y su naturaleza:
+- `operational_kill_switch` (4613): enabled=True pero SIN `operational_block.json` → no bloquea.
+- `min_llm_confidence_to_trade=0.65` (4629): por-recomendación, legítimo (no muro).
+- `open_order` / `position_add` (allow_position_adds=false) / `duplicate_symbol` (4644-4682):
+  por-símbolo (dedup), no muros; irrelevantes con cartera vacía.
+- `position_sizing` notional>0 (4713) + evaluación de `risk.py`: por-recomendación, legítimos.
+
+**Veredicto:** las 3 paredes de datos (material_risk, market_state, research) están abajo y
+NO hay otro hard-block-all. A las 15:30, una recomendación con confianza ≥0.65, R:R≥1.5 y no
+extendida → produce orden paper (micro). Si entran pocas, el lever real será §1 (construcción
+de entrada / R:R). Ya no hay "0 trades por muro": ahora es "entran las de buena calidad".
