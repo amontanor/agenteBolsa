@@ -1343,8 +1343,10 @@ def test_build_order_plans_blocks_buys_when_operational_kill_switch_is_active(tm
     assert rejected[0]["stage"] == "operational_kill_switch"
 
 
-def test_build_order_plans_blocks_buys_when_market_state_is_partial_missing_context(tmp_path: Path):
-    settings = Settings(DATA_DIR=tmp_path)
+def test_build_order_plans_paper_relaxes_partial_but_blocks_insufficient(tmp_path: Path):
+    # §2 (25-jun): en paper, el PARTIAL por falta de macro/news ya NO bloquea el plan
+    # (la revision determinista ya lo trata como micro). INSUFFICIENT sigue bloqueando.
+    settings = Settings(DATA_DIR=tmp_path)  # paper por defecto
     portfolio = PortfolioSnapshot(
         account_id="paper",
         status="ACTIVE",
@@ -1365,25 +1367,34 @@ def test_build_order_plans_blocks_buys_when_market_state_is_partial_missing_cont
         take_profit=110.0,
         target_exposure_pct=0.05,
     )
-    rejected = []
 
+    partial = {
+        "data_quality": {
+            "status": "PARTIAL",
+            "notes": ["macro_summary_missing", "sentiment_window_insufficient"],
+            "data_vendor_quality": {"formal_provider": False, "severity": "WARN"},
+        }
+    }
+    rejected_partial = []
     plans = build_order_plans(
+        settings, portfolio, [recommendation], rejected=rejected_partial, market_state=partial
+    )
+    assert plans, "en paper el PARTIAL por macro/news ya no debe bloquear el plan"
+    assert all(
+        r.get("reason") != "market_state_partial_missing_macro_or_news" for r in rejected_partial
+    )
+
+    rejected_insuf = []
+    plans_insuf = build_order_plans(
         settings,
         portfolio,
         [recommendation],
-        rejected=rejected,
-        market_state={
-            "data_quality": {
-                "status": "PARTIAL",
-                "notes": ["macro_summary_missing", "sentiment_window_insufficient"],
-                "data_vendor_quality": {"formal_provider": False, "severity": "WARN"},
-            }
-        },
+        rejected=rejected_insuf,
+        market_state={"data_quality": {"status": "INSUFFICIENT"}},
     )
-
-    assert plans == []
-    assert rejected[0]["stage"] == "market_state_guard"
-    assert rejected[0]["reason"] == "market_state_partial_missing_macro_or_news"
+    assert plans_insuf == []
+    assert rejected_insuf[0]["stage"] == "market_state_guard"
+    assert rejected_insuf[0]["reason"] == "market_state_data_quality_insufficient"
 
 
 def test_build_order_plans_uses_existing_stop_data_for_aggregate_open_risk(tmp_path: Path):
