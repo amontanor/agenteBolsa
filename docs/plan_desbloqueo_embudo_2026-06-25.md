@@ -80,9 +80,11 @@ Hallado en premarket: tras §2, las recomendaciones llegaban por primera vez al
 `research_guard` (`build_buy_order_plans:4597`). El fichero `latest_research_evidence.json`
 existe con `required=True, decision_ready=False` → `research_block_reason` bloqueaba TODA
 compra (`research_evidence_not_ready`). Era la 3ª pared, invisible hasta ahora porque
-`market_state_guard` bloqueaba antes. Fix idéntico a §2: helper
-`_effective_research_block_reason` que en PAPER no bloquea por contexto de research
-(frescura/fiabilidad), manteniéndolo en live. Test `test_research_guard_paper.py`.
-Coherente con §2: en paper retiramos los gates de CONTEXTO de datos (macro/news/research)
-que no podemos satisfacer sin feeds, dejando intactos los de CALIDAD (R:R, extensión) e
-INTEGRIDAD/seguridad (INSUFFICIENT, risk). En live todo sigue estricto.
+`market_state_guard` bloqueaba antes. **Corregido (v0.4.48):** el research_guard YA tiene un flag de control,
+`RESEARCH_EVIDENCE_FAIL_CLOSED_FOR_BUYS` (default True; `research_evidence.py:270` lo usa
+para fijar `summary.required`). El enfoque correcto NO es hardcodear paper, sino respetar
+el flag: el helper `_effective_research_block_reason` bloquea solo si el flag esta en True
+(de inmediato, sin depender del 'required' obsoleto del ultimo reporte). Para operar en
+paper sin feed de research, se pone el flag a **False** en `.env` (decision reversible del
+operador) + kernel-seal + restart. Test `test_research_guard_paper.py` (flag-based). El
+test existente del flag vuelve a verde. Misma filosofia que §2 pero por el knob previsto.

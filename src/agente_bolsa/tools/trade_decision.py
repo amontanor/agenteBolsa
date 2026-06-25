@@ -418,14 +418,14 @@ def _effective_market_state_block_reason(settings: Settings, market_state: dict[
 def _effective_research_block_reason(
     settings: Settings, context: dict[str, Any] | None, *, symbol: str | None = None
 ) -> str | None:
-    """Como `research_block_reason` pero, en PAPER, NO bloquea por evidencia de research
-    no-lista/obsoleta/poco-fiable: es un gate de CONTEXTO (frescura externa), no de
-    integridad ni de calidad del trade. Bloquearlo dejaba el sistema en 0 trades en
-    cuanto se relajaba market_state (§2). Se mantiene intacto en live. (§3, 25-jun)."""
-    reason = research_block_reason(context, symbol=symbol)
-    if reason and str(getattr(settings, "trading_mode", "")).lower() == "paper":
+    """El research_guard solo aplica si el operador lo pide con
+    `research_evidence_fail_closed_for_buys` (flag de config, default True). Si esta en
+    False NO bloquea, de inmediato, sin depender del 'required' (posiblemente obsoleto)
+    del ultimo reporte de research. Respeta la intencion del flag en paper y en live.
+    Para operar sin feed de research (paper), poner el flag a False. (§3 corregido)."""
+    if not getattr(settings, "research_evidence_fail_closed_for_buys", False):
         return None
-    return reason
+    return research_block_reason(context, symbol=symbol)
 
 
 def _compact_sentiment_for_prompt(sentiment_context: dict[str, Any], technical_context: dict[str, Any]) -> dict[str, Any]:
