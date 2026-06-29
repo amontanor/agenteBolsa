@@ -1,5 +1,6 @@
 import pandas as pd
 
+import agente_bolsa.tools.strategy_edge_backtest as strategy_edge_backtest
 from agente_bolsa.tools.strategy_edge_backtest import (
     SelectorObservation,
     StrategyObservation,
@@ -174,3 +175,45 @@ def test_summarize_selector_observations_compares_top_n_and_deciles():
     assert decile_10["mean_net"] == 0.049
     monotonic = summary["score_monotonicity"]["return_5d"]["raw"]
     assert monotonic["d10_minus_d1"] == 0.08
+
+
+def test_extension_gate_delta_compares_rejected_minus_pass():
+    observations = [
+        SelectorObservation(
+            cohort="extension_pass",
+            signal_date="2026-01-02",
+            symbol="AAA",
+            regime="bull_above_sma200",
+            selector_score=0.03,
+            technical_score=10.0,
+            score_decile=None,
+            raw_returns={5: 0.01},
+            benchmark_returns={5: 0.0},
+            beta_asof=1.0,
+        ),
+        SelectorObservation(
+            cohort="extension_rejected",
+            signal_date="2026-01-02",
+            symbol="BBB",
+            regime="bull_above_sma200",
+            selector_score=0.04,
+            technical_score=12.0,
+            score_decile=None,
+            raw_returns={5: -0.03},
+            benchmark_returns={5: 0.0},
+            beta_asof=1.0,
+        ),
+    ]
+
+    summary = summarize_selector_observations(observations, horizons=(5,), cost_bps=10.0)
+    delta = strategy_edge_backtest._delta_between_cohorts(
+        summary,
+        left="extension_rejected",
+        right="extension_pass",
+        horizons=(5,),
+    )
+
+    assert summary["overall"]["extension_pass"]["return_5d"]["raw"]["mean_net"] == 0.009
+    assert summary["overall"]["extension_rejected"]["return_5d"]["raw"]["mean_net"] == -0.031
+    assert delta["return_5d"]["raw"]["mean_delta"] == -0.04
+    assert delta["return_5d"]["raw"]["mean_net_delta"] == -0.04

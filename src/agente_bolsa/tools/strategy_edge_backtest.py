@@ -1019,6 +1019,7 @@ def run_selector_edge_backtest(
     batch_size: int = DEFAULT_BATCH_SIZE,
     sample_every: int = DEFAULT_SAMPLE_EVERY,
     progress_every: int = DEFAULT_PROGRESS_EVERY,
+    include_top_records: bool = False,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
     settings = settings or get_settings()
@@ -1123,6 +1124,7 @@ def run_selector_edge_backtest(
                 "regime": regime_by_date.get(session_date, "unknown"),
                 "selector_score": float(row.get("vector_selector_score", 0.0)),
                 "technical_score": float(row.get("vector_technical_score", 0.0)),
+                "distance_sma20": _safe_float(row.get("vector_distance_sma20")),
                 "raw_returns": {h: raw_returns[h].get(session_date) for h in horizons},
                 "benchmark_returns": {h: benchmark_returns[h].get(session_date) for h in horizons},
                 "beta_asof": beta_by_date.get(session_date),
@@ -1183,7 +1185,158 @@ def run_selector_edge_backtest(
             "elapsed_seconds": round(time.perf_counter() - started_at, 2),
         },
         "summary": summary,
+        "top_pick_records": top_records if include_top_records else [],
     }
+
+
+def _delta_between_cohorts(summary: dict[str, Any], *, left: str, right: str, horizons: tuple[int, ...]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for horizon in horizons:
+        key = f"return_{horizon}d"
+        result[key] = {}
+        for metric in ("raw", "excess_vs_spy", "beta_adjusted_vs_spy"):
+            left_stats = summary.get("overall", {}).get(left, {}).get(key, {}).get(metric, {})
+            right_stats = summary.get("overall", {}).get(right, {}).get(key, {}).get(metric, {})
+            result[key][metric] = {
+                "left_n": left_stats.get("n", 0),
+                "right_n": right_stats.get("n", 0),
+                "mean_delta": (
+                    round(float(left_stats["mean"]) - float(right_stats["mean"]), 6)
+                    if left_stats.get("mean") is not None and right_stats.get("mean") is not None
+                    else None
+                ),
+                "mean_net_delta": (
+                    round(float(left_stats["mean_net"]) - float(right_stats["mean_net"]), 6)
+                    if left_stats.get("mean_net") is not None and right_stats.get("mean_net") is not None
+                    else None
+                ),
+            }
+    return result
+
+
+def _delta_between_cohorts_by_regime(
+    summary: dict[str, Any],
+    *,
+    left: str,
+    right: str,
+    horizons: tuple[int, ...],
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for regime, cohorts in summary.get("by_regime", {}).items():
+        if left not in cohorts or right not in cohorts:
+            continue
+        result[regime] = {}
+        for horizon in horizons:
+            key = f"return_{horizon}d"
+            result[regime][key] = {}
+            for metric in ("raw", "excess_vs_spy", "beta_adjusted_vs_spy"):
+                left_stats = cohorts[left][key][metric]
+                right_stats = cohorts[right][key][metric]
+                result[regime][key][metric] = {
+                    "left_n": left_stats.get("n", 0),
+                    "right_n": right_stats.get("n", 0),
+                    "mean_delta": (
+                        round(float(left_stats["mean"]) - float(right_stats["mean"]), 6)
+                        if left_stats.get("mean") is not None and right_stats.get("mean") is not None
+                        else None
+                    ),
+                    "mean_net_delta": (
+                        round(float(left_stats["mean_net"]) - float(right_stats["mean_net"]), 6)
+                        if left_stats.get("mean_net") is not None and right_stats.get("mean_net") is not None
+                        else None
+                    ),
+                }
+    return result
+
+
+def run_extension_gate_edge_backtest(
+    *,
+    since: str,
+    end: str,
+    horizons: tuple[int, ...],
+    cost_bps: float,
+    top_n: int = 15,
+    universe_name: str = DEFAULT_UNIVERSE,
+    max_symbols: int = 0,
+    beta_lookback: int = DEFAULT_BETA_LOOKBACK,
+    regime_mode: str = DEFAULT_REGIME,
+    provider: str | None = None,
+    fmp_api_key: str | None = None,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    sample_every: int = DEFAULT_SAMPLE_EVERY,
+    progress_every: int = DEFAULT_PROGRESS_EVERY,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    settings = settings or get_settings()
+    threshold = float(settings.entry_quality_max_sma20_distance)
+    selector_report = run_selector_edge_backtest(
+        since=since,
+        end=end,
+        horizons=horizons,
+        cost_bps=cost_bps,
+        top_n=top_n,
+        universe_name=universe_name,
+        max_symbols=max_symbols,
+        beta_lookback=beta_lookback,
+        regime_mode=regime_mode,
+        provider=provider,
+        fmp_api_key=fmp_api_key,
+        batch_size=batch_size,
+        sample_every=sample_every,
+        progress_every=progress_every,
+        include_top_records=True,
+        settings=settings,
+    )
+    top_records = selector_report["top_pick_records"]
+    observations: list[SelectorObservation] = []
+    cohort_counts = {"extension_pass": 0, "extension_rejected": 0, "missing_distance": 0}
+    distance_summary_values: dict[str, list[float]] = {"extension_pass": [], "extension_rejected": []}
+    for record in top_records:
+        distance = _safe_float(record.get("distance_sma20"))
+        if distance is None:
+            cohort_counts["missing_distance"] += 1
+            continue
+        cohort = "extension_rejected" if distance > threshold else "extension_pass"
+        cohort_counts[cohort] += 1
+        distance_summary_values[cohort].append(distance)
+        observations.append(_selector_observation(record, cohort=cohort))
+
+    summary = summarize_selector_observations(observations, horizons=horizons, cost_bps=cost_bps)
+    summary["delta_rejected_minus_pass"] = _delta_between_cohorts(
+        summary,
+        left="extension_rejected",
+        right="extension_pass",
+        horizons=horizons,
+    )
+    summary["delta_by_regime_rejected_minus_pass"] = _delta_between_cohorts_by_regime(
+        summary,
+        left="extension_rejected",
+        right="extension_pass",
+        horizons=horizons,
+    )
+    summary["distance_sma20"] = {
+        cohort: {
+            "n": len(values),
+            "min": round(min(values), 6) if values else None,
+            "median": round(statistics.median(values), 6) if values else None,
+            "max": round(max(values), 6) if values else None,
+        }
+        for cohort, values in distance_summary_values.items()
+    }
+    result = dict(selector_report)
+    result["study"] = {
+        **selector_report["study"],
+        "name": "selector_top_extension_gate_edge_historical",
+        "extension_gate_threshold": threshold,
+        "extension_gate_source": "settings.entry_quality_max_sma20_distance",
+    }
+    result["scan"] = {
+        **selector_report["scan"],
+        "extension_gate_cohort_counts": cohort_counts,
+    }
+    result["summary"] = summary
+    result.pop("top_pick_records", None)
+    return result
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1350,6 +1503,98 @@ def selector_main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def build_extension_gate_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Backtest read-only del gate de extension sobre top picks del selector.")
+    parser.add_argument("--since", default="2024-01-01", help="Fecha inicial de estudio YYYY-MM-DD.")
+    parser.add_argument("--to", dest="end", default=date.today().isoformat(), help="Fecha final YYYY-MM-DD.")
+    parser.add_argument("--horizons", default="5,10,20", help="Horizontes forward separados por coma.")
+    parser.add_argument("--cost-bps", type=float, default=10.0, help="Coste round-trip en bps.")
+    parser.add_argument("--top-n", type=int, default=15, help="Top N seleccionado por fecha.")
+    parser.add_argument("--universe", default=DEFAULT_UNIVERSE, help="Universo. Default: sp500.")
+    parser.add_argument("--max-symbols", type=int, default=0, help="Limite opcional de simbolos.")
+    parser.add_argument("--beta-lookback", type=int, default=DEFAULT_BETA_LOOKBACK, help="Lookback de beta.")
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE, help="Tamano de batch de descarga.")
+    parser.add_argument(
+        "--sample-every",
+        type=int,
+        default=DEFAULT_SAMPLE_EVERY,
+        help="Evalua senales cada N sesiones para reducir solape forward. Default: 5.",
+    )
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=DEFAULT_PROGRESS_EVERY,
+        help="Imprime progreso cada N simbolos en stderr. 0 desactiva.",
+    )
+    parser.add_argument("--json", action="store_true", help="Imprime JSON completo.")
+    return parser
+
+
+def print_extension_gate_summary(report: dict[str, Any]) -> None:
+    summary = report["summary"]
+
+    def _pct(value: float | None) -> str:
+        return "n/d" if value is None else f"{value * 100:.2f}%"
+
+    print("\n=== Backtest historico gate de extension sobre top picks (read-only) ===")
+    print(
+        f"ventana={report['study']['since']}->{report['study']['end']} | "
+        f"horizons={report['study']['horizons']} | top_n={report['study']['top_n']} | "
+        f"threshold={report['study']['extension_gate_threshold']:.2%} | "
+        f"cost_bps={report['study']['cost_bps']}"
+    )
+    counts = report["scan"]["extension_gate_cohort_counts"]
+    print(
+        f"top_picks={report['scan']['top_n_candidates']} | "
+        f"pasa={counts['extension_pass']} | rechazado={counts['extension_rejected']} | "
+        f"missing_distance={counts['missing_distance']}"
+    )
+    print("\nOverall:")
+    print(f"{'cohort':<20}{'horizon':<12}{'metric':<22}{'n':>8}{'mean':>12}{'median':>12}{'hit':>10}{'mean_net':>12}")
+    for cohort, per_horizon in summary["overall"].items():
+        for horizon_key, blocks in per_horizon.items():
+            for metric_name, stats in blocks.items():
+                print(
+                    f"{cohort:<20}{horizon_key:<12}{metric_name:<22}{stats['n']:>8}"
+                    f"{_pct(stats['mean']):>12}"
+                    f"{_pct(stats['median']):>12}"
+                    f"{_pct(stats['hit_rate']):>10}"
+                    f"{_pct(stats['mean_net']):>12}"
+                )
+    print("\nDelta rechazado - pasa:")
+    print(f"{'horizon':<12}{'metric':<22}{'rej_n':>8}{'pass_n':>8}{'mean_delta':>14}{'net_delta':>14}")
+    for horizon_key, blocks in summary["delta_rejected_minus_pass"].items():
+        for metric_name, delta in blocks.items():
+            print(
+                f"{horizon_key:<12}{metric_name:<22}{delta['left_n']:>8}{delta['right_n']:>8}"
+                f"{_pct(delta['mean_delta']):>14}"
+                f"{_pct(delta['mean_net_delta']):>14}"
+            )
+
+
+def extension_gate_main(argv: list[str] | None = None) -> int:
+    parser = build_extension_gate_parser()
+    args = parser.parse_args(argv)
+    report = run_extension_gate_edge_backtest(
+        since=args.since,
+        end=args.end,
+        horizons=_parse_horizons(args.horizons),
+        cost_bps=args.cost_bps,
+        top_n=args.top_n,
+        universe_name=args.universe,
+        max_symbols=args.max_symbols,
+        beta_lookback=args.beta_lookback,
+        batch_size=args.batch_size,
+        sample_every=args.sample_every,
+        progress_every=args.progress_every,
+    )
+    if args.json:
+        print(json.dumps(report, indent=2, ensure_ascii=False, default=str))
+    else:
+        print_extension_gate_summary(report)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1381,10 +1626,13 @@ __all__ = [
     "build_point_in_time_universe_map",
     "build_regime_map",
     "build_parser",
+    "build_extension_gate_parser",
     "build_selector_parser",
     "add_vector_signal_columns",
+    "extension_gate_main",
     "main",
     "selector_main",
+    "run_extension_gate_edge_backtest",
     "run_pullback_breakout_backtest",
     "run_selector_edge_backtest",
     "sampled_session_dates",
