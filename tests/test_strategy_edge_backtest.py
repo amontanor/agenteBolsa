@@ -1,10 +1,12 @@
 import pandas as pd
 
 from agente_bolsa.tools.strategy_edge_backtest import (
+    SelectorObservation,
     StrategyObservation,
     add_vector_signal_columns,
     sampled_session_dates,
     summarize_observations,
+    summarize_selector_observations,
 )
 
 
@@ -112,3 +114,63 @@ def test_vector_signal_columns_detect_pullback_and_exclude_breakout_flags():
 
 def test_sampled_session_dates_keeps_one_of_every_n_sessions():
     assert sampled_session_dates(["d1", "d2", "d3", "d4", "d5", "d6"], every=5) == ["d1", "d6"]
+
+
+def test_summarize_selector_observations_compares_top_n_and_deciles():
+    observations = [
+        SelectorObservation(
+            cohort="population",
+            signal_date="2026-01-02",
+            symbol="AAA",
+            regime="bull_above_sma200",
+            selector_score=0.01,
+            technical_score=8.0,
+            score_decile=1,
+            raw_returns={5: -0.02},
+            benchmark_returns={5: 0.01},
+            beta_asof=1.0,
+        ),
+        SelectorObservation(
+            cohort="population",
+            signal_date="2026-01-02",
+            symbol="BBB",
+            regime="bull_above_sma200",
+            selector_score=0.04,
+            technical_score=12.0,
+            score_decile=10,
+            raw_returns={5: 0.06},
+            benchmark_returns={5: 0.01},
+            beta_asof=1.2,
+        ),
+        SelectorObservation(
+            cohort="top_n",
+            signal_date="2026-01-02",
+            symbol="BBB",
+            regime="bull_above_sma200",
+            selector_score=0.04,
+            technical_score=12.0,
+            score_decile=10,
+            raw_returns={5: 0.06},
+            benchmark_returns={5: 0.01},
+            beta_asof=1.2,
+        ),
+    ]
+
+    summary = summarize_selector_observations(observations, horizons=(5,), cost_bps=10.0)
+
+    population = summary["overall"]["population"]["return_5d"]["raw"]
+    assert population["n"] == 2
+    assert population["mean"] == 0.02
+    assert population["mean_net"] == 0.019
+
+    top_n = summary["overall"]["top_n"]["return_5d"]["raw"]
+    assert top_n["n"] == 1
+    assert top_n["mean"] == 0.06
+
+    delta = summary["delta_top_n_minus_population"]["return_5d"]["raw"]
+    assert delta["mean_delta"] == 0.04
+
+    decile_10 = summary["score_deciles"]["10"]["return_5d"]["excess_vs_spy"]
+    assert decile_10["mean_net"] == 0.049
+    monotonic = summary["score_monotonicity"]["return_5d"]["raw"]
+    assert monotonic["d10_minus_d1"] == 0.08
