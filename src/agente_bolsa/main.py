@@ -2649,6 +2649,23 @@ def command_continuous_improvement_lab(args: argparse.Namespace) -> None:
             }
         )
         return
+    if args.lab_command == "phase1-status":
+        experiments = store.continuous_improvement_experiments(limit=args.limit)
+        ready = store.continuous_improvement_proposals(status="READY_TO_APPLY", limit=args.limit)
+        applied = store.continuous_improvement_applied_changes(limit=args.limit)
+        _print_json(
+            {
+                "ok": True,
+                "runtime": store.continuous_improvement_runtime_state(),
+                "experiments_count": len(store.continuous_improvement_experiments(limit=10000)),
+                "ready_to_apply_count": len(store.continuous_improvement_proposals(status="READY_TO_APPLY", limit=10000)),
+                "applied_changes_count": len(store.continuous_improvement_applied_changes(limit=10000)),
+                "recent_experiments": experiments,
+                "ready_to_apply": ready,
+                "applied_changes": applied,
+            }
+        )
+        return
     if args.lab_command == "dynamic-agents":
         if getattr(args, "score", False):
             from .continuous_improvement.dynamic_agents import score_dynamic_agents
@@ -3364,6 +3381,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     ci_lab_autonomy = ci_lab_subparsers.add_parser("autonomy-status", help="Muestra gates de autonomia de codigo.")
     ci_lab_autonomy.set_defaults(func=command_continuous_improvement_lab)
+
+    ci_lab_phase1 = ci_lab_subparsers.add_parser("phase1-status", help="Resume experimentos y cola READY_TO_APPLY.")
+    ci_lab_phase1.add_argument("--limit", type=int, default=20)
+    ci_lab_phase1.set_defaults(func=command_continuous_improvement_lab)
 
     ci_lab_build = ci_lab_subparsers.add_parser("build-strategy", help="Construye una estrategia desde una spec (T1.4).")
     ci_lab_build.add_argument("--spec", help="Especificacion en JSON (string).")

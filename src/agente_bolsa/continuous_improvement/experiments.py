@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 from datetime import datetime, timezone
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
@@ -53,9 +54,16 @@ class ExperimentRunner:
             for item in payload.get("required_validations", []) or []
         }
         proposal_type = str(proposal.get("proposal_type") or payload.get("proposal_type") or "")
+        target_component = str(proposal.get("target_component") or payload.get("target_component") or "")
         reports_dir = self.settings.data_dir / "reports"
         artifacts: dict[str, Any] = {}
 
+        if self._should_run_strategy_edge_compare(proposal_type, target_component, required):
+            artifacts["strategy_edge_compare"] = self._run_strategy_edge_compare(
+                proposal=proposal,
+                cycle_id=cycle_id,
+                initiative_id=initiative_id,
+            )
         if "in_sample" in required:
             artifacts["backtest"] = self._run_backtest(proposal=proposal, cycle_id=cycle_id, initiative_id=initiative_id)
         if "out_of_sample" in required:
@@ -96,6 +104,13 @@ class ExperimentRunner:
             )
         return artifacts
 
+    def _should_run_strategy_edge_compare(self, proposal_type: str, target_component: str, required: set[str]) -> bool:
+        component = target_component.lower()
+        return (
+            proposal_type in {"PARAMETER_CHANGE", "STRATEGY_RULE_CHANGE"}
+            and bool(required & {"in_sample", "out_of_sample", "walk_forward", "strategy_edge_compare"})
+        ) or "entry_quality" in component or "strategy" in component
+
     def _proposal_symbol(self, proposal: dict[str, Any]) -> str | None:
         payload = proposal.get("payload") or {}
         candidates = [
@@ -125,6 +140,8 @@ class ExperimentRunner:
         artifact_path: str | None = None,
         error: str | None = None,
     ) -> dict[str, Any]:
+        stored_result = dict(result or {})
+        stored_result.setdefault("verdict", status)
         item = {
             "experiment_id": new_id("ci_exp"),
             "initiative_id": initiative_id,
@@ -135,13 +152,108 @@ class ExperimentRunner:
             "input": input_payload,
             "period": period,
             "metrics": metrics,
-            "result": result,
+            "result": stored_result,
             "artifact_path": artifact_path,
             "error": error,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         self.store.save_continuous_improvement_experiment(item)
         return item
+
+    def _run_strategy_edge_compare(self, *, proposal: dict[str, Any], cycle_id: str, initiative_id: str | None) -> dict[str, Any]:
+        payload = proposal.get("payload", {}) or {}
+        horizons = self._parse_horizons(payload.get("horizons") or payload.get("horizon_days") or "1,3,5,10")
+        since = str(payload.get("since_date") or payload.get("backtest_start") or "2026-06-01")
+        strategies = self._parse_strategies(payload.get("strategies"))
+        try:
+            strategy_edge_compare = import_module("scripts.study_strategy_edge_compare")
+            rows = strategy_edge_compare.load_signal_rows(str(self.settings.database_path), since=since)
+            summary = strategy_edge_compare.summarize_strategy_edge(
+                rows,
+                horizons=horizons,
+                strategies=strategies,
+                cost_bps=float(payload.get("cost_bps") or 10.0),
+                benchmark_returns=None,
+                betas=None,
+            )
+            robust = self._strategy_edge_is_robust(summary)
+            return self._base_experiment(
+                proposal=proposal,
+                cycle_id=cycle_id,
+                initiative_id=initiative_id,
+                experiment_type="strategy_edge_compare",
+                status="PASSED" if robust else "COMPLETED",
+                input_payload={"since": since, "horizons": list(horizons), "strategies": list(strategies)},
+                period={"since": since},
+                metrics=summary,
+                result={"summary": summary, "robust_improvement": robust},
+            )
+        except Exception as exc:  # noqa: BLE001
+            return self._base_experiment(
+                proposal=proposal,
+                cycle_id=cycle_id,
+                initiative_id=initiative_id,
+                experiment_type="strategy_edge_compare",
+                status="FAILED",
+                input_payload={"since": since, "horizons": list(horizons), "strategies": list(strategies)},
+                period={"since": since},
+                metrics={},
+                result={},
+                error=str(exc),
+            )
+
+    def _parse_horizons(self, value: Any) -> tuple[int, ...]:
+        if isinstance(value, (list, tuple)):
+            candidates = value
+        else:
+            candidates = str(value or "").split(",")
+        horizons: list[int] = []
+        for item in candidates:
+            token = str(item).strip().lower().replace("d", "")
+            if not token:
+                continue
+            try:
+                horizon = int(token)
+            except ValueError:
+                continue
+            if horizon > 0:
+                horizons.append(horizon)
+        return tuple(horizons) or (1, 3, 5, 10)
+
+    def _parse_strategies(self, value: Any) -> tuple[str, ...]:
+        if isinstance(value, (list, tuple)):
+            strategies = tuple(str(item).strip() for item in value if str(item).strip())
+        else:
+            strategies = tuple(item.strip() for item in str(value or "").split(",") if item.strip())
+        return strategies or ("builtin_pullback", "builtin_breakout")
+
+    def _strategy_edge_is_robust(self, summary: dict[str, Any]) -> bool:
+        if int(summary.get("deduped_rows") or 0) < 10:
+            return False
+        deltas = summary.get("deltas") or {}
+        positive = 0
+        checked = 0
+        for block in deltas.values():
+            if not isinstance(block, dict):
+                continue
+            checked += 1
+            delta = block.get("mean_net_delta")
+            if isinstance(delta, (int, float)) and delta > 0:
+                positive += 1
+        if checked > 0 and positive >= max(1, checked // 2):
+            return True
+        strategies = summary.get("strategies") or {}
+        for strategy in strategies.values():
+            for stats in (strategy.get("horizons") or {}).values():
+                if (
+                    int(stats.get("n") or 0) >= 30
+                    and float(stats.get("coverage") or 0.0) >= 0.25
+                    and isinstance(stats.get("mean_net"), (int, float))
+                    and float(stats["mean_net"]) > 0
+                    and float(stats.get("hit_rate") or 0.0) >= 0.50
+                ):
+                    return True
+        return False
 
     def _run_backtest(self, *, proposal: dict[str, Any], cycle_id: str, initiative_id: str | None) -> dict[str, Any]:
         payload = proposal.get("payload", {}) or {}

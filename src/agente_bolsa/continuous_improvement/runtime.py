@@ -15,11 +15,6 @@ from agente_bolsa.logging_utils import log_system_event
 from agente_bolsa.market_calendar import MarketCalendar
 from agente_bolsa.models import AgentEvent, new_id
 from agente_bolsa.storage import Store
-from agente_bolsa.tools.backtest import build_symbol_backtest
-from agente_bolsa.tools.counterfactual_analysis import (
-    build_session_retrospective_report,
-    build_walk_forward_validation_report,
-)
 
 from .agents import (
     SPECIALIST_AGENT_CLASSES,
@@ -36,7 +31,7 @@ from .agents import (
     is_generated_ci_reference,
     proposal_fingerprint,
 )
-from .experiments import AutoApplyCodeAgent
+from .experiments import AutoApplyCodeAgent, ExperimentRunner
 from .llm_client import ImprovementLLMClient
 from .llm_usage_bridge import record_improvement_llm_usage
 from .memory import SharedMemory
@@ -74,6 +69,7 @@ class ContinuousImprovementLabRuntime:
         self.guard = RiskGuardAgent()
         self.validator = ValidationAgent()
         self.reporter = ReportAgent()
+        self.experiment_runner = ExperimentRunner(settings, store)
         self.code_applier = AutoApplyCodeAgent()
 
     def _market_window(self) -> tuple[bool, str, dict[str, Any]]:
@@ -329,9 +325,14 @@ class ContinuousImprovementLabRuntime:
             aligns_with_deterministic = bool(not deterministic_decision or deterministic_decision == decision)
         discrepancy_justification = str(response.get("discrepancy_justification") or "").strip()
         if deterministic_decision and deterministic_decision != decision and not discrepancy_justification:
-            decision = "ESCALATE"
-            aligns_with_deterministic = False
-            discrepancy_justification = "Missing committee justification for deterministic disagreement."
+            if deterministic_decision == "APPROVE":
+                decision = deterministic_decision
+                aligns_with_deterministic = True
+                discrepancy_justification = "Se conserva APPROVE determinista: el desacuerdo LLM no aporta justificacion."
+            else:
+                decision = "ESCALATE"
+                aligns_with_deterministic = False
+                discrepancy_justification = "Missing committee justification for deterministic disagreement."
         return {
             "decision": decision,
             "reason": str(response.get("decision_reason") or response.get("summary") or ""),
@@ -488,87 +489,64 @@ class ContinuousImprovementLabRuntime:
         cycle_id: str,
     ) -> dict[str, Any]:
         payload = proposal.get("payload", {}) or {}
-        required = {
-            self.VALIDATION_ALIASES.get(str(item).strip().lower(), str(item).strip().lower())
-            for item in payload.get("required_validations", []) or []
-        }
-        reports_dir = self.settings.data_dir / "reports"
-        reports_dir.mkdir(parents=True, exist_ok=True)
-        artifacts: dict[str, Any] = {}
-        if "in_sample" in required:
-            symbol = self._proposal_symbol(proposal)
-            if symbol:
-                try:
-                    artifacts["backtest"] = build_symbol_backtest(
-                        symbol,
-                        reports_dir,
-                        new_id("ci_bt"),
-                        start=str(payload.get("backtest_start") or payload.get("since_date") or "2026-04-01"),
-                        end=(str(payload.get("backtest_end") or payload.get("end_date") or "") or None),
-                        min_score=int(payload.get("min_score") or self.settings.entry_quality_min_score),
-                        setup_quality=str(payload.get("setup_quality") or "strong"),
-                        max_holding_days=int(payload.get("max_holding_days") or 10),
-                        benchmark_symbol=str(payload.get("benchmark_symbol") or self.settings.benchmark_symbol),
-                        provider=self.settings.market_data_provider,
-                        fmp_api_key=self.settings.fmp_api_key,
-                        gate_config={
-                            "min_trades": self.settings.backtest_gate_min_trades,
-                            "min_hit_rate": self.settings.backtest_gate_min_hit_rate,
-                            "min_profit_factor": self.settings.backtest_gate_min_profit_factor,
-                            "max_drawdown": self.settings.backtest_gate_max_drawdown,
-                            "min_alpha_vs_benchmark": self.settings.backtest_gate_min_alpha_vs_benchmark,
-                            "min_trade_window_alpha": self.settings.backtest_gate_min_trade_window_alpha,
-                            "min_regime_trades": self.settings.backtest_gate_min_regime_trades,
-                            "max_negative_regimes": self.settings.backtest_gate_max_negative_regimes,
-                        },
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    artifacts["backtest_error"] = str(exc)
-            else:
-                artifacts["backtest_error"] = "No se pudo inferir un simbolo para ejecutar backtest."
-        if "out_of_sample" in required:
-            try:
-                artifacts["session_retrospective"] = build_session_retrospective_report(
-                    self.settings,
-                    self.store,
-                    reports_dir,
-                    new_id("ci_sr"),
-                    since_date=str(payload.get("since_date") or "2026-04-01"),
-                    end_date=(str(payload.get("end_date") or "") or None),
-                    sessions=int(payload.get("sessions") or 8),
-                    policy=str(payload.get("policy") or "proposed"),
-                    full=False,
-                )
-            except Exception as exc:  # noqa: BLE001
-                artifacts["session_retrospective_error"] = str(exc)
-        if "walk_forward" in required or proposal.get("proposal_type") in {"RISK_RULE_CHANGE", "STRATEGY_RULE_CHANGE"}:
-            try:
-                artifacts["walk_forward_validation"] = build_walk_forward_validation_report(
-                    self.settings,
-                    self.store,
-                    reports_dir,
-                    new_id("ci_wf"),
-                    since_date=str(payload.get("since_date") or "2026-04-01"),
-                    end_date=(str(payload.get("end_date") or "") or None),
-                    policy=str(payload.get("policy") or "proposed"),
-                    train_days=int(payload.get("train_days") or 5),
-                    test_days=int(payload.get("test_days") or 3),
-                    full=False,
-                )
-            except Exception as exc:  # noqa: BLE001
-                artifacts["walk_forward_validation_error"] = str(exc)
+        initiative_key = str(payload.get("initiative_key") or "")
+        initiative = self.store.continuous_improvement_initiative_by_key(initiative_key) if initiative_key else None
+        artifacts = self.experiment_runner.run_for_proposal(
+            proposal=proposal,
+            cycle_id=cycle_id,
+            initiative_id=(initiative or {}).get("initiative_id"),
+        )
         if artifacts:
             self._record_agent_event(
-                agent="ValidationAgent",
-                event_type="lab_validation_artifacts_generated",
+                agent="ExperimentRunner",
+                event_type="lab_experiments_recorded",
                 cycle_id=cycle_id,
                 payload={
                     "proposal_id": proposal.get("proposal_id"),
-                    "initiative_key": payload.get("initiative_key"),
+                    "initiative_key": initiative_key,
                     "artifacts": sorted(artifacts.keys()),
+                    "experiment_ids": [
+                        item.get("experiment_id")
+                        for item in artifacts.values()
+                        if isinstance(item, dict) and item.get("experiment_id")
+                    ],
                 },
             )
         return artifacts
+
+    def _experiment_report_payload(self, experiment: dict[str, Any]) -> dict[str, Any]:
+        result = experiment.get("result") if isinstance(experiment, dict) else {}
+        payload = dict(result or {}) if isinstance(result, dict) else {}
+        nested_summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        metrics = experiment.get("metrics") if isinstance(experiment.get("metrics"), dict) else {}
+        if nested_summary and not metrics:
+            metrics = nested_summary
+        payload.setdefault("summary", nested_summary or {"experiment_status": experiment.get("status")})
+        payload.setdefault("metrics", metrics)
+        payload.setdefault("experiment", experiment)
+        return payload
+
+    def _backlog_proposals_for_experiment(self, existing: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        existing_ids = {str(item.get("proposal_id")) for item in existing}
+        candidates: list[dict[str, Any]] = []
+        limit = max(1, int(self.settings.continuous_improvement_max_proposals_per_cycle))
+        for status in ("PENDING", "PASSED"):
+            for proposal in self.store.continuous_improvement_proposals(status=status, limit=limit * 4):
+                proposal_id = str(proposal.get("proposal_id") or "")
+                if not proposal_id or proposal_id in existing_ids:
+                    continue
+                if proposal.get("proposal_type") == "CODE_CHANGE":
+                    continue
+                payload = proposal.get("payload") or {}
+                if not payload.get("required_validations"):
+                    continue
+                if self.store.continuous_improvement_experiments(proposal_id=proposal_id, limit=1):
+                    continue
+                candidates.append(proposal)
+                existing_ids.add(proposal_id)
+                if len(candidates) >= limit:
+                    return candidates
+        return candidates
 
     def _latest_report_payload(self, name: str) -> dict[str, Any]:
         path = self.settings.data_dir / "reports" / name
@@ -1181,7 +1159,8 @@ class ContinuousImprovementLabRuntime:
                 proposal_payloads=all_payloads,
                 experiment_guidance=self._experiment_guidance_by_initiative(specialist_results),
             )
-            validations = self._persist_validations(cycle_id=cycle_id, proposals=proposals, context=context)
+            experiment_backlog = self._backlog_proposals_for_experiment(proposals)
+            validations = self._persist_validations(cycle_id=cycle_id, proposals=proposals + experiment_backlog, context=context)
 
             hypotheses = self.store.continuous_improvement_hypotheses(limit=200)
             tasks = self.store.continuous_improvement_tasks(limit=500)
@@ -1541,11 +1520,22 @@ class ContinuousImprovementLabRuntime:
             if artifacts:
                 reports = context.setdefault("reports", {})
                 if "walk_forward_validation" in artifacts:
-                    reports["walk_forward_validation"] = self._latest_report_payload("latest_walk_forward_validation.json")
+                    reports["walk_forward_validation"] = {
+                        "available": True,
+                        "payload": self._experiment_report_payload(artifacts["walk_forward_validation"]),
+                    }
                 if "session_retrospective" in artifacts:
-                    reports["session_retrospective"] = self._latest_report_payload("latest_session_retrospective.json")
+                    reports["session_retrospective"] = {
+                        "available": True,
+                        "payload": self._experiment_report_payload(artifacts["session_retrospective"]),
+                    }
                 if "backtest" in artifacts:
-                    reports["backtest"] = {"available": True, "payload": artifacts["backtest"]}
+                    reports["backtest"] = {"available": True, "payload": self._experiment_report_payload(artifacts["backtest"])}
+                if "strategy_edge_compare" in artifacts:
+                    reports["strategy_edge_compare"] = {
+                        "available": True,
+                        "payload": self._experiment_report_payload(artifacts["strategy_edge_compare"]),
+                    }
             validation = self.validator.validate(proposal, context, self.settings, store=self.store)
             self.store.save_continuous_improvement_validation(validation)
             initiative_key = str((proposal.get("payload") or {}).get("initiative_key") or "")
@@ -1580,7 +1570,12 @@ class ContinuousImprovementLabRuntime:
                 except KeyError:
                     pass
             applied_change = None
-            if proposal.get("proposal_type") == "CODE_CHANGE" and validation["status"] == "READY_TO_APPLY":
+            if (
+                proposal.get("proposal_type") == "CODE_CHANGE"
+                and validation["status"] == "READY_TO_APPLY"
+                and not self.settings.improvement_dry_run
+                and self.settings.allow_auto_apply_improvements
+            ):
                 applied_change = self.code_applier.try_apply(
                     settings=self.settings,
                     store=self.store,

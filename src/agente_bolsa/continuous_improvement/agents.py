@@ -1430,21 +1430,21 @@ class ValidationAgent:
                     and (
                         (
                             proposal_type == "CODE_CHANGE"
-                            and settings.allow_auto_apply_improvements
-                            and not settings.improvement_dry_run
-                            and not settings.require_human_approval_for_code_changes
+                            and (
+                                settings.improvement_dry_run
+                                or (
+                                    settings.allow_auto_apply_improvements
+                                    and not settings.require_human_approval_for_code_changes
+                                )
+                            )
                         )
-                        or (
-                            proposal_type != "CODE_CHANGE"
-                            and settings.improvement_dry_run
-                            and not settings.allow_auto_apply_improvements
-                        )
+                        or proposal_type != "CODE_CHANGE"
                     )
                 ),
                 "detail": (
-                    "Auto-apply de codigo habilitado con live trading bloqueado."
+                    "Codigo en modo shadow/cola humana con live trading bloqueado."
                     if proposal_type == "CODE_CHANGE"
-                    else "Dry-run activo, auto-apply desactivado y live trading bloqueado."
+                    else "Experimento shadow sin trading real y live trading bloqueado."
                 ),
             },
             {
@@ -1535,6 +1535,8 @@ class ValidationAgent:
             return "REJECTED"
         if not passed:
             return "PENDING"
+        if objective_status == "READY_TO_APPLY":
+            return "READY_TO_APPLY"
         if settings.allow_auto_apply_improvements and objective_status == "PASSED":
             return "READY_TO_APPLY"
         return "PASSED"
@@ -1564,6 +1566,7 @@ class ValidationAgent:
         live_readiness = self._report_payload(reports.get("live_readiness"))
         walk_forward = self._report_payload(reports.get("walk_forward_validation"))
         session_retrospective = self._report_payload(reports.get("session_retrospective"))
+        strategy_edge = self._report_payload(reports.get("strategy_edge_compare"))
         required_lower = {
             str(item).lower()
             for item in self._normalize_required_validations(
@@ -1581,6 +1584,7 @@ class ValidationAgent:
             "live_readiness": self._compact_report(live_readiness),
             "walk_forward_validation": self._compact_report(walk_forward),
             "session_retrospective": self._compact_report(session_retrospective),
+            "strategy_edge_compare": self._compact_report(strategy_edge),
             "summary": {
                 "signals": summary.get("signals", 0),
                 "observations": summary.get("observations", 0),
@@ -1614,6 +1618,7 @@ class ValidationAgent:
                 daily=daily,
                 summary=summary,
                 duplicate_ratio=duplicate_ratio,
+                strategy_edge=strategy_edge,
             )
         elif proposal_type == "DATA_QUALITY_CHANGE" and "signal_consolidation" in target_component:
             checks, objective_status, summary_text = self._validate_signal_consolidation(
@@ -1645,6 +1650,7 @@ class ValidationAgent:
                 duplicate_ratio=duplicate_ratio,
                 walk_forward=walk_forward,
                 session_retrospective=session_retrospective,
+                strategy_edge=strategy_edge,
             )
 
         if "in_sample" in required_lower and not self._has_backtest_evidence(
@@ -1653,6 +1659,7 @@ class ValidationAgent:
             operational=operational,
             pre_earnings=pre_earnings,
             walk_forward=walk_forward,
+            strategy_edge=strategy_edge,
         ):
             checks.append(
                 {
@@ -1666,6 +1673,7 @@ class ValidationAgent:
             daily=daily,
             operational=operational,
             session_retrospective=session_retrospective,
+            strategy_edge=strategy_edge,
         ):
             checks.append(
                 {
@@ -1678,6 +1686,7 @@ class ValidationAgent:
         if "walk_forward" in required_lower and not self._has_shadow_evidence(
             operational=operational,
             session_retrospective=session_retrospective,
+            strategy_edge=strategy_edge,
         ):
             checks.append(
                 {
@@ -1764,6 +1773,15 @@ class ValidationAgent:
             "metrics": metrics,
         }
 
+    def _strategy_edge_is_actionable(self, strategy_edge: dict[str, Any] | None) -> bool:
+        if not isinstance(strategy_edge, dict):
+            return False
+        if strategy_edge.get("robust_improvement") is True:
+            return True
+        experiment = strategy_edge.get("experiment") if isinstance(strategy_edge.get("experiment"), dict) else {}
+        result = experiment.get("result") if isinstance(experiment.get("result"), dict) else {}
+        return result.get("robust_improvement") is True
+
     def _has_backtest_evidence(
         self,
         *,
@@ -1772,7 +1790,10 @@ class ValidationAgent:
         operational: dict[str, Any],
         pre_earnings: dict[str, Any],
         walk_forward: dict[str, Any] | None = None,
+        strategy_edge: dict[str, Any] | None = None,
     ) -> bool:
+        if self._strategy_edge_is_actionable(strategy_edge):
+            return True
         if walk_forward and walk_forward.get("summary"):
             return True
         return bool(
@@ -1788,7 +1809,10 @@ class ValidationAgent:
         daily: dict[str, Any],
         operational: dict[str, Any],
         session_retrospective: dict[str, Any] | None = None,
+        strategy_edge: dict[str, Any] | None = None,
     ) -> bool:
+        if self._strategy_edge_is_actionable(strategy_edge):
+            return True
         if session_retrospective and session_retrospective.get("summary"):
             return True
         return bool(daily.get("summary") or operational.get("shadow_evaluation"))
@@ -1798,7 +1822,10 @@ class ValidationAgent:
         *,
         operational: dict[str, Any],
         session_retrospective: dict[str, Any] | None = None,
+        strategy_edge: dict[str, Any] | None = None,
     ) -> bool:
+        if self._strategy_edge_is_actionable(strategy_edge):
+            return True
         if session_retrospective and session_retrospective.get("sessions"):
             return True
         return bool((operational.get("shadow_evaluation") or {}).get("metrics_by_rule"))
@@ -1904,13 +1931,17 @@ class ValidationAgent:
         daily: dict[str, Any],
         summary: dict[str, Any],
         duplicate_ratio: float,
+        strategy_edge: dict[str, Any] | None = None,
     ) -> tuple[list[dict[str, Any]], str, str]:
         checks: list[dict[str, Any]] = []
         calibration = daily.get("entry_quality_filter_calibration_3d") or {}
         backtest_calibration = daily.get("backtest_filter_calibration_3d") or {}
+        strategy_summary = strategy_edge.get("summary") if isinstance(strategy_edge, dict) else {}
+        strategy_robust = self._strategy_edge_is_actionable(strategy_edge)
         blocked_entry_quality = int(summary.get("blocked_entry_quality") or 0)
         calibration_signals = int(calibration.get("signals") or 0)
         backtest_signals = int(backtest_calibration.get("signals") or 0)
+        strategy_rows = int((strategy_summary or {}).get("deduped_rows") or 0)
         if blocked_entry_quality > 0:
             checks.append(
                 {
@@ -1947,9 +1978,23 @@ class ValidationAgent:
                     "evidence": {"signals": backtest_signals, "top_tags": backtest_calibration.get("top_tags", [])[:3]},
                 }
             )
+        if strategy_rows:
+            checks.append(
+                {
+                    "name": "strategy_edge_experiment_present",
+                    "passed": strategy_robust,
+                    "detail": (
+                        "El experimento shadow muestra mejora robusta."
+                        if strategy_robust
+                        else "Existe experimento shadow, pero no muestra mejora robusta suficiente."
+                    ),
+                    "evidence": {"deduped_rows": strategy_rows, "robust_improvement": strategy_robust},
+                }
+            )
         issue_visible = blocked_entry_quality > 0 or duplicate_ratio > 0
-        passed = issue_visible and (calibration_signals > 0 or backtest_signals > 0)
-        status = "READY_TO_APPLY" if passed and (calibration_signals >= 5 or backtest_signals >= 5) else ("PASSED" if passed else "PENDING")
+        passed = issue_visible and (calibration_signals > 0 or backtest_signals > 0 or strategy_robust)
+        enough_evidence = calibration_signals >= 5 or backtest_signals >= 5 or strategy_robust
+        status = "READY_TO_APPLY" if passed and enough_evidence else ("PASSED" if passed else "PENDING")
         summary_text = (
             "El filtro de entrada tiene evidencia objetiva y puede ajustarse con revisiones controladas."
             if passed
@@ -2163,6 +2208,7 @@ class ValidationAgent:
         duplicate_ratio: float,
         walk_forward: dict[str, Any] | None = None,
         session_retrospective: dict[str, Any] | None = None,
+        strategy_edge: dict[str, Any] | None = None,
     ) -> tuple[list[dict[str, Any]], str, str]:
         checks: list[dict[str, Any]] = []
         if daily:
@@ -2179,8 +2225,29 @@ class ValidationAgent:
             checks.append({"name": "walk_forward_validation_available", "passed": True, "detail": "Walk-forward disponible."})
         if session_retrospective:
             checks.append({"name": "session_retrospective_available", "passed": True, "detail": "Retrospectiva disponible."})
-        objective_signal = bool(daily or operational or pre_earnings or market_quality or post_market or summary.get("observations") or duplicate_ratio)
-        status = "READY_TO_APPLY" if objective_signal and (walk_forward or session_retrospective) else ("PASSED" if objective_signal else "PENDING")
+        if strategy_edge:
+            checks.append(
+                {
+                    "name": "strategy_edge_experiment_available",
+                    "passed": self._strategy_edge_is_actionable(strategy_edge),
+                    "detail": "Experimento shadow de edge disponible.",
+                }
+            )
+        objective_signal = bool(
+            daily
+            or operational
+            or pre_earnings
+            or market_quality
+            or post_market
+            or self._strategy_edge_is_actionable(strategy_edge)
+            or summary.get("observations")
+            or duplicate_ratio
+        )
+        status = (
+            "READY_TO_APPLY"
+            if objective_signal and (walk_forward or session_retrospective or self._strategy_edge_is_actionable(strategy_edge))
+            else ("PASSED" if objective_signal else "PENDING")
+        )
         summary_text = (
             f"La propuesta {proposal_type} dispone de evidencia operativa suficiente para revision."
             if objective_signal

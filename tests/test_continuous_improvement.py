@@ -1324,7 +1324,7 @@ def test_validation_agent_passes_entry_quality_with_objective_evidence(tmp_path)
         settings,
     )
 
-    assert validation["status"] == "PASSED"
+    assert validation["status"] == "READY_TO_APPLY"
     payload = validation["payload"]
     assert payload["objective_status"] in {"PASSED", "READY_TO_APPLY"}
     assert any(check["name"] == "entry_quality_calibration_present" and check["passed"] for check in payload["checks"])
@@ -1552,9 +1552,9 @@ def test_runtime_executes_validation_artifacts_before_validation(tmp_path, monke
         (reports_dir / "latest_session_retrospective.json").write_text(json.dumps(report), encoding="utf-8")
         return report
 
-    monkeypatch.setattr("agente_bolsa.continuous_improvement.runtime.build_symbol_backtest", _fake_backtest)
-    monkeypatch.setattr("agente_bolsa.continuous_improvement.runtime.build_walk_forward_validation_report", _fake_wf)
-    monkeypatch.setattr("agente_bolsa.continuous_improvement.runtime.build_session_retrospective_report", _fake_sr)
+    monkeypatch.setattr("agente_bolsa.continuous_improvement.experiments.build_symbol_backtest", _fake_backtest)
+    monkeypatch.setattr("agente_bolsa.continuous_improvement.experiments.build_walk_forward_validation_report", _fake_wf)
+    monkeypatch.setattr("agente_bolsa.continuous_improvement.experiments.build_session_retrospective_report", _fake_sr)
 
     store.upsert_continuous_improvement_proposal(
         {
@@ -1587,7 +1587,11 @@ def test_runtime_executes_validation_artifacts_before_validation(tmp_path, monke
         "evaluation": {"summary": {}},
         "reports": {
             "daily_learning": {"available": True, "payload": {"summary": {"signals": 1}}},
-            **{key: {"available": True, "payload": value} for key, value in artifacts.items() if isinstance(value, dict)},
+            **{
+                key: {"available": True, "payload": runtime._experiment_report_payload(value)}
+                for key, value in artifacts.items()
+                if isinstance(value, dict)
+            },
         },
     }
     validation = runtime.validator.validate(
@@ -1603,8 +1607,99 @@ def test_runtime_executes_validation_artifacts_before_validation(tmp_path, monke
     assert "backtest" in artifacts
     assert "walk_forward_validation" in artifacts
     assert "session_retrospective" in artifacts
+    assert len(store.continuous_improvement_experiments(proposal_id="ci_prop_artifacts")) == 3
     assert validation["payload"]["objective_status"] in {"PENDING", "PASSED", "READY_TO_APPLY"}
     assert validation["payload"]["required_validations"] == ["in_sample", "out_of_sample", "walk_forward"]
+
+
+def test_validation_promotes_shadow_experiment_to_ready_without_autoapply(tmp_path):
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    validator = ValidationAgent()
+    proposal = {
+        "proposal_id": "ci_prop_shadow_ready",
+        "cycle_id": "ci_cycle_shadow_ready",
+        "proposal_type": "PARAMETER_CHANGE",
+        "target_component": "entry_quality_filter",
+        "target_identifier": "min_score",
+        "status": "PENDING",
+        "risk_level": "LOW",
+        "payload": {
+            "required_validations": ["in_sample", "out_of_sample", "walk_forward"],
+            "rollback_plan": "Mantener en cola humana; no mutar configuracion.",
+        },
+    }
+    context = {
+        "evaluation": {"summary": {"blocked_entry_quality": 1}},
+        "reports": {
+            "strategy_edge_compare": {
+                "available": True,
+                "payload": {
+                    "summary": {"deduped_rows": 12},
+                    "robust_improvement": True,
+                    "metrics": {"deduped_rows": 12, "deltas": {"return_5d": {"mean_net_delta": 0.01}}},
+                },
+            }
+        },
+    }
+
+    validation = validator.validate(proposal, context, settings, store=store)
+
+    assert validation["status"] == "READY_TO_APPLY"
+    assert validation["payload"]["objective_status"] == "READY_TO_APPLY"
+    check_names = {item["name"] for item in validation["payload"]["checks"]}
+    assert "strategy_edge_experiment_present" in check_names
+
+
+def test_runtime_keeps_ready_code_change_in_queue_during_dry_run(tmp_path):
+    settings = _settings(tmp_path, REQUIRE_HUMAN_APPROVAL_FOR_CODE_CHANGES=False)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    runtime = ContinuousImprovementLabRuntime(settings, store)
+    runtime.experiment_runner = type("NoExperiments", (), {"run_for_proposal": lambda self, **kwargs: {}})()
+    proposal = _code_proposal()
+    store.upsert_continuous_improvement_proposal(
+        {
+            "proposal_id": proposal["proposal_id"],
+            "cycle_id": proposal["cycle_id"],
+            "fingerprint": "fp_dry_run_ready",
+            "proposal_type": proposal["proposal_type"],
+            "target_component": proposal["target_component"],
+            "target_identifier": proposal["target_identifier"],
+            "status": "PENDING",
+            "priority": "HIGH",
+            "risk_level": proposal["risk_level"],
+            "payload": proposal["payload"],
+            "guard": {"status": "PENDING"},
+        }
+    )
+
+    validations = runtime._persist_validations(
+        cycle_id=proposal["cycle_id"],
+        proposals=[store.continuous_improvement_proposal(proposal["proposal_id"])],
+        context={"evaluation": {"summary": {}}, "reports": {}},
+    )
+
+    assert validations[0]["status"] == "READY_TO_APPLY"
+    assert store.continuous_improvement_proposal(proposal["proposal_id"])["status"] == "READY_TO_APPLY"
+    assert store.continuous_improvement_applied_changes(limit=10) == []
+
+
+def test_committee_keeps_deterministic_approve_when_llm_disagrees_without_reason(tmp_path):
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    runtime = ContinuousImprovementLabRuntime(settings, store)
+
+    decision = runtime._committee_decision_from_response(
+        {"decision": "ESCALATE"},
+        deterministic_baseline={"decision": "APPROVE"},
+    )
+
+    assert decision["decision"] == "APPROVE"
+    assert decision["initiative_status_target"] == "READY_TO_APPLY"
+    assert decision["backlog_bucket"] == "NOW"
 
 
 def test_improvement_strategist_uses_orchestrator_model(tmp_path):
