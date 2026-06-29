@@ -51,3 +51,49 @@ en el sandbox) con datos sintéticos:
 ## Qué mirar en el run real
 Si el delta EXCESS pullback−breakout es ≈0 o positivo aunque el crudo sea negativo, confirma que
 el −1.2% crudo de 1d era **beta, no falta de edge**. El veredicto de fondo se decidirá a 5d/10d.
+
+---
+
+## Actualización v0.4.58: retorno BETA-AJUSTADO
+
+El excess vs SPY ajusta el NIVEL de mercado pero **el delta entre estrategias es invariante a
+un benchmark común** (se cancela: `(pull−SPY)−(brk−SPY)=pull−brk`). Confirmado en el run real
+del 29-jun: delta crudo y delta excess fueron idénticos (−1.20%). Para separar de verdad alpha
+de beta en la **comparación**, se añade el nivel beta-ajustado.
+
+### Cambios (scripts/study_strategy_edge_compare.py)
+- `daily_returns_from_closes(closes)` — retornos diarios simples (puro).
+- `compute_betas(symbol_returns, market_returns, min_obs=20)` — beta = cov/var sobre series
+  alineadas por fecha; omite símbolos con pocos datos o varianza nula (puro).
+- `_extract_closes` + `build_betas(symbols, since, lookback_days=120, market=SPY)` — descarga
+  histórico de los símbolos + mercado, calcula retornos diarios alineados y estima beta. Aislado
+  del cálculo puro para que la red no contamine los tests.
+- `summarize_strategy_edge(..., betas=None)` — con `benchmark_returns` y `betas` añade
+  `beta_adj_horizons` (adj = retorno − beta·benchmark) y `beta_adj_deltas`. Fila sin beta o sin
+  benchmark → excluida del bloque beta-ajustado.
+- CLI `--beta-adjust` (opt-in; descarga histórico) y `--beta-lookback` (default 120).
+- Refactor de `summarize` a un loop de bloques (crudo/excess/beta_adj) sin cambiar la salida previa.
+- Versión: `0.4.57 → 0.4.58`.
+
+### Tests añadidos
+- `test_compute_betas_recovers_known_slope`: recupera beta 2.0 y 0.5; excluye serie corta.
+- `test_summarize_beta_adjusted_delta_differs_from_raw`: **demuestra** que crudo y excess dan el
+  mismo delta (−0.015) pero el beta-ajustado lo cambia (+0.005), y que las filas sin beta se excluyen.
+
+### Verificación (sandbox, sin red, ejecutando el código real con imports stubbeados)
+7 grupos de aserciones OK: compute_betas, daily_returns, benchmark_returns, beta-ajustado
+(delta +0.005 vs crudo −0.015), excess, backward-compat (sin benchmark no aparecen bloques),
+y el test de matemática previo. `py_compile` OK en ambos ficheros.
+
+### Metodología y caveats del beta-ajustado
+- beta estimada con retornos diarios sobre ~120 sesiones que terminan en `since` (una beta por
+  símbolo). El ajuste de un retorno multi-día con `beta·retorno_mercado` es la aproximación
+  estándar de market-model (válida para retornos pequeños 1–10d).
+- Caveats: la beta tiene ruido de estimación; una sola ventana; no captura cambios de beta. Sigue
+  vigente que el veredicto de fondo se decide a 5d/10d con muestra suficiente y varios regímenes.
+
+### Pendiente (venv Windows)
+1. `.\.venv\Scripts\python.exe -m pytest -q -p no:warnings` (verde + 2 nuevos = 768).
+2. `.\.venv\Scripts\ruff.exe check src tests scripts\study_strategy_edge_compare.py`.
+3. Run real: `... study_strategy_edge_compare.py --since 2026-06-25 --horizons 1,3,5,10 --cost-bps 10 --benchmark SPY --beta-adjust`.
+4. Commit.

@@ -3,12 +3,16 @@
 Uso:
     .\\.venv\\Scripts\\python.exe scripts\\study_strategy_edge_compare.py
     .\\.venv\\Scripts\\python.exe scripts\\study_strategy_edge_compare.py --since 2026-06-25 --horizons 1,3,5,10
-    .\\.venv\\Scripts\\python.exe scripts\\study_strategy_edge_compare.py --benchmark SPY
+    .\\.venv\\Scripts\\python.exe scripts\\study_strategy_edge_compare.py --benchmark SPY --beta-adjust
 
-Con --benchmark (default SPY) calcula tambien el retorno EXCESS = retorno_simbolo -
-retorno_benchmark al mismo signal_date y horizonte. El excess aisla el alpha de la
-direccion del mercado (beta), evitando que un dia alcista favorezca a las estrategias de
-alta beta. Usar --benchmark none para desactivarlo.
+Niveles de medida:
+- CRUDO: retorno forward tal cual.
+- EXCESS = retorno - retorno_benchmark (mismo signal_date/horizonte). Ajusta el NIVEL de
+  mercado, pero el delta entre estrategias es invariante a un benchmark comun (la beta
+  diferencial no se elimina).
+- BETA-AJUSTADO = retorno - beta_simbolo * retorno_benchmark. Quita la beta de cada simbolo,
+  asi el delta pullback-breakout refleja el alpha residual, no la diferencia de beta.
+  Requiere --beta-adjust (descarga historico de los simbolos para estimar beta).
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ from agente_bolsa.config import get_settings
 DEFAULT_STRATEGIES = ("builtin_pullback", "builtin_breakout")
 DEFAULT_HORIZONS = (1, 3, 5, 10)
 DEFAULT_BENCHMARK = "SPY"
+DEFAULT_BETA_LOOKBACK = 120
 _BENCHMARK_DISABLED = {"", "NONE", "OFF", "NO"}
 
 
@@ -111,9 +116,9 @@ def benchmark_returns_from_closes(
     signal_dates: Iterable[str],
     horizons: tuple[int, ...],
 ) -> dict[tuple[str, int], float]:
-    """Calcula el retorno forward del benchmark por (signal_date, horizonte).
+    """Retorno forward del benchmark por (signal_date, horizonte).
 
-    Replica la convencion de signal_learming: base = cierre del propio signal_date,
+    Replica la convencion de signal_learning: base = cierre del propio signal_date,
     objetivo = cierre N sesiones despues. Solo emite claves con datos disponibles.
     """
     position = {date: index for index, date in enumerate(ordered_dates)}
@@ -170,6 +175,116 @@ def build_benchmark_returns(
     return benchmark_returns_from_closes(ordered_dates, closes, dates, horizons)
 
 
+def daily_returns_from_closes(closes: list[float | None]) -> list[float | None]:
+    """Retornos diarios simples a partir de una serie de cierres alineada por fecha."""
+    returns: list[float | None] = []
+    for index in range(1, len(closes)):
+        prev = closes[index - 1]
+        curr = closes[index]
+        if prev and curr is not None:
+            returns.append((curr - prev) / prev)
+        else:
+            returns.append(None)
+    return returns
+
+
+def compute_betas(
+    symbol_returns: dict[str, list[float | None]],
+    market_returns: list[float | None],
+    *,
+    min_obs: int = 20,
+) -> dict[str, float]:
+    """Beta por simbolo = cov(r_simbolo, r_mercado) / var(r_mercado).
+
+    Las series deben estar alineadas por fecha (misma posicion = misma sesion).
+    Omite simbolos con menos de `min_obs` pares validos o varianza nula.
+    """
+    betas: dict[str, float] = {}
+    for symbol, series in symbol_returns.items():
+        pairs = [
+            (sym_ret, mkt_ret)
+            for sym_ret, mkt_ret in zip(series, market_returns, strict=False)
+            if sym_ret is not None and mkt_ret is not None
+        ]
+        if len(pairs) < min_obs:
+            continue
+        sym_vals = [pair[0] for pair in pairs]
+        mkt_vals = [pair[1] for pair in pairs]
+        sym_mean = sum(sym_vals) / len(sym_vals)
+        mkt_mean = sum(mkt_vals) / len(mkt_vals)
+        variance = sum((mkt - mkt_mean) ** 2 for mkt in mkt_vals)
+        if variance <= 0:
+            continue
+        covariance = sum((sym - sym_mean) * (mkt - mkt_mean) for sym, mkt in pairs)
+        betas[symbol] = round(covariance / variance, 4)
+    return betas
+
+
+def _extract_closes(frame: Any, symbols: list[str]) -> dict[str, list[float | None]]:
+    import pandas as pd
+
+    closes_by_symbol: dict[str, list[float | None]] = {}
+    multi = isinstance(frame.columns, pd.MultiIndex)
+    for symbol in symbols:
+        try:
+            if multi:
+                if symbol not in frame.columns.get_level_values(0):
+                    continue
+                series = frame[symbol]["Close"]
+            else:
+                series = frame["Close"]
+        except Exception:
+            continue
+        closes_by_symbol[symbol] = [to_float(value) for value in series.tolist()]
+    return closes_by_symbol
+
+
+def build_betas(
+    symbols: Iterable[str],
+    *,
+    since: str,
+    lookback_days: int = DEFAULT_BETA_LOOKBACK,
+    market: str = DEFAULT_BENCHMARK,
+) -> dict[str, float]:
+    """Estima beta por simbolo sobre una ventana historica que termina en `since`.
+
+    Descarga precios de los simbolos + mercado, calcula retornos diarios alineados y
+    delega en `compute_betas`. Devuelve {} si falla la descarga o no hay datos.
+    """
+    wanted = sorted({str(symbol).upper() for symbol in symbols if symbol})
+    if not wanted:
+        return {}
+    try:
+        from datetime import datetime, timedelta
+
+        from agente_bolsa.tools.market_data import download_daily_prices
+    except Exception:
+        return {}
+    try:
+        start_dt = datetime.fromisoformat(since) - timedelta(days=int(lookback_days * 1.6) + 10)
+        start = start_dt.date().isoformat()
+    except Exception:
+        start = since
+    fetch = wanted + ([market] if market not in wanted else [])
+    try:
+        frame = download_daily_prices(fetch, start, since)
+    except Exception:
+        return {}
+    if frame is None or getattr(frame, "empty", True):
+        return {}
+    closes_by_symbol = _extract_closes(frame, fetch)
+    market_closes = closes_by_symbol.get(market)
+    if not market_closes:
+        return {}
+    market_returns = daily_returns_from_closes(market_closes)
+    symbol_returns = {
+        symbol: daily_returns_from_closes(closes)
+        for symbol, closes in closes_by_symbol.items()
+        if symbol != market
+    }
+    return compute_betas(symbol_returns, market_returns)
+
+
 def _stats(values: list[float], *, cost: float) -> dict[str, Any]:
     if not values:
         return {
@@ -217,6 +332,36 @@ def _delta_block(pullback: dict[str, Any], breakout: dict[str, Any]) -> dict[str
     }
 
 
+def _horizon_values(
+    strategy_rows: list[SignalRow],
+    key: str,
+    horizon: int,
+    *,
+    benchmark_returns: dict[tuple[str, int], float] | None,
+    betas: dict[str, float] | None,
+    mode: str,
+) -> list[float]:
+    values: list[float] = []
+    for row in strategy_rows:
+        raw = to_float(row.outcome.get(key))
+        if raw is None:
+            continue
+        if mode == "raw":
+            values.append(raw)
+            continue
+        bench = (benchmark_returns or {}).get((row.signal_date, int(horizon)))
+        if bench is None:
+            continue
+        if mode == "excess":
+            values.append(raw - bench)
+        elif mode == "beta_adj":
+            beta = (betas or {}).get(row.symbol)
+            if beta is None:
+                continue
+            values.append(raw - beta * bench)
+    return values
+
+
 def summarize_strategy_edge(
     rows: list[SignalRow],
     *,
@@ -224,6 +369,7 @@ def summarize_strategy_edge(
     strategies: tuple[str, ...] = DEFAULT_STRATEGIES,
     cost_bps: float = 10.0,
     benchmark_returns: dict[tuple[str, int], float] | None = None,
+    betas: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     deduped = [
         row
@@ -232,58 +378,62 @@ def summarize_strategy_edge(
     ]
     cost = cost_bps / 10000.0
     use_excess = benchmark_returns is not None
+    use_beta_adj = benchmark_returns is not None and betas is not None
+
+    blocks = [("horizons", "raw")]
+    if use_excess:
+        blocks.append(("excess_horizons", "excess"))
+    if use_beta_adj:
+        blocks.append(("beta_adj_horizons", "beta_adj"))
+
     by_strategy: dict[str, dict[str, Any]] = {}
     for strategy in strategies:
         strategy_rows = [row for row in deduped if row.strategy_name == strategy]
-        by_strategy[strategy] = {"rows": len(strategy_rows), "horizons": {}}
-        if use_excess:
-            by_strategy[strategy]["excess_horizons"] = {}
+        by_strategy[strategy] = {"rows": len(strategy_rows)}
+        for block_key, _mode in blocks:
+            by_strategy[strategy][block_key] = {}
         for horizon in horizons:
             key = f"return_{horizon}d"
-            values = [
-                value
-                for value in (to_float(row.outcome.get(key)) for row in strategy_rows)
-                if value is not None
-            ]
-            by_strategy[strategy]["horizons"][key] = _coverage(
-                _stats(values, cost=cost), len(strategy_rows)
-            )
-            if use_excess:
-                excess_values: list[float] = []
-                for row in strategy_rows:
-                    raw = to_float(row.outcome.get(key))
-                    bench = benchmark_returns.get((row.signal_date, int(horizon)))
-                    if raw is not None and bench is not None:
-                        excess_values.append(raw - bench)
-                by_strategy[strategy]["excess_horizons"][key] = _coverage(
-                    _stats(excess_values, cost=cost), len(strategy_rows)
+            for block_key, mode in blocks:
+                values = _horizon_values(
+                    strategy_rows,
+                    key,
+                    horizon,
+                    benchmark_returns=benchmark_returns,
+                    betas=betas,
+                    mode=mode,
                 )
-
-    deltas: dict[str, dict[str, Any]] = {}
-    excess_deltas: dict[str, dict[str, Any]] = {}
-    if "builtin_pullback" in by_strategy and "builtin_breakout" in by_strategy:
-        for horizon in horizons:
-            key = f"return_{horizon}d"
-            deltas[key] = _delta_block(
-                by_strategy["builtin_pullback"]["horizons"][key],
-                by_strategy["builtin_breakout"]["horizons"][key],
-            )
-            if use_excess:
-                excess_deltas[key] = _delta_block(
-                    by_strategy["builtin_pullback"]["excess_horizons"][key],
-                    by_strategy["builtin_breakout"]["excess_horizons"][key],
+                by_strategy[strategy][block_key][key] = _coverage(
+                    _stats(values, cost=cost), len(strategy_rows)
                 )
 
     summary: dict[str, Any] = {
         "strategies": by_strategy,
-        "deltas": deltas,
+        "deltas": {},
         "deduped_rows": len(deduped),
         "horizons": list(horizons),
         "cost_bps": cost_bps,
     }
     if use_excess:
-        summary["excess_deltas"] = excess_deltas
+        summary["excess_deltas"] = {}
         summary["benchmark_pairs"] = len(benchmark_returns)
+    if use_beta_adj:
+        summary["beta_adj_deltas"] = {}
+        summary["beta_symbols"] = len(betas)
+
+    if "builtin_pullback" in by_strategy and "builtin_breakout" in by_strategy:
+        delta_targets = [("horizons", "deltas")]
+        if use_excess:
+            delta_targets.append(("excess_horizons", "excess_deltas"))
+        if use_beta_adj:
+            delta_targets.append(("beta_adj_horizons", "beta_adj_deltas"))
+        for horizon in horizons:
+            key = f"return_{horizon}d"
+            for block_key, delta_key in delta_targets:
+                summary[delta_key][key] = _delta_block(
+                    by_strategy["builtin_pullback"][block_key][key],
+                    by_strategy["builtin_breakout"][block_key][key],
+                )
     return summary
 
 
@@ -347,6 +497,7 @@ def print_report(
     strategies: tuple[str, ...],
     benchmark: str | None = None,
 ) -> None:
+    label = benchmark or DEFAULT_BENCHMARK
     print("\n=== Strategy edge compare (read-only) ===")
     print(f"since={since} | strategies={', '.join(strategies)} | cost_bps={summary['cost_bps']}")
     print(f"filas deduplicadas estrategia-simbolo-dia: {summary['deduped_rows']}")
@@ -357,10 +508,17 @@ def print_report(
 
     if "excess_deltas" in summary:
         pairs = summary.get("benchmark_pairs", 0)
-        print(f"\n>>> EXCESS vs {benchmark or DEFAULT_BENCHMARK} (retorno - benchmark; aisla beta). pares benchmark={pairs}")
+        print(f"\n>>> EXCESS vs {label} (retorno - benchmark; ajusta nivel, NO la beta diferencial). pares benchmark={pairs}")
         _print_table("--- Retorno EXCESS (vs benchmark) ---", strategies, summary, "excess_horizons")
         if summary["excess_deltas"]:
             _print_delta("=== Delta pullback - breakout (excess) ===", summary["excess_deltas"])
+
+    if "beta_adj_deltas" in summary:
+        n_betas = summary.get("beta_symbols", 0)
+        print(f"\n>>> BETA-AJUSTADO vs {label} (retorno - beta*benchmark; el delta aisla alpha). simbolos con beta={n_betas}")
+        _print_table("--- Retorno BETA-AJUSTADO ---", strategies, summary, "beta_adj_horizons")
+        if summary["beta_adj_deltas"]:
+            _print_delta("=== Delta pullback - breakout (beta-ajustado) ===", summary["beta_adj_deltas"])
 
 
 def main() -> None:
@@ -378,6 +536,17 @@ def main() -> None:
         default=DEFAULT_BENCHMARK,
         help="Simbolo benchmark para retorno excess (default SPY). Usar 'none' para desactivar.",
     )
+    parser.add_argument(
+        "--beta-adjust",
+        action="store_true",
+        help="Anade retorno beta-ajustado (descarga historico de simbolos para estimar beta).",
+    )
+    parser.add_argument(
+        "--beta-lookback",
+        type=int,
+        default=DEFAULT_BETA_LOOKBACK,
+        help=f"Sesiones de historico para estimar beta. Default: {DEFAULT_BETA_LOOKBACK}.",
+    )
     parser.add_argument("--db", default=None, help="Ruta a la BD. Por defecto usa settings.")
     args = parser.parse_args()
 
@@ -389,6 +558,7 @@ def main() -> None:
 
     benchmark = (args.benchmark or "").strip().upper()
     benchmark_returns: dict[tuple[str, int], float] | None = None
+    betas: dict[str, float] | None = None
     if benchmark not in _BENCHMARK_DISABLED:
         benchmark_returns = build_benchmark_returns(
             (row.signal_date for row in rows),
@@ -396,6 +566,13 @@ def main() -> None:
             symbol=benchmark,
             since=args.since,
         )
+        if args.beta_adjust:
+            betas = build_betas(
+                (row.symbol for row in rows),
+                since=args.since,
+                lookback_days=args.beta_lookback,
+                market=benchmark,
+            )
 
     summary = summarize_strategy_edge(
         rows,
@@ -403,6 +580,7 @@ def main() -> None:
         strategies=strategies,
         cost_bps=args.cost_bps,
         benchmark_returns=benchmark_returns,
+        betas=betas,
     )
     print_report(
         summary,

@@ -1,6 +1,7 @@
 from scripts.study_strategy_edge_compare import (
     SignalRow,
     benchmark_returns_from_closes,
+    compute_betas,
     dedupe_signal_rows,
     summarize_strategy_edge,
 )
@@ -79,10 +80,8 @@ def test_benchmark_returns_from_closes_uses_forward_window():
         ordered_dates, closes, ["2026-06-25"], (1, 3)
     )
 
-    # base = cierre del signal_date (100); horizonte N = cierre N sesiones despues.
     assert benchmark[("2026-06-25", 1)] == 0.01
     assert benchmark[("2026-06-25", 3)] == -0.01
-    # Sin barra suficiente para horizonte 5 no se emite clave.
     assert ("2026-06-25", 5) not in benchmark_returns_from_closes(
         ordered_dates, closes, ["2026-06-25"], (5,)
     )
@@ -93,7 +92,6 @@ def test_summarize_with_benchmark_reports_excess_and_excludes_missing():
         _row(date="2026-06-25", symbol="AAA", strategy="builtin_pullback", updated_at="1", outcome={"return_1d": 0.02}),
         _row(date="2026-06-25", symbol="BBB", strategy="builtin_pullback", updated_at="1", outcome={"return_1d": -0.01}),
         _row(date="2026-06-25", symbol="AAA", strategy="builtin_breakout", updated_at="1", outcome={"return_1d": 0.03}),
-        # CCC no tiene benchmark -> queda fuera del excess.
         _row(date="2026-06-26", symbol="CCC", strategy="builtin_breakout", updated_at="1", outcome={"return_1d": 0.05}),
     ]
     benchmark_returns = {("2026-06-25", 1): 0.01}
@@ -105,14 +103,49 @@ def test_summarize_with_benchmark_reports_excess_and_excludes_missing():
     pull_excess = summary["strategies"]["builtin_pullback"]["excess_horizons"]["return_1d"]
     brk_excess = summary["strategies"]["builtin_breakout"]["excess_horizons"]["return_1d"]
 
-    # pullback: (0.02-0.01)=0.01 y (-0.01-0.01)=-0.02 -> mean -0.005
     assert pull_excess["n"] == 2
     assert pull_excess["mean"] == -0.005
-    # breakout: solo AAA tiene benchmark -> (0.03-0.01)=0.02; CCC (2026-06-26) excluido
     assert brk_excess["n"] == 1
     assert brk_excess["pending"] == 1
     assert brk_excess["mean"] == 0.02
-    # delta excess pullback - breakout = -0.005 - 0.02 = -0.025
     assert summary["excess_deltas"]["return_1d"]["mean_delta"] == -0.025
-    # el bloque crudo no se ve afectado por el benchmark.
     assert summary["strategies"]["builtin_pullback"]["horizons"]["return_1d"]["n"] == 2
+
+
+def test_compute_betas_recovers_known_slope():
+    market = [0.01, -0.02, 0.03, -0.01, 0.02]
+    symbol_returns = {
+        "HI": [2 * value for value in market],
+        "LO": [0.5 * value for value in market],
+        "SHORT": [0.01, 0.02],
+    }
+
+    betas = compute_betas(symbol_returns, market, min_obs=3)
+
+    assert betas["HI"] == 2.0
+    assert betas["LO"] == 0.5
+    assert "SHORT" not in betas
+
+
+def test_summarize_beta_adjusted_delta_differs_from_raw():
+    rows = [
+        _row(date="2026-06-25", symbol="AAA", strategy="builtin_pullback", updated_at="1", outcome={"return_1d": 0.02}),
+        _row(date="2026-06-25", symbol="BBB", strategy="builtin_breakout", updated_at="1", outcome={"return_1d": 0.03}),
+        _row(date="2026-06-25", symbol="CCC", strategy="builtin_breakout", updated_at="1", outcome={"return_1d": 0.04}),
+    ]
+    benchmark_returns = {("2026-06-25", 1): 0.01}
+    betas = {"AAA": 0.5, "BBB": 2.0}
+
+    summary = summarize_strategy_edge(
+        rows, horizons=(1,), cost_bps=10.0, benchmark_returns=benchmark_returns, betas=betas
+    )
+
+    pull_adj = summary["strategies"]["builtin_pullback"]["beta_adj_horizons"]["return_1d"]
+    brk_adj = summary["strategies"]["builtin_breakout"]["beta_adj_horizons"]["return_1d"]
+
+    assert pull_adj["n"] == 1 and pull_adj["mean"] == 0.015
+    assert brk_adj["n"] == 1 and brk_adj["pending"] == 1 and brk_adj["mean"] == 0.01
+
+    assert summary["deltas"]["return_1d"]["mean_delta"] == -0.015
+    assert summary["excess_deltas"]["return_1d"]["mean_delta"] == -0.015
+    assert summary["beta_adj_deltas"]["return_1d"]["mean_delta"] == 0.005
