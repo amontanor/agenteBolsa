@@ -663,17 +663,54 @@ def summarize_observations(
     return summary
 
 
-def _stats(values: list[float], *, cost: float) -> dict[str, Any]:
+def _max_drawdown(period_returns: list[float]) -> float | None:
+    if not period_returns:
+        return None
+    equity = 1.0
+    peak = 1.0
+    max_drawdown = 0.0
+    for value in period_returns:
+        equity *= 1.0 + value
+        peak = max(peak, equity)
+        if peak > 0:
+            max_drawdown = min(max_drawdown, (equity / peak) - 1.0)
+    return round(max_drawdown, 6)
+
+
+def _stats(values: list[float], *, cost: float, dated_values: list[tuple[str, float]] | None = None) -> dict[str, Any]:
     if not values:
-        return {"n": 0, "mean": None, "median": None, "hit_rate": None, "std": None, "mean_net": None}
+        return {
+            "n": 0,
+            "mean": None,
+            "median": None,
+            "hit_rate": None,
+            "std": None,
+            "mean_net": None,
+            "sharpe_simple": None,
+            "downside_deviation": None,
+            "tail_loss_rate_lt_10pct": None,
+            "max_drawdown": None,
+        }
     mean = sum(values) / len(values)
+    std = statistics.stdev(values) if len(values) > 1 else 0.0
+    net_values = [value - cost for value in values]
+    downside_values = [min(0.0, value) for value in net_values]
+    downside_deviation = (sum(value * value for value in downside_values) / len(downside_values)) ** 0.5
+    by_date: dict[str, list[float]] = {}
+    for signal_date, value in dated_values or []:
+        by_date.setdefault(str(signal_date), []).append(value - cost)
+    period_returns = [sum(items) / len(items) for _date, items in sorted(by_date.items()) if items]
     return {
         "n": len(values),
         "mean": round(mean, 6),
         "median": round(statistics.median(values), 6),
         "hit_rate": round(sum(1 for value in values if value > 0) / len(values), 4),
-        "std": round(statistics.stdev(values), 6) if len(values) > 1 else 0.0,
+        "std": round(std, 6),
         "mean_net": round(mean - cost, 6),
+        "sharpe_simple": round((mean - cost) / std, 6) if std > 0 else None,
+        "downside_deviation": round(downside_deviation, 6),
+        "tail_loss_rate_lt_10pct": round(sum(1 for value in net_values if value < -0.10) / len(net_values), 4),
+        "max_drawdown": _max_drawdown(period_returns),
     }
 
 
@@ -694,6 +731,35 @@ def _metric_values(
     if metric == "beta_adjusted_vs_spy":
         return [
             item.raw_returns[horizon] - float(item.beta_asof) * item.benchmark_returns[horizon]
+            for item in rows
+            if item.raw_returns.get(horizon) is not None
+            and item.benchmark_returns.get(horizon) is not None
+            and item.beta_asof is not None
+        ]
+    raise ValueError(f"Metric no soportada: {metric}")
+
+
+def _metric_dated_values(
+    rows: list[SelectorObservation],
+    *,
+    horizon: int,
+    metric: str,
+) -> list[tuple[str, float]]:
+    if metric == "raw":
+        return [
+            (item.signal_date, item.raw_returns[horizon])
+            for item in rows
+            if item.raw_returns.get(horizon) is not None
+        ]
+    if metric == "excess_vs_spy":
+        return [
+            (item.signal_date, item.raw_returns[horizon] - item.benchmark_returns[horizon])
+            for item in rows
+            if item.raw_returns.get(horizon) is not None and item.benchmark_returns.get(horizon) is not None
+        ]
+    if metric == "beta_adjusted_vs_spy":
+        return [
+            (item.signal_date, item.raw_returns[horizon] - float(item.beta_asof) * item.benchmark_returns[horizon])
             for item in rows
             if item.raw_returns.get(horizon) is not None
             and item.benchmark_returns.get(horizon) is not None
@@ -732,7 +798,11 @@ def summarize_selector_observations(
         for horizon in horizons:
             key = f"return_{horizon}d"
             summary["overall"][cohort][key] = {
-                metric: _stats(_metric_values(cohort_rows, horizon=horizon, metric=metric), cost=cost)
+                metric: _stats(
+                    _metric_values(cohort_rows, horizon=horizon, metric=metric),
+                    cost=cost,
+                    dated_values=_metric_dated_values(cohort_rows, horizon=horizon, metric=metric),
+                )
                 for metric in metrics
             }
         for regime in regimes:
@@ -741,7 +811,11 @@ def summarize_selector_observations(
             for horizon in horizons:
                 key = f"return_{horizon}d"
                 summary["by_regime"][regime][cohort][key] = {
-                    metric: _stats(_metric_values(regime_rows, horizon=horizon, metric=metric), cost=cost)
+                    metric: _stats(
+                        _metric_values(regime_rows, horizon=horizon, metric=metric),
+                        cost=cost,
+                        dated_values=_metric_dated_values(regime_rows, horizon=horizon, metric=metric),
+                    )
                     for metric in metrics
                 }
 
@@ -775,7 +849,11 @@ def summarize_selector_observations(
         for horizon in horizons:
             key = f"return_{horizon}d"
             summary["score_deciles"][str(decile)][key] = {
-                metric: _stats(_metric_values(decile_rows, horizon=horizon, metric=metric), cost=cost)
+                metric: _stats(
+                    _metric_values(decile_rows, horizon=horizon, metric=metric),
+                    cost=cost,
+                    dated_values=_metric_dated_values(decile_rows, horizon=horizon, metric=metric),
+                )
                 for metric in metrics
             }
     for horizon in horizons:
@@ -1210,6 +1288,28 @@ def _delta_between_cohorts(summary: dict[str, Any], *, left: str, right: str, ho
                     if left_stats.get("mean_net") is not None and right_stats.get("mean_net") is not None
                     else None
                 ),
+                "sharpe_simple_delta": (
+                    round(float(left_stats["sharpe_simple"]) - float(right_stats["sharpe_simple"]), 6)
+                    if left_stats.get("sharpe_simple") is not None and right_stats.get("sharpe_simple") is not None
+                    else None
+                ),
+                "max_drawdown_delta": (
+                    round(float(left_stats["max_drawdown"]) - float(right_stats["max_drawdown"]), 6)
+                    if left_stats.get("max_drawdown") is not None and right_stats.get("max_drawdown") is not None
+                    else None
+                ),
+                "downside_deviation_delta": (
+                    round(float(left_stats["downside_deviation"]) - float(right_stats["downside_deviation"]), 6)
+                    if left_stats.get("downside_deviation") is not None
+                    and right_stats.get("downside_deviation") is not None
+                    else None
+                ),
+                "tail_loss_rate_lt_10pct_delta": (
+                    round(float(left_stats["tail_loss_rate_lt_10pct"]) - float(right_stats["tail_loss_rate_lt_10pct"]), 6)
+                    if left_stats.get("tail_loss_rate_lt_10pct") is not None
+                    and right_stats.get("tail_loss_rate_lt_10pct") is not None
+                    else None
+                ),
             }
     return result
 
@@ -1243,6 +1343,32 @@ def _delta_between_cohorts_by_regime(
                     "mean_net_delta": (
                         round(float(left_stats["mean_net"]) - float(right_stats["mean_net"]), 6)
                         if left_stats.get("mean_net") is not None and right_stats.get("mean_net") is not None
+                        else None
+                    ),
+                    "sharpe_simple_delta": (
+                        round(float(left_stats["sharpe_simple"]) - float(right_stats["sharpe_simple"]), 6)
+                        if left_stats.get("sharpe_simple") is not None and right_stats.get("sharpe_simple") is not None
+                        else None
+                    ),
+                    "max_drawdown_delta": (
+                        round(float(left_stats["max_drawdown"]) - float(right_stats["max_drawdown"]), 6)
+                        if left_stats.get("max_drawdown") is not None and right_stats.get("max_drawdown") is not None
+                        else None
+                    ),
+                    "downside_deviation_delta": (
+                        round(float(left_stats["downside_deviation"]) - float(right_stats["downside_deviation"]), 6)
+                        if left_stats.get("downside_deviation") is not None
+                        and right_stats.get("downside_deviation") is not None
+                        else None
+                    ),
+                    "tail_loss_rate_lt_10pct_delta": (
+                        round(
+                            float(left_stats["tail_loss_rate_lt_10pct"])
+                            - float(right_stats["tail_loss_rate_lt_10pct"]),
+                            6,
+                        )
+                        if left_stats.get("tail_loss_rate_lt_10pct") is not None
+                        and right_stats.get("tail_loss_rate_lt_10pct") is not None
                         else None
                     ),
                 }
@@ -1505,7 +1631,7 @@ def selector_main(argv: list[str] | None = None) -> int:
 
 def build_extension_gate_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Backtest read-only del gate de extension sobre top picks del selector.")
-    parser.add_argument("--since", default="2024-01-01", help="Fecha inicial de estudio YYYY-MM-DD.")
+    parser.add_argument("--since", default="2022-01-01", help="Fecha inicial de estudio YYYY-MM-DD.")
     parser.add_argument("--to", dest="end", default=date.today().isoformat(), help="Fecha final YYYY-MM-DD.")
     parser.add_argument("--horizons", default="5,10,20", help="Horizontes forward separados por coma.")
     parser.add_argument("--cost-bps", type=float, default=10.0, help="Coste round-trip en bps.")

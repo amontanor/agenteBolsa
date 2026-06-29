@@ -175,6 +175,9 @@ def test_summarize_selector_observations_compares_top_n_and_deciles():
     assert decile_10["mean_net"] == 0.049
     monotonic = summary["score_monotonicity"]["return_5d"]["raw"]
     assert monotonic["d10_minus_d1"] == 0.08
+    assert top_n["sharpe_simple"] is None
+    assert top_n["tail_loss_rate_lt_10pct"] == 0.0
+    assert top_n["max_drawdown"] == 0.0
 
 
 def test_extension_gate_delta_compares_rejected_minus_pass():
@@ -217,3 +220,56 @@ def test_extension_gate_delta_compares_rejected_minus_pass():
     assert summary["overall"]["extension_rejected"]["return_5d"]["raw"]["mean_net"] == -0.031
     assert delta["return_5d"]["raw"]["mean_delta"] == -0.04
     assert delta["return_5d"]["raw"]["mean_net_delta"] == -0.04
+    assert delta["return_5d"]["raw"]["sharpe_simple_delta"] is None
+    assert delta["return_5d"]["raw"]["tail_loss_rate_lt_10pct_delta"] == 0.0
+
+
+def test_selector_risk_metrics_include_drawdown_downside_and_tail_rate():
+    observations = [
+        SelectorObservation(
+            cohort="population",
+            signal_date="2026-01-02",
+            symbol="AAA",
+            regime="bull_above_sma200",
+            selector_score=0.01,
+            technical_score=8.0,
+            score_decile=1,
+            raw_returns={5: 0.04},
+            benchmark_returns={5: 0.0},
+            beta_asof=1.0,
+        ),
+        SelectorObservation(
+            cohort="population",
+            signal_date="2026-01-09",
+            symbol="BBB",
+            regime="bull_above_sma200",
+            selector_score=0.02,
+            technical_score=9.0,
+            score_decile=2,
+            raw_returns={5: -0.12},
+            benchmark_returns={5: 0.0},
+            beta_asof=1.0,
+        ),
+        SelectorObservation(
+            cohort="population",
+            signal_date="2026-01-16",
+            symbol="CCC",
+            regime="bull_above_sma200",
+            selector_score=0.03,
+            technical_score=10.0,
+            score_decile=3,
+            raw_returns={5: 0.02},
+            benchmark_returns={5: 0.0},
+            beta_asof=1.0,
+        ),
+    ]
+
+    summary = summarize_selector_observations(observations, horizons=(5,), cost_bps=10.0)
+    stats = summary["overall"]["population"]["return_5d"]["raw"]
+
+    assert stats["n"] == 3
+    assert stats["mean_net"] == -0.021
+    assert stats["sharpe_simple"] < 0
+    assert stats["downside_deviation"] > 0
+    assert stats["tail_loss_rate_lt_10pct"] == 0.3333
+    assert stats["max_drawdown"] < 0
