@@ -7,7 +7,9 @@ from agente_bolsa.tools.strategy_edge_backtest import (
     add_vector_signal_columns,
     sampled_session_dates,
     summarize_observations,
+    summarize_policy_weekly_returns,
     summarize_selector_observations,
+    summarize_weekly_portfolio_returns,
 )
 
 
@@ -273,3 +275,25 @@ def test_selector_risk_metrics_include_drawdown_downside_and_tail_rate():
     assert stats["downside_deviation"] > 0
     assert stats["tail_loss_rate_lt_10pct"] == 0.3333
     assert stats["max_drawdown"] < 0
+
+
+def test_weekly_policy_summary_computes_decision_risk_metrics():
+    weekly_returns = [
+        ("2026-01-02", "bull_above_sma200", 0.03),
+        ("2026-01-09", "bull_above_sma200", -0.06),
+        ("2026-01-16", "bear_below_sma200", 0.01),
+    ]
+
+    stats = summarize_weekly_portfolio_returns(weekly_returns)
+
+    assert stats["weeks"] == 3
+    assert stats["mean"] == -0.006667
+    assert stats["median"] == 0.01
+    assert stats["worst_week"] == -0.06
+    assert stats["negative_week_rate"] == 0.3333
+    assert stats["tail_week_rate_lt_5pct"] == 0.3333
+    assert stats["max_drawdown"] < 0
+
+    summary = summarize_policy_weekly_returns({"P0_cash": weekly_returns})
+    assert summary["by_regime"]["bull_above_sma200"]["P0_cash"]["weeks"] == 2
+    assert summary["by_regime"]["bear_below_sma200"]["P0_cash"]["weeks"] == 1

@@ -1098,6 +1098,7 @@ def run_selector_edge_backtest(
     sample_every: int = DEFAULT_SAMPLE_EVERY,
     progress_every: int = DEFAULT_PROGRESS_EVERY,
     include_top_records: bool = False,
+    include_candidate_records: bool = False,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
     settings = settings or get_settings()
@@ -1224,6 +1225,14 @@ def run_selector_edge_backtest(
     observations.extend(_selector_observation(record, cohort="top_n") for record in top_records)
 
     summary = summarize_selector_observations(observations, horizons=horizons, cost_bps=cost_bps)
+    weekly_benchmark_records = [
+        {
+            "signal_date": session_date,
+            "regime": regime_by_date.get(session_date, "unknown"),
+            "benchmark_returns": {h: benchmark_returns[h].get(session_date) for h in horizons},
+        }
+        for session_date in sampled_dates
+    ]
     return {
         "as_of": datetime.now(timezone.utc).isoformat(),
         "study": {
@@ -1264,6 +1273,8 @@ def run_selector_edge_backtest(
         },
         "summary": summary,
         "top_pick_records": top_records if include_top_records else [],
+        "candidate_records": records if include_candidate_records else [],
+        "weekly_benchmark_records": weekly_benchmark_records,
     }
 
 
@@ -1463,6 +1474,198 @@ def run_extension_gate_edge_backtest(
     result["summary"] = summary
     result.pop("top_pick_records", None)
     return result
+
+
+def summarize_weekly_portfolio_returns(weekly_returns: list[tuple[str, str, float]]) -> dict[str, Any]:
+    values = [value for _date, _regime, value in weekly_returns]
+    if not values:
+        return {
+            "weeks": 0,
+            "mean": None,
+            "median": None,
+            "sharpe_simple": None,
+            "max_drawdown": None,
+            "worst_week": None,
+            "negative_week_rate": None,
+            "tail_week_rate_lt_5pct": None,
+        }
+    mean = sum(values) / len(values)
+    std = statistics.stdev(values) if len(values) > 1 else 0.0
+    return {
+        "weeks": len(values),
+        "mean": round(mean, 6),
+        "median": round(statistics.median(values), 6),
+        "sharpe_simple": round(mean / std, 6) if std > 0 else None,
+        "max_drawdown": _max_drawdown(values),
+        "worst_week": round(min(values), 6),
+        "negative_week_rate": round(sum(1 for value in values if value < 0) / len(values), 4),
+        "tail_week_rate_lt_5pct": round(sum(1 for value in values if value < -0.05) / len(values), 4),
+    }
+
+
+def _weekly_equal_weight_returns_from_records(
+    records: list[dict[str, Any]],
+    *,
+    horizon: int,
+    cost: float,
+    extension_threshold: float | None = None,
+) -> list[tuple[str, str, float]]:
+    by_date: dict[str, dict[str, Any]] = {}
+    for record in records:
+        if extension_threshold is not None:
+            distance = _safe_float(record.get("distance_sma20"))
+            if distance is None or distance > extension_threshold:
+                continue
+        raw_returns = record.get("raw_returns") or {}
+        value = raw_returns.get(horizon)
+        if value is None:
+            value = raw_returns.get(str(horizon))
+        value = _safe_float(value)
+        if value is None:
+            continue
+        signal_date = str(record.get("signal_date") or "")[:10]
+        if not signal_date:
+            continue
+        bucket = by_date.setdefault(
+            signal_date,
+            {"regime": str(record.get("regime") or "unknown"), "values": []},
+        )
+        bucket["values"].append(value - cost)
+    return [
+        (signal_date, str(item["regime"]), round(sum(item["values"]) / len(item["values"]), 6))
+        for signal_date, item in sorted(by_date.items())
+        if item["values"]
+    ]
+
+
+def _weekly_benchmark_returns(
+    records: list[dict[str, Any]],
+    *,
+    horizon: int,
+    cost: float,
+) -> list[tuple[str, str, float]]:
+    weekly: list[tuple[str, str, float]] = []
+    for record in records:
+        returns = record.get("benchmark_returns") or {}
+        value = returns.get(horizon)
+        if value is None:
+            value = returns.get(str(horizon))
+        value = _safe_float(value)
+        if value is None:
+            continue
+        weekly.append((str(record.get("signal_date") or "")[:10], str(record.get("regime") or "unknown"), value - cost))
+    return weekly
+
+
+def _weekly_cash_returns(records: list[dict[str, Any]]) -> list[tuple[str, str, float]]:
+    return [
+        (str(record.get("signal_date") or "")[:10], str(record.get("regime") or "unknown"), 0.0)
+        for record in records
+        if record.get("benchmark_returns", {}).get(5) is not None
+        or record.get("benchmark_returns", {}).get("5") is not None
+    ]
+
+
+def summarize_policy_weekly_returns(
+    policy_returns: dict[str, list[tuple[str, str, float]]],
+) -> dict[str, Any]:
+    regimes = sorted({regime for rows in policy_returns.values() for _date, regime, _value in rows})
+    summary: dict[str, Any] = {"overall": {}, "by_regime": {}, "regimes": regimes}
+    for policy, rows in policy_returns.items():
+        summary["overall"][policy] = summarize_weekly_portfolio_returns(rows)
+        for regime in regimes:
+            regime_rows = [row for row in rows if row[1] == regime]
+            summary["by_regime"].setdefault(regime, {})[policy] = summarize_weekly_portfolio_returns(regime_rows)
+    return summary
+
+
+def run_weekly_policy_decision_study(
+    *,
+    since: str,
+    end: str,
+    cost_bps: float,
+    top_n: int = 15,
+    universe_name: str = DEFAULT_UNIVERSE,
+    max_symbols: int = 0,
+    beta_lookback: int = DEFAULT_BETA_LOOKBACK,
+    regime_mode: str = DEFAULT_REGIME,
+    provider: str | None = None,
+    fmp_api_key: str | None = None,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    sample_every: int = DEFAULT_SAMPLE_EVERY,
+    progress_every: int = DEFAULT_PROGRESS_EVERY,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    settings = settings or get_settings()
+    cost = cost_bps / 10000.0
+    horizon = 5
+    extension_threshold = float(settings.entry_quality_max_sma20_distance)
+    selector_report = run_selector_edge_backtest(
+        since=since,
+        end=end,
+        horizons=(horizon,),
+        cost_bps=cost_bps,
+        top_n=top_n,
+        universe_name=universe_name,
+        max_symbols=max_symbols,
+        beta_lookback=beta_lookback,
+        regime_mode=regime_mode,
+        provider=provider,
+        fmp_api_key=fmp_api_key,
+        batch_size=batch_size,
+        sample_every=sample_every,
+        progress_every=progress_every,
+        include_top_records=True,
+        include_candidate_records=True,
+        settings=settings,
+    )
+    benchmark_records = selector_report["weekly_benchmark_records"]
+    top_records = selector_report["top_pick_records"]
+    candidate_records = selector_report["candidate_records"]
+    policy_returns = {
+        "P0_cash": _weekly_cash_returns(benchmark_records),
+        "P1_spy": _weekly_benchmark_returns(benchmark_records, horizon=horizon, cost=cost),
+        "P2_top_pass_extension_gate": _weekly_equal_weight_returns_from_records(
+            top_records,
+            horizon=horizon,
+            cost=cost,
+            extension_threshold=extension_threshold,
+        ),
+        "P3_top_no_extension_gate": _weekly_equal_weight_returns_from_records(
+            top_records,
+            horizon=horizon,
+            cost=cost,
+        ),
+        "P4_all_eligible_equal_weight": _weekly_equal_weight_returns_from_records(
+            candidate_records,
+            horizon=horizon,
+            cost=cost,
+        ),
+    }
+    summary = summarize_policy_weekly_returns(policy_returns)
+    return {
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "study": {
+            "name": "weekly_policy_decision_distribution",
+            "since": since,
+            "end": end,
+            "horizon_days": horizon,
+            "cost_bps": cost_bps,
+            "top_n": top_n,
+            "regime_mode": regime_mode,
+            "current_regime_assumption": "bull_above_sma200",
+            "extension_gate_threshold": extension_threshold,
+            "sample_every_sessions": sample_every,
+            "signal_sampling": "weekly" if int(sample_every) == 5 else f"every_{sample_every}_sessions",
+            "interpretation": "Distribucion historica condicional, no prediccion.",
+        },
+        "universe": selector_report["universe"],
+        "scan": {
+            **selector_report["scan"],
+            "policy_weeks": {policy: len(rows) for policy, rows in policy_returns.items()},
+        },
+        "summary": summary,
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1721,6 +1924,79 @@ def extension_gate_main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def build_weekly_policy_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Estudio read-only de opciones de politica a 5 sesiones.")
+    parser.add_argument("--since", default="2022-01-01", help="Fecha inicial de estudio YYYY-MM-DD.")
+    parser.add_argument("--to", dest="end", default=date.today().isoformat(), help="Fecha final YYYY-MM-DD.")
+    parser.add_argument("--cost-bps", type=float, default=10.0, help="Coste round-trip en bps.")
+    parser.add_argument("--top-n", type=int, default=15, help="Top N seleccionado por fecha.")
+    parser.add_argument("--universe", default=DEFAULT_UNIVERSE, help="Universo. Default: sp500.")
+    parser.add_argument("--max-symbols", type=int, default=0, help="Limite opcional de simbolos.")
+    parser.add_argument("--beta-lookback", type=int, default=DEFAULT_BETA_LOOKBACK, help="Lookback de beta.")
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE, help="Tamano de batch de descarga.")
+    parser.add_argument(
+        "--sample-every",
+        type=int,
+        default=DEFAULT_SAMPLE_EVERY,
+        help="Evalua carteras cada N sesiones. Default: 5.",
+    )
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=DEFAULT_PROGRESS_EVERY,
+        help="Imprime progreso cada N simbolos en stderr. 0 desactiva.",
+    )
+    parser.add_argument("--json", action="store_true", help="Imprime JSON completo.")
+    return parser
+
+
+def print_weekly_policy_summary(report: dict[str, Any]) -> None:
+    def _pct(value: float | None) -> str:
+        return "n/d" if value is None else f"{value * 100:.2f}%"
+
+    print("\n=== Estudio de decision semanal por politica (read-only) ===")
+    print(
+        f"ventana={report['study']['since']}->{report['study']['end']} | "
+        f"horizon={report['study']['horizon_days']}d | top_n={report['study']['top_n']} | "
+        f"cost_bps={report['study']['cost_bps']}"
+    )
+    for regime in ("bull_above_sma200", "bear_below_sma200"):
+        if regime not in report["summary"]["by_regime"]:
+            continue
+        print(f"\nRegimen: {regime}")
+        print(f"{'policy':<34}{'weeks':>8}{'mean':>12}{'median':>12}{'sharpe':>10}{'max_dd':>12}{'worst':>12}{'neg':>10}{'tail<-5':>10}")
+        for policy, stats in report["summary"]["by_regime"][regime].items():
+            sharpe = "n/d" if stats["sharpe_simple"] is None else f"{stats['sharpe_simple']:.3f}"
+            print(
+                f"{policy:<34}{stats['weeks']:>8}"
+                f"{_pct(stats['mean']):>12}{_pct(stats['median']):>12}{sharpe:>10}"
+                f"{_pct(stats['max_drawdown']):>12}{_pct(stats['worst_week']):>12}"
+                f"{_pct(stats['negative_week_rate']):>10}{_pct(stats['tail_week_rate_lt_5pct']):>10}"
+            )
+
+
+def weekly_policy_main(argv: list[str] | None = None) -> int:
+    parser = build_weekly_policy_parser()
+    args = parser.parse_args(argv)
+    report = run_weekly_policy_decision_study(
+        since=args.since,
+        end=args.end,
+        cost_bps=args.cost_bps,
+        top_n=args.top_n,
+        universe_name=args.universe,
+        max_symbols=args.max_symbols,
+        beta_lookback=args.beta_lookback,
+        batch_size=args.batch_size,
+        sample_every=args.sample_every,
+        progress_every=args.progress_every,
+    )
+    if args.json:
+        print(json.dumps(report, indent=2, ensure_ascii=False, default=str))
+    else:
+        print_weekly_policy_summary(report)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1754,6 +2030,7 @@ __all__ = [
     "build_parser",
     "build_extension_gate_parser",
     "build_selector_parser",
+    "build_weekly_policy_parser",
     "add_vector_signal_columns",
     "extension_gate_main",
     "main",
@@ -1761,7 +2038,11 @@ __all__ = [
     "run_extension_gate_edge_backtest",
     "run_pullback_breakout_backtest",
     "run_selector_edge_backtest",
+    "run_weekly_policy_decision_study",
     "sampled_session_dates",
     "summarize_observations",
+    "summarize_policy_weekly_returns",
     "summarize_selector_observations",
+    "summarize_weekly_portfolio_returns",
+    "weekly_policy_main",
 ]
