@@ -1,0 +1,114 @@
+import pandas as pd
+
+from agente_bolsa.tools.strategy_edge_backtest import (
+    StrategyObservation,
+    add_vector_signal_columns,
+    sampled_session_dates,
+    summarize_observations,
+)
+
+
+def test_summarize_observations_aggregates_overall_and_by_regime():
+    observations = [
+        StrategyObservation(
+            strategy_name="builtin_pullback",
+            signal_date="2026-01-02",
+            symbol="AAA",
+            regime="bull_above_sma200",
+            raw_returns={5: 0.04},
+            benchmark_returns={5: 0.01},
+            beta_asof=1.2,
+        ),
+        StrategyObservation(
+            strategy_name="builtin_pullback",
+            signal_date="2026-01-03",
+            symbol="BBB",
+            regime="bear_below_sma200",
+            raw_returns={5: -0.01},
+            benchmark_returns={5: -0.02},
+            beta_asof=0.8,
+        ),
+        StrategyObservation(
+            strategy_name="builtin_breakout",
+            signal_date="2026-01-02",
+            symbol="CCC",
+            regime="bull_above_sma200",
+            raw_returns={5: 0.02},
+            benchmark_returns={5: 0.01},
+            beta_asof=1.0,
+        ),
+        StrategyObservation(
+            strategy_name="builtin_breakout",
+            signal_date="2026-01-03",
+            symbol="DDD",
+            regime="bear_below_sma200",
+            raw_returns={5: -0.03},
+            benchmark_returns={5: -0.02},
+            beta_asof=1.5,
+        ),
+    ]
+
+    summary = summarize_observations(observations, horizons=(5,), cost_bps=10.0)
+
+    pull_raw = summary["overall"]["builtin_pullback"]["return_5d"]["raw"]
+    assert pull_raw["n"] == 2
+    assert pull_raw["mean"] == 0.015
+    assert pull_raw["median"] == 0.015
+    assert pull_raw["hit_rate"] == 0.5
+    assert pull_raw["mean_net"] == 0.014
+
+    pull_excess = summary["overall"]["builtin_pullback"]["return_5d"]["excess_vs_spy"]
+    assert pull_excess["mean"] == 0.02
+
+    breakout_beta = summary["overall"]["builtin_breakout"]["return_5d"]["beta_adjusted_vs_spy"]
+    assert breakout_beta["mean"] == 0.005
+
+    bull_pull = summary["by_regime"]["bull_above_sma200"]["builtin_pullback"]["return_5d"]["raw"]
+    assert bull_pull["n"] == 1
+    assert bull_pull["mean"] == 0.04
+
+    delta_raw = summary["delta_pullback_minus_breakout"]["return_5d"]["raw"]
+    assert delta_raw["mean_delta"] == 0.02
+    assert delta_raw["mean_net_delta"] == 0.02
+
+
+def test_vector_signal_columns_detect_pullback_and_exclude_breakout_flags():
+    frame = pd.DataFrame(
+        {
+            "Open": [100.0, 101.0],
+            "High": [102.0, 102.0],
+            "Low": [99.0, 100.0],
+            "Close": [101.0, 104.0],
+            "Volume": [1_000_000, 1_100_000],
+            "sma_20": [100.0, 100.0],
+            "sma_50": [95.0, 95.0],
+            "sma_200": [90.0, 90.0],
+            "return_5d": [0.0, 0.0],
+            "return_20d": [0.01, 0.01],
+            "return_60d": [0.08, 0.08],
+            "rsi_14": [50.0, 55.0],
+            "volume_zscore_20": [0.0, 1.5],
+            "gap_pct": [0.0, 0.04],
+            "close_position_in_range": [0.6, 0.9],
+            "prev_high_55": [120.0, 100.0],
+            "bollinger_pct_b_20": [0.5, 0.5],
+            "macd": [1.0, 1.0],
+            "macd_signal": [0.5, 0.5],
+            "above_long_trend": [True, True],
+            "trend_positive": [True, True],
+            "candle_bullish_signal": [False, False],
+            "candle_bearish_signal": [False, False],
+            "candle_doji": [False, False],
+        },
+        index=pd.bdate_range("2026-01-01", periods=2),
+    )
+
+    result = add_vector_signal_columns(frame)
+
+    assert bool(result.iloc[0]["vector_pullback_signal"]) is True
+    assert bool(result.iloc[1]["vector_range_expansion_breakout_long"]) is True
+    assert bool(result.iloc[1]["vector_pullback_signal"]) is False
+
+
+def test_sampled_session_dates_keeps_one_of_every_n_sessions():
+    assert sampled_session_dates(["d1", "d2", "d3", "d4", "d5", "d6"], every=5) == ["d1", "d6"]
