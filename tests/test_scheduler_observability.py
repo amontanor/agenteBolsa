@@ -18,6 +18,7 @@ from agente_bolsa.scheduler import (
     _job_state_key,
     _selected_candidates,
     continuous_improvement_job,
+    daily_study_job,
     overnight_learning_heartbeat_job,
     scheduler_status,
 )
@@ -230,6 +231,73 @@ def test_overnight_learning_heartbeat_job_runs_once_per_session(tmp_path, monkey
     assert calls["count"] == 1
     assert store.get_runtime_value("overnight_learning_heartbeat_last_session") == "2026-06-15"
     job_state = store.get_runtime_value(_job_state_key("overnight_learning_heartbeat"))
+    assert job_state["status"] == "skipped"
+
+
+def test_daily_study_job_catches_up_once_per_closed_session(tmp_path, monkeypatch):
+    settings = Settings(DATA_DIR=tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+
+    fake_status = SimpleNamespace(
+        now_market="2026-06-16T18:30:00-04:00",
+        as_dict=lambda: {"now_market": "2026-06-16T18:30:00-04:00"},
+    )
+
+    class FakeMarketCalendar:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def should_run_daily_study(self):
+            return True, fake_status
+
+    calls = {"count": 0}
+
+    def fake_run_observable_cycle(settings_arg, store_arg, *, use_crew, verbose):
+        calls["count"] += 1
+
+    monkeypatch.setattr("agente_bolsa.scheduler.MarketCalendar", FakeMarketCalendar)
+    monkeypatch.setattr("agente_bolsa.scheduler.run_observable_cycle", fake_run_observable_cycle)
+
+    daily_study_job(settings, store, use_crew=False, verbose=False)
+    daily_study_job(settings, store, use_crew=False, verbose=False)
+
+    assert calls["count"] == 1
+    assert store.get_runtime_value("daily_study_last_session") == "2026-06-16"
+    job_state = store.get_runtime_value(_job_state_key("daily_study"))
+    assert job_state["status"] == "skipped"
+
+
+def test_daily_study_job_skips_when_session_already_processed(tmp_path, monkeypatch):
+    settings = Settings(DATA_DIR=tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    store.set_runtime_value("daily_study_last_session", "2026-06-16")
+
+    fake_status = SimpleNamespace(
+        now_market="2026-06-16T18:30:00-04:00",
+        as_dict=lambda: {"now_market": "2026-06-16T18:30:00-04:00"},
+    )
+
+    class FakeMarketCalendar:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def should_run_daily_study(self):
+            return True, fake_status
+
+    calls = {"count": 0}
+
+    def fake_run_observable_cycle(settings_arg, store_arg, *, use_crew, verbose):
+        calls["count"] += 1
+
+    monkeypatch.setattr("agente_bolsa.scheduler.MarketCalendar", FakeMarketCalendar)
+    monkeypatch.setattr("agente_bolsa.scheduler.run_observable_cycle", fake_run_observable_cycle)
+
+    daily_study_job(settings, store, use_crew=False, verbose=False)
+
+    assert calls["count"] == 0
+    job_state = store.get_runtime_value(_job_state_key("daily_study"))
     assert job_state["status"] == "skipped"
 
 

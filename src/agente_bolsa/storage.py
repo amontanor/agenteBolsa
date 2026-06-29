@@ -4140,6 +4140,54 @@ class Store:
         initiative["messages"] = self.continuous_improvement_initiative_messages(initiative_id=initiative_id)
         return initiative
 
+    def continuous_improvement_initiative_last_activity_at(self, initiative: dict[str, Any] | str) -> str | None:
+        initiative_row = self.continuous_improvement_initiative(initiative) if isinstance(initiative, str) else initiative
+        if not initiative_row:
+            return None
+        candidates: list[str] = []
+        task_ids = [str(item) for item in list(initiative_row.get("linked_task_ids") or []) if str(item)]
+        proposal_ids = [str(item) for item in list(initiative_row.get("linked_proposal_ids") or []) if str(item)]
+        validation_ids = [str(item) for item in list(initiative_row.get("linked_validation_ids") or []) if str(item)]
+        with self.connect() as conn:
+            if task_ids:
+                placeholders = ",".join("?" for _ in task_ids)
+                row = conn.execute(
+                    f"SELECT MAX(updated_at) AS latest FROM continuous_improvement_agent_tasks WHERE task_id IN ({placeholders})",
+                    task_ids,
+                ).fetchone()
+                if row and row["latest"]:
+                    candidates.append(str(row["latest"]))
+            if proposal_ids:
+                placeholders = ",".join("?" for _ in proposal_ids)
+                row = conn.execute(
+                    f"SELECT MAX(updated_at) AS latest FROM continuous_improvement_proposals WHERE proposal_id IN ({placeholders})",
+                    proposal_ids,
+                ).fetchone()
+                if row and row["latest"]:
+                    candidates.append(str(row["latest"]))
+            if validation_ids:
+                placeholders = ",".join("?" for _ in validation_ids)
+                row = conn.execute(
+                    f"SELECT MAX(created_at) AS latest FROM continuous_improvement_validations WHERE validation_id IN ({placeholders})",
+                    validation_ids,
+                ).fetchone()
+                if row and row["latest"]:
+                    candidates.append(str(row["latest"]))
+            row = conn.execute(
+                """
+                SELECT MAX(created_at) AS latest
+                FROM continuous_improvement_initiative_messages
+                WHERE initiative_id = ?
+                """,
+                (initiative_row["initiative_id"],),
+            ).fetchone()
+            if row and row["latest"]:
+                candidates.append(str(row["latest"]))
+        if candidates:
+            return max(candidates)
+        created_at = str(initiative_row.get("created_at") or "").strip()
+        return created_at or None
+
     def continuous_improvement_initiative_by_key(self, initiative_key: str) -> dict[str, Any] | None:
         with self.connect() as conn:
             row = conn.execute(

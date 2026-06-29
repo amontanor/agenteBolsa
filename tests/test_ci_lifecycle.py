@@ -117,6 +117,64 @@ def test_stalled_initiative_expires(tmp_path):
     assert rows["trading:vieja"]["latest_decision"]["decision"] == "EXPIRED"
 
 
+def test_stalled_initiative_uses_real_activity_not_initiative_updated_at(tmp_path):
+    settings, store = _setup(tmp_path, CI_INITIATIVE_TTL_DAYS=5, CI_INITIATIVE_STALL_DAYS=3)
+    initiative_id = _seed_initiative(
+        store,
+        "software:stale_but_touched",
+        "OPEN",
+        created_at=_iso_ago(days=9),
+        updated_at=_iso_ago(hours=1),
+    )
+    store.update_continuous_improvement_initiative(
+        initiative_id,
+        latest_decision={"decision": "OPEN", "source": "orchestrator"},
+        next_action="Esperar evidencia adicional.",
+    )
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE continuous_improvement_initiatives SET created_at = ?, updated_at = ? WHERE initiative_id = ?",
+            (_iso_ago(days=9), _iso_ago(hours=1), initiative_id),
+        )
+
+    result = resolve_initiatives(store, settings)
+
+    assert result["expired"][0]["initiative_key"] == "software:stale_but_touched"
+    initiative = store.continuous_improvement_initiative(initiative_id)
+    assert initiative["status"] == "REJECTED"
+    assert "estancada" in initiative["latest_decision"]["reason"]
+
+
+def test_recent_real_activity_prevents_stalled_expiration_even_if_old_initiative(tmp_path):
+    settings, store = _setup(tmp_path, CI_INITIATIVE_TTL_DAYS=5, CI_INITIATIVE_STALL_DAYS=3)
+    initiative_id = _seed_initiative(
+        store,
+        "software:recent_signal",
+        "OPEN",
+        created_at=_iso_ago(days=9),
+        updated_at=_iso_ago(hours=1),
+    )
+    store.save_continuous_improvement_initiative_message(
+        {
+            "message_id": "ci_msg_recent",
+            "initiative_id": initiative_id,
+            "cycle_id": "ci_cycle_recent",
+            "event_id": "ci_evt_recent",
+            "task_id": None,
+            "agent_name": "TechnicalAnalystAgent",
+            "role": "agent",
+            "message_type": "note",
+            "content": {"summary": "actividad reciente"},
+            "created_at": _iso_ago(hours=6),
+        }
+    )
+    result = resolve_initiatives(store, settings)
+
+    assert result["expired"] == []
+    initiative = store.continuous_improvement_initiative(initiative_id)
+    assert initiative["status"] == "OPEN"
+
+
 def test_churning_initiative_expires_even_when_normalizer_refreshes_updated_at(tmp_path):
     settings, store = _setup(tmp_path, CI_INITIATIVE_TTL_DAYS=5, CI_INITIATIVE_STALL_DAYS=3)
     initiative_id = _seed_initiative(

@@ -102,6 +102,11 @@ def _age_hours(value: Any) -> float | None:
     return (datetime.now(timezone.utc) - moment).total_seconds() / 3600.0
 
 
+def _initiative_idle_days(store: Store, initiative: dict[str, Any]) -> float:
+    activity_at = store.continuous_improvement_initiative_last_activity_at(initiative)
+    return (_age_hours(activity_at) or 0.0) / 24.0
+
+
 def sweep_stale_tasks(store: Store, settings: Settings) -> dict[str, Any]:
     """Cancela tareas no terminales vencidas y sus dependientes huerfanos."""
 
@@ -293,7 +298,7 @@ def resolve_initiatives(store: Store, settings: Settings) -> dict[str, Any]:
         initiative_id = str(initiative["initiative_id"])
         has_open_tasks = open_tasks.get(initiative_id, 0) > 0
         age_days = ( _age_hours(initiative.get("created_at")) or 0.0) / 24.0
-        idle_days = ( _age_hours(initiative.get("updated_at")) or 0.0) / 24.0
+        idle_days = _initiative_idle_days(store, initiative)
 
         if status == "MONITORING" and not has_open_tasks and idle_days > monitoring_close_days:
             outcome = _outcome_for(initiative)

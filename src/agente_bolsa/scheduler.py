@@ -1863,6 +1863,7 @@ def daily_study_job(
     *,
     use_crew: bool,
     verbose: bool = True,
+    force: bool = False,
 ) -> None:
     run_id = new_id("daily")
     started_at = datetime.now(timezone.utc)
@@ -1876,7 +1877,7 @@ def daily_study_job(
         f"Comprobando estudio diario. Debe ejecutarse: {should_run}.",
         status.as_dict(),
     )
-    if not should_run:
+    if not should_run and not force:
         reporter.emit(
             "self_improvement_engineer",
             "daily_study_skipped",
@@ -1885,6 +1886,12 @@ def daily_study_job(
             status.as_dict(),
         )
         _set_job_status(store, "daily_study", status="skipped", run_id=run_id, started_at=started_at, detail="no corresponde ejecutar estudio diario")
+        return
+
+    session_date = datetime.fromisoformat(status.now_market).date().isoformat()
+    state_key = "daily_study_last_session"
+    if not force and store.get_runtime_value(state_key) == session_date:
+        _set_job_status(store, "daily_study", status="skipped", run_id=run_id, started_at=started_at, detail="estudio diario ya ejecutado para la sesion")
         return
 
     reporter.emit(
@@ -1896,6 +1903,7 @@ def daily_study_job(
     )
     try:
         run_observable_cycle(settings, store, use_crew=use_crew, verbose=verbose)
+        store.set_runtime_value(state_key, session_date)
     except Exception as exc:
         _set_job_status(store, "daily_study", status="failed", run_id=run_id, started_at=started_at, detail=str(exc), extra={"error_type": type(exc).__name__})
         raise
@@ -2724,8 +2732,6 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         raise RuntimeError("APScheduler no esta instalado. Instala las dependencias del proyecto para usar schedule.")
     local_tz = ZoneInfo(settings.local_timezone)
     scheduler = BackgroundScheduler(timezone=local_tz)
-    daily_hour, daily_minute = _daily_hour_minute(settings.daily_study_time_local)
-
     scheduler.add_job(
         portfolio_watch_job,
         trigger=IntervalTrigger(seconds=settings.portfolio_watch_interval_seconds),
@@ -2760,11 +2766,11 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
     )
     scheduler.add_job(
         daily_study_job,
-        trigger=CronTrigger(hour=daily_hour, minute=daily_minute, timezone=local_tz),
+        trigger=IntervalTrigger(minutes=settings.closed_market_study_interval_minutes),
         args=[settings, store],
         kwargs={"use_crew": use_crew, "verbose": verbose},
         id="daily_study",
-        name="Daily study after US market close",
+        name="Daily study checker once per closed session",
         max_instances=1,
         coalesce=True,
         replace_existing=True,
@@ -2885,6 +2891,7 @@ def run_scheduler_forever(settings: Settings, store: Store, *, use_crew: bool, v
             market_cycle_job(settings, store, use_crew=use_crew, verbose=verbose)
         else:
             closed_market_technical_study_job(settings, store, use_crew=use_crew, verbose=verbose)
+            daily_study_job(settings, store, use_crew=use_crew, verbose=verbose)
             post_market_review_job(settings, store, use_llm=use_crew, verbose=verbose)
             overnight_learning_heartbeat_job(settings, store, verbose=verbose)
     except Exception as exc:  # noqa: BLE001 - keep scheduler alive and visible.
@@ -2909,7 +2916,6 @@ def run_scheduler_forever(settings: Settings, store: Store, *, use_crew: bool, v
 def scheduler_status(settings: Settings) -> dict[str, object]:
     calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
     market_status = calendar.status()
-    daily_hour, daily_minute = _daily_hour_minute(settings.daily_study_time_local)
     overnight_hour, overnight_minute = _daily_hour_minute(settings.overnight_learning_time_local)
     now_local = datetime.now(ZoneInfo(settings.local_timezone))
     store = Store(settings.database_path, settings.agent_logs_dir)
@@ -2953,8 +2959,8 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
             },
             {
                 "id": "daily_study",
-                "cadence": f"cada dia a las {daily_hour:02d}:{daily_minute:02d} {settings.local_timezone}",
-                "market_behavior": "solo ejecuta si fue dia de mercado y la sesion ya cerro",
+                "cadence": f"cada {settings.closed_market_study_interval_minutes} minutos como comprobador",
+                "market_behavior": "tras cierre, una vez por sesion, ejecuta el estudio diario aunque la app se abriera tarde",
             },
             {
                 "id": "post_market_review",
