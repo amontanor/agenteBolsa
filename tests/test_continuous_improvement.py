@@ -1686,6 +1686,64 @@ def test_runtime_keeps_ready_code_change_in_queue_during_dry_run(tmp_path):
     assert store.continuous_improvement_applied_changes(limit=10) == []
 
 
+def test_runtime_keeps_ready_code_change_in_queue_when_autoapply_disabled(tmp_path):
+    settings = _settings(
+        tmp_path,
+        IMPROVEMENT_DRY_RUN=False,
+        ALLOW_AUTO_APPLY_IMPROVEMENTS=False,
+        REQUIRE_HUMAN_APPROVAL_FOR_CODE_CHANGES=False,
+    )
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    runtime = ContinuousImprovementLabRuntime(settings, store)
+    runtime.experiment_runner = type("NoExperiments", (), {"run_for_proposal": lambda self, **kwargs: {}})()
+
+    class _ReadyValidator:
+        def validate(self, proposal, context, settings, *, store=None):  # noqa: ANN001
+            return {
+                "validation_id": "ci_val_autoapply_disabled",
+                "proposal_id": proposal["proposal_id"],
+                "cycle_id": proposal["cycle_id"],
+                "status": "READY_TO_APPLY",
+                "validation_type": "deterministic_gate",
+                "payload": {"objective_status": "READY_TO_APPLY", "checks": []},
+            }
+
+    class _ForbiddenApplier:
+        def try_apply(self, **kwargs):  # noqa: ANN001
+            raise AssertionError("AutoApplyCodeAgent no debe invocarse con ALLOW_AUTO_APPLY_IMPROVEMENTS=false")
+
+    runtime.validator = _ReadyValidator()
+    runtime.code_applier = _ForbiddenApplier()
+    proposal = _code_proposal()
+    store.upsert_continuous_improvement_proposal(
+        {
+            "proposal_id": proposal["proposal_id"],
+            "cycle_id": proposal["cycle_id"],
+            "fingerprint": "fp_autoapply_disabled_ready",
+            "proposal_type": proposal["proposal_type"],
+            "target_component": proposal["target_component"],
+            "target_identifier": proposal["target_identifier"],
+            "status": "READY_TO_APPLY",
+            "priority": "HIGH",
+            "risk_level": proposal["risk_level"],
+            "payload": proposal["payload"],
+            "guard": {"status": "READY_TO_APPLY", "reason": "autonomous_apply_enabled"},
+        }
+    )
+
+    validations = runtime._persist_validations(
+        cycle_id=proposal["cycle_id"],
+        proposals=[store.continuous_improvement_proposal(proposal["proposal_id"])],
+        context={"evaluation": {"summary": {}}, "reports": {}},
+    )
+
+    assert validations[0]["status"] == "READY_TO_APPLY"
+    persisted = store.continuous_improvement_proposal(proposal["proposal_id"])
+    assert persisted["status"] == "READY_TO_APPLY"
+    assert store.continuous_improvement_applied_changes(limit=10) == []
+
+
 def test_committee_keeps_deterministic_approve_when_llm_disagrees_without_reason(tmp_path):
     settings = _settings(tmp_path)
     store = Store(settings.database_path, settings.agent_logs_dir)
@@ -2166,6 +2224,34 @@ def test_auto_apply_code_agent_blocks_protected_path(tmp_path):
     assert result["status"] == "BLOCKED"
     assert "bloqueado" in result["error"]
     assert not (workspace / "src" / "agente_bolsa" / "tools" / "execution.py").exists()
+
+
+def test_auto_apply_code_agent_blocks_when_human_review_required(tmp_path):
+    workspace = tmp_path / "workspace"
+    (workspace / "tests").mkdir(parents=True)
+    (workspace / "tests" / "ci_autonomous_target.txt").write_text("before\n", encoding="utf-8")
+    settings = _settings(
+        tmp_path / "state",
+        IMPROVEMENT_DRY_RUN=False,
+        ALLOW_AUTO_APPLY_IMPROVEMENTS=True,
+        REQUIRE_HUMAN_APPROVAL_FOR_CODE_CHANGES=True,
+        CONTINUOUS_IMPROVEMENT_WORKSPACE_DIR=workspace,
+    )
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+
+    result = AutoApplyCodeAgent().try_apply(
+        settings=settings,
+        store=store,
+        initiative=None,
+        proposal=_code_proposal(),
+        validation=_ready_validation(),
+    )
+
+    assert result["status"] == "BLOCKED"
+    assert result["error"] == "REQUIRE_HUMAN_APPROVAL_FOR_CODE_CHANGES=true"
+    assert (workspace / "tests" / "ci_autonomous_target.txt").read_text(encoding="utf-8") == "before\n"
+    assert store.continuous_improvement_applied_changes(statuses=["APPLIED"]) == []
 
 
 def test_auto_apply_code_agent_rolls_back_when_tests_fail(tmp_path):

@@ -1,5 +1,7 @@
 """Tests de niveles de autonomia de codigo (T1.1)."""
 
+import pytest
+
 from agente_bolsa.config import Settings
 from agente_bolsa.continuous_improvement.autonomy import (
     active_autonomy_level,
@@ -160,3 +162,57 @@ def test_try_apply_blocks_tools_file_at_level1(tmp_path):
     assert result["status"] == "BLOCKED"
     assert "allowlist" in result["error"]
     assert not (workspace / "src" / "agente_bolsa" / "tools" / "breakout_scanner.py").exists()
+
+
+@pytest.mark.parametrize(
+    "protected_path",
+    [
+        "src/agente_bolsa/kernel.py",
+        "src/agente_bolsa/tools/broker.py",
+        "src/agente_bolsa/tools/execution.py",
+        "src/agente_bolsa/tools/risk.py",
+        "src/agente_bolsa/config.py",
+        ".env",
+    ],
+)
+@pytest.mark.parametrize("level", [1, 2, 3])
+def test_auto_apply_blocks_kernel_floor_paths_at_every_autonomy_level(tmp_path, protected_path, level):
+    workspace = tmp_path / f"workspace_{level}_{protected_path.replace('/', '_').replace('.', '_')}"
+    workspace.mkdir()
+    settings = Settings(
+        DATA_DIR=tmp_path / f"state_{level}_{protected_path.replace('/', '_').replace('.', '_')}",
+        IMPROVEMENT_DRY_RUN=False,
+        ALLOW_AUTO_APPLY_IMPROVEMENTS=True,
+        REQUIRE_HUMAN_APPROVAL_FOR_CODE_CHANGES=False,
+        CONTINUOUS_IMPROVEMENT_WORKSPACE_DIR=workspace,
+        CODE_AUTONOMY_LEVEL=level,
+    )
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    proposal = {
+        "proposal_id": f"ci_prop_floor_{level}",
+        "cycle_id": f"ci_cycle_floor_{level}",
+        "proposal_type": "CODE_CHANGE",
+        "status": "READY_TO_APPLY",
+        "risk_level": "LOW",
+        "target_component": "continuous_improvement",
+        "payload": {
+            "proposal_type": "CODE_CHANGE",
+            "rollback_plan": "restore",
+            "file_edits": [{"path": protected_path, "content": "# blocked\n"}],
+            "test_commands": ["python -c \"assert True\""],
+        },
+    }
+    validation = {"validation_id": f"ci_val_floor_{level}", "status": "READY_TO_APPLY", "payload": {}}
+
+    result = AutoApplyCodeAgent().try_apply(
+        settings=settings,
+        store=store,
+        initiative=None,
+        proposal=proposal,
+        validation=validation,
+    )
+
+    assert result["status"] == "BLOCKED"
+    assert "bloqueado" in result["error"]
+    assert not (workspace / protected_path).exists()
