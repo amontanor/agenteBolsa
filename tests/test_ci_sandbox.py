@@ -5,7 +5,7 @@ import subprocess
 import pytest
 
 from agente_bolsa.config import Settings
-from agente_bolsa.continuous_improvement.experiments import AutoApplyCodeAgent
+from agente_bolsa.continuous_improvement.experiments import AutoApplyCodeAgent, CodeDiffPreviewAgent
 from agente_bolsa.continuous_improvement.sandbox import (
     GitSandbox,
     GitSandboxError,
@@ -188,6 +188,103 @@ def test_sandbox_supported_detects_non_git(tmp_path):
     plain = tmp_path / "plain"
     plain.mkdir()
     assert sandbox_supported(plain) is False
+
+
+# -- Diff preview para revision humana -------------------------------------
+def test_code_diff_preview_generates_artifact_without_applied_change(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    settings = _settings(tmp_path, repo)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    monkeypatch.setattr(
+        GitSandbox,
+        "validate",
+        lambda self, **kw: {"ok": True, "steps": [{"step": "pytest", "ok": True, "returncode": 0, "output": "ok"}]},
+    )
+    proposal = _proposal(
+        [{"path": "docs/base.md", "old": "base\n", "new": "base\npreview\n"}],
+        proposal_id="ci_prop_diff_preview",
+    )
+    proposal["payload"]["test_commands"] = ["python -c \"assert True\""]
+    validation = _validation()
+    validation["proposal_id"] = "ci_prop_diff_preview"
+
+    artifact = CodeDiffPreviewAgent().generate(
+        settings=settings,
+        store=store,
+        proposal=proposal,
+        validation=validation,
+    )
+
+    assert artifact["artifact_type"] == "code_diff_preview"
+    assert "diff --git a/docs/base.md b/docs/base.md" in artifact["content_text"]
+    assert "+preview" in artifact["content_text"]
+    assert artifact["payload"]["tests_ok"] is True
+    assert artifact["payload"]["status"] == "READY_FOR_HUMAN_REVIEW"
+    assert store.continuous_improvement_applied_changes(limit=10) == []
+    assert (repo / "docs" / "base.md").read_text(encoding="utf-8") == "base\n"
+
+
+def test_code_diff_preview_attaches_failed_tests_without_promotion(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    settings = _settings(tmp_path, repo)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    monkeypatch.setattr(
+        GitSandbox,
+        "validate",
+        lambda self, **kw: {
+            "ok": False,
+            "steps": [{"step": "pytest", "ok": False, "returncode": 1, "output": "failed"}],
+        },
+    )
+    proposal = _proposal(
+        [{"path": "docs/base.md", "old": "base\n", "new": "base\npreview\n"}],
+        proposal_id="ci_prop_diff_preview_failed_tests",
+    )
+    validation = _validation()
+    validation["proposal_id"] = "ci_prop_diff_preview_failed_tests"
+
+    artifact = CodeDiffPreviewAgent().generate(
+        settings=settings,
+        store=store,
+        proposal=proposal,
+        validation=validation,
+    )
+
+    assert artifact["artifact_type"] == "code_diff_preview_invalid"
+    assert artifact["payload"]["tests_ok"] is False
+    assert artifact["payload"]["status"] == "REJECTED_BY_TESTS"
+    assert "diff --git a/docs/base.md b/docs/base.md" in artifact["content_text"]
+    assert store.continuous_improvement_applied_changes(limit=10) == []
+    assert (repo / "docs" / "base.md").read_text(encoding="utf-8") == "base\n"
+
+
+@pytest.mark.parametrize("protected_path", [".env", "src/agente_bolsa/tools/risk.py"])
+def test_code_diff_preview_blocks_kernel_floor_without_worktree(tmp_path, protected_path):
+    repo = _init_repo(tmp_path / "repo")
+    settings = _settings(tmp_path, repo)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    proposal = _proposal(
+        [{"path": protected_path, "content": "# blocked\n"}],
+        proposal_id=f"ci_prop_blocked_{protected_path.replace('/', '_').replace('.', '_')}",
+    )
+    proposal["payload"]["test_commands"] = ["python -c \"assert True\""]
+
+    artifact = CodeDiffPreviewAgent().generate(
+        settings=settings,
+        store=store,
+        proposal=proposal,
+        validation=_validation(),
+    )
+
+    assert artifact["artifact_type"] == "code_diff_preview_blocked"
+    assert artifact["payload"]["status"] == "BLOCKED"
+    assert "bloqueado" in artifact["payload"]["error"]
+    assert store.continuous_improvement_applied_changes(limit=10) == []
+    sandboxes = repo / "sandboxes"
+    assert not sandboxes.exists() or not any(sandboxes.iterdir())
 
 
 # -- T5.8: integridad de escritura -----------------------------------------

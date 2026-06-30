@@ -31,7 +31,7 @@ from .agents import (
     is_generated_ci_reference,
     proposal_fingerprint,
 )
-from .experiments import AutoApplyCodeAgent, ExperimentRunner
+from .experiments import AutoApplyCodeAgent, CodeDiffPreviewAgent, ExperimentRunner
 from .llm_client import ImprovementLLMClient
 from .llm_usage_bridge import record_improvement_llm_usage
 from .memory import SharedMemory
@@ -71,6 +71,7 @@ class ContinuousImprovementLabRuntime:
         self.reporter = ReportAgent()
         self.experiment_runner = ExperimentRunner(settings, store)
         self.code_applier = AutoApplyCodeAgent()
+        self.diff_previewer = CodeDiffPreviewAgent()
 
     def _market_window(self) -> tuple[bool, str, dict[str, Any]]:
         calendar = MarketCalendar(self.settings.market_calendar, self.settings.local_timezone)
@@ -1570,12 +1571,59 @@ class ContinuousImprovementLabRuntime:
                 except KeyError:
                     pass
             applied_change = None
-            if (
+            preview_result = None
+            should_auto_apply = (
                 proposal.get("proposal_type") == "CODE_CHANGE"
                 and validation["status"] == "READY_TO_APPLY"
                 and not self.settings.improvement_dry_run
                 and self.settings.allow_auto_apply_improvements
+            )
+            if (
+                proposal.get("proposal_type") == "CODE_CHANGE"
+                and validation["status"] == "READY_TO_APPLY"
+                and not should_auto_apply
+                and not self.diff_previewer.has_preview_artifact(self.store, str(proposal.get("proposal_id") or ""))
             ):
+                preview_result = self.diff_previewer.generate(
+                    settings=self.settings,
+                    store=self.store,
+                    proposal=proposal,
+                    validation=validation,
+                )
+                preview_status = (preview_result.get("payload") or {}).get("status")
+                if preview_status in {"READY_FOR_HUMAN_REVIEW", "BLOCKED", "REJECTED_BY_TESTS", "FAILED"}:
+                    next_status = (
+                        str(preview_status)
+                        if preview_status in {"BLOCKED", "REJECTED_BY_TESTS"}
+                        else "READY_TO_APPLY"
+                    )
+                    try:
+                        self.store.update_continuous_improvement_proposal_status(
+                            proposal["proposal_id"],
+                            status=next_status,
+                            actor="CodeDiffPreviewAgent",
+                            reason=(
+                                "Diff listo para revision humana."
+                                if preview_status == "READY_FOR_HUMAN_REVIEW"
+                                else "Diff no disponible para revision humana."
+                            ),
+                            payload={"artifact": preview_result},
+                        )
+                        proposal["status"] = next_status
+                    except KeyError:
+                        pass
+                    self._record_agent_event(
+                        agent="CodeDiffPreviewAgent",
+                        event_type="lab_code_diff_preview_recorded",
+                        cycle_id=cycle_id,
+                        payload={
+                            "proposal_id": proposal["proposal_id"],
+                            "artifact_id": preview_result.get("artifact_id"),
+                            "artifact_type": preview_result.get("artifact_type"),
+                            "status": preview_status,
+                        },
+                    )
+            if should_auto_apply:
                 applied_change = self.code_applier.try_apply(
                     settings=self.settings,
                     store=self.store,

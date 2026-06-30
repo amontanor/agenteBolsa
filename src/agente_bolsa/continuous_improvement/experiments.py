@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
+import shlex
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timezone
 from importlib import import_module
 from pathlib import Path
@@ -26,7 +28,7 @@ from .autonomy import (
     ast_import_violation,
     path_violation,
 )
-from .sandbox import GitSandbox, GitSandboxError, sandbox_supported
+from .sandbox import GitSandbox, GitSandboxError, apply_payload_to_worktree, sandbox_supported
 
 
 class ExperimentRunner:
@@ -1070,3 +1072,174 @@ class AutoApplyCodeAgent:
             if result.returncode != 0:
                 return {"returncode": result.returncode, "commands": outputs, "output": output[-4000:]}
         return {"returncode": 0, "commands": outputs, "output": "\n".join(item["output"] for item in outputs)[-4000:]}
+
+
+class CodeDiffPreviewAgent:
+    """Genera diffs revisables en sandbox sin aplicar al arbol real."""
+
+    VALID_ARTIFACT = "code_diff_preview"
+    INVALID_ARTIFACT = "code_diff_preview_invalid"
+    BLOCKED_ARTIFACT = "code_diff_preview_blocked"
+    FAILED_ARTIFACT = "code_diff_preview_failed"
+
+    def __init__(self) -> None:
+        self._guard = AutoApplyCodeAgent()
+
+    def has_preview_artifact(self, store: Store, proposal_id: str) -> bool:
+        artifact = store.continuous_improvement_proposal_artifact(proposal_id)
+        return bool(artifact and str(artifact.get("artifact_type") or "").startswith("code_diff_preview"))
+
+    def generate(
+        self,
+        *,
+        settings: Settings,
+        store: Store,
+        proposal: dict[str, Any],
+        validation: dict[str, Any],
+    ) -> dict[str, Any]:
+        proposal_id = str(proposal.get("proposal_id") or "")
+        base_payload = {
+            "proposal_id": proposal_id,
+            "validation_id": validation.get("validation_id"),
+            "validation_status": validation.get("status"),
+            "applied": False,
+        }
+        blocked = self._blocked_reason(settings=settings, store=store, proposal=proposal, validation=validation)
+        if blocked:
+            return self._save_artifact(
+                store,
+                proposal_id=proposal_id,
+                artifact_type=self.BLOCKED_ARTIFACT,
+                content_text=blocked,
+                payload={**base_payload, "status": "BLOCKED", "error": blocked},
+            )
+
+        workspace = settings.improvement_workspace_dir
+        if not sandbox_supported(workspace):
+            error = "Sandbox git no soportado: falta git o no es un repo."
+            return self._save_artifact(
+                store,
+                proposal_id=proposal_id,
+                artifact_type=self.FAILED_ARTIFACT,
+                content_text=error,
+                payload={**base_payload, "status": "FAILED", "error": error},
+            )
+
+        payload = proposal.get("payload", {}) or {}
+        file_edits = payload.get("file_edits") or payload.get("files")
+        patch_text = str(payload.get("patch") or "").strip()
+        change_id = new_id("ci_diff")
+        sandbox = GitSandbox(settings, repo_root=workspace)
+        try:
+            worktree = sandbox.open(change_id)
+            apply_payload_to_worktree(worktree, file_edits=file_edits, patch_text=patch_text)
+            diff = sandbox._git("diff", "--binary", "HEAD", cwd=worktree).stdout
+            if not diff.strip():
+                error = "El payload no produjo diff."
+                return self._save_artifact(
+                    store,
+                    proposal_id=proposal_id,
+                    artifact_type=self.FAILED_ARTIFACT,
+                    content_text=error,
+                    payload={**base_payload, "status": "FAILED", "error": error, "sandbox_change_id": change_id},
+                )
+            validation_result = sandbox.validate(steps=self._validation_steps(payload))
+            ok = bool(validation_result.get("ok"))
+            artifact_type = self.VALID_ARTIFACT if ok else self.INVALID_ARTIFACT
+            status = "READY_FOR_HUMAN_REVIEW" if ok else "REJECTED_BY_TESTS"
+            return self._save_artifact(
+                store,
+                proposal_id=proposal_id,
+                artifact_type=artifact_type,
+                content_text=diff[-200000:],
+                payload={
+                    **base_payload,
+                    "status": status,
+                    "tests_ok": ok,
+                    "validation": validation_result,
+                    "sandbox_change_id": change_id,
+                    "target_paths": self._target_rels(workspace, file_edits=file_edits, patch_text=patch_text),
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            error = f"{type(exc).__name__}: {exc}"
+            return self._save_artifact(
+                store,
+                proposal_id=proposal_id,
+                artifact_type=self.FAILED_ARTIFACT,
+                content_text=error,
+                payload={**base_payload, "status": "FAILED", "error": error, "sandbox_change_id": change_id},
+            )
+        finally:
+            sandbox.destroy()
+
+    def _blocked_reason(
+        self,
+        *,
+        settings: Settings,
+        store: Store,
+        proposal: dict[str, Any],
+        validation: dict[str, Any],
+    ) -> str | None:
+        if proposal.get("proposal_type") != "CODE_CHANGE":
+            return "Solo genera diffs para CODE_CHANGE"
+        if validation.get("status") != "READY_TO_APPLY":
+            return "La validacion no esta READY_TO_APPLY"
+        payload = proposal.get("payload", {}) or {}
+        file_edits = payload.get("file_edits") or payload.get("files")
+        patch_text = str(payload.get("patch") or "").strip()
+        if not (file_edits or patch_text):
+            return "Falta patch o file_edits aplicable"
+        workspace = settings.improvement_workspace_dir
+        targets = self._guard._target_paths(workspace, file_edits=file_edits, patch_text=patch_text)
+        level = active_autonomy_level(store, settings)
+        path_error = self._guard._validate_paths(workspace, targets, level)
+        if path_error:
+            return path_error
+        ast_error = self._guard._ast_import_violation(workspace, file_edits)
+        if ast_error:
+            return ast_error
+        return None
+
+    def _validation_steps(self, payload: dict[str, Any]) -> list[tuple[str, list[str]]] | None:
+        commands = [str(item).strip() for item in payload.get("test_commands", []) or [] if str(item).strip()]
+        if not commands:
+            return None
+        steps: list[tuple[str, list[str]]] = []
+        for index, command in enumerate(commands, start=1):
+            parts = shlex.split(command, posix=True)
+            if not parts:
+                continue
+            if parts and parts[0].lower() in {"python", "python.exe"}:
+                parts[0] = sys.executable
+            steps.append((f"proposal_test_{index}", parts))
+        return steps or None
+
+    def _target_rels(self, workspace: Path, *, file_edits: Any, patch_text: str) -> list[str]:
+        workspace = workspace.resolve()
+        rels: list[str] = []
+        for path in self._guard._target_paths(workspace, file_edits=file_edits, patch_text=patch_text):
+            try:
+                rels.append(path.resolve().relative_to(workspace).as_posix())
+            except ValueError:
+                rels.append(str(path))
+        return rels
+
+    def _save_artifact(
+        self,
+        store: Store,
+        *,
+        proposal_id: str,
+        artifact_type: str,
+        content_text: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        item = {
+            "artifact_id": new_id("ci_artifact"),
+            "proposal_id": proposal_id,
+            "artifact_type": artifact_type,
+            "content_text": content_text,
+            "payload": payload,
+        }
+        store.save_continuous_improvement_proposal_artifact(item)
+        return item
