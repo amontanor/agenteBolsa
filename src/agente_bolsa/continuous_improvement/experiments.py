@@ -647,7 +647,7 @@ class AutoApplyCodeAgent:
             sandbox.open(change_id)
             sandbox.apply(file_edits, patch_text)
             validation_result = sandbox.validate()
-        except (GitSandboxError, ValueError, RuntimeError) as exc:
+        except (GitSandboxError, OSError, ValueError, RuntimeError) as exc:
             sandbox.destroy()
             return self._save(store, base, status="FAILED", error=f"{type(exc).__name__}: {exc}")
 
@@ -1133,6 +1133,7 @@ class CodeDiffPreviewAgent:
         try:
             worktree = sandbox.open(change_id)
             apply_payload_to_worktree(worktree, file_edits=file_edits, patch_text=patch_text)
+            sandbox._git("add", "-N", ".", cwd=worktree)
             diff = sandbox._git("diff", "--binary", "HEAD", cwd=worktree).stdout
             if not diff.strip():
                 error = "El payload no produjo diff."
@@ -1159,6 +1160,22 @@ class CodeDiffPreviewAgent:
                     "validation": validation_result,
                     "sandbox_change_id": change_id,
                     "target_paths": self._target_rels(workspace, file_edits=file_edits, patch_text=patch_text),
+                },
+            )
+        except (GitSandboxError, OSError, ValueError, RuntimeError) as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            return self._save_artifact(
+                store,
+                proposal_id=proposal_id,
+                artifact_type=self.INVALID_ARTIFACT,
+                content_text=error,
+                payload={
+                    **base_payload,
+                    "status": "REJECTED_BY_TESTS",
+                    "tests_ok": False,
+                    "error": error,
+                    "sandbox_change_id": change_id,
+                    "validation": {"ok": False, "steps": [{"step": "apply_patch", "ok": False, "output": error}]},
                 },
             )
         except Exception as exc:  # noqa: BLE001
@@ -1210,8 +1227,13 @@ class CodeDiffPreviewAgent:
             parts = shlex.split(command, posix=True)
             if not parts:
                 continue
-            if parts and parts[0].lower() in {"python", "python.exe"}:
+            executable = parts[0].lower()
+            if executable in {"python", "python.exe"}:
                 parts[0] = sys.executable
+            elif executable in {"pytest", "pytest.exe"}:
+                parts = [sys.executable, "-m", "pytest", *parts[1:]]
+            elif executable in {"ruff", "ruff.exe"}:
+                parts = [sys.executable, "-m", "ruff", *parts[1:]]
             steps.append((f"proposal_test_{index}", parts))
         return steps or None
 

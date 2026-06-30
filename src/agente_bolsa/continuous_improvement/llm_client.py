@@ -9,7 +9,7 @@ from typing import Any
 from urllib import error, request
 
 from openai import OpenAI
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from agente_bolsa.config import Settings
 from agente_bolsa.logging_utils import log_system_event
@@ -61,6 +61,7 @@ class ImprovementLLMClient:
         max_tokens: int | None = None,
         route: str = "agents",
         response_model: type[BaseModel] = LLMImprovementResponse,
+        normalize_response: bool = True,
     ) -> LLMJsonResult:
         llm_call_id = new_id("ci_llm")
         model_name = model or self.settings.improvement_llm_model
@@ -133,6 +134,7 @@ class ImprovementLLMClient:
                 max_tokens=max_tokens if max_tokens is not None else self.settings.improvement_llm_max_tokens,
                 request_preview=request_preview,
                 response_model=response_model,
+                normalize_response=normalize_response,
             )
             if result.ok:
                 return result
@@ -164,6 +166,7 @@ class ImprovementLLMClient:
                 max_tokens=max_tokens if max_tokens is not None else self.settings.improvement_llm_max_tokens,
                 request_preview=fallback_preview,
                 response_model=response_model,
+                normalize_response=normalize_response,
             )
             if fallback_result.ok:
                 return fallback_result
@@ -251,6 +254,7 @@ class ImprovementLLMClient:
         max_tokens: int,
         request_preview: dict[str, Any],
         response_model: type[BaseModel],
+        normalize_response: bool,
     ) -> LLMJsonResult:
         target_tokens = (
             self.settings.improvement_llm_local_context_target_tokens
@@ -330,7 +334,7 @@ class ImprovementLLMClient:
                 else:
                     raw = self._post_json(target, request_body, headers)
                     content = self._extract_content(raw)
-                parsed = self._parse_json_content(content)
+                parsed = self._parse_json_content(content, normalize_response=normalize_response)
                 payload = response_model.model_validate(parsed)
                 log_system_event(
                     self.settings.logs_dir,
@@ -363,7 +367,7 @@ class ImprovementLLMClient:
                     truncation_report=truncation_report,
                     request_preview=request_preview,
                 )
-            except (OSError, ValueError, ValidationError) as exc:
+            except Exception as exc:  # noqa: BLE001
                 last_error = str(exc)
                 LOGGER.warning("Improvement LLM call failed on %s attempt %s: %s", endpoint.name, attempt + 1, exc)
                 if _is_quota_exhausted_error(last_error):
@@ -491,7 +495,7 @@ class ImprovementLLMClient:
             raise ValueError("LLM response without text content")
         return content
 
-    def _parse_json_content(self, content: str) -> dict[str, Any]:
+    def _parse_json_content(self, content: str, *, normalize_response: bool = True) -> dict[str, Any]:
         text = content.strip()
         if text.startswith("```"):
             text = text.strip("`")
@@ -503,6 +507,8 @@ class ImprovementLLMClient:
             raise ValueError(f"Invalid JSON from LLM: {exc}") from exc
         if not isinstance(value, dict):
             raise ValueError("LLM JSON root must be an object")
+        if not normalize_response:
+            return value
         return self._normalize_response_shape(value)
 
     def _normalize_response_shape(self, value: dict[str, Any]) -> dict[str, Any]:

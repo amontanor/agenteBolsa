@@ -10,6 +10,7 @@ from agente_bolsa.continuous_improvement.sandbox import (
     GitSandbox,
     GitSandboxError,
     apply_payload_to_worktree,
+    run_validation_steps,
     sandbox_supported,
 )
 from agente_bolsa.storage import Store
@@ -188,6 +189,17 @@ def test_sandbox_supported_detects_non_git(tmp_path):
     plain = tmp_path / "plain"
     plain.mkdir()
     assert sandbox_supported(plain) is False
+
+
+def test_validation_steps_report_missing_command_as_failed_step(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    settings = _settings(tmp_path, repo)
+
+    result = run_validation_steps(settings, repo, steps=[("missing", ["missing-command-for-ci-test"])])
+
+    assert result["ok"] is False
+    assert result["steps"][0]["ok"] is False
+    assert "FileNotFoundError" in result["steps"][0]["output"]
 
 
 # -- Diff preview para revision humana -------------------------------------

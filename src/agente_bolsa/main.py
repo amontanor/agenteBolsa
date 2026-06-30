@@ -2685,6 +2685,29 @@ def command_continuous_improvement_lab(args: argparse.Namespace) -> None:
         result = build_strategy_from_spec(store, settings, spec)
         _print_json({"ok": result.get("ok", False), **result})
         return
+    if args.lab_command == "gen-diff":
+        from .continuous_improvement.codegen import (
+            create_demo_codegen_proposal,
+            generate_code_diff_for_proposal,
+        )
+
+        proposal_id = args.proposal
+        if getattr(args, "demo", False):
+            proposal_id = create_demo_codegen_proposal(store)
+        if not proposal_id:
+            _print_json({"ok": False, "error": "Indica --proposal <id> o usa --demo."})
+            return
+        result = generate_code_diff_for_proposal(settings=settings, store=store, proposal_id=proposal_id)
+        if args.json:
+            _print_json({"ok": result.get("ok", False), **result})
+        else:
+            artifact = result.get("artifact") or {}
+            print(
+                "GEN-DIFF | "
+                f"proposal={proposal_id} | status={result.get('status')} | "
+                f"artifact={artifact.get('artifact_id')} | type={artifact.get('artifact_type')}"
+            )
+        return
     raise ValueError(f"Unknown lab command: {args.lab_command}")
 
 
@@ -3394,6 +3417,15 @@ def build_parser() -> argparse.ArgumentParser:
     ci_lab_dynamic.add_argument("--score", action="store_true", help="Puntua y retira agentes inutiles.")
     ci_lab_dynamic.add_argument("--limit", type=int, default=100)
     ci_lab_dynamic.set_defaults(func=command_continuous_improvement_lab)
+
+    ci_lab_gen_diff = ci_lab_subparsers.add_parser(
+        "gen-diff",
+        help="Genera por LLM un diff revisable para una propuesta CODE_CHANGE y lo valida en sandbox.",
+    )
+    ci_lab_gen_diff.add_argument("--proposal", help="ID de la propuesta CODE_CHANGE en READY_TO_APPLY.")
+    ci_lab_gen_diff.add_argument("--demo", action="store_true", help="Crea una propuesta demo de bajo riesgo y genera su diff.")
+    ci_lab_gen_diff.add_argument("--json", action="store_true", help="Devuelve el resultado completo en JSON.")
+    ci_lab_gen_diff.set_defaults(func=command_continuous_improvement_lab)
 
     learning_postmortem = subparsers.add_parser(
         "learning-postmortem",

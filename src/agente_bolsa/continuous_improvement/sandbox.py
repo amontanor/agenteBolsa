@@ -202,6 +202,9 @@ def run_validation_steps(
         except subprocess.TimeoutExpired:
             step_ok = False
             results.append({"step": name, "returncode": None, "ok": False, "output": f"timeout tras {timeout}s"})
+        except OSError as exc:
+            step_ok = False
+            results.append({"step": name, "returncode": None, "ok": False, "output": f"{type(exc).__name__}: {exc}"})
         if not step_ok:
             ok = False
             break
@@ -258,6 +261,9 @@ def apply_payload_to_worktree(worktree: Path, *, file_edits: Any, patch_text: st
                 continue
             old = str(item.get("old") or "")
             new = str(item.get("new") or "")
+            if not path.exists() and old == "":
+                _write_and_verify(path, new)
+                continue
             current = path.read_text(encoding="utf-8")
             if old not in current:
                 raise ValueError(f"No se encontro bloque old en {item['path']}")

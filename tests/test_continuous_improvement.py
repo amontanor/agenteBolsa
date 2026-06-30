@@ -134,6 +134,14 @@ def test_improvement_llm_client_disabled_returns_valid_json_payload(tmp_path):
     assert result.payload.proposals[0].proposal_type == "MONITORING_CHANGE"
 
 
+def test_improvement_llm_client_can_parse_specialized_json_without_normalizing(tmp_path):
+    client = ImprovementLLMClient(_settings(tmp_path))
+
+    parsed = client._parse_json_content('{"summary": "diff", "file_edits": []}', normalize_response=False)
+
+    assert parsed == {"summary": "diff", "file_edits": []}
+
+
 def test_improvement_llm_client_can_route_orchestrator_to_separate_provider(tmp_path):
     settings = _settings(
         tmp_path,
