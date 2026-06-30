@@ -2708,6 +2708,43 @@ def command_continuous_improvement_lab(args: argparse.Namespace) -> None:
                 f"artifact={artifact.get('artifact_id')} | type={artifact.get('artifact_type')}"
             )
         return
+    if args.lab_command == "review":
+        from .continuous_improvement.human_apply import review_code_diff_artifacts
+
+        result = review_code_diff_artifacts(store, proposal_id=args.proposal, limit=args.limit)
+        if args.json:
+            _print_json(result)
+        else:
+            for artifact in result["artifacts"]:
+                payload = artifact.get("payload") or {}
+                print(
+                    "DIFF READY | "
+                    f"proposal={artifact.get('proposal_id')} | artifact={artifact.get('artifact_id')} | "
+                    f"tests_ok={payload.get('tests_ok')} | targets={', '.join(artifact.get('target_paths') or [])}"
+                )
+                validation = payload.get("validation") or {}
+                print(f"VALIDATION: ok={validation.get('ok')} steps={len(validation.get('steps') or [])}")
+                print(artifact.get("content_text") or "")
+        return
+    if args.lab_command == "approve":
+        from .continuous_improvement.human_apply import approve_and_apply_code_diff
+
+        result = approve_and_apply_code_diff(
+            settings=settings,
+            store=store,
+            proposal_id=args.proposal,
+            actor=args.actor,
+        )
+        if args.json:
+            _print_json({"ok": result.get("ok", False), **result})
+        else:
+            print(
+                "APPROVE | "
+                f"proposal={args.proposal} | status={result.get('status')} | "
+                f"commit={result.get('commit')} | applied_change={result.get('applied_change_id')} | "
+                f"error={result.get('error') or ''}"
+            )
+        return
     raise ValueError(f"Unknown lab command: {args.lab_command}")
 
 
@@ -3426,6 +3463,24 @@ def build_parser() -> argparse.ArgumentParser:
     ci_lab_gen_diff.add_argument("--demo", action="store_true", help="Crea una propuesta demo de bajo riesgo y genera su diff.")
     ci_lab_gen_diff.add_argument("--json", action="store_true", help="Devuelve el resultado completo en JSON.")
     ci_lab_gen_diff.set_defaults(func=command_continuous_improvement_lab)
+
+    ci_lab_review = ci_lab_subparsers.add_parser(
+        "review",
+        help="Lista o muestra diffs validados listos para revision humana.",
+    )
+    ci_lab_review.add_argument("--proposal", help="ID de propuesta concreta.")
+    ci_lab_review.add_argument("--limit", type=int, default=20)
+    ci_lab_review.add_argument("--json", action="store_true", help="Devuelve la revision en JSON.")
+    ci_lab_review.set_defaults(func=command_continuous_improvement_lab)
+
+    ci_lab_approve = ci_lab_subparsers.add_parser(
+        "approve",
+        help="Aprobacion humana: aplica un diff validado, corre suite completa y crea commit reversible.",
+    )
+    ci_lab_approve.add_argument("--proposal", required=True, help="ID de propuesta con artefacto code_diff_preview valido.")
+    ci_lab_approve.add_argument("--actor", default="cli", help="Operador que aprueba el cambio.")
+    ci_lab_approve.add_argument("--json", action="store_true", help="Devuelve el resultado en JSON.")
+    ci_lab_approve.set_defaults(func=command_continuous_improvement_lab)
 
     learning_postmortem = subparsers.add_parser(
         "learning-postmortem",
