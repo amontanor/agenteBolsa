@@ -1304,7 +1304,7 @@ class ContinuousImprovementLabRuntime:
                 )
             normalized_raw["required_validations"] = merged_validations
             payload = ImprovementProposalPayload.model_validate(normalized_raw)
-            guard = self.guard.assess(payload, self.settings)
+            guard = self.guard.assess(payload, self.settings, payload=normalized_raw)
             proposal_id = new_id("ci_prop")
             initiative = self.store.continuous_improvement_initiative_by_key(initiative_key)
             if not initiative:

@@ -855,3 +855,12 @@ re-correr `study_strategy_edge_compare.py --since 2026-06-25 --horizons 1,3,5,10
 2. Vigilar con el scoreboard que el generador pullback sigue produciendo y varia dia a dia.
 3. Backlog NO data-gated restante (riesgo/supervisar): migracion historica de T6 (320k filas 96%
    duplicadas, sin perder outcomes); C2 paralelizar sentimiento (cambio de conducta runtime).
+
+### B4 - Regla constitucional anti-auto-sabotaje. **HECHO (v0.4.70).**
+Regla deterministica en el laboratorio de mejora continua que rechaza propuestas
+dirigidas a modificar controles de seguridad propios antes de llegar a
+`READY_TO_APPLY`. Cubre auto-apply, aprobacion humana de cambios de codigo,
+live trading, modo de trading, suelo de kernel, `autonomy.py` /
+`code_autonomy_level`, `DETERMINISTIC_GATE` y umbrales de gates de riesgo
+(`entry-quality`, `backtest_gate`, `risk_gate`). Ver informe:
+`docs/informe_codex_constitucion_2026-06-30.md`.

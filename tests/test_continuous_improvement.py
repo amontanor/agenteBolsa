@@ -4,6 +4,7 @@ import pytest
 
 from agente_bolsa.config import Settings, get_settings
 from agente_bolsa.continuous_improvement.agents import (
+    SELF_SAFETY_REJECTION_REASON,
     DataCollectorAgent,
     DecisionCommitteeAgent,
     ExperimentDesignerAgent,
@@ -431,6 +432,28 @@ def test_risk_guard_rejects_dangerous_live_trading_proposal(tmp_path):
     assert "dangerous_term" in guard["reasons"]
 
 
+def test_risk_guard_rejects_self_safety_target_before_queue(tmp_path):
+    settings = _settings(tmp_path)
+    proposal = ImprovementProposalPayload(
+        proposal_type="CODE_CHANGE",
+        target_component="continuous_improvement",
+        target_identifier="allow_auto_apply_improvements",
+        current_value="false",
+        proposed_value="true",
+        rationale="No debe poder modificar su propia autonomia.",
+        risk_level="LOW",
+        required_validations=["tests"],
+        rollback_plan="revert",
+    )
+
+    guard = RiskGuardAgent().assess(proposal, settings)
+
+    assert guard["status"] == "REJECTED"
+    assert SELF_SAFETY_REJECTION_REASON in guard["reasons"]
+    assert guard["approved_for_auto_apply"] is False
+    assert guard["self_safety_violation"]["matched"] == "allow_auto_apply_improvements"
+
+
 def test_risk_guard_marks_high_risk_code_change_for_human_review(tmp_path):
     settings = _settings(tmp_path, REQUIRE_HUMAN_APPROVAL_FOR_HIGH_RISK=True)
     proposal = ImprovementProposalPayload(
@@ -450,7 +473,87 @@ def test_risk_guard_marks_high_risk_code_change_for_human_review(tmp_path):
     assert guard["status"] == "WAITING_HUMAN_REVIEW"
 
 
-def test_validation_blocks_repeated_parameter_tuning_in_frozen_window(tmp_path):
+def test_validation_rejects_self_safety_payload_file_target(tmp_path):
+    settings = _settings(tmp_path)
+    validator = ValidationAgent()
+    proposal = _code_proposal(
+        target_component="docs_observabilidad",
+        target_identifier="runtime_notes",
+        file_edits=[{"path": ".env", "content": "ALLOW_LIVE_TRADING=true\n"}],
+    )
+
+    validation = validator.validate(proposal, {"evaluation": {"summary": {}}, "reports": {}}, settings)
+
+    assert validation["status"] == "REJECTED"
+    assert validation["payload"]["objective_status"] == "REJECTED"
+    assert validation["payload"]["objective_summary"] == SELF_SAFETY_REJECTION_REASON
+    assert validation["payload"]["checks"][0]["name"] == SELF_SAFETY_REJECTION_REASON
+    assert validation["payload"]["checks"][0]["evidence"]["matched"] == ".env"
+
+
+def test_validation_rejects_protected_file_basename_target(tmp_path):
+    settings = _settings(tmp_path)
+    validator = ValidationAgent()
+    proposal = {
+        "proposal_id": "ci_prop_protected_basename",
+        "cycle_id": "ci_cycle_protected_basename",
+        "proposal_type": "CODE_CHANGE",
+        "target_component": "software_runtime",
+        "target_identifier": "risk.py",
+        "status": "PENDING",
+        "risk_level": "LOW",
+        "payload": {
+            "rollback_plan": "revert",
+            "required_validations": ["tests"],
+            "file_edits": [{"path": "docs/observabilidad.md", "content": "nota\n"}],
+        },
+    }
+
+    validation = validator.validate(proposal, {"evaluation": {"summary": {}}, "reports": {}}, settings)
+
+    assert validation["status"] == "REJECTED"
+    assert validation["payload"]["checks"][0]["name"] == SELF_SAFETY_REJECTION_REASON
+    assert validation["payload"]["checks"][0]["evidence"]["matched"] == "risk.py"
+
+
+def test_validation_does_not_block_low_risk_docs_observability(tmp_path):
+    settings = _settings(tmp_path)
+    validator = ValidationAgent()
+    proposal = {
+        "proposal_id": "ci_prop_docs_obs",
+        "cycle_id": "ci_cycle_docs_obs",
+        "proposal_type": "MONITORING_CHANGE",
+        "target_component": "docs",
+        "target_identifier": "observabilidad",
+        "status": "PENDING",
+        "risk_level": "LOW",
+        "payload": {
+            "proposal_type": "MONITORING_CHANGE",
+            "target_component": "docs",
+            "target_identifier": "observabilidad",
+            "rollback_plan": "Revertir el documento si no aporta claridad.",
+            "required_validations": [],
+        },
+    }
+    context = {
+        "evaluation": {"summary": {"observations": 1}},
+        "reports": {
+            "session_retrospective": {
+                "available": True,
+                "payload": {"summary": {"reviewed": 1}, "sessions": [{"session_id": "s1"}]},
+            }
+        },
+    }
+
+    validation = validator.validate(proposal, context, settings)
+
+    assert validation["status"] == "READY_TO_APPLY"
+    assert validation["payload"]["objective_status"] == "READY_TO_APPLY"
+    check_names = {item["name"] for item in validation["payload"]["checks"]}
+    assert SELF_SAFETY_REJECTION_REASON not in check_names
+
+
+def test_validation_rejects_protected_parameter_tuning_before_other_gates(tmp_path):
     settings = _settings(tmp_path)
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()
@@ -477,9 +580,10 @@ def test_validation_blocks_repeated_parameter_tuning_in_frozen_window(tmp_path):
         store=store,
     )
 
-    checks = {item["name"]: item for item in validation["payload"]["checks"]}
-    assert validation["status"] == "PENDING"
-    assert checks["repeated_parameter_tuning"]["passed"] is False
+    assert validation["status"] == "REJECTED"
+    assert validation["payload"]["objective_status"] == "REJECTED"
+    assert validation["payload"]["objective_summary"] == SELF_SAFETY_REJECTION_REASON
+    assert validation["payload"]["checks"][0]["name"] == SELF_SAFETY_REJECTION_REASON
 
 
 def test_runtime_enqueue_event_deduplicates_same_payload(tmp_path):
@@ -1288,7 +1392,7 @@ def test_validation_agent_keeps_risk_rule_change_pending_without_real_execution(
     assert any(item["name"] == "in_sample" and item["passed"] is False for item in payload["checks"])
 
 
-def test_validation_agent_passes_entry_quality_with_objective_evidence(tmp_path):
+def test_validation_agent_rejects_entry_quality_with_objective_evidence(tmp_path):
     settings = _settings(tmp_path)
     validation = ValidationAgent().validate(
         {
@@ -1332,10 +1436,11 @@ def test_validation_agent_passes_entry_quality_with_objective_evidence(tmp_path)
         settings,
     )
 
-    assert validation["status"] == "READY_TO_APPLY"
+    assert validation["status"] == "REJECTED"
     payload = validation["payload"]
-    assert payload["objective_status"] in {"PASSED", "READY_TO_APPLY"}
-    assert any(check["name"] == "entry_quality_calibration_present" and check["passed"] for check in payload["checks"])
+    assert payload["objective_status"] == "REJECTED"
+    assert payload["objective_summary"] == SELF_SAFETY_REJECTION_REASON
+    assert payload["checks"][0]["name"] == SELF_SAFETY_REJECTION_REASON
 
 
 def test_data_collector_loads_latest_counterfactual_reports(tmp_path):
@@ -1620,7 +1725,7 @@ def test_runtime_executes_validation_artifacts_before_validation(tmp_path, monke
     assert validation["payload"]["required_validations"] == ["in_sample", "out_of_sample", "walk_forward"]
 
 
-def test_validation_promotes_shadow_experiment_to_ready_without_autoapply(tmp_path):
+def test_validation_rejects_entry_quality_threshold_change(tmp_path):
     settings = _settings(tmp_path)
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()
@@ -1654,10 +1759,10 @@ def test_validation_promotes_shadow_experiment_to_ready_without_autoapply(tmp_pa
 
     validation = validator.validate(proposal, context, settings, store=store)
 
-    assert validation["status"] == "READY_TO_APPLY"
-    assert validation["payload"]["objective_status"] == "READY_TO_APPLY"
-    check_names = {item["name"] for item in validation["payload"]["checks"]}
-    assert "strategy_edge_experiment_present" in check_names
+    assert validation["status"] == "REJECTED"
+    assert validation["payload"]["objective_status"] == "REJECTED"
+    assert validation["payload"]["objective_summary"] == SELF_SAFETY_REJECTION_REASON
+    assert validation["payload"]["checks"][0]["name"] == SELF_SAFETY_REJECTION_REASON
 
 
 def test_runtime_keeps_ready_code_change_in_queue_during_dry_run(tmp_path):

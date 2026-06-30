@@ -46,6 +46,136 @@ SPECIALIST_RESPONSE_MODELS = {
     AgentName.DECISION_COMMITTEE: SpecialistResponseBase,
 }
 
+SELF_SAFETY_REJECTION_REASON = "self_safety_modification_forbidden"
+
+SELF_SAFETY_FORBIDDEN_IDENTIFIERS = {
+    "allow_auto_apply_improvements",
+    "require_human_approval_for_code_changes",
+    "allow_live_trading",
+    "trading_mode",
+    "code_autonomy_level",
+    "deterministic_gate",
+}
+
+SELF_SAFETY_FORBIDDEN_PATH_SUFFIXES = {
+    ".env",
+    "src/agente_bolsa/kernel.py",
+    "src/agente_bolsa/tools/risk.py",
+    "src/agente_bolsa/tools/broker.py",
+    "src/agente_bolsa/tools/execution.py",
+    "src/agente_bolsa/config.py",
+    "src/agente_bolsa/continuous_improvement/autonomy.py",
+}
+
+SELF_SAFETY_FORBIDDEN_BASENAMES = {
+    "kernel.py",
+    "risk.py",
+    "broker.py",
+    "execution.py",
+    "config.py",
+    "autonomy.py",
+}
+
+SELF_SAFETY_FORBIDDEN_GATE_TOKENS = {
+    "entry-quality",
+    "entry_quality",
+    "backtest gate",
+    "backtest_gate",
+    "risk_gate",
+}
+
+SELF_SAFETY_STRUCTURAL_KEYS = (
+    "target",
+    "identifier",
+    "component",
+    "file",
+    "path",
+    "patch",
+    "setting",
+    "config",
+    "parameter",
+    "threshold",
+    "env",
+)
+
+
+def self_safety_modification_violation(
+    *,
+    target_component: str,
+    target_identifier: str,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    references = [target_component, target_identifier]
+    references.extend(_self_safety_payload_references(payload or {}))
+    for raw in references:
+        match = _self_safety_match(str(raw or ""))
+        if match:
+            return {"reason": SELF_SAFETY_REJECTION_REASON, **match}
+    return None
+
+
+def _self_safety_payload_references(value: Any, *, key: str = "") -> list[str]:
+    key_lower = key.lower()
+    if isinstance(value, dict):
+        refs: list[str] = []
+        for child_key, child_value in value.items():
+            refs.extend(_self_safety_payload_references(child_value, key=str(child_key)))
+        return refs
+    if isinstance(value, list):
+        refs = []
+        for item in value:
+            refs.extend(_self_safety_payload_references(item, key=key))
+        return refs
+    if not any(token in key_lower for token in SELF_SAFETY_STRUCTURAL_KEYS):
+        return []
+    text = str(value or "")
+    if key_lower == "patch":
+        return _self_safety_patch_paths(text)
+    return [text]
+
+
+def _self_safety_patch_paths(text: str) -> list[str]:
+    paths: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("+++ ", "--- ")):
+            candidate = stripped[4:].strip()
+            if candidate != "/dev/null":
+                paths.append(candidate.removeprefix("a/").removeprefix("b/"))
+        elif stripped.startswith("diff --git "):
+            paths.extend(part.removeprefix("a/").removeprefix("b/") for part in stripped.split()[2:4])
+        elif stripped.startswith("*** Update File: "):
+            paths.append(stripped.removeprefix("*** Update File: ").strip())
+    return paths
+
+
+def _self_safety_match(raw: str) -> dict[str, Any] | None:
+    text = raw.strip()
+    if not text:
+        return None
+    normalized = _normalize_self_safety_reference(text)
+    lowered = normalized.lower()
+    identifier = re.sub(r"[^a-z0-9_]+", "_", lowered).strip("_")
+    if identifier in SELF_SAFETY_FORBIDDEN_IDENTIFIERS:
+        return {"match_type": "identifier", "matched": identifier, "reference": text}
+    if any(token in lowered for token in SELF_SAFETY_FORBIDDEN_GATE_TOKENS):
+        return {"match_type": "risk_gate", "matched": lowered, "reference": text}
+    if lowered == ".env" or lowered.endswith("/.env"):
+        return {"match_type": "path", "matched": ".env", "reference": text}
+    if any(lowered.endswith(path) for path in SELF_SAFETY_FORBIDDEN_PATH_SUFFIXES):
+        return {"match_type": "path", "matched": lowered, "reference": text}
+    if lowered in SELF_SAFETY_FORBIDDEN_BASENAMES:
+        return {"match_type": "path", "matched": lowered, "reference": text}
+    if "/" in lowered and Path(lowered).name in SELF_SAFETY_FORBIDDEN_BASENAMES:
+        return {"match_type": "path", "matched": lowered, "reference": text}
+    return None
+
+
+def _normalize_self_safety_reference(text: str) -> str:
+    normalized = text.strip().replace("\\", "/")
+    normalized = normalized.removeprefix("./").removeprefix("a/").removeprefix("b/")
+    return normalized
+
 
 def _load_json_file(path: Path) -> dict[str, Any]:
     if not path.exists():
@@ -1340,7 +1470,13 @@ class RiskGuardAgent:
         "saltarse riesgo",
     }
 
-    def assess(self, proposal: ImprovementProposalPayload, settings: Settings) -> dict[str, Any]:
+    def assess(
+        self,
+        proposal: ImprovementProposalPayload,
+        settings: Settings,
+        *,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         text = " ".join(
             [
                 proposal.proposal_type,
@@ -1353,6 +1489,13 @@ class RiskGuardAgent:
             ]
         ).lower()
         reasons: list[str] = []
+        self_safety_violation = self_safety_modification_violation(
+            target_component=proposal.target_component,
+            target_identifier=proposal.target_identifier,
+            payload=payload or proposal.model_dump(),
+        )
+        if self_safety_violation:
+            reasons.append(SELF_SAFETY_REJECTION_REASON)
         if any(term in text for term in self.DANGEROUS_TERMS):
             reasons.append("dangerous_term")
         if proposal.proposal_type == "CODE_CHANGE" and settings.require_human_approval_for_code_changes:
@@ -1364,7 +1507,7 @@ class RiskGuardAgent:
         if not settings.improvement_dry_run:
             reasons.append("autonomous_apply_enabled")
 
-        rejected = "dangerous_term" in reasons
+        rejected = SELF_SAFETY_REJECTION_REASON in reasons or "dangerous_term" in reasons
         if rejected:
             status = "REJECTED"
         elif (
@@ -1382,6 +1525,7 @@ class RiskGuardAgent:
             "approved_for_auto_apply": not rejected and proposal.proposal_type == "CODE_CHANGE" and settings.allow_auto_apply_improvements and not settings.improvement_dry_run and not settings.require_human_approval_for_code_changes and not settings.allow_live_trading,
             "reasons": reasons,
             "dry_run": settings.improvement_dry_run,
+            "self_safety_violation": self_safety_violation,
         }
 
 
@@ -1410,6 +1554,36 @@ class ValidationAgent:
         payload = {**(proposal.get("payload", {}) or {}), "proposal_id": proposal.get("proposal_id")}
         proposal_type = str(proposal.get("proposal_type") or payload.get("proposal_type") or "MONITORING_CHANGE")
         target_component = str(proposal.get("target_component") or payload.get("target_component") or "").strip()
+        target_identifier = str(proposal.get("target_identifier") or payload.get("target_identifier") or "").strip()
+        self_safety_violation = self_safety_modification_violation(
+            target_component=target_component,
+            target_identifier=target_identifier,
+            payload=payload,
+        )
+        if self_safety_violation:
+            return {
+                "validation_id": new_id("ci_val"),
+                "proposal_id": proposal["proposal_id"],
+                "cycle_id": proposal["cycle_id"],
+                "validation_type": "deterministic_gate",
+                "status": "REJECTED",
+                "payload": {
+                    "checks": [
+                        {
+                            "name": SELF_SAFETY_REJECTION_REASON,
+                            "passed": False,
+                            "detail": "La propuesta intenta modificar controles de seguridad del propio sistema.",
+                            "evidence": self_safety_violation,
+                        }
+                    ],
+                    "required_validations": [],
+                    "data_quality": (context.get("evaluation") or {}).get("data_quality"),
+                    "objective_status": "REJECTED",
+                    "objective_evidence": {"self_safety_violation": self_safety_violation},
+                    "objective_summary": SELF_SAFETY_REJECTION_REASON,
+                    "target_component": target_component,
+                },
+            }
         required = self._normalize_required_validations(
             payload.get("required_validations") or self._default_required_validations(proposal_type)
         )
