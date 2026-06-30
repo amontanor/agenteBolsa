@@ -129,3 +129,16 @@ La semana en que, **sin que toques código**, la firma:
 - y te entrega un **digest diario** con lo hecho y lo que pide aprobar.
 
 Ese es el momento en que dejas de tener "agentes que opinan" y pasas a tener **una firma que entrega**.
+
+---
+
+## Progreso 30-jun (mañana) — raíles de la firma construidos (sin apply)
+
+- ✅ **Invariante de apply blindado con test (v0.4.66):** con `ALLOW_AUTO_APPLY_IMPROVEMENTS=false` el applier no se invoca; `REQUIRE_HUMAN_APPROVAL_FOR_CODE_CHANGES=true` bloquea `APPLIED`; el suelo de kernel rechaza los 6 ficheros prohibidos en niveles 1/2/3. (commit bea8b3c6)
+- ✅ **venv-base:** diagnosticado — `.venv\Scripts\python.exe` es un launcher que delega en el Python311 base; cada servicio = shim+worker, NO runtimes duplicados, código actual. **Cosmético → sin acción, fuera del backlog.** (be7ac375)
+- ✅ **Fase 2A — preview de diffs (v0.4.67):** `CodeDiffPreviewAgent` aplica un payload en `GitSandbox`, corre tests y adjunta el diff como `proposal_artifact`. 0 apply, suelo de kernel, no toca árbol real. (b06579b8)
+- ✅ **Fase 2B — codegen (v0.4.68):** `CodegenPatchAgent` (LLM) convierte prosa→patch, restringido a allowlist (`continuous_improvement/`, `tools/operational_*`, `tests/`, `docs/`), encadena con el preview → artefacto `READY_FOR_HUMAN_REVIEW`. CLI manual `continuous-improvement-lab gen-diff`. Demo real verificada, `applied_changes=0`. (675d5fbf)
+
+**Cadena actual:** detectar → proponer → experimentar (shadow) → **codegen patch → sandbox+tests → adjuntar diff para revisión humana**. Todo con `applied_changes=0` y auto-apply off+sellado+testeado.
+
+**PENDIENTE — Fase 2B-apply (sesión dedicada, en frío):** el "botón" de **aprobación humana positiva** → aplica una propuesta concreta de forma **reversible** (backup + tests + suelo de kernel + rollback automático si degrada). Es el único punto donde el código ENTRA al repo → máxima cautela. Luego: Fase 3 (orquestación/gobierno/digest) y Fase 4 (memoria, especialistas, régimen).
