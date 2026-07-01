@@ -47,15 +47,67 @@ SPECIALIST_RESPONSE_MODELS = {
 }
 
 SELF_SAFETY_REJECTION_REASON = "self_safety_modification_forbidden"
+SELF_GOVERNANCE_REJECTION_REASON = "self_governance_modification_forbidden"
+RECENTLY_REJECTED_DUPLICATE_REASON = "recently_rejected_duplicate"
 
 SELF_SAFETY_FORBIDDEN_IDENTIFIERS = {
     "allow_auto_apply_improvements",
     "require_human_approval_for_code_changes",
     "allow_live_trading",
     "trading_mode",
-    "code_autonomy_level",
     "deterministic_gate",
 }
+
+SELF_GOVERNANCE_FORBIDDEN_IDENTIFIERS = {
+    "allow_auto_apply_improvements",
+    "ci_build_strategy_enabled",
+    "ci_max_open_initiatives",
+    "ci_recurring_cooldown_hours",
+    "ci_sandbox_enabled",
+    "ci_sandbox_full_suite",
+    "ci_sandbox_validate_timeout_seconds",
+    "code_autonomy_level",
+    "continuous_improvement_enabled",
+    "continuous_improvement_event_cooldown_seconds",
+    "continuous_improvement_group_cooldown_seconds",
+    "continuous_improvement_max_proposals_per_cycle",
+    "continuous_improvement_retry_base_seconds",
+    "continuous_improvement_retry_max_seconds",
+    "continuous_improvement_runtime_interval_seconds",
+    "continuous_improvement_runtime_loop_sleep_seconds",
+    "continuous_improvement_schedule_enabled",
+    "improvement_dry_run",
+    "micro_experiment_size_multiplier",
+    "programmer_max_repair_attempts",
+    "require_human_approval_for_code_changes",
+}
+
+SELF_GOVERNANCE_CONTEXT_PREFIXES = (
+    "ci_",
+    "continuous_improvement_",
+    "improvement_",
+)
+
+SELF_GOVERNANCE_CONTROL_TOKENS = (
+    "aggression",
+    "auto_apply",
+    "autonomy",
+    "cooldown",
+    "dry_run",
+    "frequency",
+    "human_approval",
+    "interval",
+    "loop_sleep",
+    "max_open",
+    "max_proposals",
+    "repair_attempts",
+    "retry",
+    "sandbox",
+    "schedule",
+    "supervision",
+    "timeout",
+    "wip",
+)
 
 SELF_SAFETY_FORBIDDEN_PATH_SUFFIXES = {
     ".env",
@@ -114,6 +166,21 @@ def self_safety_modification_violation(
     return None
 
 
+def self_governance_modification_violation(
+    *,
+    target_component: str,
+    target_identifier: str,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    references = [target_component, target_identifier]
+    references.extend(_self_safety_payload_references(payload or {}))
+    for raw in references:
+        match = _self_governance_match(str(raw or ""))
+        if match:
+            return {"reason": SELF_GOVERNANCE_REJECTION_REASON, **match}
+    return None
+
+
 def _self_safety_payload_references(value: Any, *, key: str = "") -> list[str]:
     key_lower = key.lower()
     if isinstance(value, dict):
@@ -168,6 +235,22 @@ def _self_safety_match(raw: str) -> dict[str, Any] | None:
         return {"match_type": "path", "matched": lowered, "reference": text}
     if "/" in lowered and Path(lowered).name in SELF_SAFETY_FORBIDDEN_BASENAMES:
         return {"match_type": "path", "matched": lowered, "reference": text}
+    return None
+
+
+def _self_governance_match(raw: str) -> dict[str, Any] | None:
+    text = raw.strip()
+    if not text:
+        return None
+    normalized = _normalize_self_safety_reference(text)
+    lowered = normalized.lower()
+    identifier = re.sub(r"[^a-z0-9_]+", "_", lowered).strip("_")
+    if identifier in SELF_GOVERNANCE_FORBIDDEN_IDENTIFIERS:
+        return {"match_type": "lab_governance_setting", "matched": identifier, "reference": text}
+    has_lab_context = identifier.startswith(SELF_GOVERNANCE_CONTEXT_PREFIXES) or "lab" in identifier
+    controls_lab = any(token in identifier for token in SELF_GOVERNANCE_CONTROL_TOKENS)
+    if has_lab_context and controls_lab:
+        return {"match_type": "lab_governance_setting", "matched": identifier, "reference": text}
     return None
 
 
@@ -1494,8 +1577,15 @@ class RiskGuardAgent:
             target_identifier=proposal.target_identifier,
             payload=payload or proposal.model_dump(),
         )
+        self_governance_violation = self_governance_modification_violation(
+            target_component=proposal.target_component,
+            target_identifier=proposal.target_identifier,
+            payload=payload or proposal.model_dump(),
+        )
         if self_safety_violation:
             reasons.append(SELF_SAFETY_REJECTION_REASON)
+        if self_governance_violation:
+            reasons.append(SELF_GOVERNANCE_REJECTION_REASON)
         if any(term in text for term in self.DANGEROUS_TERMS):
             reasons.append("dangerous_term")
         if proposal.proposal_type == "CODE_CHANGE" and settings.require_human_approval_for_code_changes:
@@ -1507,7 +1597,11 @@ class RiskGuardAgent:
         if not settings.improvement_dry_run:
             reasons.append("autonomous_apply_enabled")
 
-        rejected = SELF_SAFETY_REJECTION_REASON in reasons or "dangerous_term" in reasons
+        rejected = (
+            SELF_SAFETY_REJECTION_REASON in reasons
+            or SELF_GOVERNANCE_REJECTION_REASON in reasons
+            or "dangerous_term" in reasons
+        )
         if rejected:
             status = "REJECTED"
         elif (
@@ -1526,6 +1620,7 @@ class RiskGuardAgent:
             "reasons": reasons,
             "dry_run": settings.improvement_dry_run,
             "self_safety_violation": self_safety_violation,
+            "self_governance_violation": self_governance_violation,
         }
 
 
@@ -1581,6 +1676,35 @@ class ValidationAgent:
                     "objective_status": "REJECTED",
                     "objective_evidence": {"self_safety_violation": self_safety_violation},
                     "objective_summary": SELF_SAFETY_REJECTION_REASON,
+                    "target_component": target_component,
+                },
+            }
+        self_governance_violation = self_governance_modification_violation(
+            target_component=target_component,
+            target_identifier=target_identifier,
+            payload=payload,
+        )
+        if self_governance_violation:
+            return {
+                "validation_id": new_id("ci_val"),
+                "proposal_id": proposal["proposal_id"],
+                "cycle_id": proposal["cycle_id"],
+                "validation_type": "deterministic_gate",
+                "status": "REJECTED",
+                "payload": {
+                    "checks": [
+                        {
+                            "name": SELF_GOVERNANCE_REJECTION_REASON,
+                            "passed": False,
+                            "detail": "La propuesta intenta modificar cadencia, agresividad o supervision del propio laboratorio.",
+                            "evidence": self_governance_violation,
+                        }
+                    ],
+                    "required_validations": [],
+                    "data_quality": (context.get("evaluation") or {}).get("data_quality"),
+                    "objective_status": "REJECTED",
+                    "objective_evidence": {"self_governance_violation": self_governance_violation},
+                    "objective_summary": SELF_GOVERNANCE_REJECTION_REASON,
                     "target_component": target_component,
                 },
             }

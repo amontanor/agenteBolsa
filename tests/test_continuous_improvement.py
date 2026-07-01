@@ -4,6 +4,8 @@ import pytest
 
 from agente_bolsa.config import Settings, get_settings
 from agente_bolsa.continuous_improvement.agents import (
+    RECENTLY_REJECTED_DUPLICATE_REASON,
+    SELF_GOVERNANCE_REJECTION_REASON,
     SELF_SAFETY_REJECTION_REASON,
     DataCollectorAgent,
     DecisionCommitteeAgent,
@@ -16,6 +18,7 @@ from agente_bolsa.continuous_improvement.agents import (
     TechnicalEdgeAgent,
     ValidationAgent,
     initiative_topic_key,
+    proposal_fingerprint,
 )
 from agente_bolsa.continuous_improvement.api import status_payload
 from agente_bolsa.continuous_improvement.experiments import AutoApplyCodeAgent
@@ -454,6 +457,28 @@ def test_risk_guard_rejects_self_safety_target_before_queue(tmp_path):
     assert guard["self_safety_violation"]["matched"] == "allow_auto_apply_improvements"
 
 
+def test_risk_guard_rejects_self_governance_cadence_target(tmp_path):
+    settings = _settings(tmp_path)
+    proposal = ImprovementProposalPayload(
+        proposal_type="PARAMETER_CHANGE",
+        target_component="continuous_improvement",
+        target_identifier="ci_recurring_cooldown_hours",
+        current_value="24",
+        proposed_value="0",
+        rationale="Acelerar el laboratorio autonomo.",
+        risk_level="LOW",
+        required_validations=[],
+        rollback_plan="Restaurar cooldown anterior.",
+    )
+
+    guard = RiskGuardAgent().assess(proposal, settings)
+
+    assert guard["status"] == "REJECTED"
+    assert SELF_GOVERNANCE_REJECTION_REASON in guard["reasons"]
+    assert guard["approved_for_auto_apply"] is False
+    assert guard["self_governance_violation"]["matched"] == "ci_recurring_cooldown_hours"
+
+
 def test_risk_guard_marks_high_risk_code_change_for_human_review(tmp_path):
     settings = _settings(tmp_path, REQUIRE_HUMAN_APPROVAL_FOR_HIGH_RISK=True)
     proposal = ImprovementProposalPayload(
@@ -551,6 +576,80 @@ def test_validation_does_not_block_low_risk_docs_observability(tmp_path):
     assert validation["payload"]["objective_status"] == "READY_TO_APPLY"
     check_names = {item["name"] for item in validation["payload"]["checks"]}
     assert SELF_SAFETY_REJECTION_REASON not in check_names
+    assert SELF_GOVERNANCE_REJECTION_REASON not in check_names
+
+
+def test_validation_does_not_block_trading_selection_parameter(tmp_path):
+    settings = _settings(tmp_path)
+    validator = ValidationAgent()
+    proposal = {
+        "proposal_id": "ci_prop_trade_selection",
+        "cycle_id": "ci_cycle_trade_selection",
+        "proposal_type": "PARAMETER_CHANGE",
+        "target_component": "trade_selection",
+        "target_identifier": "trade_selection_top_n",
+        "status": "PENDING",
+        "risk_level": "MEDIUM",
+        "payload": {
+            "proposal_type": "PARAMETER_CHANGE",
+            "target_component": "trade_selection",
+            "target_identifier": "trade_selection_top_n",
+            "rollback_plan": "Restaurar top_n anterior.",
+            "required_validations": ["in_sample", "out_of_sample", "walk_forward"],
+        },
+    }
+
+    validation = validator.validate(proposal, {"evaluation": {"summary": {}}, "reports": {}}, settings)
+
+    assert validation["status"] != "REJECTED"
+    check_names = {item["name"] for item in validation["payload"]["checks"]}
+    assert SELF_SAFETY_REJECTION_REASON not in check_names
+    assert SELF_GOVERNANCE_REJECTION_REASON not in check_names
+
+
+def test_runtime_rejects_recently_rejected_duplicate(tmp_path):
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    runtime = ContinuousImprovementLabRuntime(settings, store)
+    raw = {
+        "proposal_type": "MONITORING_CHANGE",
+        "target_component": "docs",
+        "target_identifier": "observabilidad",
+        "current_value": "sin checklist",
+        "proposed_value": "anadir checklist operativo",
+        "rationale": "Evitar perdida de trazabilidad.",
+        "expected_impact": "Mejor trazabilidad operativa.",
+        "risk_level": "LOW",
+        "required_validations": [],
+        "rollback_plan": "Revertir la documentacion.",
+    }
+    payload = ImprovementProposalPayload.model_validate(raw)
+    initiative_key = initiative_topic_key(domain="software", proposal=raw)
+    fingerprint = proposal_fingerprint(payload)
+    store.upsert_continuous_improvement_proposal(
+        {
+            "proposal_id": "ci_prop_recent_rejected",
+            "cycle_id": "ci_cycle_previous",
+            "fingerprint": fingerprint,
+            "proposal_type": payload.proposal_type,
+            "target_component": payload.target_component,
+            "target_identifier": payload.target_identifier,
+            "status": "REJECTED",
+            "priority": "LOW",
+            "risk_level": payload.risk_level,
+            "payload": {**payload.model_dump(), "initiative_key": initiative_key},
+            "guard": {"status": "REJECTED", "reasons": ["manual_reject"]},
+        }
+    )
+
+    stored = runtime._persist_proposals(cycle_id="ci_cycle_duplicate", proposal_payloads=[raw])
+
+    assert stored[0]["proposal_id"] == "ci_prop_recent_rejected"
+    assert stored[0]["status"] == "REJECTED"
+    decisions = store.continuous_improvement_decisions(proposal_id="ci_prop_recent_rejected", limit=5)
+    assert decisions[0]["reason"] == RECENTLY_REJECTED_DUPLICATE_REASON
+    assert decisions[0]["payload"]["recently_rejected_duplicate"]["match_type"] == "fingerprint"
 
 
 def test_validation_rejects_protected_parameter_tuning_before_other_gates(tmp_path):

@@ -864,3 +864,12 @@ live trading, modo de trading, suelo de kernel, `autonomy.py` /
 `code_autonomy_level`, `DETERMINISTIC_GATE` y umbrales de gates de riesgo
 (`entry-quality`, `backtest_gate`, `risk_gate`). Ver informe:
 `docs/informe_codex_constitucion_2026-06-30.md`.
+
+### B5 - Constitucion v2: autogobierno y dedup anti-busywork. **HECHO (v0.4.71).**
+Extension deterministica del lab para rechazar cambios de cadencia, WIP,
+autonomia o supervision propios con `self_governance_modification_forbidden`, y
+para bloquear re-propuestas recientemente rechazadas con
+`recently_rejected_duplicate`. Los parametros de trading como
+`trade_selection_top_n` no se prohiben por constitucion: quedan en cola humana y
+requieren evidencia de edge. Ver informe:
+`docs/informe_codex_constitucion_v2_2026-07-01.md`.

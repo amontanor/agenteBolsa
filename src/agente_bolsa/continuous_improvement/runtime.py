@@ -17,6 +17,7 @@ from agente_bolsa.models import AgentEvent, new_id
 from agente_bolsa.storage import Store
 
 from .agents import (
+    RECENTLY_REJECTED_DUPLICATE_REASON,
     SPECIALIST_AGENT_CLASSES,
     ChiefInvestmentOrchestratorAgent,
     DataCollectorAgent,
@@ -42,6 +43,8 @@ LOGGER = logging.getLogger(__name__)
 
 
 class ContinuousImprovementLabRuntime:
+    RECENT_REJECTION_DEDUPE_DAYS = 7
+
     VALIDATION_ALIASES = {
         "backtest": "in_sample",
         "baseline_compare": "out_of_sample",
@@ -1305,6 +1308,24 @@ class ContinuousImprovementLabRuntime:
             normalized_raw["required_validations"] = merged_validations
             payload = ImprovementProposalPayload.model_validate(normalized_raw)
             guard = self.guard.assess(payload, self.settings, payload=normalized_raw)
+            fingerprint = proposal_fingerprint(payload)
+            recent_duplicate = self._recently_rejected_duplicate(
+                fingerprint=fingerprint,
+                initiative_key=initiative_key,
+                target_component=payload.target_component,
+                target_identifier=payload.target_identifier,
+            )
+            if recent_duplicate:
+                guard = {
+                    **guard,
+                    "status": "REJECTED",
+                    "approved_for_auto_apply": False,
+                    "reasons": [
+                        *[item for item in guard.get("reasons", []) if item],
+                        RECENTLY_REJECTED_DUPLICATE_REASON,
+                    ],
+                    "recently_rejected_duplicate": recent_duplicate,
+                }
             proposal_id = new_id("ci_prop")
             initiative = self.store.continuous_improvement_initiative_by_key(initiative_key)
             if not initiative:
@@ -1342,13 +1363,13 @@ class ContinuousImprovementLabRuntime:
                 and initiative_status in {"EXPERIMENTING", "VALIDATING", "MONITORING", "READY_TO_APPLY"}
             )
             status = guard["status"]
-            if frozen_conflict:
+            if frozen_conflict and status != "REJECTED":
                 status = "WAITING_HUMAN_REVIEW"
             stored_id, inserted = self.store.upsert_continuous_improvement_proposal(
                 {
                     "proposal_id": proposal_id,
                     "cycle_id": cycle_id,
-                    "fingerprint": proposal_fingerprint(payload),
+                    "fingerprint": fingerprint,
                     "proposal_type": payload.proposal_type,
                     "target_component": payload.target_component,
                     "target_identifier": payload.target_identifier,
@@ -1365,6 +1386,21 @@ class ContinuousImprovementLabRuntime:
                     "guard": guard,
                 }
             )
+            if recent_duplicate:
+                try:
+                    self.store.update_continuous_improvement_proposal_status(
+                        stored_id,
+                        status="REJECTED",
+                        actor="RiskGuardAgent",
+                        reason=RECENTLY_REJECTED_DUPLICATE_REASON,
+                        payload={
+                            "recently_rejected_duplicate": recent_duplicate,
+                            "initiative_key": initiative_key,
+                            "fingerprint": fingerprint,
+                        },
+                    )
+                except KeyError:
+                    pass
             proposal = self.store.continuous_improvement_proposal(stored_id)
             if not proposal:
                 continue
@@ -1399,6 +1435,53 @@ class ContinuousImprovementLabRuntime:
                 },
             )
         return stored
+
+    def _recently_rejected_duplicate(
+        self,
+        *,
+        fingerprint: str,
+        initiative_key: str,
+        target_component: str,
+        target_identifier: str,
+    ) -> dict[str, Any] | None:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=self.RECENT_REJECTION_DEDUPE_DAYS)
+        target_component_norm = str(target_component or "").strip().lower()
+        target_identifier_norm = str(target_identifier or "").strip().lower()
+        for item in self.store.continuous_improvement_proposals(status="REJECTED", limit=20000):
+            updated_at = self._parse_iso_datetime(str(item.get("updated_at") or item.get("created_at") or ""))
+            if updated_at is not None and updated_at < cutoff:
+                continue
+            payload = item.get("payload") or {}
+            same_fingerprint = bool(fingerprint and item.get("fingerprint") == fingerprint)
+            same_initiative_target = (
+                bool(initiative_key)
+                and str(payload.get("initiative_key") or "").strip() == initiative_key
+                and str(item.get("target_component") or "").strip().lower() == target_component_norm
+                and str(item.get("target_identifier") or "").strip().lower() == target_identifier_norm
+            )
+            if same_fingerprint or same_initiative_target:
+                return {
+                    "proposal_id": item.get("proposal_id"),
+                    "fingerprint": item.get("fingerprint"),
+                    "initiative_key": payload.get("initiative_key"),
+                    "target_component": item.get("target_component"),
+                    "target_identifier": item.get("target_identifier"),
+                    "updated_at": item.get("updated_at"),
+                    "match_type": "fingerprint" if same_fingerprint else "initiative_target",
+                    "dedupe_window_days": self.RECENT_REJECTION_DEDUPE_DAYS,
+                }
+        return None
+
+    def _parse_iso_datetime(self, value: str) -> datetime | None:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
 
     def _prepare_proposals(self, proposal_payloads: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         if not proposal_payloads:
