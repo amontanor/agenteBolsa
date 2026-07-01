@@ -886,3 +886,10 @@ Estudio read-only 2022-2026 con `strategy_edge_backtest.py`: caja,
 buy&hold SPY, SPY solo en bull (`SPY > SMA200`) y top-selecciones solo en bull.
 Incluye costes, Sharpe, max drawdown, peor semana y desglose por regimen. Ver
 informe: `docs/informe_codex_regime_policy_2026-07-01.md`.
+
+### B8 - Robustez de politica por regimen: beta, controles y costes. **HECHO (v0.4.74).**
+Extension read-only del estudio de regimen con SMA150/200/250, sensibilidad
+10/20/30 bps, control equal-weight de todo el universo, control random15 con seed
+fija, residual beta-ajustado de top-picks y turnover semanal. Confirma etiquetas
+de regimen causales (`SMA[t]` con datos `<= t`). Ver informe:
+`docs/informe_codex_regime_policy_robustez_2026-07-01.md`.

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import random
 import statistics
 import sys
 import tempfile
@@ -235,16 +237,30 @@ def build_beta_map(close: pd.Series, spy_close: pd.Series, *, lookback: int) -> 
     return {_date_text(idx): _safe_float(val) for idx, val in beta.items()}
 
 
-def build_regime_map(spy_features: pd.DataFrame, *, mode: str = DEFAULT_REGIME) -> dict[str, str]:
+def build_regime_map(
+    spy_features: pd.DataFrame,
+    *,
+    mode: str = DEFAULT_REGIME,
+    sma_window: int = 200,
+) -> dict[str, str]:
     if mode != DEFAULT_REGIME:
         raise ValueError(f"Regime mode no soportado: {mode}")
+    window = int(sma_window)
+    if window <= 0:
+        raise ValueError("La ventana SMA del regimen debe ser positiva.")
+    sma_column = f"sma_{window}"
+    sma_values = (
+        spy_features[sma_column]
+        if sma_column in spy_features.columns
+        else spy_features["Close"].astype(float).rolling(window).mean()
+    )
     result: dict[str, str] = {}
     for idx, row in spy_features.iterrows():
         close = _safe_float(row.get("Close"))
-        sma200 = _safe_float(row.get("sma_200"))
+        sma_value = _safe_float(sma_values.loc[idx])
         label = "unknown"
-        if close is not None and sma200 is not None:
-            label = "bull_above_sma200" if close > sma200 else "bear_below_sma200"
+        if close is not None and sma_value is not None:
+            label = f"bull_above_sma{window}" if close > sma_value else f"bear_below_sma{window}"
         result[_date_text(idx)] = label
     return result
 
@@ -1092,6 +1108,7 @@ def run_selector_edge_backtest(
     max_symbols: int = 0,
     beta_lookback: int = DEFAULT_BETA_LOOKBACK,
     regime_mode: str = DEFAULT_REGIME,
+    regime_sma_window: int = 200,
     provider: str | None = None,
     fmp_api_key: str | None = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
@@ -1099,6 +1116,7 @@ def run_selector_edge_backtest(
     progress_every: int = DEFAULT_PROGRESS_EVERY,
     include_top_records: bool = False,
     include_candidate_records: bool = False,
+    include_universe_records: bool = False,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
     settings = settings or get_settings()
@@ -1139,9 +1157,10 @@ def run_selector_edge_backtest(
     benchmark_return_20d_by_date = {
         _date_text(index): _safe_float(value) for index, value in spy_features["return_20d"].items()
     }
-    regime_by_date = build_regime_map(spy_features, mode=regime_mode)
+    regime_by_date = build_regime_map(spy_features, mode=regime_mode, sma_window=regime_sma_window)
 
     records: list[dict[str, Any]] = []
+    universe_records: list[dict[str, Any]] = []
     candidates_by_date: dict[str, list[dict[str, Any]]] = {}
     symbols_scanned = 0
     symbols_with_features = 0
@@ -1186,6 +1205,28 @@ def run_selector_edge_backtest(
         }
         if not eligible_dates:
             continue
+        raw_returns = build_forward_return_map(features["Close"], horizons)
+        beta_by_date = build_beta_map(features["Close"], spy_close, lookback=beta_lookback)
+        if include_universe_records:
+            universe_rows = features[
+                features["_signal_date"].isin(eligible_dates)
+                & (features["_position"] >= 419)
+            ]
+            for _index, row in universe_rows.iterrows():
+                session_date = str(row.get("_signal_date") or "")[:10]
+                raw_by_horizon = {h: raw_returns[h].get(session_date) for h in horizons}
+                if all(value is None for value in raw_by_horizon.values()):
+                    continue
+                universe_records.append(
+                    {
+                        "signal_date": session_date,
+                        "symbol": symbol,
+                        "regime": regime_by_date.get(session_date, "unknown"),
+                        "raw_returns": raw_by_horizon,
+                        "benchmark_returns": {h: benchmark_returns[h].get(session_date) for h in horizons},
+                        "beta_asof": beta_by_date.get(session_date),
+                    }
+                )
         eligible = features[
             features["_signal_date"].isin(eligible_dates)
             & (features["_position"] >= 419)
@@ -1193,8 +1234,6 @@ def run_selector_edge_backtest(
         ]
         if eligible.empty:
             continue
-        raw_returns = build_forward_return_map(features["Close"], horizons)
-        beta_by_date = build_beta_map(features["Close"], spy_close, lookback=beta_lookback)
         for _index, row in eligible.iterrows():
             session_date = str(row.get("_signal_date") or "")[:10]
             record = {
@@ -1244,6 +1283,7 @@ def run_selector_edge_backtest(
             "top_n": top_n,
             "beta_lookback": beta_lookback,
             "regime_mode": regime_mode,
+            "regime_sma_window": regime_sma_window,
             "benchmark_symbol": spy_symbol,
             "universe_name": universe_name,
             "max_symbols": max_symbols,
@@ -1269,11 +1309,13 @@ def run_selector_edge_backtest(
             "symbols_with_features": symbols_with_features,
             "population_candidates": len(records),
             "top_n_candidates": len(top_records),
+            "universe_member_records": len(universe_records),
             "elapsed_seconds": round(time.perf_counter() - started_at, 2),
         },
         "summary": summary,
         "top_pick_records": top_records if include_top_records else [],
         "candidate_records": records if include_candidate_records else [],
+        "universe_member_records": universe_records if include_universe_records else [],
         "weekly_benchmark_records": weekly_benchmark_records,
     }
 
@@ -1584,49 +1626,220 @@ def summarize_policy_weekly_returns(
     return summary
 
 
+def _is_bull_regime(regime: str) -> bool:
+    return str(regime or "").startswith("bull_above_sma")
+
+
+def _raw_return_for_horizon(record: dict[str, Any], horizon: int) -> float | None:
+    raw_returns = record.get("raw_returns") or {}
+    value = raw_returns.get(horizon)
+    if value is None:
+        value = raw_returns.get(str(horizon))
+    return _safe_float(value)
+
+
+def _benchmark_return_for_horizon(record: dict[str, Any], horizon: int) -> float | None:
+    returns = record.get("benchmark_returns") or {}
+    value = returns.get(horizon)
+    if value is None:
+        value = returns.get(str(horizon))
+    return _safe_float(value)
+
+
+def _records_by_date(records: list[dict[str, Any]], *, horizon: int, cost: float) -> dict[str, list[dict[str, Any]]]:
+    by_date: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        signal_date = str(record.get("signal_date") or "")[:10]
+        value = _raw_return_for_horizon(record, horizon)
+        if not signal_date or value is None:
+            continue
+        enriched = dict(record)
+        enriched["_net_return"] = value - cost
+        enriched["_gross_return"] = value
+        by_date.setdefault(signal_date, []).append(enriched)
+    return by_date
+
+
+def _stable_random_sample(records: list[dict[str, Any]], *, signal_date: str, random_seed: int, sample_size: int) -> list[dict[str, Any]]:
+    if len(records) <= sample_size:
+        return list(records)
+    digest = hashlib.sha256(f"{random_seed}:{signal_date}".encode()).hexdigest()
+    seeded = random.Random(int(digest[:16], 16))
+    return seeded.sample(sorted(records, key=lambda item: str(item.get("symbol") or "")), sample_size)
+
+
+def summarize_weekly_turnover(weekly_holdings: list[tuple[str, str, set[str]]]) -> dict[str, Any]:
+    ordered = sorted(weekly_holdings, key=lambda item: item[0])
+    values: list[float] = []
+    previous: set[str] | None = None
+    for _date, _regime, holdings in ordered:
+        current = set(holdings)
+        if previous is None:
+            previous = current
+            continue
+        if not previous and not current:
+            turnover = 0.0
+        elif not previous or not current:
+            turnover = 1.0
+        else:
+            turnover = 1.0 - (len(previous & current) / max(len(previous), len(current)))
+        values.append(round(turnover, 6))
+        previous = current
+    return {
+        "transitions": len(values),
+        "mean": round(sum(values) / len(values), 6) if values else None,
+        "median": round(statistics.median(values), 6) if values else None,
+        "max": round(max(values), 6) if values else None,
+    }
+
+
+def regime_policy_weekly_details(
+    benchmark_records: list[dict[str, Any]],
+    top_records: list[dict[str, Any]],
+    *,
+    horizon: int,
+    cost: float,
+    universe_records: list[dict[str, Any]] | None = None,
+    random_seed: int = 17,
+    random_n: int = 15,
+) -> dict[str, Any]:
+    top_by_date = _records_by_date(top_records, horizon=horizon, cost=cost)
+    universe_by_date = _records_by_date(universe_records or [], horizon=horizon, cost=cost)
+
+    policy_names = [
+        "cash",
+        "spy_buy_hold",
+        "spy_bull_cash_bear",
+        "top_bull_cash_bear",
+        "top_bull_cash_bear_beta_adjusted",
+        "universe_equal_weight_bull_cash_bear",
+        "random15_bull_cash_bear",
+    ]
+    policy_returns: dict[str, list[tuple[str, str, float]]] = {name: [] for name in policy_names}
+    weekly_holdings: dict[str, list[tuple[str, str, set[str]]]] = {
+        "cash": [],
+        "spy_buy_hold": [],
+        "spy_bull_cash_bear": [],
+        "top_bull_cash_bear": [],
+        "universe_equal_weight_bull_cash_bear": [],
+        "random15_bull_cash_bear": [],
+    }
+    weekly_details: dict[str, list[dict[str, Any]]] = {
+        "top_bull_cash_bear": [],
+        "universe_equal_weight_bull_cash_bear": [],
+        "random15_bull_cash_bear": [],
+    }
+
+    for record in benchmark_records:
+        signal_date = str(record.get("signal_date") or "")[:10]
+        regime = str(record.get("regime") or "unknown")
+        spy_value = _benchmark_return_for_horizon(record, horizon)
+        if not signal_date or spy_value is None:
+            continue
+        is_bull = _is_bull_regime(regime)
+
+        policy_returns["cash"].append((signal_date, regime, 0.0))
+        policy_returns["spy_buy_hold"].append((signal_date, regime, round(spy_value - cost, 6)))
+        policy_returns["spy_bull_cash_bear"].append((signal_date, regime, round(spy_value - cost, 6) if is_bull else 0.0))
+        weekly_holdings["cash"].append((signal_date, regime, set()))
+        weekly_holdings["spy_buy_hold"].append((signal_date, regime, {"SPY"}))
+        weekly_holdings["spy_bull_cash_bear"].append((signal_date, regime, {"SPY"} if is_bull else set()))
+
+        top_rows = top_by_date.get(signal_date, [])
+        top_symbols = {str(item.get("symbol") or "") for item in top_rows if str(item.get("symbol") or "")}
+        if is_bull and top_rows:
+            top_return = round(sum(float(item["_net_return"]) for item in top_rows) / len(top_rows), 6)
+            betas = [_safe_float(item.get("beta_asof")) for item in top_rows]
+            clean_betas = [beta for beta in betas if beta is not None]
+            portfolio_beta = sum(clean_betas) / len(clean_betas) if clean_betas else 1.0
+            beta_adjusted = round(top_return - (portfolio_beta * spy_value), 6)
+        else:
+            top_return = 0.0
+            portfolio_beta = None
+            beta_adjusted = 0.0
+        policy_returns["top_bull_cash_bear"].append((signal_date, regime, top_return))
+        policy_returns["top_bull_cash_bear_beta_adjusted"].append((signal_date, regime, beta_adjusted))
+        weekly_holdings["top_bull_cash_bear"].append((signal_date, regime, top_symbols if is_bull else set()))
+        weekly_details["top_bull_cash_bear"].append(
+            {
+                "signal_date": signal_date,
+                "regime": regime,
+                "positions": len(top_rows) if is_bull else 0,
+                "portfolio_beta": round(portfolio_beta, 6) if portfolio_beta is not None else None,
+                "spy_return": round(spy_value, 6),
+                "return": top_return,
+                "beta_adjusted_return": beta_adjusted,
+            }
+        )
+
+        universe_rows = universe_by_date.get(signal_date, [])
+        if is_bull and universe_rows:
+            universe_return = round(sum(float(item["_net_return"]) for item in universe_rows) / len(universe_rows), 6)
+            universe_symbols = {str(item.get("symbol") or "") for item in universe_rows if str(item.get("symbol") or "")}
+        else:
+            universe_return = 0.0
+            universe_symbols = set()
+        policy_returns["universe_equal_weight_bull_cash_bear"].append((signal_date, regime, universe_return))
+        weekly_holdings["universe_equal_weight_bull_cash_bear"].append((signal_date, regime, universe_symbols))
+        weekly_details["universe_equal_weight_bull_cash_bear"].append(
+            {
+                "signal_date": signal_date,
+                "regime": regime,
+                "positions": len(universe_symbols),
+                "return": universe_return,
+            }
+        )
+
+        random_rows = _stable_random_sample(
+            universe_rows,
+            signal_date=signal_date,
+            random_seed=random_seed,
+            sample_size=max(1, int(random_n)),
+        )
+        if is_bull and random_rows:
+            random_return = round(sum(float(item["_net_return"]) for item in random_rows) / len(random_rows), 6)
+            random_symbols = {str(item.get("symbol") or "") for item in random_rows if str(item.get("symbol") or "")}
+        else:
+            random_return = 0.0
+            random_symbols = set()
+        policy_returns["random15_bull_cash_bear"].append((signal_date, regime, random_return))
+        weekly_holdings["random15_bull_cash_bear"].append((signal_date, regime, random_symbols))
+        weekly_details["random15_bull_cash_bear"].append(
+            {
+                "signal_date": signal_date,
+                "regime": regime,
+                "positions": len(random_symbols),
+                "return": random_return,
+            }
+        )
+
+    return {
+        "policy_returns": policy_returns,
+        "turnover": {policy: summarize_weekly_turnover(rows) for policy, rows in weekly_holdings.items()},
+        "weekly_details": weekly_details,
+    }
+
+
 def regime_policy_weekly_returns(
     benchmark_records: list[dict[str, Any]],
     top_records: list[dict[str, Any]],
     *,
     horizon: int,
     cost: float,
+    universe_records: list[dict[str, Any]] | None = None,
+    random_seed: int = 17,
+    random_n: int = 15,
 ) -> dict[str, list[tuple[str, str, float]]]:
-    top_by_date: dict[str, list[float]] = {}
-    for record in top_records:
-        signal_date = str(record.get("signal_date") or "")[:10]
-        raw_returns = record.get("raw_returns") or {}
-        value = raw_returns.get(horizon)
-        if value is None:
-            value = raw_returns.get(str(horizon))
-        value = _safe_float(value)
-        if not signal_date or value is None:
-            continue
-        top_by_date.setdefault(signal_date, []).append(value - cost)
-
-    policy_returns: dict[str, list[tuple[str, str, float]]] = {
-        "cash": [],
-        "spy_buy_hold": [],
-        "spy_bull_cash_bear": [],
-        "top_bull_cash_bear": [],
-    }
-    for record in benchmark_records:
-        signal_date = str(record.get("signal_date") or "")[:10]
-        regime = str(record.get("regime") or "unknown")
-        returns = record.get("benchmark_returns") or {}
-        spy_value = returns.get(horizon)
-        if spy_value is None:
-            spy_value = returns.get(str(horizon))
-        spy_value = _safe_float(spy_value)
-        if not signal_date or spy_value is None:
-            continue
-        is_bull = regime == "bull_above_sma200"
-        policy_returns["cash"].append((signal_date, regime, 0.0))
-        policy_returns["spy_buy_hold"].append((signal_date, regime, round(spy_value - cost, 6)))
-        policy_returns["spy_bull_cash_bear"].append((signal_date, regime, round(spy_value - cost, 6) if is_bull else 0.0))
-        top_values = top_by_date.get(signal_date, [])
-        top_return = round(sum(top_values) / len(top_values), 6) if is_bull and top_values else 0.0
-        policy_returns["top_bull_cash_bear"].append((signal_date, regime, top_return))
-    return policy_returns
+    details = regime_policy_weekly_details(
+        benchmark_records,
+        top_records,
+        horizon=horizon,
+        cost=cost,
+        universe_records=universe_records,
+        random_seed=random_seed,
+        random_n=random_n,
+    )
+    return details["policy_returns"]
 
 
 def run_weekly_policy_decision_study(
@@ -1728,6 +1941,9 @@ def run_regime_policy_study(
     max_symbols: int = 0,
     beta_lookback: int = DEFAULT_BETA_LOOKBACK,
     regime_mode: str = DEFAULT_REGIME,
+    regime_sma_window: int = 200,
+    random_seed: int = 17,
+    random_n: int = 15,
     provider: str | None = None,
     fmp_api_key: str | None = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
@@ -1737,7 +1953,6 @@ def run_regime_policy_study(
 ) -> dict[str, Any]:
     settings = settings or get_settings()
     horizon = 5
-    cost = cost_bps / 10000.0
     selector_report = run_selector_edge_backtest(
         since=since,
         end=end,
@@ -1748,37 +1963,73 @@ def run_regime_policy_study(
         max_symbols=max_symbols,
         beta_lookback=beta_lookback,
         regime_mode=regime_mode,
+        regime_sma_window=regime_sma_window,
         provider=provider,
         fmp_api_key=fmp_api_key,
         batch_size=batch_size,
         sample_every=sample_every,
         progress_every=progress_every,
         include_top_records=True,
+        include_universe_records=True,
         settings=settings,
     )
+    return build_regime_policy_report_from_selector(
+        selector_report,
+        cost_bps=cost_bps,
+        horizon=horizon,
+        random_seed=random_seed,
+        random_n=random_n,
+    )
+
+
+def build_regime_policy_report_from_selector(
+    selector_report: dict[str, Any],
+    *,
+    cost_bps: float,
+    horizon: int = 5,
+    random_seed: int = 17,
+    random_n: int = 15,
+) -> dict[str, Any]:
+    cost = cost_bps / 10000.0
     benchmark_records = selector_report["weekly_benchmark_records"]
     top_records = selector_report["top_pick_records"]
-    policy_returns = regime_policy_weekly_returns(
+    universe_records = selector_report.get("universe_member_records", [])
+    details = regime_policy_weekly_details(
         benchmark_records,
         top_records,
         horizon=horizon,
         cost=cost,
+        universe_records=universe_records,
+        random_seed=random_seed,
+        random_n=random_n,
     )
+    policy_returns = details["policy_returns"]
     summary = summarize_policy_weekly_returns(policy_returns)
+    regime_sma_window = int(selector_report["study"].get("regime_sma_window", 200))
     return {
         "as_of": datetime.now(timezone.utc).isoformat(),
         "study": {
             "name": "regime_governed_policy_historical",
-            "since": since,
-            "end": end,
+            "since": selector_report["study"]["since"],
+            "end": selector_report["study"]["end"],
             "horizon_days": horizon,
             "cost_bps": cost_bps,
-            "top_n": top_n,
-            "regime_rule": "SPY close > SMA200 => bull/participar; SPY close <= SMA200 => bear/caja",
-            "regime_mode": regime_mode,
-            "sample_every_sessions": sample_every,
-            "signal_sampling": "weekly" if int(sample_every) == 5 else f"every_{sample_every}_sessions",
-            "interpretation": "Politicas semanales read-only con coste aplicado solo cuando hay posicion.",
+            "top_n": selector_report["study"]["top_n"],
+            "regime_rule": (
+                f"SPY close > SMA{regime_sma_window} => bull/participar; "
+                f"SPY close <= SMA{regime_sma_window} => bear/caja"
+            ),
+            "regime_mode": selector_report["study"]["regime_mode"],
+            "regime_sma_window": regime_sma_window,
+            "regime_label_causality": "SMA calculada con rolling historico hasta t incluido; no usa datos posteriores a la fecha de senal.",
+            "random_seed": random_seed,
+            "random_n": random_n,
+            "sample_every_sessions": selector_report["study"]["sample_every_sessions"],
+            "signal_sampling": selector_report["study"]["signal_sampling"],
+            "interpretation": (
+                "Politicas semanales read-only con coste aplicado solo cuando hay posicion. "
+                "La serie beta-ajustada de top picks es retorno neto de cartera menos beta media por SPY."
+            ),
         },
         "universe": selector_report["universe"],
         "scan": {
@@ -1786,7 +2037,88 @@ def run_regime_policy_study(
             "policy_weeks": {policy: len(rows) for policy, rows in policy_returns.items()},
         },
         "summary": summary,
+        "turnover": details["turnover"],
+        "weekly_details": details["weekly_details"],
         "policy_returns": policy_returns,
+    }
+
+
+def run_regime_policy_robustness_study(
+    *,
+    since: str,
+    end: str,
+    cost_bps_values: tuple[float, ...],
+    sma_windows: tuple[int, ...],
+    top_n: int = 15,
+    universe_name: str = DEFAULT_UNIVERSE,
+    max_symbols: int = 0,
+    beta_lookback: int = DEFAULT_BETA_LOOKBACK,
+    regime_mode: str = DEFAULT_REGIME,
+    random_seed: int = 17,
+    random_n: int = 15,
+    provider: str | None = None,
+    fmp_api_key: str | None = None,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    sample_every: int = DEFAULT_SAMPLE_EVERY,
+    progress_every: int = DEFAULT_PROGRESS_EVERY,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    settings = settings or get_settings()
+    horizon = 5
+    reports_by_window: dict[str, Any] = {}
+    scan_by_window: dict[str, Any] = {}
+    for sma_window in sma_windows:
+        selector_report = run_selector_edge_backtest(
+            since=since,
+            end=end,
+            horizons=(horizon,),
+            cost_bps=cost_bps_values[0] if cost_bps_values else 10.0,
+            top_n=top_n,
+            universe_name=universe_name,
+            max_symbols=max_symbols,
+            beta_lookback=beta_lookback,
+            regime_mode=regime_mode,
+            regime_sma_window=int(sma_window),
+            provider=provider,
+            fmp_api_key=fmp_api_key,
+            batch_size=batch_size,
+            sample_every=sample_every,
+            progress_every=progress_every,
+            include_top_records=True,
+            include_universe_records=True,
+            settings=settings,
+        )
+        scan_by_window[str(sma_window)] = selector_report["scan"]
+        reports_by_window[str(sma_window)] = {
+            str(cost_bps): build_regime_policy_report_from_selector(
+                selector_report,
+                cost_bps=cost_bps,
+                horizon=horizon,
+                random_seed=random_seed,
+                random_n=random_n,
+            )
+            for cost_bps in cost_bps_values
+        }
+    return {
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "study": {
+            "name": "regime_governed_policy_robustness_historical",
+            "since": since,
+            "end": end,
+            "horizon_days": horizon,
+            "top_n": top_n,
+            "sma_windows": list(sma_windows),
+            "cost_bps_values": list(cost_bps_values),
+            "regime_mode": regime_mode,
+            "random_seed": random_seed,
+            "random_n": random_n,
+            "sample_every_sessions": sample_every,
+            "signal_sampling": "weekly" if int(sample_every) == 5 else f"every_{sample_every}_sessions",
+            "regime_label_causality": "Cada etiqueta usa Close[t] y SMA[t] calculada con datos <= t.",
+            "interpretation": "Estudio historico read-only; no promueve cambios ni modifica estado.",
+        },
+        "scan_by_sma_window": scan_by_window,
+        "reports_by_sma_window": reports_by_window,
     }
 
 
@@ -2159,10 +2491,12 @@ __all__ = [
     "selector_main",
     "run_extension_gate_edge_backtest",
     "run_pullback_breakout_backtest",
+    "run_regime_policy_robustness_study",
     "run_regime_policy_study",
     "run_selector_edge_backtest",
     "run_weekly_policy_decision_study",
     "sampled_session_dates",
+    "regime_policy_weekly_details",
     "regime_policy_weekly_returns",
     "summarize_observations",
     "summarize_policy_weekly_returns",

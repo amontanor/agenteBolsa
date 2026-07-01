@@ -5,6 +5,7 @@ from agente_bolsa.tools.strategy_edge_backtest import (
     SelectorObservation,
     StrategyObservation,
     add_vector_signal_columns,
+    regime_policy_weekly_details,
     regime_policy_weekly_returns,
     sampled_session_dates,
     summarize_observations,
@@ -320,12 +321,35 @@ def test_regime_policy_weekly_returns_aligns_cash_spy_and_top_picks():
         },
     ]
     top_records = [
-        {"signal_date": "2026-01-02", "raw_returns": {5: 0.04}},
-        {"signal_date": "2026-01-02", "raw_returns": {5: 0.02}},
-        {"signal_date": "2026-01-09", "raw_returns": {5: 0.10}},
+        {"signal_date": "2026-01-02", "symbol": "AAA", "raw_returns": {5: 0.04}, "beta_asof": 1.1},
+        {"signal_date": "2026-01-02", "symbol": "BBB", "raw_returns": {5: 0.02}, "beta_asof": 0.9},
+        {"signal_date": "2026-01-09", "symbol": "CCC", "raw_returns": {5: 0.10}, "beta_asof": 1.4},
+    ]
+    universe_records = [
+        {"signal_date": "2026-01-02", "symbol": "AAA", "raw_returns": {5: 0.03}},
+        {"signal_date": "2026-01-02", "symbol": "BBB", "raw_returns": {5: 0.01}},
+        {"signal_date": "2026-01-09", "symbol": "AAA", "raw_returns": {5: 0.10}},
+        {"signal_date": "2026-01-16", "symbol": "DDD", "raw_returns": {5: 0.02}},
     ]
 
-    policies = regime_policy_weekly_returns(benchmark_records, top_records, horizon=5, cost=0.001)
+    details = regime_policy_weekly_details(
+        benchmark_records,
+        top_records,
+        horizon=5,
+        cost=0.001,
+        universe_records=universe_records,
+        random_seed=7,
+        random_n=2,
+    )
+    policies = regime_policy_weekly_returns(
+        benchmark_records,
+        top_records,
+        horizon=5,
+        cost=0.001,
+        universe_records=universe_records,
+        random_seed=7,
+        random_n=2,
+    )
     summary = summarize_policy_weekly_returns(policies)
 
     assert {name: len(rows) for name, rows in policies.items()} == {
@@ -333,6 +357,9 @@ def test_regime_policy_weekly_returns_aligns_cash_spy_and_top_picks():
         "spy_buy_hold": 3,
         "spy_bull_cash_bear": 3,
         "top_bull_cash_bear": 3,
+        "top_bull_cash_bear_beta_adjusted": 3,
+        "universe_equal_weight_bull_cash_bear": 3,
+        "random15_bull_cash_bear": 3,
     }
     assert policies["cash"] == [
         ("2026-01-02", "bull_above_sma200", 0.0),
@@ -344,4 +371,25 @@ def test_regime_policy_weekly_returns_aligns_cash_spy_and_top_picks():
     assert policies["top_bull_cash_bear"][0][2] == 0.029
     assert policies["top_bull_cash_bear"][1][2] == 0.0
     assert policies["top_bull_cash_bear"][2][2] == 0.0
+    assert policies["top_bull_cash_bear_beta_adjusted"][0][2] == 0.009
+    assert policies["universe_equal_weight_bull_cash_bear"][0][2] == 0.019
+    assert policies["universe_equal_weight_bull_cash_bear"][1][2] == 0.0
+    assert policies["universe_equal_weight_bull_cash_bear"][2][2] == 0.019
+    assert policies["random15_bull_cash_bear"][0][2] == 0.019
+    assert details["turnover"]["top_bull_cash_bear"]["transitions"] == 2
+    assert details["turnover"]["top_bull_cash_bear"]["max"] == 1.0
     assert summary["by_regime"]["bear_below_sma200"]["top_bull_cash_bear"]["mean"] == 0.0
+
+
+def test_build_regime_map_supports_causal_sma_windows():
+    frame = pd.DataFrame(
+        {"Close": [10.0, 10.0, 12.0, 1.0, 100.0]},
+        index=pd.to_datetime(["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04", "2026-01-05"]),
+    )
+
+    regimes = strategy_edge_backtest.build_regime_map(frame, sma_window=3)
+
+    assert regimes["2026-01-01"] == "unknown"
+    assert regimes["2026-01-02"] == "unknown"
+    assert regimes["2026-01-03"] == "bull_above_sma3"
+    assert regimes["2026-01-04"] == "bear_below_sma3"
