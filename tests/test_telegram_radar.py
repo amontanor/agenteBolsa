@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 
 from agente_bolsa.research.telegram_radar.extract import (
+    _extract_first_json_object,
+    _parse_json_object,
     extract_opportunity,
     map_tickers_to_universe,
 )
@@ -78,6 +80,64 @@ def test_extract_opportunity_degrades_when_llm_unavailable():
     assert "RH" in extraction.tickers
     assert "RACE" in extraction.tickers
     assert extraction.llm_error == "llm down"
+
+
+def test_parse_json_object_accepts_clean_json_fences_and_prose():
+    clean = '{"is_opportunity": true, "tickers": ["NVDA"], "direction": "buy"}'
+    fenced = '```json\n{"is_opportunity": true, "tickers": ["NVDA"], "direction": "buy"}\n```'
+    prose = 'Claro. Resultado:\n{"is_opportunity": true, "tickers": ["NVDA"], "direction": "buy"}\nFin.'
+
+    assert _parse_json_object(clean)["tickers"] == ["NVDA"]
+    assert _parse_json_object(fenced)["direction"] == "buy"
+    assert _parse_json_object(prose)["is_opportunity"] is True
+
+
+def test_extract_first_json_object_is_balanced_and_respects_strings():
+    text = 'prosa {"thesis": "texto con } dentro", "nested": {"ok": true}} cola {"ignored": true}'
+
+    extracted = _extract_first_json_object(text)
+
+    assert extracted == '{"thesis": "texto con } dentro", "nested": {"ok": true}}'
+
+
+def test_extract_opportunity_retries_after_non_parseable_llm_response():
+    post = {
+        "message_id": 105,
+        "posted_at": "2026-07-01T09:30:00+00:00",
+        "text": "NVIDIA muy comprable",
+    }
+    calls = []
+
+    def fake_llm(messages):
+        calls.append(messages)
+        if len(calls) == 1:
+            return "No puedo devolver JSON ahora"
+        return '```json\n{"is_opportunity": true, "tickers": ["NVDA"], "direction": "buy", "thesis": "Entrada en NVIDIA", "timeframe": null, "confidence": 0.8, "unresolved_mentions": []}\n```'
+
+    extraction = extract_opportunity(post, llm=fake_llm, current_universe=["NVDA"])
+
+    assert len(calls) == 2
+    assert extraction.extraction_status == "llm_ok"
+    assert extraction.tickers == ["NVDA"]
+    assert extraction.confidence == 0.8
+
+
+def test_extract_opportunity_falls_back_after_unparseable_llm_retry():
+    post = {
+        "message_id": 106,
+        "posted_at": "2026-07-01T09:30:00+00:00",
+        "text": "Micron puede ser oportunidad",
+    }
+
+    def fake_llm(_messages):
+        return "respuesta sin objeto JSON"
+
+    extraction = extract_opportunity(post, llm=fake_llm, current_universe=["MU"])
+
+    assert extraction.extraction_status == "llm_unavailable_heuristic_fallback"
+    assert "retry:" in str(extraction.llm_error)
+    assert extraction.tickers == ["MU"]
+    assert extraction.direction == "watch"
 
 
 def test_map_tickers_to_universe_with_stub_members():

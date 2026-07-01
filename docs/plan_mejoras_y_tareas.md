@@ -923,3 +923,11 @@ R:R, confianza y entry-quality; y `scorecard.py` para medir retornos forward
 5/10/20d netos de costes y excess vs SPY de todas las menciones. CLI
 `telegram-radar report`. No cambia trading ni crea ordenes. Ver informe:
 `docs/informe_codex_telegram_radar_faseB_2026-07-01.md`.
+
+### B13 - Telegram radar Fase B.1: extraccion LLM robusta. **HECHO (v0.4.79).**
+Correccion read-only de `research/telegram_radar/extract.py`: diagnostico de
+respuesta real `chat_for_role("deep")`, prompt JSON estricto, extractor de primer
+objeto JSON balanceado, soporte de fences/prosa alrededor y un reintento acotado
+si la respuesta no es parseable. La validacion real sobre 3 posts recientes paso
+de fallback heuristico a `llm_ok`. Ver informe:
+`docs/informe_codex_telegram_radar_faseB1_2026-07-01.md`.

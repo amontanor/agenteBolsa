@@ -35,7 +35,6 @@ NAME_TO_TICKER = {
 }
 
 TICKER_RE = re.compile(r"(?<![A-Z0-9])\$?([A-Z][A-Z0-9.-]{1,5})(?![A-Z0-9])")
-JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
 TICKER_STOPWORDS = {"AYER", "HOY", "MAS", "USA", "VIP"}
 
 
@@ -99,10 +98,27 @@ def extract_opportunity(
     llm_model: str | None = None
     status = "heuristic_only"
     if use_llm:
+        messages = _messages_for_post(text)
         try:
-            content = llm(_messages_for_post(text)) if llm else _call_llm(_messages_for_post(text), settings or get_settings())
+            content = _call_extraction_llm(messages, settings=settings, llm=llm)
             raw = _parse_json_object(content)
             status = "llm_ok"
+        except json.JSONDecodeError as exc:
+            try:
+                content = _call_extraction_llm(_messages_for_post(text, retry=True), settings=settings, llm=llm)
+                raw = _parse_json_object(content)
+                status = "llm_ok"
+            except Exception as retry_exc:
+                llm_error = f"{exc}; retry: {retry_exc}"
+                status = "llm_unavailable_heuristic_fallback"
+        except ValueError as exc:
+            try:
+                content = _call_extraction_llm(_messages_for_post(text, retry=True), settings=settings, llm=llm)
+                raw = _parse_json_object(content)
+                status = "llm_ok"
+            except Exception as retry_exc:
+                llm_error = f"{exc}; retry: {retry_exc}"
+                status = "llm_unavailable_heuristic_fallback"
         except Exception as exc:
             llm_error = str(exc)
             status = "llm_unavailable_heuristic_fallback"
@@ -132,15 +148,37 @@ def extract_opportunity(
     )
 
 
-def _messages_for_post(text: str) -> list[dict[str, Any]]:
+def _call_extraction_llm(
+    messages: list[dict[str, Any]],
+    *,
+    settings: Settings | None,
+    llm: Callable[[list[dict[str, Any]]], str] | None,
+) -> str:
+    return llm(messages) if llm else _call_llm(messages, settings or get_settings())
+
+
+def _messages_for_post(text: str, *, retry: bool = False) -> list[dict[str, Any]]:
+    retry_prefix = (
+        "REINTENTO: la respuesta anterior no fue JSON parseable. "
+        "Responde SOLO con el objeto JSON, sin texto, sin markdown y sin fences. "
+        if retry
+        else ""
+    )
     return [
         {
             "role": "system",
             "content": (
+                f"{retry_prefix}"
                 "Extrae oportunidades de bolsa de posts de Telegram en espanol. "
-                "Devuelve solo JSON valido con keys: is_opportunity bool, tickers list, "
-                "direction buy|sell|watch|none, thesis breve, timeframe string|null, "
-                "confidence numero 0-1, unresolved_mentions list. Normaliza $RH a RH."
+                "Tu respuesta completa debe ser un unico objeto JSON valido: debe empezar con { y acabar con }. "
+                "No incluyas explicaciones, razonamiento, texto antes/despues, markdown ni fences ```json. "
+                "Usa exactamente estas claves: "
+                "is_opportunity (boolean), tickers (array de strings), "
+                "direction (uno de buy, sell, watch, none), thesis (string breve), "
+                "timeframe (string o null), confidence (numero 0-1), unresolved_mentions (array de strings). "
+                "Normaliza $RH a RH y nombres comunes: Palantir=PLTR, Reddit=RDDT, Ferrari=RACE, "
+                "MercadoLibre/MELI=MELI, Google=GOOGL, Oracle=ORCL, Micron=MU. "
+                "Si no hay ticker concreto, usa tickers=[] y direction=none."
             ),
         },
         {"role": "user", "content": text},
@@ -153,25 +191,72 @@ def _call_llm(messages: list[dict[str, Any]], settings: Settings) -> str:
         settings=settings,
         messages=messages,
         temperature=0.0,
-        max_tokens=500,
+        max_tokens=900,
     )
     choice = response.choices[0]
-    content = getattr(getattr(choice, "message", None), "content", None)
-    if content is None:
-        content = choice.message["content"]
-    return str(content)
+    return _response_message_text(getattr(choice, "message", None))
 
 
 def _parse_json_object(content: str) -> dict[str, Any]:
-    text = content.strip()
-    try:
-        value = json.loads(text)
-    except json.JSONDecodeError:
-        match = JSON_BLOCK_RE.search(text)
-        if not match:
-            raise
-        value = json.loads(match.group(0))
+    text = _extract_first_json_object(content)
+    value = json.loads(text)
     return value if isinstance(value, dict) else {}
+
+
+def _response_message_text(message: Any) -> str:
+    content = getattr(message, "content", None)
+    if content is None and isinstance(message, dict):
+        content = message.get("content")
+    if str(content or "").strip():
+        return str(content)
+    reasoning_content = getattr(message, "reasoning_content", None)
+    if reasoning_content is None and isinstance(message, dict):
+        reasoning_content = message.get("reasoning_content")
+    return str(reasoning_content or "")
+
+
+def _extract_first_json_object(content: str) -> str:
+    text = _strip_outer_fence(str(content or "").strip())
+    start: int | None = None
+    depth = 0
+    in_string = False
+    escaped = False
+    for index, char in enumerate(text):
+        if start is None:
+            if char == "{":
+                start = index
+                depth = 1
+            continue
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    raise ValueError("no_json_object_found")
+
+
+def _strip_outer_fence(text: str) -> str:
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    first_line_end = stripped.find("\n")
+    if first_line_end == -1:
+        return stripped
+    closing = stripped.rfind("```")
+    if closing <= first_line_end:
+        return stripped
+    return stripped[first_line_end + 1 : closing].strip()
 
 
 def _normalize_direction(value: str) -> str:
