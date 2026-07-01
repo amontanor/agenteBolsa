@@ -931,3 +931,11 @@ objeto JSON balanceado, soporte de fences/prosa alrededor y un reintento acotado
 si la respuesta no es parseable. La validacion real sobre 3 posts recientes paso
 de fallback heuristico a `llm_ok`. Ver informe:
 `docs/informe_codex_telegram_radar_faseB1_2026-07-01.md`.
+
+### B14 - Telegram radar diario aislado. **HECHO (v0.4.80).**
+Extension read-only del CLI `telegram-radar report --out` para escribir markdown
+UTF-8 y scripts externos `scripts/run_telegram_radar_daily.ps1` y
+`scripts/run_telegram_radar_supervisor.ps1`. El supervisor no toca
+`agente_bolsa.main schedule`, corre fuera del runtime de trading y deja informes
+en `data/research/telegram/reports/radar_<fecha>.md`. No se arranco la tarea.
+Ver informe: `docs/informe_codex_telegram_radar_scheduling_2026-07-02.md`.

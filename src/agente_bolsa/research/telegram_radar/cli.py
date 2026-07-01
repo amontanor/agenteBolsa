@@ -206,8 +206,23 @@ def render_report_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def write_markdown_report(markdown: str, output_path: str | Path) -> Path:
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(markdown, encoding="utf-8", newline="\n")
+    return path
+
+
 def _parse_dt(value: Any) -> datetime | None:
     if not value:
+        return None
+    try:
+        text = str(value).replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(text)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except ValueError:
         return None
 
 
@@ -250,11 +265,3 @@ def _fmt_pct(value: Any) -> str:
         return f"{float(value) * 100:.2f}%"
     except (TypeError, ValueError):
         return "-"
-    try:
-        text = str(value).replace("Z", "+00:00")
-        parsed = datetime.fromisoformat(text)
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed
-    except ValueError:
-        return None

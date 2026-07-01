@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import argparse
+
 import pandas as pd
 
+import agente_bolsa.main as main_module
 from agente_bolsa.config import Settings
 from agente_bolsa.research.telegram_radar.analysis import build_gate_verdicts
-from agente_bolsa.research.telegram_radar.cli import render_report_markdown
+from agente_bolsa.research.telegram_radar.cli import render_report_markdown, write_markdown_report
 from agente_bolsa.research.telegram_radar.scorecard import build_scorecard
 
 
@@ -150,3 +153,41 @@ def test_render_report_markdown_contains_scorecard_and_caveats():
     assert "confidence_baja" in markdown
     assert "## Marcador acumulado" in markdown
     assert "cherry-picking" in markdown
+
+
+def test_write_markdown_report_uses_utf8(tmp_path):
+    output = tmp_path / "nested" / "radar.md"
+    markdown = "# Radar\n\nSección con acentos: oportunidad, ejecución, señal.\n"
+
+    written = write_markdown_report(markdown, output)
+    raw = output.read_bytes()
+
+    assert written == output
+    assert raw.startswith(b"# Radar")
+    assert b"\xff\xfe" not in raw[:2]
+    assert output.read_text(encoding="utf-8") == markdown
+
+
+def test_telegram_radar_report_out_writes_markdown_utf8(monkeypatch, tmp_path, capsys):
+    output = tmp_path / "radar.md"
+    markdown = "# Radar diario\n\nSeñal UTF-8.\n"
+
+    monkeypatch.setattr(main_module, "get_settings", lambda: Settings(DATA_DIR=tmp_path))
+    monkeypatch.setattr(main_module, "configure_logging", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        main_module,
+        "telegram_radar_build_report",
+        lambda **_kwargs: {"ok": True, "markdown": markdown},
+    )
+
+    main_module.command_telegram_radar(
+        argparse.Namespace(
+            telegram_command="report",
+            days=7,
+            out=str(output),
+            json=False,
+        )
+    )
+
+    assert output.read_text(encoding="utf-8") == markdown
+    assert "escrito" in capsys.readouterr().out

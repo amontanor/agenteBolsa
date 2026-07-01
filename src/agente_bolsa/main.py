@@ -28,6 +28,9 @@ from .models import AgentEvent, Hypothesis, new_id
 from .research.telegram_radar.cli import build_report as telegram_radar_build_report
 from .research.telegram_radar.cli import list_records as telegram_radar_list_records
 from .research.telegram_radar.cli import run_ingest as telegram_radar_run_ingest
+from .research.telegram_radar.cli import (
+    write_markdown_report as telegram_radar_write_markdown_report,
+)
 from .scheduler import (
     _run_pre_earnings_trade_operation,
     broker_reconciliation_job,
@@ -1645,6 +1648,10 @@ def command_telegram_radar(args: argparse.Namespace) -> None:
             settings=settings,
             days=args.days,
         )
+        output_path = getattr(args, "out", None)
+        if output_path:
+            written = telegram_radar_write_markdown_report(report["markdown"], output_path)
+            report["output_path"] = str(written)
     if args.json:
         _print_json(report)
         return
@@ -1656,6 +1663,9 @@ def command_telegram_radar(args: argparse.Namespace) -> None:
             print(f"warnings={report['ingest']['warnings']}")
         return
     if args.telegram_command == "report":
+        if report.get("output_path"):
+            print(f"TELEGRAM RADAR REPORT escrito en {report['output_path']}")
+            return
         print(report["markdown"])
         return
     print("TELEGRAM RADAR LIST (research read-only)")
@@ -4107,6 +4117,7 @@ def build_parser() -> argparse.ArgumentParser:
     telegram_list.set_defaults(func=command_telegram_radar)
     telegram_report = telegram_subparsers.add_parser("report", help="Genera marcador honesto y veredictos internos.")
     telegram_report.add_argument("--days", type=int, default=7, help="Ventana reciente para oportunidades/veredictos.")
+    telegram_report.add_argument("--out", help="Ruta de salida markdown UTF-8. Si se omite, imprime por stdout.")
     telegram_report.add_argument("--json", action="store_true", help="Devuelve JSON con markdown incluido.")
     telegram_report.set_defaults(func=command_telegram_radar)
 
