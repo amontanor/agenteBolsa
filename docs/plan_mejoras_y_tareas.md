@@ -893,3 +893,10 @@ Extension read-only del estudio de regimen con SMA150/200/250, sensibilidad
 fija, residual beta-ajustado de top-picks y turnover semanal. Confirma etiquetas
 de regimen causales (`SMA[t]` con datos `<= t`). Ver informe:
 `docs/informe_codex_regime_policy_robustez_2026-07-01.md`.
+
+### B9 - Turnover y estabilidad OOS del alpha beta-ajustado. **HECHO (v0.4.75).**
+Extension read-only de `study_regime_policy.py` con sensibilidad de top-picks a
+rebalanceo semanal/quincenal/mensual, min-hold e histeresis, coste por turnover
+estimado y desglose OOS 2022/2023/2024/2025-26. El residual beta-ajustado sobrevive
+mejor con menor turnover, pero 2023 muestra fragilidad. Ver informe:
+`docs/informe_codex_regime_policy_turnover_oos_2026-07-01.md`.

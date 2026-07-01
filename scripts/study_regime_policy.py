@@ -75,6 +75,18 @@ def print_robustness_summary(report: dict[str, Any]) -> None:
                     f"{_pct(stats.get('cumulative_return')):>12}{_num(stats.get('sharpe_annualized')):>12}"
                     f"{_pct(stats.get('max_drawdown')):>12}{_pct(stats.get('worst_week')):>12}"
                 )
+    print("\nAlpha beta-ajustado top-picks por cadencia")
+    print(f"{'sma':>5}{'cost':>8}{'variant':<48}{'cum_alpha':>12}{'sharpe':>10}{'turnover':>12}")
+    for sma_window, cost_reports in report["reports_by_sma_window"].items():
+        for cost_bps, cost_report in cost_reports.items():
+            for variant, stats in cost_report.get("turnover_sensitivity", {}).items():
+                alpha = stats["beta_adjusted_summary"]
+                turnover = stats["turnover"]
+                print(
+                    f"{sma_window:>5}{cost_bps:>8}{variant:<48}"
+                    f"{_pct(alpha.get('cumulative_return')):>12}{_num(alpha.get('sharpe_annualized')):>10}"
+                    f"{_pct(turnover.get('mean')):>12}"
+                )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -93,6 +105,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--progress-every", type=int, default=50)
     parser.add_argument("--random-seed", type=int, default=17, help="Seed fija para control random15.")
     parser.add_argument("--random-n", type=int, default=15, help="Tamano del control aleatorio.")
+    parser.add_argument("--cadence-weeks", default="1,2,4", help="Cadencias de rebalanceo top-picks en semanas.")
+    parser.add_argument("--min-hold-weeks", type=int, default=2, help="Minimo de semanas para variante con histeresis.")
+    parser.add_argument(
+        "--hysteresis-score-delta",
+        type=float,
+        default=0.02,
+        help="Mejora minima de score para rotar una posicion retenida.",
+    )
     parser.add_argument("--json", action="store_true", help="Imprime JSON completo.")
     return parser
 
@@ -101,6 +121,7 @@ def main() -> int:
     args = build_parser().parse_args()
     sma_windows = _parse_int_list(args.sma_windows)
     cost_values = _parse_float_list(args.cost_sensitivity_bps) if args.cost_sensitivity_bps else (args.cost_bps,)
+    cadence_weeks = _parse_int_list(args.cadence_weeks)
     if len(sma_windows) > 1 or len(cost_values) > 1:
         report = run_regime_policy_robustness_study(
             since=args.since,
@@ -116,6 +137,9 @@ def main() -> int:
             progress_every=args.progress_every,
             random_seed=args.random_seed,
             random_n=args.random_n,
+            cadence_weeks=cadence_weeks,
+            min_hold_weeks=args.min_hold_weeks,
+            hysteresis_score_delta=args.hysteresis_score_delta,
         )
     else:
         report = run_regime_policy_study(
@@ -132,6 +156,9 @@ def main() -> int:
             regime_sma_window=sma_windows[0],
             random_seed=args.random_seed,
             random_n=args.random_n,
+            cadence_weeks=cadence_weeks,
+            min_hold_weeks=args.min_hold_weeks,
+            hysteresis_score_delta=args.hysteresis_score_delta,
         )
     if args.json:
         print(json.dumps(report, indent=2, ensure_ascii=False, default=str))

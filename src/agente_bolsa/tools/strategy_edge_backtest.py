@@ -32,6 +32,12 @@ DEFAULT_BATCH_SIZE = 80
 DEFAULT_SAMPLE_EVERY = 5
 DEFAULT_PROGRESS_EVERY = 25
 MIN_CURRENT_SP500_SIZE = 450
+DEFAULT_OOS_SUBPERIODS = {
+    "2022": ("2022-01-01", "2022-12-31"),
+    "2023": ("2023-01-01", "2023-12-31"),
+    "2024": ("2024-01-01", "2024-12-31"),
+    "2025-26": ("2025-01-01", "2026-12-31"),
+}
 
 
 @dataclass(frozen=True)
@@ -1693,6 +1699,234 @@ def summarize_weekly_turnover(weekly_holdings: list[tuple[str, str, set[str]]]) 
     }
 
 
+def _holding_turnover(previous: set[str], current: set[str]) -> float:
+    if not previous and not current:
+        return 0.0
+    if not previous or not current:
+        return 1.0
+    return 1.0 - (len(previous & current) / max(len(previous), len(current)))
+
+
+def _record_score(record: dict[str, Any]) -> float:
+    value = _safe_float(record.get("selector_score"))
+    return value if value is not None else 0.0
+
+
+def _top_records_by_date(records: list[dict[str, Any]], *, horizon: int) -> dict[str, list[dict[str, Any]]]:
+    by_date: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        signal_date = str(record.get("signal_date") or "")[:10]
+        if not signal_date or _raw_return_for_horizon(record, horizon) is None:
+            continue
+        by_date.setdefault(signal_date, []).append(record)
+    for rows in by_date.values():
+        rows.sort(key=lambda item: (_record_score(item), _safe_float(item.get("technical_score")) or 0.0), reverse=True)
+    return by_date
+
+
+def _universe_records_by_date_symbol(
+    records: list[dict[str, Any]],
+    *,
+    horizon: int,
+) -> dict[str, dict[str, dict[str, Any]]]:
+    by_date: dict[str, dict[str, dict[str, Any]]] = {}
+    for record in records:
+        signal_date = str(record.get("signal_date") or "")[:10]
+        symbol = str(record.get("symbol") or "").upper()
+        if not signal_date or not symbol or _raw_return_for_horizon(record, horizon) is None:
+            continue
+        by_date.setdefault(signal_date, {})[symbol] = record
+    return by_date
+
+
+def _select_hysteresis_holdings(
+    previous_holdings: dict[str, dict[str, Any]],
+    target_rows: list[dict[str, Any]],
+    *,
+    top_n: int,
+    min_hold_weeks: int,
+    score_delta: float,
+) -> dict[str, dict[str, Any]]:
+    target_by_symbol = {str(row.get("symbol") or "").upper(): row for row in target_rows}
+    target_symbols = list(target_by_symbol)
+    retained: dict[str, dict[str, Any]] = {}
+    candidate_index = 0
+    for symbol, state in previous_holdings.items():
+        if len(retained) >= top_n:
+            break
+        target_row = target_by_symbol.get(symbol)
+        if target_row is not None:
+            retained[symbol] = {
+                **state,
+                "score": _record_score(target_row),
+                "last_beta": _safe_float(target_row.get("beta_asof")) or state.get("last_beta"),
+            }
+            continue
+        while candidate_index < len(target_symbols) and target_symbols[candidate_index] in retained:
+            candidate_index += 1
+        replacement_score = (
+            _record_score(target_by_symbol[target_symbols[candidate_index]])
+            if candidate_index < len(target_symbols)
+            else None
+        )
+        held_weeks = int(state.get("held_weeks", 0))
+        previous_score = float(state.get("score", 0.0))
+        should_keep = held_weeks < min_hold_weeks or replacement_score is None or replacement_score < previous_score + score_delta
+        if should_keep:
+            retained[symbol] = state
+
+    selected = dict(retained)
+    for row in target_rows:
+        if len(selected) >= top_n:
+            break
+        symbol = str(row.get("symbol") or "").upper()
+        if not symbol or symbol in selected:
+            continue
+        selected[symbol] = {
+            "score": _record_score(row),
+            "held_weeks": 0,
+            "last_beta": _safe_float(row.get("beta_asof")),
+        }
+    return selected
+
+
+def _summarize_policy_subperiods(
+    weekly_returns: list[tuple[str, str, float]],
+    *,
+    periods: dict[str, tuple[str, str]],
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for label, (start, end) in periods.items():
+        rows = [row for row in weekly_returns if start <= row[0] <= end]
+        result[label] = summarize_weekly_portfolio_returns(rows)
+    return result
+
+
+def summarize_policy_subperiods(
+    policy_returns: dict[str, list[tuple[str, str, float]]],
+    *,
+    periods: dict[str, tuple[str, str]],
+) -> dict[str, Any]:
+    return {
+        policy: _summarize_policy_subperiods(rows, periods=periods)
+        for policy, rows in policy_returns.items()
+    }
+
+
+def top_pick_turnover_sensitivity(
+    benchmark_records: list[dict[str, Any]],
+    top_records: list[dict[str, Any]],
+    universe_records: list[dict[str, Any]],
+    *,
+    horizon: int,
+    cost: float,
+    top_n: int,
+    cadence_weeks: tuple[int, ...] = (1, 2, 4),
+    min_hold_weeks: int = 2,
+    hysteresis_score_delta: float = 0.02,
+    periods: dict[str, tuple[str, str]] | None = None,
+) -> dict[str, Any]:
+    top_by_date = _top_records_by_date(top_records, horizon=horizon)
+    universe_by_date_symbol = _universe_records_by_date_symbol(universe_records, horizon=horizon)
+    ordered_benchmark = sorted(benchmark_records, key=lambda item: str(item.get("signal_date") or "")[:10])
+    result: dict[str, Any] = {}
+    for cadence in cadence_weeks:
+        for use_hysteresis in (False, True):
+            variant = f"top_rebalance_{cadence}w"
+            if use_hysteresis:
+                variant = f"{variant}_hysteresis_min{min_hold_weeks}_delta{hysteresis_score_delta:g}"
+            holdings: dict[str, dict[str, Any]] = {}
+            weeks_since_rebalance: int | None = None
+            returns: list[tuple[str, str, float]] = []
+            beta_adjusted_returns: list[tuple[str, str, float]] = []
+            turnover_rows: list[tuple[str, str, set[str]]] = []
+
+            for record in ordered_benchmark:
+                signal_date = str(record.get("signal_date") or "")[:10]
+                regime = str(record.get("regime") or "unknown")
+                spy_value = _benchmark_return_for_horizon(record, horizon)
+                if not signal_date or spy_value is None:
+                    continue
+                previous_symbols = set(holdings)
+                is_bull = _is_bull_regime(regime)
+                if not is_bull:
+                    holdings = {}
+                    weeks_since_rebalance = None
+                else:
+                    rebalance_due = weeks_since_rebalance is None or weeks_since_rebalance >= cadence
+                    if rebalance_due:
+                        target_rows = top_by_date.get(signal_date, [])[:top_n]
+                        if use_hysteresis:
+                            holdings = _select_hysteresis_holdings(
+                                holdings,
+                                target_rows,
+                                top_n=top_n,
+                                min_hold_weeks=min_hold_weeks,
+                                score_delta=hysteresis_score_delta,
+                            )
+                        else:
+                            holdings = {
+                                str(row.get("symbol") or "").upper(): {
+                                    "score": _record_score(row),
+                                    "held_weeks": 0,
+                                    "last_beta": _safe_float(row.get("beta_asof")),
+                                }
+                                for row in target_rows
+                                if str(row.get("symbol") or "").strip()
+                            }
+                        weeks_since_rebalance = 0
+
+                current_symbols = set(holdings)
+                turnover = _holding_turnover(previous_symbols, current_symbols)
+                date_records = universe_by_date_symbol.get(signal_date, {})
+                position_returns: list[float] = []
+                position_betas: list[float] = []
+                for symbol, state in holdings.items():
+                    symbol_record = date_records.get(symbol)
+                    symbol_return = _raw_return_for_horizon(symbol_record or {}, horizon)
+                    if symbol_return is None:
+                        continue
+                    position_returns.append(symbol_return)
+                    beta = _safe_float((symbol_record or {}).get("beta_asof"))
+                    if beta is None:
+                        beta = _safe_float(state.get("last_beta"))
+                    if beta is not None:
+                        position_betas.append(beta)
+                if position_returns:
+                    gross_return = sum(position_returns) / len(position_returns)
+                    portfolio_beta = sum(position_betas) / len(position_betas) if position_betas else 1.0
+                else:
+                    gross_return = 0.0
+                    portfolio_beta = 0.0
+                net_return = round(gross_return - (cost * turnover), 6)
+                beta_adjusted = round(net_return - (portfolio_beta * spy_value), 6)
+                returns.append((signal_date, regime, net_return))
+                beta_adjusted_returns.append((signal_date, regime, beta_adjusted))
+                turnover_rows.append((signal_date, regime, current_symbols))
+                if is_bull and weeks_since_rebalance is not None:
+                    weeks_since_rebalance += 1
+                for state in holdings.values():
+                    state["held_weeks"] = int(state.get("held_weeks", 0)) + 1
+
+            variant_summary: dict[str, Any] = {
+                "cadence_weeks": cadence,
+                "hysteresis": use_hysteresis,
+                "min_hold_weeks": min_hold_weeks if use_hysteresis else 0,
+                "hysteresis_score_delta": hysteresis_score_delta if use_hysteresis else 0.0,
+                "cost_model": "cost_bps * weekly_turnover",
+                "return_summary": summarize_weekly_portfolio_returns(returns),
+                "beta_adjusted_summary": summarize_weekly_portfolio_returns(beta_adjusted_returns),
+                "turnover": summarize_weekly_turnover(turnover_rows),
+            }
+            if periods is not None:
+                variant_summary["subperiods"] = {
+                    "return": _summarize_policy_subperiods(returns, periods=periods),
+                    "beta_adjusted": _summarize_policy_subperiods(beta_adjusted_returns, periods=periods),
+                }
+            result[variant] = variant_summary
+    return result
+
+
 def regime_policy_weekly_details(
     benchmark_records: list[dict[str, Any]],
     top_records: list[dict[str, Any]],
@@ -1944,6 +2178,9 @@ def run_regime_policy_study(
     regime_sma_window: int = 200,
     random_seed: int = 17,
     random_n: int = 15,
+    cadence_weeks: tuple[int, ...] = (1, 2, 4),
+    min_hold_weeks: int = 2,
+    hysteresis_score_delta: float = 0.02,
     provider: str | None = None,
     fmp_api_key: str | None = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
@@ -1979,6 +2216,9 @@ def run_regime_policy_study(
         horizon=horizon,
         random_seed=random_seed,
         random_n=random_n,
+        cadence_weeks=cadence_weeks,
+        min_hold_weeks=min_hold_weeks,
+        hysteresis_score_delta=hysteresis_score_delta,
     )
 
 
@@ -1989,8 +2229,13 @@ def build_regime_policy_report_from_selector(
     horizon: int = 5,
     random_seed: int = 17,
     random_n: int = 15,
+    cadence_weeks: tuple[int, ...] = (1, 2, 4),
+    min_hold_weeks: int = 2,
+    hysteresis_score_delta: float = 0.02,
+    subperiods: dict[str, tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
     cost = cost_bps / 10000.0
+    periods = subperiods or DEFAULT_OOS_SUBPERIODS
     benchmark_records = selector_report["weekly_benchmark_records"]
     top_records = selector_report["top_pick_records"]
     universe_records = selector_report.get("universe_member_records", [])
@@ -2005,6 +2250,19 @@ def build_regime_policy_report_from_selector(
     )
     policy_returns = details["policy_returns"]
     summary = summarize_policy_weekly_returns(policy_returns)
+    subperiod_summary = summarize_policy_subperiods(policy_returns, periods=periods)
+    turnover_sensitivity = top_pick_turnover_sensitivity(
+        benchmark_records,
+        top_records,
+        universe_records,
+        horizon=horizon,
+        cost=cost,
+        top_n=int(selector_report["study"]["top_n"]),
+        cadence_weeks=cadence_weeks,
+        min_hold_weeks=min_hold_weeks,
+        hysteresis_score_delta=hysteresis_score_delta,
+        periods=periods,
+    )
     regime_sma_window = int(selector_report["study"].get("regime_sma_window", 200))
     return {
         "as_of": datetime.now(timezone.utc).isoformat(),
@@ -2024,11 +2282,16 @@ def build_regime_policy_report_from_selector(
             "regime_label_causality": "SMA calculada con rolling historico hasta t incluido; no usa datos posteriores a la fecha de senal.",
             "random_seed": random_seed,
             "random_n": random_n,
+            "cadence_weeks": list(cadence_weeks),
+            "min_hold_weeks": min_hold_weeks,
+            "hysteresis_score_delta": hysteresis_score_delta,
+            "subperiods": periods,
             "sample_every_sessions": selector_report["study"]["sample_every_sessions"],
             "signal_sampling": selector_report["study"]["signal_sampling"],
             "interpretation": (
                 "Politicas semanales read-only con coste aplicado solo cuando hay posicion. "
-                "La serie beta-ajustada de top picks es retorno neto de cartera menos beta media por SPY."
+                "La serie beta-ajustada de top picks es retorno neto de cartera menos beta media por SPY. "
+                "La sensibilidad de turnover aplica coste_bps por turnover semanal estimado."
             ),
         },
         "universe": selector_report["universe"],
@@ -2037,7 +2300,9 @@ def build_regime_policy_report_from_selector(
             "policy_weeks": {policy: len(rows) for policy, rows in policy_returns.items()},
         },
         "summary": summary,
+        "subperiod_summary": subperiod_summary,
         "turnover": details["turnover"],
+        "turnover_sensitivity": turnover_sensitivity,
         "weekly_details": details["weekly_details"],
         "policy_returns": policy_returns,
     }
@@ -2056,6 +2321,9 @@ def run_regime_policy_robustness_study(
     regime_mode: str = DEFAULT_REGIME,
     random_seed: int = 17,
     random_n: int = 15,
+    cadence_weeks: tuple[int, ...] = (1, 2, 4),
+    min_hold_weeks: int = 2,
+    hysteresis_score_delta: float = 0.02,
     provider: str | None = None,
     fmp_api_key: str | None = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
@@ -2096,6 +2364,9 @@ def run_regime_policy_robustness_study(
                 horizon=horizon,
                 random_seed=random_seed,
                 random_n=random_n,
+                cadence_weeks=cadence_weeks,
+                min_hold_weeks=min_hold_weeks,
+                hysteresis_score_delta=hysteresis_score_delta,
             )
             for cost_bps in cost_bps_values
         }
@@ -2112,6 +2383,10 @@ def run_regime_policy_robustness_study(
             "regime_mode": regime_mode,
             "random_seed": random_seed,
             "random_n": random_n,
+            "cadence_weeks": list(cadence_weeks),
+            "min_hold_weeks": min_hold_weeks,
+            "hysteresis_score_delta": hysteresis_score_delta,
+            "subperiods": DEFAULT_OOS_SUBPERIODS,
             "sample_every_sessions": sample_every,
             "signal_sampling": "weekly" if int(sample_every) == 5 else f"every_{sample_every}_sessions",
             "regime_label_causality": "Cada etiqueta usa Close[t] y SMA[t] calculada con datos <= t.",
@@ -2498,9 +2773,11 @@ __all__ = [
     "sampled_session_dates",
     "regime_policy_weekly_details",
     "regime_policy_weekly_returns",
+    "summarize_policy_subperiods",
     "summarize_observations",
     "summarize_policy_weekly_returns",
     "summarize_selector_observations",
     "summarize_weekly_portfolio_returns",
+    "top_pick_turnover_sensitivity",
     "weekly_policy_main",
 ]

@@ -12,6 +12,7 @@ from agente_bolsa.tools.strategy_edge_backtest import (
     summarize_policy_weekly_returns,
     summarize_selector_observations,
     summarize_weekly_portfolio_returns,
+    top_pick_turnover_sensitivity,
 )
 
 
@@ -393,3 +394,64 @@ def test_build_regime_map_supports_causal_sma_windows():
     assert regimes["2026-01-02"] == "unknown"
     assert regimes["2026-01-03"] == "bull_above_sma3"
     assert regimes["2026-01-04"] == "bear_below_sma3"
+
+
+def test_top_pick_turnover_sensitivity_lowers_rotation_and_keeps_beta_adjusted_alpha():
+    benchmark_records = [
+        {"signal_date": "2026-01-02", "regime": "bull_above_sma200", "benchmark_returns": {5: 0.01}},
+        {"signal_date": "2026-01-09", "regime": "bull_above_sma200", "benchmark_returns": {5: 0.01}},
+        {"signal_date": "2026-01-16", "regime": "bull_above_sma200", "benchmark_returns": {5: 0.01}},
+        {"signal_date": "2026-01-23", "regime": "bull_above_sma200", "benchmark_returns": {5: 0.01}},
+    ]
+    weekly_symbols = {
+        "2026-01-02": ("AAA", "BBB"),
+        "2026-01-09": ("CCC", "DDD"),
+        "2026-01-16": ("EEE", "FFF"),
+        "2026-01-23": ("GGG", "HHH"),
+    }
+    top_records = []
+    universe_records = []
+    for signal_date, symbols in weekly_symbols.items():
+        for rank, symbol in enumerate(symbols):
+            top_records.append(
+                {
+                    "signal_date": signal_date,
+                    "symbol": symbol,
+                    "selector_score": 1.0 - (rank * 0.1),
+                    "technical_score": 1.0,
+                    "raw_returns": {5: 0.03},
+                    "beta_asof": 1.0,
+                }
+            )
+        for symbol in {item for values in weekly_symbols.values() for item in values}:
+            universe_records.append(
+                {
+                    "signal_date": signal_date,
+                    "symbol": symbol,
+                    "raw_returns": {5: 0.03 if symbol in symbols else 0.02},
+                    "beta_asof": 1.0,
+                }
+            )
+
+    sensitivity = top_pick_turnover_sensitivity(
+        benchmark_records,
+        top_records,
+        universe_records,
+        horizon=5,
+        cost=0.001,
+        top_n=2,
+        cadence_weeks=(1, 2),
+        min_hold_weeks=2,
+        hysteresis_score_delta=0.02,
+        periods={"2026": ("2026-01-01", "2026-12-31")},
+    )
+
+    weekly = sensitivity["top_rebalance_1w"]
+    biweekly = sensitivity["top_rebalance_2w"]
+    weekly_hysteresis = sensitivity["top_rebalance_1w_hysteresis_min2_delta0.02"]
+
+    assert weekly["turnover"]["mean"] == 1.0
+    assert biweekly["turnover"]["mean"] < weekly["turnover"]["mean"]
+    assert weekly_hysteresis["turnover"]["mean"] < weekly["turnover"]["mean"]
+    assert weekly["beta_adjusted_summary"]["mean"] == 0.019
+    assert weekly["subperiods"]["beta_adjusted"]["2026"]["weeks"] == 4
