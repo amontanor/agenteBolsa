@@ -13,6 +13,7 @@ from agente_bolsa.tools.strategy_edge_backtest import (
     DEFAULT_SAMPLE_EVERY,
     run_regime_policy_robustness_study,
     run_regime_policy_study,
+    run_regime_policy_walk_forward_study,
 )
 
 
@@ -89,6 +90,26 @@ def print_robustness_summary(report: dict[str, Any]) -> None:
                 )
 
 
+def print_walk_forward_summary(report: dict[str, Any]) -> None:
+    print("\n=== Walk-forward OOS politica por regimen (read-only) ===")
+    print(
+        f"ventana={report['study']['since']}->{report['study']['end']} | "
+        f"sma={report['study']['sma_windows']} | costs={report['study']['cost_bps_values']} bps"
+    )
+    print(f"{'cost':>8}{'weeks':>8}{'alpha_cum':>12}{'sharpe':>10}{'turnover':>12}{'worst':>12}{'param_changes':>15}")
+    for cost_bps, block in report["by_cost_bps"].items():
+        alpha = block["beta_adjusted_oos"]
+        turnover = block["turnover"]
+        stability = block["selection_stability"]
+        changes = f"{stability['changes']}/{max(stability['steps'] - 1, 0)}"
+        print(
+            f"{cost_bps:>8}{alpha['weeks']:>8}{_pct(alpha.get('cumulative_return')):>12}"
+            f"{_num(alpha.get('sharpe_annualized')):>10}{_pct(turnover.get('mean')):>12}"
+            f"{_pct(alpha.get('worst_week')):>12}{changes:>15}"
+        )
+        print("  selected:", " -> ".join(stability["selected_sequence"]))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Estudio read-only de politicas por regimen SPY>SMA.")
     parser.add_argument("--since", default="2022-01-01", help="Fecha inicial YYYY-MM-DD.")
@@ -106,6 +127,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--random-seed", type=int, default=17, help="Seed fija para control random15.")
     parser.add_argument("--random-n", type=int, default=15, help="Tamano del control aleatorio.")
     parser.add_argument("--cadence-weeks", default="1,2,4", help="Cadencias de rebalanceo top-picks en semanas.")
+    parser.add_argument("--min-hold-values", default="0,2", help="Rejilla walk-forward de min-hold en semanas.")
+    parser.add_argument("--hysteresis-deltas", default="0,0.02", help="Rejilla walk-forward de deltas de histeresis.")
     parser.add_argument("--min-hold-weeks", type=int, default=2, help="Minimo de semanas para variante con histeresis.")
     parser.add_argument(
         "--hysteresis-score-delta",
@@ -113,6 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.02,
         help="Mejora minima de score para rotar una posicion retenida.",
     )
+    parser.add_argument("--walk-forward", action="store_true", help="Ejecuta solo walk-forward OOS expansivo.")
     parser.add_argument("--json", action="store_true", help="Imprime JSON completo.")
     return parser
 
@@ -122,7 +146,24 @@ def main() -> int:
     sma_windows = _parse_int_list(args.sma_windows)
     cost_values = _parse_float_list(args.cost_sensitivity_bps) if args.cost_sensitivity_bps else (args.cost_bps,)
     cadence_weeks = _parse_int_list(args.cadence_weeks)
-    if len(sma_windows) > 1 or len(cost_values) > 1:
+    if args.walk_forward:
+        report = run_regime_policy_walk_forward_study(
+            since=args.since,
+            end=args.end,
+            cost_bps_values=cost_values,
+            sma_windows=sma_windows,
+            top_n=args.top_n,
+            universe_name=args.universe,
+            max_symbols=args.max_symbols,
+            beta_lookback=args.beta_lookback,
+            batch_size=args.batch_size,
+            sample_every=args.sample_every,
+            progress_every=args.progress_every,
+            cadence_weeks=cadence_weeks,
+            min_hold_values=_parse_int_list(args.min_hold_values),
+            hysteresis_deltas=_parse_float_list(args.hysteresis_deltas),
+        )
+    elif len(sma_windows) > 1 or len(cost_values) > 1:
         report = run_regime_policy_robustness_study(
             since=args.since,
             end=args.end,
@@ -162,6 +203,8 @@ def main() -> int:
         )
     if args.json:
         print(json.dumps(report, indent=2, ensure_ascii=False, default=str))
+    elif report["study"]["name"] == "regime_policy_walk_forward_oos":
+        print_walk_forward_summary(report)
     elif report["study"]["name"] == "regime_governed_policy_robustness_historical":
         print_robustness_summary(report)
     else:

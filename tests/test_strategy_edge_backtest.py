@@ -5,6 +5,7 @@ from agente_bolsa.tools.strategy_edge_backtest import (
     SelectorObservation,
     StrategyObservation,
     add_vector_signal_columns,
+    build_regime_policy_walk_forward_report,
     regime_policy_weekly_details,
     regime_policy_weekly_returns,
     sampled_session_dates,
@@ -455,3 +456,75 @@ def test_top_pick_turnover_sensitivity_lowers_rotation_and_keeps_beta_adjusted_a
     assert weekly_hysteresis["turnover"]["mean"] < weekly["turnover"]["mean"]
     assert weekly["beta_adjusted_summary"]["mean"] == 0.019
     assert weekly["subperiods"]["beta_adjusted"]["2026"]["weeks"] == 4
+
+
+def test_walk_forward_selects_parameters_from_training_not_future_oos():
+    def selector_report(sma: int, train_regime: str, apply_regime: str, train_return: float, apply_return: float):
+        benchmark_records = [
+            {"signal_date": "2022-06-03", "regime": train_regime, "benchmark_returns": {5: 0.0}},
+            {"signal_date": "2023-06-02", "regime": apply_regime, "benchmark_returns": {5: 0.0}},
+        ]
+        top_records = [
+            {
+                "signal_date": "2022-06-03",
+                "symbol": f"AAA{sma}",
+                "selector_score": train_return,
+                "technical_score": train_return,
+                "raw_returns": {5: train_return},
+                "beta_asof": 1.0,
+            },
+            {
+                "signal_date": "2023-06-02",
+                "symbol": f"AAA{sma}",
+                "selector_score": apply_return,
+                "technical_score": apply_return,
+                "raw_returns": {5: apply_return},
+                "beta_asof": 1.0,
+            },
+        ]
+        universe_records = [
+            {
+                "signal_date": record["signal_date"],
+                "symbol": record["symbol"],
+                "raw_returns": record["raw_returns"],
+                "beta_asof": 1.0,
+            }
+            for record in top_records
+        ]
+        return {
+            "study": {"top_n": 1},
+            "scan": {"sampled_signal_dates": 2},
+            "weekly_benchmark_records": benchmark_records,
+            "top_pick_records": top_records,
+            "universe_member_records": universe_records,
+        }
+
+    reports = {
+        "150": selector_report(150, "bull_above_sma150", "bull_above_sma150", 0.03, -0.02),
+        "200": selector_report(200, "bear_below_sma200", "bull_above_sma200", 0.00, 0.10),
+    }
+
+    report = build_regime_policy_walk_forward_report(
+        reports,
+        since="2022-01-01",
+        end="2023-12-31",
+        cost_bps_values=(0.0,),
+        sma_windows=(150, 200),
+        cadence_weeks=(1,),
+        min_hold_values=(0,),
+        hysteresis_deltas=(0.0,),
+        walk_forward_blocks=(
+            {
+                "label": "train_2022_apply_2023",
+                "train_end": "2022-12-31",
+                "apply_start": "2023-01-01",
+                "apply_end": "2023-12-31",
+            },
+        ),
+    )
+
+    cost_report = report["by_cost_bps"]["0.0"]
+
+    assert cost_report["selected_steps"][0]["selected"]["sma_window"] == 150
+    assert cost_report["beta_adjusted_oos"]["cumulative_return"] == -0.02
+    assert cost_report["selection_stability"]["selected_sequence"] == ["sma150_cadence1w_hold0_delta0"]

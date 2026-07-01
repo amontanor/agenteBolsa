@@ -900,3 +900,11 @@ rebalanceo semanal/quincenal/mensual, min-hold e histeresis, coste por turnover
 estimado y desglose OOS 2022/2023/2024/2025-26. El residual beta-ajustado sobrevive
 mejor con menor turnover, pero 2023 muestra fragilidad. Ver informe:
 `docs/informe_codex_regime_policy_turnover_oos_2026-07-01.md`.
+
+### B10 - Walk-forward OOS honesto de politica por regimen. **HECHO (v0.4.76).**
+Extension read-only de `study_regime_policy.py` con seleccion expansiva sobre una
+rejilla pre-registrada (SMA150/200/250, cadencia 1/2/4w, min-hold e histeresis).
+Cada bloque OOS usa parametros elegidos solo con datos pasados y cose el alpha
+beta-ajustado. Resultado: alpha OOS cosido no confirma edge robusto y la seleccion
+de parametros cambia en cada paso. Ver informe:
+`docs/informe_codex_regime_policy_walk_forward_oos_2026-07-01.md`.
