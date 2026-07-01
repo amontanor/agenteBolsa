@@ -25,6 +25,7 @@ from .eventing import EventReporter, PrettyLogPrinter, print_raw_tail_line
 from .logging_utils import configure_logging, log_system_event
 from .market_calendar import MarketCalendar
 from .models import AgentEvent, Hypothesis, new_id
+from .research.telegram_radar.cli import build_report as telegram_radar_build_report
 from .research.telegram_radar.cli import list_records as telegram_radar_list_records
 from .research.telegram_radar.cli import run_ingest as telegram_radar_run_ingest
 from .scheduler import (
@@ -1633,11 +1634,16 @@ def command_telegram_radar(args: argparse.Namespace) -> None:
             force=args.force,
             use_llm=not args.skip_llm,
         )
-    else:
+    elif args.telegram_command == "list":
         report = telegram_radar_list_records(
             settings=settings,
             days=args.days,
             only_opportunities=args.only_opportunities,
+        )
+    else:
+        report = telegram_radar_build_report(
+            settings=settings,
+            days=args.days,
         )
     if args.json:
         _print_json(report)
@@ -1648,6 +1654,9 @@ def command_telegram_radar(args: argparse.Namespace) -> None:
         print(f"storage={report.get('paths', {})}")
         if report["ingest"].get("warnings"):
             print(f"warnings={report['ingest']['warnings']}")
+        return
+    if args.telegram_command == "report":
+        print(report["markdown"])
         return
     print("TELEGRAM RADAR LIST (research read-only)")
     print(f"returned={report['summary']['returned']} | posts={report['summary']['posts']}")
@@ -4096,6 +4105,10 @@ def build_parser() -> argparse.ArgumentParser:
     telegram_list.add_argument("--only-opportunities", action="store_true", help="Muestra solo oportunidades extraidas.")
     telegram_list.add_argument("--json", action="store_true", help="Devuelve JSON.")
     telegram_list.set_defaults(func=command_telegram_radar)
+    telegram_report = telegram_subparsers.add_parser("report", help="Genera marcador honesto y veredictos internos.")
+    telegram_report.add_argument("--days", type=int, default=7, help="Ventana reciente para oportunidades/veredictos.")
+    telegram_report.add_argument("--json", action="store_true", help="Devuelve JSON con markdown incluido.")
+    telegram_report.set_defaults(func=command_telegram_radar)
 
     commands = subparsers.add_parser("commands", help="Resumen claro de comandos operativos frecuentes.")
     commands.add_argument("--json", action="store_true", help="Devuelve el catalogo completo en JSON.")

@@ -915,3 +915,11 @@ Telegram sin login, cachear posts, extraer oportunidades/tickers con LLM o fallb
 heuristico y marcar cobertura S&P 500 point-in-time. CLI `telegram-radar ingest`
 y `telegram-radar list`. No cambia trading ni crea ordenes. Ver informe:
 `docs/informe_codex_telegram_radar_faseA_2026-07-01.md`.
+
+### B12 - Telegram radar Fase B: veredicto interno y scorecard honesto. **HECHO (v0.4.78).**
+Extension read-only del paquete `research/telegram_radar` con `analysis.py` para
+contrastar menciones in-universe contra regimen SPY>SMA200, extension SMA20, RSI,
+R:R, confianza y entry-quality; y `scorecard.py` para medir retornos forward
+5/10/20d netos de costes y excess vs SPY de todas las menciones. CLI
+`telegram-radar report`. No cambia trading ni crea ordenes. Ver informe:
+`docs/informe_codex_telegram_radar_faseB_2026-07-01.md`.

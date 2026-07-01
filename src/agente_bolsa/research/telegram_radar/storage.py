@@ -14,6 +14,8 @@ class TelegramRadarStore:
         self.root = Path(root)
         self.posts_path = self.root / "posts.jsonl"
         self.extractions_path = self.root / "extractions.jsonl"
+        self.gate_verdicts_path = self.root / "gate_verdicts.jsonl"
+        self.scorecard_path = self.root / "scorecard.jsonl"
         self.cache_dir = self.root / "cache"
 
     def ensure_dirs(self) -> None:
@@ -25,6 +27,12 @@ class TelegramRadarStore:
 
     def load_extractions(self) -> list[dict[str, Any]]:
         return _read_jsonl(self.extractions_path)
+
+    def load_gate_verdicts(self) -> list[dict[str, Any]]:
+        return _read_jsonl(self.gate_verdicts_path)
+
+    def load_scorecard(self) -> list[dict[str, Any]]:
+        return _read_jsonl(self.scorecard_path)
 
     def upsert_posts(self, posts: list[dict[str, Any]]) -> dict[str, Any]:
         self.ensure_dirs()
@@ -58,6 +66,58 @@ class TelegramRadarStore:
                 inserted += 1
                 existing[message_id] = row
         _write_jsonl_atomic(self.extractions_path, [existing[key] for key in sorted(existing)])
+        return {"inserted": inserted, "updated": updated, "total": len(existing)}
+
+    def upsert_gate_verdicts(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        self.ensure_dirs()
+        existing = {
+            (int(item["message_id"]), str(item["ticker"]).upper()): item
+            for item in self.load_gate_verdicts()
+        }
+        inserted = 0
+        updated = 0
+        for row in rows:
+            key = (int(row["message_id"]), str(row["ticker"]).upper())
+            if key in existing:
+                if existing[key] != row:
+                    updated += 1
+                existing[key] = row
+            else:
+                inserted += 1
+                existing[key] = row
+        ordered = [existing[key] for key in sorted(existing)]
+        _write_jsonl_atomic(self.gate_verdicts_path, ordered)
+        return {"inserted": inserted, "updated": updated, "total": len(existing)}
+
+    def upsert_scorecard(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        self.ensure_dirs()
+        existing = {
+            (
+                int(item["message_id"]),
+                str(item["ticker"]).upper(),
+                int(item["horizon_days"]),
+                float(item["cost_bps"]),
+            ): item
+            for item in self.load_scorecard()
+        }
+        inserted = 0
+        updated = 0
+        for row in rows:
+            key = (
+                int(row["message_id"]),
+                str(row["ticker"]).upper(),
+                int(row["horizon_days"]),
+                float(row["cost_bps"]),
+            )
+            if key in existing:
+                if existing[key] != row:
+                    updated += 1
+                existing[key] = row
+            else:
+                inserted += 1
+                existing[key] = row
+        ordered = [existing[key] for key in sorted(existing)]
+        _write_jsonl_atomic(self.scorecard_path, ordered)
         return {"inserted": inserted, "updated": updated, "total": len(existing)}
 
 

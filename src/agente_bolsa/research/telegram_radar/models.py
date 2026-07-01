@@ -36,3 +36,40 @@ class TelegramExtraction:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class TelegramGateVerdict:
+    message_id: int
+    ticker: str
+    posted_at: str | None
+    direction: str
+    our_gate: str
+    reasons: list[str]
+    metrics: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class TelegramScorecardRow:
+    message_id: int
+    ticker: str
+    posted_at: str | None
+    direction: str
+    horizon_days: int
+    cost_bps: float
+    in_universe: bool
+    out_of_coverage: bool
+    status: str
+    entry_date: str | None
+    exit_date: str | None
+    ticker_return: float | None
+    spy_return: float | None
+    signal_return_net: float | None
+    excess_vs_spy: float | None
+    beta_adjusted_return: float | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)

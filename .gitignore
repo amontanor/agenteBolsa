@@ -19,6 +19,7 @@ data/backtests/*.parquet
 data/reports/*.html
 data/reports/*.md
 data/reports/*.json
+data/research/
 data/cache/
 *.pkl
 *.egg-info/
