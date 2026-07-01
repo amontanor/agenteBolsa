@@ -52,7 +52,11 @@ RECENTLY_REJECTED_DUPLICATE_REASON = "recently_rejected_duplicate"
 
 SELF_SAFETY_FORBIDDEN_IDENTIFIERS = {
     "allow_auto_apply_improvements",
+    "live_capital_fraction",
+    "live_requires_formal_market_data",
+    "require_human_approval",
     "require_human_approval_for_code_changes",
+    "require_human_approval_for_high_risk",
     "allow_live_trading",
     "trading_mode",
     "deterministic_gate",
@@ -60,12 +64,21 @@ SELF_SAFETY_FORBIDDEN_IDENTIFIERS = {
 
 SELF_GOVERNANCE_FORBIDDEN_IDENTIFIERS = {
     "allow_auto_apply_improvements",
+    "autonomy_demote_rollbacks",
+    "autonomy_demote_sessions",
+    "autonomy_promotion_clean_sessions",
+    "autonomy_promotion_min_applied",
     "ci_build_strategy_enabled",
+    "ci_initiative_stall_days",
+    "ci_initiative_ttl_days",
     "ci_max_open_initiatives",
+    "ci_monitoring_close_days",
     "ci_recurring_cooldown_hours",
     "ci_sandbox_enabled",
     "ci_sandbox_full_suite",
     "ci_sandbox_validate_timeout_seconds",
+    "ci_task_ttl_hours",
+    "ci_validation_backlog_ttl_days",
     "code_autonomy_level",
     "continuous_improvement_enabled",
     "continuous_improvement_event_cooldown_seconds",
@@ -76,11 +89,23 @@ SELF_GOVERNANCE_FORBIDDEN_IDENTIFIERS = {
     "continuous_improvement_runtime_interval_seconds",
     "continuous_improvement_runtime_loop_sleep_seconds",
     "continuous_improvement_schedule_enabled",
+    "continuous_improvement_time_local",
+    "continuous_improvement_workspace_dir",
     "improvement_dry_run",
     "micro_experiment_size_multiplier",
     "programmer_max_repair_attempts",
     "require_human_approval_for_code_changes",
 }
+
+CONSTITUTIONAL_SECURITY_GOVERNANCE_SETTINGS = (
+    SELF_SAFETY_FORBIDDEN_IDENTIFIERS
+    | SELF_GOVERNANCE_FORBIDDEN_IDENTIFIERS
+    | {
+        "allow_auto_apply_improvements",
+        "allow_live_trading",
+        "trading_mode",
+    }
+)
 
 SELF_GOVERNANCE_CONTEXT_PREFIXES = (
     "ci_",
@@ -223,8 +248,9 @@ def _self_safety_match(raw: str) -> dict[str, Any] | None:
     normalized = _normalize_self_safety_reference(text)
     lowered = normalized.lower()
     identifier = re.sub(r"[^a-z0-9_]+", "_", lowered).strip("_")
-    if identifier in SELF_SAFETY_FORBIDDEN_IDENTIFIERS:
-        return {"match_type": "identifier", "matched": identifier, "reference": text}
+    matched_identifier = _match_forbidden_identifier(identifier, SELF_SAFETY_FORBIDDEN_IDENTIFIERS)
+    if matched_identifier:
+        return {"match_type": "identifier", "matched": matched_identifier, "reference": text}
     if any(token in lowered for token in SELF_SAFETY_FORBIDDEN_GATE_TOKENS):
         return {"match_type": "risk_gate", "matched": lowered, "reference": text}
     if lowered == ".env" or lowered.endswith("/.env"):
@@ -245,12 +271,22 @@ def _self_governance_match(raw: str) -> dict[str, Any] | None:
     normalized = _normalize_self_safety_reference(text)
     lowered = normalized.lower()
     identifier = re.sub(r"[^a-z0-9_]+", "_", lowered).strip("_")
-    if identifier in SELF_GOVERNANCE_FORBIDDEN_IDENTIFIERS:
-        return {"match_type": "lab_governance_setting", "matched": identifier, "reference": text}
+    matched_identifier = _match_forbidden_identifier(identifier, SELF_GOVERNANCE_FORBIDDEN_IDENTIFIERS)
+    if matched_identifier:
+        return {"match_type": "lab_governance_setting", "matched": matched_identifier, "reference": text}
     has_lab_context = identifier.startswith(SELF_GOVERNANCE_CONTEXT_PREFIXES) or "lab" in identifier
     controls_lab = any(token in identifier for token in SELF_GOVERNANCE_CONTROL_TOKENS)
     if has_lab_context and controls_lab:
         return {"match_type": "lab_governance_setting", "matched": identifier, "reference": text}
+    return None
+
+
+def _match_forbidden_identifier(identifier: str, forbidden: set[str]) -> str | None:
+    if identifier in forbidden:
+        return identifier
+    for candidate in sorted(forbidden, key=len, reverse=True):
+        if re.search(rf"(?:^|_){re.escape(candidate)}(?:_|$)", identifier):
+            return candidate
     return None
 
 

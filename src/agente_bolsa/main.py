@@ -16,6 +16,7 @@ from .agent_config import load_agent_config, load_task_config, validate_agent_ta
 from .agent_registry import AGENTS
 from .config import get_settings
 from .continuous_improvement.api import run_api_server
+from .continuous_improvement.digest import build_lab_digest, format_lab_digest_text
 from .continuous_improvement.experiments import AutoApplyCodeAgent
 from .continuous_improvement.orchestrator import ContinuousImprovementOrchestrator
 from .continuous_improvement.runtime import ContinuousImprovementLabRuntime
@@ -2600,6 +2601,10 @@ def command_continuous_improvement_lab(args: argparse.Namespace) -> None:
             }
         )
         return
+    if args.lab_command == "digest":
+        digest = build_lab_digest(store, days=args.days)
+        print(format_lab_digest_text(digest))
+        return
     if args.lab_command == "rollback":
         change = AutoApplyCodeAgent().rollback(
             settings=settings,
@@ -3434,6 +3439,10 @@ def build_parser() -> argparse.ArgumentParser:
     ci_lab_applied.add_argument("--status", action="append", help="Filtra por estado; se puede repetir.")
     ci_lab_applied.add_argument("--limit", type=int, default=50)
     ci_lab_applied.set_defaults(func=command_continuous_improvement_lab)
+
+    ci_lab_digest = ci_lab_subparsers.add_parser("digest", help="Resume el estado diario del laboratorio en modo solo lectura.")
+    ci_lab_digest.add_argument("--days", type=int, default=1)
+    ci_lab_digest.set_defaults(func=command_continuous_improvement_lab)
 
     ci_lab_rollback = ci_lab_subparsers.add_parser("rollback", help="Marca rollback de un cambio aplicado.")
     ci_lab_rollback.add_argument("applied_change_id")

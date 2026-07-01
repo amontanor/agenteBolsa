@@ -873,3 +873,10 @@ para bloquear re-propuestas recientemente rechazadas con
 `trade_selection_top_n` no se prohiben por constitucion: quedan en cola humana y
 requieren evidencia de edge. Ver informe:
 `docs/informe_codex_constitucion_v2_2026-07-01.md`.
+
+### B6 - Batch Fase 3: digest, auditoria constitucional y rollback demo. **HECHO (v0.4.72).**
+Anadido `continuous-improvement-lab digest --days N` en modo solo lectura,
+auditoria de cobertura constitucional contra `Settings.model_fields` con test
+anti-huecos futuros, y rollback del cambio demo `docs/ci_codegen_demo.md` con
+registro `ROLLED_BACK`. Ver informe:
+`docs/informe_codex_batch_2026-07-01.md`.

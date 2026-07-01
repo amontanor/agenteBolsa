@@ -4,6 +4,7 @@ import pytest
 
 from agente_bolsa.config import Settings, get_settings
 from agente_bolsa.continuous_improvement.agents import (
+    CONSTITUTIONAL_SECURITY_GOVERNANCE_SETTINGS,
     RECENTLY_REJECTED_DUPLICATE_REASON,
     SELF_GOVERNANCE_REJECTION_REASON,
     SELF_SAFETY_REJECTION_REASON,
@@ -19,8 +20,11 @@ from agente_bolsa.continuous_improvement.agents import (
     ValidationAgent,
     initiative_topic_key,
     proposal_fingerprint,
+    self_governance_modification_violation,
+    self_safety_modification_violation,
 )
 from agente_bolsa.continuous_improvement.api import status_payload
+from agente_bolsa.continuous_improvement.digest import build_lab_digest
 from agente_bolsa.continuous_improvement.experiments import AutoApplyCodeAgent
 from agente_bolsa.continuous_improvement.llm_client import ImprovementLLMClient
 from agente_bolsa.continuous_improvement.orchestration import LabOrchestrator
@@ -91,6 +95,140 @@ def _code_proposal(**payload_overrides):
         "risk_level": payload["risk_level"],
         "payload": payload,
     }
+
+
+def test_lab_digest_counts_synthetic_categories(tmp_path):
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    rows = [
+        ("ci_prop_safe", "REJECTED", "settings", "ALLOW_LIVE_TRADING", SELF_SAFETY_REJECTION_REASON),
+        ("ci_prop_gov", "REJECTED", "settings", "ci_recurring_cooldown_hours", SELF_GOVERNANCE_REJECTION_REASON),
+        ("ci_prop_dup", "REJECTED", "docs", "observabilidad", RECENTLY_REJECTED_DUPLICATE_REASON),
+        ("ci_prop_other", "REJECTED", "docs", "otros", "manual_reject"),
+        ("ci_prop_ready", "READY_TO_APPLY", "docs", "observabilidad", ""),
+    ]
+    for proposal_id, status, component, identifier, reason in rows:
+        store.upsert_continuous_improvement_proposal(
+            {
+                "proposal_id": proposal_id,
+                "cycle_id": "ci_cycle_digest",
+                "fingerprint": f"fp_{proposal_id}",
+                "proposal_type": "MONITORING_CHANGE",
+                "target_component": component,
+                "target_identifier": identifier,
+                "status": status,
+                "priority": "LOW",
+                "risk_level": "LOW",
+                "payload": {"rollback_plan": "revert", "initiative_key": f"software:{identifier or component}"},
+                "guard": {"status": status, "reasons": [reason] if reason else []},
+            }
+        )
+        if status == "REJECTED":
+            store.update_continuous_improvement_proposal_status(
+                proposal_id,
+                status="REJECTED",
+                actor="test",
+                reason=reason,
+                payload={},
+            )
+    store.save_continuous_improvement_proposal_artifact(
+        {
+            "artifact_id": "ci_artifact_ready_diff",
+            "proposal_id": "ci_prop_ready",
+            "artifact_type": "diff",
+            "content_text": "diff --git a/docs/x b/docs/x\n",
+            "payload": {"status": "READY_FOR_HUMAN_REVIEW"},
+        }
+    )
+    store.save_continuous_improvement_applied_change(
+        {
+            "applied_change_id": "ci_applied_digest",
+            "proposal_id": "ci_prop_ready",
+            "cycle_id": "ci_cycle_digest",
+            "status": "APPLIED",
+            "change_type": "CODE_CHANGE",
+            "target_key": "docs/observabilidad.md",
+        }
+    )
+    store.save_continuous_improvement_experiment(
+        {"experiment_id": "ci_exp_pass", "proposal_id": "ci_prop_ready", "cycle_id": "ci_cycle_digest", "status": "PASSED"}
+    )
+    store.save_continuous_improvement_experiment(
+        {"experiment_id": "ci_exp_fail", "proposal_id": "ci_prop_ready", "cycle_id": "ci_cycle_digest", "status": "FAILED"}
+    )
+
+    digest = build_lab_digest(store, days=7)
+
+    assert digest["proposals"]["created"] == 5
+    assert digest["proposals"]["rejected_by_reason"] == {
+        "self_safety": 1,
+        "self_governance": 1,
+        "recently_rejected": 1,
+        "otros": 1,
+    }
+    assert digest["proposals"]["ready_to_apply_count"] == 1
+    assert digest["proposals"]["ready_to_apply"][0]["has_diff"] is True
+    assert digest["requires_attention"][0]["proposal_id"] == "ci_prop_ready"
+    assert digest["applied_changes"]["by_status"]["APPLIED"] == 1
+    assert digest["experiments"] == {"run": 2, "passed": 1, "failed": 1}
+
+
+def test_constitution_covers_all_security_and_governance_settings():
+    candidate_names = set()
+    for name, field in Settings.model_fields.items():
+        alias = str(field.alias or name).lower()
+        if _is_constitutional_setting_candidate(name, alias):
+            candidate_names.add(name)
+    uncovered = sorted(candidate_names - CONSTITUTIONAL_SECURITY_GOVERNANCE_SETTINGS)
+
+    assert not uncovered
+    for name in sorted(candidate_names):
+        alias = str(Settings.model_fields[name].alias or name)
+        assert _constitutional_violation_for_identifier(name), name
+        assert _constitutional_violation_for_identifier(alias), alias
+
+    assert not _constitutional_violation_for_identifier("trade_selection_top_n")
+    assert not _constitutional_violation_for_identifier("min_llm_confidence_to_trade")
+    assert _constitutional_violation_for_identifier("settings.allow_auto_apply_improvements")
+    for path in [
+        "src/agente_bolsa/kernel.py",
+        "src/agente_bolsa/tools/risk.py",
+        "src/agente_bolsa/tools/broker.py",
+        "src/agente_bolsa/tools/execution.py",
+        "src/agente_bolsa/config.py",
+        ".env",
+    ]:
+        assert self_safety_modification_violation(target_component="code", target_identifier=path, payload={}), path
+
+
+def _is_constitutional_setting_candidate(name: str, alias: str) -> bool:
+    lowered = name.lower()
+    alias_lower = alias.lower()
+    explicit = {
+        "allow_auto_apply_improvements",
+        "allow_live_trading",
+        "live_capital_fraction",
+        "live_requires_formal_market_data",
+        "micro_experiment_size_multiplier",
+        "require_human_approval",
+        "require_human_approval_for_code_changes",
+        "require_human_approval_for_high_risk",
+        "trading_mode",
+    }
+    return (
+        lowered in explicit
+        or lowered.startswith(("ci_", "continuous_improvement_", "autonomy_"))
+        or alias_lower.startswith(("ci_", "continuous_improvement_", "autonomy_"))
+        or lowered in {"code_autonomy_level", "improvement_dry_run", "programmer_max_repair_attempts"}
+    )
+
+
+def _constitutional_violation_for_identifier(identifier: str) -> bool:
+    return bool(
+        self_safety_modification_violation(target_component="settings", target_identifier=identifier, payload={})
+        or self_governance_modification_violation(target_component="settings", target_identifier=identifier, payload={})
+    )
 
 
 def _ready_validation():
