@@ -908,3 +908,10 @@ Cada bloque OOS usa parametros elegidos solo con datos pasados y cose el alpha
 beta-ajustado. Resultado: alpha OOS cosido no confirma edge robusto y la seleccion
 de parametros cambia en cada paso. Ver informe:
 `docs/informe_codex_regime_policy_walk_forward_oos_2026-07-01.md`.
+
+### B11 - Telegram radar Fase A: ingesta y extraccion read-only. **HECHO (v0.4.77).**
+Nuevo paquete aislado `research/telegram_radar` para ingerir la vista publica de
+Telegram sin login, cachear posts, extraer oportunidades/tickers con LLM o fallback
+heuristico y marcar cobertura S&P 500 point-in-time. CLI `telegram-radar ingest`
+y `telegram-radar list`. No cambia trading ni crea ordenes. Ver informe:
+`docs/informe_codex_telegram_radar_faseA_2026-07-01.md`.

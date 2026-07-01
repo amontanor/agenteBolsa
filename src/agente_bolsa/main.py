@@ -25,6 +25,8 @@ from .eventing import EventReporter, PrettyLogPrinter, print_raw_tail_line
 from .logging_utils import configure_logging, log_system_event
 from .market_calendar import MarketCalendar
 from .models import AgentEvent, Hypothesis, new_id
+from .research.telegram_radar.cli import list_records as telegram_radar_list_records
+from .research.telegram_radar.cli import run_ingest as telegram_radar_run_ingest
 from .scheduler import (
     _run_pre_earnings_trade_operation,
     broker_reconciliation_job,
@@ -1619,6 +1621,44 @@ def command_post_market_review(args: argparse.Namespace) -> None:
         )
         return
     _print_post_market_review(report)
+
+
+def command_telegram_radar(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    if args.telegram_command == "ingest":
+        report = telegram_radar_run_ingest(
+            settings=settings,
+            backfill=args.backfill,
+            force=args.force,
+            use_llm=not args.skip_llm,
+        )
+    else:
+        report = telegram_radar_list_records(
+            settings=settings,
+            days=args.days,
+            only_opportunities=args.only_opportunities,
+        )
+    if args.json:
+        _print_json(report)
+        return
+    if args.telegram_command == "ingest":
+        print("TELEGRAM RADAR INGEST (research read-only)")
+        print(f"posts_parsed={report['ingest'].get('posts_parsed', 0)} | extractions={report.get('extractions_created', 0)}")
+        print(f"storage={report.get('paths', {})}")
+        if report["ingest"].get("warnings"):
+            print(f"warnings={report['ingest']['warnings']}")
+        return
+    print("TELEGRAM RADAR LIST (research read-only)")
+    print(f"returned={report['summary']['returned']} | posts={report['summary']['posts']}")
+    for row in report["rows"][:20]:
+        extraction = row.get("extraction") or {}
+        tickers = ",".join(extraction.get("tickers", [])) or "-"
+        print(
+            f"- {row.get('message_id')} {row.get('posted_at') or '-'} "
+            f"opp={bool(extraction.get('is_opportunity'))} tickers={tickers} "
+            f"dir={extraction.get('direction', '-')}"
+        )
 
 
 def command_learning_postmortem(args: argparse.Namespace) -> None:
@@ -4039,6 +4079,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     post_market_review.add_argument("--json", action="store_true", help="Devuelve el informe completo en JSON.")
     post_market_review.set_defaults(func=command_post_market_review)
+
+    telegram_radar = subparsers.add_parser(
+        "telegram-radar",
+        help="Radar research-only de posts publicos de Telegram; no opera ni cambia trading.",
+    )
+    telegram_subparsers = telegram_radar.add_subparsers(dest="telegram_command", required=True)
+    telegram_ingest = telegram_subparsers.add_parser("ingest", help="Ingiere y extrae posts nuevos del canal publico.")
+    telegram_ingest.add_argument("--backfill", type=int, default=1, help="Paginas a retroceder con ?before=<id>.")
+    telegram_ingest.add_argument("--force", action="store_true", help="Ignora cache HTML local.")
+    telegram_ingest.add_argument("--skip-llm", action="store_true", help="Usa solo heuristica local para extraccion.")
+    telegram_ingest.add_argument("--json", action="store_true", help="Devuelve JSON.")
+    telegram_ingest.set_defaults(func=command_telegram_radar)
+    telegram_list = telegram_subparsers.add_parser("list", help="Lista posts guardados y extracciones.")
+    telegram_list.add_argument("--days", type=int, default=7, help="Ventana reciente a listar.")
+    telegram_list.add_argument("--only-opportunities", action="store_true", help="Muestra solo oportunidades extraidas.")
+    telegram_list.add_argument("--json", action="store_true", help="Devuelve JSON.")
+    telegram_list.set_defaults(func=command_telegram_radar)
 
     commands = subparsers.add_parser("commands", help="Resumen claro de comandos operativos frecuentes.")
     commands.add_argument("--json", action="store_true", help="Devuelve el catalogo completo en JSON.")
