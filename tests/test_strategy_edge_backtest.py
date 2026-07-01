@@ -5,6 +5,7 @@ from agente_bolsa.tools.strategy_edge_backtest import (
     SelectorObservation,
     StrategyObservation,
     add_vector_signal_columns,
+    regime_policy_weekly_returns,
     sampled_session_dates,
     summarize_observations,
     summarize_policy_weekly_returns,
@@ -290,6 +291,7 @@ def test_weekly_policy_summary_computes_decision_risk_metrics():
     assert stats["mean"] == -0.006667
     assert stats["median"] == 0.01
     assert stats["worst_week"] == -0.06
+    assert stats["cumulative_return"] == -0.022118
     assert stats["negative_week_rate"] == 0.3333
     assert stats["tail_week_rate_lt_5pct"] == 0.3333
     assert stats["max_drawdown"] < 0
@@ -297,3 +299,49 @@ def test_weekly_policy_summary_computes_decision_risk_metrics():
     summary = summarize_policy_weekly_returns({"P0_cash": weekly_returns})
     assert summary["by_regime"]["bull_above_sma200"]["P0_cash"]["weeks"] == 2
     assert summary["by_regime"]["bear_below_sma200"]["P0_cash"]["weeks"] == 1
+
+
+def test_regime_policy_weekly_returns_aligns_cash_spy_and_top_picks():
+    benchmark_records = [
+        {
+            "signal_date": "2026-01-02",
+            "regime": "bull_above_sma200",
+            "benchmark_returns": {5: 0.02},
+        },
+        {
+            "signal_date": "2026-01-09",
+            "regime": "bear_below_sma200",
+            "benchmark_returns": {5: -0.04},
+        },
+        {
+            "signal_date": "2026-01-16",
+            "regime": "bull_above_sma200",
+            "benchmark_returns": {5: 0.01},
+        },
+    ]
+    top_records = [
+        {"signal_date": "2026-01-02", "raw_returns": {5: 0.04}},
+        {"signal_date": "2026-01-02", "raw_returns": {5: 0.02}},
+        {"signal_date": "2026-01-09", "raw_returns": {5: 0.10}},
+    ]
+
+    policies = regime_policy_weekly_returns(benchmark_records, top_records, horizon=5, cost=0.001)
+    summary = summarize_policy_weekly_returns(policies)
+
+    assert {name: len(rows) for name, rows in policies.items()} == {
+        "cash": 3,
+        "spy_buy_hold": 3,
+        "spy_bull_cash_bear": 3,
+        "top_bull_cash_bear": 3,
+    }
+    assert policies["cash"] == [
+        ("2026-01-02", "bull_above_sma200", 0.0),
+        ("2026-01-09", "bear_below_sma200", 0.0),
+        ("2026-01-16", "bull_above_sma200", 0.0),
+    ]
+    assert policies["spy_buy_hold"][0][2] == 0.019
+    assert policies["spy_bull_cash_bear"][1][2] == 0.0
+    assert policies["top_bull_cash_bear"][0][2] == 0.029
+    assert policies["top_bull_cash_bear"][1][2] == 0.0
+    assert policies["top_bull_cash_bear"][2][2] == 0.0
+    assert summary["by_regime"]["bear_below_sma200"]["top_bull_cash_bear"]["mean"] == 0.0

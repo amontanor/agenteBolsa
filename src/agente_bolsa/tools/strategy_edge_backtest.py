@@ -1491,11 +1491,16 @@ def summarize_weekly_portfolio_returns(weekly_returns: list[tuple[str, str, floa
         }
     mean = sum(values) / len(values)
     std = statistics.stdev(values) if len(values) > 1 else 0.0
+    equity = 1.0
+    for value in values:
+        equity *= 1.0 + value
     return {
         "weeks": len(values),
         "mean": round(mean, 6),
         "median": round(statistics.median(values), 6),
+        "cumulative_return": round(equity - 1.0, 6),
         "sharpe_simple": round(mean / std, 6) if std > 0 else None,
+        "sharpe_annualized": round((mean / std) * (52**0.5), 6) if std > 0 else None,
         "max_drawdown": _max_drawdown(values),
         "worst_week": round(min(values), 6),
         "negative_week_rate": round(sum(1 for value in values if value < 0) / len(values), 4),
@@ -1577,6 +1582,51 @@ def summarize_policy_weekly_returns(
             regime_rows = [row for row in rows if row[1] == regime]
             summary["by_regime"].setdefault(regime, {})[policy] = summarize_weekly_portfolio_returns(regime_rows)
     return summary
+
+
+def regime_policy_weekly_returns(
+    benchmark_records: list[dict[str, Any]],
+    top_records: list[dict[str, Any]],
+    *,
+    horizon: int,
+    cost: float,
+) -> dict[str, list[tuple[str, str, float]]]:
+    top_by_date: dict[str, list[float]] = {}
+    for record in top_records:
+        signal_date = str(record.get("signal_date") or "")[:10]
+        raw_returns = record.get("raw_returns") or {}
+        value = raw_returns.get(horizon)
+        if value is None:
+            value = raw_returns.get(str(horizon))
+        value = _safe_float(value)
+        if not signal_date or value is None:
+            continue
+        top_by_date.setdefault(signal_date, []).append(value - cost)
+
+    policy_returns: dict[str, list[tuple[str, str, float]]] = {
+        "cash": [],
+        "spy_buy_hold": [],
+        "spy_bull_cash_bear": [],
+        "top_bull_cash_bear": [],
+    }
+    for record in benchmark_records:
+        signal_date = str(record.get("signal_date") or "")[:10]
+        regime = str(record.get("regime") or "unknown")
+        returns = record.get("benchmark_returns") or {}
+        spy_value = returns.get(horizon)
+        if spy_value is None:
+            spy_value = returns.get(str(horizon))
+        spy_value = _safe_float(spy_value)
+        if not signal_date or spy_value is None:
+            continue
+        is_bull = regime == "bull_above_sma200"
+        policy_returns["cash"].append((signal_date, regime, 0.0))
+        policy_returns["spy_buy_hold"].append((signal_date, regime, round(spy_value - cost, 6)))
+        policy_returns["spy_bull_cash_bear"].append((signal_date, regime, round(spy_value - cost, 6) if is_bull else 0.0))
+        top_values = top_by_date.get(signal_date, [])
+        top_return = round(sum(top_values) / len(top_values), 6) if is_bull and top_values else 0.0
+        policy_returns["top_bull_cash_bear"].append((signal_date, regime, top_return))
+    return policy_returns
 
 
 def run_weekly_policy_decision_study(
@@ -1665,6 +1715,78 @@ def run_weekly_policy_decision_study(
             "policy_weeks": {policy: len(rows) for policy, rows in policy_returns.items()},
         },
         "summary": summary,
+    }
+
+
+def run_regime_policy_study(
+    *,
+    since: str,
+    end: str,
+    cost_bps: float,
+    top_n: int = 15,
+    universe_name: str = DEFAULT_UNIVERSE,
+    max_symbols: int = 0,
+    beta_lookback: int = DEFAULT_BETA_LOOKBACK,
+    regime_mode: str = DEFAULT_REGIME,
+    provider: str | None = None,
+    fmp_api_key: str | None = None,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    sample_every: int = DEFAULT_SAMPLE_EVERY,
+    progress_every: int = DEFAULT_PROGRESS_EVERY,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    settings = settings or get_settings()
+    horizon = 5
+    cost = cost_bps / 10000.0
+    selector_report = run_selector_edge_backtest(
+        since=since,
+        end=end,
+        horizons=(horizon,),
+        cost_bps=cost_bps,
+        top_n=top_n,
+        universe_name=universe_name,
+        max_symbols=max_symbols,
+        beta_lookback=beta_lookback,
+        regime_mode=regime_mode,
+        provider=provider,
+        fmp_api_key=fmp_api_key,
+        batch_size=batch_size,
+        sample_every=sample_every,
+        progress_every=progress_every,
+        include_top_records=True,
+        settings=settings,
+    )
+    benchmark_records = selector_report["weekly_benchmark_records"]
+    top_records = selector_report["top_pick_records"]
+    policy_returns = regime_policy_weekly_returns(
+        benchmark_records,
+        top_records,
+        horizon=horizon,
+        cost=cost,
+    )
+    summary = summarize_policy_weekly_returns(policy_returns)
+    return {
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "study": {
+            "name": "regime_governed_policy_historical",
+            "since": since,
+            "end": end,
+            "horizon_days": horizon,
+            "cost_bps": cost_bps,
+            "top_n": top_n,
+            "regime_rule": "SPY close > SMA200 => bull/participar; SPY close <= SMA200 => bear/caja",
+            "regime_mode": regime_mode,
+            "sample_every_sessions": sample_every,
+            "signal_sampling": "weekly" if int(sample_every) == 5 else f"every_{sample_every}_sessions",
+            "interpretation": "Politicas semanales read-only con coste aplicado solo cuando hay posicion.",
+        },
+        "universe": selector_report["universe"],
+        "scan": {
+            **selector_report["scan"],
+            "policy_weeks": {policy: len(rows) for policy, rows in policy_returns.items()},
+        },
+        "summary": summary,
+        "policy_returns": policy_returns,
     }
 
 
@@ -2037,9 +2159,11 @@ __all__ = [
     "selector_main",
     "run_extension_gate_edge_backtest",
     "run_pullback_breakout_backtest",
+    "run_regime_policy_study",
     "run_selector_edge_backtest",
     "run_weekly_policy_decision_study",
     "sampled_session_dates",
+    "regime_policy_weekly_returns",
     "summarize_observations",
     "summarize_policy_weekly_returns",
     "summarize_selector_observations",

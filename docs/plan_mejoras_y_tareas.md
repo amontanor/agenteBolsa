@@ -880,3 +880,9 @@ auditoria de cobertura constitucional contra `Settings.model_fields` con test
 anti-huecos futuros, y rollback del cambio demo `docs/ci_codegen_demo.md` con
 registro `ROLLED_BACK`. Ver informe:
 `docs/informe_codex_batch_2026-07-01.md`.
+
+### B7 - Estudio historico de politica por regimen. **HECHO (v0.4.73).**
+Estudio read-only 2022-2026 con `strategy_edge_backtest.py`: caja,
+buy&hold SPY, SPY solo en bull (`SPY > SMA200`) y top-selecciones solo en bull.
+Incluye costes, Sharpe, max drawdown, peor semana y desglose por regimen. Ver
+informe: `docs/informe_codex_regime_policy_2026-07-01.md`.
