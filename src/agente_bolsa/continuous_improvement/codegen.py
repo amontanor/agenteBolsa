@@ -22,6 +22,7 @@ if TYPE_CHECKING:  # pragma: no cover - solo anotaciones.
 
 
 LOW_RISK_CODEGEN_ALLOWED_PREFIXES: tuple[str, ...] = (
+    "src/agente_bolsa/__init__.py",
     "src/agente_bolsa/continuous_improvement/",
     "src/agente_bolsa/tools/operational_",
     "tests/",
@@ -445,7 +446,9 @@ class CodegenPatchAgent:
                     "Para archivos existentes grandes usa file_edits {path, old, new}; el bloque old debe copiarse "
                     "VERBATIM del contexto proporcionado, sin reformatear ni normalizar espacios, y debe ser corto y unico. "
                     "Para archivos nuevos o existentes con menos de 300 lineas puedes usar {path, content} con el contenido completo. "
-                    "Si hay data_samples, respeta ese esquema real y crea al menos un test con una linea real copiada literalmente."
+                    "Si hay data_samples, respeta ese esquema real y crea al menos un test con una linea real copiada literalmente. "
+                    "Los tests deben cubrir valores null y claves ausentes de campos anidados que aparezcan en esas muestras, "
+                    "por ejemplo objetos internos opcionales como decision.order."
                 ),
             },
             {

@@ -394,6 +394,34 @@ def test_codegen_prompt_includes_real_data_file_sample(tmp_path):
     assert "target_exposure" not in sample["head"][0]
 
 
+def test_codegen_prompt_allows_version_file_and_mentions_null_nested_samples(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    version_file = repo / "src" / "agente_bolsa" / "__init__.py"
+    version_file.parent.mkdir(parents=True, exist_ok=True)
+    version_file.write_text('__version__ = "0.0.1"\n', encoding="utf-8")
+    settings = _settings(tmp_path, repo)
+    proposal = {
+        "proposal_id": "ci_prop_version_context",
+        "proposal_type": "CODE_CHANGE",
+        "target_component": "version",
+        "target_identifier": "src/agente_bolsa/__init__.py",
+        "risk_level": "LOW",
+        "payload": {
+            "target_identifier": "src/agente_bolsa/__init__.py",
+            "proposed_value": "Bump version.",
+            "rationale": "test",
+        },
+    }
+
+    messages = CodegenPatchAgent()._messages(settings, proposal)
+    system_prompt = messages[0]["content"]
+    user_payload = json.loads(messages[1]["content"])
+
+    assert "src/agente_bolsa/__init__.py" in system_prompt
+    assert "valores null y claves ausentes" in system_prompt
+    assert user_payload["context_files"][0]["path"] == "src/agente_bolsa/__init__.py"
+
+
 def test_codegen_rejects_target_outside_low_risk_allowlist(tmp_path):
     repo = _init_repo(tmp_path / "repo")
     settings = _settings(tmp_path, repo)
