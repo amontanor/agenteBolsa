@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -30,6 +31,8 @@ CODEGEN_MIN_MAX_TOKENS = 32000
 CODEGEN_SELF_CORRECTION_ROUNDS = 2
 CODEGEN_FULL_CONTEXT_MAX_LINES = 800
 CODEGEN_FULL_CONTENT_MAX_LINES = 300
+CODEGEN_DATA_SAMPLE_LINES = 5
+DATA_PATH_RE = re.compile(r"\bdata/[A-Za-z0-9_./-]+\.(?:jsonl|json|csv|tsv)\b")
 
 
 class CodegenPatchResponse(BaseModel):
@@ -60,6 +63,13 @@ class CodegenPatchResponse(BaseModel):
         if isinstance(value, list):
             return [str(item).strip() for item in value if str(item).strip()]
         return []
+
+    @field_validator("patch", mode="before")
+    @classmethod
+    def _normalize_patch(cls, value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value)
 
 
 class CodegenPatchAgent:
@@ -300,6 +310,7 @@ class CodegenPatchAgent:
             "application_error": error,
             "previous_response": generated.model_dump(mode="json"),
             "real_target_context": self._real_target_context(settings.improvement_workspace_dir, proposal, generated),
+            "data_samples": self._data_samples(settings.improvement_workspace_dir, proposal),
             "instruction": (
                 "Regenera el JSON completo. Copia cada bloque old VERBATIM del contexto real adjunto, "
                 "sin normalizar espacios ni cambiar saltos de linea. Usa bloques old cortos y unicos. "
@@ -406,6 +417,7 @@ class CodegenPatchAgent:
     def _messages(self, settings: Settings, proposal: dict[str, Any]) -> list[dict[str, str]]:
         payload = proposal.get("payload") or {}
         context_files = self._context_files(settings.improvement_workspace_dir, proposal)
+        data_samples = self._data_samples(settings.improvement_workspace_dir, proposal)
         user_payload = {
             "proposal_id": proposal.get("proposal_id"),
             "target_component": proposal.get("target_component"),
@@ -416,6 +428,7 @@ class CodegenPatchAgent:
             "expected_impact": payload.get("expected_impact") or "",
             "rollback_plan": payload.get("rollback_plan") or "",
             "context_files": context_files,
+            "data_samples": data_samples,
         }
         return [
             {
@@ -426,11 +439,13 @@ class CodegenPatchAgent:
                     "Responde de forma directa y compacta; no expliques razonamiento ni repitas contexto. "
                     "Debes producir un cambio pequeno, revisable y reversible. Solo puedes tocar rutas bajo: "
                     f"{', '.join(LOW_RISK_CODEGEN_ALLOWED_PREFIXES)}. "
+                    "Debes modificar el target_identifier de la propuesta cuando sea una ruta de codigo existente; "
+                    "generar solo tests o documentacion no satisface la propuesta. "
                     "Nunca modifiques risk.py, kernel.py, broker.py, execution.py, config.py ni .env. "
                     "Para archivos existentes grandes usa file_edits {path, old, new}; el bloque old debe copiarse "
                     "VERBATIM del contexto proporcionado, sin reformatear ni normalizar espacios, y debe ser corto y unico. "
                     "Para archivos nuevos o existentes con menos de 300 lineas puedes usar {path, content} con el contenido completo. "
-                    "Incluye tests concretos."
+                    "Si hay data_samples, respeta ese esquema real y crea al menos un test con una linea real copiada literalmente."
                 ),
             },
             {
@@ -482,6 +497,38 @@ class CodegenPatchAgent:
                     }
                 )
         return context
+
+    def _data_samples(self, workspace: Path, proposal: dict[str, Any]) -> list[dict[str, Any]]:
+        paths = _data_paths_from_proposal(proposal)
+        workspace = workspace.resolve()
+        samples: list[dict[str, Any]] = []
+        for rel in paths[:6]:
+            path = (workspace / rel).resolve()
+            try:
+                path.relative_to(workspace)
+            except ValueError:
+                continue
+            if not path.exists() or not path.is_file():
+                continue
+            try:
+                lines = path.read_text(encoding="utf-8-sig").splitlines()
+            except OSError as exc:
+                samples.append({"path": rel, "exists": True, "error": str(exc)})
+                continue
+            head = lines[:CODEGEN_DATA_SAMPLE_LINES]
+            tail = lines[-CODEGEN_DATA_SAMPLE_LINES:] if len(lines) > CODEGEN_DATA_SAMPLE_LINES else []
+            samples.append(
+                {
+                    "path": rel,
+                    "exists": True,
+                    "line_count": len(lines),
+                    "head": head,
+                    "tail": tail,
+                    "truncated": len(lines) > CODEGEN_DATA_SAMPLE_LINES * 2,
+                    "instruction": "Usa esta muestra para inferir el esquema real; no inventes nombres de campos.",
+                }
+            )
+        return samples
 
     def _save_artifact(
         self,
@@ -598,6 +645,23 @@ def _candidate_paths_from_proposal(proposal: dict[str, Any]) -> list[str]:
                     candidates.append(item.strip().replace("\\", "/"))
                 elif isinstance(item, dict) and item.get("path"):
                     candidates.append(str(item["path"]).strip().replace("\\", "/"))
+    return list(dict.fromkeys(candidates))
+
+
+def _data_paths_from_proposal(proposal: dict[str, Any]) -> list[str]:
+    payload = proposal.get("payload") or {}
+    haystack = json.dumps(
+        {
+            "proposal": {
+                key: proposal.get(key)
+                for key in ("target_component", "target_identifier", "proposal_type", "risk_level")
+            },
+            "payload": payload,
+        },
+        ensure_ascii=False,
+        default=str,
+    )
+    candidates = [match.group(0).strip().replace("\\", "/") for match in DATA_PATH_RE.finditer(haystack)]
     return list(dict.fromkeys(candidates))
 
 

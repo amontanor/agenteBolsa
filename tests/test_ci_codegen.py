@@ -151,6 +151,12 @@ def _proposal_artifacts(store):
     ]
 
 
+def test_codegen_response_accepts_null_patch():
+    response = CodegenPatchResponse(summary="ok", file_edits=[], patch=None)
+
+    assert response.patch == ""
+
+
 def test_codegen_preview_produces_diff_artifact_and_no_applied_change(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     settings = _settings(tmp_path, repo)
@@ -352,6 +358,40 @@ def test_codegen_prompt_includes_full_current_target_context(tmp_path):
     assert context_file["content"] == long_text
     assert context_file["truncated"] is False
     assert context_file["lines"] == 500
+
+
+def test_codegen_prompt_includes_real_data_file_sample(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    settings = _settings(tmp_path, repo)
+    log_dir = repo / "data" / "research" / "core_sleeve"
+    log_dir.mkdir(parents=True)
+    real_line = (
+        '{"created_at": "2026-07-02T11:12:06+00:00", "status": "would_submit", '
+        '"symbol": "SPY", "data_date": "2026-07-01", "exposure": 0.656465, '
+        '"decision": {"order": {"side": "buy", "notional": 13914.44}, "reason": "buy_to_target"}}'
+    )
+    (log_dir / "core_sleeve_log.jsonl").write_text(real_line + "\n", encoding="utf-8")
+    proposal = {
+        "proposal_id": "ci_prop_context_data",
+        "proposal_type": "CODE_CHANGE",
+        "target_component": "continuous_improvement",
+        "target_identifier": "docs/base.md",
+        "risk_level": "LOW",
+        "payload": {
+            "target_identifier": "docs/base.md",
+            "proposed_value": "Leer data/research/core_sleeve/core_sleeve_log.jsonl y mostrar exposure + decision.order.",
+            "rationale": "test",
+        },
+    }
+
+    messages = CodegenPatchAgent()._messages(settings, proposal)
+    user_payload = json.loads(messages[1]["content"])
+    sample = user_payload["data_samples"][0]
+
+    assert sample["path"] == "data/research/core_sleeve/core_sleeve_log.jsonl"
+    assert sample["head"] == [real_line]
+    assert "decision" in sample["head"][0]
+    assert "target_exposure" not in sample["head"][0]
 
 
 def test_codegen_rejects_target_outside_low_risk_allowlist(tmp_path):
