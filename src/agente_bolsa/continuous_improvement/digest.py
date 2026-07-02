@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+import json
+import re
+from collections import Counter, defaultdict
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from statistics import median
 from typing import Any
 
 from agente_bolsa.storage import Store
@@ -12,14 +17,27 @@ REJECTION_BUCKETS = {
     "self_governance_modification_forbidden": "self_governance",
     "recently_rejected_duplicate": "recently_rejected",
 }
+TERMINAL_PROPOSAL_STATUSES = {
+    "APPLIED",
+    "ARCHIVED",
+    "BLOCKED",
+    "DUPLICATE",
+    "REJECTED",
+    "REJECTED_BY_TESTS",
+}
+ROLLBACK_STATUSES = {"ROLLED_BACK", "ROLLBACK_REQUESTED", "ROLLBACK_FAILED"}
+EXECUTABLE = "EJECUTABLE"
+PROSE = "PROSA"
 
 
-def build_lab_digest(store: Store, *, days: int = 1) -> dict[str, Any]:
+def build_lab_digest(store: Store, *, days: int = 1, now: datetime | None = None) -> dict[str, Any]:
     days = max(1, int(days))
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    proposals = store.continuous_improvement_proposals(limit=20000)
-    experiments = store.continuous_improvement_experiments(limit=20000)
-    applied_changes = store.continuous_improvement_applied_changes(limit=20000)
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    cutoff = now - timedelta(days=days)
+    proposals = store.continuous_improvement_proposals(limit=50000)
+    experiments = store.continuous_improvement_experiments(limit=50000)
+    applied_changes = store.continuous_improvement_applied_changes(limit=50000)
+    decisions = store.continuous_improvement_decisions(limit=50000)
 
     recent_proposals_created = [item for item in proposals if _is_recent(item.get("created_at"), cutoff)]
     recent_rejected = [
@@ -52,8 +70,10 @@ def build_lab_digest(store: Store, *, days: int = 1) -> dict[str, Any]:
         applied_counts[status] = applied_counts.get(status, 0) + 1
 
     attention = [item for item in ready_to_apply if item["has_diff"]]
+    approval_requests = ready_for_human_approval_requests(store, limit=200)
     return {
         "days": days,
+        "generated_at": now.isoformat(),
         "window_start": cutoff.isoformat(),
         "proposals": {
             "created": len(recent_proposals_created),
@@ -67,7 +87,193 @@ def build_lab_digest(store: Store, *, days: int = 1) -> dict[str, Any]:
         },
         "experiments": experiment_counts,
         "requires_attention": attention,
+        "approval_requests": approval_requests,
+        "kpi_funnel": build_kpi_funnel(proposals, experiments, applied_changes, decisions, now=now),
+        "proposal_quality": build_proposal_quality_report(store, proposals=proposals, now=now, limit=200),
     }
+
+
+def write_lab_digest_file(
+    store: Store,
+    reports_dir: Path,
+    *,
+    days: int = 1,
+    run_date: date | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    run_date = run_date or now.date()
+    digest = build_lab_digest(store, days=days, now=now)
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    path = reports_dir / f"ci_digest_{run_date.isoformat()}.md"
+    path.write_text(format_lab_digest_text(digest), encoding="utf-8")
+    return {"ok": True, "path": str(path), "digest": digest}
+
+
+def build_kpi_funnel(
+    proposals: list[dict[str, Any]],
+    experiments: list[dict[str, Any]],
+    applied_changes: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    current_week_start = _week_start(now.date())
+    week_starts = [current_week_start - timedelta(days=7 * offset) for offset in reversed(range(4))]
+    proposals_by_id = {str(item.get("proposal_id")): item for item in proposals if item.get("proposal_id")}
+    experiments_by_week = _group_by_week(experiments, "created_at")
+    applied_by_week = _group_by_week(applied_changes, "created_at")
+    proposals_by_week = _group_by_week(proposals, "created_at")
+    decisions_by_week = _group_by_week(decisions, "created_at")
+
+    rows: list[dict[str, Any]] = []
+    for start in week_starts:
+        end = start + timedelta(days=7)
+        week_key = start.isoformat()
+        week_proposals = proposals_by_week.get(week_key, [])
+        week_experiments = experiments_by_week.get(week_key, [])
+        week_applied = applied_by_week.get(week_key, [])
+        proposal_ids = {str(item.get("proposal_id")) for item in week_proposals if item.get("proposal_id")}
+        experiment_proposal_ids = {str(item.get("proposal_id")) for item in week_experiments if item.get("proposal_id")}
+        applied_proposal_ids = {str(item.get("proposal_id")) for item in week_applied if item.get("proposal_id")}
+        decided_ages = _decision_ages_days(decisions_by_week.get(week_key, []), proposals_by_id)
+        rows.append(
+            {
+                "week_start": week_key,
+                "week_end": (end - timedelta(days=1)).isoformat(),
+                "proposals": len(week_proposals),
+                "experiments": len(week_experiments),
+                "applied_changes": len(week_applied),
+                "proposal_to_experiment_pct": _pct(len(experiment_proposal_ids & proposal_ids), len(proposal_ids)),
+                "experiment_to_applied_pct": _pct(len(applied_proposal_ids & experiment_proposal_ids), len(experiment_proposal_ids)),
+                "median_days_proposal_to_decision": round(median(decided_ages), 2) if decided_ages else None,
+                "rollbacks": sum(1 for item in week_applied if str(item.get("status") or "").upper() in ROLLBACK_STATUSES),
+            }
+        )
+
+    wip_statuses = Counter(
+        str(item.get("status") or "UNKNOWN").upper()
+        for item in proposals
+        if str(item.get("status") or "UNKNOWN").upper() not in TERMINAL_PROPOSAL_STATUSES
+    )
+    return {
+        "definition": (
+            "Semanas ISO; conversiones por proposal_id dentro de cada semana. "
+            "WIP actual excluye estados terminales: "
+            + ", ".join(sorted(TERMINAL_PROPOSAL_STATUSES))
+        ),
+        "weeks": rows,
+        "wip_current": {"total": sum(wip_statuses.values()), "by_status": dict(sorted(wip_statuses.items()))},
+        "rollbacks_total": sum(1 for item in applied_changes if str(item.get("status") or "").upper() in ROLLBACK_STATUSES),
+    }
+
+
+def classify_proposal_quality(proposal: dict[str, Any]) -> dict[str, Any]:
+    payload = proposal.get("payload") or {}
+    text = _proposal_text(proposal).lower()
+    target_identifier = str(proposal.get("target_identifier") or payload.get("target_identifier") or "").strip()
+    current_value = str(payload.get("current_value") or "").strip()
+    proposed_value = str(payload.get("proposed_value") or "").strip()
+
+    if _has_diff_spec(payload, text):
+        return {"class": EXECUTABLE, "reason": "diff_or_targets"}
+    if target_identifier and current_value and proposed_value and current_value != proposed_value:
+        return {"class": EXECUTABLE, "reason": "parameter_current_to_proposed"}
+    if target_identifier and _contains_current_to_proposed(text):
+        return {"class": EXECUTABLE, "reason": "text_current_to_proposed"}
+    if _has_shadow_rule(payload, text):
+        return {"class": EXECUTABLE, "reason": "concrete_shadow_rule"}
+    return {"class": PROSE, "reason": "no_deterministic_execution_spec"}
+
+
+def build_proposal_quality_report(
+    store: Store,
+    *,
+    proposals: list[dict[str, Any]] | None = None,
+    now: datetime | None = None,
+    limit: int = 200,
+) -> dict[str, Any]:
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    proposals = proposals if proposals is not None else store.continuous_improvement_proposals(limit=limit)
+    recent = sorted(proposals, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:limit]
+    initiative_owner = _initiative_owner_map(store)
+    classified: list[dict[str, Any]] = []
+    for proposal in recent:
+        classification = classify_proposal_quality(proposal)
+        row = {
+            "proposal_id": proposal.get("proposal_id"),
+            "class": classification["class"],
+            "reason": classification["reason"],
+            "proposer": _proposal_proposer(proposal, initiative_owner),
+            "week_start": _week_start((_parse_iso_datetime(str(proposal.get("created_at") or "")) or now).date()).isoformat(),
+            "title": _proposal_title(proposal),
+            "excerpt": _proposal_excerpt(proposal),
+        }
+        classified.append(row)
+
+    global_counts = Counter(item["class"] for item in classified)
+    by_agent: dict[str, Counter[str]] = defaultdict(Counter)
+    by_week: dict[str, Counter[str]] = defaultdict(Counter)
+    examples: dict[str, list[dict[str, Any]]] = {EXECUTABLE: [], PROSE: []}
+    for item in classified:
+        by_agent[item["proposer"]][item["class"]] += 1
+        by_week[item["week_start"]][item["class"]] += 1
+        if len(examples[item["class"]]) < 5:
+            examples[item["class"]].append(
+                {
+                    "proposal_id": item["proposal_id"],
+                    "title": item["title"],
+                    "reason": item["reason"],
+                    "excerpt": item["excerpt"],
+                }
+            )
+
+    return {
+        "sample_size": len(classified),
+        "generated_at": now.isoformat(),
+        "global": _counter_payload(global_counts),
+        "by_agent": {agent: _counter_payload(counts) for agent, counts in sorted(by_agent.items())},
+        "by_week": {week: _counter_payload(counts) for week, counts in sorted(by_week.items())},
+        "examples": examples,
+        "classified": classified,
+        "definition": (
+            "EJECUTABLE si hay parametro con valor actual y propuesto, spec de diff/targets, "
+            "o regla shadow con entrada/salida/stop/take-profit medible; si no, PROSA."
+        ),
+    }
+
+
+def ready_for_human_approval_requests(store: Store, *, limit: int = 200) -> list[dict[str, Any]]:
+    query = """
+        SELECT artifact_id, proposal_id, artifact_type, content_text, payload_json,
+               created_at, updated_at
+        FROM continuous_improvement_proposal_artifacts
+        WHERE artifact_type = 'code_diff_preview'
+        ORDER BY updated_at DESC
+        LIMIT ?
+    """
+    proposals = {str(item.get("proposal_id")): item for item in store.continuous_improvement_proposals(limit=50000)}
+    rows: list[Any]
+    with store.connect() as conn:
+        rows = conn.execute(query, (limit,)).fetchall()
+    requests: list[dict[str, Any]] = []
+    for row in rows:
+        payload = json.loads(row["payload_json"] or "{}")
+        if payload.get("status") != "READY_FOR_HUMAN_REVIEW" or payload.get("tests_ok") is not True:
+            continue
+        proposal = proposals.get(str(row["proposal_id"])) or {}
+        target_paths = payload.get("target_paths") or _diff_target_paths(str(row["content_text"] or ""))
+        requests.append(
+            {
+                "proposal_id": row["proposal_id"],
+                "title": _proposal_title(proposal),
+                "targets": list(target_paths),
+                "artifact_id": row["artifact_id"],
+                "updated_at": row["updated_at"],
+            }
+        )
+    return requests
 
 
 def format_lab_digest_text(digest: dict[str, Any]) -> str:
@@ -76,9 +282,13 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
     applied = digest.get("applied_changes") or {}
     experiments = digest.get("experiments") or {}
     attention = digest.get("requires_attention") or []
+    kpis = digest.get("kpi_funnel") or {}
+    quality = digest.get("proposal_quality") or {}
+    approval_requests = digest.get("approval_requests") or []
 
     lines = [
         f"Digest diario del lab - ultimos {digest.get('days')} dia(s)",
+        f"Generado: {digest.get('generated_at', 'n/d')}",
         "",
         "Propuestas",
         f"- creadas: {(digest.get('proposals') or {}).get('created', 0)}",
@@ -107,14 +317,55 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
             f"- PASSED: {experiments.get('passed', 0)}",
             f"- FAILED: {experiments.get('failed', 0)}",
             "",
-            "Requiere tu atencion",
+            "KPI funnel - ultimas 4 semanas",
+            f"- WIP actual: {(kpis.get('wip_current') or {}).get('total', 0)} | "
+            f"{_format_counts((kpis.get('wip_current') or {}).get('by_status') or {})}",
+            f"- Rollbacks historicos: {kpis.get('rollbacks_total', 0)}",
+            "| Semana | Propuestas | Experimentos | Applied | % prop->exp | % exp->aplicado | Mediana dias a decision | Rollbacks |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
+    for row in kpis.get("weeks") or []:
+        lines.append(
+            f"| {row.get('week_start')} | {row.get('proposals', 0)} | {row.get('experiments', 0)} | "
+            f"{row.get('applied_changes', 0)} | {_pct_text(row.get('proposal_to_experiment_pct'))} | "
+            f"{_pct_text(row.get('experiment_to_applied_pct'))} | {_none_text(row.get('median_days_proposal_to_decision'))} | "
+            f"{row.get('rollbacks', 0)} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "Calidad de propuestas - medicion sin enforcement",
+            f"- muestra: {quality.get('sample_size', 0)}",
+            f"- global: {_format_counts((quality.get('global') or {}).get('counts') or {})}",
+            "- definicion: " + str(quality.get("definition") or ""),
+            "",
+            "Ejemplos EJECUTABLE",
+        ]
+    )
+    lines.extend(_quality_example_lines((quality.get("examples") or {}).get(EXECUTABLE) or []))
+    lines.append("")
+    lines.append("Ejemplos PROSA")
+    lines.extend(_quality_example_lines((quality.get("examples") or {}).get(PROSE) or []))
+
+    lines.extend(["", "Requiere tu atencion"])
     if attention:
         for item in attention:
             lines.append(f"- {item.get('proposal_id')} | {item.get('target')} | diff listo")
     else:
         lines.append("- Nada con diff listo en la ventana.")
+
+    lines.extend(["", "PIDE APROBACIÓN"])
+    if approval_requests:
+        for item in approval_requests:
+            targets = ", ".join(item.get("targets") or ["sin targets"])
+            lines.append(
+                f"- {item.get('proposal_id')} | {item.get('title')} | targets: {targets} | "
+                "accion: continuous-improvement-lab review/approve"
+            )
+    else:
+        lines.append("- No hay propuestas READY_FOR_HUMAN_REVIEW con tests_ok=true.")
     return "\n".join(lines)
 
 
@@ -135,10 +386,9 @@ def _artifact_has_diff(artifact: dict[str, Any] | None) -> bool:
     payload = artifact.get("payload") or {}
     content = str(artifact.get("content_text") or "")
     return (
-        artifact_type in {"diff", "patch"}
+        artifact_type in {"diff", "patch", "code_diff_preview"}
         or "diff --git " in content
-        or "--- " in content
-        and "+++ " in content
+        or ("--- " in content and "+++ " in content)
         or str(payload.get("status") or "") == "READY_FOR_HUMAN_REVIEW"
         or bool(payload.get("diff") or payload.get("patch"))
     )
@@ -185,3 +435,175 @@ def _format_counts(counts: dict[str, int]) -> str:
     if not counts:
         return "sin cambios"
     return ", ".join(f"{key}={value}" for key, value in sorted(counts.items()))
+
+
+def _week_start(day: date) -> date:
+    return day - timedelta(days=day.weekday())
+
+
+def _group_by_week(items: list[dict[str, Any]], field: str) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in items:
+        parsed = _parse_iso_datetime(str(item.get(field) or ""))
+        if parsed is None:
+            continue
+        grouped[_week_start(parsed.date()).isoformat()].append(item)
+    return grouped
+
+
+def _pct(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return round((numerator / denominator) * 100.0, 2)
+
+
+def _decision_ages_days(decisions: list[dict[str, Any]], proposals_by_id: dict[str, dict[str, Any]]) -> list[float]:
+    ages: list[float] = []
+    first_decision_by_proposal: dict[str, datetime] = {}
+    for decision in sorted(decisions, key=lambda item: str(item.get("created_at") or "")):
+        proposal_id = str(decision.get("proposal_id") or "")
+        first_decision_by_proposal.setdefault(proposal_id, _parse_iso_datetime(str(decision.get("created_at") or "")) or datetime.now(timezone.utc))
+    for proposal_id, decision_at in first_decision_by_proposal.items():
+        proposal_at = _parse_iso_datetime(str((proposals_by_id.get(proposal_id) or {}).get("created_at") or ""))
+        if proposal_at is None:
+            continue
+        ages.append(max(0.0, (decision_at - proposal_at).total_seconds() / 86400.0))
+    return ages
+
+
+def _has_diff_spec(payload: dict[str, Any], text: str) -> bool:
+    for key in ("file_edits", "files", "target_files", "target_paths", "diff_targets"):
+        value = payload.get(key)
+        if isinstance(value, list | tuple) and value:
+            return True
+    if str(payload.get("patch") or "").strip() or str(payload.get("diff") or "").strip():
+        return True
+    return bool("diff --git" in text or re.search(r"\b(src|tests|docs)/[\w./-]+\.py\b", text))
+
+
+def _contains_current_to_proposed(text: str) -> bool:
+    if "->" in text or "→" in text:
+        return True
+    patterns = [
+        r"['\"]?current_value['\"]?\s*:\s*['\"]?\d+(?:\.\d+)?[^.\n]{0,120}['\"]?target_value['\"]?\s*:\s*['\"]?\d+(?:\.\d+)?",
+        r"current(?:ly)?[^.\n]{0,80}\b\d+(?:\.\d+)?[^.\n]{0,80}(?:propos|increase|decrease|set)[^.\n]{0,80}\b\d+(?:\.\d+)?",
+        r"actual[^.\n]{0,80}\b\d+(?:\.\d+)?[^.\n]{0,80}propuest[^.\n]{0,80}\b\d+(?:\.\d+)?",
+        r"\bde\s+\d+(?:\.\d+)?\s+a\s+\d+(?:\.\d+)?\b",
+    ]
+    return any(re.search(pattern, text) for pattern in patterns)
+
+
+def _has_shadow_rule(payload: dict[str, Any], text: str) -> bool:
+    if "shadow" not in text and str(payload.get("promotion_state") or "").lower() != "shadow":
+        return False
+    rule_keys = {"entry", "exit", "stop_loss", "take_profit", "min_trades", "invalidation"}
+    if rule_keys & set(payload):
+        return True
+    hits = sum(1 for key in rule_keys if key in text)
+    return hits >= 2
+
+
+def _proposal_text(proposal: dict[str, Any]) -> str:
+    payload = proposal.get("payload") or {}
+    parts: list[str] = [
+        str(proposal.get("proposal_type") or ""),
+        str(proposal.get("target_component") or ""),
+        str(proposal.get("target_identifier") or ""),
+    ]
+    for key in (
+        "current_value",
+        "proposed_value",
+        "rationale",
+        "expected_impact",
+        "rollback_plan",
+        "patch",
+        "diff",
+        "summary",
+        "title",
+    ):
+        parts.append(str(payload.get(key) or ""))
+    for key in ("file_edits", "files", "target_files", "target_paths"):
+        if payload.get(key):
+            parts.append(json.dumps(payload.get(key), ensure_ascii=False, default=str))
+    return "\n".join(parts)
+
+
+def _proposal_excerpt(proposal: dict[str, Any], *, limit: int = 320) -> str:
+    text = " ".join(_proposal_text(proposal).split())
+    return text[:limit]
+
+
+def _proposal_title(proposal: dict[str, Any]) -> str:
+    payload = proposal.get("payload") or {}
+    for key in ("title", "summary", "expected_impact", "rationale", "proposed_value"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return " ".join(value.split())[:120]
+    target = f"{proposal.get('target_component')}/{proposal.get('target_identifier')}".strip("/")
+    return target or str(proposal.get("proposal_id") or "sin titulo")
+
+
+def _initiative_owner_map(store: Store) -> dict[str, str]:
+    owners: dict[str, str] = {}
+    try:
+        initiatives = store.continuous_improvement_initiatives(limit=50000)
+    except Exception:
+        return owners
+    for item in initiatives:
+        key = str(item.get("initiative_key") or "")
+        owner = str(item.get("owner_agent") or "").strip()
+        if key and owner:
+            owners[key] = owner
+    return owners
+
+
+def _proposal_proposer(proposal: dict[str, Any], initiative_owner: dict[str, str]) -> str:
+    payload = proposal.get("payload") or {}
+    for key in ("proposer", "source", "agent_name", "owner_agent"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
+    initiative_key = str(payload.get("initiative_key") or "").strip()
+    if initiative_key and initiative_owner.get(initiative_key):
+        return initiative_owner[initiative_key]
+    return "UNKNOWN"
+
+
+def _counter_payload(counter: Counter[str]) -> dict[str, Any]:
+    counts = {EXECUTABLE: int(counter.get(EXECUTABLE, 0)), PROSE: int(counter.get(PROSE, 0))}
+    total = counts[EXECUTABLE] + counts[PROSE]
+    return {
+        "counts": counts,
+        "total": total,
+        "executable_pct": _pct(counts[EXECUTABLE], total),
+        "prose_pct": _pct(counts[PROSE], total),
+    }
+
+
+def _quality_example_lines(examples: list[dict[str, Any]]) -> list[str]:
+    if not examples:
+        return ["- Sin ejemplos en la muestra."]
+    return [
+        f"- {item.get('proposal_id')} | {item.get('reason')} | {item.get('title')} | {item.get('excerpt')}"
+        for item in examples
+    ]
+
+
+def _diff_target_paths(diff_text: str) -> list[str]:
+    targets: list[str] = []
+    for line in str(diff_text or "").splitlines():
+        if line.startswith("+++ b/") or line.startswith("--- a/"):
+            rel = line[6:].strip()
+            if rel != "/dev/null":
+                targets.append(rel.replace("\\", "/"))
+    return list(dict.fromkeys(targets))
+
+
+def _pct_text(value: Any) -> str:
+    if value is None:
+        return "n/d"
+    return f"{float(value):.2f}%"
+
+
+def _none_text(value: Any) -> str:
+    return "n/d" if value is None else str(value)

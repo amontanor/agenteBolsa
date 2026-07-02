@@ -2661,8 +2661,22 @@ def command_continuous_improvement_lab(args: argparse.Namespace) -> None:
         )
         return
     if args.lab_command == "digest":
+        if args.out:
+            target = Path(args.out)
+            digest = build_lab_digest(store, days=args.days)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(format_lab_digest_text(digest), encoding="utf-8")
+            result = {"ok": True, "path": str(target), "digest": digest}
+            if args.json:
+                _print_json(result)
+            else:
+                print(f"Digest escrito: {result['path']}")
+            return
         digest = build_lab_digest(store, days=args.days)
-        print(format_lab_digest_text(digest))
+        if args.json:
+            _print_json({"ok": True, "digest": digest})
+        else:
+            print(format_lab_digest_text(digest))
         return
     if args.lab_command == "rollback":
         change = AutoApplyCodeAgent().rollback(
@@ -3501,6 +3515,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     ci_lab_digest = ci_lab_subparsers.add_parser("digest", help="Resume el estado diario del laboratorio en modo solo lectura.")
     ci_lab_digest.add_argument("--days", type=int, default=1)
+    ci_lab_digest.add_argument("--out", help="Ruta markdown opcional para escribir el digest.")
+    ci_lab_digest.add_argument("--json", action="store_true", help="Devuelve JSON.")
     ci_lab_digest.set_defaults(func=command_continuous_improvement_lab)
 
     ci_lab_rollback = ci_lab_subparsers.add_parser("rollback", help="Marca rollback de un cambio aplicado.")
