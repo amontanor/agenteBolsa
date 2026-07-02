@@ -1076,7 +1076,13 @@ fontaneria. Reordenacion por impacto:
 5. **Codegen ficheros grandes**: sin esto la firma no mantiene su propio codigo (P20).
 
 Lote 2 encargado: P16-P21 en `docs/prompts_codex_2026-07-02_lote2.md`. Estado:
-PENDIENTE. Ninguna tarea cambia conducta real (read-only / flag OFF / human-gated).
+EN CURSO. Ninguna tarea cambia conducta real (read-only / flag OFF / human-gated).
+
+| Tarea | Entrega | Artefacto | Estado |
+|---|---|---|---|
+| P16 | Relectura horizonte salida 1-3d vs 5-10d con muestra acumulada | `docs/informe_codex_p16_horizonte_salida_2026-07-02.md` | HECHO (v0.4.97, commit 09c27b07) |
+| P17 | Parity check core sleeve + runbook de activacion/escalado | `scripts/core_sleeve_parity_check.py`, `docs/runbook_core_sleeve_activacion.md`, `docs/informe_codex_p17_parity_runbook_2026-07-02.md` | HECHO (v0.4.98) |
+| P18-P21 | Pendiente, en orden | `docs/prompts_codex_2026-07-02_lote2.md` | PENDIENTE |
 
 | P10-P14 | Regeneracion esquema real → fix encoding → gate tests → fix approve → simetria suite | Codex | Bajo | **HECHO** (v0.4.89-0.4.93, commits aa2d6b42, 14b61778, 621d364e, e9c7e992, 81cddbaa; apply final commit 6816b05e por approve de Antonio; version efectiva 0.4.94) |
 
