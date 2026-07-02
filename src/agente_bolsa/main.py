@@ -3105,6 +3105,13 @@ def build_parser() -> argparse.ArgumentParser:
     status = subparsers.add_parser("status", help="Muestra estado basico.")
     status.set_defaults(func=command_status)
 
+    validate_agent_config = subparsers.add_parser(
+        "validate-agent-config",
+        help="Valida configuracion de agentes y tareas.",
+    )
+    validate_agent_config.add_argument("--json", action="store_true", help="Devuelve el resultado en JSON.")
+    validate_agent_config.set_defaults(func=command_validate_agent_config)
+
     cycle_funnel = subparsers.add_parser(
         "cycle-funnel",
         help="Embudo del ultimo market_cycle: universo->candidatos->gates->fills con motivos de rechazo.",
