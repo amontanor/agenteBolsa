@@ -95,6 +95,8 @@ SELF_GOVERNANCE_FORBIDDEN_IDENTIFIERS = {
     "continuous_improvement_schedule_enabled",
     "continuous_improvement_time_local",
     "continuous_improvement_workspace_dir",
+    "core_sleeve_dry_run",
+    "core_sleeve_enabled",
     "improvement_dry_run",
     "micro_experiment_size_multiplier",
     "programmer_max_repair_attempts",
@@ -202,6 +204,8 @@ def self_governance_modification_violation(
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     references = [target_component, target_identifier]
+    if target_component and target_identifier:
+        references.append(f"{target_component}_{target_identifier}")
     references.extend(_self_safety_payload_references(payload or {}))
     for raw in references:
         match = _self_governance_match(str(raw or ""))

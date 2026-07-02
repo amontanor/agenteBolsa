@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from agente_bolsa.config import Settings
 from agente_bolsa.continuous_improvement.agents import (
+    SELF_GOVERNANCE_REJECTION_REASON,
     SELF_SAFETY_REJECTION_REASON,
     ValidationAgent,
+    self_governance_modification_violation,
     self_safety_modification_violation,
 )
 from agente_bolsa.continuous_improvement.aggressiveness_gate import (
@@ -143,3 +145,44 @@ def test_settings_aggressiveness_analogs_are_documented(tmp_path):
     assert criteria["entry_quality_max_sma20_distance"] == "increase"
     assert criteria["entry_quality_fallback_momentum_extension_min_score"] == "decrease"
     assert criteria["entry_quality_fallback_momentum_extension_max_selection_rank"] == "increase"
+    assert criteria["sleeve_fraction"] == "increase"
+    assert criteria["target_vol"] == "increase"
+
+
+def test_core_sleeve_activation_flags_are_self_governance_gated():
+    enabled = self_governance_modification_violation(
+        target_component="core_sleeve",
+        target_identifier="enabled",
+        payload={},
+    )
+    dry_run = self_governance_modification_violation(
+        target_component="core_sleeve",
+        target_identifier="dry_run",
+        payload={},
+    )
+
+    assert enabled is not None
+    assert enabled["reason"] == SELF_GOVERNANCE_REJECTION_REASON
+    assert dry_run is not None
+    assert dry_run["reason"] == SELF_GOVERNANCE_REJECTION_REASON
+
+
+def test_core_sleeve_sleeve_fraction_increase_requires_edge_evidence(tmp_path):
+    settings = _settings(tmp_path)
+    store = _store(settings)
+    proposal = {
+        **_proposal("ci_prop_core_sleeve"),
+        "target_component": "core_sleeve",
+        "target_identifier": "sleeve_fraction",
+        "payload": {
+            "current_value": "0.30",
+            "proposed_value": "0.40",
+            "rollback_plan": "Restore sleeve_fraction to 0.30.",
+            "rationale": "Increase the SPY core sleeve.",
+        },
+    }
+
+    result = ValidationAgent().validate(proposal, {"evaluation": {"summary": {}}}, settings, store=store)
+
+    assert result["status"] == "REJECTED"
+    assert result["payload"]["checks"][0]["name"] == AGGRESSIVENESS_REQUIRES_EDGE_EVIDENCE

@@ -24,6 +24,10 @@ AGGRESSIVENESS_PARAMETER_CRITERIA: dict[str, str] = {
     "entry_quality_min_score": "decrease",
     "entry_quality_max_rsi": "increase",
     "entry_quality_max_sma20_distance": "increase",
+    "sleeve_fraction": "increase",
+    "core_sleeve_sleeve_fraction": "increase",
+    "target_vol": "increase",
+    "core_sleeve_target_vol": "increase",
 }
 
 PROFILE_RANK = {
@@ -105,7 +109,8 @@ def assess_aggressiveness_evidence(
     if not target_identifier:
         return AggressivenessAssessment(False, False, reason="no_target_identifier")
     criteria = aggressiveness_parameter_criteria(settings)
-    criterion = criteria.get(target_identifier)
+    canonical_identifier = re.sub(r"[^a-z0-9_]+", "_", target_identifier.lower()).strip("_")
+    criterion = criteria.get(target_identifier) or criteria.get(canonical_identifier)
     if criterion is None:
         return AggressivenessAssessment(False, False, target_identifier=target_identifier, reason="target_not_aggressiveness")
 
