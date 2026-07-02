@@ -13,6 +13,10 @@ from agente_bolsa.config import Settings
 from agente_bolsa.models import new_id
 from agente_bolsa.storage import Store
 
+from .aggressiveness_gate import (
+    AGGRESSIVENESS_REQUIRES_EDGE_EVIDENCE,
+    assess_aggressiveness_evidence,
+)
 from .context_compaction import compact_ci_context_for_llm
 from .llm_client import ImprovementLLMClient
 from .schemas import (
@@ -1741,6 +1745,38 @@ class ValidationAgent:
                     "objective_status": "REJECTED",
                     "objective_evidence": {"self_governance_violation": self_governance_violation},
                     "objective_summary": SELF_GOVERNANCE_REJECTION_REASON,
+                    "target_component": target_component,
+                },
+            }
+        aggressiveness_assessment = assess_aggressiveness_evidence(
+            {**proposal, "payload": payload},
+            settings=settings,
+            store=store,
+        )
+        if aggressiveness_assessment.requires_evidence and not aggressiveness_assessment.has_edge_evidence:
+            return {
+                "validation_id": new_id("ci_val"),
+                "proposal_id": proposal["proposal_id"],
+                "cycle_id": proposal["cycle_id"],
+                "validation_type": "deterministic_gate",
+                "status": "REJECTED",
+                "payload": {
+                    "checks": [
+                        {
+                            "name": AGGRESSIVENESS_REQUIRES_EDGE_EVIDENCE,
+                            "passed": False,
+                            "detail": (
+                                "Una propuesta que aumenta la agresividad operativa necesita un experimento "
+                                "PASSED enlazado con edge/alpha/expectancy forward positivo neto de costes."
+                            ),
+                            "evidence": aggressiveness_assessment.as_payload(),
+                        }
+                    ],
+                    "required_validations": [],
+                    "data_quality": (context.get("evaluation") or {}).get("data_quality"),
+                    "objective_status": "REJECTED",
+                    "objective_evidence": {"aggressiveness_gate": aggressiveness_assessment.as_payload()},
+                    "objective_summary": AGGRESSIVENESS_REQUIRES_EDGE_EVIDENCE,
                     "target_component": target_component,
                 },
             }

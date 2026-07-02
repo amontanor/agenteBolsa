@@ -116,7 +116,7 @@ def test_lab_digest_kpis_from_synthetic_database(tmp_path):
     store.save_continuous_improvement_applied_change(
         {
             "applied_change_id": "ci_applied_a",
-            "proposal_id": "ci_prop_a",
+            "proposal_id": "ci_prop_b",
             "cycle_id": "ci_cycle_phase3",
             "status": "APPLIED",
             "change_type": "CODE_CHANGE",

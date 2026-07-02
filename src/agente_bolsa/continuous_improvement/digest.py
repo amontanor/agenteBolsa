@@ -136,7 +136,6 @@ def build_kpi_funnel(
         week_applied = applied_by_week.get(week_key, [])
         proposal_ids = {str(item.get("proposal_id")) for item in week_proposals if item.get("proposal_id")}
         experiment_proposal_ids = {str(item.get("proposal_id")) for item in week_experiments if item.get("proposal_id")}
-        applied_proposal_ids = {str(item.get("proposal_id")) for item in week_applied if item.get("proposal_id")}
         decided_ages = _decision_ages_days(decisions_by_week.get(week_key, []), proposals_by_id)
         rows.append(
             {
@@ -146,7 +145,7 @@ def build_kpi_funnel(
                 "experiments": len(week_experiments),
                 "applied_changes": len(week_applied),
                 "proposal_to_experiment_pct": _pct(len(experiment_proposal_ids & proposal_ids), len(proposal_ids)),
-                "experiment_to_applied_pct": _pct(len(applied_proposal_ids & experiment_proposal_ids), len(experiment_proposal_ids)),
+                "experiment_to_applied_pct": _pct(len(week_applied), len(week_experiments)),
                 "median_days_proposal_to_decision": round(median(decided_ages), 2) if decided_ages else None,
                 "rollbacks": sum(1 for item in week_applied if str(item.get("status") or "").upper() in ROLLBACK_STATUSES),
             }
@@ -159,7 +158,8 @@ def build_kpi_funnel(
     )
     return {
         "definition": (
-            "Semanas ISO; conversiones por proposal_id dentro de cada semana. "
+            "Semanas ISO; % prop->exp mide proposal_id con experimento/propuestas de la semana; "
+            "% exp->aplicado mide Applied/Experimentos de la semana para cuadrar con la columna Applied. "
             "WIP actual excluye estados terminales: "
             + ", ".join(sorted(TERMINAL_PROPOSAL_STATUSES))
         ),
@@ -254,6 +254,11 @@ def ready_for_human_approval_requests(store: Store, *, limit: int = 200) -> list
         LIMIT ?
     """
     proposals = {str(item.get("proposal_id")): item for item in store.continuous_improvement_proposals(limit=50000)}
+    applied_or_rolled_back = {
+        str(item.get("proposal_id"))
+        for item in store.continuous_improvement_applied_changes(limit=50000)
+        if item.get("proposal_id") and str(item.get("status") or "").upper() in {"APPLIED", "ROLLED_BACK"}
+    }
     rows: list[Any]
     with store.connect() as conn:
         rows = conn.execute(query, (limit,)).fetchall()
@@ -263,6 +268,8 @@ def ready_for_human_approval_requests(store: Store, *, limit: int = 200) -> list
         if payload.get("status") != "READY_FOR_HUMAN_REVIEW" or payload.get("tests_ok") is not True:
             continue
         proposal = proposals.get(str(row["proposal_id"])) or {}
+        if str(row["proposal_id"]) in applied_or_rolled_back or str(proposal.get("status") or "").upper() in {"APPLIED", "ROLLED_BACK"}:
+            continue
         target_paths = payload.get("target_paths") or _diff_target_paths(str(row["content_text"] or ""))
         requests.append(
             {
