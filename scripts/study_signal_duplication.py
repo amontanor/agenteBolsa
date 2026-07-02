@@ -62,7 +62,7 @@ def main() -> None:
     avg_per = round(total / unique, 2) if unique else 0.0
     mx = max(counts) if counts else 0
 
-    print(f"\n=== Duplicación de señales (signal_outcomes) ===")
+    print("\n=== Duplicación de señales (signal_outcomes) ===")
     print(f"filas totales                 : {total}")
     print(f"combinaciones (símbolo, día)  : {unique}   <- muestra INDEPENDIENTE efectiva")
     print(f"duplicate_ratio real          : {dup_ratio*100:.1f}%")

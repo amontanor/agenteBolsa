@@ -20,14 +20,13 @@ No escribe nada.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 from pathlib import Path
 from statistics import mean
 
 from agente_bolsa.tools.setup_edge import setup_quality_key
-
-import json
 
 DEFAULT_DB = Path("data/state/agente_bolsa.sqlite3")
 APPROVED = {

@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
-from pathlib import Path
 
 from agente_bolsa._utils import sqlite_connect_ro, table_exists, to_float
 from agente_bolsa.config import get_settings
@@ -38,7 +37,7 @@ def _loads(raw) -> dict:
 def _bucket(value, edges: list[float], labels: list[str]) -> str:
     if value is None:
         return "n/d"
-    for edge, label in zip(edges, labels):
+    for edge, label in zip(edges, labels, strict=False):
         if value < edge:
             return label
     return labels[-1]
