@@ -94,6 +94,7 @@ def build_lab_digest(
         },
         "experiments": experiment_counts,
         "overlay_shadow": latest_overlay_shadow_signal(data_dir, now=now),
+        "core_sleeve": latest_core_sleeve_signal(data_dir, now=now),
         "requires_attention": attention,
         "approval_requests": approval_requests,
         "kpi_funnel": build_kpi_funnel(proposals, experiments, applied_changes, decisions, now=now),
@@ -326,6 +327,44 @@ def latest_overlay_shadow_signal(data_dir: Path, *, now: datetime | None = None)
     }
 
 
+def latest_core_sleeve_signal(data_dir: Path, *, now: datetime | None = None) -> dict[str, Any]:
+    log_path = data_dir / "research" / "core_sleeve" / "core_sleeve_log.jsonl"
+    if not log_path.exists():
+        return {"available": False, "reason": f"{log_path} no existe"}
+    latest: dict[str, Any] | None = None
+    for line in log_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            latest = payload
+    if latest is None:
+        return {"available": False, "reason": f"{log_path} no contiene JSON valido"}
+    data_date_text = str(latest.get("data_date") or "")
+    try:
+        data_day = date.fromisoformat(data_date_text)
+    except ValueError:
+        return {"available": False, "reason": f"data_date invalida: {data_date_text}"}
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    market_days_old = _market_days_between(data_day, now.date())
+    decision = latest.get("decision")
+    return {
+        "available": True,
+        "path": str(log_path),
+        "data_date": data_date_text,
+        "market_days_old": market_days_old,
+        "stale": market_days_old > 3,
+        "status": latest.get("status"),
+        "exposure": latest.get("exposure"),
+        "decision_reason": (decision.get("reason") if decision else None),
+        "decision_order_side": (decision.get("order", {}).get("side") if decision else None),
+        "decision_order_notional": (decision.get("order", {}).get("notional") if decision else None),
+    }
+
+
 def format_lab_digest_text(digest: dict[str, Any]) -> str:
     rejected = (digest.get("proposals") or {}).get("rejected_by_reason") or {}
     ready = (digest.get("proposals") or {}).get("ready_to_apply") or []
@@ -389,6 +428,33 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
             lines.append(f"- ADVERTENCIA: senal overlay con {overlay.get('market_days_old')} dias de mercado; revisar supervisor.")
     else:
         lines.append(f"- No disponible: {overlay.get('reason', 'sin log overlay_shadow')}")
+
+    core_sleeve = digest.get("core_sleeve") or {}
+    lines.extend(
+        [
+            "",
+            "Core sleeve",
+        ]
+    )
+    if core_sleeve.get("available"):
+        lines.extend(
+            [
+                f"- data_date: {core_sleeve.get('data_date', 'n/d')}",
+                f"- status: {_none_text(core_sleeve.get('status'))}",
+                f"- exposure: {_none_text(core_sleeve.get('exposure'))}",
+            ]
+        )
+        decision_reason = core_sleeve.get("decision_reason")
+        decision_order_side = core_sleeve.get("decision_order_side")
+        decision_order_notional = core_sleeve.get("decision_order_notional")
+        if decision_reason is not None:
+            lines.append(f"- decision.reason: {decision_reason}")
+            lines.append(f"- decision.order.side: {_none_text(decision_order_side)}")
+            lines.append(f"- decision.order.notional: {_none_text(decision_order_notional)}")
+        if core_sleeve.get("stale"):
+            lines.append(f"- ADVERTENCIA: registro core sleeve con {core_sleeve.get('market_days_old')} dias de mercado; revisar supervisor.")
+    else:
+        lines.append(f"- No disponible: {core_sleeve.get('reason', 'sin log core_sleeve')}")
 
     lines.extend(
         [

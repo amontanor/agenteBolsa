@@ -184,3 +184,24 @@ def test_format_lab_digest_ends_with_pide_aprobacion_section(tmp_path):
 
     assert text.splitlines()[-2] == "PIDE APROBACIÓN"
     assert text.splitlines()[-1] == "- No hay propuestas READY_FOR_HUMAN_REVIEW con tests_ok=true."
+
+
+def test_core_sleeve_section_in_digest(tmp_path):
+    store = _store(tmp_path)
+    # Create core_sleeve log directory and file with data samples
+    log_dir = tmp_path / "research" / "core_sleeve"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "core_sleeve_log.jsonl"
+    line1 = '{"created_at": "2026-07-02T11:11:38.004021+00:00", "status": "disabled", "symbol": "SPY", "data_date": "2026-07-01", "price": 745.76001, "realized_vol_annualized": 0.182797, "exposure": 0.656465, "config": {"enabled": false, "dry_run": true, "sleeve_fraction": 0.3, "rebalance_band_pp": 5.0, "target_vol": 0.12}, "decision": null}'
+    line2 = '{"created_at": "2026-07-02T11:12:06.753314+00:00", "status": "would_submit", "symbol": "SPY", "data_date": "2026-07-01", "price": 745.76001, "realized_vol_annualized": 0.182797, "exposure": 0.656465, "config": {"enabled": true, "dry_run": true, "sleeve_fraction": 0.3, "rebalance_band_pp": 5.0, "target_vol": 0.12}, "decision": {"data_date": "2026-07-01", "equity": 70653.37, "price": 745.76001, "exposure": 0.656465, "sleeve_fraction": 0.3, "target_notional": 13914.44, "current_notional": 0.0, "max_sleeve_notional": 21196.01, "rebalance_band_notional": 1059.8, "delta_notional": 13914.44, "order": {"symbol": "SPY", "side": "buy", "notional": 13914.44, "payload": {"qty": 18.658067, "entry_price": 745.76001, "source": "core_sleeve_vt12"}}, "reason": "buy_to_target"}}'
+    log_path.write_text(line1 + "\n" + line2 + "\n", encoding="utf-8")
+
+    digest = build_lab_digest(store, days=7, now=datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc), data_dir=tmp_path)
+    core = digest.get("core_sleeve", {})
+    assert core.get("available") is True
+    assert core.get("status") == "would_submit"
+    assert core.get("exposure") == 0.656465
+    assert core.get("decision_reason") == "buy_to_target"
+    assert core.get("decision_order_side") == "buy"
+    assert core.get("decision_order_notional") == 13914.44
+    assert core.get("stale") is False  # data_date 2026-07-01, now 2026-07-02, so not stale
