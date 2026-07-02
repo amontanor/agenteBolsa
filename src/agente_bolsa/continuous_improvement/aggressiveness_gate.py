@@ -28,6 +28,10 @@ AGGRESSIVENESS_PARAMETER_CRITERIA: dict[str, str] = {
     "core_sleeve_sleeve_fraction": "increase",
     "target_vol": "increase",
     "core_sleeve_target_vol": "increase",
+    "lab_book_daily_cap": "increase",
+    "lab_book_fixed_notional": "increase",
+    "lab_book_notional": "increase",
+    "lab_book_max_universe_symbols": "increase",
 }
 
 PROFILE_RANK = {
@@ -106,11 +110,17 @@ def assess_aggressiveness_evidence(
 ) -> AggressivenessAssessment:
     payload = proposal.get("payload") or {}
     target_identifier = str(proposal.get("target_identifier") or payload.get("target_identifier") or "").strip()
+    target_component = str(proposal.get("target_component") or payload.get("target_component") or "").strip()
     if not target_identifier:
         return AggressivenessAssessment(False, False, reason="no_target_identifier")
     criteria = aggressiveness_parameter_criteria(settings)
     canonical_identifier = re.sub(r"[^a-z0-9_]+", "_", target_identifier.lower()).strip("_")
-    criterion = criteria.get(target_identifier) or criteria.get(canonical_identifier)
+    component_identifier = re.sub(
+        r"[^a-z0-9_]+",
+        "_",
+        f"{target_component}_{target_identifier}".lower(),
+    ).strip("_")
+    criterion = criteria.get(target_identifier) or criteria.get(canonical_identifier) or criteria.get(component_identifier)
     if criterion is None:
         return AggressivenessAssessment(False, False, target_identifier=target_identifier, reason="target_not_aggressiveness")
 

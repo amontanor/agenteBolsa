@@ -98,6 +98,8 @@ SELF_GOVERNANCE_FORBIDDEN_IDENTIFIERS = {
     "core_sleeve_dry_run",
     "core_sleeve_enabled",
     "improvement_dry_run",
+    "lab_book_enabled",
+    "lab_book_mode",
     "micro_experiment_size_multiplier",
     "programmer_max_repair_attempts",
     "require_human_approval_for_code_changes",

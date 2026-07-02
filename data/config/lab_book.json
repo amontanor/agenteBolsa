@@ -1,0 +1,16 @@
+{
+  "enabled": false,
+  "mode": "log_only",
+  "fixed_notional": 200.0,
+  "daily_cap": 10,
+  "candidate_sources": [
+    "all_candidates",
+    "shadow_candidates"
+  ],
+  "allowed_directions": [
+    "long"
+  ],
+  "default_stop_pct": 0.05,
+  "default_take_profit_pct": 0.1,
+  "max_universe_symbols": 0
+}

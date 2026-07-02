@@ -147,6 +147,8 @@ def test_settings_aggressiveness_analogs_are_documented(tmp_path):
     assert criteria["entry_quality_fallback_momentum_extension_max_selection_rank"] == "increase"
     assert criteria["sleeve_fraction"] == "increase"
     assert criteria["target_vol"] == "increase"
+    assert criteria["lab_book_daily_cap"] == "increase"
+    assert criteria["lab_book_fixed_notional"] == "increase"
 
 
 def test_core_sleeve_activation_flags_are_self_governance_gated():
@@ -179,6 +181,45 @@ def test_core_sleeve_sleeve_fraction_increase_requires_edge_evidence(tmp_path):
             "proposed_value": "0.40",
             "rollback_plan": "Restore sleeve_fraction to 0.30.",
             "rationale": "Increase the SPY core sleeve.",
+        },
+    }
+
+    result = ValidationAgent().validate(proposal, {"evaluation": {"summary": {}}}, settings, store=store)
+
+    assert result["status"] == "REJECTED"
+    assert result["payload"]["checks"][0]["name"] == AGGRESSIVENESS_REQUIRES_EDGE_EVIDENCE
+
+
+def test_lab_book_activation_flags_are_self_governance_gated():
+    enabled = self_governance_modification_violation(
+        target_component="lab_book",
+        target_identifier="enabled",
+        payload={},
+    )
+    mode = self_governance_modification_violation(
+        target_component="lab_book",
+        target_identifier="mode",
+        payload={},
+    )
+
+    assert enabled is not None
+    assert enabled["reason"] == SELF_GOVERNANCE_REJECTION_REASON
+    assert mode is not None
+    assert mode["reason"] == SELF_GOVERNANCE_REJECTION_REASON
+
+
+def test_lab_book_size_increase_requires_edge_evidence(tmp_path):
+    settings = _settings(tmp_path)
+    store = _store(settings)
+    proposal = {
+        **_proposal("ci_prop_lab_book"),
+        "target_component": "lab_book",
+        "target_identifier": "fixed_notional",
+        "payload": {
+            "current_value": "200",
+            "proposed_value": "500",
+            "rollback_plan": "Restore lab_book fixed_notional to 200.",
+            "rationale": "Increase lab book sample notional.",
         },
     }
 

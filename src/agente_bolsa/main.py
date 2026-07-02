@@ -73,6 +73,7 @@ from .tools.daily_learning import (
     load_daily_learning_context,
 )
 from .tools.execution import submit_paper_order_plan
+from .tools.lab_book import run_lab_book_once
 from .tools.live_readiness import build_live_readiness_report
 from .tools.market_state import build_market_state, load_latest_market_state
 from .tools.operational_health import (
@@ -1678,6 +1679,22 @@ def command_telegram_radar(args: argparse.Namespace) -> None:
             f"opp={bool(extraction.get('is_opportunity'))} tickers={tickers} "
             f"dir={extraction.get('direction', '-')}"
         )
+
+
+def command_lab_book(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    result = run_lab_book_once(settings, store, config_path=Path(args.config) if args.config else None)
+    if args.json:
+        _print_json(result)
+        return
+    print(
+        "LAB BOOK "
+        f"status={result.get('status')} mode={result.get('mode')} "
+        f"recorded={result.get('recorded', 0)} orders_submitted={result.get('orders_submitted', 0)}"
+    )
 
 
 def command_learning_postmortem(args: argparse.Namespace) -> None:
@@ -4145,6 +4162,16 @@ def build_parser() -> argparse.ArgumentParser:
     telegram_report.add_argument("--out", help="Ruta de salida markdown UTF-8. Si se omite, imprime por stdout.")
     telegram_report.add_argument("--json", action="store_true", help="Devuelve JSON con markdown incluido.")
     telegram_report.set_defaults(func=command_telegram_radar)
+
+    lab_book = subparsers.add_parser(
+        "lab-book",
+        help="Libro laboratorio log-only; registra hipoteticos separados sin enviar ordenes.",
+    )
+    lab_book_subparsers = lab_book.add_subparsers(dest="lab_book_command", required=True)
+    lab_book_run = lab_book_subparsers.add_parser("run", help="Ejecuta el registro diario log-only.")
+    lab_book_run.add_argument("--config", default=str(Path("data/config/lab_book.json")), help="Ruta JSON de config.")
+    lab_book_run.add_argument("--json", action="store_true", help="Devuelve JSON.")
+    lab_book_run.set_defaults(func=command_lab_book)
 
     commands = subparsers.add_parser("commands", help="Resumen claro de comandos operativos frecuentes.")
     commands.add_argument("--json", action="store_true", help="Devuelve el catalogo completo en JSON.")
