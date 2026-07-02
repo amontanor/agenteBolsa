@@ -1,7 +1,7 @@
-{
-  "enabled": false,
-  "dry_run": true,
-  "sleeve_fraction": 0.3,
-  "rebalance_band_pp": 5,
-  "target_vol": 0.12
+﻿{
+    "enabled":  true,
+    "dry_run":  true,
+    "sleeve_fraction":  0.3,
+    "rebalance_band_pp":  5,
+    "target_vol":  0.12
 }

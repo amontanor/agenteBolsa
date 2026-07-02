@@ -948,3 +948,157 @@ riesgo ampliadas, costes por turnover y walk-forward OOS expansivo. Resultado:
 vol-target reduce las caidas mejor que SMA/drawdown-guard en el periodo, pero
 la seleccion OOS no es plenamente estable. Ver informe:
 `docs/informe_codex_drawdown_overlay_2026-07-02.md`.
+
+---
+
+## 16. Direccion del responsable — 2-jul-2026 (estado v0.4.81)
+
+**Decision de rumbo: CONTINUAR el plan vigente con prioridades afinadas.** No se
+crea un porfolio alternativo: el plan actual esta respaldado por evidencia (picking
+sin alpha OOS confirmado; overlay de exposicion como unica palanca honesta; firma
+con railes construidos pero Fase 3 pendiente). Ajustes del responsable:
+
+**Debilidad detectada en B15 (critica del informe):** el walk-forward OOS solo
+aplica 2023-2026 (tramo favorable) y entrena con un unico bear (2022). Con una sola
+transicion bajista, "seleccion inestable" es indistinguible de "muestra corta". El
+equal-weight ademas tiene sesgo de supervivencia reconocido. Antes de archivar o
+promover vol-target hay que testarlo contra 2008/2011/2015-16/2018/2020 con
+criterios de exito PRE-REGISTRADOS (ver P1).
+
+**Gap operativo detectado:** el supervisor diario del radar Telegram NO esta
+arrancado (informe B14: "no se arranco la tarea"). Sin el, el reloj del scorecard
+(2-3 semanas) no corre. Accion de Antonio, no de Codex (ver P0).
+
+### Porfolio priorizado (impacto vs riesgo)
+
+| # | Tarea | Quien | Riesgo | Estado |
+|---|-------|-------|--------|--------|
+| P0 | Arrancar supervisor Telegram radar + verificar schedule-status y version cargada | Antonio | Nulo | PENDIENTE |
+| P1 | Robustez historica profunda de vol-target (SPY desde ~2000, walk-forward multi-bear, politica FIJA pre-registrada sin seleccion a posteriori) | Codex | Nulo (read-only) | **HECHO (v0.4.82, commit 616c9f9e). Veredicto: CUMPLE criterios pre-registrados** (11/11 anos DD>15% mejoran max DD y peor mes; Sortino 0.765 vs 0.657). Ver 16.1 |
+| P2 | Fase 3 minima de la firma: digest diario programado + KPI funnel + medicion de calidad de propuestas, sin enforcement | Codex | Bajo (lab, no trading) | **HECHO (v0.4.83, commit 764965ae).** Destapo cola READY_TO_APPLY con propuestas de agresividad sin evidencia. Ver 16.2 |
+| P3 | (lun 6-jul) Lectura pullback vs breakout con criterios de promocion pre-registrados | Codex | Nulo (read-only) | PROGRAMADO (prompt entregado) |
+| P4 | Shadow del overlay vol-target 12% + gate de evidencia para agresividad + limpieza digest | Codex | Bajo | **HECHO (v0.4.84, commit 0d69b0f0).** Paridad backtest-vivo testeada; señal 1-jul: vol 18.3% → exposicion VT12 66%. Cola saneada: 3 rechazos por `aggressiveness_requires_edge_evidence`, 2 por self_safety, 1 por self_governance. "Peor mes" aclarado (calendario en ambas tablas). Pendiente menor: listar las 7 propuestas restantes en READY_TO_APPLY (encargado en P6) |
+| P5 | **Manga core SPY vol-target 12% en paper** (flag OFF + dry-run; limites duros; config fuera de config.py) | Codex | Medio (mitigado) | **HECHO (v0.4.85, commit 056e83e9).** Revisado por el responsable: dry-run retorna antes del submit (verificado en codigo), config segura `enabled=false`, demo real would_submit SPY $13.914 = 70.653×0.30×0.6565 (matematica verificada). Decision: pasar a dry-run diario (enabled=true, dry_run=true) para acumular sesiones antes de activar |
+| P6 | Primer cambio real de la firma end-to-end + fix CLI + listado cola | Codex | Bajo | **HECHO PARCIAL (v0.4.86, commits 0db8e130+89d7f500). HALLAZGO CRITICO: el codegen de la firma fallo 3/3** (`opencode-go/glm-5.2`: "LLM response without text content"; fallback local sin conexion). La firma NO puede entregar diffs = Fase 2 muerta en runtime. Digest+CLI entregados via fallback Codex. Cola READY_TO_APPLY listada con recomendaciones → P7b |
+| P7 | **Reparar el programador de la firma** (codegen LLM) + reintento e2e + saneo de cola | Codex | Bajo-Medio (lab) | **HECHO (v0.4.87, commit c548004f).** Causa raiz confirmada con respuesta cruda: glm-5.2 quemaba hasta 57k chars en `reasoning_content` con `finish_reason=length` y cap de 4k. Fix: truncado diagnosticable, extraccion JSON de reasoning, codegen a 16k tokens con modelo propio (deepseek-v4-flash), health-check cubre rol codegen (`codegen_ok=true`). Cola READY_TO_APPLY = 0 (5 REJECTED con razon auditable, 4 a VALIDATING). Reintento e2e: intento 3 llego a sandbox pero `REJECTED_BY_TESTS` (bloque `old` no casaba) → el programador habla pero aun no entrega parches aplicables → P9 |
+| P8 | Radar Telegram: dejar madurar scorecard ~2-3 semanas | — | — | EN ESPERA (supervisor unico vivo; primer informe diario 2-jul OK; vigilar anomalia ORCL ext -23%/RSI 11) |
+| P9 | **Codegen que entrega parches aplicables** (autocorreccion acotada + contexto completo + artefactos de intento) | Codex | Bajo (lab, allowlist) | **HECHO (v0.4.88, commit 2a457e08).** Causa raiz adicional encontrada: `_context_files()` truncaba a 12k chars sin avisar (digest.py ya media 29.7k) → el modelo parcheaba un fichero que no veia entero. Fix: contexto completo <=800 lineas + 32k tokens + autocorreccion (aplicacion Y validacion). **Reintento e2e: EXITO al 3er intento** — `ci_artifact_259b18101111` en READY_FOR_HUMAN_REVIEW, 5 tests sandbox verdes, targets en allowlist. La autocorreccion arreglo sola un JSON invalido del intento 2. **HITO FASE 2 pendiente solo de: revision del diff por el responsable → approve de Antonio** |
+
+### 16.6 Hito Fase 2 (2-jul): primer diff de la firma — RECHAZADO en revision humana
+
+`ci_prop_p7_core_sleeve_digest` llego a `READY_FOR_HUMAN_REVIEW` con tests verdes,
+pero el responsable RECHAZO el diff (`ci_artifact_259b18101111`) antes del approve:
+**la firma invento el esquema del log** (leia `target_exposure`/`hypothetical_order`;
+el productor real escribe `exposure`/`decision.order`) **y escribio tests que
+validaban su propia invencion**. Con datos reales, la seccion mostraria None.
+Leccion capital para la firma: tests sinteticos contra datos autofabricados no
+prueban integracion con la realidad — es la version en codigo del sobreajuste.
+Ademas el rail de arbol limpio funciono: el approve prematuro quedo BLOCKED.
+Regeneracion con esquema real + muestra de datos reales en contexto de codegen: P10
+(`docs/prompts_codex_2026-07-02_f.md`). El hito queda pendiente de un diff correcto.
+Matiz de proceso: la reactivacion uso `P9ManualCodegenGate` (bootstrap manual);
+cuando el orquestador de Fase 3 exista, este cauce debe ser suyo.
+
+### 16.5 Revision del responsable sobre P7 (2-jul, tarde)
+
+Entrega modelo: diagnostico con evidencia cruda ANTES de arreglar. Estado de la
+cadena del programador de la firma tras P7: transporte OK (habla), calidad KO (su
+patch no aplica: `old` block mismatch, fallo clasico de search/replace). Correcto
+no aplicar fallback esta vez: el fallo real es el dato que necesitabamos. La
+propuesta `ci_prop_p7_core_sleeve_digest` paso ademas por el cauce normal de
+validacion (matiz de P6 corregido). Dos payloads literales confirmaron que los
+rechazos `duplicate_or_prose` eran correctos (ambos pedian auto-aplicacion en
+prosa). Siguiente eslabon (P9): autocorreccion con el error de vuelta al modelo —
+si tras eso el codegen sigue sin entregar, la decision sera cambiar el formato de
+patch (p. ej. fichero completo en vez de search/replace para targets pequenos).
+
+### 16.4 Revision del responsable sobre P5+P6 (2-jul, tarde)
+
+- **P5 aceptado.** Verificaciones propias del responsable (no de palabra): config en
+  disco `enabled=false/dry_run=true`; el guard dry-run retorna antes de cualquier
+  submit; sizing de la demo cuadra a mano. Gobierno correcto: la firma no puede
+  proponerse activar la manga (`core_sleeve.enabled/dry_run` human-gated).
+- **P6: el valor esta en el fallo.** El experimento e2e destapo que el programador
+  de la firma esta roto en runtime: 3/3 `gen-diff` con respuesta LLM sin contenido
+  (glm-5.2 via opencode-go) y fallback local caido. Es el MISMO patron de fallos
+  previos (C1.3: Kimi consumia tokens en razonamiento y devolvia vacio; B.1: fix de
+  extraccion en telegram radar). Sin esto, el hito "la firma funciona" es imposible:
+  arreglar el codegen pasa a maxima prioridad de la firma (P7). Leccion repetida del
+  proyecto: la degradacion LLM silenciosa debe hacerse visible → el health-check
+  debe cubrir el rol de codegen.
+- Matiz de metodo anotado: Codex sembro la propuesta directamente en READY_TO_APPLY
+  (bypass de validacion). Aceptable para el ejercicio; el reintento P7 debe pasar
+  por el cauce normal de validacion.
+
+### 16.3 Decision estrategica del responsable (2-jul, tarde; ratificada por Antonio)
+
+El sistema pivota a **core + satelite en paper**: manga core de SPY gobernada por
+vol-target 12% (unica palanca con evidencia OOS que CUMPLE criterios pre-registrados)
+y el stock-picking como satelite en shadow hasta que demuestre edge (lectura pullback
+6-jul). Despliegue: shadow (corriendo desde P4) → dry-run (P5) → activacion humana.
+La activacion (`enabled=true, dry_run=false`) requiere: ~5 sesiones de paridad
+shadow-vs-backtest sin divergencia, revision del responsable, y accion manual de
+Antonio. La firma tiene prohibido proponerse a si misma activar o engordar la manga
+(cubierto por aggressiveness_gate/human-gate en P5.4).
+
+### 16.1 Revision del responsable sobre P1 (2-jul, tarde)
+
+Veredicto aceptado como evidencia con estas cautelas anotadas:
+
+- El test decisivo es el correcto: politica FIJA vol-target 12% sin seleccion a
+  posteriori. El walk-forward selector es inestable (Codex lo reconoce) y NO se usa.
+- Coste real de la proteccion: CAGR full-period 8.43%→6.09% a 20 bps. El criterio
+  pre-registrado aceptaba ese trade-off (Sortino y colas mandan), pero debe quedar
+  explicito ante cualquier decision de adopcion.
+- Calidad de datos: 28 dias con desviacion >1% SPY vs ^GSPC, concentrados en
+  2000 y 2008 (p.ej. 2000-01-07: +5.81% vs +2.71%). Los episodios dot-com son los
+  menos fiables; 2008/2020/2022 tienen margen de sobra aunque el dato tenga ruido.
+- Inconsistencia menor detectada: "peor mes" usa ventana distinta en la tabla de
+  episodios (parece rolling) vs la tabla de criterios (calendario). Pedir
+  harmonizacion/definicion explicita en P4.
+- Scope creep menor: el commit toca 3 scripts ajenos (orden de imports por ruff).
+  Inocuo, pero en adelante arreglos de lint ajenos van en commit separado.
+- Recuperaciones: vol-target tarda MAS en recuperar en varios episodios (dot-com
+  1139 vs 1020 dias). La proteccion es de profundidad de caida, no de velocidad.
+
+**Implicacion estrategica (decision de Antonio, sin prisa):** el overlay solo
+sirve si el portfolio tiene exposicion de mercado, y hoy el book paper esta
+practicamente plano. La evidencia acumulada (picking sin alpha + overlay que
+CUMPLE) apunta al pivote honesto: una manga core de SPY en paper gobernada por
+vol-target 12%, con el picking como satelite en shadow. Es un cambio de
+estrategia, no de parametro: requiere decision humana explicita. Paso previo
+obligatorio en cualquier caso: shadow del overlay en vivo (P4) para verificar que
+la senal diaria replica el backtest.
+
+### 16.2 Revision del responsable sobre P2 (2-jul, tarde)
+
+El digest funciona y ya paga: destapo la cola. Hallazgos:
+
+- **La constitucion muerde** (rechazos 24h: self_safety=5, self_governance=6),
+  y la firma sigue intentando encender auto-apply — bien bloqueado.
+- **RED FLAG — cola READY_TO_APPLY (13):** contiene subidas de agresividad de
+  trading SIN evidencia de edge (`max_daily_buy_orders`, `max_orders_per_cycle`)
+  justificadas con "mas trades → mas outcomes" — exactamente la falacia de
+  sobre-operacion que este proyecto combate. Tambien `deterministic_gate_error_severity`
+  (relajar severidad del gate, 2 propuestas) llego a READY_TO_APPLY: revisar por
+  que la constitucion v2 no lo cubre. Decision del responsable: **rechazar en
+  bloque** las de agresividad sin evidencia y anadir regla de gate (P4) para que
+  no vuelvan a llegar a la cola humana sin experimento adjunto.
+- Digest re-lista en PIDE APROBACION la demo codegen ya aplicada y revertida
+  (`ci_prop_codegen_demo_...`): debe excluirse lo ya APPLIED/ROLLED_BACK (P4).
+- KPI: semana 29-jun Applied=1 pero %exp→aplicado=0.00% (definicion no casa);
+  harmonizar (P4). El clasificador 68% "ejecutable" esta inflado (payloads de
+  metricas cuentan como spec): valido para medir tendencia, NO para enforcement.
+
+**Criterios pre-registrados (fijados HOY, antes de mirar los datos):**
+- P1 / vol-target 12% fijo (sin seleccion): en cada bloque OOS anual, neto 20 bps,
+  debe reducir max DD y peor mes vs buy&hold en los años de drawdown grande
+  (>15% en SPY), mantener Sortino global >= buy&hold, y hacerlo en >=80% de los
+  bloques con drawdown. Si falla → se archiva la palanca honestamente.
+- P3 / pullback → ACTIVE solo si: expectancy 5d y 10d positiva neta de 10 bps,
+  alpha vs SPY positivo, n>=30 simbolo-dias maduros, y el resultado no depende de
+  un solo dia ni de un solo sector. Si no, sigue SHADOW acumulando.
+
+**Que NO se hace:** no relajar gates; no promover vol-target ni pullback sin sus
+criterios; no ampliar autonomia ni auto-apply; no Fase 4 hasta que la Fase 3
+minima este corriendo y medida.
