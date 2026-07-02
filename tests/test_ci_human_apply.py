@@ -130,6 +130,42 @@ def test_human_approve_applies_allowlisted_diff_and_records_applied_change(tmp_p
     assert _git(repo, "status", "--short").stdout.strip() == ""
 
 
+def test_human_approve_skips_newer_rejected_preview_and_applies_previous_ready(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    settings = _settings(tmp_path, repo)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    proposal_id = _proposal_with_artifact(store, proposal_id="ci_prop_limit_before_filter")
+    store.save_continuous_improvement_proposal_artifact(
+        {
+            "artifact_id": f"{proposal_id}_rejected_artifact",
+            "proposal_id": proposal_id,
+            "artifact_type": "code_diff_preview",
+            "content_text": "diff --git a/docs/rejected.md b/docs/rejected.md\n",
+            "payload": {
+                "status": "REJECTED_BY_HUMAN_REVIEW",
+                "tests_ok": False,
+                "human_review_reason": "new_code_without_tests",
+            },
+        }
+    )
+
+    result = approve_and_apply_code_diff(
+        settings=settings,
+        store=store,
+        proposal_id=proposal_id,
+        actor="pytest",
+        validation_steps=[("unit", ["python", "-c", "from pathlib import Path; assert Path('docs/human_apply.md').exists()"])],
+        backup=False,
+    )
+
+    assert result["ok"] is True
+    assert result["status"] == "APPLIED"
+    assert result["artifact"]["payload"]["diff_artifact_id"] == f"{proposal_id}_artifact"
+    assert (repo / "docs" / "human_apply.md").read_text(encoding="utf-8") == "human apply ok\n"
+    assert not (repo / "docs" / "rejected.md").exists()
+
+
 def test_human_approve_applies_lf_diff_to_crlf_worktree_file(tmp_path):
     repo = _init_repo(tmp_path / "repo")
     target = repo / "docs" / "human_apply.md"

@@ -210,7 +210,7 @@ def _scope_error(targets: list[str]) -> str | None:
 
 
 def _latest_ready_diff_artifact(store: Store, proposal_id: str) -> dict[str, Any] | None:
-    artifacts = _diff_artifacts(store, proposal_id=proposal_id, limit=1)
+    artifacts = _diff_artifacts(store, proposal_id=proposal_id, limit=20)
     return artifacts[0] if artifacts else None
 
 
