@@ -58,6 +58,11 @@ DEFAULT_WALK_FORWARD_BLOCKS = (
         "apply_end": "2026-12-31",
     },
 )
+DEFAULT_OVERLAY_VOL_TARGETS = (0.10, 0.12, 0.15)
+DEFAULT_OVERLAY_SMA_WINDOWS = (150, 200, 250)
+DEFAULT_OVERLAY_DD_THRESHOLDS = (0.10, 0.15, 0.20)
+DEFAULT_OVERLAY_COST_BPS = (10.0, 20.0, 30.0)
+DEFAULT_OVERLAY_VOL_LOOKBACK = 20
 
 
 @dataclass(frozen=True)
@@ -1576,6 +1581,449 @@ def summarize_weekly_portfolio_returns(weekly_returns: list[tuple[str, str, floa
     }
 
 
+def drawdown_series_from_returns(period_returns: pd.Series) -> pd.Series:
+    returns = pd.to_numeric(period_returns, errors="coerce").fillna(0.0)
+    equity = (1.0 + returns).cumprod()
+    peak = equity.cummax()
+    return (equity / peak) - 1.0
+
+
+def max_recovery_time(period_returns: pd.Series) -> int:
+    returns = pd.to_numeric(period_returns, errors="coerce").fillna(0.0)
+    equity = (1.0 + returns).cumprod()
+    peak = equity.cummax()
+    underwater = equity < peak
+    longest = 0
+    current = 0
+    for value in underwater:
+        if bool(value):
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 0
+    return int(longest)
+
+
+def risk_overlay_metrics(period_returns: pd.Series, *, periods_per_year: int = 252) -> dict[str, Any]:
+    returns = pd.to_numeric(period_returns, errors="coerce").dropna()
+    if returns.empty:
+        return {
+            "periods": 0,
+            "cagr": None,
+            "sharpe": None,
+            "sortino": None,
+            "max_drawdown": None,
+            "ulcer_index": None,
+            "worst_week": None,
+            "worst_month": None,
+            "pct_time_in_drawdown": None,
+            "max_recovery_periods": None,
+            "cumulative_return": None,
+        }
+    equity = (1.0 + returns).cumprod()
+    drawdowns = drawdown_series_from_returns(returns)
+    years = max(len(returns) / float(periods_per_year), 1.0 / periods_per_year)
+    cumulative = float(equity.iloc[-1] - 1.0)
+    cagr = (float(equity.iloc[-1]) ** (1.0 / years)) - 1.0
+    mean = float(returns.mean())
+    std = float(returns.std(ddof=1)) if len(returns) > 1 else 0.0
+    downside = returns[returns < 0]
+    downside_std = float(downside.std(ddof=1)) if len(downside) > 1 else 0.0
+    weekly = (1.0 + returns).resample("W-FRI").prod() - 1.0
+    monthly = (1.0 + returns).resample("ME").prod() - 1.0
+    ulcer = float(((drawdowns * 100.0) ** 2).mean() ** 0.5) / 100.0
+    return {
+        "periods": int(len(returns)),
+        "cagr": round(cagr, 6),
+        "sharpe": round((mean / std) * (periods_per_year**0.5), 6) if std > 0 else None,
+        "sortino": round((mean / downside_std) * (periods_per_year**0.5), 6) if downside_std > 0 else None,
+        "max_drawdown": round(float(drawdowns.min()), 6),
+        "ulcer_index": round(ulcer, 6),
+        "worst_week": round(float(weekly.min()), 6) if not weekly.empty else None,
+        "worst_month": round(float(monthly.min()), 6) if not monthly.empty else None,
+        "pct_time_in_drawdown": round(float((drawdowns < 0).mean()), 6),
+        "max_recovery_periods": max_recovery_time(returns),
+        "cumulative_return": round(cumulative, 6),
+    }
+
+
+def exposure_regime_on_off(regime_close: pd.Series, *, sma_window: int) -> pd.Series:
+    close = pd.to_numeric(regime_close, errors="coerce").dropna()
+    features = pd.DataFrame({"Close": close})
+    regime = build_regime_map(features, sma_window=int(sma_window))
+    values = {pd.Timestamp(day): (1.0 if _is_bull_regime(label) else 0.0) for day, label in regime.items()}
+    return pd.Series(values, dtype=float).reindex(close.index).ffill().fillna(0.0)
+
+
+def exposure_vol_target(market_close: pd.Series, *, target_vol: float, lookback: int = DEFAULT_OVERLAY_VOL_LOOKBACK) -> pd.Series:
+    close = pd.to_numeric(market_close, errors="coerce").dropna()
+    realized = close.pct_change().rolling(int(lookback)).std() * (252**0.5)
+    exposure = float(target_vol) / realized
+    return exposure.clip(lower=0.0, upper=1.0).fillna(1.0)
+
+
+def exposure_drawdown_guard(
+    market_close: pd.Series,
+    *,
+    threshold: float,
+    reduced_exposure: float = 0.5,
+) -> pd.Series:
+    close = pd.to_numeric(market_close, errors="coerce").dropna()
+    trailing_peak = close.cummax()
+    drawdown = (close / trailing_peak) - 1.0
+    exposure = pd.Series(1.0, index=close.index)
+    exposure = exposure.mask(drawdown <= -abs(float(threshold)), float(reduced_exposure))
+    return exposure.clip(lower=0.0, upper=1.0)
+
+
+def simulate_exposure_overlay(
+    market_returns: pd.Series,
+    target_exposure: pd.Series,
+    *,
+    cost_bps: float,
+    start: str,
+    end: str,
+) -> dict[str, Any]:
+    returns = pd.to_numeric(market_returns, errors="coerce").dropna().sort_index()
+    target = pd.to_numeric(target_exposure, errors="coerce").reindex(returns.index).ffill().fillna(0.0).clip(0.0, 1.0)
+    actual = target.shift(1).ffill().fillna(0.0)
+    turnover = actual.diff().abs().fillna(actual.abs())
+    cost = float(cost_bps) / 10000.0
+    net_returns = (actual * returns) - (turnover * cost)
+    period = net_returns.loc[str(start) : str(end)]
+    period_exposure = actual.loc[period.index]
+    period_turnover = turnover.loc[period.index]
+    metrics = risk_overlay_metrics(period)
+    metrics["avg_exposure"] = round(float(period_exposure.mean()), 6) if not period_exposure.empty else None
+    metrics["turnover_sum"] = round(float(period_turnover.sum()), 6) if not period_turnover.empty else None
+    metrics["turnover_mean"] = round(float(period_turnover.mean()), 6) if not period_turnover.empty else None
+    return {
+        "returns": period,
+        "target_exposure": target.loc[period.index],
+        "actual_exposure": period_exposure,
+        "turnover": period_turnover,
+        "metrics": metrics,
+    }
+
+
+def _overlay_policy_specs(
+    *,
+    sma_windows: tuple[int, ...],
+    vol_targets: tuple[float, ...],
+    dd_thresholds: tuple[float, ...],
+) -> list[dict[str, Any]]:
+    specs: list[dict[str, Any]] = [{"id": "buy_hold", "kind": "buy_hold"}]
+    specs.extend({"id": f"regime_sma{int(window)}", "kind": "regime", "sma_window": int(window)} for window in sma_windows)
+    specs.extend({"id": f"vol_target_{int(target * 100)}pct", "kind": "vol_target", "target_vol": float(target)} for target in vol_targets)
+    specs.extend({"id": f"drawdown_guard_{int(threshold * 100)}pct", "kind": "drawdown_guard", "threshold": float(threshold)} for threshold in dd_thresholds)
+    for window in sma_windows:
+        for target in vol_targets:
+            specs.append(
+                {
+                    "id": f"combo_sma{int(window)}_vol{int(target * 100)}pct",
+                    "kind": "combo_regime_vol",
+                    "sma_window": int(window),
+                    "target_vol": float(target),
+                }
+            )
+    return specs
+
+
+def _overlay_target_exposure(
+    spec: dict[str, Any],
+    *,
+    market_close: pd.Series,
+    regime_close: pd.Series,
+) -> pd.Series:
+    kind = str(spec["kind"])
+    if kind == "buy_hold":
+        return pd.Series(1.0, index=market_close.dropna().index)
+    if kind == "regime":
+        return exposure_regime_on_off(regime_close, sma_window=int(spec["sma_window"]))
+    if kind == "vol_target":
+        return exposure_vol_target(market_close, target_vol=float(spec["target_vol"]))
+    if kind == "drawdown_guard":
+        return exposure_drawdown_guard(market_close, threshold=float(spec["threshold"]))
+    if kind == "combo_regime_vol":
+        regime_exposure = exposure_regime_on_off(regime_close, sma_window=int(spec["sma_window"]))
+        vol_exposure = exposure_vol_target(market_close, target_vol=float(spec["target_vol"]))
+        return (regime_exposure.reindex(vol_exposure.index).ffill().fillna(0.0) * vol_exposure).clip(0.0, 1.0)
+    raise ValueError(f"overlay policy kind no soportado: {kind}")
+
+
+def _drawdown_return_tradeoff(policy_metrics: dict[str, Any], baseline_metrics: dict[str, Any]) -> dict[str, Any]:
+    policy_dd = abs(float(policy_metrics.get("max_drawdown") or 0.0))
+    baseline_dd = abs(float(baseline_metrics.get("max_drawdown") or 0.0))
+    policy_cagr = _safe_float(policy_metrics.get("cagr"))
+    baseline_cagr = _safe_float(baseline_metrics.get("cagr"))
+    dd_reduction = baseline_dd - policy_dd
+    cagr_sacrifice = (baseline_cagr - policy_cagr) if baseline_cagr is not None and policy_cagr is not None else None
+    ratio = None
+    if cagr_sacrifice is not None and cagr_sacrifice > 0:
+        ratio = dd_reduction / cagr_sacrifice
+    return {
+        "drawdown_reduction": round(dd_reduction, 6),
+        "cagr_sacrifice": round(cagr_sacrifice, 6) if cagr_sacrifice is not None else None,
+        "dd_reduction_per_cagr_sacrificed": round(ratio, 6) if ratio is not None else None,
+        "return_not_sacrificed": bool(cagr_sacrifice is not None and cagr_sacrifice <= 0),
+    }
+
+
+def build_overlay_policy_report(
+    *,
+    market_name: str,
+    market_close: pd.Series,
+    regime_close: pd.Series,
+    since: str,
+    end: str,
+    cost_bps_values: tuple[float, ...] = DEFAULT_OVERLAY_COST_BPS,
+    sma_windows: tuple[int, ...] = DEFAULT_OVERLAY_SMA_WINDOWS,
+    vol_targets: tuple[float, ...] = DEFAULT_OVERLAY_VOL_TARGETS,
+    dd_thresholds: tuple[float, ...] = DEFAULT_OVERLAY_DD_THRESHOLDS,
+) -> dict[str, Any]:
+    close = pd.to_numeric(market_close, errors="coerce").dropna().sort_index()
+    returns = close.pct_change().dropna()
+    specs = _overlay_policy_specs(sma_windows=sma_windows, vol_targets=vol_targets, dd_thresholds=dd_thresholds)
+    by_cost: dict[str, Any] = {}
+    for cost_bps in cost_bps_values:
+        policies: dict[str, Any] = {}
+        for spec in specs:
+            target = _overlay_target_exposure(spec, market_close=close, regime_close=regime_close)
+            simulation = simulate_exposure_overlay(returns, target, cost_bps=float(cost_bps), start=since, end=end)
+            policies[str(spec["id"])] = {
+                "spec": spec,
+                "metrics": simulation["metrics"],
+            }
+        baseline = policies["buy_hold"]["metrics"]
+        for payload in policies.values():
+            payload["tradeoff_vs_buy_hold"] = _drawdown_return_tradeoff(payload["metrics"], baseline)
+        by_cost[str(cost_bps)] = {"policies": policies}
+    return {
+        "market": market_name,
+        "since": since,
+        "end": end,
+        "cost_bps_values": list(cost_bps_values),
+        "sma_windows": list(sma_windows),
+        "vol_targets": list(vol_targets),
+        "dd_thresholds": list(dd_thresholds),
+        "policies_by_cost": by_cost,
+        "causality": "Cada exposicion objetivo usa indicadores calculados con datos <= t y se aplica a retornos desde t+1 mediante shift(1).",
+    }
+
+
+def _overlay_training_score(metrics: dict[str, Any]) -> tuple[float, float, float, float]:
+    sortino = _safe_float(metrics.get("sortino"))
+    max_dd = abs(float(metrics.get("max_drawdown") or 0.0))
+    ulcer = abs(float(metrics.get("ulcer_index") or 0.0))
+    cagr = _safe_float(metrics.get("cagr"))
+    return (
+        float(sortino) if sortino is not None else -999.0,
+        -max_dd,
+        -ulcer,
+        float(cagr) if cagr is not None else -999.0,
+    )
+
+
+def build_overlay_walk_forward_report(
+    *,
+    market_name: str,
+    market_close: pd.Series,
+    regime_close: pd.Series,
+    since: str,
+    end: str,
+    cost_bps_values: tuple[float, ...] = DEFAULT_OVERLAY_COST_BPS,
+    sma_windows: tuple[int, ...] = DEFAULT_OVERLAY_SMA_WINDOWS,
+    vol_targets: tuple[float, ...] = DEFAULT_OVERLAY_VOL_TARGETS,
+    dd_thresholds: tuple[float, ...] = DEFAULT_OVERLAY_DD_THRESHOLDS,
+    walk_forward_blocks: tuple[dict[str, str], ...] = DEFAULT_WALK_FORWARD_BLOCKS,
+) -> dict[str, Any]:
+    close = pd.to_numeric(market_close, errors="coerce").dropna().sort_index()
+    returns = close.pct_change().dropna()
+    specs = _overlay_policy_specs(sma_windows=sma_windows, vol_targets=vol_targets, dd_thresholds=dd_thresholds)
+    target_by_id = {
+        str(spec["id"]): _overlay_target_exposure(spec, market_close=close, regime_close=regime_close)
+        for spec in specs
+    }
+    by_cost: dict[str, Any] = {}
+    for cost_bps in cost_bps_values:
+        stitched_returns: list[pd.Series] = []
+        stitched_exposure: list[pd.Series] = []
+        selected_steps: list[dict[str, Any]] = []
+        for block in walk_forward_blocks:
+            train_start = since
+            train_end = min(block["train_end"], end)
+            apply_start = max(block["apply_start"], since)
+            apply_end = min(block["apply_end"], end)
+            if train_start > train_end or apply_start > apply_end:
+                continue
+            evaluated: list[tuple[tuple[float, float, float, float], str, dict[str, Any], dict[str, Any]]] = []
+            for spec in specs:
+                policy_id = str(spec["id"])
+                train_sim = simulate_exposure_overlay(
+                    returns,
+                    target_by_id[policy_id],
+                    cost_bps=float(cost_bps),
+                    start=train_start,
+                    end=train_end,
+                )
+                evaluated.append((_overlay_training_score(train_sim["metrics"]), policy_id, spec, train_sim))
+            evaluated.sort(key=lambda item: (item[0], item[1]), reverse=True)
+            _score, chosen_id, chosen_spec, train_sim = evaluated[0]
+            apply_sim = simulate_exposure_overlay(
+                returns,
+                target_by_id[chosen_id],
+                cost_bps=float(cost_bps),
+                start=apply_start,
+                end=apply_end,
+            )
+            stitched_returns.append(apply_sim["returns"])
+            stitched_exposure.append(apply_sim["actual_exposure"])
+            selected_steps.append(
+                {
+                    "block": block["label"],
+                    "train_start": train_start,
+                    "train_end": train_end,
+                    "apply_start": apply_start,
+                    "apply_end": apply_end,
+                    "selected": chosen_spec,
+                    "training_metrics": train_sim["metrics"],
+                    "oos_metrics": apply_sim["metrics"],
+                }
+            )
+        oos_returns = pd.concat(stitched_returns).sort_index() if stitched_returns else pd.Series(dtype=float)
+        oos_exposure = pd.concat(stitched_exposure).sort_index() if stitched_exposure else pd.Series(dtype=float)
+        selected_ids = [str(step["selected"]["id"]) for step in selected_steps]
+        changes = sum(1 for previous, current in zip(selected_ids, selected_ids[1:], strict=False) if previous != current)
+        metrics = risk_overlay_metrics(oos_returns)
+        metrics["avg_exposure"] = round(float(oos_exposure.mean()), 6) if not oos_exposure.empty else None
+        by_cost[str(cost_bps)] = {
+            "oos_metrics": metrics,
+            "selected_steps": selected_steps,
+            "selection_stability": {
+                "steps": len(selected_steps),
+                "changes": changes,
+                "change_rate": round(changes / (len(selected_steps) - 1), 6) if len(selected_steps) > 1 else None,
+                "selection_counts": {policy_id: selected_ids.count(policy_id) for policy_id in sorted(set(selected_ids))},
+                "selected_sequence": selected_ids,
+            },
+        }
+    return {
+        "market": market_name,
+        "since": since,
+        "end": end,
+        "cost_bps_values": list(cost_bps_values),
+        "walk_forward_blocks": list(walk_forward_blocks),
+        "selection_objective": "max training Sortino, tie lower max drawdown, tie lower Ulcer index, tie higher CAGR.",
+        "by_cost_bps": by_cost,
+    }
+
+
+def _close_frame_from_prices(prices: pd.DataFrame, symbols: list[str]) -> pd.DataFrame:
+    columns: dict[str, pd.Series] = {}
+    for symbol in symbols:
+        frame = _normalize_download_frame(prices, symbol)
+        if not frame.empty and "Close" in frame.columns:
+            columns[symbol] = pd.to_numeric(frame["Close"], errors="coerce")
+    return pd.DataFrame(columns).sort_index()
+
+
+def _equal_weight_close(close_frame: pd.DataFrame) -> pd.Series:
+    returns = close_frame.pct_change(fill_method=None)
+    ew_returns = returns.mean(axis=1, skipna=True).dropna()
+    return (100.0 * (1.0 + ew_returns).cumprod()).rename("equal_weight_universe")
+
+
+def run_drawdown_overlay_study(
+    *,
+    since: str,
+    end: str,
+    universe_name: str = DEFAULT_UNIVERSE,
+    max_symbols: int = 0,
+    cost_bps_values: tuple[float, ...] = DEFAULT_OVERLAY_COST_BPS,
+    sma_windows: tuple[int, ...] = DEFAULT_OVERLAY_SMA_WINDOWS,
+    vol_targets: tuple[float, ...] = DEFAULT_OVERLAY_VOL_TARGETS,
+    dd_thresholds: tuple[float, ...] = DEFAULT_OVERLAY_DD_THRESHOLDS,
+    provider: str | None = None,
+    fmp_api_key: str | None = None,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    settings = settings or get_settings()
+    study_start = (datetime.fromisoformat(since) - timedelta(days=DEFAULT_BUFFER_CALENDAR_DAYS)).date().isoformat()
+    symbols = resolve_study_universe(universe_name, settings.universe, max_symbols, settings.data_dir / "cache")
+    all_symbols = sorted({"SPY", *symbols})
+    prices, meta = download_prices_read_only(
+        all_symbols,
+        start=study_start,
+        end=end,
+        provider=provider or settings.market_data_provider,
+        fmp_api_key=fmp_api_key if fmp_api_key is not None else settings.fmp_api_key,
+        batch_size=batch_size,
+    )
+    close_frame = _close_frame_from_prices(prices, all_symbols)
+    if "SPY" not in close_frame:
+        raise ValueError("SPY no disponible para el estudio de overlay.")
+    spy_close = close_frame["SPY"].dropna()
+    ew_symbols = [symbol for symbol in symbols if symbol in close_frame.columns and symbol != "SPY"]
+    ew_close = _equal_weight_close(close_frame[ew_symbols]) if ew_symbols else pd.Series(dtype=float)
+    markets = {
+        "SPY": spy_close,
+        "equal_weight_universe": ew_close,
+    }
+    market_reports = {
+        name: build_overlay_policy_report(
+            market_name=name,
+            market_close=series,
+            regime_close=spy_close,
+            since=since,
+            end=end,
+            cost_bps_values=cost_bps_values,
+            sma_windows=sma_windows,
+            vol_targets=vol_targets,
+            dd_thresholds=dd_thresholds,
+        )
+        for name, series in markets.items()
+        if not series.empty
+    }
+    oos_reports = {
+        name: build_overlay_walk_forward_report(
+            market_name=name,
+            market_close=series,
+            regime_close=spy_close,
+            since=since,
+            end=end,
+            cost_bps_values=cost_bps_values,
+            sma_windows=sma_windows,
+            vol_targets=vol_targets,
+            dd_thresholds=dd_thresholds,
+        )
+        for name, series in markets.items()
+        if not series.empty
+    }
+    return {
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "study": {
+            "name": "drawdown_overlay_read_only",
+            "since": since,
+            "end": end,
+            "universe_name": universe_name,
+            "max_symbols": max_symbols,
+            "cost_bps_values": list(cost_bps_values),
+            "sma_windows": list(sma_windows),
+            "vol_targets": list(vol_targets),
+            "dd_thresholds": list(dd_thresholds),
+            "causality": "Senales calculadas con datos <= t; exposicion aplicada con shift(1) a retornos posteriores.",
+        },
+        "data": {
+            "download": meta,
+            "equal_weight_symbols": ew_symbols,
+            "equal_weight_symbol_count": len(ew_symbols),
+        },
+        "markets": market_reports,
+        "walk_forward_oos": oos_reports,
+    }
+
+
 def _weekly_equal_weight_returns_from_records(
     records: list[dict[str, Any]],
     *,
@@ -3066,7 +3514,17 @@ __all__ = [
     "summarize_selector_observations",
     "summarize_weekly_portfolio_returns",
     "build_regime_policy_walk_forward_report",
+    "build_overlay_policy_report",
+    "build_overlay_walk_forward_report",
+    "drawdown_series_from_returns",
+    "exposure_drawdown_guard",
+    "exposure_regime_on_off",
+    "exposure_vol_target",
+    "max_recovery_time",
+    "risk_overlay_metrics",
+    "run_drawdown_overlay_study",
     "simulate_top_pick_turnover_policy",
+    "simulate_exposure_overlay",
     "top_pick_turnover_sensitivity",
     "weekly_policy_main",
 ]

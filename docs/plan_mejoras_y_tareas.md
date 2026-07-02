@@ -939,3 +939,12 @@ UTF-8 y scripts externos `scripts/run_telegram_radar_daily.ps1` y
 `agente_bolsa.main schedule`, corre fuera del runtime de trading y deja informes
 en `data/research/telegram/reports/radar_<fecha>.md`. No se arranco la tarea.
 Ver informe: `docs/informe_codex_telegram_radar_scheduling_2026-07-02.md`.
+
+### B15 - Estudio drawdown overlay de exposicion. **HECHO (v0.4.81).**
+Extension read-only de `strategy_edge_backtest.py` con overlays de exposicion
+0..1 sobre SPY y cesta equal-weight: buy&hold, regimen SMA150/200/250,
+vol-target 10/12/15%, drawdown-guard y combo regimen+vol. Incluye metricas de
+riesgo ampliadas, costes por turnover y walk-forward OOS expansivo. Resultado:
+vol-target reduce las caidas mejor que SMA/drawdown-guard en el periodo, pero
+la seleccion OOS no es plenamente estable. Ver informe:
+`docs/informe_codex_drawdown_overlay_2026-07-02.md`.
