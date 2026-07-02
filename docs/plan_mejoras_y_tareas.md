@@ -1009,6 +1009,19 @@ P11 (`docs/prompts_codex_2026-07-02_g.md`): diagnostico byte a byte, apply robus
 (--3way / --ignore-whitespace / normalizacion simetrica), test CRLF sintetico,
 regeneracion y reintento. El hito Fase 2 queda a un `approve` de distancia.
 
+**Actualizacion 2 (2-jul, 15h):** P11 (v0.4.90, commit 14b61778) encontro la causa
+raiz REAL (no era CRLF de ficheros: los helpers Git decodificaban la salida con
+locale cp1252 y el artefacto se guardaba con mojibake; fix: UTF-8 explicito +
+apply en 3 niveles) — buen trabajo de no asumir la hipotesis del responsable.
+PERO el artefacto regenerado (`ci_artifact_9a6378dc448e`) fue RECHAZADO por el
+responsable tras inspeccion directa en BD: toca solo digest.py SIN ningun test de
+la funcion nueva; su sandbox solo corrio los 4 tests preexistentes → `tests_ok=true`
+enganoso. Hueco sistemico destapado: el gate acepta codigo nuevo sin tests. P12
+(`docs/prompts_codex_2026-07-02_h.md`): gate determinista `new_code_requires_tests`
++ restaurar el artefacto P10 (contenido ya aprobado) reparado con el nuevo apply.
+Racha de hallazgos del e2e: transporte LLM → contexto truncado → esquema inventado
+→ encoding del apply → gate sin exigencia de tests. Cada iteracion endurece la firma.
+
 ### 16.5 Revision del responsable sobre P7 (2-jul, tarde)
 
 Entrega modelo: diagnostico con evidencia cruda ANTES de arreglar. Estado de la
