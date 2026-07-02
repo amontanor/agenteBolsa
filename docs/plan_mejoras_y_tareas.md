@@ -14,6 +14,16 @@
 - Ultima actualizacion: 2026-06-16
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
+### P20 - Codegen con modo fichero-completo para targets medianos. **HECHO (v0.4.101).**
+Post-mortem de los fallos `old block` de P15: 0/7 bloques de `digest.py` coincidian
+exactamente o por whitespace; eran lineas parafraseadas o bloques inexistentes.
+Se sube el limite de contexto/contenido completo de codegen a 900 lineas y se
+actualizan los prompts para usar la constante, permitiendo que targets como
+`digest.py` se entreguen como `{path, content}` y que git compute el diff. Validado
+con tests focales y `gen-diff --demo --json`: `READY_FOR_HUMAN_REVIEW`,
+`applied=false`, sin aprobar el diff. Informe:
+`docs/informe_codex_p20_codegen_oldblock_2026-07-02.md`.
+
 ### B3 â€” Estrategia `builtin_pullback` en SHADOW. **HECHO (v0.4.50).**
 Nueva estrategia builtin en `src/agente_bolsa/strategies/builtin_pullback.py`,
 registrada por defecto como `SHADOW` en el registry. Reutiliza

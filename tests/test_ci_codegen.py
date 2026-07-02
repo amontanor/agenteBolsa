@@ -358,6 +358,38 @@ def test_codegen_prompt_includes_full_current_target_context(tmp_path):
     assert context_file["content"] == long_text
     assert context_file["truncated"] is False
     assert context_file["lines"] == 500
+    assert context_file["content_mode_allowed"] is True
+
+
+def test_codegen_prompt_allows_full_content_for_digest_sized_target(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    settings = _settings(tmp_path, repo)
+    digest_path = repo / "src" / "agente_bolsa" / "continuous_improvement" / "digest.py"
+    digest_path.parent.mkdir(parents=True, exist_ok=True)
+    digest_text = "".join(f"line {idx:03d} = 'digest context'\n" for idx in range(700))
+    digest_path.write_text(digest_text, encoding="utf-8")
+    proposal = {
+        "proposal_id": "ci_prop_digest_context",
+        "proposal_type": "CODE_CHANGE",
+        "target_component": "continuous_improvement",
+        "target_identifier": "src/agente_bolsa/continuous_improvement/digest.py",
+        "risk_level": "LOW",
+        "payload": {
+            "target_identifier": "src/agente_bolsa/continuous_improvement/digest.py",
+            "rationale": "test",
+        },
+    }
+
+    messages = CodegenPatchAgent()._messages(settings, proposal)
+    user_payload = json.loads(messages[1]["content"])
+    context_file = user_payload["context_files"][0]
+
+    assert "900 lineas o menos" in messages[0]["content"]
+    assert context_file["path"] == "src/agente_bolsa/continuous_improvement/digest.py"
+    assert context_file["content"] == digest_text
+    assert context_file["truncated"] is False
+    assert context_file["lines"] == 700
+    assert context_file["content_mode_allowed"] is True
 
 
 def test_codegen_prompt_includes_real_data_file_sample(tmp_path):

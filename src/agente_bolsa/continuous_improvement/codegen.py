@@ -30,8 +30,8 @@ LOW_RISK_CODEGEN_ALLOWED_PREFIXES: tuple[str, ...] = (
 )
 CODEGEN_MIN_MAX_TOKENS = 32000
 CODEGEN_SELF_CORRECTION_ROUNDS = 2
-CODEGEN_FULL_CONTEXT_MAX_LINES = 800
-CODEGEN_FULL_CONTENT_MAX_LINES = 300
+CODEGEN_FULL_CONTEXT_MAX_LINES = 900
+CODEGEN_FULL_CONTENT_MAX_LINES = 900
 CODEGEN_DATA_SAMPLE_LINES = 5
 DATA_PATH_RE = re.compile(r"\bdata/[A-Za-z0-9_./-]+\.(?:jsonl|json|csv|tsv)\b")
 
@@ -315,7 +315,8 @@ class CodegenPatchAgent:
             "instruction": (
                 "Regenera el JSON completo. Copia cada bloque old VERBATIM del contexto real adjunto, "
                 "sin normalizar espacios ni cambiar saltos de linea. Usa bloques old cortos y unicos. "
-                "Si el archivo es nuevo o un archivo existente con menos de 300 lineas, puedes usar {path, content}."
+                "Si el archivo es nuevo o un archivo existente con "
+                f"{CODEGEN_FULL_CONTENT_MAX_LINES} lineas o menos, puedes usar {{path, content}}."
             ),
         }
         return [
@@ -365,7 +366,7 @@ class CodegenPatchAgent:
                         "chars": len(text),
                         "lines": len(lines),
                         "truncated": False,
-                        "content_mode_allowed": len(lines) < CODEGEN_FULL_CONTENT_MAX_LINES,
+                        "content_mode_allowed": len(lines) <= CODEGEN_FULL_CONTENT_MAX_LINES,
                     }
                 )
             else:
@@ -445,7 +446,9 @@ class CodegenPatchAgent:
                     "Nunca modifiques risk.py, kernel.py, broker.py, execution.py, config.py ni .env. "
                     "Para archivos existentes grandes usa file_edits {path, old, new}; el bloque old debe copiarse "
                     "VERBATIM del contexto proporcionado, sin reformatear ni normalizar espacios, y debe ser corto y unico. "
-                    "Para archivos nuevos o existentes con menos de 300 lineas puedes usar {path, content} con el contenido completo. "
+                    "Para archivos nuevos o existentes con "
+                    f"{CODEGEN_FULL_CONTENT_MAX_LINES} lineas o menos puedes usar {{path, content}} "
+                    "con el contenido completo. "
                     "Si hay data_samples, respeta ese esquema real y crea al menos un test con una linea real copiada literalmente. "
                     "Los tests deben cubrir valores null y claves ausentes de campos anidados que aparezcan en esas muestras, "
                     "por ejemplo objetos internos opcionales como decision.order."
@@ -484,7 +487,7 @@ class CodegenPatchAgent:
                         "chars": len(text),
                         "lines": len(lines),
                         "truncated": False,
-                        "content_mode_allowed": len(lines) < CODEGEN_FULL_CONTENT_MAX_LINES,
+                        "content_mode_allowed": len(lines) <= CODEGEN_FULL_CONTENT_MAX_LINES,
                     }
                 )
             else:
