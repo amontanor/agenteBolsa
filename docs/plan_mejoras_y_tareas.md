@@ -1022,6 +1022,34 @@ enganoso. Hueco sistemico destapado: el gate acepta codigo nuevo sin tests. P12
 Racha de hallazgos del e2e: transporte LLM → contexto truncado → esquema inventado
 → encoding del apply → gate sin exigencia de tests. Cada iteracion endurece la firma.
 
+### 16.7 HITO FASE 2 CERRADO (2-jul, tarde) — primer cambio de la firma APLICADO
+
+`APPROVE | status=APPLIED | commit=6816b05e | applied_change=ci_applied_022335b7740c`
+
+Primer cambio de codigo generado por la firma (deepseek-v4-flash + autocorreccion),
+validado en sandbox con suite completa, revisado por el responsable, aprobado por
+Antonio y aplicado de forma reversible. La seccion "Core sleeve" del digest diario
+es ahora codigo escrito por la propia firma.
+
+Recuento de defectos reales destapados y arreglados por este UNICO e2e (P6→P14):
+1. Transporte LLM roto (glm-5.2 truncaba en razonamiento; cap 4k) — P7.
+2. Contexto truncado en silencio a 12k chars (el modelo parcheaba a ciegas) — P9.
+3. Esquema inventado + tests autoreferenciales (rechazo humano) — P10.
+4. Artefactos corrompidos por decode cp1252 (mojibake) — P11.
+5. Gate aceptaba codigo nuevo sin tests — P12.
+6. Approve con limit-before-filter (elegia el artefacto equivocado) — P13.
+7. Approve sin evidencia del fallo + asimetria sandbox/approve (suites focalizadas
+   vs suite completa) + politica de version no contemplada en artefactos — P14.
+   Ironia instructiva: el test que tumbo el approve era `test_version_policy` — el
+   propio control de la casa exigiendo bump de version al diff de la firma.
+
+Todo con test de regresion. Cadencia de apply humano DEMOSTRADA end-to-end.
+Pendiente estructural (Fase 3): los pasos manuales (`P9/P10/P11ManualCodegenGate`,
+reactivaciones, resiembras) deben pasar al orquestador; y el digest debe traer la
+cola de aprobacion al humano cada manana (ya lo hace).
+
+| P10-P14 | Regeneracion esquema real → fix encoding → gate tests → fix approve → simetria suite | Codex | Bajo | **HECHO** (v0.4.89-0.4.93, commits aa2d6b42, 14b61778, 621d364e, e9c7e992, 81cddbaa; apply final commit 6816b05e por approve de Antonio; version efectiva 0.4.94) |
+
 ### 16.5 Revision del responsable sobre P7 (2-jul, tarde)
 
 Entrega modelo: diagnostico con evidencia cruda ANTES de arreglar. Estado de la
