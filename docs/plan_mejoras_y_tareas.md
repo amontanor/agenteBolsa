@@ -1048,6 +1048,36 @@ Pendiente estructural (Fase 3): los pasos manuales (`P9/P10/P11ManualCodegenGate
 reactivaciones, resiembras) deben pasar al orquestador; y el digest debe traer la
 cola de aprobacion al humano cada manana (ya lo hace).
 
+**Post-hito (P15, v0.4.96, commits 0ea61f00/fa126d40/88bb854d):** el codigo aplicado
+de la firma crasheo en su primera ejecucion real (`decision.order: null`, estado
+`no_order` por `already_rebalanced_today` — el caso normal futuro de "hold"). La
+firma fallo 3/3 al arreglar su propio bug (old-block otra vez) → hotfix directo de
+Codex con tests del contrato COMPLETO de estados del productor. Dos lecciones: (a)
+tests de parsers deben cubrir todos los estados que el productor emite, no los que
+convenga; (b) el codegen sigue sin saber editar ficheros grandes → P20.
+
+---
+
+## 17. Direccion revisada del responsable (2-jul, tarde; aprobada por Antonio)
+
+El beneficio viene de: exposicion al mercado, control de perdidas y edge — no de
+fontaneria. Reordenacion por impacto:
+
+1. **Capital desplegado** (palanca nº1): activar la manga tras paridad dry-run y
+   escalar 30→50→70% por puertas pre-registradas (P17). Techo de honestidad: la
+   beta bien cobrada + caidas controladas ya bate a la mayoria de minoristas.
+2. **Horizonte de salida 5-10d**: unico hallazgo de edge propio con evidencia
+   direccional positiva (jun: 1-3d −1,78% vs 5-10d +1,18%, n=4); releer con la
+   muestra acumulada y criterios pre-registrados (P16).
+3. **Dos libros**: core (beta+overlay, rotacion minima) + laboratorio (micro-size,
+   log-only primero) para resolver el hambre de muestra sin sobre-operar (P18).
+4. **KPI de mortalidad**: la firma se mide por hipotesis matadas honestamente por
+   semana, no por actividad; agenda de investigacion en el digest (P19).
+5. **Codegen ficheros grandes**: sin esto la firma no mantiene su propio codigo (P20).
+
+Lote 2 encargado: P16-P21 en `docs/prompts_codex_2026-07-02_lote2.md`. Estado:
+PENDIENTE. Ninguna tarea cambia conducta real (read-only / flag OFF / human-gated).
+
 | P10-P14 | Regeneracion esquema real → fix encoding → gate tests → fix approve → simetria suite | Codex | Bajo | **HECHO** (v0.4.89-0.4.93, commits aa2d6b42, 14b61778, 621d364e, e9c7e992, 81cddbaa; apply final commit 6816b05e por approve de Antonio; version efectiva 0.4.94) |
 
 ### 16.5 Revision del responsable sobre P7 (2-jul, tarde)
