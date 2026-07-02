@@ -19,6 +19,11 @@ from .continuous_improvement.api import run_api_server
 from .continuous_improvement.digest import build_lab_digest, format_lab_digest_text
 from .continuous_improvement.experiments import AutoApplyCodeAgent
 from .continuous_improvement.orchestrator import ContinuousImprovementOrchestrator
+from .continuous_improvement.research_agenda import (
+    add_research_hypothesis,
+    close_research_hypothesis,
+    load_research_agenda,
+)
 from .continuous_improvement.runtime import ContinuousImprovementLabRuntime
 from .cycle_runner import run_observable_cycle
 from .eventing import EventReporter, PrettyLogPrinter, print_raw_tail_line
@@ -1695,6 +1700,26 @@ def command_lab_book(args: argparse.Namespace) -> None:
         f"status={result.get('status')} mode={result.get('mode')} "
         f"recorded={result.get('recorded', 0)} orders_submitted={result.get('orders_submitted', 0)}"
     )
+
+
+def command_research_agenda(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    path = Path(args.path) if getattr(args, "path", None) else settings.data_dir / "research" / "research_agenda.json"
+    if args.research_agenda_command == "add":
+        result = {"ok": True, "item": add_research_hypothesis(path=path, title=args.title, target_date=args.target_date, status=args.status, notes=args.notes)}
+    elif args.research_agenda_command == "close":
+        result = {"ok": True, "item": close_research_hypothesis(path=path, hypothesis_id=args.hypothesis_id, status=args.status, notes=args.notes)}
+    else:
+        result = {"ok": True, "path": str(path), "items": load_research_agenda(path)}
+    if args.json:
+        _print_json(result)
+        return
+    if "item" in result:
+        item = result["item"]
+        print(f"{item['hypothesis_id']} | {item['status']} | {item['target_date']} | {item['title']}")
+        return
+    for item in result["items"]:
+        print(f"{item['hypothesis_id']} | {item['status']} | {item['target_date']} | {item['title']}")
 
 
 def command_learning_postmortem(args: argparse.Namespace) -> None:
@@ -4172,6 +4197,31 @@ def build_parser() -> argparse.ArgumentParser:
     lab_book_run.add_argument("--config", default=str(Path("data/config/lab_book.json")), help="Ruta JSON de config.")
     lab_book_run.add_argument("--json", action="store_true", help="Devuelve JSON.")
     lab_book_run.set_defaults(func=command_lab_book)
+
+    research_agenda = subparsers.add_parser(
+        "research-agenda",
+        help="Gestiona agenda persistente de hipotesis de investigacion.",
+    )
+    agenda_subparsers = research_agenda.add_subparsers(dest="research_agenda_command", required=True)
+    agenda_list = agenda_subparsers.add_parser("list", help="Lista hipotesis de investigacion.")
+    agenda_list.add_argument("--path", help="Ruta JSON alternativa.")
+    agenda_list.add_argument("--json", action="store_true", help="Devuelve JSON.")
+    agenda_list.set_defaults(func=command_research_agenda)
+    agenda_add = agenda_subparsers.add_parser("add", help="Anade una hipotesis a la agenda.")
+    agenda_add.add_argument("--title", required=True)
+    agenda_add.add_argument("--target-date", required=True)
+    agenda_add.add_argument("--status", default="pendiente", choices=["pendiente", "en_curso", "matada", "promovida"])
+    agenda_add.add_argument("--notes", default="")
+    agenda_add.add_argument("--path", help="Ruta JSON alternativa.")
+    agenda_add.add_argument("--json", action="store_true", help="Devuelve JSON.")
+    agenda_add.set_defaults(func=command_research_agenda)
+    agenda_close = agenda_subparsers.add_parser("close", help="Cierra una hipotesis como matada o promovida.")
+    agenda_close.add_argument("--id", dest="hypothesis_id", required=True)
+    agenda_close.add_argument("--status", required=True, choices=["matada", "promovida"])
+    agenda_close.add_argument("--notes", default="")
+    agenda_close.add_argument("--path", help="Ruta JSON alternativa.")
+    agenda_close.add_argument("--json", action="store_true", help="Devuelve JSON.")
+    agenda_close.set_defaults(func=command_research_agenda)
 
     commands = subparsers.add_parser("commands", help="Resumen claro de comandos operativos frecuentes.")
     commands.add_argument("--json", action="store_true", help="Devuelve el catalogo completo en JSON.")

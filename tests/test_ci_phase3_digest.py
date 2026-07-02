@@ -13,6 +13,7 @@ from agente_bolsa.continuous_improvement.digest import (
     latest_core_sleeve_signal,
     write_lab_digest_file,
 )
+from agente_bolsa.continuous_improvement.research_agenda import save_research_agenda
 from agente_bolsa.storage import Store
 
 
@@ -144,6 +145,49 @@ def test_lab_digest_kpis_from_synthetic_database(tmp_path):
     assert current_week["proposal_to_experiment_pct"] == 50.0
     assert current_week["experiment_to_applied_pct"] == 100.0
     assert digest["kpi_funnel"]["wip_current"]["total"] >= 1
+
+
+def test_lab_digest_includes_research_agenda_and_kpis(tmp_path):
+    store = _store(tmp_path)
+    save_research_agenda(
+        [
+            {
+                "hypothesis_id": "agenda_test_open",
+                "title": "pullback",
+                "status": "pendiente",
+                "target_date": "2026-07-06",
+                "notes": "medir",
+            },
+            {
+                "hypothesis_id": "agenda_test_killed",
+                "title": "old edge",
+                "status": "matada",
+                "target_date": "2026-07-02",
+                "notes": "sin edge",
+                "closed_at": "2026-07-01T12:00:00+00:00",
+            },
+        ],
+        tmp_path / "research" / "research_agenda.json",
+    )
+    store.save_continuous_improvement_experiment(
+        {
+            "experiment_id": "ci_exp_research",
+            "proposal_id": "ci_prop_research",
+            "cycle_id": "ci_cycle_research",
+            "status": "PASSED",
+            "created_at": "2026-07-01T12:00:00+00:00",
+        }
+    )
+
+    digest = build_lab_digest(store, days=7, now=datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc), data_dir=tmp_path)
+    text = format_lab_digest_text(digest)
+
+    assert digest["research_agenda"]["kpis"]["estudios_ejecutados_semana"] == 1
+    assert digest["research_agenda"]["kpis"]["hipotesis_matadas_semana"] == 1
+    assert "KPIs de investigacion" in text
+    assert "estudios_ejecutados/semana: 1" in text
+    assert "Agenda de investigacion" in text
+    assert "| pullback | pendiente | 2026-07-06 | medir |" in text
 
 
 def test_proposal_quality_classifier_executable_and_prose_cases():

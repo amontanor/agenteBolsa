@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "hypotheses": [
+    {
+      "hypothesis_id": "agenda_pullback_20260706",
+      "title": "pullback",
+      "status": "pendiente",
+      "target_date": "2026-07-06",
+      "notes": "Medir edge de builtin_pullback con muestra madura y OOS.",
+      "created_at": "2026-07-02T00:00:00+00:00",
+      "updated_at": "2026-07-02T00:00:00+00:00",
+      "closed_at": null
+    },
+    {
+      "hypothesis_id": "agenda_exit_horizon_5_10d_p16",
+      "title": "horizonte salida 5-10d",
+      "status": "matada",
+      "target_date": "2026-07-02",
+      "notes": "P16 no cumple criterios pre-registrados: n<20 y concentracion temporal/regimen.",
+      "created_at": "2026-07-02T00:00:00+00:00",
+      "updated_at": "2026-07-02T00:00:00+00:00",
+      "closed_at": "2026-07-02T00:00:00+00:00"
+    },
+    {
+      "hypothesis_id": "agenda_telegram_radar_20260720",
+      "title": "telegram radar",
+      "status": "pendiente",
+      "target_date": "2026-07-20",
+      "notes": "Evaluar si los posts filtrados aportan senal incremental.",
+      "created_at": "2026-07-02T00:00:00+00:00",
+      "updated_at": "2026-07-02T00:00:00+00:00",
+      "closed_at": null
+    },
+    {
+      "hypothesis_id": "agenda_overlay_activation_20260705",
+      "title": "overlay activacion",
+      "status": "en_curso",
+      "target_date": "2026-07-05",
+      "notes": "Activacion humana de core sleeve tras paridad limpia.",
+      "created_at": "2026-07-02T00:00:00+00:00",
+      "updated_at": "2026-07-02T00:00:00+00:00",
+      "closed_at": null
+    },
+    {
+      "hypothesis_id": "agenda_orcl_anomaly_p21",
+      "title": "anomalia ORCL",
+      "status": "pendiente",
+      "target_date": "2026-07-02",
+      "notes": "P21: validar si ext_sma20=-23.35% es dato real o corrupto.",
+      "created_at": "2026-07-02T00:00:00+00:00",
+      "updated_at": "2026-07-02T00:00:00+00:00",
+      "closed_at": null
+    }
+  ]
+}

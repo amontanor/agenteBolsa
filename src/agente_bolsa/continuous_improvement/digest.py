@@ -12,6 +12,8 @@ from typing import Any
 
 from agente_bolsa.storage import Store
 
+from .research_agenda import build_research_agenda_snapshot
+
 REJECTION_BUCKETS = {
     "self_safety_modification_forbidden": "self_safety",
     "self_governance_modification_forbidden": "self_governance",
@@ -95,6 +97,7 @@ def build_lab_digest(
         "experiments": experiment_counts,
         "overlay_shadow": latest_overlay_shadow_signal(data_dir, now=now),
         "core_sleeve": latest_core_sleeve_signal(data_dir, now=now),
+        "research_agenda": build_research_agenda_snapshot(data_dir, experiments, now=now),
         "requires_attention": attention,
         "approval_requests": approval_requests,
         "kpi_funnel": build_kpi_funnel(proposals, experiments, applied_changes, decisions, now=now),
@@ -376,6 +379,7 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
     quality = digest.get("proposal_quality") or {}
     approval_requests = digest.get("approval_requests") or []
     overlay = digest.get("overlay_shadow") or {}
+    research_agenda = digest.get("research_agenda") or {}
 
     lines = [
         f"Digest diario del lab - ultimos {digest.get('days')} dia(s)",
@@ -407,6 +411,22 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
             f"- corridos: {experiments.get('run', 0)}",
             f"- PASSED: {experiments.get('passed', 0)}",
             f"- FAILED: {experiments.get('failed', 0)}",
+            "",
+            "KPIs de investigacion",
+            f"- estudios_ejecutados/semana: {(research_agenda.get('kpis') or {}).get('estudios_ejecutados_semana', 0)}",
+            f"- hipotesis_matadas/semana: {(research_agenda.get('kpis') or {}).get('hipotesis_matadas_semana', 0)}",
+            f"- hipotesis_promovidas/semana: {(research_agenda.get('kpis') or {}).get('hipotesis_promovidas_semana', 0)}",
+            "",
+            "Agenda de investigacion",
+            "| Hipotesis | Estado | Fecha objetivo | Notas |",
+            "|---|---|---|---|",
+            *[
+                (
+                    f"| {item.get('title', '')} | {item.get('status', '')} | "
+                    f"{item.get('target_date', '')} | {item.get('notes', '')} |"
+                )
+                for item in research_agenda.get("items") or []
+            ],
             "",
             "Overlay shadow",
         ]
