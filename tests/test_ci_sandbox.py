@@ -272,6 +272,83 @@ def test_code_diff_preview_attaches_failed_tests_without_promotion(tmp_path, mon
     assert (repo / "docs" / "base.md").read_text(encoding="utf-8") == "base\n"
 
 
+def test_code_diff_preview_rejects_src_change_with_test_requirement_without_test_file(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    settings = _settings(tmp_path, repo)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+
+    def _unexpected_validate(self, **kw):  # noqa: ANN001
+        raise AssertionError("validate no debe ejecutarse si el gate determinista rechaza el diff")
+
+    monkeypatch.setattr(GitSandbox, "validate", _unexpected_validate)
+    proposal = _proposal(
+        [
+            {
+                "path": "src/agente_bolsa/continuous_improvement/demo_gate.py",
+                "content": "def demo_gate_value():\n    return 1\n",
+            }
+        ],
+        proposal_id="ci_prop_src_without_tests",
+    )
+    proposal["payload"]["test_requirement"] = "Debe cubrir demo_gate_value."
+    proposal["payload"]["test_commands"] = ["python -c \"assert True\""]
+    validation = _validation()
+    validation["proposal_id"] = "ci_prop_src_without_tests"
+
+    artifact = CodeDiffPreviewAgent().generate(settings=settings, store=store, proposal=proposal, validation=validation)
+
+    assert artifact["artifact_type"] == "code_diff_preview_invalid"
+    assert artifact["payload"]["status"] == "REJECTED_BY_GATE"
+    assert artifact["payload"]["gate_reason"] == "new_code_requires_tests"
+    assert artifact["payload"]["tests_ok"] is False
+    assert "src/agente_bolsa/continuous_improvement/demo_gate.py" in artifact["payload"]["target_paths"]
+    assert store.continuous_improvement_applied_changes(limit=10) == []
+
+
+def test_code_diff_preview_accepts_src_change_when_touched_test_file_is_executed(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    settings = _settings(tmp_path, repo)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+
+    def _validate(self, **kw):  # noqa: ANN001
+        commands = [" ".join(step[1]).replace("\\", "/") for step in kw["steps"]]
+        assert any("tests/test_ci_gate_demo.py" in command for command in commands)
+        return {"ok": True, "steps": [{"step": "proposal_test_1", "ok": True, "returncode": 0, "output": "ok"}]}
+
+    monkeypatch.setattr(GitSandbox, "validate", _validate)
+    proposal = _proposal(
+        [
+            {
+                "path": "src/agente_bolsa/continuous_improvement/demo_gate.py",
+                "content": "def demo_gate_value():\n    return 1\n",
+            },
+            {
+                "path": "tests/test_ci_gate_demo.py",
+                "content": (
+                    "from agente_bolsa.continuous_improvement.demo_gate import demo_gate_value\n\n\n"
+                    "def test_demo_gate_value():\n"
+                    "    assert demo_gate_value() == 1\n"
+                ),
+            },
+        ],
+        proposal_id="ci_prop_src_with_tests",
+    )
+    proposal["payload"]["test_requirement"] = "Debe cubrir demo_gate_value."
+    proposal["payload"]["test_commands"] = ["python -m pytest tests/test_ci_gate_demo.py -q"]
+    validation = _validation()
+    validation["proposal_id"] = "ci_prop_src_with_tests"
+
+    artifact = CodeDiffPreviewAgent().generate(settings=settings, store=store, proposal=proposal, validation=validation)
+
+    assert artifact["artifact_type"] == "code_diff_preview"
+    assert artifact["payload"]["status"] == "READY_FOR_HUMAN_REVIEW"
+    assert artifact["payload"]["tests_ok"] is True
+    assert "tests/test_ci_gate_demo.py" in artifact["payload"]["target_paths"]
+    assert store.continuous_improvement_applied_changes(limit=10) == []
+
+
 @pytest.mark.parametrize("protected_path", [".env", "src/agente_bolsa/tools/risk.py"])
 def test_code_diff_preview_blocks_kernel_floor_without_worktree(tmp_path, protected_path):
     repo = _init_repo(tmp_path / "repo")

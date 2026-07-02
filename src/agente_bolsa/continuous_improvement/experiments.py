@@ -1144,6 +1144,24 @@ class CodeDiffPreviewAgent:
                     content_text=error,
                     payload={**base_payload, "status": "FAILED", "error": error, "sandbox_change_id": change_id},
                 )
+            target_paths = self._target_rels(workspace, file_edits=file_edits, patch_text=patch_text)
+            gate_error = self._new_code_tests_gate_error(payload=payload, diff=diff, target_paths=target_paths)
+            if gate_error:
+                return self._save_artifact(
+                    store,
+                    proposal_id=proposal_id,
+                    artifact_type=self.INVALID_ARTIFACT,
+                    content_text=diff[-200000:],
+                    payload={
+                        **base_payload,
+                        "status": "REJECTED_BY_GATE",
+                        "tests_ok": False,
+                        "error": gate_error,
+                        "gate_reason": "new_code_requires_tests",
+                        "sandbox_change_id": change_id,
+                        "target_paths": target_paths,
+                    },
+                )
             validation_result = sandbox.validate(steps=self._validation_steps(payload))
             ok = bool(validation_result.get("ok"))
             artifact_type = self.VALID_ARTIFACT if ok else self.INVALID_ARTIFACT
@@ -1159,7 +1177,7 @@ class CodeDiffPreviewAgent:
                     "tests_ok": ok,
                     "validation": validation_result,
                     "sandbox_change_id": change_id,
-                    "target_paths": self._target_rels(workspace, file_edits=file_edits, patch_text=patch_text),
+                    "target_paths": target_paths,
                 },
             )
         except (GitSandboxError, OSError, ValueError, RuntimeError) as exc:
@@ -1236,6 +1254,48 @@ class CodeDiffPreviewAgent:
                 parts = [sys.executable, "-m", "ruff", *parts[1:]]
             steps.append((f"proposal_test_{index}", parts))
         return steps or None
+
+    def _new_code_tests_gate_error(self, *, payload: dict[str, Any], diff: str, target_paths: list[str]) -> str | None:
+        src_paths = [path for path in target_paths if path.startswith("src/")]
+        if not src_paths:
+            return None
+        requires_tests = self._declares_test_requirement(payload) or self._diff_adds_function(diff)
+        if not requires_tests:
+            return None
+        test_paths = [path for path in target_paths if path.startswith("tests/")]
+        if not test_paths:
+            return "new_code_requires_tests: el diff modifica src/ pero no toca tests/."
+        commands = [str(item).strip() for item in payload.get("test_commands", []) or [] if str(item).strip()]
+        if not self._commands_execute_touched_tests(commands, test_paths):
+            return "new_code_requires_tests: test_commands no ejecuta el fichero de tests modificado."
+        return None
+
+    def _declares_test_requirement(self, payload: dict[str, Any]) -> bool:
+        for key in ("test_requirement", "testing_requirement", "tests_requirement"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return True
+            if isinstance(value, (list, tuple, dict)) and value:
+                return True
+            if value is True:
+                return True
+        return False
+
+    def _diff_adds_function(self, diff: str) -> bool:
+        for line in diff.splitlines():
+            if line.startswith("+++") or not line.startswith("+"):
+                continue
+            if re.match(r"^\+\s*(async\s+def|def)\s+\w+\s*\(", line):
+                return True
+        return False
+
+    def _commands_execute_touched_tests(self, commands: list[str], test_paths: list[str]) -> bool:
+        normalized_commands = [command.replace("\\", "/").lower() for command in commands]
+        for test_path in test_paths:
+            needle = test_path.replace("\\", "/").lower()
+            if any(needle in command for command in normalized_commands):
+                return True
+        return False
 
     def _target_rels(self, workspace: Path, *, file_edits: Any, patch_text: str) -> list[str]:
         workspace = workspace.resolve()
