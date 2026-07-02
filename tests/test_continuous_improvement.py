@@ -284,6 +284,44 @@ def test_improvement_llm_client_can_parse_specialized_json_without_normalizing(t
     assert parsed == {"summary": "diff", "file_edits": []}
 
 
+def test_improvement_llm_client_rejects_truncated_reasoning_only_response(tmp_path):
+    client = ImprovementLLMClient(_settings(tmp_path, IMPROVEMENT_LLM_ENABLED=True))
+    raw = {
+        "choices": [
+            {
+                "finish_reason": "length",
+                "message": {
+                    "content": "",
+                    "reasoning_content": "razonamiento parcial sin JSON cerrado",
+                },
+            }
+        ]
+    }
+
+    with pytest.raises(ValueError, match="llm_response_truncated"):
+        client._extract_content(raw)
+
+
+def test_improvement_llm_client_extracts_json_from_reasoning_when_content_missing(tmp_path):
+    client = ImprovementLLMClient(_settings(tmp_path, IMPROVEMENT_LLM_ENABLED=True))
+    raw = {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {
+                    "content": "",
+                    "reasoning_content": 'analisis previo {"summary": "diff", "file_edits": []} cierre',
+                },
+            }
+        ]
+    }
+
+    content = client._extract_content(raw)
+    parsed = client._parse_json_content(content, normalize_response=False)
+
+    assert parsed == {"summary": "diff", "file_edits": []}
+
+
 def test_improvement_llm_client_can_route_orchestrator_to_separate_provider(tmp_path):
     settings = _settings(
         tmp_path,

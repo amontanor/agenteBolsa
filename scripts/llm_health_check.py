@@ -14,8 +14,8 @@ Uso (no requiere dependencias del proyecto, solo stdlib):
     python scripts/llm_health_check.py --timeout 20
 
 Codigos de salida:
-    0  -> decision y sentimiento tienen proveedor primario o fallback disponible
-    1  -> decision o sentimiento no tienen ningun proveedor disponible
+    0  -> decision, sentimiento y codegen tienen proveedor disponible
+    1  -> algun rol critico no tiene proveedor disponible
 
 Lee la configuracion de .env (no sobrescribe variables ya presentes en el
 entorno). Nunca imprime claves completas.
@@ -63,13 +63,23 @@ def mask(value: str) -> str:
     return value[:4] + "***" + value[-2:]
 
 
-def ping_provider(name: str, base: str, key: str, model: str, timeout: float) -> dict:
+def ping_provider(
+    name: str,
+    base: str,
+    key: str,
+    model: str,
+    timeout: float,
+    *,
+    role: str = "",
+    json_probe: bool = False,
+) -> dict:
     """Lanza una completion minima y mide latencia/estado."""
     result = {
         "provider": name,
         "base_url": base,
         "model": model,
         "api_key": mask(key),
+        "role": role,
         "ok": False,
         "latency_ms": None,
         "status": None,
@@ -80,14 +90,24 @@ def ping_provider(name: str, base: str, key: str, model: str, timeout: float) ->
         return result
 
     url = base.rstrip("/") + "/chat/completions"
-    payload = json.dumps(
-        {
-            "model": model,
-            "messages": [{"role": "user", "content": "Responde solo: OK"}],
-            "max_tokens": 8,
-            "temperature": 0,
-        }
-    ).encode("utf-8")
+    if json_probe:
+        messages = [
+            {"role": "system", "content": "Devuelve solo JSON valido."},
+            {"role": "user", "content": 'Devuelve exactamente {"ok": true}.'},
+        ]
+        max_tokens = 64
+    else:
+        messages = [{"role": "user", "content": "Responde solo: OK"}]
+        max_tokens = 8
+    body = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": 0,
+    }
+    if json_probe:
+        body["response_format"] = {"type": "json_object"}
+    payload = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=payload, method="POST")
     req.add_header("Content-Type", "application/json")
     req.add_header("Accept", "application/json")
@@ -108,8 +128,14 @@ def ping_provider(name: str, base: str, key: str, model: str, timeout: float) ->
                 content = (
                     data.get("choices", [{}])[0].get("message", {}).get("content", "")
                 )
-                result["detail"] = (content or "").strip()[:60] or "(respuesta vacia)"
-                result["ok"] = resp.status == 200 and bool(data.get("choices"))
+                result["detail"] = (content or "").strip()[:80] or "(respuesta vacia)"
+                if json_probe:
+                    try:
+                        result["ok"] = resp.status == 200 and bool(json.loads(content or "{}").get("ok"))
+                    except (TypeError, json.JSONDecodeError):
+                        result["ok"] = False
+                else:
+                    result["ok"] = resp.status == 200 and bool(data.get("choices"))
             except json.JSONDecodeError:
                 result["detail"] = body[:80]
                 result["ok"] = resp.status == 200
@@ -118,7 +144,14 @@ def ping_provider(name: str, base: str, key: str, model: str, timeout: float) ->
         result["status"] = exc.code
         result["detail"] = f"HTTP {exc.code}: {exc.reason}"
     except urllib.error.URLError as exc:
-        result["detail"] = f"sin conexion: {exc.reason}"
+        local_8080 = base.rstrip("/").startswith("http://127.0.0.1:8080")
+        if local_8080:
+            result["detail"] = (
+                "fallback local no disponible en 127.0.0.1:8080 "
+                "(esperado si el servidor local no esta arrancado)"
+            )
+        else:
+            result["detail"] = f"sin conexion: {exc.reason}"
     except Exception as exc:  # noqa: BLE001 - diagnostico no debe romper.
         result["detail"] = f"{type(exc).__name__}: {exc}"
     return result
@@ -151,6 +184,17 @@ def main() -> int:
     sentiment_base = cfg(env, "LLM_ROLE_SENTIMENT_BASE_URL") or prim_base
     sentiment_key = cfg(env, "LLM_ROLE_SENTIMENT_API_KEY") or prim_key
     sentiment_model = cfg(env, "LLM_ROLE_SENTIMENT_MODEL") or prim_model
+    codegen_base = cfg(env, "IMPROVEMENT_LLM_CODEGEN_BASE_URL") or cfg(env, "IMPROVEMENT_LLM_BASE_URL")
+    codegen_key = (
+        cfg(env, "IMPROVEMENT_LLM_CODEGEN_API_KEY")
+        or cfg(env, "IMPROVEMENT_LLM_API_KEY")
+        or cfg(env, "OPENCODE_API_KEY")
+    )
+    improvement_model = cfg(env, "IMPROVEMENT_LLM_MODEL")
+    codegen_model = cfg(env, "IMPROVEMENT_LLM_CODEGEN_MODEL")
+    if not codegen_model and improvement_model.lower().startswith("glm-"):
+        codegen_model = cfg(env, "IMPROVEMENT_LLM_ORCHESTRATOR_MODEL") or cfg(env, "OPENCODE_MODEL")
+    codegen_model = codegen_model or improvement_model
 
     providers = [
         {
@@ -183,6 +227,15 @@ def main() -> int:
             "model": cfg(env, "IMPROVEMENT_LLM_MODEL"),
             "enabled": cfg(env, "IMPROVEMENT_LLM_ENABLED", "true").lower() == "true",
         },
+        {
+            "name": "codegen [continuous improvement]",
+            "role": "codegen",
+            "base": codegen_base,
+            "key": codegen_key,
+            "model": codegen_model,
+            "enabled": cfg(env, "IMPROVEMENT_LLM_ENABLED", "true").lower() == "true",
+            "json_probe": True,
+        },
     ]
 
     results = []
@@ -199,19 +252,33 @@ def main() -> int:
                 }
             )
             continue
-        res = ping_provider(p["name"], p["base"], p["key"], p["model"], args.timeout)
+        res = ping_provider(
+            p["name"],
+            p["base"],
+            p["key"],
+            p["model"],
+            args.timeout,
+            role=p["role"],
+            json_probe=bool(p.get("json_probe")),
+        )
         res["role"] = p["role"]
         results.append(res)
 
     fallback_ok = any(r.get("ok") for r in results if r.get("role") == "fallback")
     decision_ok = fallback_ok or any(r.get("ok") for r in results if r.get("role") == "decision")
     sentiment_ok = fallback_ok or any(r.get("ok") for r in results if r.get("role") == "sentiment")
-    overall_ok = decision_ok and sentiment_ok
+    codegen_ok = any(r.get("ok") for r in results if r.get("role") == "codegen")
+    overall_ok = decision_ok and sentiment_ok and codegen_ok
 
     if args.json:
         print(
             json.dumps(
-                {"decision_ok": decision_ok, "sentiment_ok": sentiment_ok, "providers": results},
+                {
+                    "decision_ok": decision_ok,
+                    "sentiment_ok": sentiment_ok,
+                    "codegen_ok": codegen_ok,
+                    "providers": results,
+                },
                 indent=2,
                 ensure_ascii=False,
             )
@@ -229,9 +296,9 @@ def main() -> int:
             print(f"{flag} {r['provider']:<28} {r['model']:<18} {lat:>8}  {r.get('detail')}")
         print()
         if overall_ok:
-            print("RESULTADO: decision y sentimiento tienen LLM disponible. Operativa normal.")
+            print("RESULTADO: decision, sentimiento y codegen tienen LLM disponible. Operativa normal.")
         else:
-            print("RESULTADO: decision o sentimiento no tienen LLM disponible -> modo degradado.")
+            print("RESULTADO: algun rol critico no tiene LLM disponible -> modo degradado.")
             print("           El sistema puede operar en")
             print("           fallback determinista (slate de candidatos muy reducido,")
             print("           sin sentimiento). Revisar proveedor primario y/o arrancar")

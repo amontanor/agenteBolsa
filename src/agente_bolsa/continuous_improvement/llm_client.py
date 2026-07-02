@@ -368,7 +368,7 @@ class ImprovementLLMClient:
                     request_preview=request_preview,
                 )
             except Exception as exc:  # noqa: BLE001
-                last_error = str(exc)
+                last_error = self._format_endpoint_error(endpoint, exc)
                 LOGGER.warning("Improvement LLM call failed on %s attempt %s: %s", endpoint.name, attempt + 1, exc)
                 if _is_quota_exhausted_error(last_error):
                     break
@@ -389,6 +389,14 @@ class ImprovementLLMClient:
             truncation_report=truncation_report,
             request_preview=request_preview,
         )
+
+    def _format_endpoint_error(self, endpoint: _ImprovementEndpoint, exc: Exception) -> str:
+        if endpoint.fallback_used and endpoint.base_url.rstrip("/").startswith("http://127.0.0.1:8080"):
+            return (
+                "fallback local no disponible en 127.0.0.1:8080 "
+                "(esperado si el servidor local no esta arrancado)"
+            )
+        return str(exc)
 
     def _configuration_error(self, provider: str, api_key: str | None, base_url: str) -> str | None:
         provider_key = provider.strip().lower()
@@ -461,8 +469,11 @@ class ImprovementLLMClient:
         choices = getattr(response, "choices", None) or []
         if not choices:
             raise ValueError("LLM response without choices")
-        message = getattr(choices[0], "message", None)
+        choice = choices[0]
+        finish_reason = str(getattr(choice, "finish_reason", "") or "")
+        message = getattr(choice, "message", None)
         content = getattr(message, "content", None)
+        reasoning_content = getattr(message, "reasoning_content", None)
         if isinstance(content, list):
             text_parts = []
             for item in content:
@@ -470,8 +481,21 @@ class ImprovementLLMClient:
                 if text:
                     text_parts.append(text)
             content = "".join(text_parts)
+        if finish_reason == "length":
+            raise ValueError(
+                "llm_response_truncated: "
+                f"finish_reason=length content_chars={len(content or '')} reasoning_chars={len(reasoning_content or '')}"
+            )
         if not isinstance(content, str) or not content.strip():
-            raise ValueError("LLM response without text content")
+            if isinstance(reasoning_content, str) and reasoning_content.strip():
+                try:
+                    return self._extract_json_object_text(reasoning_content)
+                except ValueError as exc:
+                    raise ValueError(
+                        "llm_response_reasoning_without_content: "
+                        f"finish_reason={finish_reason or 'unknown'} reasoning_chars={len(reasoning_content)}"
+                    ) from exc
+            raise ValueError("llm_response_without_text_content")
         return content
 
     def _post_json(self, endpoint: str, body: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
@@ -489,10 +513,26 @@ class ImprovementLLMClient:
         choices = response_payload.get("choices") or []
         if not choices:
             raise ValueError("LLM response without choices")
-        message = (choices[0] or {}).get("message") or {}
+        choice = choices[0] or {}
+        finish_reason = str(choice.get("finish_reason") or "")
+        message = choice.get("message") or {}
         content = message.get("content")
+        reasoning_content = message.get("reasoning_content")
+        if finish_reason == "length":
+            raise ValueError(
+                "llm_response_truncated: "
+                f"finish_reason=length content_chars={len(content or '')} reasoning_chars={len(reasoning_content or '')}"
+            )
         if not isinstance(content, str) or not content.strip():
-            raise ValueError("LLM response without text content")
+            if isinstance(reasoning_content, str) and reasoning_content.strip():
+                try:
+                    return self._extract_json_object_text(reasoning_content)
+                except ValueError as exc:
+                    raise ValueError(
+                        "llm_response_reasoning_without_content: "
+                        f"finish_reason={finish_reason or 'unknown'} reasoning_chars={len(reasoning_content)}"
+                    ) from exc
+            raise ValueError("llm_response_without_text_content")
         return content
 
     def _parse_json_content(self, content: str, *, normalize_response: bool = True) -> dict[str, Any]:
@@ -501,6 +541,8 @@ class ImprovementLLMClient:
             text = text.strip("`")
             if text.lower().startswith("json"):
                 text = text[4:].strip()
+        if not text.startswith("{"):
+            text = self._extract_json_object_text(text)
         try:
             value = json.loads(text)
         except json.JSONDecodeError as exc:
@@ -510,6 +552,33 @@ class ImprovementLLMClient:
         if not normalize_response:
             return value
         return self._normalize_response_shape(value)
+
+    def _extract_json_object_text(self, text: str) -> str:
+        start = text.find("{")
+        if start < 0:
+            raise ValueError("LLM response does not contain a JSON object")
+        depth = 0
+        in_string = False
+        escaped = False
+        for idx in range(start, len(text)):
+            char = text[idx]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : idx + 1]
+        raise ValueError("LLM response contains an incomplete JSON object")
 
     def _normalize_response_shape(self, value: dict[str, Any]) -> dict[str, Any]:
         if "diagnosis" in value and "proposals" in value:

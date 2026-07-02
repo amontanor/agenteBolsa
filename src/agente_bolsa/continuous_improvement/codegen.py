@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -25,6 +26,7 @@ LOW_RISK_CODEGEN_ALLOWED_PREFIXES: tuple[str, ...] = (
     "tests/",
     "docs/",
 )
+CODEGEN_MIN_MAX_TOKENS = 16000
 
 
 class CodegenPatchResponse(BaseModel):
@@ -92,10 +94,11 @@ class CodegenPatchAgent:
         llm_result = (self.client or ImprovementLLMClient(settings)).generate_json(
             self._messages(settings, proposal),
             CodegenPatchResponse.model_json_schema(),
+            model=_codegen_model(settings),
             response_model=CodegenPatchResponse,
             normalize_response=False,
             temperature=0.0,
-            max_tokens=min(int(getattr(settings, "improvement_llm_max_tokens", 6000)), 4000),
+            max_tokens=_codegen_max_tokens(settings),
             route="agents",
         )
         if not llm_result.ok or not isinstance(llm_result.payload, CodegenPatchResponse):
@@ -309,6 +312,21 @@ def generate_code_diff_for_proposal(
         store=store,
         proposal_id=proposal_id,
     )
+
+
+def _codegen_max_tokens(settings: Settings) -> int:
+    configured = int(getattr(settings, "improvement_llm_max_tokens", CODEGEN_MIN_MAX_TOKENS) or 0)
+    return max(configured, CODEGEN_MIN_MAX_TOKENS)
+
+
+def _codegen_model(settings: Settings) -> str:
+    override = os.environ.get("IMPROVEMENT_LLM_CODEGEN_MODEL", "").strip()
+    if override:
+        return override
+    configured = str(getattr(settings, "improvement_llm_model", "") or "").strip()
+    if configured.lower().startswith("glm-"):
+        return str(getattr(settings, "improvement_llm_orchestrator_model", "") or configured)
+    return configured
 
 
 def create_demo_codegen_proposal(store: Store) -> str:

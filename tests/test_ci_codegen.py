@@ -32,17 +32,21 @@ def _init_repo(path):
     return path
 
 
-def _settings(tmp_path, workspace):
+def _settings(tmp_path, workspace, **overrides):
+    values = {
+        "DATA_DIR": tmp_path / "state",
+        "IMPROVEMENT_DRY_RUN": False,
+        "ALLOW_AUTO_APPLY_IMPROVEMENTS": False,
+        "REQUIRE_HUMAN_APPROVAL_FOR_CODE_CHANGES": True,
+        "ALLOW_LIVE_TRADING": False,
+        "CONTINUOUS_IMPROVEMENT_WORKSPACE_DIR": workspace,
+        "CI_SANDBOX_ENABLED": True,
+        "CI_SANDBOX_FULL_SUITE": False,
+    }
+    values.update(overrides)
     return Settings(
         _env_file=None,
-        DATA_DIR=tmp_path / "state",
-        IMPROVEMENT_DRY_RUN=False,
-        ALLOW_AUTO_APPLY_IMPROVEMENTS=False,
-        REQUIRE_HUMAN_APPROVAL_FOR_CODE_CHANGES=True,
-        ALLOW_LIVE_TRADING=False,
-        CONTINUOUS_IMPROVEMENT_WORKSPACE_DIR=workspace,
-        CI_SANDBOX_ENABLED=True,
-        CI_SANDBOX_FULL_SUITE=False,
+        **values,
     )
 
 
@@ -89,8 +93,10 @@ def _store_ready_proposal(store, *, proposal_id="ci_prop_codegen", target_identi
 class _FakeCodegenClient:
     def __init__(self, payload):
         self.payload = payload
+        self.last_kwargs = {}
 
     def generate_json(self, messages, schema, **kwargs):  # noqa: ANN001
+        self.last_kwargs = kwargs
         return LLMJsonResult(
             ok=True,
             llm_call_id="ci_llm_codegen_test",
@@ -142,6 +148,41 @@ def test_codegen_preview_produces_diff_artifact_and_no_applied_change(tmp_path, 
     assert artifact["payload"]["tests_ok"] is True
     assert store.continuous_improvement_applied_changes(limit=10) == []
     assert not (repo / "docs" / "generated.md").exists()
+    assert client.last_kwargs["max_tokens"] >= 16000
+
+
+def test_codegen_uses_codegen_role_model_when_general_model_is_glm(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    settings = _settings(
+        tmp_path,
+        repo,
+        IMPROVEMENT_LLM_MODEL="glm-5.2",
+        IMPROVEMENT_LLM_ORCHESTRATOR_MODEL="kimi-k2.6",
+    )
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    proposal_id = _store_ready_proposal(store)
+    monkeypatch.setattr(
+        GitSandbox,
+        "validate",
+        lambda self, **kw: {"ok": True, "steps": [{"step": "unit", "ok": True}]},
+    )
+    client = _FakeCodegenClient(
+        {
+            "summary": "Crea documentacion demo.",
+            "file_edits": [{"path": "docs/generated.md", "old": "", "new": "demo codegen\n"}],
+            "test_commands": ["python -c \"assert True\""],
+        }
+    )
+
+    result = CodegenPatchAgent(client=client).generate_for_proposal(
+        settings=settings,
+        store=store,
+        proposal_id=proposal_id,
+    )
+
+    assert result["ok"] is True
+    assert client.last_kwargs["model"] == "kimi-k2.6"
 
 
 def test_codegen_rejects_target_outside_low_risk_allowlist(tmp_path):
