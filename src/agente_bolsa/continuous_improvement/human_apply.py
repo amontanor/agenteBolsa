@@ -80,10 +80,11 @@ def approve_and_apply_code_diff(
     if backup:
         backup_report = backup_database(settings, settings.data_dir / "reports", new_id("db_backup_human_apply"))
 
-    apply_result = _git(repo, "apply", "--index", "--whitespace=nowarn", "-", input_text=diff_text)
-    if apply_result.returncode != 0:
-        error = (apply_result.stderr or apply_result.stdout or "git apply fallo").strip()
+    apply_result = _apply_diff_with_fallback(repo, diff_text)
+    if not apply_result["ok"]:
+        error = apply_result["error"]
         return _reject_tests(store, proposal, artifact, actor, error, validation={"ok": False, "steps": []})
+    applied_diff_text = str(apply_result["diff_text"])
 
     validation = run_validation_steps(
         settings,
@@ -91,7 +92,7 @@ def approve_and_apply_code_diff(
         steps=validation_steps if validation_steps is not None else _full_validation_steps(),
     )
     if not validation.get("ok"):
-        _reverse_patch(repo, diff_text)
+        _reverse_patch(repo, applied_diff_text)
         _restore_targets(repo, targets)
         return _reject_tests(store, proposal, artifact, actor, "Suite fallida tras apply humano.", validation=validation)
 
@@ -122,6 +123,7 @@ def approve_and_apply_code_diff(
             "commit": commit_hash,
             "backup": backup_report,
             "validation": validation,
+            "apply_strategy": apply_result["strategy"],
             "target_paths": targets,
         },
     )
@@ -142,6 +144,7 @@ def approve_and_apply_code_diff(
                 "actor": actor,
                 "manual_approval": True,
                 "approval_artifact_id": approval_artifact["artifact_id"],
+                "apply_strategy": apply_result["strategy"],
                 "backup": backup_report,
             },
             "validation_ids": [payload.get("validation_id")] if payload.get("validation_id") else [],
@@ -323,9 +326,53 @@ def _git(repo: Path, *args: str, input_text: str | None = None) -> subprocess.Co
         cwd=str(repo),
         input=input_text,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
         timeout=300,
     )
+
+
+def _apply_diff_with_fallback(repo: Path, diff_text: str) -> dict[str, Any]:
+    attempts = [
+        ("3way", diff_text, ("apply", "--index", "--3way", "--whitespace=nowarn", "-")),
+        (
+            "ignore_whitespace",
+            diff_text,
+            ("apply", "--index", "--ignore-whitespace", "--whitespace=nowarn", "-"),
+        ),
+    ]
+    repaired = _repair_cp1252_mojibake(diff_text)
+    if repaired != diff_text:
+        attempts.append(
+            (
+                "repair_cp1252_mojibake",
+                repaired,
+                ("apply", "--index", "--3way", "--whitespace=nowarn", "-"),
+            )
+        )
+        attempts.append(
+            (
+                "repair_cp1252_mojibake_ignore_whitespace",
+                repaired,
+                ("apply", "--index", "--ignore-whitespace", "--whitespace=nowarn", "-"),
+            )
+        )
+    errors: list[str] = []
+    for strategy, candidate, command in attempts:
+        result = _git(repo, *command, input_text=candidate)
+        if result.returncode == 0:
+            return {"ok": True, "strategy": strategy, "diff_text": candidate}
+        errors.append(f"{strategy}: {(result.stderr or result.stdout or 'git apply fallo').strip()}")
+    return {"ok": False, "strategy": None, "diff_text": diff_text, "error": " | ".join(errors)}
+
+
+def _repair_cp1252_mojibake(text: str) -> str:
+    try:
+        repaired = text.encode("cp1252").decode("utf-8")
+    except UnicodeError:
+        return text
+    return repaired if repaired != text else text
 
 
 def _git_or_raise(repo: Path, *args: str) -> str:

@@ -56,6 +56,8 @@ class GitSandbox:
             ["git", *args],
             cwd=str(cwd or self.repo_root),
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
             timeout=timeout,
         )

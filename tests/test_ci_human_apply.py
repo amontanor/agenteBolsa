@@ -6,6 +6,7 @@ import pytest
 
 from agente_bolsa.config import Settings
 from agente_bolsa.continuous_improvement.human_apply import (
+    _repair_cp1252_mojibake,
     approve_and_apply_code_diff,
     review_code_diff_artifacts,
 )
@@ -127,6 +128,85 @@ def test_human_approve_applies_allowlisted_diff_and_records_applied_change(tmp_p
     assert changes[0]["decision"]["manual_approval"] is True
     assert changes[0]["after"]["commit"] == result["commit"]
     assert _git(repo, "status", "--short").stdout.strip() == ""
+
+
+def test_human_approve_applies_lf_diff_to_crlf_worktree_file(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    target = repo / "docs" / "human_apply.md"
+    target.write_bytes(b"alpha\r\nbeta\r\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "crlf file")
+    settings = _settings(tmp_path, repo)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    diff_text = """diff --git a/docs/human_apply.md b/docs/human_apply.md
+index fbbee86..c2ee3cc 100644
+--- a/docs/human_apply.md
++++ b/docs/human_apply.md
+@@ -1,2 +1,2 @@
+-alpha
++alpha updated
+ beta
+"""
+    proposal_id = _proposal_with_artifact(store, proposal_id="ci_prop_crlf_apply", diff_text=diff_text)
+
+    result = approve_and_apply_code_diff(
+        settings=settings,
+        store=store,
+        proposal_id=proposal_id,
+        actor="pytest",
+        validation_steps=[("unit", ["python", "-c", "from pathlib import Path; assert 'alpha updated' in Path('docs/human_apply.md').read_text()"])],
+        backup=False,
+    )
+
+    assert result["ok"] is True
+    assert "alpha updated" in target.read_text(encoding="utf-8")
+    assert result["artifact"]["payload"]["apply_strategy"] in {"3way", "ignore_whitespace"}
+
+
+def test_human_approve_repairs_cp1252_mojibake_context(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    target = repo / "docs" / "human_apply.md"
+    target.write_text('PIDE APROBACIÓN\nnext\n', encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "utf8 file")
+    settings = _settings(tmp_path, repo)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    mojibake = "PIDE APROBACIÓN".encode().decode("cp1252")
+    diff_text = f"""diff --git a/docs/human_apply.md b/docs/human_apply.md
+index 274dbf4..94a86be 100644
+--- a/docs/human_apply.md
++++ b/docs/human_apply.md
+@@ -1,2 +1,2 @@
+-{mojibake}
++PIDE OK
+ next
+"""
+    proposal_id = _proposal_with_artifact(store, proposal_id="ci_prop_mojibake_apply", diff_text=diff_text)
+
+    result = approve_and_apply_code_diff(
+        settings=settings,
+        store=store,
+        proposal_id=proposal_id,
+        actor="pytest",
+        validation_steps=[("unit", ["python", "-c", "from pathlib import Path; assert Path('docs/human_apply.md').read_text(encoding='utf-8').startswith('PIDE OK')"])],
+        backup=False,
+    )
+
+    assert result["ok"] is True
+    assert target.read_text(encoding="utf-8").startswith("PIDE OK")
+    assert result["artifact"]["payload"]["apply_strategy"] in {
+        "ignore_whitespace",
+        "repair_cp1252_mojibake",
+        "repair_cp1252_mojibake_ignore_whitespace",
+    }
+
+
+def test_repair_cp1252_mojibake_restores_utf8_text():
+    mojibake = "PIDE APROBACIÓN".encode().decode("cp1252")
+
+    assert _repair_cp1252_mojibake(mojibake) == "PIDE APROBACIÓN"
 
 
 @pytest.mark.parametrize(
