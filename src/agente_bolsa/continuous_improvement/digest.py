@@ -30,10 +30,17 @@ EXECUTABLE = "EJECUTABLE"
 PROSE = "PROSA"
 
 
-def build_lab_digest(store: Store, *, days: int = 1, now: datetime | None = None) -> dict[str, Any]:
+def build_lab_digest(
+    store: Store,
+    *,
+    days: int = 1,
+    now: datetime | None = None,
+    data_dir: Path | None = None,
+) -> dict[str, Any]:
     days = max(1, int(days))
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     cutoff = now - timedelta(days=days)
+    data_dir = data_dir or _infer_data_dir(store)
     proposals = store.continuous_improvement_proposals(limit=50000)
     experiments = store.continuous_improvement_experiments(limit=50000)
     applied_changes = store.continuous_improvement_applied_changes(limit=50000)
@@ -86,6 +93,7 @@ def build_lab_digest(store: Store, *, days: int = 1, now: datetime | None = None
             "by_status": applied_counts,
         },
         "experiments": experiment_counts,
+        "overlay_shadow": latest_overlay_shadow_signal(data_dir, now=now),
         "requires_attention": attention,
         "approval_requests": approval_requests,
         "kpi_funnel": build_kpi_funnel(proposals, experiments, applied_changes, decisions, now=now),
@@ -103,7 +111,7 @@ def write_lab_digest_file(
 ) -> dict[str, Any]:
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     run_date = run_date or now.date()
-    digest = build_lab_digest(store, days=days, now=now)
+    digest = build_lab_digest(store, days=days, now=now, data_dir=reports_dir.parent)
     reports_dir.mkdir(parents=True, exist_ok=True)
     path = reports_dir / f"ci_digest_{run_date.isoformat()}.md"
     path.write_text(format_lab_digest_text(digest), encoding="utf-8")
@@ -283,6 +291,41 @@ def ready_for_human_approval_requests(store: Store, *, limit: int = 200) -> list
     return requests
 
 
+def latest_overlay_shadow_signal(data_dir: Path, *, now: datetime | None = None) -> dict[str, Any]:
+    log_path = data_dir / "research" / "overlay_shadow" / "overlay_shadow_log.jsonl"
+    if not log_path.exists():
+        return {"available": False, "reason": f"{log_path} no existe"}
+    latest: dict[str, Any] | None = None
+    for line in log_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            latest = payload
+    if latest is None:
+        return {"available": False, "reason": f"{log_path} no contiene JSON valido"}
+    data_date_text = str(latest.get("data_date") or "")
+    try:
+        data_day = date.fromisoformat(data_date_text)
+    except ValueError:
+        return {"available": False, "reason": f"data_date invalida: {data_date_text}"}
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    market_days_old = _market_days_between(data_day, now.date())
+    return {
+        "available": True,
+        "path": str(log_path),
+        "data_date": data_date_text,
+        "market_days_old": market_days_old,
+        "stale": market_days_old > 3,
+        "price": latest.get("price"),
+        "realized_vol_annualized": latest.get("realized_vol_annualized"),
+        "target_exposures": latest.get("target_exposures") or {},
+    }
+
+
 def format_lab_digest_text(digest: dict[str, Any]) -> str:
     rejected = (digest.get("proposals") or {}).get("rejected_by_reason") or {}
     ready = (digest.get("proposals") or {}).get("ready_to_apply") or []
@@ -292,6 +335,7 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
     kpis = digest.get("kpi_funnel") or {}
     quality = digest.get("proposal_quality") or {}
     approval_requests = digest.get("approval_requests") or []
+    overlay = digest.get("overlay_shadow") or {}
 
     lines = [
         f"Digest diario del lab - ultimos {digest.get('days')} dia(s)",
@@ -323,6 +367,31 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
             f"- corridos: {experiments.get('run', 0)}",
             f"- PASSED: {experiments.get('passed', 0)}",
             f"- FAILED: {experiments.get('failed', 0)}",
+            "",
+            "Overlay shadow",
+        ]
+    )
+    if overlay.get("available"):
+        exposures = overlay.get("target_exposures") or {}
+        lines.extend(
+            [
+                f"- data_date: {overlay.get('data_date', 'n/d')}",
+                f"- vol realizada anualizada: {_none_text(overlay.get('realized_vol_annualized'))}",
+                (
+                    "- exposiciones: "
+                    f"VT10={_none_text(exposures.get('vol_target_10pct'))}, "
+                    f"VT12={_none_text(exposures.get('vol_target_12pct'))}, "
+                    f"SMA200={_none_text(exposures.get('regime_sma200'))}"
+                ),
+            ]
+        )
+        if overlay.get("stale"):
+            lines.append(f"- ADVERTENCIA: senal overlay con {overlay.get('market_days_old')} dias de mercado; revisar supervisor.")
+    else:
+        lines.append(f"- No disponible: {overlay.get('reason', 'sin log overlay_shadow')}")
+
+    lines.extend(
+        [
             "",
             "KPI funnel - ultimas 4 semanas",
             f"- WIP actual: {(kpis.get('wip_current') or {}).get('total', 0)} | "
@@ -436,6 +505,34 @@ def _parse_iso_datetime(value: str) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _infer_data_dir(store: Store) -> Path:
+    database_path = Path(getattr(store, "database_path", "data/state/agente_bolsa.sqlite3"))
+    if database_path.parent.name == "state":
+        return database_path.parent.parent
+    return Path("data")
+
+
+def _market_days_between(start: date, end: date) -> int:
+    if end <= start:
+        return 0
+    try:
+        import pandas_market_calendars as mcal
+
+        schedule = mcal.get_calendar("XNYS").schedule(
+            start_date=(start + timedelta(days=1)).isoformat(),
+            end_date=end.isoformat(),
+        )
+        return int(len(schedule))
+    except Exception:
+        day = start + timedelta(days=1)
+        count = 0
+        while day <= end:
+            if day.weekday() < 5:
+                count += 1
+            day += timedelta(days=1)
+        return count
 
 
 def _format_counts(counts: dict[str, int]) -> str:
