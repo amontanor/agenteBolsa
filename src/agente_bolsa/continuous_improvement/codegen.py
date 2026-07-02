@@ -26,7 +26,10 @@ LOW_RISK_CODEGEN_ALLOWED_PREFIXES: tuple[str, ...] = (
     "tests/",
     "docs/",
 )
-CODEGEN_MIN_MAX_TOKENS = 16000
+CODEGEN_MIN_MAX_TOKENS = 32000
+CODEGEN_SELF_CORRECTION_ROUNDS = 2
+CODEGEN_FULL_CONTEXT_MAX_LINES = 800
+CODEGEN_FULL_CONTENT_MAX_LINES = 300
 
 
 class CodegenPatchResponse(BaseModel):
@@ -91,72 +94,107 @@ class CodegenPatchAgent:
             )
             return {"ok": False, "status": "BLOCKED", "proposal_id": proposal_id, "artifact": artifact}
 
-        llm_result = (self.client or ImprovementLLMClient(settings)).generate_json(
-            self._messages(settings, proposal),
-            CodegenPatchResponse.model_json_schema(),
-            model=_codegen_model(settings),
-            response_model=CodegenPatchResponse,
-            normalize_response=False,
-            temperature=0.0,
-            max_tokens=_codegen_max_tokens(settings),
-            route="agents",
-        )
-        if not llm_result.ok or not isinstance(llm_result.payload, CodegenPatchResponse):
-            error = llm_result.error or "LLM codegen no devolvio un patch valido."
-            artifact = self._save_artifact(
+        messages = self._messages(settings, proposal)
+        last_preview: dict[str, Any] | None = None
+        for correction_round in range(CODEGEN_SELF_CORRECTION_ROUNDS + 1):
+            llm_result = (self.client or ImprovementLLMClient(settings)).generate_json(
+                messages,
+                CodegenPatchResponse.model_json_schema(),
+                model=_codegen_model(settings),
+                response_model=CodegenPatchResponse,
+                normalize_response=False,
+                temperature=0.0,
+                max_tokens=_codegen_max_tokens(settings),
+                route="agents",
+            )
+            if not llm_result.ok or not isinstance(llm_result.payload, CodegenPatchResponse):
+                error = llm_result.error or "LLM codegen no devolvio un patch valido."
+                artifact = self._save_artifact(
+                    store,
+                    proposal_id=proposal_id,
+                    artifact_type=self.FAILED_ARTIFACT,
+                    content_text=error,
+                    payload={
+                        "status": "FAILED",
+                        "error": error,
+                        "llm_call_id": llm_result.llm_call_id,
+                        "provider": llm_result.provider,
+                        "model": llm_result.model,
+                        "correction_round": correction_round,
+                        "applied": False,
+                    },
+                )
+                return {"ok": False, "status": "FAILED", "proposal_id": proposal_id, "artifact": artifact}
+
+            generated = llm_result.payload
+            self._save_attempt_artifact(
                 store,
                 proposal_id=proposal_id,
-                artifact_type=self.FAILED_ARTIFACT,
-                content_text=error,
-                payload={
-                    "status": "FAILED",
-                    "error": error,
+                generated=generated,
+                llm_result=llm_result,
+                correction_round=correction_round,
+            )
+            payload = self._generated_payload(proposal, generated, llm_result)
+            scope_error = self._scope_error(settings.improvement_workspace_dir, payload)
+            if scope_error:
+                artifact = self._save_artifact(
+                    store,
+                    proposal_id=proposal_id,
+                    artifact_type=self.BLOCKED_ARTIFACT,
+                    content_text=scope_error,
+                    payload={
+                        "status": "BLOCKED",
+                        "error": scope_error,
+                        "llm_call_id": llm_result.llm_call_id,
+                        "provider": llm_result.provider,
+                        "model": llm_result.model,
+                        "generated_summary": generated.summary,
+                        "correction_round": correction_round,
+                        "applied": False,
+                    },
+                )
+                return {"ok": False, "status": "BLOCKED", "proposal_id": proposal_id, "artifact": artifact}
+
+            preview_proposal = {**proposal, "payload": payload}
+            validation = self._ready_validation(proposal)
+            artifact = self._preview.generate(
+                settings=settings,
+                store=store,
+                proposal=preview_proposal,
+                validation=validation,
+            )
+            last_preview = artifact
+            status = str((artifact.get("payload") or {}).get("status") or artifact.get("artifact_type") or "")
+            if status == "READY_FOR_HUMAN_REVIEW" or not self._is_correctable_preview_error(artifact):
+                return {
+                    "ok": status == "READY_FOR_HUMAN_REVIEW",
+                    "status": status,
+                    "proposal_id": proposal_id,
                     "llm_call_id": llm_result.llm_call_id,
                     "provider": llm_result.provider,
                     "model": llm_result.model,
-                    "applied": False,
-                },
+                    "artifact": artifact,
+                    "correction_round": correction_round,
+                }
+            if correction_round >= CODEGEN_SELF_CORRECTION_ROUNDS:
+                break
+            messages = self._correction_messages(
+                settings=settings,
+                proposal=proposal,
+                previous_messages=messages,
+                generated=generated,
+                artifact=artifact,
+                correction_round=correction_round + 1,
             )
-            return {"ok": False, "status": "FAILED", "proposal_id": proposal_id, "artifact": artifact}
 
-        generated = llm_result.payload
-        payload = self._generated_payload(proposal, generated, llm_result)
-        scope_error = self._scope_error(settings.improvement_workspace_dir, payload)
-        if scope_error:
-            artifact = self._save_artifact(
-                store,
-                proposal_id=proposal_id,
-                artifact_type=self.BLOCKED_ARTIFACT,
-                content_text=scope_error,
-                payload={
-                    "status": "BLOCKED",
-                    "error": scope_error,
-                    "llm_call_id": llm_result.llm_call_id,
-                    "provider": llm_result.provider,
-                    "model": llm_result.model,
-                    "generated_summary": generated.summary,
-                    "applied": False,
-                },
-            )
-            return {"ok": False, "status": "BLOCKED", "proposal_id": proposal_id, "artifact": artifact}
-
-        preview_proposal = {**proposal, "payload": payload}
-        validation = self._ready_validation(proposal)
-        artifact = self._preview.generate(
-            settings=settings,
-            store=store,
-            proposal=preview_proposal,
-            validation=validation,
-        )
-        status = str((artifact.get("payload") or {}).get("status") or artifact.get("artifact_type") or "")
+        artifact = last_preview or {}
+        status = str((artifact.get("payload") or {}).get("status") or artifact.get("artifact_type") or "FAILED")
         return {
-            "ok": status == "READY_FOR_HUMAN_REVIEW",
+            "ok": False,
             "status": status,
             "proposal_id": proposal_id,
-            "llm_call_id": llm_result.llm_call_id,
-            "provider": llm_result.provider,
-            "model": llm_result.model,
             "artifact": artifact,
+            "correction_round": CODEGEN_SELF_CORRECTION_ROUNDS,
         }
 
     def _proposal_blocked_reason(self, proposal: dict[str, Any]) -> str | None:
@@ -194,6 +232,144 @@ class CodegenPatchAgent:
             }
         )
         return base
+
+    def _save_attempt_artifact(
+        self,
+        store: Store,
+        *,
+        proposal_id: str,
+        generated: CodegenPatchResponse,
+        llm_result: Any,
+        correction_round: int,
+    ) -> dict[str, Any]:
+        raw_payload = generated.model_dump(mode="json")
+        return self._save_artifact(
+            store,
+            proposal_id=proposal_id,
+            artifact_type="code_diff_attempt",
+            content_text=json.dumps(raw_payload, ensure_ascii=False, indent=2)[-200000:],
+            payload={
+                "status": "GENERATED",
+                "correction_round": correction_round,
+                "llm_call_id": llm_result.llm_call_id,
+                "provider": llm_result.provider,
+                "model": llm_result.model,
+                "file_edit_count": len(generated.file_edits),
+                "has_patch": bool(str(generated.patch or "").strip()),
+                "test_commands": generated.test_commands,
+            },
+        )
+
+    def _is_correctable_preview_error(self, artifact: dict[str, Any]) -> bool:
+        payload = artifact.get("payload") or {}
+        validation = payload.get("validation") or {}
+        steps = validation.get("steps") or []
+        if steps and str((steps[0] or {}).get("step") or "") == "apply_patch" and not (steps[0] or {}).get("ok"):
+            return True
+        if payload.get("status") == "REJECTED_BY_TESTS" and validation.get("ok") is False:
+            return True
+        error = self._artifact_error_text(artifact)
+        return any(term in error for term in ("No se encontro bloque old", "git apply fallo", "Falta patch", "file_edits invalido"))
+
+    def _artifact_error_text(self, artifact: dict[str, Any]) -> str:
+        payload = artifact.get("payload") or {}
+        error = str(payload.get("error") or "")
+        validation = payload.get("validation") or {}
+        failed_steps = [
+            f"{step.get('step')}: {step.get('output')}"
+            for step in validation.get("steps", []) or []
+            if isinstance(step, dict) and not step.get("ok")
+        ]
+        if failed_steps:
+            return "\n".join([error, *failed_steps]).strip()
+        return error or str(artifact.get("content_text") or "")
+
+    def _correction_messages(
+        self,
+        *,
+        settings: Settings,
+        proposal: dict[str, Any],
+        previous_messages: list[dict[str, str]],
+        generated: CodegenPatchResponse,
+        artifact: dict[str, Any],
+        correction_round: int,
+    ) -> list[dict[str, str]]:
+        error = self._artifact_error_text(artifact)
+        correction_payload = {
+            "correction_round": correction_round,
+            "application_error": error,
+            "previous_response": generated.model_dump(mode="json"),
+            "real_target_context": self._real_target_context(settings.improvement_workspace_dir, proposal, generated),
+            "instruction": (
+                "Regenera el JSON completo. Copia cada bloque old VERBATIM del contexto real adjunto, "
+                "sin normalizar espacios ni cambiar saltos de linea. Usa bloques old cortos y unicos. "
+                "Si el archivo es nuevo o un archivo existente con menos de 300 lineas, puedes usar {path, content}."
+            ),
+        }
+        return [
+            *previous_messages,
+            {"role": "assistant", "content": json.dumps(generated.model_dump(mode="json"), ensure_ascii=False)},
+            {"role": "user", "content": json.dumps(correction_payload, ensure_ascii=False, indent=2)},
+        ]
+
+    def _real_target_context(
+        self,
+        workspace: Path,
+        proposal: dict[str, Any],
+        generated: CodegenPatchResponse,
+    ) -> list[dict[str, Any]]:
+        candidates = _candidate_paths_from_proposal(proposal)
+        for item in generated.file_edits:
+            if isinstance(item, dict) and item.get("path"):
+                candidates.append(str(item["path"]).strip().replace("\\", "/"))
+        candidates = list(dict.fromkeys(candidates))
+        workspace = workspace.resolve()
+        context: list[dict[str, Any]] = []
+        for rel in candidates[:6]:
+            if not _is_low_risk_codegen_path(rel):
+                continue
+            path = (workspace / rel).resolve()
+            try:
+                path.relative_to(workspace)
+            except ValueError:
+                continue
+            if not path.exists():
+                context.append({"path": rel, "exists": False, "content": "", "lines": 0, "truncated": False})
+                continue
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError as exc:
+                context.append({"path": rel, "exists": True, "error": str(exc), "truncated": True})
+                continue
+            lines = text.splitlines()
+            if len(lines) <= CODEGEN_FULL_CONTEXT_MAX_LINES:
+                context.append(
+                    {
+                        "path": rel,
+                        "exists": True,
+                        "content": text,
+                        "chars": len(text),
+                        "lines": len(lines),
+                        "truncated": False,
+                        "content_mode_allowed": len(lines) < CODEGEN_FULL_CONTENT_MAX_LINES,
+                    }
+                )
+            else:
+                excerpt = "\n".join([*lines[:120], "... <TRUNCATED> ...", *lines[-120:]])
+                context.append(
+                    {
+                        "path": rel,
+                        "exists": True,
+                        "content": excerpt,
+                        "chars": len(text),
+                        "lines": len(lines),
+                        "truncated": True,
+                        "content_mode_allowed": False,
+                    }
+                )
+        return context
 
     def _scope_error(self, workspace: Path, payload: dict[str, Any]) -> str | None:
         file_edits = payload.get("file_edits") or payload.get("files")
@@ -247,10 +423,14 @@ class CodegenPatchAgent:
                 "content": (
                     "Eres un agente de codegen de bajo riesgo. Devuelve JSON valido con las claves "
                     "summary, file_edits, patch, test_commands y risk_notes. No escribas prosa fuera del JSON. "
+                    "Responde de forma directa y compacta; no expliques razonamiento ni repitas contexto. "
                     "Debes producir un cambio pequeno, revisable y reversible. Solo puedes tocar rutas bajo: "
                     f"{', '.join(LOW_RISK_CODEGEN_ALLOWED_PREFIXES)}. "
                     "Nunca modifiques risk.py, kernel.py, broker.py, execution.py, config.py ni .env. "
-                    "Prefiere file_edits con {path, old, new} o {path, content}. Incluye tests concretos."
+                    "Para archivos existentes grandes usa file_edits {path, old, new}; el bloque old debe copiarse "
+                    "VERBATIM del contexto proporcionado, sin reformatear ni normalizar espacios, y debe ser corto y unico. "
+                    "Para archivos nuevos o existentes con menos de 300 lineas puedes usar {path, content} con el contenido completo. "
+                    "Incluye tests concretos."
                 ),
             },
             {
@@ -259,10 +439,10 @@ class CodegenPatchAgent:
             },
         ]
 
-    def _context_files(self, workspace: Path, proposal: dict[str, Any]) -> list[dict[str, str]]:
+    def _context_files(self, workspace: Path, proposal: dict[str, Any]) -> list[dict[str, Any]]:
         candidates = _candidate_paths_from_proposal(proposal)
         workspace = workspace.resolve()
-        context: list[dict[str, str]] = []
+        context: list[dict[str, Any]] = []
         for rel in candidates[:4]:
             if not _is_low_risk_codegen_path(rel):
                 continue
@@ -277,7 +457,30 @@ class CodegenPatchAgent:
                 text = path.read_text(encoding="utf-8")
             except OSError:
                 continue
-            context.append({"path": rel, "content": text[:12000]})
+            lines = text.splitlines()
+            if len(lines) <= CODEGEN_FULL_CONTEXT_MAX_LINES:
+                context.append(
+                    {
+                        "path": rel,
+                        "content": text,
+                        "chars": len(text),
+                        "lines": len(lines),
+                        "truncated": False,
+                        "content_mode_allowed": len(lines) < CODEGEN_FULL_CONTENT_MAX_LINES,
+                    }
+                )
+            else:
+                excerpt = "\n".join([*lines[:120], "... <TRUNCATED> ...", *lines[-120:]])
+                context.append(
+                    {
+                        "path": rel,
+                        "content": excerpt,
+                        "chars": len(text),
+                        "lines": len(lines),
+                        "truncated": True,
+                        "content_mode_allowed": False,
+                    }
+                )
         return context
 
     def _save_artifact(
