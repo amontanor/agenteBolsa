@@ -319,3 +319,43 @@ def test_human_approve_rejects_failing_suite_and_leaves_no_residue(tmp_path):
     assert store.continuous_improvement_applied_changes(limit=10) == []
     assert store.continuous_improvement_proposal(proposal_id)["status"] == "REJECTED_BY_TESTS"
     assert _git(repo, "status", "--short").stdout.strip() == ""
+
+
+def test_human_approve_rejected_artifact_keeps_failed_test_evidence(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    settings = _settings(tmp_path, repo)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    proposal_id = _proposal_with_artifact(store, proposal_id="ci_prop_failing_suite_evidence")
+
+    result = approve_and_apply_code_diff(
+        settings=settings,
+        store=store,
+        proposal_id=proposal_id,
+        actor="pytest",
+        validation_steps=[
+            (
+                "pytest",
+                [
+                    "python",
+                    "-c",
+                    (
+                        "import sys; "
+                        "print('FAILED tests/test_demo.py::test_nope - AssertionError'); "
+                        "sys.exit(1)"
+                    ),
+                ],
+            )
+        ],
+        backup=False,
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "REJECTED_BY_TESTS"
+    assert result["failure_evidence"]["failed_test"] == "tests/test_demo.py::test_nope"
+    assert result["failure_evidence"]["returncode"] == 1
+    assert "FAILED tests/test_demo.py::test_nope" in result["failure_evidence"]["output_tail"]
+    payload = result["artifact"]["payload"]
+    assert payload["failure_evidence"] == result["failure_evidence"]
+    assert "tests/test_demo.py::test_nope" in result["error"]
+    assert _git(repo, "status", "--short").stdout.strip() == ""

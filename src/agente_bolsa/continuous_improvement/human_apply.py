@@ -20,6 +20,7 @@ if TYPE_CHECKING:  # pragma: no cover - solo anotaciones.
 
 
 HUMAN_APPLY_ALLOWED_PREFIXES: tuple[str, ...] = (
+    "src/agente_bolsa/__init__.py",
     "src/agente_bolsa/continuous_improvement/",
     "src/agente_bolsa/tools/operational_",
     "tests/",
@@ -94,7 +95,20 @@ def approve_and_apply_code_diff(
     if not validation.get("ok"):
         _reverse_patch(repo, applied_diff_text)
         _restore_targets(repo, targets)
-        return _reject_tests(store, proposal, artifact, actor, "Suite fallida tras apply humano.", validation=validation)
+        failure_evidence = validation_failure_evidence(validation)
+        failed_test = failure_evidence.get("failed_test")
+        error = "Suite fallida tras apply humano."
+        if failed_test:
+            error = f"{error} Test fallido: {failed_test}"
+        return _reject_tests(
+            store,
+            proposal,
+            artifact,
+            actor,
+            error,
+            validation=validation,
+            failure_evidence=failure_evidence,
+        )
 
     _git_or_raise(repo, "add", "-A", "--", *targets)
     commit_message = f"[ci-human] apply {proposal_id}"
@@ -187,6 +201,33 @@ def _full_validation_steps() -> list[tuple[str, list[str]]]:
     ]
 
 
+def validation_failure_evidence(validation: dict[str, Any]) -> dict[str, Any]:
+    failed_step = next((step for step in validation.get("steps", []) or [] if not step.get("ok")), None)
+    if not failed_step:
+        return {"failed_test": None, "returncode": None, "output_tail": ""}
+    output = str(failed_step.get("output") or "")
+    return {
+        "failed_test": _failed_test_from_output(output),
+        "returncode": failed_step.get("returncode"),
+        "step": failed_step.get("step"),
+        "output_tail": "\n".join(output.splitlines()[-50:]),
+    }
+
+
+def _failed_test_from_output(output: str) -> str | None:
+    for line in str(output or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("FAILED ") and "::" in stripped:
+            return stripped.split()[1]
+    for line in str(output or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("________________") and stripped.endswith("________________"):
+            name = stripped.strip("_ ").strip()
+            if name:
+                return name
+    return None
+
+
 def _live_guard(settings: Settings) -> str | None:
     if bool(getattr(settings, "allow_live_trading", False)):
         return "ALLOW_LIVE_TRADING=true bloquea apply humano."
@@ -268,8 +309,10 @@ def _reject_tests(
     error: str,
     *,
     validation: dict[str, Any],
+    failure_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     proposal_id = proposal["proposal_id"]
+    failure_evidence = failure_evidence or validation_failure_evidence(validation)
     artifact = _save_artifact(
         store,
         proposal_id=proposal_id,
@@ -281,6 +324,7 @@ def _reject_tests(
             "actor": actor,
             "diff_artifact_id": diff_artifact.get("artifact_id"),
             "validation": validation,
+            "failure_evidence": failure_evidence,
             "applied": False,
         },
     )
@@ -296,6 +340,7 @@ def _reject_tests(
         "status": "REJECTED_BY_TESTS",
         "proposal_id": proposal_id,
         "error": error,
+        "failure_evidence": failure_evidence,
         "artifact": artifact,
         "validation": validation,
     }

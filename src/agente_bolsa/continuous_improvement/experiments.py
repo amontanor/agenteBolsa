@@ -1238,8 +1238,6 @@ class CodeDiffPreviewAgent:
 
     def _validation_steps(self, payload: dict[str, Any]) -> list[tuple[str, list[str]]] | None:
         commands = [str(item).strip() for item in payload.get("test_commands", []) or [] if str(item).strip()]
-        if not commands:
-            return None
         steps: list[tuple[str, list[str]]] = []
         for index, command in enumerate(commands, start=1):
             parts = shlex.split(command, posix=True)
@@ -1253,7 +1251,10 @@ class CodeDiffPreviewAgent:
             elif executable in {"ruff", "ruff.exe"}:
                 parts = [sys.executable, "-m", "ruff", *parts[1:]]
             steps.append((f"proposal_test_{index}", parts))
-        return steps or None
+        full_pytest = [sys.executable, "-m", "pytest", "tests/", "-x", "-q"]
+        if not any(parts[1:] == full_pytest[1:] for _, parts in steps):
+            steps.append(("full_pytest", full_pytest))
+        return steps
 
     def _new_code_tests_gate_error(self, *, payload: dict[str, Any], diff: str, target_paths: list[str]) -> str | None:
         src_paths = [path for path in target_paths if path.startswith("src/")]

@@ -2816,11 +2816,13 @@ def command_continuous_improvement_lab(args: argparse.Namespace) -> None:
         if args.json:
             _print_json({"ok": result.get("ok", False), **result})
         else:
+            failure_evidence = result.get("failure_evidence") or {}
+            failed_test = failure_evidence.get("failed_test") or ""
             print(
                 "APPROVE | "
                 f"proposal={args.proposal} | status={result.get('status')} | "
                 f"commit={result.get('commit')} | applied_change={result.get('applied_change_id')} | "
-                f"error={result.get('error') or ''}"
+                f"error={result.get('error') or ''} | failed_test={failed_test}"
             )
         return
     raise ValueError(f"Unknown lab command: {args.lab_command}")

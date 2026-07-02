@@ -313,6 +313,7 @@ def test_code_diff_preview_accepts_src_change_when_touched_test_file_is_executed
     store.ensure_schema()
 
     def _validate(self, **kw):  # noqa: ANN001
+        assert any(step[0] == "full_pytest" and "tests/" in step[1] for step in kw["steps"])
         commands = [" ".join(step[1]).replace("\\", "/") for step in kw["steps"]]
         assert any("tests/test_ci_gate_demo.py" in command for command in commands)
         return {"ok": True, "steps": [{"step": "proposal_test_1", "ok": True, "returncode": 0, "output": "ok"}]}

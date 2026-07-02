@@ -20,6 +20,10 @@ def test_tools_file_blocked_at_level1_allowed_at_level2():
     assert path_violation(rel, 2) is None
 
 
+def test_version_file_allowed_at_level1_for_required_bumps():
+    assert path_violation("src/agente_bolsa/__init__.py", 1) is None
+
+
 def test_kernel_and_broker_blocked_at_all_levels():
     for level in (1, 2, 3):
         assert path_violation("src/agente_bolsa/kernel.py", level) is not None

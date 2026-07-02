@@ -41,6 +41,7 @@ ALWAYS_BLOCKED_EXACT: frozenset[str] = frozenset({".env"})
 
 # Allowlist del nivel 1 (el comportamiento actual).
 _LEVEL1_ALLOWED: tuple[str, ...] = (
+    "src/agente_bolsa/__init__.py",
     "src/agente_bolsa/continuous_improvement/",
     "src/agente_bolsa/tools/operational_",
     "src/agente_bolsa/tools/reporting.py",
