@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 from agente_bolsa.config import Settings
@@ -9,6 +10,7 @@ from agente_bolsa.continuous_improvement.digest import (
     build_lab_digest,
     classify_proposal_quality,
     format_lab_digest_text,
+    latest_core_sleeve_signal,
     write_lab_digest_file,
 )
 from agente_bolsa.storage import Store
@@ -205,3 +207,89 @@ def test_core_sleeve_section_in_digest(tmp_path):
     assert core.get("decision_order_side") == "buy"
     assert core.get("decision_order_notional") == 13914.44
     assert core.get("stale") is False  # data_date 2026-07-01, now 2026-07-02, so not stale
+
+
+def test_latest_core_sleeve_signal_handles_real_no_order_with_null_order(tmp_path):
+    log_dir = tmp_path / "research" / "core_sleeve"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    real_crash_line = '{"created_at": "2026-07-02T13:45:05.206059+00:00", "status": "no_order", "symbol": "SPY", "data_date": "2026-07-01", "price": 745.76001, "realized_vol_annualized": 0.182797, "exposure": 0.656465, "config": {"enabled": true, "dry_run": true, "sleeve_fraction": 0.3, "rebalance_band_pp": 5.0, "target_vol": 0.12}, "decision": {"data_date": "2026-07-01", "equity": 70653.37, "price": 745.76001, "exposure": 0.656465, "sleeve_fraction": 0.3, "target_notional": 13914.44, "current_notional": 0.0, "max_sleeve_notional": 21196.01, "rebalance_band_notional": 1059.8, "delta_notional": 13914.44, "order": null, "reason": "already_rebalanced_today"}}'
+    (log_dir / "core_sleeve_log.jsonl").write_text(real_crash_line + "\n", encoding="utf-8")
+
+    core = latest_core_sleeve_signal(tmp_path, now=datetime(2026, 7, 2, 14, 0, tzinfo=timezone.utc))
+
+    assert core["available"] is True
+    assert core["status"] == "no_order"
+    assert core["decision_reason"] == "already_rebalanced_today"
+    assert core["decision_order_side"] is None
+    assert core["decision_order_notional"] is None
+
+
+def test_latest_core_sleeve_signal_handles_missing_nested_order(tmp_path):
+    log_dir = tmp_path / "research" / "core_sleeve"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    line = '{"created_at": "2026-07-02T13:45:05.206059+00:00", "status": "no_order", "symbol": "SPY", "data_date": "2026-07-01", "price": 745.76001, "realized_vol_annualized": 0.182797, "exposure": 0.656465, "config": {"enabled": true, "dry_run": true}, "decision": {"reason": "within_rebalance_band"}}'
+    (log_dir / "core_sleeve_log.jsonl").write_text(line + "\n", encoding="utf-8")
+
+    core = latest_core_sleeve_signal(tmp_path, now=datetime(2026, 7, 2, 14, 0, tzinfo=timezone.utc))
+
+    assert core["decision_reason"] == "within_rebalance_band"
+    assert core["decision_order_side"] is None
+    assert core["decision_order_notional"] is None
+
+
+def test_latest_core_sleeve_signal_covers_all_producer_status_shapes(tmp_path):
+    cases = [
+        (
+            "disabled",
+            None,
+            None,
+            None,
+        ),
+        (
+            "no_order",
+            {"reason": "within_rebalance_band", "order": None},
+            None,
+            None,
+        ),
+        (
+            "would_submit",
+            {"reason": "buy_to_target", "order": {"symbol": "SPY", "side": "buy", "notional": 13914.44}},
+            "buy",
+            13914.44,
+        ),
+        (
+            "market_closed",
+            {"reason": "sell_to_target", "order": {"symbol": "SPY", "side": "sell", "notional": 500.0}},
+            "sell",
+            500.0,
+        ),
+        (
+            "submitted",
+            {"reason": "buy_to_target", "order": {"symbol": "SPY", "side": "buy", "notional": 750.0}},
+            "buy",
+            750.0,
+        ),
+    ]
+    for status, decision, expected_side, expected_notional in cases:
+        data_dir = tmp_path / status
+        log_dir = data_dir / "research" / "core_sleeve"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "created_at": "2026-07-02T13:45:05.206059+00:00",
+            "status": status,
+            "symbol": "SPY",
+            "data_date": "2026-07-01",
+            "price": 745.76001,
+            "realized_vol_annualized": 0.182797,
+            "exposure": 0.656465,
+            "config": {"enabled": status != "disabled", "dry_run": status != "submitted"},
+            "decision": decision,
+        }
+        (log_dir / "core_sleeve_log.jsonl").write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+        core = latest_core_sleeve_signal(data_dir, now=datetime(2026, 7, 2, 14, 0, tzinfo=timezone.utc))
+
+        assert core["available"] is True
+        assert core["status"] == status
+        assert core["decision_order_side"] == expected_side
+        assert core["decision_order_notional"] == expected_notional

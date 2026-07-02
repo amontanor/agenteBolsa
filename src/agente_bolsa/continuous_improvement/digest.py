@@ -350,7 +350,8 @@ def latest_core_sleeve_signal(data_dir: Path, *, now: datetime | None = None) ->
         return {"available": False, "reason": f"data_date invalida: {data_date_text}"}
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     market_days_old = _market_days_between(data_day, now.date())
-    decision = latest.get("decision")
+    decision = latest.get("decision") if isinstance(latest.get("decision"), dict) else {}
+    order = decision.get("order") if isinstance(decision.get("order"), dict) else {}
     return {
         "available": True,
         "path": str(log_path),
@@ -359,9 +360,9 @@ def latest_core_sleeve_signal(data_dir: Path, *, now: datetime | None = None) ->
         "stale": market_days_old > 3,
         "status": latest.get("status"),
         "exposure": latest.get("exposure"),
-        "decision_reason": (decision.get("reason") if decision else None),
-        "decision_order_side": (decision.get("order", {}).get("side") if decision else None),
-        "decision_order_notional": (decision.get("order", {}).get("notional") if decision else None),
+        "decision_reason": decision.get("reason"),
+        "decision_order_side": order.get("side"),
+        "decision_order_notional": order.get("notional"),
     }
 
 
