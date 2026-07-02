@@ -999,6 +999,16 @@ Regeneracion con esquema real + muestra de datos reales en contexto de codegen: 
 Matiz de proceso: la reactivacion uso `P9ManualCodegenGate` (bootstrap manual);
 cuando el orquestador de Fase 3 exista, este cauce debe ser suyo.
 
+**Actualizacion (2-jul, tarde):** P10 regenero el diff CORRECTO (esquema real,
+tests con lineas reales del log; contenido aprobado por el responsable), pero el
+`approve` real fallo con `patch does not apply` en ambos targets pese a sandbox
+verde → bug del CAMINO DE APPLY en Windows (hipotesis: EOL CRLF/LF + mojibake real
+en `test_ci_phase3_digest.py`; el sandbox normaliza, el arbol real no). Los railes
+respondieron bien: REJECTED_BY_TESTS limpio, sin estado a medias. Fix encargado en
+P11 (`docs/prompts_codex_2026-07-02_g.md`): diagnostico byte a byte, apply robusto
+(--3way / --ignore-whitespace / normalizacion simetrica), test CRLF sintetico,
+regeneracion y reintento. El hito Fase 2 queda a un `approve` de distancia.
+
 ### 16.5 Revision del responsable sobre P7 (2-jul, tarde)
 
 Entrega modelo: diagnostico con evidencia cruda ANTES de arreglar. Estado de la
