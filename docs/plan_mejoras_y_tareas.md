@@ -24,6 +24,14 @@ con tests focales y `gen-diff --demo --json`: `READY_FOR_HUMAN_REVIEW`,
 `applied=false`, sin aprobar el diff. Informe:
 `docs/informe_codex_p20_codegen_oldblock_2026-07-02.md`.
 
+### P21 - Anomalia ORCL del radar Telegram verificada. **HECHO (v0.4.102).**
+Se reviso el post Telegram `5014` del 2026-06-29 y se recalcularon los tecnicos
+de ORCL contra cache local y descarga yfinance aislada. El dato `ext_sma20=-23.35%`
+y `rsi=11.25` se reproduce exactamente; GOOGL y META del mismo post muestran
+extensiones normales. Veredicto: dato real, sin simbolo mal extraido, precio
+cruzado ni split corrupto. No se purga scorecard ni se cambia logica. Informe:
+`docs/informe_codex_p21_orcl_anomalia_2026-07-02.md`.
+
 ### B3 â€” Estrategia `builtin_pullback` en SHADOW. **HECHO (v0.4.50).**
 Nueva estrategia builtin en `src/agente_bolsa/strategies/builtin_pullback.py`,
 registrada por defecto como `SHADOW` en el registry. Reutiliza
