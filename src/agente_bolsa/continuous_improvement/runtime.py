@@ -37,6 +37,7 @@ from .llm_client import ImprovementLLMClient
 from .llm_usage_bridge import record_improvement_llm_usage
 from .memory import SharedMemory
 from .orchestration import LabOrchestrator
+from .research_mode import ci_research_mode_enabled, load_ci_research_mode_config
 from .schemas import CycleStatus, ImprovementProposalPayload, RuntimeStatus, TaskStatus
 
 LOGGER = logging.getLogger(__name__)
@@ -102,6 +103,66 @@ class ContinuousImprovementLabRuntime:
         if previous_close_ok:
             return True, "Ventana de gracia activa: 10 minutos despues del cierre.", payload
         return False, "Laboratorio bloqueado: solo opera con mercado abierto o +/-10 minutos.", payload
+
+    def _research_mode_config(self) -> dict[str, Any]:
+        return load_ci_research_mode_config(self.settings.data_dir / "config" / "ci_research_mode.json")
+
+    def _research_safe_event(self, event: dict[str, Any], config: dict[str, Any]) -> bool:
+        domain = str(event.get("domain") or "").strip()
+        event_type = str(event.get("event_type") or "").strip()
+        allowed_domains = {str(item) for item in config.get("allow_domains") or []}
+        allowed_event_types = {str(item) for item in config.get("allow_event_types") or []}
+        if domain == "trading-improvement" or event_type in {"latest_daily_learning_digest", "latest_post_market_review"}:
+            return False
+        return domain in allowed_domains or event_type in allowed_event_types
+
+    def _research_safe_task(self, task: dict[str, Any], event: dict[str, Any], config: dict[str, Any]) -> bool:
+        if not self._research_safe_event(event, config):
+            return False
+        agent_name = str(task.get("agent_name") or "")
+        forbidden_agents = {
+            "MarketEstimatorAgent",
+            "MarketRegimeAgent",
+            "TechnicalAnalystAgent",
+            "TechnicalEdgeAgent",
+            "StrategyEvaluatorAgent",
+            "ParameterCalibrationAgent",
+            "PreEarningsSpecialistAgent",
+            "RiskCapitalAgent",
+        }
+        if agent_name in forbidden_agents:
+            return False
+        task_domain = str(task.get("domain") or "").lower()
+        payload_text = json.dumps(task.get("payload") or {}, ensure_ascii=True, default=str).lower()
+        forbidden_terms = ("candidate", "candidato", "order", "orden", "sizing", "snapshot", "live", "market_regime")
+        return "trading" not in task_domain and not any(term in payload_text for term in forbidden_terms)
+
+    def _research_safe_proposal(self, proposal: dict[str, Any], config: dict[str, Any]) -> bool:
+        if str(proposal.get("proposal_type") or "").upper() != "CODE_CHANGE":
+            return False
+        target_component = str(proposal.get("target_component") or "")
+        target_identifier = str(proposal.get("target_identifier") or "")
+        payload = proposal.get("payload") or {}
+        target_text = " ".join(
+            [
+                target_component,
+                target_identifier,
+                str(payload.get("target_component") or ""),
+                str(payload.get("target_identifier") or ""),
+                json.dumps(payload.get("file_edits") or payload.get("target_paths") or [], ensure_ascii=True, default=str),
+            ]
+        ).replace("\\", "/")
+        lowered = target_text.lower()
+        if any(term in lowered for term in ("broker", "execution", "order", "sizing", "live", "candidate", "market_snapshot")):
+            return False
+        return any(str(prefix).lower() in lowered for prefix in config.get("proposal_target_allowlist") or [])
+
+    def _filter_research_proposals(self, proposals: list[dict[str, Any]], config: dict[str, Any]) -> list[dict[str, Any]]:
+        limit = max(0, int(config.get("max_new_proposals_per_cycle") or 0))
+        if limit <= 0:
+            return []
+        safe = [item for item in proposals if self._research_safe_proposal(item, config)]
+        return safe[:limit]
 
     def describe_agents(self) -> list[dict[str, Any]]:
         descriptions = {
@@ -868,7 +929,30 @@ class ContinuousImprovementLabRuntime:
             )
             return {"ok": False, "status": "COOLDOWN", **cooldown_payload}
         market_allowed, market_reason, market_payload = self._market_window()
+        research_config: dict[str, Any] = {}
         if not market_allowed:
+            research_config = self._research_mode_config()
+            if ci_research_mode_enabled(research_config):
+                mode = "research"
+            else:
+                self._update_runtime(
+                    status=RuntimeStatus.IDLE,
+                    payload={
+                        "status": "MARKET_BLOCKED",
+                        "reason": market_reason,
+                        "market": market_payload,
+                        "research_mode": {"enabled": False, "config_path": str(self.settings.data_dir / "config" / "ci_research_mode.json")},
+                    },
+                )
+                self._record_agent_event(
+                    agent="continuous_improvement_lab",
+                    event_type="lab_market_window_blocked",
+                    cycle_id=None,
+                    payload={"reason": market_reason, "market": market_payload, "mode": mode},
+                )
+                return {"ok": False, "status": "MARKET_BLOCKED", "reason": market_reason, "market": market_payload}
+        research_mode = mode == "research"
+        if not market_allowed and not research_mode:
             self._update_runtime(
                 status=RuntimeStatus.IDLE,
                 payload={
@@ -886,7 +970,7 @@ class ContinuousImprovementLabRuntime:
             return {"ok": False, "status": "MARKET_BLOCKED", "reason": market_reason, "market": market_payload}
 
         cycle_id = self._start_cycle(mode=mode)
-        self._update_runtime(status=RuntimeStatus.RUNNING, payload={"cycle_id": cycle_id, "mode": mode})
+        self._update_runtime(status=RuntimeStatus.RUNNING, payload={"cycle_id": cycle_id, "mode": mode, "research_mode": research_mode})
         self._record_agent_event(
             agent="continuous_improvement_lab",
             event_type="lab_cycle_started",
@@ -898,6 +982,13 @@ class ContinuousImprovementLabRuntime:
         try:
             self.store.update_continuous_improvement_cycle(cycle_id, status=CycleStatus.COLLECTING_DATA.value)
             context = self.collector.collect(self.settings, self.store, cycle_id=cycle_id)
+            if research_mode:
+                context["research_mode"] = {
+                    "enabled": True,
+                    "reason": market_reason,
+                    "market": market_payload,
+                    "excluded": ["live_candidates", "orders", "sizing", "realtime_market_snapshots"],
+                }
             evaluation = self.evaluator.evaluate(context)
             context["evaluation"] = evaluation
             try:
@@ -917,7 +1008,7 @@ class ContinuousImprovementLabRuntime:
                 self.enqueue_event(
                     event_type=trigger_event_type,
                     source=mode,
-                    domain="software-improvement",
+                    domain="research" if research_mode else "software-improvement",
                     payload=trigger_payload or {"cycle_id": cycle_id, "mode": mode},
                     force_unique=True,
                 )
@@ -926,6 +1017,15 @@ class ContinuousImprovementLabRuntime:
             open_events = self.store.continuous_improvement_events(statuses=["DISCOVERED", "PLANNED"], limit=50)
             event_batch: list[dict[str, Any]] = []
             for event in open_events:
+                if research_mode and not self._research_safe_event(event, research_config):
+                    self.store.update_continuous_improvement_event(event["event_id"], status="CANCELLED")
+                    self._record_agent_event(
+                        agent="continuous_improvement_lab",
+                        event_type="lab_research_event_blocked",
+                        cycle_id=cycle_id,
+                        payload={"event_id": event["event_id"], "event_type": event.get("event_type"), "domain": event.get("domain")},
+                    )
+                    continue
                 event_batch.append(event)
                 self.orchestrator.create_tasks_for_event(cycle_id=cycle_id, event=event, context=context)
                 self._record_agent_event(
@@ -949,6 +1049,20 @@ class ContinuousImprovementLabRuntime:
                     if not event:
                         continue
                     initiative_id = self._initiative_id_for_task(task)
+                    if research_mode and not self._research_safe_task(task, event, research_config):
+                        self.store.update_continuous_improvement_task(
+                            task["task_id"],
+                            status=TaskStatus.CANCELLED.value,
+                            finished_at=datetime.now(timezone.utc).isoformat(),
+                            result={"status": "BLOCKED", "reason": "research_mode_excludes_trading_paths"},
+                        )
+                        self._record_agent_event(
+                            agent=task["agent_name"],
+                            event_type="lab_research_task_blocked",
+                            cycle_id=cycle_id,
+                            payload={"task_id": task["task_id"], "event_id": event["event_id"], "agent_name": task["agent_name"]},
+                        )
+                        continue
                     skip_reason = self._should_skip_task(task=task, event=event, context=context)
                     if skip_reason:
                         self.store.update_continuous_improvement_task(
@@ -1157,13 +1271,15 @@ class ContinuousImprovementLabRuntime:
                 all_payloads.extend(response.get("proposals") or [])
             if llm_result.payload:
                 all_payloads.extend([payload.model_dump() for payload in llm_result.payload.proposals])
+            if research_mode:
+                all_payloads = self._filter_research_proposals(all_payloads, research_config)
 
             proposals = self._persist_proposals(
                 cycle_id=cycle_id,
                 proposal_payloads=all_payloads,
                 experiment_guidance=self._experiment_guidance_by_initiative(specialist_results),
             )
-            experiment_backlog = self._backlog_proposals_for_experiment(proposals)
+            experiment_backlog = [] if research_mode else self._backlog_proposals_for_experiment(proposals)
             validations = self._persist_validations(cycle_id=cycle_id, proposals=proposals + experiment_backlog, context=context)
 
             hypotheses = self.store.continuous_improvement_hypotheses(limit=200)
@@ -1209,6 +1325,9 @@ class ContinuousImprovementLabRuntime:
                 payload={
                     "cycle_id": cycle_id,
                     "status": status,
+                    "research_mode": research_mode,
+                    "market": market_payload,
+                    "market_reason": market_reason,
                     "events_pending": len(self.store.continuous_improvement_events(statuses=["DISCOVERED", "PLANNED"], limit=100)),
                     "tasks_pending": len(
                         self.store.continuous_improvement_tasks(

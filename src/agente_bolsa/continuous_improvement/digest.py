@@ -99,6 +99,7 @@ def build_lab_digest(
         "overlay_shadow": latest_overlay_shadow_signal(data_dir, now=now),
         "core_sleeve": latest_core_sleeve_signal(data_dir, now=now),
         "codegen_nightly": latest_codegen_nightly_run(data_dir),
+        "research_mode": build_research_mode_usage(store, now=now),
         "research_agenda": build_research_agenda_snapshot(data_dir, experiments, now=now),
         "requires_attention": attention,
         "approval_requests": approval_requests,
@@ -258,6 +259,84 @@ def build_proposal_quality_report(
     }
 
 
+def build_research_mode_usage(store: Store, *, now: datetime | None = None) -> dict[str, Any]:
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    cutoff = now - timedelta(days=1)
+    cycles = [
+        item
+        for item in store.continuous_improvement_cycles(limit=5000)
+        if str(item.get("mode") or "") == "research" and _is_recent(item.get("started_at"), cutoff)
+    ]
+    cycle_ids = {str(item.get("cycle_id") or "") for item in cycles}
+    if not cycle_ids:
+        return {
+            "window_hours": 24,
+            "cycles": 0,
+            "cycle_ids": [],
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cost_usd": 0.0,
+        }
+    placeholders = ",".join("?" for _ in cycle_ids)
+    with store.connect() as conn:
+        response_rows = conn.execute(
+            f"""
+            SELECT llm_call_id
+            FROM continuous_improvement_llm_responses
+            WHERE cycle_id IN ({placeholders})
+            """,
+            tuple(cycle_ids),
+        ).fetchall()
+    llm_call_ids = {str(row["llm_call_id"] or "") for row in response_rows if row["llm_call_id"]}
+    if not llm_call_ids:
+        return {
+            "window_hours": 24,
+            "cycles": len(cycles),
+            "cycle_ids": list(cycle_ids)[:20],
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cost_usd": 0.0,
+        }
+    prompt_tokens = 0
+    completion_tokens = 0
+    cost = 0.0
+    with store.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT source, role, prompt_tokens, completion_tokens, total_tokens, payload_json, created_at
+            FROM llm_usage
+            WHERE created_at >= ?
+            ORDER BY created_at DESC
+            """,
+            (cutoff.isoformat(),),
+        ).fetchall()
+    for row in rows:
+        source = str(row["source"] or "")
+        if cycle_ids and not any(cycle_id in source for cycle_id in cycle_ids):
+            if source not in {"continuous_improvement_lab", "continuous_improvement"}:
+                continue
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        if llm_call_ids and str(payload.get("llm_call_id") or "") not in llm_call_ids:
+            continue
+        prompt_tokens += int(row["prompt_tokens"] or 0)
+        completion_tokens += int(row["completion_tokens"] or 0)
+        cost += float(payload.get("cost_usd") or payload.get("estimated_cost_usd") or 0.0)
+    return {
+        "window_hours": 24,
+        "cycles": len(cycles),
+        "cycle_ids": list(cycle_ids)[:20],
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
+        "cost_usd": round(cost, 6),
+    }
+
+
 def ready_for_human_approval_requests(store: Store, *, limit: int = 200) -> list[dict[str, Any]]:
     query = """
         SELECT artifact_id, proposal_id, artifact_type, content_text, payload_json,
@@ -387,6 +466,7 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
     approval_requests = digest.get("approval_requests") or []
     overlay = digest.get("overlay_shadow") or {}
     codegen_nightly = digest.get("codegen_nightly") or {}
+    research_mode = digest.get("research_mode") or {}
     research_agenda = digest.get("research_agenda") or {}
 
     lines = [
@@ -419,6 +499,14 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
             f"- corridos: {experiments.get('run', 0)}",
             f"- PASSED: {experiments.get('passed', 0)}",
             f"- FAILED: {experiments.get('failed', 0)}",
+            "",
+            "Research-mode cerrado",
+            f"- ciclos_24h: {research_mode.get('cycles', 0)}",
+            (
+                "- gasto_llm_24h: "
+                f"tokens={research_mode.get('total_tokens', 0)} | "
+                f"coste_usd={research_mode.get('cost_usd', 0)}"
+            ),
             "",
             "KPIs de investigacion",
             f"- estudios_ejecutados/semana: {(research_agenda.get('kpis') or {}).get('estudios_ejecutados_semana', 0)}",

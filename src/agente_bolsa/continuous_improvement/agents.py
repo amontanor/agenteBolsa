@@ -19,6 +19,7 @@ from .aggressiveness_gate import (
 )
 from .context_compaction import compact_ci_context_for_llm
 from .llm_client import ImprovementLLMClient
+from .research_mode import RESEARCH_MODE_GOVERNED_KEYS
 from .schemas import (
     AgentName,
     ImprovementProposalPayload,
@@ -78,6 +79,8 @@ SELF_GOVERNANCE_FORBIDDEN_IDENTIFIERS = {
     "ci_max_open_initiatives",
     "ci_monitoring_close_days",
     "ci_recurring_cooldown_hours",
+    "ci_research_mode",
+    "ci_research_mode_enabled",
     "ci_sandbox_enabled",
     "ci_sandbox_full_suite",
     "ci_sandbox_validate_timeout_seconds",
@@ -103,6 +106,7 @@ SELF_GOVERNANCE_FORBIDDEN_IDENTIFIERS = {
     "micro_experiment_size_multiplier",
     "programmer_max_repair_attempts",
     "require_human_approval_for_code_changes",
+    *RESEARCH_MODE_GOVERNED_KEYS,
 }
 
 CONSTITUTIONAL_SECURITY_GOVERNANCE_SETTINGS = (

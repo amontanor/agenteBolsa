@@ -1,0 +1,25 @@
+{
+  "enabled": false,
+  "human_gated": true,
+  "max_new_proposals_per_cycle": 3,
+  "allow_event_types": [
+    "manual_trigger",
+    "repeated_errors_detected",
+    "scheduler_state_changed",
+    "latest_market_data_quality"
+  ],
+  "allow_domains": [
+    "software-improvement",
+    "research",
+    "observability"
+  ],
+  "proposal_target_allowlist": [
+    "docs/",
+    "scripts/",
+    "tests/",
+    "src/agente_bolsa/continuous_improvement/",
+    "src/agente_bolsa/tools/ops_reports.py",
+    "src/agente_bolsa/tools/operational_health.py"
+  ],
+  "notes": "OFF por defecto. Solo Antonio debe activar este modo para ciclos sin mercado."
+}
