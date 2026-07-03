@@ -2846,6 +2846,32 @@ def command_continuous_improvement_lab(args: argparse.Namespace) -> None:
                 f"successes={result.get('successes', 0)} | failures={result.get('failures', 0)}"
             )
         return
+    if args.lab_command == "findings-to-proposals":
+        from .continuous_improvement.findings_to_proposals import (
+            audit_observation_execution_family,
+            persist_findings_to_proposals,
+            settle_observation_execution_family,
+        )
+
+        result = persist_findings_to_proposals(
+            settings=settings,
+            store=store,
+            limit=args.limit,
+            dry_run=not args.apply,
+        )
+        if args.settle_observations:
+            result["observation_family"] = settle_observation_execution_family(store=store, dry_run=not args.apply)
+        else:
+            result["observation_family"] = audit_observation_execution_family(store)
+        if args.json:
+            _print_json(result)
+        else:
+            print(
+                "FINDINGS-TO-PROPOSALS | "
+                f"dry_run={result.get('dry_run')} | created={len(result.get('created') or [])} | "
+                f"duplicates={len(result.get('duplicates') or [])}"
+            )
+        return
     if args.lab_command == "review":
         from .continuous_improvement.human_apply import review_code_diff_artifacts
 
@@ -3632,6 +3658,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ci_lab_codegen_nightly.add_argument("--json", action="store_true", help="Devuelve el resultado completo en JSON.")
     ci_lab_codegen_nightly.set_defaults(func=command_continuous_improvement_lab)
+
+    ci_lab_findings = ci_lab_subparsers.add_parser(
+        "findings-to-proposals",
+        help="Convierte hallazgos medidos en propuestas CODE_CHANGE revisables.",
+    )
+    ci_lab_findings.add_argument("--limit", type=int, default=3, help="Maximo 3 propuestas nuevas por ejecucion.")
+    ci_lab_findings.add_argument("--apply", action="store_true", help="Persiste propuestas; sin esto solo previsualiza.")
+    ci_lab_findings.add_argument(
+        "--settle-observations",
+        action="store_true",
+        help="Rechaza la familia observation_execution_* si --apply esta activo; si no, solo audita.",
+    )
+    ci_lab_findings.add_argument("--json", action="store_true", help="Devuelve JSON.")
+    ci_lab_findings.set_defaults(func=command_continuous_improvement_lab)
 
     ci_lab_review = ci_lab_subparsers.add_parser(
         "review",
