@@ -1,0 +1,8 @@
+{
+  "daily_token_budget": 64000,
+  "enabled": true,
+  "estimated_tokens_per_proposal": 32000,
+  "human_gated": true,
+  "max_proposals_per_day": 2,
+  "notes": "Parametros fuera del allowlist de codegen; solo Antonio debe cambiar cupos."
+}

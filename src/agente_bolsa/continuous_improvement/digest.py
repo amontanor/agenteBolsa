@@ -12,6 +12,7 @@ from typing import Any
 
 from agente_bolsa.storage import Store
 
+from .codegen_nightly import latest_codegen_nightly_run
 from .research_agenda import build_research_agenda_snapshot
 
 REJECTION_BUCKETS = {
@@ -97,6 +98,7 @@ def build_lab_digest(
         "experiments": experiment_counts,
         "overlay_shadow": latest_overlay_shadow_signal(data_dir, now=now),
         "core_sleeve": latest_core_sleeve_signal(data_dir, now=now),
+        "codegen_nightly": latest_codegen_nightly_run(data_dir),
         "research_agenda": build_research_agenda_snapshot(data_dir, experiments, now=now),
         "requires_attention": attention,
         "approval_requests": approval_requests,
@@ -280,7 +282,12 @@ def ready_for_human_approval_requests(store: Store, *, limit: int = 200) -> list
         if payload.get("status") != "READY_FOR_HUMAN_REVIEW" or payload.get("tests_ok") is not True:
             continue
         proposal = proposals.get(str(row["proposal_id"])) or {}
-        if str(row["proposal_id"]) in applied_or_rolled_back or str(proposal.get("status") or "").upper() in {"APPLIED", "ROLLED_BACK"}:
+        proposal_status = str(proposal.get("status") or "").upper()
+        if (
+            str(row["proposal_id"]) in applied_or_rolled_back
+            or proposal_status in TERMINAL_PROPOSAL_STATUSES
+            or proposal_status in ROLLBACK_STATUSES
+        ):
             continue
         target_paths = payload.get("target_paths") or _diff_target_paths(str(row["content_text"] or ""))
         requests.append(
@@ -379,6 +386,7 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
     quality = digest.get("proposal_quality") or {}
     approval_requests = digest.get("approval_requests") or []
     overlay = digest.get("overlay_shadow") or {}
+    codegen_nightly = digest.get("codegen_nightly") or {}
     research_agenda = digest.get("research_agenda") or {}
 
     lines = [
@@ -476,6 +484,33 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
             lines.append(f"- ADVERTENCIA: registro core sleeve con {core_sleeve.get('market_days_old')} dias de mercado; revisar supervisor.")
     else:
         lines.append(f"- No disponible: {core_sleeve.get('reason', 'sin log core_sleeve')}")
+
+    lines.extend(["", "Codegen nightly"])
+    if codegen_nightly.get("available"):
+        attempts = codegen_nightly.get("attempts") or []
+        ready_for_review = codegen_nightly.get("ready_for_human_review") or []
+        lines.extend(
+            [
+                f"- run_id: {codegen_nightly.get('run_id', 'n/d')}",
+                f"- status: {codegen_nightly.get('status', 'n/d')}",
+                (
+                    "- intentos: "
+                    f"{len(attempts)} | exitos: {codegen_nightly.get('successes', 0)} | "
+                    f"fallos: {codegen_nightly.get('failures', 0)} | "
+                    f"tokens_est: {codegen_nightly.get('estimated_tokens_used', 0)}"
+                ),
+            ]
+        )
+        for attempt in attempts[:10]:
+            suffix = f" | causa: {attempt.get('error')}" if attempt.get("error") else ""
+            lines.append(f"  - {attempt.get('proposal_id')} | {attempt.get('status')}{suffix}")
+        if ready_for_review:
+            lines.append("- Cola para aprobacion humana: " + ", ".join(str(item) for item in ready_for_review[:10]))
+        skipped = codegen_nightly.get("skipped") or []
+        for item in skipped[:5]:
+            lines.append(f"  - omitida {item.get('proposal_id')} | {item.get('reason')}")
+    else:
+        lines.append(f"- No disponible: {codegen_nightly.get('reason', 'sin ejecucion registrada')}")
 
     lines.extend(
         [

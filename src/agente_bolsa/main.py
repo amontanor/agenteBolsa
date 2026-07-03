@@ -2828,6 +2828,24 @@ def command_continuous_improvement_lab(args: argparse.Namespace) -> None:
                 f"artifact={artifact.get('artifact_id')} | type={artifact.get('artifact_type')}"
             )
         return
+    if args.lab_command == "codegen-nightly":
+        from .continuous_improvement.codegen_nightly import run_codegen_nightly
+
+        result = run_codegen_nightly(
+            settings=settings,
+            store=store,
+            config_path=Path(args.config) if args.config else None,
+            cleanup=not args.no_cleanup,
+        )
+        if args.json:
+            _print_json({"ok": result.get("ok", False), **result})
+        else:
+            print(
+                "CODEGEN-NIGHTLY | "
+                f"status={result.get('status')} | attempts={len(result.get('attempts') or [])} | "
+                f"successes={result.get('successes', 0)} | failures={result.get('failures', 0)}"
+            )
+        return
     if args.lab_command == "review":
         from .continuous_improvement.human_apply import review_code_diff_artifacts
 
@@ -3598,6 +3616,22 @@ def build_parser() -> argparse.ArgumentParser:
     ci_lab_gen_diff.add_argument("--demo", action="store_true", help="Crea una propuesta demo de bajo riesgo y genera su diff.")
     ci_lab_gen_diff.add_argument("--json", action="store_true", help="Devuelve el resultado completo en JSON.")
     ci_lab_gen_diff.set_defaults(func=command_continuous_improvement_lab)
+
+    ci_lab_codegen_nightly = ci_lab_subparsers.add_parser(
+        "codegen-nightly",
+        help="Genera hasta dos diffs revisables al dia para propuestas CODE_CHANGE elegibles.",
+    )
+    ci_lab_codegen_nightly.add_argument(
+        "--config",
+        help="Ruta JSON de cupos nightly. Por defecto data/config/codegen_nightly.json.",
+    )
+    ci_lab_codegen_nightly.add_argument(
+        "--no-cleanup",
+        action="store_true",
+        help="Omite la limpieza de estados historicos de codegen.",
+    )
+    ci_lab_codegen_nightly.add_argument("--json", action="store_true", help="Devuelve el resultado completo en JSON.")
+    ci_lab_codegen_nightly.set_defaults(func=command_continuous_improvement_lab)
 
     ci_lab_review = ci_lab_subparsers.add_parser(
         "review",
