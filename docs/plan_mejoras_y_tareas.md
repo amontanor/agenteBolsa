@@ -946,35 +946,38 @@ y `telegram-radar list`. No cambia trading ni crea ordenes. Ver informe:
 ### B12 - Telegram radar Fase B: veredicto interno y scorecard honesto. **HECHO (v0.4.78).**
 Extension read-only del paquete `research/telegram_radar` con `analysis.py` para
 contrastar menciones in-universe contra regimen SPY>SMA200, extension SMA20, RSI,
-R:R, confianza y entry-quality; y `scorecard.py` para medir retornos forward
-5/10/20d netos de costes y excess vs SPY de todas las menciones. CLI
-`telegram-radar report`. No cambia trading ni crea ordenes. Ver informe:
-`docs/informe_codex_telegram_radar_faseB_2026-07-01.md`.
+R:R, 
+---
 
-### B13 - Telegram radar Fase B.1: extraccion LLM robusta. **HECHO (v0.4.79).**
-Correccion read-only de `research/telegram_radar/extract.py`: diagnostico de
-respuesta real `chat_for_role("deep")`, prompt JSON estricto, extractor de primer
-objeto JSON balanceado, soporte de fences/prosa alrededor y un reintento acotado
-si la respuesta no es parseable. La validacion real sobre 3 posts recientes paso
-de fallback heuristico a `llm_ok`. Ver informe:
-`docs/informe_codex_telegram_radar_faseB1_2026-07-01.md`.
+## 18. Revision del responsable — lote 3 (3-jul-2026, manana)
 
-### B14 - Telegram radar diario aislado. **HECHO (v0.4.80).**
-Extension read-only del CLI `telegram-radar report --out` para escribir markdown
-UTF-8 y scripts externos `scripts/run_telegram_radar_daily.ps1` y
-`scripts/run_telegram_radar_supervisor.ps1`. El supervisor no toca
-`agente_bolsa.main schedule`, corre fuera del runtime de trading y deja informes
-en `data/research/telegram/reports/radar_<fecha>.md`. No se arranco la tarea.
-Ver informe: `docs/informe_codex_telegram_radar_scheduling_2026-07-02.md`.
+- **P22 (muralla lab book) ACEPTADO. Veredicto: SEGURO.** Muralla central en
+  `Store.signal_outcomes` (excluye `source=lab_book` por defecto), unica excepcion
+  explicita para maduracion, filtros SQL directos en ~20 consumidores y
+  test-candado global (`tests/test_lab_book_wall.py`). Protege tambien el
+  veredicto pullback del 6-jul. (v0.4.103, commit 3da63043)
+- **P23 (orquestador-lite nightly) ACEPTADO.** CLI `codegen-nightly` con frenos
+  duros: max 2 gen-diff/dia, presupuesto tokens, doble freno (si auto-apply no es
+  false, se NIEGA a generar), cupos human-gated fuera del allowlist, exclusion de
+  propuestas previamente rechazadas, nunca approve/apply. Limpieza ejecutada:
+  demo P20 REJECTED/demo_cleanup; P15 coherente. Fix extra: el digest ya no pide
+  aprobacion de propuestas en estado terminal. (v0.4.104, commit c7ff4ec3)
+  **Cabo suelto: falta el script supervisor del nightly** (solo CLI) → P24 lunes.
+- **AUTORIZACIONES del responsable (3-jul):** (1) lab book `enabled=true` en modo
+  log_only ($200 fijos, cap 10/dia, solo long, sin ordenes) — empezara a registrar
+  el lunes con mercado abierto; (2) nightly operativo por CLI manual hasta P24.
+- Ambar en vigilancia: `overnight_learning_heartbeat` degradado 2-jul
+  (`overnight_llm_response_invalid`); revisar si repite con el codigo nuevo.
 
-### B15 - Estudio drawdown overlay de exposicion. **HECHO (v0.4.81).**
-Extension read-only de `strategy_edge_backtest.py` con overlays de exposicion
-0..1 sobre SPY y cesta equal-weight: buy&hold, regimen SMA150/200/250,
-vol-target 10/12/15%, drawdown-guard y combo regimen+vol. Incluye metricas de
-riesgo ampliadas, costes por turnover y walk-forward OOS expansivo. Resultado:
-vol-target reduce las caidas mejor que SMA/drawdown-guard en el periodo, pero
-la seleccion OOS no es plenamente estable. Ver informe:
-`docs/informe_codex_drawdown_overlay_2026-07-02.md`.
+### Agenda lunes 6-jul
+1. P3 — veredicto pullback (prompt en `docs/prompts_codex_2026-07-02.md`).
+2. Encargar P24: supervisor del nightly + revision del heartbeat nocturno si
+   repite el warning.
+3. Primera sesion de dry-run de manga + lab book con mercado abierto; paridad
+   con `scripts/core_sleeve_parity_check.py`.
+4. Revision de activacion de la manga: jueves 9-jul (5 sesiones) o miercoles 8
+   si la paridad viene perfecta.
+n_overlay_2026-07-02.md`.
 
 ---
 
