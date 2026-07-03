@@ -977,35 +977,40 @@ R:R,
    con `scripts/core_sleeve_parity_check.py`.
 4. Revision de activacion de la manga: jueves 9-jul (5 sesiones) o miercoles 8
    si la paridad viene perfecta.
-n_overlay_2026-07-02.md`.
 
 ---
 
-## 16. Direccion del responsable — 2-jul-2026 (estado v0.4.81)
+## 19. Revision del responsable — lote 4 (3-jul-2026, manana)
 
-**Decision de rumbo: CONTINUAR el plan vigente con prioridades afinadas.** No se
-crea un porfolio alternativo: el plan actual esta respaldado por evidencia (picking
-sin alpha OOS confirmado; overlay de exposicion como unica palanca honesta; firma
-con railes construidos pero Fase 3 pendiente). Ajustes del responsable:
+- **P24 ACEPTADO** (v0.4.105, c611b385): research-mode del lab (flag OFF) con
+  exclusion dura de caminos de trading + supervisor del nightly entregado.
+- **P25 ACEPTADO** (v0.4.106, f3262631): misterio de las 160 observaciones
+  RESUELTO con evidencia (candidatos de closed_market_study con outcomes
+  inmaduros, no cola ejecutable) → familia `observation_execution_*` rechazada
+  entera con dedupe. Puente findings_to_proposals creado: 3 CODE_CHANGE
+  elegibles sembradas para el nightly.
+- **P26 ACEPTADO** (v0.4.107, 806485e1): auditoria de producto. Numeros clave:
+  OrchestratorAgent 969 propuestas/4sem con 98% rechazo; 88.5% prosa reciente;
+  decision LLM 7.09M tokens/2sem con 0 trades; overnight arreglado con fallback
+  determinista.
 
-**Debilidad detectada en B15 (critica del informe):** el walk-forward OOS solo
-aplica 2023-2026 (tramo favorable) y entrena con un unico bear (2022). Con una sola
-transicion bajista, "seleccion inestable" es indistinguible de "muestra corta". El
-equal-weight ademas tiene sesgo de supervivencia reconocido. Antes de archivar o
-promover vol-target hay que testarlo contra 2008/2011/2015-16/2018/2020 con
-criterios de exito PRE-REGISTRADOS (ver P1).
+**Decisiones del responsable (3-jul):**
+1. AUTORIZO encender `ci_research_mode` (la firma piensa 24/7; fin de semana como
+   ventana de prueba supervisada; kill-switch = flag off + reinicio).
+2. AUTORIZO arrancar el supervisor del nightly (03:00); tiene 3 propuestas
+   elegibles para esta noche.
+3. Recomendacion 1 de P26 (default ALLOW_AUTO_APPLY→false en config.py): APARCADA
+   como ticket de cambio de kernel (requiere kernel-seal + aprobacion explicita de
+   Antonio; no urgente: .env=false + doble freno + tests de invariante).
+4. Recomendaciones 2/5 (capar orquestador, re-instruir cast) y 4 (dieta de tokens
+   de decision, solo medicion) → lote 5 (P27-P29).
 
-**Gap operativo detectado:** el supervisor diario del radar Telegram NO esta
-arrancado (informe B14: "no se arranco la tarea"). Sin el, el reloj del scorecard
-(2-3 semanas) no corre. Accion de Antonio, no de Codex (ver P0).
-
-### Porfolio priorizado (impacto vs riesgo)
-
-| # | Tarea | Quien | Riesgo | Estado |
-|---|-------|-------|--------|--------|
-| P0 | Arrancar supervisor Telegram radar + verificar schedule-status y version cargada | Antonio | Nulo | PENDIENTE |
-| P1 | Robustez historica profunda de vol-target (SPY desde ~2000, walk-forward multi-bear, politica FIJA pre-registrada sin seleccion a posteriori) | Codex | Nulo (read-only) | **HECHO (v0.4.82, commit 616c9f9e). Veredicto: CUMPLE criterios pre-registrados** (11/11 anos DD>15% mejoran max DD y peor mes; Sortino 0.765 vs 0.657). Ver 16.1 |
-| P2 | Fase 3 minima de la firma: digest diario programado + KPI funnel + medicion de calidad de propuestas, sin enforcement | Codex | Bajo (lab, no trading) | **HECHO (v0.4.83, commit 764965ae).** Destapo cola READY_TO_APPLY con propuestas de agresividad sin evidencia. Ver 16.2 |
+### Agenda actualizada
+- Sab/dom: research-mode + nightly corriendo; revisar digest 08:30 y cola de
+  aprobacion si el nightly produce diffs.
+- Lun 6-jul: P3 veredicto pullback; primera sesion lab book + manga dry-run.
+- Jue 9-jul (o mie 8): revision activacion manga con parity check.
+puestas, sin enforcement | Codex | Bajo (lab, no trading) | **HECHO (v0.4.83, commit 764965ae).** Destapo cola READY_TO_APPLY con propuestas de agresividad sin evidencia. Ver 16.2 |
 | P3 | (lun 6-jul) Lectura pullback vs breakout con criterios de promocion pre-registrados | Codex | Nulo (read-only) | PROGRAMADO (prompt entregado) |
 | P4 | Shadow del overlay vol-target 12% + gate de evidencia para agresividad + limpieza digest | Codex | Bajo | **HECHO (v0.4.84, commit 0d69b0f0).** Paridad backtest-vivo testeada; señal 1-jul: vol 18.3% → exposicion VT12 66%. Cola saneada: 3 rechazos por `aggressiveness_requires_edge_evidence`, 2 por self_safety, 1 por self_governance. "Peor mes" aclarado (calendario en ambas tablas). Pendiente menor: listar las 7 propuestas restantes en READY_TO_APPLY (encargado en P6) |
 | P5 | **Manga core SPY vol-target 12% en paper** (flag OFF + dry-run; limites duros; config fuera de config.py) | Codex | Medio (mitigado) | **HECHO (v0.4.85, commit 056e83e9).** Revisado por el responsable: dry-run retorna antes del submit (verificado en codigo), config segura `enabled=false`, demo real would_submit SPY $13.914 = 70.653×0.30×0.6565 (matematica verificada). Decision: pasar a dry-run diario (enabled=true, dry_run=true) para acumular sesiones antes de activar |
