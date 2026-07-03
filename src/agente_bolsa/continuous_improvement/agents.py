@@ -17,6 +17,10 @@ from .aggressiveness_gate import (
     AGGRESSIVENESS_REQUIRES_EDGE_EVIDENCE,
     assess_aggressiveness_evidence,
 )
+from .cast_governance import (
+    assess_cast_governance,
+    load_cast_governance_config,
+)
 from .context_compaction import compact_ci_context_for_llm
 from .llm_client import ImprovementLLMClient
 from .research_mode import RESEARCH_MODE_GOVERNED_KEYS
@@ -81,6 +85,11 @@ SELF_GOVERNANCE_FORBIDDEN_IDENTIFIERS = {
     "ci_recurring_cooldown_hours",
     "ci_research_mode",
     "ci_research_mode_enabled",
+    "cast_governance",
+    "cast_governance_enabled",
+    "weekly_cap_no_evidence",
+    "retired_proposers",
+    "contract_agents",
     "ci_sandbox_enabled",
     "ci_sandbox_full_suite",
     "ci_sandbox_validate_timeout_seconds",
@@ -1755,6 +1764,39 @@ class ValidationAgent:
                     "objective_status": "REJECTED",
                     "objective_evidence": {"self_governance_violation": self_governance_violation},
                     "objective_summary": SELF_GOVERNANCE_REJECTION_REASON,
+                    "target_component": target_component,
+                },
+            }
+        cast_config = load_cast_governance_config(
+            Path(settings.data_dir) / "config" / "cast_governance.json"
+        )
+        cast_violation = assess_cast_governance(
+            proposal,
+            payload,
+            store=store,
+            config=cast_config,
+        )
+        if cast_violation:
+            return {
+                "validation_id": new_id("ci_val"),
+                "proposal_id": proposal["proposal_id"],
+                "cycle_id": proposal["cycle_id"],
+                "validation_type": "deterministic_gate",
+                "status": "REJECTED",
+                "payload": {
+                    "checks": [
+                        {
+                            "name": cast_violation["reason"],
+                            "passed": False,
+                            "detail": cast_violation["detail"],
+                            "evidence": cast_violation.get("evidence") or {},
+                        }
+                    ],
+                    "required_validations": [],
+                    "data_quality": (context.get("evaluation") or {}).get("data_quality"),
+                    "objective_status": "REJECTED",
+                    "objective_evidence": {"cast_governance": cast_violation},
+                    "objective_summary": cast_violation["reason"],
                     "target_component": target_component,
                 },
             }

@@ -165,6 +165,9 @@ def test_lab_digest_counts_synthetic_categories(tmp_path):
         "self_safety": 1,
         "self_governance": 1,
         "recently_rejected": 1,
+        "cast_cap": 0,
+        "contract": 0,
+        "not_proposer": 0,
         "otros": 1,
     }
     assert digest["proposals"]["ready_to_apply_count"] == 1

@@ -57,6 +57,7 @@ from .tools.backtest import build_symbol_backtest
 from .tools.breakout_scanner import build_breakout_scan, merge_breakout_universe
 from .tools.broker import BrokerClientFactory
 from .tools.command_catalog import available_command_catalog, command_cheatsheet
+from .tools.config_audit import build_config_audit, digest_safety_summary, format_config_audit_text
 from .tools.counterfactual_analysis import (
     DEFAULT_RETROSPECTIVE_SESSIONS,
     build_decision_compare_report,
@@ -2705,7 +2706,7 @@ def command_continuous_improvement_lab(args: argparse.Namespace) -> None:
     if args.lab_command == "digest":
         if args.out:
             target = Path(args.out)
-            digest = build_lab_digest(store, days=args.days)
+            digest = build_lab_digest(store, days=args.days, safety=digest_safety_summary(get_settings()))
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(format_lab_digest_text(digest), encoding="utf-8")
             result = {"ok": True, "path": str(target), "digest": digest}
@@ -2714,7 +2715,7 @@ def command_continuous_improvement_lab(args: argparse.Namespace) -> None:
             else:
                 print(f"Digest escrito: {result['path']}")
             return
-        digest = build_lab_digest(store, days=args.days)
+        digest = build_lab_digest(store, days=args.days, safety=digest_safety_summary(get_settings()))
         if args.json:
             _print_json({"ok": True, "digest": digest})
         else:
@@ -2924,6 +2925,14 @@ def command_validate_agent_config(args: argparse.Namespace) -> None:
         _print_json(payload)
         return
     print("Configuracion valida")
+
+
+def command_config_audit(args: argparse.Namespace) -> None:
+    audit = build_config_audit(get_settings())
+    if getattr(args, "json", False):
+        _print_json({"ok": True, "audit": audit})
+        return
+    print(format_config_audit_text(audit))
 
 
 def command_market_state(args: argparse.Namespace) -> None:
@@ -3199,6 +3208,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     validate_agent_config.add_argument("--json", action="store_true", help="Devuelve el resultado en JSON.")
     validate_agent_config.set_defaults(func=command_validate_agent_config)
+
+    config_audit = subparsers.add_parser(
+        "config-audit",
+        help="Audita configuracion efectiva vs defaults y flags de seguridad.",
+    )
+    config_audit.add_argument("--json", action="store_true", help="Devuelve el resultado en JSON.")
+    config_audit.set_defaults(func=command_config_audit)
 
     cycle_funnel = subparsers.add_parser(
         "cycle-funnel",

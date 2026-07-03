@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "human_gated": true,
+  "weekly_cap_no_evidence": {
+    "OrchestratorAgent": 10
+  },
+  "contract_agents": [
+    "SoftwareReliabilityAgent",
+    "DataQualityAgent"
+  ],
+  "retired_proposers": [
+    "StrategyEvaluatorAgent",
+    "ExperimentDesignerAgent"
+  ],
+  "notes": "Gobierno del cast (P27). Solo Antonio debe cambiar topes o listas; la firma tiene prohibido modificar este fichero por autogobierno."
+}

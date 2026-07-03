@@ -19,6 +19,9 @@ REJECTION_BUCKETS = {
     "self_safety_modification_forbidden": "self_safety",
     "self_governance_modification_forbidden": "self_governance",
     "recently_rejected_duplicate": "recently_rejected",
+    "cast_cap_exceeded_no_evidence": "cast_cap",
+    "proposal_contract_violation": "contract",
+    "agent_not_a_proposer": "not_proposer",
 }
 TERMINAL_PROPOSAL_STATUSES = {
     "APPLIED",
@@ -39,6 +42,7 @@ def build_lab_digest(
     days: int = 1,
     now: datetime | None = None,
     data_dir: Path | None = None,
+    safety: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     days = max(1, int(days))
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -61,7 +65,15 @@ def build_lab_digest(
     recent_applied = [item for item in applied_changes if _is_recent(item.get("updated_at"), cutoff)]
     recent_experiments = [item for item in experiments if _is_recent(item.get("updated_at"), cutoff)]
 
-    rejection_counts = {"self_safety": 0, "self_governance": 0, "recently_rejected": 0, "otros": 0}
+    rejection_counts = {
+        "self_safety": 0,
+        "self_governance": 0,
+        "recently_rejected": 0,
+        "cast_cap": 0,
+        "contract": 0,
+        "not_proposer": 0,
+        "otros": 0,
+    }
     for proposal in recent_rejected:
         rejection_counts[_rejection_bucket(store, proposal)] += 1
 
@@ -84,6 +96,7 @@ def build_lab_digest(
     return {
         "days": days,
         "generated_at": now.isoformat(),
+        "safety": safety,
         "window_start": cutoff.isoformat(),
         "proposals": {
             "created": len(recent_proposals_created),
@@ -455,6 +468,15 @@ def latest_core_sleeve_signal(data_dir: Path, *, now: datetime | None = None) ->
     }
 
 
+def _safety_lines(safety: dict[str, Any] | None) -> list[str]:
+    if not isinstance(safety, dict):
+        return []
+    if safety.get("ok"):
+        return ["Safety: OK"]
+    violations = ", ".join(str(item) for item in (safety.get("violations") or [])) or "sin detalle"
+    return [f"Safety: ALERTA -> {violations}"]
+
+
 def format_lab_digest_text(digest: dict[str, Any]) -> str:
     rejected = (digest.get("proposals") or {}).get("rejected_by_reason") or {}
     ready = (digest.get("proposals") or {}).get("ready_to_apply") or []
@@ -472,6 +494,7 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
     lines = [
         f"Digest diario del lab - ultimos {digest.get('days')} dia(s)",
         f"Generado: {digest.get('generated_at', 'n/d')}",
+        *_safety_lines(digest.get("safety")),
         "",
         "Propuestas",
         f"- creadas: {(digest.get('proposals') or {}).get('created', 0)}",
@@ -480,6 +503,9 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
             f"self_safety={rejected.get('self_safety', 0)}, "
             f"self_governance={rejected.get('self_governance', 0)}, "
             f"recently_rejected={rejected.get('recently_rejected', 0)}, "
+            f"cast_cap={rejected.get('cast_cap', 0)}, "
+            f"contract={rejected.get('contract', 0)}, "
+            f"not_proposer={rejected.get('not_proposer', 0)}, "
             f"otros={rejected.get('otros', 0)}"
         ),
         f"- READY_TO_APPLY: {len(ready)}",
