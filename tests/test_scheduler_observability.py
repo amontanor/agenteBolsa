@@ -192,6 +192,45 @@ def test_overnight_learning_heartbeat_records_llm_usage(tmp_path, monkeypatch):
     assert latest_usage["total_tokens"] > 42
 
 
+def test_overnight_learning_heartbeat_uses_deterministic_fallback_on_invalid_llm(tmp_path, monkeypatch):
+    settings = Settings(
+        DATA_DIR=tmp_path,
+        IMPROVEMENT_LLM_ENABLED=True,
+        OVERNIGHT_LEARNING_USE_LLM=True,
+    )
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+
+    class FakeImprovementLLMClient:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def generate_json(self, messages, schema, *, model, max_tokens):
+            return LLMJsonResult(
+                ok=False,
+                llm_call_id="ci_llm_overnight_invalid",
+                payload=None,
+                raw_response="",
+                error="llm_response_without_text_content",
+                provider="fake",
+                model=model,
+                prompt_tokens_estimate=42,
+            )
+
+    monkeypatch.setattr(
+        "agente_bolsa.continuous_improvement.llm_client.ImprovementLLMClient",
+        FakeImprovementLLMClient,
+    )
+
+    report = build_overnight_learning_heartbeat(store, settings, settings.data_dir / "reports", "night_invalid")
+
+    assert report["status"] == "ok"
+    assert report["llm_result"]["ok"] is False
+    assert report["llm_result"]["fallback_used"] is True
+    assert report["llm_result"]["diagnosis"]["summary"].startswith("Heartbeat nocturno generado por fallback")
+    assert "overnight_llm_response_invalid_fallback_used" in report["warnings"]
+
+
 def test_overnight_learning_heartbeat_job_runs_once_per_session(tmp_path, monkeypatch):
     settings = Settings(DATA_DIR=tmp_path, OVERNIGHT_LEARNING_ENABLED=True)
     store = Store(settings.database_path, settings.agent_logs_dir)

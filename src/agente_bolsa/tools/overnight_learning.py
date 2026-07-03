@@ -119,6 +119,32 @@ def _llm_messages(snapshot: dict[str, Any]) -> list[dict[str, str]]:
     ]
 
 
+def _deterministic_reflection(snapshot: dict[str, Any], *, error: str | None = None) -> dict[str, Any]:
+    backlog = snapshot.get("backlog") or {}
+    learning = snapshot.get("learning") or {}
+    reports = snapshot.get("reports") or {}
+    actions: list[str] = []
+    if int(backlog.get("ready_to_apply") or 0) > 0:
+        actions.append("Revisar cola READY_TO_APPLY y priorizar diffs de bajo riesgo.")
+    if int(backlog.get("open_initiatives") or 0) > 20:
+        actions.append("Reducir iniciativas abiertas antes de abrir nuevas lineas de mejora.")
+    daily_learning = reports.get("daily_learning") if isinstance(reports.get("daily_learning"), dict) else {}
+    daily_summary = daily_learning.get("summary") if isinstance(daily_learning.get("summary"), dict) else {}
+    if int(daily_summary.get("executed_observations") or 0) == 0:
+        actions.append("Mantener observaciones como investigacion hasta que existan outcomes maduros.")
+    if int(learning.get("shadow_rules") or 0) > 0:
+        actions.append("Revisar reglas shadow con evidencia madura antes de promocionar.")
+    return {
+        "diagnosis": {
+            "summary": "Heartbeat nocturno generado por fallback determinista; el proveedor LLM no devolvio JSON util.",
+            "confidence": "LOW",
+            "data_quality": "PARTIAL",
+        },
+        "recommended_next_actions": actions[:5] or ["Revisar frescura de reportes antes de la proxima sesion."],
+        "fallback_reason": error,
+    }
+
+
 def build_overnight_learning_heartbeat(
     store: Store,
     settings: Settings,
@@ -156,18 +182,32 @@ def build_overnight_learning_heartbeat(
                 snapshot["llm"]["latest_usage_age_hours"] = _latest_llm_age_hours(store)
                 snapshot["llm"]["stale"] = False
             if not result.ok:
-                warnings.append("overnight_llm_response_invalid")
-            llm_result_payload = {
-                "ok": result.ok,
-                "llm_call_id": result.llm_call_id,
-                "provider": result.provider,
-                "model": result.model,
-                "fallback_used": result.fallback_used,
-                "error": result.error,
-                "diagnosis": result.payload.diagnosis.model_dump() if result.payload else None,
-                "recommended_next_actions": result.payload.recommended_next_actions if result.payload else [],
-                "usage": usage,
-            }
+                warnings.append("overnight_llm_response_invalid_fallback_used")
+                fallback = _deterministic_reflection(snapshot, error=result.error)
+                llm_result_payload = {
+                    "ok": False,
+                    "llm_call_id": result.llm_call_id,
+                    "provider": result.provider,
+                    "model": result.model,
+                    "fallback_used": True,
+                    "error": result.error,
+                    "diagnosis": fallback["diagnosis"],
+                    "recommended_next_actions": fallback["recommended_next_actions"],
+                    "usage": usage,
+                    "fallback_reason": fallback["fallback_reason"],
+                }
+            else:
+                llm_result_payload = {
+                    "ok": True,
+                    "llm_call_id": result.llm_call_id,
+                    "provider": result.provider,
+                    "model": result.model,
+                    "fallback_used": result.fallback_used,
+                    "error": result.error,
+                    "diagnosis": result.payload.diagnosis.model_dump() if result.payload else None,
+                    "recommended_next_actions": result.payload.recommended_next_actions if result.payload else [],
+                    "usage": usage,
+                }
         except Exception as exc:  # noqa: BLE001 - heartbeat must never kill schedule.
             warnings.append(f"overnight_llm_failed:{type(exc).__name__}:{exc}")
     else:
@@ -175,7 +215,8 @@ def build_overnight_learning_heartbeat(
         warnings.append(reason)
 
     health_status = "ok"
-    if warnings:
+    blocking_warnings = [item for item in warnings if item != "overnight_llm_response_invalid_fallback_used"]
+    if blocking_warnings:
         health_status = "degraded"
     if snapshot["llm"]["stale"]:
         health_status = "degraded"
