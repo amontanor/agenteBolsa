@@ -85,6 +85,7 @@ def main() -> int:
         SELECT signal_date, features_json, outcome_json
         FROM signal_outcomes
         WHERE signal_date >= ? AND outcome_json IS NOT NULL
+          AND coalesce(source, '') != 'lab_book'
         """,
         (since,),
     ).fetchall()

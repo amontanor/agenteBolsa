@@ -782,7 +782,7 @@ def update_signal_outcomes(
     limit: int = 1000,
     since_date: str = "2026-04-01",
 ) -> dict[str, Any]:
-    signals = store.signal_outcomes(limit=limit, since_date=since_date)
+    signals = store.signal_outcomes(limit=limit, since_date=since_date, include_lab_book=True)
     symbols = sorted({signal["symbol"] for signal in signals})
     if not signals or not symbols:
         return {"updated": 0, "signals": 0, "symbols": 0, "warnings": []}

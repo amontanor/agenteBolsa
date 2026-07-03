@@ -448,6 +448,7 @@ def load_signal_rows(db_path: str, *, since: str) -> list[SignalRow]:
                    features_json, outcome_json, created_at, updated_at
             FROM signal_outcomes
             WHERE signal_date >= ?
+              AND coalesce(source, '') != 'lab_book'
             ORDER BY updated_at DESC, created_at DESC
             """,
             (since,),

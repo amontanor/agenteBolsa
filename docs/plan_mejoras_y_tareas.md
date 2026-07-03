@@ -14,6 +14,15 @@
 - Ultima actualizacion: 2026-06-16
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
+### P22 - Muralla `lab_book` para consumidores de `signal_outcomes`. **HECHO (v0.4.103).**
+Auditoria completa de lectores de `signal_outcomes` antes de habilitar el lab book.
+`Store.signal_outcomes` excluye `source='lab_book'` por defecto; la maduracion de
+outcomes es la unica excepcion explicita con `include_lab_book=True`. Se filtraron
+matching de ejecucion, edge/setup, C2 shadow, scoreboards, readiness, UI/contextos y
+scripts de estudio, con test candado global en `tests/test_lab_book_wall.py`.
+Veredicto: **SEGURO habilitar lab book log-only**, pero no se habilita en esta
+entrega. Informe: `docs/informe_codex_p22_muralla_lab_book_2026-07-03.md`.
+
 ### P20 - Codegen con modo fichero-completo para targets medianos. **HECHO (v0.4.101).**
 Post-mortem de los fallos `old block` de P15: 0/7 bloques de `digest.py` coincidian
 exactamente o por whitespace; eran lineas parafraseadas o bloques inexistentes.

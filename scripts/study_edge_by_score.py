@@ -99,13 +99,13 @@ def main() -> None:
         if not table_exists(conn, "signal_outcomes"):
             print("No existe la tabla signal_outcomes.")
             return
-        where = ""
+        where = "WHERE coalesce(source, '') != 'lab_book'"
         params: tuple = ()
         if args.train_days and args.train_days > 0:
             from datetime import date, timedelta
 
             start = (date.today() - timedelta(days=args.train_days)).isoformat()
-            where = "WHERE signal_date >= ?"
+            where += " AND signal_date >= ?"
             params = (start,)
         rows = conn.execute(
             f"SELECT signal_date, features_json, outcome_json FROM signal_outcomes {where}", params

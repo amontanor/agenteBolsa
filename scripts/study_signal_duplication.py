@@ -36,7 +36,9 @@ def main() -> None:
         if not table_exists(conn, "signal_outcomes"):
             print("No existe la tabla signal_outcomes.")
             return
-        rows = conn.execute("SELECT signal_date, signal_id FROM signal_outcomes").fetchall()
+        rows = conn.execute(
+            "SELECT signal_date, signal_id FROM signal_outcomes WHERE coalesce(source, '') != 'lab_book'"
+        ).fetchall()
     finally:
         conn.close()
 

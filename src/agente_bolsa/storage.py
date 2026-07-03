@@ -1420,6 +1420,7 @@ class Store:
                 SELECT gate_json
                 FROM signal_outcomes
                 WHERE source_run_id = ? AND symbol = ?
+                  AND coalesce(source, '') != 'lab_book'
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
@@ -1434,6 +1435,7 @@ class Store:
                 UPDATE signal_outcomes
                 SET decision = ?, gate_json = ?, updated_at = ?
                 WHERE source_run_id = ? AND symbol = ?
+                  AND coalesce(source, '') != 'lab_book'
                 """,
                 (decision, _dumps(existing_gate), _utc_iso(), source_run_id, symbol.upper()),
             )
@@ -1451,6 +1453,7 @@ class Store:
                 SELECT gate_json
                 FROM signal_outcomes
                 WHERE source_run_id = ? AND symbol = ?
+                  AND coalesce(source, '') != 'lab_book'
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
@@ -1465,6 +1468,7 @@ class Store:
                 UPDATE signal_outcomes
                 SET gate_json = ?, updated_at = ?
                 WHERE source_run_id = ? AND symbol = ?
+                  AND coalesce(source, '') != 'lab_book'
                 """,
                 (_dumps(existing_gate), _utc_iso(), source_run_id, symbol.upper()),
             )
@@ -1732,6 +1736,7 @@ class Store:
                        created_at, updated_at
                 FROM signal_outcomes
                 WHERE symbol = ?
+                  AND coalesce(source, '') != 'lab_book'
                 ORDER BY signal_date DESC, created_at DESC
                 LIMIT 1
                 """,
@@ -2201,6 +2206,7 @@ class Store:
         *,
         limit: int = 500,
         since_date: str | None = None,
+        include_lab_book: bool = False,
     ) -> list[dict[str, Any]]:
         query = """
             SELECT signal_id, source_run_id, source, symbol, signal_date,
@@ -2210,6 +2216,8 @@ class Store:
             WHERE 1 = 1
         """
         params: list[Any] = []
+        if not include_lab_book:
+            query += " AND coalesce(source, '') != 'lab_book'"
         if since_date:
             query += " AND signal_date >= ?"
             params.append(since_date)

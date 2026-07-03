@@ -67,6 +67,7 @@ def main() -> int:
         SELECT signal_date, features_json, gate_json, outcome_json
         FROM signal_outcomes
         WHERE decision = 'blocked_backtest'
+          AND coalesce(source, '') != 'lab_book'
         """
     ).fetchall()
 

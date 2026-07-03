@@ -140,7 +140,9 @@ def main() -> int:
         broker_status[(str(row["status"]), str(row["side"]))] += 1
     realized = _realized_pnl_from_fills(broker_rows)
 
-    signal_rows = con.execute("SELECT gate_json, outcome_json FROM signal_outcomes").fetchall()
+    signal_rows = con.execute(
+        "SELECT gate_json, outcome_json FROM signal_outcomes WHERE coalesce(source, '') != 'lab_book'"
+    ).fetchall()
     executed_signals = 0
     realized_signals = 0
     for row in signal_rows:

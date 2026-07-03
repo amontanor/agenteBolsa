@@ -82,7 +82,7 @@ def test_lab_book_records_fixed_size_capped_and_tagged_rows(tmp_path):
     }
 
     result = run_lab_book_once(settings, store, config_path=config_path, report_builder=lambda: report)
-    rows = store.signal_outcomes()
+    rows = store.signal_outcomes(include_lab_book=True)
 
     assert result["status"] == "recorded"
     assert result["recorded"] == 2

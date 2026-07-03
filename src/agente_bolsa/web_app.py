@@ -857,6 +857,7 @@ def _latest_llm_context_by_symbol(store: Store, symbols: list[str]) -> dict[str,
                 SELECT symbol, signal_date, decision, gate_json, updated_at
                 FROM signal_outcomes
                 WHERE symbol = ?
+                  AND coalesce(source, '') != 'lab_book'
                 ORDER BY signal_date DESC, updated_at DESC
                 LIMIT 1
                 """,
@@ -3032,6 +3033,8 @@ def _company_study_signal_rows(
         WHERE 1 = 1
     """
     params: list[Any] = []
+    if not sources or "lab_book" not in {str(item).lower() for item in sources}:
+        query += " AND coalesce(source, '') != 'lab_book'"
     if since_date:
         query += " AND signal_date >= ?"
         params.append(since_date)

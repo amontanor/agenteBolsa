@@ -68,6 +68,7 @@ def match_signal_row_for_buy_order(
             WHERE symbol = ?
               AND signal_date <= ?
               AND signal_date >= ?
+              AND coalesce(source, '') != 'lab_book'
             ORDER BY signal_date DESC, created_at DESC, signal_id DESC
             LIMIT ?
             """,
@@ -81,6 +82,7 @@ def match_signal_row_for_buy_order(
             FROM signal_outcomes
             WHERE symbol = ?
               AND signal_date <= ?
+              AND coalesce(source, '') != 'lab_book'
             ORDER BY signal_date DESC, created_at DESC, signal_id DESC
             LIMIT ?
             """,

@@ -86,7 +86,8 @@ def main() -> int:
     rows = []
     for r in con.execute(
         "SELECT signal_date, decision, features_json, outcome_json "
-        "FROM signal_outcomes WHERE outcome_json IS NOT NULL"
+        "FROM signal_outcomes WHERE outcome_json IS NOT NULL "
+        "AND coalesce(source, '') != 'lab_book'"
     ):
         ret5 = _f(_loads(r["outcome_json"]).get("return_5d"))
         if ret5 is None:
