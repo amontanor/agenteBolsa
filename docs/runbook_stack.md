@@ -65,3 +65,25 @@ configurado. Si `127.0.0.1:8501` ya responde, sale sin crear otra instancia.
 4. Si `lock_orphan=true`, ejecutar de nuevo el supervisor o borrar el lock solo
    tras confirmar que el PID no existe o no corresponde a ese servicio.
 5. Repetir `stack_status.ps1` y conservar la salida en el informe operativo.
+
+---
+
+## Lecciones del incidente de duplicados (2-4 jul 2026) — del responsable
+
+1. **El filtro crudo por linea de comando es CIEGO a lanzamientos con ruta
+   relativa.** Los supervisores lanzados con `-File .\scripts\...` no contienen
+   "agenteBolsa" en su CommandLine y son invisibles a
+   `Get-CimInstance ... -match 'agenteBolsa'`. Por eso convivieron duplicados
+   durante dos dias sin que ningun inventario manual los viera. `stack_status`
+   detecta por NOMBRE DE SCRIPT y es la unica vista fiable.
+2. **Reglas de oro desde hoy:**
+   - Arrancar SIEMPRE con `scripts\stack_up.ps1` (idempotente). PROHIBIDO
+     `Start-Process` a mano para servicios del stack.
+   - Revisar SIEMPRE con `scripts\stack_status.ps1` (no con filtros crudos).
+   - Parar supervisores con `scripts\stack_down.ps1`.
+   - Tras cambios de codigo: reiniciar scheduler/web (tareas programadas) y
+     verificar con `stack_status` que queda UNA instancia de cada.
+3. **Historial del incidente:** schedulers huerfanos del 30-jun y 4-jul
+   conviviendo; 3 Streamlit de dias distintos; 5 supervisores duplicados
+   (viejos con ruta relativa + nuevos de stack_up). Limpieza final 4-jul
+   15:32: 7 servicios CORRIENDO, 0 duplicados, locks OK.

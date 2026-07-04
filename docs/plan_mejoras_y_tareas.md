@@ -1235,3 +1235,33 @@ El digest funciona y ya paga: destapo la cola. Hallazgos:
 **Que NO se hace:** no relajar gates; no promover vol-target ni pullback sin sus
 criterios; no ampliar autonomia ni auto-apply; no Fase 4 hasta que la Fase 3
 minima este corriendo y medida.
+
+---
+
+## 20. Revision del responsable — 4-jul-2026 (sabado)
+
+- **P30 ACEPTADO (v0.4.109, commit da001ccd)** y validado en combate el mismo
+  dia: `stack_status` detecto 5 supervisores duplicados que el filtro crudo por
+  CommandLine NO puede ver (lanzamientos con ruta relativa no contienen
+  "agenteBolsa"). Limpieza ejecutada; estado final 7/7 CORRIENDO sin duplicados.
+  Matiz al informe de Codex: SI habia duplicados logicos (su propia stack_up los
+  creo contra los viejos invisibles); la herramienta corregida los destapo.
+  Reglas de oro anadidas a `docs/runbook_stack.md`.
+- **Primer run 100% autonomo del nightly** (ci_codegen_nightly_6f75d401179a):
+  selecciono 2 propuestas de P25, gasto 64k tokens, genero diffs con
+  autocorreccion y los rechazo honestamente. Post-mortem con evidencia:
+  1. `ci_prop_82a01dd92356`: su test generado fallo (proposal_test_1).
+  2. `ci_prop_0327e166f163`, cascada de 3 intentos: test generado mal →
+     autocorrige → **FAILED test_version_policy** (el diff no bumpeaba version)
+     → intenta bumpear `__init__.py` a ciegas → "No se encontro bloque old"
+     (invento el contenido: el fichero no estaba en su contexto).
+  Causas mecanicas → P31 (lunes): (a) el bump de `__version__` lo hace el
+  PIPELINE deterministicamente tras aplicar el patch (el modelo tiene PROHIBIDO
+  tocar `__init__.py`); (b) para propuestas de tests, incluir en contexto el
+  MODULO BAJO TEST (hoy el modelo asertaba comportamientos que no habia visto);
+  (c) relanzar las 2 propuestas fallidas con esos fixes.
+- Digest sabado: Safety OK en produccion, agenda viva (5-10d matada), manga
+  calculando ($14.028 hipoteticos), research-mode aun 0 ciclos (el scheduler
+  con codigo research arranco 15:05 de hoy; primera madrugada util: domingo).
+- Pendiente para el lunes: P3 (veredicto pullback) + P31 + primera sesion de
+  manga dry-run + lab book con mercado abierto + paridad.
