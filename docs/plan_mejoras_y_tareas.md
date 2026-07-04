@@ -14,6 +14,15 @@
 - Ultima actualizacion: 2026-06-16
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
+### P30 - Arranque idempotente y stack-status. **HECHO (v0.4.109).**
+Se añaden locks `data/run/<servicio>.pid` a los cinco supervisores residentes,
+`scripts/stack_status.ps1`, `scripts/stack_up.ps1`, `scripts/stack_down.ps1` y
+runbook operativo. El panel web ahora comprueba `127.0.0.1:8501` antes de lanzar
+Streamlit y no crea una instancia duplicada si ya responde. Se reemplazaron los
+usos deprecados de `use_container_width` por `width="stretch"` en `web_app.py`.
+Verificado con `stack_status` antes/despues, `stack_up` idempotente, smoke web,
+tests/lint/gates. Informe: `docs/informe_codex_p30_stack_2026-07-04.md`.
+
 ### P22 - Muralla `lab_book` para consumidores de `signal_outcomes`. **HECHO (v0.4.103).**
 Auditoria completa de lectores de `signal_outcomes` antes de habilitar el lab book.
 `Store.signal_outcomes` excluye `source='lab_book'` por defecto; la maduracion de

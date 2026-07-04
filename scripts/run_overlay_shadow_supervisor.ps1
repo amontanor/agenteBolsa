@@ -12,6 +12,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "stack_common.ps1")
+
 $Repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $DailyScript = Join-Path $Repo "scripts\run_overlay_shadow_daily.ps1"
 $LogPath = Join-Path $Repo "data\logs\overlay_shadow_supervisor.log"
@@ -50,16 +52,28 @@ if (-not (Test-Path $DailyScript)) {
 
 Write-OverlayShadowSupervisorLog "START overlay shadow supervisor run_at=$RunAt start=$Start"
 
-while ($true) {
-    $nextRun = Get-NextRunAt -TimeText $RunAt
-    Write-OverlayShadowSupervisorLog "NEXT_RUN $($nextRun.ToString('s'))"
-    while ((Get-Date) -lt $nextRun) {
-        $remaining = [int]($nextRun - (Get-Date)).TotalSeconds
-        Start-Sleep -Seconds ([Math]::Min([Math]::Max($remaining, 1), 300))
-    }
+$lockTaken = Acquire-StackSingleInstanceLock `
+    -ServiceName "overlay_shadow_supervisor" `
+    -CommandPattern "run_overlay_shadow_supervisor\.ps1" `
+    -Log { param($Message) Write-OverlayShadowSupervisorLog $Message }
+if (-not $lockTaken) {
+    exit 0
+}
 
-    Write-OverlayShadowSupervisorLog "RUN daily_script"
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $DailyScript -Start $Start
-    $exitCode = $LASTEXITCODE
-    Write-OverlayShadowSupervisorLog "DONE daily_script exit_code=$exitCode"
+try {
+    while ($true) {
+        $nextRun = Get-NextRunAt -TimeText $RunAt
+        Write-OverlayShadowSupervisorLog "NEXT_RUN $($nextRun.ToString('s'))"
+        while ((Get-Date) -lt $nextRun) {
+            $remaining = [int]($nextRun - (Get-Date)).TotalSeconds
+            Start-Sleep -Seconds ([Math]::Min([Math]::Max($remaining, 1), 300))
+        }
+
+        Write-OverlayShadowSupervisorLog "RUN daily_script"
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $DailyScript -Start $Start
+        $exitCode = $LASTEXITCODE
+        Write-OverlayShadowSupervisorLog "DONE daily_script exit_code=$exitCode"
+    }
+} finally {
+    Release-StackSingleInstanceLock -ServiceName "overlay_shadow_supervisor" -Log { param($Message) Write-OverlayShadowSupervisorLog $Message }
 }

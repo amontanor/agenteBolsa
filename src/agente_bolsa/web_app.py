@@ -499,7 +499,7 @@ def _bar_chart(data: list[dict[str, Any]], x: str, y: str, color_field: str | No
         st.info("Todavia no hay datos suficientes.")
         return
     if alt is None:
-        st.dataframe(frame, use_container_width=True)
+        st.dataframe(frame, width="stretch")
         return
     chart = alt.Chart(frame).mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
         x=alt.X(f"{x}:N", sort="-y", title=""),
@@ -508,7 +508,7 @@ def _bar_chart(data: list[dict[str, Any]], x: str, y: str, color_field: str | No
     )
     if color_field and color_field in frame.columns:
         chart = chart.encode(color=alt.Color(f"{color_field}:N", legend=None))
-    st.altair_chart(chart.properties(height=height), use_container_width=True)
+    st.altair_chart(chart.properties(height=height), width="stretch")
 
 
 def _leaderboard_request(method: str, *, gain_pct: float | None = None) -> dict[str, Any]:
@@ -566,7 +566,7 @@ def _render_leaderboard_controls(store: Store, total_pct: float | None) -> None:
                 key="leaderboard_submit_gain",
                 type="primary",
                 disabled=gain_pct is None,
-                use_container_width=True,
+                width="stretch",
             ):
                 try:
                     result = _leaderboard_request("POST", gain_pct=gain_pct)
@@ -619,7 +619,7 @@ def _render_leaderboard_controls(store: Store, total_pct: float | None) -> None:
                 "Borrar todos los datos",
                 key="leaderboard_delete_all",
                 disabled=not delete_confirmed,
-                use_container_width=True,
+                width="stretch",
             ):
                 try:
                     result = _leaderboard_request("DELETE")
@@ -1238,7 +1238,7 @@ def _portfolio_action_table(rows: list[dict[str, Any]], *, key_prefix: str = "po
         symbol = str(item.get("Simbolo") or "-").upper()
         c1, c2, c3, c4, c5, c6 = st.columns([1.0, 1.25, 1.25, 1.25, 1.0, 1.0])
         with c1:
-            if st.button(symbol, key=f"{key_prefix}_{symbol}", use_container_width=True):
+            if st.button(symbol, key=f"{key_prefix}_{symbol}", width="stretch"):
                 clicked_symbol = symbol
         c2.markdown(
             f"<div class='portfolio-native-cell'>{_money(item.get('Valor'))}<span>qty {_num(item.get('Qty')) or 0:g}</span></div>",
@@ -1315,7 +1315,7 @@ def _render_position_price_chart(
         st.markdown("<div class='empty-box'>Sin precios suficientes para graficar esta posicion.</div>", unsafe_allow_html=True)
         return
     if alt is None:
-        st.dataframe(price_df, use_container_width=True, hide_index=True)
+        st.dataframe(price_df, width="stretch", hide_index=True)
         return
 
     chart_df = price_df.copy()
@@ -1373,7 +1373,7 @@ def _render_position_price_chart(
     if entry_date:
         entry_rows = pd.DataFrame([{"fecha": entry_date}])
         layers.append(alt.Chart(entry_rows).mark_rule(color="#111827", strokeDash=[2, 3]).encode(x="fecha:N"))
-    st.altair_chart(alt.layer(*layers).properties(height=360), use_container_width=True)
+    st.altair_chart(alt.layer(*layers).properties(height=360), width="stretch")
 
 
 def _render_position_news(settings: Any, symbol: str) -> None:
@@ -1415,7 +1415,7 @@ def _render_position_news(settings: Any, symbol: str) -> None:
     if not rows:
         st.markdown("<div class='empty-box'>Sin noticias recientes para esta posicion.</div>", unsafe_allow_html=True)
         return
-    kwargs: dict[str, Any] = {"use_container_width": True, "hide_index": True}
+    kwargs: dict[str, Any] = {"width": "stretch", "hide_index": True}
     try:
         kwargs["column_config"] = {"enlace": st.column_config.LinkColumn("enlace", display_text="abrir")}
     except Exception as exc:
@@ -1498,7 +1498,7 @@ def _render_position_detail_content(settings: Any, history: dict[str, Any], rows
         if symbol_trades:
             st.dataframe(
                 pd.DataFrame(symbol_trades).sort_values("time", ascending=False).head(8),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
     with right:
@@ -1724,7 +1724,7 @@ def _portfolio_value_chart(
         )
         st.dataframe(
             chart_df[["fecha", "valor_cartera", "P/L dia", "% dia", "fuente"]],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
         if used_estimate:
@@ -1764,7 +1764,7 @@ def _portfolio_value_chart(
         .mark_circle(size=76, color="#0e7a47", opacity=0.95)
         .encode(x=date_axis, y="valor_cartera:Q")
     )
-    st.altair_chart((line + points).properties(height=292), use_container_width=True)
+    st.altair_chart((line + points).properties(height=292), width="stretch")
     if used_estimate:
         st.caption("Grafico estimado desde operaciones/P/L del agente para cuadrar con los valores de cabecera.")
     return visible_summary
@@ -1791,7 +1791,7 @@ def _positions_table(rows: list[dict[str, Any]]) -> None:
         )
         .map(_pl_color, subset=["P/L $", "P/L %"])
     )
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.dataframe(styled, width="stretch", hide_index=True)
 
 
 def _position_cards(rows: list[dict[str, Any]], *, max_items: int = 8) -> None:
@@ -1908,7 +1908,7 @@ def _render_latest_news_panel(settings: Any, limit: int = 20) -> None:
             for row in rows
         ]
     )
-    kwargs: dict[str, Any] = {"use_container_width": True, "hide_index": True}
+    kwargs: dict[str, Any] = {"width": "stretch", "hide_index": True}
     try:
         kwargs["column_config"] = {
             "enlace": st.column_config.LinkColumn("enlace", display_text="abrir"),
@@ -2641,7 +2641,7 @@ def _render_performance_baseline(store: Any) -> None:
         with m3:
             _compact_metric("Sharpe 60", latest.get("sharpe_60"))
         if alt is None:
-            st.dataframe(frame, use_container_width=True, hide_index=True)
+            st.dataframe(frame, width="stretch", hide_index=True)
             return
         long_frame = frame.melt(
             id_vars=["fecha"],
@@ -2663,7 +2663,7 @@ def _render_performance_baseline(store: Any) -> None:
                 ],
             )
         )
-        st.altair_chart(equity_chart.properties(height=240), use_container_width=True)
+        st.altair_chart(equity_chart.properties(height=240), width="stretch")
         iq_chart = (
             alt.Chart(frame)
             .mark_line(color="#7c3aed", strokeWidth=2.5)
@@ -2673,7 +2673,7 @@ def _render_performance_baseline(store: Any) -> None:
                 tooltip=[alt.Tooltip("fecha:N", title="Fecha"), alt.Tooltip("iq_score:Q", title="iq_score")],
             )
         )
-        st.altair_chart(iq_chart.properties(height=200), use_container_width=True)
+        st.altair_chart(iq_chart.properties(height=200), width="stretch")
 
 
 def _render_autonomy_panel(store: Any, settings: Any) -> None:
@@ -2758,7 +2758,7 @@ def _render_research_inbox_panel(settings: Any, store: Store) -> None:
                     for item in rows
                 ]
             ),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
     else:
@@ -2790,7 +2790,7 @@ def _render_learning_lab_panel(store: Store) -> None:
                     for item in lessons
                 ]
             ),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -2815,7 +2815,7 @@ def _render_code_changes_panel(store: Store) -> None:
                 for item in changes
             ]
         ),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -2848,13 +2848,13 @@ def _render_profitability_scoreboard_panel(settings: Any, store: Store) -> None:
     visible_cols = ["key", "horizon", "matured", "expectancy", "hit_rate", "profit_factor", "alpha"]
     with tab_setup:
         setup_rows = rows[rows["section"] == "setup"][visible_cols].copy()
-        st.dataframe(setup_rows, use_container_width=True, hide_index=True)
+        st.dataframe(setup_rows, width="stretch", hide_index=True)
     with tab_regime:
         regime_rows = rows[rows["section"] == "regime"][visible_cols].copy()
-        st.dataframe(regime_rows, use_container_width=True, hide_index=True)
+        st.dataframe(regime_rows, width="stretch", hide_index=True)
     with tab_tags:
         tag_rows = rows[rows["section"] == "tag"][visible_cols].copy()
-        st.dataframe(tag_rows, use_container_width=True, hide_index=True)
+        st.dataframe(tag_rows, width="stretch", hide_index=True)
 
 
 def _render_strategy_lab_panel(store: Store) -> None:
@@ -2890,7 +2890,7 @@ def _render_strategy_lab_panel(store: Store) -> None:
             for item in (readiness.get("promotion_candidates") or []) + (readiness.get("retire_candidates") or [])
         ]
         if decisions:
-            st.dataframe(pd.DataFrame(decisions), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(decisions), width="stretch", hide_index=True)
         else:
             st.caption("Sin candidatos de promocion bajo filtros estrictos; retiros se listan al reunir evidencia negativa suficiente.")
     except Exception as exc:  # noqa: BLE001
@@ -2909,7 +2909,7 @@ def _render_strategy_lab_panel(store: Store) -> None:
                     for item in windows
                 ]
             ),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -2937,7 +2937,7 @@ def _render_agent_roster_panel(runtime: ContinuousImprovementLabRuntime, store: 
                 for item in rows[:16]
             ]
         ),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -3825,7 +3825,7 @@ def page_portfolio() -> None:
 
     st.subheader("Posiciones abiertas")
     if positions:
-        st.dataframe(pd.DataFrame(positions), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(positions), width="stretch", hide_index=True)
         st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
         _position_detail_panel(settings, history, position_rows)
     else:
@@ -3833,14 +3833,14 @@ def page_portfolio() -> None:
 
     st.subheader("Ordenes abiertas en Alpaca")
     if portfolio.open_orders:
-        st.dataframe(pd.DataFrame([asdict(item) for item in portfolio.open_orders]), use_container_width=True)
+        st.dataframe(pd.DataFrame([asdict(item) for item in portfolio.open_orders]), width="stretch")
     else:
         st.info("No hay ordenes abiertas.")
 
     st.subheader("Ordenes enviadas por el agente")
     orders = _orders_dataframe(history.get("local_broker_orders", []))
     if not orders.empty:
-        st.dataframe(orders.sort_values("fecha", ascending=False), use_container_width=True, hide_index=True)
+        st.dataframe(orders.sort_values("fecha", ascending=False), width="stretch", hide_index=True)
     else:
         st.info("No hay ordenes locales desde abril de 2026.")
 
@@ -3870,14 +3870,14 @@ def page_recent_trades() -> None:
         _order_cards(orders, max_items=20)
     with tab_table:
         if orders:
-            st.dataframe(pd.DataFrame(orders), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(orders), width="stretch", hide_index=True)
         else:
             st.info("No hay ordenes locales desde abril de 2026.")
     with tab_fills:
         history = build_trade_history(settings, limit=limit, start_date=DEFAULT_START_DATE)
         trades = pd.DataFrame(history.get("trades", []))
         if not trades.empty:
-            st.dataframe(trades.sort_values("time", ascending=False), use_container_width=True, hide_index=True)
+            st.dataframe(trades.sort_values("time", ascending=False), width="stretch", hide_index=True)
         else:
             st.info("No hay fills de Alpaca para el filtro actual.")
 
@@ -3928,9 +3928,9 @@ def page_learning() -> None:
         st.dataframe(pd.DataFrame(report.get("verdicts", {}).items(), columns=["veredicto", "count"]), hide_index=True)
 
     st.subheader("Indicadores que mejor funcionan")
-    st.dataframe(pd.DataFrame(report.get("best_indicators", [])), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(report.get("best_indicators", [])), width="stretch", hide_index=True)
     st.subheader("Indicadores que peor funcionan")
-    st.dataframe(pd.DataFrame(report.get("worst_indicators", [])), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(report.get("worst_indicators", [])), width="stretch", hide_index=True)
 
     st.markdown("")
     _section_title("Aprendizaje diario reciente", "Sin cambiar de pantalla: edge por setup, calibracion de confianza y error de estimacion.")
@@ -3961,14 +3961,14 @@ def page_learning() -> None:
         st.subheader("Perfiles con mejor expectativa")
         st.dataframe(
             pd.DataFrame((digest or {}).get("setup_priors_3d", [])[:8]),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
     with lower_mid:
         st.subheader("Memoria por ticker/setup")
         st.dataframe(
             pd.DataFrame((digest or {}).get("symbol_setup_memory_3d", [])[:10]),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
     with lower_right:
@@ -4000,7 +4000,7 @@ def page_adaptive() -> None:
         _metric_card("Ultimo ajuste", (status.get("last_tuning") or {}).get("as_of", "-"))
 
     st.subheader("Parametros")
-    st.dataframe(pd.DataFrame(status.get("parameters", [])), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(status.get("parameters", [])), width="stretch", hide_index=True)
     st.subheader("Overrides activos")
     st.json(status.get("active_overrides", {}))
     with st.expander("Estado completo"):
@@ -4228,7 +4228,7 @@ def _pre_earnings_previous_events_block_old(store: Store) -> None:
         frame.style.format({"% final": lambda value: "sin datos" if pd.isna(value) else f"{value:.1%}"})
         .map(color_result, subset=["evaluacion"])
     )
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.dataframe(styled, width="stretch", hide_index=True)
 
     with st.expander("Ver detalle de predicciones anteriores", expanded=False):
         for detail in details[:50]:
@@ -4251,7 +4251,7 @@ def _pre_earnings_previous_events_block_old(store: Store) -> None:
                 pd.DataFrame(rows_detail).style.format(
                     {"%": lambda value: "sin datos" if pd.isna(value) else f"{value:.1%}"}
                 ),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
 
@@ -4302,7 +4302,7 @@ def _pre_earnings_next_day_block_old(
         color_estimation,
         subset=["% estimacion"],
     )
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.dataframe(styled, width="stretch", hide_index=True)
 
 
 
@@ -4365,7 +4365,7 @@ def _pre_earnings_resolved_history_block(store: Store) -> None:
         .map(color_result, subset=["resultado"])
         .map(color_return, subset=["% subida real"])
     )
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.dataframe(styled, width="stretch", hide_index=True)
 
 
 
@@ -4529,7 +4529,7 @@ def page_cycle_decisions() -> None:
                 "acciones_top": actions or "-",
             }
         )
-    st.dataframe(pd.DataFrame(overview), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(overview), width="stretch", hide_index=True)
 
     labels = [f"{item['cycle_id']} | {_local_datetime(item['ended_at'])}" for item in cycles]
     selected = st.selectbox("Detalle de ciclo", labels)
@@ -4556,18 +4556,18 @@ def page_cycle_decisions() -> None:
 
     st.subheader("Recomendaciones LLM / decisión")
     if cycle["recommendations"]:
-        st.dataframe(_cycle_recommendations_dataframe(cycle["recommendations"]), use_container_width=True, hide_index=True)
+        st.dataframe(_cycle_recommendations_dataframe(cycle["recommendations"]), width="stretch", hide_index=True)
     else:
         st.info("Este ciclo no tiene recomendaciones estructuradas guardadas.")
 
     st.subheader("Planes, riesgo y envio")
     if cycle["plans"]:
-        st.dataframe(_cycle_plans_dataframe(cycle["plans"], cycle["orders"]), use_container_width=True, hide_index=True)
+        st.dataframe(_cycle_plans_dataframe(cycle["plans"], cycle["orders"]), width="stretch", hide_index=True)
     else:
         st.info("No hubo planes de orden aprobados o pendientes en este ciclo.")
 
     with st.expander("Eventos del ciclo"):
-        st.dataframe(_events_dataframe(cycle["events"]), use_container_width=True, hide_index=True)
+        st.dataframe(_events_dataframe(cycle["events"]), width="stretch", hide_index=True)
     with st.expander("Datos brutos"):
         st.json(cycle)
 
@@ -5313,7 +5313,7 @@ def _render_ci_live_task_groups(task_groups: list[dict[str, Any]]) -> None:
                     for item in group["messages"]
                 ]
             )
-            st.dataframe(feed, use_container_width=True, hide_index=True)
+            st.dataframe(feed, width="stretch", hide_index=True)
             latest_payload = group["messages"][-1]["payload"] if group["messages"] else {}
             if latest_payload:
                 st.json(latest_payload)
@@ -5910,7 +5910,7 @@ def page_continuous_improvement() -> None:
                 data=_json(ci_export_payload),
                 file_name=f"mejora_continua_historico_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json",
                 mime="application/json",
-                use_container_width=True,
+                width="stretch",
             )
     st.caption(f"CI LLM: {_ci_llm_route_label(settings, latest_llm_result)}")
     st.caption(f"Uso prompt: {_ci_llm_usage_label(latest_llm_result)}")
@@ -5936,7 +5936,7 @@ def page_continuous_improvement() -> None:
             _section_title("Acciones", "Controles manuales y detalle tecnico cuando haga falta.")
             a1, a2, a3, a4 = st.columns(4)
             with a1:
-                if st.button("Run once", disabled=not settings.continuous_improvement_enabled, use_container_width=True):
+                if st.button("Run once", disabled=not settings.continuous_improvement_enabled, width="stretch"):
                     try:
                         with st.spinner("Ejecutando tick del laboratorio..."):
                             result = runtime.run_once(mode="manual", trigger_event_type="manual_trigger", trigger_payload={"source": "streamlit"})
@@ -5945,7 +5945,7 @@ def page_continuous_improvement() -> None:
                     except Exception as exc:  # noqa: BLE001 - dashboard should keep explaining failures.
                         st.error(f"Run once fallo: {exc}")
             with a2:
-                if st.button("Encolar evento", disabled=not settings.continuous_improvement_enabled, use_container_width=True):
+                if st.button("Encolar evento", disabled=not settings.continuous_improvement_enabled, width="stretch"):
                     runtime.enqueue_event(
                         event_type="manual_ui_event",
                         source="streamlit",
@@ -5956,12 +5956,12 @@ def page_continuous_improvement() -> None:
                     st.success("Evento encolado.")
                     st.rerun()
             with a3:
-                if st.button("Iniciar scheduler", use_container_width=True):
+                if st.button("Iniciar scheduler", width="stretch"):
                     result = _start_schedule()
                     st.success(f"Scheduler iniciado. PID: {result.get('pid')}")
                     st.rerun()
             with a4:
-                if st.button("Reintentar ahora", disabled=not settings.continuous_improvement_enabled, use_container_width=True):
+                if st.button("Reintentar ahora", disabled=not settings.continuous_improvement_enabled, width="stretch"):
                     try:
                         with st.spinner("Reintentando mejora continua..."):
                             result = runtime.run_once(mode="manual", trigger_event_type="manual_retry", trigger_payload={"source": "streamlit_retry"})
@@ -6055,11 +6055,11 @@ def page_continuous_improvement() -> None:
     )
     with tab_runtime:
         st.subheader("Agentes")
-        st.dataframe(pd.DataFrame(runtime.describe_agents()), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(runtime.describe_agents()), width="stretch", hide_index=True)
         st.subheader("Estado runtime")
         st.json(runtime_state or {})
         st.subheader("Artefactos de validacion")
-        st.dataframe(pd.DataFrame(artifact_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(artifact_rows), width="stretch", hide_index=True)
         st.subheader("Validacion objetiva")
         objective_rows = []
         for item in validations[:12]:
@@ -6080,7 +6080,7 @@ def page_continuous_improvement() -> None:
                 }
             )
         if objective_rows:
-            st.dataframe(pd.DataFrame(objective_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(objective_rows), width="stretch", hide_index=True)
         else:
             st.info("No hay validaciones objetivas registradas todavia.")
     with tab_live:
@@ -6119,7 +6119,7 @@ def page_continuous_improvement() -> None:
                         "inicio": _local_datetime(item.get("started_at") or item.get("created_at")),
                     }
                 )
-            st.dataframe(pd.DataFrame(active_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(active_rows), width="stretch", hide_index=True)
         else:
             st.caption("No hay tareas activas en este momento.")
         st.subheader("Iniciativas con estado")
@@ -6137,7 +6137,7 @@ def page_continuous_improvement() -> None:
                         "evidencias": len(item.get("evidence") or []),
                     }
                 )
-            st.dataframe(pd.DataFrame(initiative_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(initiative_rows), width="stretch", hide_index=True)
         else:
             st.caption("Sin iniciativas activas.")
         if initiatives:
@@ -6155,21 +6155,21 @@ def page_continuous_improvement() -> None:
                         "siguiente": _short(item.get("next_action"), 90),
                     }
                 )
-            st.dataframe(pd.DataFrame(initiative_status_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(initiative_status_rows), width="stretch", hide_index=True)
         with st.expander("Linea temporal completa"):
             if not ci_activity.empty:
                 st.dataframe(
                     ci_activity[["hora", "agente", "evento", "mensaje"]],
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
             else:
                 st.info("Sin mensajes todavia.")
     with tab_queue:
         st.subheader("Eventos")
-        st.dataframe(pd.DataFrame(events), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(events), width="stretch", hide_index=True)
         st.subheader("Tareas")
-        st.dataframe(pd.DataFrame(tasks), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(tasks), width="stretch", hide_index=True)
         st.subheader("Iniciativas")
         if initiatives:
             initiative_table = []
@@ -6185,17 +6185,17 @@ def page_continuous_improvement() -> None:
                         "siguiente": _short(item.get("next_action"), 90),
                     }
                 )
-            st.dataframe(pd.DataFrame(initiative_table), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(initiative_table), width="stretch", hide_index=True)
         else:
             st.info("No hay iniciativas guardadas.")
     with tab_hypotheses:
         if hypotheses:
-            st.dataframe(pd.DataFrame(hypotheses), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(hypotheses), width="stretch", hide_index=True)
         else:
             st.info("No hay hipotesis abiertas.")
     with tab_proposals:
         if proposals:
-            st.dataframe(_ci_proposals_dataframe(proposals), use_container_width=True, hide_index=True)
+            st.dataframe(_ci_proposals_dataframe(proposals), width="stretch", hide_index=True)
             if review:
                 selected = st.selectbox(
                     "Revision humana",
@@ -6229,7 +6229,7 @@ def page_continuous_improvement() -> None:
         else:
             st.info("No hay propuestas guardadas.")
         st.subheader("Validaciones")
-        st.dataframe(pd.DataFrame(validations), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(validations), width="stretch", hide_index=True)
     with tab_report:
         if latest and latest.get("report"):
             st.json(latest["report"])
@@ -6258,7 +6258,7 @@ def page_llm() -> None:
         st.info("Todavia no hay uso LLM registrado.")
         return
 
-    st.dataframe(daily, use_container_width=True, hide_index=True)
+    st.dataframe(daily, width="stretch", hide_index=True)
 
 
 
@@ -6302,7 +6302,7 @@ def page_config() -> None:
         {"clave": "entry_quality_max_sma20_distance", "valor": settings.entry_quality_max_sma20_distance},
         {"clave": "database", "valor": str(settings.database_path)},
     ]
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
     st.subheader("Selector LLM")
     st.caption("Guarda cambios en `.env` local. En la nube replica los mismos valores como variables/secrets de Fly.")
     col_primary, col_agents, col_orchestrator = st.columns(3)
@@ -6350,7 +6350,7 @@ def page_config() -> None:
             orchestrator_models,
             index=_select_index(orchestrator_models, settings.improvement_llm_orchestrator_model),
         )
-    save_llm_config = st.button("Guardar configuracion LLM", type="primary", use_container_width=True)
+    save_llm_config = st.button("Guardar configuracion LLM", type="primary", width="stretch")
     if save_llm_config:
         updates = {
             "LLM_MODEL_SELECTOR": primary_selector,
@@ -6385,7 +6385,7 @@ def page_config() -> None:
         {"proveedor": "mimo", "base_url": "https://token-plan-ams.xiaomimimo.com/v1", "modelo": "mimo-v2.5"},
         {"proveedor": "mimo", "base_url": "https://token-plan-ams.xiaomimimo.com/v1", "modelo": "mimo-v2.5-pro"},
     ]
-    st.dataframe(pd.DataFrame(model_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(model_rows), width="stretch", hide_index=True)
     latest_quality = _latest_report_json("latest_market_data_quality.json")
     latest_readiness = _latest_report_json("latest_live_readiness.json")
     latest_backup = _latest_report_json("latest_database_backup.json")

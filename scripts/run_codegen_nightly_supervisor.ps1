@@ -12,6 +12,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "stack_common.ps1")
+
 $Repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $NightlyScript = Join-Path $Repo "scripts\run_codegen_nightly.ps1"
 $LogPath = Join-Path $Repo "data\logs\codegen_nightly_supervisor.log"
@@ -50,20 +52,32 @@ if (-not (Test-Path $NightlyScript)) {
 
 Write-CodegenNightlySupervisorLog "START codegen nightly supervisor run_at=$RunAt config=$Config"
 
-while ($true) {
-    $nextRun = Get-NextRunAt -TimeText $RunAt
-    Write-CodegenNightlySupervisorLog "NEXT_RUN $($nextRun.ToString('s'))"
-    while ((Get-Date) -lt $nextRun) {
-        $remaining = [int]($nextRun - (Get-Date)).TotalSeconds
-        Start-Sleep -Seconds ([Math]::Min([Math]::Max($remaining, 1), 300))
-    }
+$lockTaken = Acquire-StackSingleInstanceLock `
+    -ServiceName "codegen_nightly_supervisor" `
+    -CommandPattern "run_codegen_nightly_supervisor\.ps1" `
+    -Log { param($Message) Write-CodegenNightlySupervisorLog $Message }
+if (-not $lockTaken) {
+    exit 0
+}
 
-    Write-CodegenNightlySupervisorLog "RUN nightly_script"
-    if ($Config -ne "") {
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $NightlyScript -Config $Config
-    } else {
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $NightlyScript
+try {
+    while ($true) {
+        $nextRun = Get-NextRunAt -TimeText $RunAt
+        Write-CodegenNightlySupervisorLog "NEXT_RUN $($nextRun.ToString('s'))"
+        while ((Get-Date) -lt $nextRun) {
+            $remaining = [int]($nextRun - (Get-Date)).TotalSeconds
+            Start-Sleep -Seconds ([Math]::Min([Math]::Max($remaining, 1), 300))
+        }
+
+        Write-CodegenNightlySupervisorLog "RUN nightly_script"
+        if ($Config -ne "") {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $NightlyScript -Config $Config
+        } else {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $NightlyScript
+        }
+        $exitCode = $LASTEXITCODE
+        Write-CodegenNightlySupervisorLog "DONE nightly_script exit_code=$exitCode"
     }
-    $exitCode = $LASTEXITCODE
-    Write-CodegenNightlySupervisorLog "DONE nightly_script exit_code=$exitCode"
+} finally {
+    Release-StackSingleInstanceLock -ServiceName "codegen_nightly_supervisor" -Log { param($Message) Write-CodegenNightlySupervisorLog $Message }
 }

@@ -13,6 +13,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "stack_common.ps1")
+
 $Repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $DailyScript = Join-Path $Repo "scripts\run_ci_digest_daily.ps1"
 $LogPath = Join-Path $Repo "data\logs\ci_digest_supervisor.log"
@@ -51,16 +53,28 @@ if (-not (Test-Path $DailyScript)) {
 
 Write-CiDigestSupervisorLog "START ci digest supervisor run_at=$RunAt days=$Days"
 
-while ($true) {
-    $nextRun = Get-NextRunAt -TimeText $RunAt
-    Write-CiDigestSupervisorLog "NEXT_RUN $($nextRun.ToString('s'))"
-    while ((Get-Date) -lt $nextRun) {
-        $remaining = [int]($nextRun - (Get-Date)).TotalSeconds
-        Start-Sleep -Seconds ([Math]::Min([Math]::Max($remaining, 1), 300))
-    }
+$lockTaken = Acquire-StackSingleInstanceLock `
+    -ServiceName "ci_digest_supervisor" `
+    -CommandPattern "run_ci_digest_supervisor\.ps1" `
+    -Log { param($Message) Write-CiDigestSupervisorLog $Message }
+if (-not $lockTaken) {
+    exit 0
+}
 
-    Write-CiDigestSupervisorLog "RUN daily_script"
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $DailyScript -Days $Days
-    $exitCode = $LASTEXITCODE
-    Write-CiDigestSupervisorLog "DONE daily_script exit_code=$exitCode"
+try {
+    while ($true) {
+        $nextRun = Get-NextRunAt -TimeText $RunAt
+        Write-CiDigestSupervisorLog "NEXT_RUN $($nextRun.ToString('s'))"
+        while ((Get-Date) -lt $nextRun) {
+            $remaining = [int]($nextRun - (Get-Date)).TotalSeconds
+            Start-Sleep -Seconds ([Math]::Min([Math]::Max($remaining, 1), 300))
+        }
+
+        Write-CiDigestSupervisorLog "RUN daily_script"
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $DailyScript -Days $Days
+        $exitCode = $LASTEXITCODE
+        Write-CiDigestSupervisorLog "DONE daily_script exit_code=$exitCode"
+    }
+} finally {
+    Release-StackSingleInstanceLock -ServiceName "ci_digest_supervisor" -Log { param($Message) Write-CiDigestSupervisorLog $Message }
 }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import socket
 import subprocess
 import sys
 import time
@@ -3168,9 +3169,20 @@ def command_log(args: argparse.Namespace) -> None:
         time.sleep(args.interval)
 
 
+def _is_tcp_port_open(host: str, port: int, timeout: float = 1.5) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def command_web(args: argparse.Namespace) -> None:
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
+    if _is_tcp_port_open(args.host, args.port):
+        print(f"Panel web ya corriendo en http://{args.host}:{args.port}; no se lanza otra instancia.")
+        return
     app_path = Path(__file__).with_name("web_app.py")
     cmd = [
         sys.executable,

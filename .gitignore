@@ -30,6 +30,7 @@ tmp_*.json
 logs/
 data/state/*.pid
 data/state/*.lock
+data/run/*.pid
 
 # Local experiments / downloaded tool trees
 llama.cpp/

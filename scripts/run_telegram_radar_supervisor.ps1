@@ -11,6 +11,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "stack_common.ps1")
+
 $Repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $DailyScript = Join-Path $Repo "scripts\run_telegram_radar_daily.ps1"
 $LogPath = Join-Path $Repo "data\logs\telegram_radar_supervisor.log"
@@ -49,16 +51,28 @@ if (-not (Test-Path $DailyScript)) {
 
 Write-SupervisorLog "START telegram radar supervisor run_at=$RunAt"
 
-while ($true) {
-    $nextRun = Get-NextRunAt -TimeText $RunAt
-    Write-SupervisorLog "NEXT_RUN $($nextRun.ToString('s'))"
-    while ((Get-Date) -lt $nextRun) {
-        $remaining = [int]($nextRun - (Get-Date)).TotalSeconds
-        Start-Sleep -Seconds ([Math]::Min([Math]::Max($remaining, 1), 300))
-    }
+$lockTaken = Acquire-StackSingleInstanceLock `
+    -ServiceName "telegram_radar_supervisor" `
+    -CommandPattern "run_telegram_radar_supervisor\.ps1" `
+    -Log { param($Message) Write-SupervisorLog $Message }
+if (-not $lockTaken) {
+    exit 0
+}
 
-    Write-SupervisorLog "RUN daily_script"
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $DailyScript
-    $exitCode = $LASTEXITCODE
-    Write-SupervisorLog "DONE daily_script exit_code=$exitCode"
+try {
+    while ($true) {
+        $nextRun = Get-NextRunAt -TimeText $RunAt
+        Write-SupervisorLog "NEXT_RUN $($nextRun.ToString('s'))"
+        while ((Get-Date) -lt $nextRun) {
+            $remaining = [int]($nextRun - (Get-Date)).TotalSeconds
+            Start-Sleep -Seconds ([Math]::Min([Math]::Max($remaining, 1), 300))
+        }
+
+        Write-SupervisorLog "RUN daily_script"
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $DailyScript
+        $exitCode = $LASTEXITCODE
+        Write-SupervisorLog "DONE daily_script exit_code=$exitCode"
+    }
+} finally {
+    Release-StackSingleInstanceLock -ServiceName "telegram_radar_supervisor" -Log { param($Message) Write-SupervisorLog $Message }
 }

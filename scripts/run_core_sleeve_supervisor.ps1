@@ -13,6 +13,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "stack_common.ps1")
+
 $Repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $DailyScript = Join-Path $Repo "scripts\run_core_sleeve_daily.ps1"
 $RunLog = Join-Path $Repo "data\logs\core_sleeve_supervisor.log"
@@ -51,23 +53,35 @@ if (-not (Test-Path $DailyScript)) {
 
 Write-CoreSleeveSupervisorLog "START core sleeve supervisor run_at=$RunAt"
 
-while ($true) {
-    $nextRun = Get-NextRunAt -TimeText $RunAt
-    Write-CoreSleeveSupervisorLog "NEXT_RUN $($nextRun.ToString('s'))"
-    while ((Get-Date) -lt $nextRun) {
-        $remaining = [int]($nextRun - (Get-Date)).TotalSeconds
-        Start-Sleep -Seconds ([Math]::Min([Math]::Max($remaining, 1), 300))
-    }
+$lockTaken = Acquire-StackSingleInstanceLock `
+    -ServiceName "core_sleeve_supervisor" `
+    -CommandPattern "run_core_sleeve_supervisor\.ps1" `
+    -Log { param($Message) Write-CoreSleeveSupervisorLog $Message }
+if (-not $lockTaken) {
+    exit 0
+}
 
-    Write-CoreSleeveSupervisorLog "RUN daily_script"
-    $argsList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $DailyScript)
-    if ($Config) {
-        $argsList += @("-Config", $Config)
+try {
+    while ($true) {
+        $nextRun = Get-NextRunAt -TimeText $RunAt
+        Write-CoreSleeveSupervisorLog "NEXT_RUN $($nextRun.ToString('s'))"
+        while ((Get-Date) -lt $nextRun) {
+            $remaining = [int]($nextRun - (Get-Date)).TotalSeconds
+            Start-Sleep -Seconds ([Math]::Min([Math]::Max($remaining, 1), 300))
+        }
+
+        Write-CoreSleeveSupervisorLog "RUN daily_script"
+        $argsList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $DailyScript)
+        if ($Config) {
+            $argsList += @("-Config", $Config)
+        }
+        if ($LogDir) {
+            $argsList += @("-LogDir", $LogDir)
+        }
+        & powershell.exe @argsList
+        $exitCode = $LASTEXITCODE
+        Write-CoreSleeveSupervisorLog "DONE daily_script exit_code=$exitCode"
     }
-    if ($LogDir) {
-        $argsList += @("-LogDir", $LogDir)
-    }
-    & powershell.exe @argsList
-    $exitCode = $LASTEXITCODE
-    Write-CoreSleeveSupervisorLog "DONE daily_script exit_code=$exitCode"
+} finally {
+    Release-StackSingleInstanceLock -ServiceName "core_sleeve_supervisor" -Log { param($Message) Write-CoreSleeveSupervisorLog $Message }
 }
