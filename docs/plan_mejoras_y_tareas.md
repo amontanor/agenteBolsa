@@ -14,6 +14,15 @@
 - Ultima actualizacion: 2026-06-16
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
+### P34 - Hardening pre-activacion de manga core y paridad diaria. **HECHO (v0.4.113).**
+Se endurece `core_sleeve` antes de cualquier orden real: reserva atomica por
+`data_date`, `client_order_id` estable `core-sleeve-YYYYMMDD`, preview sin envio,
+guardas testeadas y tope absoluto `CORE_SLEEVE_MAX_ORDER_NOTIONAL` por `os.getenv`
+con default finito. El one-shot diario ejecuta la manga y despues escribe el
+parity check en `data/research/core_sleeve/parity_<fecha>.md`; el supervisor queda
+por defecto a las 22:15 CEST y respeta `enabled/dry_run` del JSON. No se cambia la
+matematica del vol-target ni se arranca/reinicia nada.
+
 ### P31 - Busqueda web trazable para evidencia y sentimiento. **HECHO (v0.4.110).**
 Se integra una capa shadow de busqueda web con Tavily/Brave (`WEB_SEARCH_*`,
 `TAVILY_*`, `BRAVE_*`) sin dar navegacion libre al LLM. `web_research_agent`

@@ -17,6 +17,7 @@ $Python = Join-Path $Repo ".venv\Scripts\python.exe"
 $ConfigPath = if ($Config) { $Config } else { Join-Path $Repo "data\config\core_sleeve.json" }
 $OutDir = if ($LogDir) { $LogDir } else { Join-Path $Repo "data\research\core_sleeve" }
 $RunLog = Join-Path $Repo "data\logs\core_sleeve.log"
+$ParityScript = Join-Path $Repo "scripts\core_sleeve_parity_check.py"
 
 function Write-CoreSleeveLog {
     param([string]$Message)
@@ -44,6 +45,19 @@ try {
         exit $exitCode
     }
     Write-CoreSleeveLog "DONE core_sleeve"
+
+    if (Test-Path $ParityScript) {
+        $parityDate = Get-Date -Format "yyyy-MM-dd"
+        $parityPath = Join-Path $OutDir "parity_$parityDate.md"
+        Write-CoreSleeveLog "START parity_check out=$parityPath"
+        $parityOutput = & $Python $ParityScript --config $ConfigPath 2>&1
+        $parityExitCode = $LASTEXITCODE
+        Set-Content -Path $parityPath -Value ($parityOutput -join [Environment]::NewLine) -Encoding UTF8
+        Write-CoreSleeveLog "DONE parity_check exit_code=$parityExitCode out=$parityPath"
+    } else {
+        Write-CoreSleeveLog "WARN parity_script_missing path=$ParityScript"
+    }
+
     exit 0
 } catch {
     Write-CoreSleeveLog "ERROR unexpected $($_.Exception.Message)"

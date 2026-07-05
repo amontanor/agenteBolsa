@@ -6,7 +6,7 @@
 #>
 
 param(
-    [string]$RunAt = "15:45",
+    [string]$RunAt = "22:15",
     [string]$Config = "",
     [string]$LogDir = ""
 )

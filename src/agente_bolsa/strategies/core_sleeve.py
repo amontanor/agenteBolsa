@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
@@ -27,6 +28,7 @@ DEFAULT_CORE_SLEEVE_CONFIG = {
 }
 DEFAULT_CONFIG_PATH = Path("data/config/core_sleeve.json")
 DEFAULT_LOG_DIR = Path("data/research/core_sleeve")
+DEFAULT_MAX_ORDER_NOTIONAL = 50_000.0
 
 
 @dataclass(frozen=True)
@@ -81,6 +83,7 @@ def calculate_core_sleeve_decision(
     price: float,
     data_date: str,
     already_rebalanced: bool = False,
+    max_order_notional: float | None = None,
 ) -> CoreSleeveDecision:
     equity = max(0.0, _portfolio_equity(portfolio))
     safe_price = max(0.0, float(price or 0.0))
@@ -91,6 +94,7 @@ def calculate_core_sleeve_decision(
     current_notional = max(0.0, _long_symbol_notional(portfolio, CORE_SLEEVE_SYMBOL))
     band_notional = max_sleeve_notional * (float(config.rebalance_band_pp) / 100.0)
     delta = target_notional - current_notional
+    order_notional_cap = _safe_max_order_notional(max_order_notional)
     order = None
     reason = "within_rebalance_band"
 
@@ -102,11 +106,11 @@ def calculate_core_sleeve_decision(
         reason = "missing_price"
     elif abs(delta) > band_notional:
         if delta > 0:
-            notional = min(delta, max(0.0, max_sleeve_notional - current_notional))
+            notional = min(delta, max(0.0, max_sleeve_notional - current_notional), order_notional_cap)
             order = _order_payload(side="buy", notional=notional, price=safe_price)
             reason = "buy_to_target"
         elif current_notional > 0:
-            sell_notional = min(abs(delta), current_notional)
+            sell_notional = min(abs(delta), current_notional, order_notional_cap)
             order = _order_payload(side="sell", notional=sell_notional, price=safe_price)
             reason = "sell_to_target"
 
@@ -133,6 +137,7 @@ def run_core_sleeve_once(
     overlay_runner: Callable[..., dict[str, Any]] = run_overlay_shadow_once,
     portfolio_loader: Callable[[], PortfolioSnapshot] | None = None,
     order_submitter: Callable[..., dict[str, Any]] = submit_paper_order_plan,
+    preview: bool = False,
 ) -> dict[str, Any]:
     settings = get_settings()
     config_path = config_path or settings.data_dir / "config" / "core_sleeve.json"
@@ -164,6 +169,11 @@ def run_core_sleeve_once(
         append_core_sleeve_log(payload, log_dir)
         return {"ok": True, "status": "no_order", "decision": asdict(decision), "log_path": str(log_dir / "core_sleeve_log.jsonl")}
 
+    if preview:
+        payload["status"] = "preview"
+        append_core_sleeve_log(payload, log_dir)
+        return {"ok": True, "status": "preview", "decision": asdict(decision), "log_path": str(log_dir / "core_sleeve_log.jsonl")}
+
     if config.dry_run:
         payload["status"] = "would_submit"
         append_core_sleeve_log(payload, log_dir)
@@ -176,7 +186,22 @@ def run_core_sleeve_once(
         append_core_sleeve_log(payload, log_dir)
         return {"ok": False, "status": "market_closed", "decision": asdict(decision), "market": market_status.as_dict()}
 
-    submitted = order_submitter(settings, decision.order, client_order_id=f"core-sleeve-{data_date.replace('-', '')}")
+    reserved = reserve_core_sleeve_rebalance_for_date(log_dir, data_date)
+    if not reserved:
+        decision = calculate_core_sleeve_decision(
+            portfolio=portfolio,
+            config=config,
+            exposure=exposure,
+            price=price,
+            data_date=data_date,
+            already_rebalanced=True,
+        )
+        payload = _log_payload(config=config, observation=observation, decision=decision, status="no_order")
+        payload["market"] = market_status.as_dict()
+        append_core_sleeve_log(payload, log_dir)
+        return {"ok": True, "status": "no_order", "decision": asdict(decision), "log_path": str(log_dir / "core_sleeve_log.jsonl")}
+
+    submitted = order_submitter(settings, decision.order, client_order_id=core_sleeve_client_order_id(data_date))
     payload["status"] = "submitted"
     payload["submitted_order"] = submitted
     append_core_sleeve_log(payload, log_dir)
@@ -192,6 +217,8 @@ def append_core_sleeve_log(payload: dict[str, Any], log_dir: Path) -> Path:
 
 
 def has_core_sleeve_rebalance_for_date(log_path: Path, data_date: str) -> bool:
+    if core_sleeve_rebalance_marker_path(log_path.parent, data_date).exists():
+        return True
     if not log_path.exists():
         return False
     for line in log_path.read_text(encoding="utf-8").splitlines():
@@ -204,17 +231,46 @@ def has_core_sleeve_rebalance_for_date(log_path: Path, data_date: str) -> bool:
     return False
 
 
+def reserve_core_sleeve_rebalance_for_date(log_dir: Path, data_date: str) -> bool:
+    """Atomically reserve the data_date before a live submit attempt."""
+
+    log_dir.mkdir(parents=True, exist_ok=True)
+    marker_path = core_sleeve_rebalance_marker_path(log_dir, data_date)
+    payload = {
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "data_date": data_date,
+        "client_order_id": core_sleeve_client_order_id(data_date),
+        "status": "reserved",
+    }
+    try:
+        fd = os.open(str(marker_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+    return True
+
+
+def core_sleeve_rebalance_marker_path(log_dir: Path, data_date: str) -> Path:
+    return log_dir / f"core_sleeve_rebalance_{data_date.replace('-', '')}.lock"
+
+
+def core_sleeve_client_order_id(data_date: str) -> str:
+    return f"core-sleeve-{data_date.replace('-', '')}"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Ejecuta la manga core SPY en modo aislado.")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
     parser.add_argument("--log-dir", default=str(DEFAULT_LOG_DIR))
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--preview", action="store_true", help="Muestra la orden prevista sin enviarla.")
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
-    result = run_core_sleeve_once(config_path=Path(args.config), log_dir=Path(args.log_dir))
+    result = run_core_sleeve_once(config_path=Path(args.config), log_dir=Path(args.log_dir), preview=bool(args.preview))
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
     else:
@@ -257,6 +313,16 @@ def _order_payload(*, side: str, notional: float, price: float) -> dict[str, Any
             "source": "core_sleeve_vt12",
         },
     }
+
+
+def _safe_max_order_notional(value: float | None = None) -> float:
+    if value is None:
+        raw = os.getenv("CORE_SLEEVE_MAX_ORDER_NOTIONAL", str(DEFAULT_MAX_ORDER_NOTIONAL))
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = DEFAULT_MAX_ORDER_NOTIONAL
+    return max(0.0, float(value))
 
 
 def _portfolio_equity(portfolio: PortfolioSnapshot | dict[str, Any]) -> float:
