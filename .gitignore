@@ -1,6 +1,9 @@
 .venv/
+.venv_old_codex/
+data/tmp/
 __pycache__/
 *.py[cod]
+*.pyc
 .pytest_cache/
 .ruff_cache/
 .env
