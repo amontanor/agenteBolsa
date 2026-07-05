@@ -132,6 +132,7 @@ from .tools.trade_decision import (
 )
 from .tools.trade_history import DEFAULT_HISTORY_START_DATE, build_trade_history
 from .tools.universe import resolve_study_universe
+from .tools.web_evidence_ab import build_web_evidence_ab_report
 from .tools.web_research import build_web_research_report
 
 LOGGER = logging.getLogger(__name__)
@@ -1649,6 +1650,22 @@ def command_web_research(args: argparse.Namespace) -> None:
         {"path": report["path"], "summary": report["summary"]},
     )
     _print_json({"ok": True, "path": report["path"], "summary": report["summary"], "report": report})
+
+
+def command_web_evidence_ab(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    report = build_web_evidence_ab_report(settings.data_dir, limit=args.limit)
+    if args.json:
+        _print_json(report)
+        return
+    summary = report["summary"]
+    print("WEB EVIDENCE A/B")
+    print(f"Observaciones: {summary['observations']}")
+    print(f"Decisiones cambiadas: {summary['decisions_changed']} ({summary['pct_decisions_changed']:.1%})")
+    print(f"Items web acumulados: {summary['web_items']}")
+    print(f"Outcomes maduros: {summary['matured_outcomes']}")
+    print(f"Archivo: {report['path']}")
 
 
 def command_post_market_review(args: argparse.Namespace) -> None:
@@ -4313,6 +4330,14 @@ def build_parser() -> argparse.ArgumentParser:
     web_research.add_argument("--max-items", type=int, default=None, help="Maximo de resultados normalizados.")
     web_research.add_argument("--json", action="store_true", help="Devuelve el informe completo en JSON.")
     web_research.set_defaults(func=command_web_research)
+
+    web_evidence_ab = subparsers.add_parser(
+        "web-evidence-ab",
+        help="Agrega el historico shadow A/B de valor de evidencia web.",
+    )
+    web_evidence_ab.add_argument("--limit", type=int, default=None, help="Maximo de observaciones recientes a agregar.")
+    web_evidence_ab.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    web_evidence_ab.set_defaults(func=command_web_evidence_ab)
 
     post_market_review = subparsers.add_parser(
         "post-market-review",

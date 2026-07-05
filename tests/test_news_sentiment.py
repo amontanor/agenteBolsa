@@ -25,6 +25,22 @@ def test_assess_material_news_risk_flags_competitive_threat_without_llm():
     assert "amazon logistics" in risk["matched_terms"]
 
 
+def test_material_risk_v2_requires_symbol_cooccurrence_and_ignores_rival_alone(monkeypatch):
+    news = [
+        {
+            "title": "Rival cuts outlook after lawsuit",
+            "summary": "A competitor faces an investigation, but Apple is not mentioned.",
+        }
+    ]
+    old_risk = assess_material_news_risk("AAPL", news, {})
+    monkeypatch.setenv("MATERIAL_RISK_V2", "true")
+    new_risk = assess_material_news_risk("AAPL", news, {})
+
+    assert old_risk["severity"] == "material"
+    assert new_risk["severity"] == "none"
+    assert new_risk["material_risk_v2_shadow"]["material_to_none"] is True
+
+
 def test_llm_sentiment_uses_dedicated_sentiment_role(monkeypatch):
     captured: dict[str, str] = {}
 

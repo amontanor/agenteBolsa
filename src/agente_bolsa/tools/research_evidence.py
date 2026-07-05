@@ -7,6 +7,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 from agente_bolsa.models import new_id
 
@@ -77,7 +78,7 @@ def _hash_payload(value: dict[str, Any]) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
 
-def _source_score(source_name: str, provider: str, *, source_type: str) -> float:
+def _legacy_source_score(source_name: str, provider: str, *, source_type: str) -> float:
     text = f"{source_name} {provider}".lower()
     if source_type == "macro_thesis":
         return 0.7
@@ -87,6 +88,36 @@ def _source_score(source_name: str, provider: str, *, source_type: str) -> float
         return 0.85
     if any(term in text for term in ("yahoo", "yfinance", "fmp", "financialmodelingprep")):
         return 0.65
+    return 0.55
+
+
+def _source_domain(url: str | None) -> str:
+    host = (urlparse(str(url or "")).hostname or "").lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def _source_score(source_name: str, provider: str, *, source_type: str, url: str | None = None) -> float:
+    if source_type == "macro_thesis":
+        return 0.7
+    host = _source_domain(url)
+    if any(term in host for term in ("sec.gov", "edgar", "nasdaq.com", "nyse.com")):
+        return 0.95
+    if any(
+        term in host
+        for term in (
+            "reuters.com",
+            "bloomberg.com",
+            "wsj.com",
+            "ft.com",
+            "cnbc.com",
+            "marketwatch.com",
+        )
+    ):
+        return 0.85
+    if any(term in host for term in ("finance.yahoo.com", "financialmodelingprep.com")):
+        return 0.65
+    if not host:
+        return _legacy_source_score(source_name, provider, source_type=source_type)
     return 0.55
 
 
@@ -106,11 +137,21 @@ def _evidence_row(
     published_at: str | None = None,
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    payload = payload or {}
+    payload = dict(payload or {})
     freshness = _freshness_hours(published_at, fetched_at)
     evidence_id = payload.get("evidence_id") or new_id("ev")
-    reliability = _source_score(source_name, provider, source_type=source_type)
+    reliability = _source_score(source_name, provider, source_type=source_type, url=url)
+    legacy_reliability = _legacy_source_score(source_name, provider, source_type=source_type)
     quality_status = "available" if title or summary or payload else "empty"
+    payload.setdefault(
+        "source_reliability_delta",
+        {
+            "domain": _source_domain(url),
+            "legacy_score": round(legacy_reliability, 3),
+            "domain_score": round(reliability, 3),
+            "delta": round(reliability - legacy_reliability, 3),
+        },
+    )
     return {
         "evidence_id": evidence_id,
         "symbol": symbol.upper() if symbol else None,
@@ -125,6 +166,8 @@ def _evidence_row(
         "published_at": published_at,
         "fetched_at": fetched_at.isoformat(),
         "reliability_score": round(reliability, 3),
+        "reliability_delta": round(reliability - legacy_reliability, 3),
+        "source_domain": _source_domain(url),
         "freshness_hours": freshness,
         "staleness_status": _staleness_status(freshness, max_age_hours=max_age_hours),
         "quality_status": quality_status,

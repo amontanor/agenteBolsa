@@ -14,7 +14,9 @@ from .web_research_budget import (
     BudgetedSearchResult,
     budgeted_provider_search,
     parse_published_at,
+    provider_calls_used,
     web_search_freshness_v2_enabled,
+    web_search_merge_providers_enabled,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only.
@@ -179,7 +181,7 @@ def _provider_order(settings: Settings) -> list[str]:
         ordered.append("tavily")
     if settings.brave_api_key:
         ordered.append("brave")
-    return ordered
+    return sorted(ordered, key=lambda provider: (provider_calls_used(settings, provider), ordered.index(provider)))
 
 
 def _search_provider(settings: Settings, provider: str, query: str, *, max_items: int) -> list[WebSearchResult]:
@@ -245,6 +247,7 @@ def search_company_news(
     attempted: list[str] = []
     cache_hits = 0
     provider_calls = 0
+    merge_providers = web_search_merge_providers_enabled()
     for provider in _provider_order(settings):
         attempted.append(provider)
         for query in queries:
@@ -263,7 +266,7 @@ def search_company_news(
             except Exception as exc:  # noqa: BLE001 - best effort evidence.
                 warnings.append(f"{provider}:{query}:{type(exc).__name__}")
         items = dedupe_news_items(items, limit=max_items)
-        if items:
+        if items and not merge_providers:
             break
     quality = "ok" if items else ("no_provider" if not attempted else "empty")
     return {
@@ -286,6 +289,7 @@ def search_general_market_news(settings: Settings, *, max_items: int | None = No
     attempted: list[str] = []
     cache_hits = 0
     provider_calls = 0
+    merge_providers = web_search_merge_providers_enabled()
     for provider in _provider_order(settings):
         attempted.append(provider)
         try:
@@ -303,7 +307,7 @@ def search_general_market_news(settings: Settings, *, max_items: int | None = No
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"{provider}:{type(exc).__name__}")
         items = dedupe_news_items(items, limit=max_items)
-        if items:
+        if items and not merge_providers:
             break
     quality = "ok" if items else ("no_provider" if not attempted else "empty")
     return {

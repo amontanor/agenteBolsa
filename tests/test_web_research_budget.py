@@ -43,7 +43,7 @@ def test_budget_counter_increments_only_real_provider_calls(tmp_path, monkeypatc
 
 
 def test_budget_cap_degrades_without_provider_call(tmp_path, monkeypatch):
-    monkeypatch.setenv("WEB_SEARCH_MONTHLY_BUDGET", "0")
+    monkeypatch.setenv("WEB_SEARCH_BUDGET_BRAVE", "0")
     settings = Settings(_env_file=None, DATA_DIR=tmp_path)
     calls = {"count": 0}
 
@@ -61,9 +61,38 @@ def test_budget_cap_degrades_without_provider_call(tmp_path, monkeypatch):
     )
 
     assert result.items == []
-    assert result.warnings == ["web_search_budget_exhausted"]
+    assert result.warnings == ["web_search_budget_exhausted:brave"]
     assert calls["count"] == 0
     assert '"degraded": true' in (tmp_path / "reports" / "latest_web_search_budget.json").read_text(encoding="utf-8")
+
+
+def test_budget_cap_is_per_provider(tmp_path, monkeypatch):
+    monkeypatch.setenv("WEB_SEARCH_BUDGET_TAVILY", "0")
+    monkeypatch.setenv("WEB_SEARCH_BUDGET_BRAVE", "2")
+    settings = Settings(_env_file=None, DATA_DIR=tmp_path)
+    calls = {"brave": 0}
+
+    tavily = budgeted_provider_search(
+        settings,
+        provider="tavily",
+        query="AAPL stock news",
+        max_items=3,
+        scope="symbol",
+        fetcher=lambda: [{"title": "no"}],
+    )
+    brave = budgeted_provider_search(
+        settings,
+        provider="brave",
+        query="AAPL stock news",
+        max_items=3,
+        scope="symbol",
+        fetcher=lambda: calls.__setitem__("brave", calls["brave"] + 1) or [{"title": "yes"}],
+    )
+
+    assert tavily.items == []
+    assert tavily.warnings == ["web_search_budget_exhausted:tavily"]
+    assert brave.items == [{"title": "yes"}]
+    assert calls["brave"] == 1
 
 
 def test_cache_expiry_uses_ttl(tmp_path, monkeypatch):

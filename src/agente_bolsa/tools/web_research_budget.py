@@ -54,6 +54,17 @@ def web_search_monthly_budget() -> int:
     return max(0, env_int("WEB_SEARCH_MONTHLY_BUDGET", 1000))
 
 
+def web_search_provider_budget(provider: str) -> int:
+    provider_key = str(provider or "").strip().upper()
+    if provider_key in {"TAVILY", "BRAVE"}:
+        return max(0, env_int(f"WEB_SEARCH_BUDGET_{provider_key}", 100000))
+    return web_search_monthly_budget()
+
+
+def web_search_merge_providers_enabled() -> bool:
+    return env_bool("WEB_SEARCH_MERGE_PROVIDERS", False)
+
+
 def web_search_freshness_v2_enabled() -> bool:
     return env_bool("WEB_SEARCH_FRESHNESS_V2", False)
 
@@ -205,6 +216,12 @@ def _load_usage(settings: Any) -> dict[str, Any]:
     return payload
 
 
+def provider_calls_used(settings: Any, provider: str) -> int:
+    usage = _load_usage(settings)
+    provider_payload = ((usage.get("providers") or {}).get(provider) or {})
+    return int(provider_payload.get("calls") or 0)
+
+
 def _save_usage(settings: Any, payload: dict[str, Any]) -> None:
     payload["updated_at"] = _utc_now().isoformat()
     _write_json(_usage_path(settings, str(payload.get("month") or _month_key())), payload)
@@ -227,6 +244,16 @@ def _write_budget_report(settings: Any, usage: dict[str, Any], *, last_warning: 
     budget = web_search_monthly_budget()
     now = _utc_now()
     projected_monthly = round(calls_used / max(now.day, 1) * 31, 2)
+    providers = usage.get("providers") or {}
+    provider_budgets = {
+        provider: {
+            **payload,
+            "budget": web_search_provider_budget(provider),
+            "remaining": max(web_search_provider_budget(provider) - int((payload or {}).get("calls") or 0), 0),
+        }
+        for provider, payload in providers.items()
+        if isinstance(payload, dict)
+    }
     report = {
         "as_of": now.isoformat(),
         "month": usage.get("month") or _month_key(now),
@@ -239,7 +266,7 @@ def _write_budget_report(settings: Any, usage: dict[str, Any], *, last_warning: 
         "cache_misses": cache_misses,
         "cache_hit_rate": round(cache_hits / total_cache_lookups, 4) if total_cache_lookups else 0.0,
         "budget_exhaustions": int(usage.get("budget_exhaustions") or 0),
-        "providers": usage.get("providers") or {},
+        "providers": provider_budgets,
         "degraded": int(usage.get("budget_exhaustions") or 0) > 0,
         "last_warning": last_warning,
     }
@@ -273,18 +300,19 @@ def budgeted_provider_search(
         return BudgetedSearchResult(items=list(cached), cache_hit=True, calls_used=0, warnings=[])
 
     usage["cache_misses"] = int(usage.get("cache_misses") or 0) + 1
-    budget = web_search_monthly_budget()
-    calls_used = int(usage.get("calls_used") or 0)
+    provider_usage = _provider_usage(usage, provider)
+    budget = web_search_provider_budget(provider)
+    calls_used = int(provider_usage.get("calls") or 0)
     if calls_used >= budget:
-        warning = "web_search_budget_exhausted"
+        warning = f"web_search_budget_exhausted:{provider}"
         usage["budget_exhaustions"] = int(usage.get("budget_exhaustions") or 0) + 1
-        _provider_usage(usage, provider)["degradations"] += 1
+        provider_usage["degradations"] += 1
         _save_usage(settings, usage)
         _write_budget_report(settings, usage, last_warning=warning)
         return BudgetedSearchResult(items=[], cache_hit=False, calls_used=0, warnings=[warning])
 
-    usage["calls_used"] = calls_used + 1
-    _provider_usage(usage, provider)["calls"] += 1
+    usage["calls_used"] = int(usage.get("calls_used") or 0) + 1
+    provider_usage["calls"] = calls_used + 1
     _save_usage(settings, usage)
     try:
         items = list(fetcher())

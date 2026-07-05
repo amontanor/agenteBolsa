@@ -105,6 +105,68 @@ def test_search_company_news_without_provider_is_no_provider(tmp_path):
     assert result["items"] == []
 
 
+def test_search_company_news_can_merge_providers_and_dedupe(tmp_path, monkeypatch):
+    monkeypatch.setenv("WEB_SEARCH_MERGE_PROVIDERS", "true")
+    settings = Settings(
+        _env_file=None,
+        DATA_DIR=tmp_path,
+        WEB_SEARCH_ENABLED=True,
+        WEB_SEARCH_PROVIDER="auto",
+        TAVILY_API_KEY="tv",
+        BRAVE_API_KEY="br",
+    )
+
+    def fake_tavily(_settings, query, *, max_items):
+        return [
+            web_research.WebSearchResult(
+                title="AAPL catalyst",
+                url="https://example.com/aapl",
+                summary="Tavily",
+                published_at="2026-07-05T10:00:00Z",
+                source_name="Reuters",
+                provider="tavily",
+                query=query,
+                payload={},
+            )
+        ]
+
+    def fake_brave(_settings, query, *, max_items):
+        return [
+            web_research.WebSearchResult(
+                title="AAPL catalyst duplicate",
+                url="https://example.com/aapl",
+                summary="Brave duplicate",
+                published_at="2026-07-05T10:00:00Z",
+                source_name="CNBC",
+                provider="brave",
+                query=query,
+                payload={},
+            ),
+            web_research.WebSearchResult(
+                title="AAPL guidance",
+                url="https://example.com/aapl-guidance",
+                summary="Brave",
+                published_at="2026-07-05T10:00:00Z",
+                source_name="CNBC",
+                provider="brave",
+                query=query,
+                payload={},
+            ),
+        ]
+
+    monkeypatch.setattr(web_research, "_tavily_search", fake_tavily)
+    monkeypatch.setattr(web_research, "_brave_search", fake_brave)
+
+    result = search_company_news(settings, "AAPL", max_items=5)
+
+    assert result["providers_attempted"] == ["tavily", "brave"]
+    assert result["provider_calls"] == 4
+    assert [item["link"] for item in result["items"]] == [
+        "https://example.com/aapl",
+        "https://example.com/aapl-guidance",
+    ]
+
+
 def test_command_web_research_outputs_json(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(
         main_module,

@@ -34,6 +34,19 @@ el delta shadow de simbolos `unknown -> fresh` y si desbloquearia el gate, sin
 cambiar compras vivas con el flag apagado. Verificacion: tests sinteticos sin red
 para contador, cap, cache, TTL y parsing de frescura.
 
+### P33 - Reparto Tavily/Brave, anti-falso-veto y A/B shadow. **HECHO (v0.4.112).**
+Se reparte `WEB_SEARCH_PROVIDER=auto` por menor uso mensual entre Tavily y Brave,
+con presupuesto independiente `WEB_SEARCH_BUDGET_TAVILY` y
+`WEB_SEARCH_BUDGET_BRAVE` por `os.getenv`. `WEB_SEARCH_MERGE_PROVIDERS` permite
+consultar ambos proveedores y fusionar/deduplicar evidencia. `MATERIAL_RISK_V2`
+queda default OFF y calcula delta shadow para falsos vetos: exige coocurrencia
+termino negativo + simbolo/empresa y elimina `competitor/rival` como veto por si
+solos. `research_evidence` puntua fiabilidad por dominio curado y guarda delta de
+scoring en payload. Se crea `data/research/web_ab/web_evidence_ab.jsonl` y CLI
+`web-evidence-ab` para medir valor A/B sin llamadas extra. Verificacion: tests
+sinteticos sin red para reparto/cap, merge+dedup, riesgo material V2, scoring de
+dominio y A/B shadow.
+
 ### P30 - Arranque idempotente y stack-status. **HECHO (v0.4.109).**
 Se añaden locks `data/run/<servicio>.pid` a los cinco supervisores residentes,
 `scripts/stack_status.ps1`, `scripts/stack_up.ps1`, `scripts/stack_down.ps1` y

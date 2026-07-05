@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.research_evidence import (
+    _source_score,
     build_research_evidence_report,
     load_research_evidence_context,
     research_block_reason,
@@ -14,6 +15,13 @@ def _setup(tmp_path):
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()
     return settings, store
+
+
+def test_source_score_uses_curated_domain_levels():
+    assert _source_score("Random", "web", source_type="symbol_news", url="https://www.sec.gov/Archives/x") == 0.95
+    assert _source_score("Random", "web", source_type="symbol_news", url="https://www.reuters.com/markets/x") == 0.85
+    assert _source_score("Random", "web", source_type="symbol_news", url="https://finance.yahoo.com/news/x") == 0.65
+    assert _source_score("Reuters", "web", source_type="symbol_news", url="https://unknown.example/x") == 0.55
 
 
 def test_build_research_report_persists_rows_and_latest_file(tmp_path, monkeypatch):

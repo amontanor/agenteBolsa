@@ -13,8 +13,13 @@ from agente_bolsa.llm_router import chat_for_role
 from agente_bolsa.llm_usage import record_llm_response
 
 from .reporting import write_json_report
+from .web_evidence_ab import (
+    build_web_ab_observation,
+    record_web_ab_observation,
+    split_local_web_news,
+)
 from .web_research import dedupe_news_items, search_company_news
-from .web_research_budget import freshness_hours
+from .web_research_budget import env_bool, freshness_hours
 
 ProgressCallback = Callable[[int, int, str], None]
 
@@ -209,26 +214,46 @@ def assess_material_news_risk(
     symbol: str,
     news: list[dict[str, Any]],
     sentiment: dict[str, Any] | None = None,
+    *,
+    company_name: str | None = None,
 ) -> dict[str, Any]:
     """Flag material news risk without relying on the LLM path."""
 
     sentiment = sentiment or {}
-    matched_terms: list[str] = []
-    matched_titles: list[str] = []
-    for item in news:
-        text = " ".join(
-            [
-                str(item.get("title") or ""),
-                str(item.get("summary") or ""),
-                str(item.get("publisher") or ""),
-            ]
-        ).lower()
-        item_terms = [term for term in MATERIAL_NEGATIVE_TERMS if term in text]
-        if item_terms:
-            matched_terms.extend(item_terms)
-            title = _clean_text(item.get("title"))
-            if title:
-                matched_titles.append(title)
+    symbol_text = symbol.upper().strip()
+    company_text = _clean_text(company_name).lower()
+
+    def _term_matches(*, require_subject: bool) -> tuple[list[str], list[str]]:
+        matched_terms: list[str] = []
+        matched_titles: list[str] = []
+        for item in news:
+            text = " ".join(
+                [
+                    str(item.get("title") or ""),
+                    str(item.get("summary") or ""),
+                    str(item.get("publisher") or ""),
+                ]
+            ).lower()
+            item_terms = [term for term in MATERIAL_NEGATIVE_TERMS if term in text]
+            if require_subject:
+                subject_present = symbol_text.lower() in text or (bool(company_text) and company_text in text)
+                item_terms = [
+                    term
+                    for term in item_terms
+                    if subject_present and term not in {"competitor", "rival"}
+                ]
+            if item_terms:
+                matched_terms.extend(item_terms)
+                title = _clean_text(item.get("title"))
+                if title:
+                    matched_titles.append(title)
+        return sorted(set(matched_terms)), matched_titles[:5]
+
+    matched_terms, matched_titles = _term_matches(require_subject=False)
+    v2_terms, v2_titles = _term_matches(require_subject=True)
+    material_risk_v2 = env_bool("MATERIAL_RISK_V2", False)
+    active_terms = v2_terms if material_risk_v2 else matched_terms
+    active_titles = v2_titles if material_risk_v2 else matched_titles
 
     risk_flags = [str(flag) for flag in sentiment.get("risk_flags", [])]
     sentiment_score = sentiment.get("sentiment_score")
@@ -241,7 +266,7 @@ def assess_material_news_risk(
     failed = "sentiment_failed" in risk_flags
 
     severity = "none"
-    if matched_terms or negative_sentiment:
+    if active_terms or negative_sentiment:
         severity = "material"
     elif failed:
         severity = "unknown"
@@ -253,12 +278,20 @@ def assess_material_news_risk(
         "severity": severity,
         "material": severity == "material",
         "unknown": severity == "unknown",
-        "matched_terms": sorted(set(matched_terms)),
-        "matched_titles": matched_titles[:5],
+        "matched_terms": active_terms,
+        "matched_titles": active_titles,
         "sentiment_failed": failed,
         "sentiment_score": sentiment_score,
         "sentiment_confidence": confidence,
         "risk_flags": risk_flags,
+        "material_risk_v2_shadow": {
+            "enabled": material_risk_v2,
+            "old_severity": "material" if matched_terms or negative_sentiment else ("unknown" if failed else "no_news" if not news else "none"),
+            "v2_severity": "material" if v2_terms or negative_sentiment else ("unknown" if failed else "no_news" if not news else "none"),
+            "old_terms": matched_terms,
+            "v2_terms": v2_terms,
+            "material_to_none": bool(matched_terms) and not v2_terms and not negative_sentiment,
+        },
     }
 
 
@@ -306,6 +339,20 @@ def analyze_news_sentiment_for_candidates(
                 }
         try:
             material_risk = assess_material_news_risk(symbol, news, sentiment)
+            local_news, web_news = split_local_web_news(news)
+            if web_news and getattr(settings, "web_search_enabled", False):
+                local_material_risk = assess_material_news_risk(symbol, local_news, sentiment)
+                record_web_ab_observation(
+                    settings.data_dir,
+                    build_web_ab_observation(
+                        run_id=run_id,
+                        symbol=symbol,
+                        news=news,
+                        combined_material_risk=material_risk,
+                        local_material_risk=local_material_risk,
+                        sentiment=sentiment,
+                    ),
+                )
             results.append(
                 {
                     "symbol": symbol,
