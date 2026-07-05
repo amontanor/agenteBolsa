@@ -31,8 +31,8 @@ def test_build_research_report_persists_rows_and_latest_file(tmp_path, monkeypat
         lambda _settings: {"economic_calendar": [], "earnings_calendar": [], "general_news": [], "quality": "ok"},
     )
     monkeypatch.setattr(
-        "agente_bolsa.tools.research_evidence.fetch_symbol_news",
-        lambda symbol, max_items=5: [
+        "agente_bolsa.tools.research_evidence.fetch_combined_symbol_news",
+        lambda _settings, symbol, max_items=5: [
             {
                 "title": f"{symbol} rallies on demand",
                 "publisher": "Reuters",
@@ -67,8 +67,8 @@ def test_research_block_reason_uses_symbol_specific_failures(tmp_path, monkeypat
         lambda _settings: {"economic_calendar": [], "earnings_calendar": [], "general_news": [], "quality": "ok"},
     )
     monkeypatch.setattr(
-        "agente_bolsa.tools.research_evidence.fetch_symbol_news",
-        lambda symbol, max_items=5: [],
+        "agente_bolsa.tools.research_evidence.fetch_combined_symbol_news",
+        lambda _settings, symbol, max_items=5: [],
     )
 
     report = build_research_evidence_report(
@@ -83,3 +83,95 @@ def test_research_block_reason_uses_symbol_specific_failures(tmp_path, monkeypat
 
     assert report["summary"]["decision_ready"] is False
     assert research_block_reason(report, symbol="AAPL") == "research_evidence_missing_or_stale"
+
+
+def test_build_research_report_persists_web_provider_rows(tmp_path, monkeypatch):
+    settings, store = _setup(tmp_path)
+    settings = settings.model_copy(update={"web_search_enabled": True})
+    monkeypatch.setattr(
+        "agente_bolsa.tools.research_evidence.fetch_macro_events",
+        lambda _settings: {"economic_calendar": [], "earnings_calendar": [], "general_news": [], "quality": "ok"},
+    )
+    monkeypatch.setattr(
+        "agente_bolsa.tools.research_evidence.search_general_market_news",
+        lambda _settings, max_items=10: {
+            "provider": "tavily",
+            "quality": "ok",
+            "items": [
+                {
+                    "title": "Markets await Fed",
+                    "publisher": "Reuters",
+                    "provider": "tavily",
+                    "link": "https://example.com/macro",
+                    "published_at": datetime.now(timezone.utc).isoformat(),
+                }
+            ],
+            "warnings": [],
+        },
+    )
+    monkeypatch.setattr(
+        "agente_bolsa.tools.research_evidence.fetch_combined_symbol_news",
+        lambda _settings, symbol, max_items=5: [
+            {
+                "title": f"{symbol} web catalyst",
+                "publisher": "CNBC",
+                "provider": "brave",
+                "published_at": datetime.now(timezone.utc).isoformat(),
+                "summary": "Fresh catalyst",
+                "link": "https://example.com/company",
+            }
+        ],
+    )
+
+    report = build_research_evidence_report(
+        store,
+        settings,
+        tmp_path / "reports",
+        "run_web",
+        symbols=["AAPL"],
+        sentiment_context={},
+        market_state={},
+    )
+
+    rows = store.research_evidence(limit=10)
+    assert any(item["provider"] == "brave" and item["symbol"] == "AAPL" for item in rows)
+    assert any(item["provider"] == "tavily" and item["scope"] == "macro" for item in rows)
+    assert report["summary"]["providers"]["news"]["provider"] == "combined"
+
+
+def test_freshness_v2_shadow_does_not_unlock_live_gate_when_flag_off(tmp_path, monkeypatch):
+    monkeypatch.delenv("WEB_SEARCH_FRESHNESS_V2", raising=False)
+    settings, store = _setup(tmp_path)
+    monkeypatch.setattr(
+        "agente_bolsa.tools.research_evidence.fetch_macro_events",
+        lambda _settings: {"economic_calendar": [], "earnings_calendar": [], "general_news": [], "quality": "ok"},
+    )
+    monkeypatch.setattr(
+        "agente_bolsa.tools.research_evidence.fetch_combined_symbol_news",
+        lambda _settings, symbol, max_items=5: [
+            {
+                "title": f"{symbol} catalyst",
+                "publisher": "Reuters",
+                "provider": "brave",
+                "published_at": "2 hours ago",
+                "summary": "Fresh relative date only V2 can parse",
+                "link": "https://example.com/company",
+            }
+        ],
+    )
+
+    report = build_research_evidence_report(
+        store,
+        settings,
+        tmp_path / "reports",
+        "run_shadow",
+        symbols=["AAPL"],
+        sentiment_context={},
+        market_state={},
+    )
+
+    shadow = report["summary"]["freshness_v2_shadow"]
+    assert report["summary"]["decision_ready"] is False
+    assert shadow["enabled"] is False
+    assert shadow["symbols_unknown_to_fresh"] == ["AAPL"]
+    assert shadow["would_unblock_gate"] is True

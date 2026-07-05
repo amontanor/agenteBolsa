@@ -6,6 +6,10 @@ El sistema no intenta que un LLM "adivine" el mercado. La idea robusta es conver
 
 La mejora no se mide por "el agente cree que mejora", sino por metricas: rendimiento fuera de muestra, drawdown, estabilidad por regimen, coste de transaccion, slippage, rotacion, correlacion con estrategias existentes y resultado en paper trading.
 
+## Busqueda web trazable
+
+`tools/web_research.py` integra Tavily/Brave como proveedores configurables (`WEB_SEARCH_PROVIDER=auto|tavily|brave|off`) y apagados por defecto. El `web_research_agent` no navega libremente: los resultados se normalizan en `research_evidence` con proveedor, URL, fecha, frescura, payload y `evidence_id`. `news_sentiment` analiza noticias combinadas (`yfinance` + web) y `trade_decision` recibe solo el contexto compacto de evidencia. La primera version es shadow: aporta contexto y flags sin cambiar gates ni ordenes. CLI: `web-research SYMBOL --json`, `web-research --market --json`, `study-symbol SYMBOL --with-web-news`.
+
 ## Ciclo continuo
 
 ```mermaid

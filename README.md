@@ -278,6 +278,26 @@ NEWS_SENTIMENT_TOP_N=10
 NEWS_ITEMS_PER_SYMBOL=5
 ```
 
+Tambien puede activar busqueda web trazable en modo shadow para complementar
+`yfinance`/FMP con Tavily o Brave. Los agentes no navegan libremente: consumen
+filas normalizadas en `research_evidence` con proveedor, URL, fecha, frescura y
+`evidence_id`.
+
+```env
+WEB_SEARCH_ENABLED=true
+WEB_SEARCH_PROVIDER=auto
+TAVILY_API_KEY=
+BRAVE_API_KEY=
+```
+
+Para probar conectividad y ver resultados normalizados sin operar:
+
+```powershell
+python -m agente_bolsa.main web-research AAPL --json
+python -m agente_bolsa.main web-research --market --json
+python -m agente_bolsa.main study-symbol AAPL --with-web-news --with-news-llm
+```
+
 Para forzarlo manualmente:
 
 ```powershell

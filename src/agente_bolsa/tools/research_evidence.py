@@ -11,8 +11,11 @@ from typing import TYPE_CHECKING, Any
 from agente_bolsa.models import new_id
 
 from .macro_context import fetch_macro_events
-from .news_sentiment import fetch_symbol_news
+from .news_sentiment import fetch_combined_symbol_news
 from .reporting import write_json_report
+from .web_research import search_general_market_news
+from .web_research_budget import freshness_hours as parsed_freshness_hours
+from .web_research_budget import web_search_freshness_v2_enabled
 
 if TYPE_CHECKING:  # pragma: no cover - typing only.
     from ..config import Settings
@@ -37,11 +40,26 @@ def _iso_to_dt(value: Any) -> datetime | None:
 
 
 def _freshness_hours(published_at: Any, fetched_at: datetime) -> float | None:
+    if web_search_freshness_v2_enabled():
+        return parsed_freshness_hours(published_at, fetched_at=fetched_at)
     published_dt = _iso_to_dt(published_at)
     if published_dt is None:
         return None
     delta = fetched_at - published_dt
     return round(max(delta.total_seconds(), 0.0) / 3600.0, 3)
+
+
+def _freshness_shadow_status(published_at: Any, fetched_at: datetime, *, max_age_hours: float) -> dict[str, Any]:
+    old_freshness = _iso_to_dt(published_at)
+    old_status = "unknown" if old_freshness is None else _staleness_status(_freshness_hours(published_at, fetched_at), max_age_hours=max_age_hours)
+    parsed = parsed_freshness_hours(published_at, fetched_at=fetched_at)
+    parsed_status = _staleness_status(parsed, max_age_hours=max_age_hours)
+    return {
+        "old_status": old_status,
+        "v2_status": parsed_status,
+        "v2_freshness_hours": parsed,
+        "unknown_to_fresh": old_status == "unknown" and parsed_status == "fresh",
+    }
 
 
 def _staleness_status(freshness_hours: float | None, *, max_age_hours: float) -> str:
@@ -192,14 +210,45 @@ def build_research_evidence_report(
         )
         store.upsert_research_evidence(row)
         rows.append(row)
+    web_macro = {"quality": "disabled", "items": [], "warnings": []}
+    if getattr(settings, "web_search_enabled", False):
+        try:
+            web_macro = search_general_market_news(settings, max_items=settings.web_search_market_max_items)
+        except Exception as exc:  # noqa: BLE001 - external search is best effort.
+            warnings.append(f"web_macro: web_search_failed:{type(exc).__name__}")
+            web_macro = {"quality": "error", "items": [], "warnings": [type(exc).__name__]}
+        for item in list(web_macro.get("items") or [])[: settings.web_search_market_max_items]:
+            if not isinstance(item, dict):
+                continue
+            row = _evidence_row(
+                scope="macro",
+                source_type="web_macro_news",
+                source_name=str(item.get("publisher") or "web_macro_news"),
+                provider=str(item.get("provider") or web_macro.get("provider") or "web"),
+                fetched_at=fetched_at,
+                max_age_hours=max_age_hours,
+                topic="macro",
+                title=str(item.get("title") or ""),
+                summary=str(item.get("summary") or ""),
+                url=str(item.get("link") or "") or None,
+                published_at=str(item.get("published_at") or "") or None,
+                payload=item,
+            )
+            store.upsert_research_evidence(row)
+            rows.append(row)
 
     symbols_summary: list[dict[str, Any]] = []
+    freshness_shadow: list[dict[str, Any]] = []
     for symbol in symbol_set:
         sentiment_row = sentiment_lookup.get(symbol) or {}
         news_rows = list(sentiment_row.get("news") or [])
         if not news_rows:
             try:
-                news_rows = fetch_symbol_news(symbol, max_items=5)
+                news_rows = fetch_combined_symbol_news(
+                    settings,
+                    symbol,
+                    max_items=max(5, int(getattr(settings, "web_search_max_items_per_symbol", 5))),
+                )
             except Exception as exc:  # noqa: BLE001 - degrade and continue.
                 warnings.append(f"{symbol}: news_fetch_failed:{type(exc).__name__}")
                 news_rows = []
@@ -207,16 +256,22 @@ def build_research_evidence_report(
         fresh_count = 0
         stale_count = 0
         best_score = 0.0
+        shadow_unknown_to_fresh = 0
         for item in news_rows[:5]:
             if not isinstance(item, dict):
                 continue
+            shadow_freshness = _freshness_shadow_status(
+                item.get("published_at"),
+                fetched_at,
+                max_age_hours=max_age_hours,
+            )
             row = _evidence_row(
                 symbol=symbol,
                 scope="symbol",
                 topic="news",
                 source_type="symbol_news",
                 source_name=str(item.get("publisher") or "symbol_news"),
-                provider="yfinance",
+                provider=str(item.get("provider") or "yfinance"),
                 fetched_at=fetched_at,
                 max_age_hours=max_age_hours,
                 title=str(item.get("title") or ""),
@@ -231,6 +286,8 @@ def build_research_evidence_report(
                 fresh_count += 1
             elif row["staleness_status"] == "stale":
                 stale_count += 1
+            if shadow_freshness["unknown_to_fresh"]:
+                shadow_unknown_to_fresh += 1
             best_score = max(best_score, float(row["reliability_score"]))
             store.upsert_research_evidence(row)
             rows.append(row)
@@ -248,6 +305,15 @@ def build_research_evidence_report(
                 "sentiment_score": ((sentiment_row.get("sentiment") or {}).get("sentiment_score") if sentiment_row else None),
             }
         )
+        if shadow_unknown_to_fresh:
+            freshness_shadow.append(
+                {
+                    "symbol": symbol,
+                    "unknown_to_fresh_items": shadow_unknown_to_fresh,
+                    "live_fresh_items": fresh_count,
+                    "would_have_fresh_evidence": fresh_count > 0 or shadow_unknown_to_fresh > 0,
+                }
+            )
 
     symbols_missing_fresh = [
         item["symbol"]
@@ -255,16 +321,27 @@ def build_research_evidence_report(
         if item["news_items"] == 0 or item["fresh_items"] == 0
     ]
     symbols_with_fresh = [item["symbol"] for item in symbols_summary if item["fresh_items"] > 0]
+    shadow_symbols_with_fresh = {
+        str(item.get("symbol") or "").upper()
+        for item in freshness_shadow
+        if item.get("would_have_fresh_evidence")
+    }
+    shadow_missing_fresh = [symbol for symbol in symbols_missing_fresh if symbol not in shadow_symbols_with_fresh]
     low_quality = [
         item["symbol"]
         for item in symbols_summary
         if item["news_items"] > 0 and float(item["max_reliability"] or 0.0) < min_reliability
     ]
     providers = {
-        "macro": {"quality": macro_quality, "provider": "fmp" if getattr(settings, "fmp_api_key", None) else "none"},
+        "macro": {
+            "quality": macro_quality,
+            "provider": "fmp" if getattr(settings, "fmp_api_key", None) else "none",
+            "web_quality": web_macro.get("quality"),
+            "web_provider": web_macro.get("provider"),
+        },
         "news": {
             "quality": "ok" if symbols_with_fresh else ("partial" if symbols_summary else "unknown"),
-            "provider": "yfinance",
+            "provider": "combined" if getattr(settings, "web_search_enabled", False) else "yfinance",
         },
     }
     required = bool(getattr(settings, "research_evidence_fail_closed_for_buys", False))
@@ -282,6 +359,17 @@ def build_research_evidence_report(
         "required": required,
         "decision_ready": decision_ready,
         "rows_persisted": len(rows),
+        "freshness_v2_shadow": {
+            "enabled": web_search_freshness_v2_enabled(),
+            "symbols_unknown_to_fresh": [item["symbol"] for item in freshness_shadow],
+            "symbols_missing_fresh_if_enabled": shadow_missing_fresh,
+            "would_unblock_gate": required
+            and not decision_ready
+            and macro_quality in {"ok", "no_provider"}
+            and not shadow_missing_fresh
+            and not low_quality,
+            "items": freshness_shadow,
+        },
     }
     report = {
         "as_of": fetched_at.isoformat(),
@@ -293,6 +381,7 @@ def build_research_evidence_report(
             "earnings_events": len(list(macro_events.get("earnings_calendar") or [])),
         },
         "symbols": symbols_summary,
+        "freshness_v2_shadow": summary["freshness_v2_shadow"],
         "warnings": warnings,
     }
     return write_json_report(

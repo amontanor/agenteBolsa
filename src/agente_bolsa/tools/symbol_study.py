@@ -12,7 +12,11 @@ import pandas as pd
 from agente_bolsa.config import Settings
 
 from .market_data import download_daily_prices
-from .news_sentiment import analyze_news_sentiment_for_candidates, fetch_symbol_news
+from .news_sentiment import (
+    analyze_news_sentiment_for_candidates,
+    fetch_combined_symbol_news,
+    fetch_symbol_news,
+)
 from .technical_analysis import add_basic_technical_features
 from .technical_state_validator import validate_symbol_technical_state
 
@@ -139,6 +143,7 @@ def build_symbol_study(
     *,
     lookback_days: int = 420,
     include_news: bool = False,
+    include_web_news: bool = False,
     include_news_llm: bool = False,
     news_items: int = 5,
 ) -> dict[str, Any]:
@@ -174,8 +179,10 @@ def build_symbol_study(
                 }
             )
 
-    news_context: dict[str, Any] = {"enabled": include_news, "items": []}
-    if include_news:
+    news_context: dict[str, Any] = {"enabled": include_news or include_web_news, "web_enabled": include_web_news, "items": []}
+    if include_web_news:
+        news_context["items"] = fetch_combined_symbol_news(settings, symbol, max_items=news_items, force_web=True)
+    elif include_news:
         news_context["items"] = fetch_symbol_news(symbol, max_items=news_items)
     if include_news_llm:
         sentiment_report = analyze_news_sentiment_for_candidates(

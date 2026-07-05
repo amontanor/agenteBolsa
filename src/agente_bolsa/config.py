@@ -900,6 +900,17 @@ class Settings(BaseSettings):
     )
     research_evidence_max_age_hours: float = Field(default=48.0, alias="RESEARCH_EVIDENCE_MAX_AGE_HOURS")
     research_evidence_min_reliability: float = Field(default=0.45, alias="RESEARCH_EVIDENCE_MIN_RELIABILITY")
+    # Busqueda web trazable para research evidence. Shadow por defecto: aporta
+    # contexto, pero los gates siguen gobernados por research_evidence_*.
+    web_search_enabled: bool = Field(default=False, alias="WEB_SEARCH_ENABLED")
+    web_search_provider: Literal["auto", "tavily", "brave", "off"] = Field(default="auto", alias="WEB_SEARCH_PROVIDER")
+    web_search_max_items_per_symbol: int = Field(default=5, alias="WEB_SEARCH_MAX_ITEMS_PER_SYMBOL")
+    web_search_market_max_items: int = Field(default=10, alias="WEB_SEARCH_MARKET_MAX_ITEMS")
+    web_search_timeout_seconds: int = Field(default=20, alias="WEB_SEARCH_TIMEOUT_SECONDS")
+    tavily_api_key: str | None = Field(default=None, alias="TAVILY_API_KEY")
+    tavily_base_url: str = Field(default="https://api.tavily.com/search", alias="TAVILY_BASE_URL")
+    brave_api_key: str | None = Field(default=None, alias="BRAVE_API_KEY")
+    brave_base_url: str = Field(default="https://api.search.brave.com/res/v1/web/search", alias="BRAVE_BASE_URL")
     # Fabrica de hipotesis + granja de backtests (T3.2).
     factory_max_variants_per_night: int = Field(default=50, alias="FACTORY_MAX_VARIANTS_PER_NIGHT")
     factory_workers: int = Field(default=4, alias="FACTORY_WORKERS")

@@ -41,6 +41,7 @@ web_research_agent:
   lane: "research"
   status: "active"
   runtime_entrypoints:
+    - "web_research"
     - "trade_decision"
     - "continuous_improvement"
   uses_llm: true

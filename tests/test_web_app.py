@@ -46,6 +46,7 @@ from agente_bolsa.web_app import (
     _single_symbol_price_frame,
     _study_price,
     _trim_portfolio_chart_range,
+    _web_search_status,
     update_env_file,
 )
 
@@ -152,6 +153,34 @@ def test_update_env_file_updates_existing_keys_and_appends_missing(tmp_path):
     assert "KEEP_ME=true" in text
     assert "IMPROVEMENT_LLM_PROVIDER=opencode-go" in text
     assert "IMPROVEMENT_LLM_MODEL=kimi-k2.6" in text
+
+
+def test_web_search_status_reports_disabled_without_probe():
+    status = _web_search_status(
+        Settings(_env_file=None, WEB_SEARCH_ENABLED=False),
+        {"available": False, "path": "x"},
+    )
+
+    assert status["label"] == "OFF"
+    assert status["detail"] == "desactivado"
+
+
+def test_web_search_status_reports_latest_success():
+    status = _web_search_status(
+        Settings(_env_file=None, WEB_SEARCH_ENABLED=True, WEB_SEARCH_PROVIDER="auto", TAVILY_API_KEY="tv"),
+        {
+            "available": True,
+            "path": "x",
+            "payload": {
+                "summary": {"quality": "ok", "provider": "tavily", "items": 3},
+                "result": {"providers_attempted": ["tavily"], "provider": "tavily"},
+            },
+        },
+    )
+
+    assert status["label"] == "ON"
+    assert status["detail"] == "tavily OK"
+    assert status["providers"][0]["last_ok"] is True
 
 
 def test_usage_tokens_estimates_missing_local_backend_usage():

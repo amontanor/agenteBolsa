@@ -82,6 +82,7 @@ from agente_bolsa.tools.signal_learning import build_learning_status, update_sig
 from agente_bolsa.tools.system_status import build_status, to_html
 from agente_bolsa.tools.trade_decision import build_buy_order_plans
 from agente_bolsa.tools.trade_history import build_trade_history
+from agente_bolsa.tools.web_research import build_web_research_report
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_START_DATE = "2026-04-01"
@@ -678,6 +679,61 @@ def _latest_report_json(filename: str) -> dict[str, Any]:
         return {"available": False, "path": str(path)}
 
 
+def _web_search_status(settings: Any, latest_report: dict[str, Any] | None = None) -> dict[str, Any]:
+    latest_report = latest_report or _latest_report_json("latest_web_research.json")
+    payload = (latest_report.get("payload") or {}) if latest_report.get("available") else {}
+    summary = payload.get("summary") or {}
+    result = payload.get("result") or {}
+    attempted = [str(item) for item in list(result.get("providers_attempted") or [])]
+    latest_provider = str(result.get("provider") or summary.get("provider") or "-")
+    latest_quality = str(summary.get("quality") or "pending")
+    providers = []
+    for provider_name, configured in (
+        ("tavily", bool(getattr(settings, "tavily_api_key", None))),
+        ("brave", bool(getattr(settings, "brave_api_key", None))),
+    ):
+        providers.append(
+            {
+                "provider": provider_name,
+                "configured": configured,
+                "active": bool(settings.web_search_enabled)
+                and str(getattr(settings, "web_search_provider", "off")) in {"auto", provider_name},
+                "attempted": provider_name in attempted,
+                "last_ok": latest_quality == "ok" and latest_provider == provider_name,
+            }
+        )
+    if not getattr(settings, "web_search_enabled", False):
+        tone = "neutral"
+        label = "OFF"
+        detail = "desactivado"
+    elif latest_quality == "ok":
+        tone = "good"
+        label = "ON"
+        detail = f"{latest_provider} OK"
+    elif latest_quality in {"empty", "error"}:
+        tone = "bad"
+        label = "WARN"
+        detail = f"{latest_provider} {latest_quality}"
+    elif latest_quality == "no_provider":
+        tone = "bad"
+        label = "WARN"
+        detail = "sin credenciales"
+    else:
+        tone = "neutral"
+        label = "ON"
+        detail = "sin probe"
+    return {
+        "label": label,
+        "tone": tone,
+        "detail": detail,
+        "latest_provider": latest_provider,
+        "latest_quality": latest_quality,
+        "items": int(summary.get("items") or 0),
+        "providers": providers,
+        "report_path": latest_report.get("path"),
+    }
+
+
 def _llm_daily_usage_dataframe(store: Store, *, limit: int = 1000) -> pd.DataFrame:
     settings = _settings()
     totals: dict[str, dict[str, Any]] = {}
@@ -1109,10 +1165,12 @@ def _dashboard_header(
         )
 
     pills: list[str] = []
+    overall_detail = str(operational_status.get("overall_detail") or "")
     pills.append(
         _pill(
             "\u25cf " + str(operational_status.get("overall_label") or "Estado"),
             str(operational_status.get("overall_tone") or "neutral"),
+            overall_detail,
         )
     )
     pills.append(
@@ -2726,11 +2784,13 @@ def _render_autonomy_panel(store: Any, settings: Any) -> None:
 
 def _render_research_inbox_panel(settings: Any, store: Store) -> None:
     latest_research = _latest_report_json("latest_research_evidence.json")
+    latest_web_research = _latest_report_json("latest_web_research.json")
     payload = (latest_research.get("payload") or {}) if latest_research.get("available") else {}
     summary = payload.get("summary") or {}
+    web_status = _web_search_status(settings, latest_web_research)
     rows = store.research_evidence(limit=10)
     _section_title("Research Inbox", "Evidencia externa reciente y calidad de fuentes.")
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
         _compact_metric("Decision ready", "OK" if summary.get("decision_ready") else "BLOCK", tone="good" if summary.get("decision_ready") else "bad")
     with c2:
@@ -2739,6 +2799,8 @@ def _render_research_inbox_panel(settings: Any, store: Store) -> None:
         providers = summary.get("providers") or {}
         provider_note = f"macro {((providers.get('macro') or {}).get('quality') or '-')}"
         _compact_metric("Proveedores", ((providers.get("news") or {}).get("quality") or "-"), provider_note)
+    with c4:
+        _compact_metric("Web search", web_status["label"], web_status["detail"], web_status["tone"])
     if summary.get("symbols_missing_fresh_evidence"):
         st.caption("Sin evidencia fresca: " + ", ".join(list(summary.get("symbols_missing_fresh_evidence") or [])[:8]))
     if rows:
@@ -5567,7 +5629,9 @@ def _dashboard_operational_status(settings: Any, store: Store, latest_ci_llm_res
     ci_job = _job_runtime_status(store, "continuous_improvement")
     ci_runtime = store.continuous_improvement_runtime_state() or {}
     healthcheck = _latest_report_json("latest_agents_healthcheck.json")
+    latest_web_research = _latest_report_json("latest_web_research.json")
     watchdog = (healthcheck.get("payload") or {}).get("watchdog") or {}
+    web_status = _web_search_status(settings, latest_web_research)
 
     portfolio_age = _age_minutes(portfolio_job.get("finished_at"), tz)
     scheduler_ok = portfolio_age is not None and portfolio_age <= 3
@@ -5620,11 +5684,33 @@ def _dashboard_operational_status(settings: Any, store: Store, latest_ci_llm_res
             "tone": "good" if llm_ok else "neutral",
             "detail": "decision reciente / API disponible" if llm_ok else "pendiente de nueva llamada con config actual",
         },
+        {
+            "label": "Buscadores",
+            "tone": "good"
+            if web_status["tone"] == "good"
+            else "bad"
+            if web_status["tone"] == "bad"
+            else "neutral",
+            "detail": (
+                f'{web_status["latest_provider"]} {web_status["latest_quality"]} | '
+                f'{web_status["items"]} items | {web_status["report_path"]}'
+            ),
+        },
     ]
     overall_ok = scheduler_ok and market_ok and ci_ok and watchdog_ok
+    overall_detail = " | ".join(
+        [
+            f"Scheduler {'OK' if scheduler_ok else 'pendiente'}",
+            f"Mercado {'OK' if market_ok else 'pendiente'}",
+            f"Agentes {'OK' if ci_ok else 'pendiente'}",
+            f"Watchdog {'OK' if watchdog_ok else 'degradado'}",
+            f'Buscadores {web_status["detail"]}',
+        ]
+    )
     return {
         "overall_tone": "good" if overall_ok else "bad",
         "overall_label": "Sistema funcionando" if overall_ok else "Revisar sistema",
+        "overall_detail": overall_detail,
         "badges": badges,
     }
 
@@ -6386,6 +6472,61 @@ def page_config() -> None:
         {"proveedor": "mimo", "base_url": "https://token-plan-ams.xiaomimimo.com/v1", "modelo": "mimo-v2.5-pro"},
     ]
     st.dataframe(pd.DataFrame(model_rows), width="stretch", hide_index=True)
+    st.subheader("Buscadores web")
+    latest_web_research = _latest_report_json("latest_web_research.json")
+    web_status = _web_search_status(settings, latest_web_research)
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        _metric_card("Web search", web_status["label"])
+    with c2:
+        _metric_card("Proveedor", settings.web_search_provider)
+    with c3:
+        configured_count = sum(1 for item in web_status["providers"] if item.get("configured"))
+        _metric_card("Credenciales", f"{configured_count}/2")
+    with c4:
+        _metric_card("Ultimo probe", web_status["detail"])
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "provider": item["provider"],
+                    "activo": "si" if item["active"] else "no",
+                    "api_key": "si" if item["configured"] else "no",
+                    "ultimo_probe": "ok" if item["last_ok"] else ("intentado" if item["attempted"] else "-"),
+                }
+                for item in web_status["providers"]
+            ]
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+    probe_symbol = st.text_input("Ticker probe web", value="AAPL", key="web_probe_symbol").strip().upper() or "AAPL"
+    tavily_col, brave_col = st.columns(2)
+    with tavily_col:
+        probe_tavily = st.button("Probar Tavily", width="stretch", disabled=not bool(settings.tavily_api_key))
+    with brave_col:
+        probe_brave = st.button("Probar Brave", width="stretch", disabled=not bool(settings.brave_api_key))
+    probe_provider = "tavily" if probe_tavily else "brave" if probe_brave else None
+    if probe_provider:
+        try:
+            probe_settings = settings.model_copy(update={"web_search_enabled": True, "web_search_provider": probe_provider})
+            report = build_web_research_report(
+                probe_settings,
+                settings.data_dir / "reports",
+                new_id("webprobe"),
+                symbol=probe_symbol,
+                max_items=3,
+            )
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Probe {probe_provider} fallido: {exc}")
+        else:
+            st.success(
+                f"Probe {probe_provider} OK para {probe_symbol}: "
+                f"{report['summary'].get('items', 0)} resultados."
+            )
+            st.caption(f"Informe: {report.get('path')}")
+            get_settings.cache_clear()
+            st.rerun()
     latest_quality = _latest_report_json("latest_market_data_quality.json")
     latest_readiness = _latest_report_json("latest_live_readiness.json")
     latest_backup = _latest_report_json("latest_database_backup.json")

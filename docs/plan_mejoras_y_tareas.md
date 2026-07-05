@@ -14,6 +14,26 @@
 - Ultima actualizacion: 2026-06-16
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
+### P31 - Busqueda web trazable para evidencia y sentimiento. **HECHO (v0.4.110).**
+Se integra una capa shadow de busqueda web con Tavily/Brave (`WEB_SEARCH_*`,
+`TAVILY_*`, `BRAVE_*`) sin dar navegacion libre al LLM. `web_research_agent`
+expone `web-research`, `news_sentiment` combina yfinance + web deduplicado y
+`research_evidence` persiste provider/URL/frescura/evidence_id sobre la tabla
+existente. No cambia gates ni ordenes: solo aporta evidencia trazable y flags.
+Verificacion: tests unitarios sin red para normalizacion, fallback, evidencia,
+sentimiento y CLI; lint y gates operativos.
+
+### P32 - Gobernador de cuota y cache TTL para web search. **HECHO (v0.4.111).**
+Se anade `tools/web_research_budget.py` como capa comun para Tavily/Brave:
+contador mensual persistente, cap duro `WEB_SEARCH_MONTHLY_BUDGET` por `os.getenv`,
+cache TTL por simbolo/macro y reporte `data/reports/latest_web_search_budget.json`.
+La busqueda web pasa a ser fallback dirigido en sentimiento/evidencia: solo se
+llama si la evidencia local esta ausente o vieja, salvo probes explicitos.
+`WEB_SEARCH_FRESHNESS_V2` queda apagado por defecto; `research_evidence` calcula
+el delta shadow de simbolos `unknown -> fresh` y si desbloquearia el gate, sin
+cambiar compras vivas con el flag apagado. Verificacion: tests sinteticos sin red
+para contador, cap, cache, TTL y parsing de frescura.
+
 ### P30 - Arranque idempotente y stack-status. **HECHO (v0.4.109).**
 Se añaden locks `data/run/<servicio>.pid` a los cinco supervisores residentes,
 `scripts/stack_status.ps1`, `scripts/stack_up.ps1`, `scripts/stack_down.ps1` y

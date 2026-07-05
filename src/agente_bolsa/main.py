@@ -132,6 +132,7 @@ from .tools.trade_decision import (
 )
 from .tools.trade_history import DEFAULT_HISTORY_START_DATE, build_trade_history
 from .tools.universe import resolve_study_universe
+from .tools.web_research import build_web_research_report
 
 LOGGER = logging.getLogger(__name__)
 
@@ -1582,7 +1583,8 @@ def command_study_symbol(args: argparse.Namespace) -> None:
         settings.data_dir / "reports",
         run_id,
         lookback_days=args.lookback_days,
-        include_news=args.with_news or args.with_news_llm,
+        include_news=args.with_news or args.with_news_llm or args.with_web_news,
+        include_web_news=args.with_web_news,
         include_news_llm=args.with_news_llm,
         news_items=args.news_items,
     )
@@ -1602,6 +1604,51 @@ def command_study_symbol(args: argparse.Namespace) -> None:
     if args.full:
         payload["report"] = report
     _print_json(payload)
+
+
+def command_web_research(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    if bool(args.symbol) == bool(args.market):
+        raise ValueError("Indica exactamente un simbolo o --market.")
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    reporter = EventReporter(store, verbose=not args.json)
+    run_id = new_id("web")
+    target = args.symbol.upper() if args.symbol else "mercado"
+    reporter.emit(
+        "web_research_agent",
+        "web_research_started",
+        run_id,
+        f"Buscando evidencia web para {target}.",
+        {"symbol": args.symbol, "market": args.market, "max_items": args.max_items},
+    )
+    try:
+        report = build_web_research_report(
+            settings,
+            settings.data_dir / "reports",
+            run_id,
+            symbol=args.symbol,
+            market=args.market,
+            max_items=args.max_items,
+        )
+    except Exception as exc:
+        reporter.emit(
+            "web_research_agent",
+            "web_research_failed",
+            run_id,
+            f"Busqueda web fallida para {target}: {exc}",
+            {"error": repr(exc), "symbol": args.symbol, "market": args.market},
+        )
+        raise
+    reporter.emit(
+        "web_research_agent",
+        "web_research_completed",
+        run_id,
+        f"Busqueda web completada para {target}. Resultados: {report['summary']['items']}.",
+        {"path": report["path"], "summary": report["summary"]},
+    )
+    _print_json({"ok": True, "path": report["path"], "summary": report["summary"], "report": report})
 
 
 def command_post_market_review(args: argparse.Namespace) -> None:
@@ -4235,6 +4282,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Incluye noticias recientes de yfinance sin pedir validacion LLM.",
     )
     study_symbol.add_argument(
+        "--with-web-news",
+        action="store_true",
+        help="Incluye noticias web trazables si WEB_SEARCH_* esta configurado.",
+    )
+    study_symbol.add_argument(
         "--with-news-llm",
         action="store_true",
         help="Incluye noticias y validacion de sentimiento con el LLM configurado.",
@@ -4251,6 +4303,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Imprime el informe completo ademas de guardarlo en data/reports.",
     )
     study_symbol.set_defaults(func=command_study_symbol)
+
+    web_research = subparsers.add_parser(
+        "web-research",
+        help="Prueba la busqueda web trazable para un simbolo o mercado sin operar.",
+    )
+    web_research.add_argument("symbol", nargs="?", help="Ticker a investigar, por ejemplo AAPL.")
+    web_research.add_argument("--market", action="store_true", help="Busca noticias generales de mercado.")
+    web_research.add_argument("--max-items", type=int, default=None, help="Maximo de resultados normalizados.")
+    web_research.add_argument("--json", action="store_true", help="Devuelve el informe completo en JSON.")
+    web_research.set_defaults(func=command_web_research)
 
     post_market_review = subparsers.add_parser(
         "post-market-review",

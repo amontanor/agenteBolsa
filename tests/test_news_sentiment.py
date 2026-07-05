@@ -1,7 +1,11 @@
 import pytest
 
 from agente_bolsa.config import Settings
-from agente_bolsa.tools.news_sentiment import _llm_sentiment, assess_material_news_risk
+from agente_bolsa.tools.news_sentiment import (
+    _llm_sentiment,
+    assess_material_news_risk,
+    fetch_combined_symbol_news,
+)
 
 
 def test_assess_material_news_risk_flags_competitive_threat_without_llm():
@@ -77,3 +81,30 @@ def test_llm_sentiment_rejects_empty_json(monkeypatch):
             {"direction": "long", "score": 80},
             [{"title": "Apple launches product"}],
         )
+
+
+def test_fetch_combined_symbol_news_adds_web_results(monkeypatch):
+    monkeypatch.setattr(
+        "agente_bolsa.tools.news_sentiment.fetch_symbol_news",
+        lambda symbol, max_items=5: [{"title": "AAPL yfinance", "link": "https://example.com/yf"}],
+    )
+    monkeypatch.setattr(
+        "agente_bolsa.tools.news_sentiment.search_company_news",
+        lambda settings, symbol, max_items=5: {
+            "items": [
+                {
+                    "title": "AAPL web",
+                    "link": "https://example.com/web",
+                    "provider": "tavily",
+                }
+            ]
+        },
+    )
+
+    result = fetch_combined_symbol_news(
+        Settings(_env_file=None, WEB_SEARCH_ENABLED=True),
+        "AAPL",
+        max_items=5,
+    )
+
+    assert [item["title"] for item in result] == ["AAPL yfinance", "AAPL web"]

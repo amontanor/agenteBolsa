@@ -13,6 +13,8 @@ from agente_bolsa.llm_router import chat_for_role
 from agente_bolsa.llm_usage import record_llm_response
 
 from .reporting import write_json_report
+from .web_research import dedupe_news_items, search_company_news
+from .web_research_budget import freshness_hours
 
 ProgressCallback = Callable[[int, int, str], None]
 
@@ -93,6 +95,37 @@ def fetch_symbol_news(symbol: str, max_items: int = 5) -> list[dict[str, Any]]:
         if len(normalized) >= max_items:
             break
     return normalized
+
+
+def _has_fresh_local_news(settings: Settings, news: list[dict[str, Any]]) -> bool:
+    max_age_hours = float(getattr(settings, "research_evidence_max_age_hours", 48.0))
+    for item in news:
+        if str(item.get("provider") or "").lower() not in {"", "yfinance", "yahoo"}:
+            continue
+        age = freshness_hours(item.get("published_at"))
+        if age is not None and age <= max_age_hours:
+            return True
+    return False
+
+
+def fetch_combined_symbol_news(
+    settings: Settings,
+    symbol: str,
+    max_items: int = 5,
+    *,
+    force_web: bool = False,
+) -> list[dict[str, Any]]:
+    news: list[dict[str, Any]] = []
+    try:
+        news.extend(fetch_symbol_news(symbol, max_items=max_items))
+    except Exception:
+        if not getattr(settings, "web_search_enabled", False):
+            raise
+    should_call_web = force_web or not _has_fresh_local_news(settings, news)
+    if getattr(settings, "web_search_enabled", False) and should_call_web:
+        web_result = search_company_news(settings, symbol, max_items=max_items)
+        news.extend(list(web_result.get("items") or []))
+    return dedupe_news_items(news, limit=max_items)
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -247,7 +280,7 @@ def analyze_news_sentiment_for_candidates(
             continue
         news: list[dict[str, Any]] = []
         try:
-            news = fetch_symbol_news(symbol, max_items=max_news_items)
+            news = fetch_combined_symbol_news(settings, symbol, max_items=max_news_items)
         except Exception as exc:  # noqa: BLE001 - one symbol must not block the study.
             warnings.append(f"{symbol}: news fetch failed: {exc}")
             sentiment = {
