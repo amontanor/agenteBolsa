@@ -96,7 +96,7 @@ def _signal_context(store: Store, symbol: str, *, as_of_date: str | None = None)
                 FROM signal_outcomes
                 WHERE symbol = ?
                   AND signal_date <= ?
-                  AND coalesce(source, '') != 'lab_book'
+                  AND coalesce(source, '') NOT IN ('lab_book', 'learning_experiment')
                 ORDER BY signal_date DESC, created_at DESC
                 LIMIT 1
                 """,

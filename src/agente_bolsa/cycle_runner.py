@@ -25,6 +25,7 @@ from .tools.broker import BrokerClientFactory
 from .tools.costs import TransactionCostModel
 from .tools.deterministic_reviewer import recommendation_input_fingerprint, review_recommendations
 from .tools.execution import submit_paper_order_plan
+from .tools.learning_mode import LEARNING_EXPERIMENT_SOURCE, active_learning_mode
 from .tools.market_snapshot import build_market_snapshot, compact_snapshot_for_prompt
 from .tools.market_state import build_market_state, compact_market_state_for_prompt
 from .tools.operational_health import load_operational_block_context
@@ -309,6 +310,101 @@ def _backtest_gate_decision(settings: Settings, report: dict[str, Any]) -> tuple
     return True, "backtest aprobado"
 
 
+def _learning_mode_backtest_near_miss(settings: Settings, report: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    learning_mode = active_learning_mode(settings)
+    if not learning_mode:
+        return False, {}
+    metrics = report.get("metrics", {}) or {}
+    benchmark = ((report.get("benchmark") or {}).get("metrics")) or {}
+    trades = int(metrics.get("trades") or 0)
+    hit_rate = float(metrics.get("hit_rate") or 0.0)
+    profit_factor = metrics.get("profit_factor")
+    profit_factor_value = None if profit_factor is None else float(profit_factor)
+    trade_window_alpha = benchmark.get("trade_window_alpha")
+    alpha_vs_benchmark = benchmark.get("alpha_vs_benchmark")
+    alpha_value = trade_window_alpha if trade_window_alpha is not None else alpha_vs_benchmark
+    negative_regimes = 0
+    for bucket in (report.get("regime_summary") or {}).values():
+        bucket_trades = int(bucket.get("trades") or 0)
+        bucket_avg = bucket.get("avg_return")
+        if (
+            bucket_trades >= int(settings.backtest_gate_min_regime_trades or 0)
+            and bucket_avg is not None
+            and float(bucket_avg) < 0
+        ):
+            negative_regimes += 1
+    if trades < 8:
+        return False, {"clear_reject": "trades_lt_8"}
+    if profit_factor_value is None or profit_factor_value < 0.90:
+        return False, {"clear_reject": "profit_factor_lt_0_90"}
+    if alpha_value is not None and float(alpha_value) < -0.01:
+        return False, {"clear_reject": "alpha_very_negative"}
+    approved = (
+        hit_rate >= (float(settings.backtest_gate_min_hit_rate) - 0.03)
+        and (profit_factor_value is not None and profit_factor_value >= 0.95)
+        and negative_regimes <= 2
+        and (alpha_value is None or float(alpha_value) >= -0.005)
+    )
+    return approved, {
+        "mode": "learning_near_miss",
+        "trades": trades,
+        "hit_rate": hit_rate,
+        "profit_factor": profit_factor_value,
+        "alpha_value": alpha_value,
+        "negative_regimes": negative_regimes,
+    }
+
+
+def _write_learning_mode_shadow_report(
+    settings: Settings,
+    *,
+    run_id: str,
+    recommendations: list[Any],
+    plans: list[Any],
+    rejected: list[dict[str, Any]],
+    operational_kill_switch: dict[str, Any] | None = None,
+) -> str:
+    local_day = datetime.now(ZoneInfo(settings.local_timezone)).date().isoformat()
+    reports_dir = settings.data_dir / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    path = reports_dir / f"learning_mode_shadow_{local_day}.json"
+    gate_by_symbol = {
+        str(item.get("symbol") or "").upper(): item
+        for item in rejected
+        if str(item.get("symbol") or "").strip()
+    }
+    payload = {
+        "run_id": run_id,
+        "session_date": local_day,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "mode": "shadow_first",
+        "cohort": LEARNING_EXPERIMENT_SOURCE,
+        "operational_kill_switch": operational_kill_switch or {},
+        "would_buy": [
+            {
+                "symbol": plan.symbol,
+                "notional": plan.notional,
+                "entry_price": plan.entry_price,
+                "stop_loss": plan.stop_loss,
+                "take_profit": plan.take_profit,
+                "reason": plan.recommendation.reason,
+                "source": plan.recommendation.source,
+                "strategy_name": ((gate_by_symbol.get(plan.symbol) or {}).get("checks") or {}).get("strategy_name"),
+                "backtest_soft_override": bool(plan.backtest_soft_override),
+                "micro_experiment": bool(plan.micro_experiment),
+            }
+            for plan in plans
+            if str(plan.side).lower() == "buy"
+        ],
+        "rejected": rejected,
+        "recommendations": [asdict(item) for item in recommendations],
+    }
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=True, default=str), encoding="utf-8")
+    latest_path = reports_dir / "latest_learning_mode_shadow.json"
+    latest_path.write_text(json.dumps(payload, indent=2, ensure_ascii=True, default=str), encoding="utf-8")
+    return str(path)
+
+
 def _apply_backtest_gate(
     settings: Settings,
     reporter: EventReporter,
@@ -358,6 +454,28 @@ def _apply_backtest_gate(
             )
             if approved:
                 kept.append(recommendation)
+            elif _learning_mode_backtest_near_miss(settings, report)[0]:
+                near_miss_checks = _learning_mode_backtest_near_miss(settings, report)[1]
+                decisions[-1] = {
+                    "symbol": recommendation.symbol,
+                    "approved": True,
+                    "reason": "learning_near_miss",
+                    "path": report.get("path"),
+                    "metrics": metrics,
+                    "checks": near_miss_checks,
+                }
+                kept.append(
+                    replace(
+                        recommendation,
+                        micro_experiment=True,
+                        backtest_soft_override=True,
+                        soft_override_reasons=[
+                            *list(getattr(recommendation, "soft_override_reasons", []) or []),
+                            "learning_near_miss",
+                        ],
+                        cohort=LEARNING_EXPERIMENT_SOURCE,
+                    )
+                )
             elif (
                 settings.trading_mode == "paper"
                 and settings.backtest_gate_paper_soft_override_enabled
@@ -643,8 +761,14 @@ def _auto_paper_trade(
             },
         )
         return {"submitted": [], "failed": [], "blocked": "paper_safety"}
+    learning_mode = active_learning_mode(settings)
+    learning_shadow_only = bool(learning_mode and learning_mode.get("shadow_first"))
     operational_kill_switch = load_operational_block_context(settings.data_dir)
-    if settings.operational_kill_switch_enabled and operational_kill_switch.get("block_buy_execution"):
+    if (
+        settings.operational_kill_switch_enabled
+        and operational_kill_switch.get("block_buy_execution")
+        and not learning_shadow_only
+    ):
         reporter.emit(
             "execution_agent",
             "paper_auto_trade_blocked",
@@ -763,6 +887,7 @@ def _auto_paper_trade(
         pass
 
     recommendations = decision["recommendations"]
+    learning_mode = active_learning_mode(settings)
     # §1 (experimento paper): construir objetivo a R:R minimo en compras de buen setup
     # cuyo take del LLM era demasiado conservador. Solo sube el take; nunca empeora.
     if str(getattr(settings, "trading_mode", "")).lower() == "paper":
@@ -798,6 +923,14 @@ def _auto_paper_trade(
         sentiment_context,
         market_state,
     )
+    if learning_mode:
+        reviewed_recommendations = [
+            replace(
+                item,
+                cohort=LEARNING_EXPERIMENT_SOURCE if str(item.action).lower() == "buy" else item.cohort,
+            )
+            for item in reviewed_recommendations
+        ]
     if deterministic_review:
         reporter.emit(
             "risk_manager",
@@ -921,11 +1054,65 @@ def _auto_paper_trade(
         dry_run=True,
         rejected=rejected_order_plans,
         market_state=market_state,
+        ignore_operational_kill_switch=learning_shadow_only,
     )
     effective_plan_limit = _effective_buy_plan_limit(settings, gated_recommendations)
     effective_daily_limit = _effective_daily_buy_limit(settings, plans)
     approved_buys = sorted({item.symbol for item in gated_recommendations if str(item.action).lower() == "buy"})
     plans = _apply_daily_buy_limit(settings, store, reporter, run_id, plans, rejected=rejected_order_plans)
+    if learning_mode and bool(learning_mode.get("shadow_first")):
+        shadow_path = _write_learning_mode_shadow_report(
+            settings,
+            run_id=run_id,
+            recommendations=reviewed_recommendations,
+            plans=plans,
+            rejected=rejected_order_plans,
+            operational_kill_switch=operational_kill_switch,
+        )
+        reporter.emit(
+            "execution_agent",
+            "learning_mode_shadow_logged",
+            run_id,
+            "Learning mode en shadow_first: se registro lo que habria comprado sin enviar ordenes.",
+            {"path": shadow_path, "buys": [plan.symbol for plan in plans if str(plan.side).lower() == "buy"]},
+        )
+        if settings.operational_kill_switch_enabled and operational_kill_switch.get("block_buy_execution"):
+            reporter.emit(
+                "risk_manager",
+                "auto_paper_trading_blocked_shadow_only",
+                run_id,
+                "Operational kill switch activo: learning_mode shadow sigue registrando, pero no enviaria ordenes reales.",
+                operational_kill_switch,
+            )
+        execution_updates = update_signal_execution_status(
+            store,
+            source_run_id=decision_context.get("run_id"),
+            approved_symbols=approved_buys,
+            rejected_order_plans=rejected_order_plans,
+            planned_symbols=[],
+            submitted=[],
+            failed=[],
+            effective_max_orders_per_cycle=effective_plan_limit,
+            effective_max_daily_buy_orders=effective_daily_limit,
+        )
+        return {
+            "submitted": [],
+            "failed": [],
+            "shadow_only": True,
+            "shadow_report_path": shadow_path,
+            "operational_kill_switch": operational_kill_switch,
+            "recommendations": [asdict(item) for item in reviewed_recommendations],
+            "deterministic_review": deterministic_review,
+            "adversarial_review": adversarial_review,
+            "entry_quality_gate": entry_quality_gate,
+            "backtest_gate": backtest_gate,
+            "approved_buys": approved_buys,
+            "effective_max_orders_per_cycle": effective_plan_limit,
+            "effective_max_daily_buy_orders": effective_daily_limit,
+            "rejected_order_plans": rejected_order_plans,
+            "execution_updates": execution_updates,
+            "recommendation_augmentation": recommendation_augmentation,
+        }
     planned_symbols = [plan.symbol for plan in plans if str(plan.side).lower() == "buy"]
     for plan in plans:
         plan_id = new_id("plan")

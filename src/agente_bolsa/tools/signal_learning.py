@@ -74,6 +74,8 @@ def _signal_features(candidate: dict[str, Any]) -> dict[str, Any]:
         "strategy_version": candidate.get("strategy_version"),
         "strategy_status": candidate.get("strategy_status"),
         "shadow_candidate": bool(candidate.get("shadow_candidate")),
+        "cohort": candidate.get("cohort"),
+        "learning_mode": bool(candidate.get("learning_mode")),
         "negative_pocket_shadow_penalties": candidate.get("negative_pocket_shadow_penalties", {}),
         "negative_pocket_penalty_applied": bool(candidate.get("negative_pocket_penalty_applied")),
         "blocked_auto_buy": bool(candidate.get("blocked_auto_buy")),
@@ -782,7 +784,12 @@ def update_signal_outcomes(
     limit: int = 1000,
     since_date: str = "2026-04-01",
 ) -> dict[str, Any]:
-    signals = store.signal_outcomes(limit=limit, since_date=since_date, include_lab_book=True)
+    signals = store.signal_outcomes(
+        limit=limit,
+        since_date=since_date,
+        include_lab_book=True,
+        include_learning_experiment=True,
+    )
     symbols = sorted({signal["symbol"] for signal in signals})
     if not signals or not symbols:
         return {"updated": 0, "signals": 0, "symbols": 0, "warnings": []}

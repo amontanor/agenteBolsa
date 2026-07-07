@@ -81,6 +81,7 @@ from .tools.daily_learning import (
 )
 from .tools.execution import submit_paper_order_plan
 from .tools.lab_book import run_lab_book_once
+from .tools.learning_mode import active_learning_mode, learning_mode_source
 from .tools.live_readiness import build_live_readiness_report
 from .tools.market_state import build_market_state, load_latest_market_state
 from .tools.operational_health import (
@@ -1102,6 +1103,7 @@ def command_scan_technical(args: argparse.Namespace) -> None:
         top_n=args.top_n,
         progress_callback=_progress,
         benchmark_symbol=settings.benchmark_symbol,
+        learning_mode_config=active_learning_mode(settings),
     )
     annotated_report = _annotate_technical_context_with_learning(
         report,
@@ -1115,7 +1117,11 @@ def command_scan_technical(args: argparse.Namespace) -> None:
     market_state = load_latest_market_state(settings.data_dir / "reports")
     if market_state:
         report["market_state"] = market_state
-    signals_saved = record_signal_candidates(store, report, source="manual_scan")
+    signals_saved = record_signal_candidates(
+        store,
+        report,
+        source=learning_mode_source(settings=settings, default_source="manual_scan"),
+    )
     elapsed_seconds = round(time.perf_counter() - started, 2)
     top_longs = [item["symbol"] for item in report["top_longs"][:5]]
     top_shorts = [item["symbol"] for item in report["top_shorts"][:5]]
@@ -2224,6 +2230,8 @@ def command_learning_digest(args: argparse.Namespace) -> None:
         return
     digest = report["digest"]
     print("LEARNING DIGEST")
+    if digest.get("llm_status_line"):
+        print(digest["llm_status_line"])
     print(f"Resumen: {digest['summary']}")
     if (digest.get("pre_earnings") or {}).get("available"):
         print(f"Pre-earnings: {(digest.get('pre_earnings') or {}).get('summary', {})}")

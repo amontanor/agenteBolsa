@@ -13,6 +13,7 @@ from agente_bolsa.config import Settings
 from agente_bolsa.models import new_id
 from agente_bolsa.storage import Store
 
+from ..tools.learning_mode import LEARNING_MODE_GOVERNED_KEYS
 from .aggressiveness_gate import (
     AGGRESSIVENESS_REQUIRES_EDGE_EVIDENCE,
     assess_aggressiveness_evidence,
@@ -112,9 +113,18 @@ SELF_GOVERNANCE_FORBIDDEN_IDENTIFIERS = {
     "improvement_dry_run",
     "lab_book_enabled",
     "lab_book_mode",
+    "learning_mode",
+    "learning_mode_enabled",
+    "learning_mode_human_gated",
+    "learning_mode_shadow_first",
+    "learning_mode_daily_order_budget",
+    "learning_mode_per_trade_notional_usd",
+    "learning_mode_max_portfolio_exposure_pct",
+    "learning_mode_allowed_strategies",
     "micro_experiment_size_multiplier",
     "programmer_max_repair_attempts",
     "require_human_approval_for_code_changes",
+    *LEARNING_MODE_GOVERNED_KEYS,
     *RESEARCH_MODE_GOVERNED_KEYS,
 }
 

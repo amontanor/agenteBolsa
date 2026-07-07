@@ -107,7 +107,7 @@ def compute_setup_edge_table_from_connection(
     end_date = _coerce_as_of(as_of)
     start_date = end_date - timedelta(days=max(1, int(train_window_days)))
     columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(signal_outcomes)").fetchall()}
-    source_filter = "AND coalesce(source, '') != 'lab_book'" if "source" in columns else ""
+    source_filter = "AND coalesce(source, '') NOT IN ('lab_book', 'learning_experiment')" if "source" in columns else ""
     rows = connection.execute(
         f"""
         SELECT signal_date, features_json, outcome_json

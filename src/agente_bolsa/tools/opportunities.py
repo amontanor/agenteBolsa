@@ -328,7 +328,7 @@ def latest_llm_context_by_symbol(store: Store, symbols: list[str]) -> dict[str, 
                 SELECT symbol, signal_date, decision, gate_json, updated_at
                 FROM signal_outcomes
                 WHERE symbol = ?
-                  AND coalesce(source, '') != 'lab_book'
+                  AND coalesce(source, '') NOT IN ('lab_book', 'learning_experiment')
                 ORDER BY signal_date DESC, updated_at DESC
                 LIMIT 1
                 """,

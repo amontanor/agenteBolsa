@@ -36,7 +36,7 @@ def _candidate_rows(store: Store, since_date: str) -> list[dict[str, Any]]:
             SELECT signal_id, symbol, signal_date, features_json, outcome_json
             FROM signal_outcomes
             WHERE signal_date >= ?
-              AND coalesce(source, '') != 'lab_book'
+              AND coalesce(source, '') NOT IN ('lab_book', 'learning_experiment')
               AND (
                 json_extract(features_json, '$.setup_name') = 'confirmed_pattern'
                 OR coalesce(json_extract(features_json, '$.chart_patterns.bullish_confirmed_count'), 0) > 0

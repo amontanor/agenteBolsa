@@ -35,6 +35,7 @@ from .tools.broker import BrokerClientFactory
 from .tools.broker_reconciliation import reconcile_broker_orders
 from .tools.daily_learning import build_learning_digest_report, load_daily_learning_context
 from .tools.execution import submit_paper_order_plan
+from .tools.learning_mode import active_learning_mode, learning_mode_source
 from .tools.news_sentiment import analyze_news_sentiment_for_candidates
 from .tools.operational_health import (
     activate_persistent_kill_switch,
@@ -1365,6 +1366,7 @@ def market_cycle_job(
             run_id,
             benchmark_symbol=settings.benchmark_symbol,
             store=store,
+            learning_mode_config=active_learning_mode(settings),
         )
         selected_candidates, selected_symbols = _selected_candidates(report, settings)
         report["selected_candidates"] = selected_candidates
@@ -1376,7 +1378,11 @@ def market_cycle_job(
                 report["market_state"] = latest_market_state
         except Exception as exc:  # noqa: BLE001 - el ledger no debe romper el ciclo.
             log_swallow(LOGGER, "adjuntar regimen al ledger intradia", exc)
-        signals_saved = record_signal_candidates(store, report, source="intraday_scan")
+        signals_saved = record_signal_candidates(
+            store,
+            report,
+            source=learning_mode_source(settings=settings, default_source="intraday_scan"),
+        )
         top_longs = ", ".join(item["symbol"] for item in report["top_longs"][:5]) or "sin candidatos"
         top_shorts = ", ".join(item["symbol"] for item in report["top_shorts"][:5]) or "sin candidatos"
         reporter.emit(
@@ -1609,6 +1615,7 @@ def closed_market_technical_study_job(
         progress_callback=_progress,
         benchmark_symbol=settings.benchmark_symbol,
         store=store,
+        learning_mode_config=active_learning_mode(settings),
     )
     selected_candidates, selected_symbols = _selected_candidates(report, settings)
     report["selected_candidates"] = selected_candidates
@@ -1620,7 +1627,11 @@ def closed_market_technical_study_job(
             report["market_state"] = latest_market_state
     except Exception as exc:  # noqa: BLE001 - el ledger no debe romper el estudio.
         log_swallow(LOGGER, "adjuntar regimen al estudio de mercado cerrado", exc)
-    signals_saved = record_signal_candidates(store, report, source="closed_market_study")
+    signals_saved = record_signal_candidates(
+        store,
+        report,
+        source=learning_mode_source(settings=settings, default_source="closed_market_study"),
+    )
     top_longs = ", ".join(item["symbol"] for item in report["top_longs"][:5]) or "sin candidatos"
     top_shorts = ", ".join(item["symbol"] for item in report["top_shorts"][:5]) or "sin candidatos"
     reporter.emit(
@@ -1790,6 +1801,7 @@ def opportunity_snapshot_job(
         top_n=20,
         benchmark_symbol=settings.benchmark_symbol,
         store=store,
+        learning_mode_config=active_learning_mode(settings),
     )
     annotated_report = _annotate_technical_context_with_learning(
         report,
@@ -1808,7 +1820,11 @@ def opportunity_snapshot_job(
             report["market_state"] = latest_market_state
     except Exception as exc:  # noqa: BLE001 - el snapshot no debe fallar por regimen ausente.
         log_swallow(LOGGER, "adjuntar regimen al snapshot de oportunidades", exc)
-    record_signal_candidates(store, report, source="opportunity_snapshot")
+    record_signal_candidates(
+        store,
+        report,
+        source=learning_mode_source(settings=settings, default_source="opportunity_snapshot"),
+    )
     snapshot = build_opportunity_snapshot(
         settings,
         store,

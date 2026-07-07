@@ -9,6 +9,7 @@ from typing import Any
 
 import pandas as pd
 
+from .learning_mode import LEARNING_EXPERIMENT_SOURCE
 from .market_data import download_daily_prices_with_metadata
 from .reporting import write_json_report
 from .technical_analysis import add_basic_technical_features
@@ -35,6 +36,7 @@ def build_closed_market_technical_study(
     progress_callback: Any | None = None,
     benchmark_symbol: str = "SPY",
     store: Any | None = None,
+    learning_mode_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     end = datetime.now(timezone.utc).date() + timedelta(days=1)
     start = end - timedelta(days=lookback_days)
@@ -75,16 +77,31 @@ def build_closed_market_technical_study(
         multi_symbol=multi_symbol,
         benchmark_return_20d=benchmark_return_20d,
     )
+    learning_mode = learning_mode_config if learning_mode_config else None
+    allowed_learning_strategies = {
+        str(item)
+        for item in list((learning_mode or {}).get("allowed_strategies") or [])
+        if str(item).strip()
+    }
     candidates: list[dict[str, Any]] = []
     shadow_candidates: list[dict[str, Any]] = []
     tool_requests: list[dict[str, Any]] = []
     for strategy in discover(store):
+        if learning_mode and allowed_learning_strategies and strategy.name not in allowed_learning_strategies:
+            continue
         produced = strategy.generate_candidates(context)
         for candidate in produced:
             candidate["strategy_name"] = strategy.name
             candidate["strategy_version"] = strategy.version
+            candidate["cohort"] = LEARNING_EXPERIMENT_SOURCE if learning_mode else None
+            candidate["learning_mode"] = bool(learning_mode)
         warnings.extend(getattr(strategy, "last_warnings", []) or [])
-        if str(getattr(strategy, "status", "ACTIVE")).upper() == "SHADOW":
+        strategy_status = str(getattr(strategy, "status", "ACTIVE")).upper()
+        if learning_mode and strategy.name in allowed_learning_strategies:
+            strategy_status = "ACTIVE"
+            for candidate in produced:
+                candidate["strategy_status"] = "LEARNING_ACTIVE"
+        if strategy_status == "SHADOW":
             # Las SHADOW acumulan outcomes pero NUNCA llegan a decision/ejecucion.
             shadow_candidates.extend(produced)
             continue

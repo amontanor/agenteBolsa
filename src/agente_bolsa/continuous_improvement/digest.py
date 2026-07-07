@@ -471,10 +471,17 @@ def latest_core_sleeve_signal(data_dir: Path, *, now: datetime | None = None) ->
 def _safety_lines(safety: dict[str, Any] | None) -> list[str]:
     if not isinstance(safety, dict):
         return []
+    learning_mode = safety.get("learning_mode") if isinstance(safety.get("learning_mode"), dict) else None
+    learning_suffix = ""
+    if learning_mode is not None:
+        learning_suffix = (
+            f" | learning_mode={'ON' if learning_mode.get('enabled') else 'OFF'}"
+            f", shadow_first={bool(learning_mode.get('shadow_first'))}"
+        )
     if safety.get("ok"):
-        return ["Safety: OK"]
+        return [f"Safety: OK{learning_suffix}"]
     violations = ", ".join(str(item) for item in (safety.get("violations") or [])) or "sin detalle"
-    return [f"Safety: ALERTA -> {violations}"]
+    return [f"Safety: ALERTA -> {violations}{learning_suffix}"]
 
 
 def format_lab_digest_text(digest: dict[str, Any]) -> str:

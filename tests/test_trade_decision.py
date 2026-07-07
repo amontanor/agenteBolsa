@@ -1343,6 +1343,57 @@ def test_build_order_plans_blocks_buys_when_operational_kill_switch_is_active(tm
     assert rejected[0]["stage"] == "operational_kill_switch"
 
 
+def test_build_order_plans_can_ignore_operational_kill_switch_for_shadow_only(tmp_path: Path):
+    settings = Settings(DATA_DIR=tmp_path)
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "latest_operational_health.json").write_text(
+        json.dumps(
+            {
+                "alerts": [
+                    {
+                        "severity": "critical",
+                        "kind": "job_failed",
+                        "job": "market_cycle",
+                        "detail": "broker sync timeout",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    portfolio = PortfolioSnapshot(
+        account_id="paper",
+        status="ACTIVE",
+        currency="USD",
+        cash=10_000,
+        portfolio_value=20_000,
+        buying_power=20_000,
+        positions=[],
+        open_orders=[],
+    )
+    recommendation = TradeRecommendation(
+        symbol="AAPL",
+        action="buy",
+        confidence=0.9,
+        reason="test",
+        entry_price=100.0,
+        stop_loss=95.0,
+        take_profit=110.0,
+        target_exposure_pct=0.05,
+    )
+
+    plans = build_order_plans(
+        settings,
+        portfolio,
+        [recommendation],
+        ignore_operational_kill_switch=True,
+    )
+
+    assert len(plans) == 1
+    assert plans[0].symbol == "AAPL"
+
+
 def test_build_order_plans_paper_relaxes_partial_but_blocks_insufficient(tmp_path: Path):
     # §2 (25-jun): en paper, el PARTIAL por falta de macro/news ya NO bloquea el plan
     # (la revision determinista ya lo trata como micro). INSUFFICIENT sigue bloqueando.

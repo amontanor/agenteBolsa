@@ -32,6 +32,9 @@ AGGRESSIVENESS_PARAMETER_CRITERIA: dict[str, str] = {
     "lab_book_fixed_notional": "increase",
     "lab_book_notional": "increase",
     "lab_book_max_universe_symbols": "increase",
+    "learning_mode_daily_order_budget": "increase",
+    "learning_mode_per_trade_notional_usd": "increase",
+    "learning_mode_max_portfolio_exposure_pct": "increase",
 }
 
 PROFILE_RANK = {

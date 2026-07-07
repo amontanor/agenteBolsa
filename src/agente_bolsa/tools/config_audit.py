@@ -58,6 +58,7 @@ AUDIT_FIELDS: tuple[str, ...] = (
 FILE_CONFIGS: dict[str, str] = {
     "core_sleeve": "config/core_sleeve.json",
     "lab_book": "config/lab_book.json",
+    "learning_mode": "config/learning_mode.json",
     "ci_research_mode": "config/ci_research_mode.json",
     "codegen_nightly": "config/codegen_nightly.json",
     "cast_governance": "config/cast_governance.json",
@@ -130,6 +131,24 @@ def build_config_audit(settings: Settings) -> dict[str, Any]:
                 "ok": bool(core_sleeve.get("dry_run")) is True,
             }
         )
+    learning_mode = file_configs.get("learning_mode")
+    if isinstance(learning_mode, dict) and "_error" not in learning_mode:
+        checks.append(
+            {
+                "name": "learning_mode.enabled",
+                "value": learning_mode.get("enabled"),
+                "expected": False,
+                "ok": bool(learning_mode.get("enabled")) is False,
+            }
+        )
+        checks.append(
+            {
+                "name": "learning_mode.human_gated",
+                "value": learning_mode.get("human_gated"),
+                "expected": True,
+                "ok": bool(learning_mode.get("human_gated", True)) is True,
+            }
+        )
     safety = {
         "ok": all(check["ok"] for check in checks),
         "checks": checks,
@@ -143,11 +162,20 @@ def build_config_audit(settings: Settings) -> dict[str, Any]:
     }
 
 
+def _learning_mode_safety_suffix(audit: dict[str, Any]) -> str:
+    learning_mode = (audit.get("file_configs") or {}).get("learning_mode")
+    if isinstance(learning_mode, dict) and "_error" not in learning_mode:
+        enabled = bool(learning_mode.get("enabled"))
+        shadow_first = bool(learning_mode.get("shadow_first"))
+        return f", learning_mode={'ON' if enabled else 'OFF'}, shadow_first={shadow_first}"
+    return ", learning_mode=sin_datos"
+
+
 def format_config_audit_text(audit: dict[str, Any]) -> str:
     lines = ["Auditoria de configuracion efectiva", ""]
     safety = audit.get("safety") or {}
     if safety.get("ok"):
-        lines.append("Safety: OK (paper, live off, auto-apply off, sleeve dry-run)")
+        lines.append(f"Safety: OK (paper, live off, auto-apply off, sleeve dry-run{_learning_mode_safety_suffix(audit)})")
     else:
         lines.append(f"Safety: ALERTA -> {', '.join(safety.get('violations') or ['sin datos'])}")
     lines.append("")
@@ -164,7 +192,7 @@ def format_config_audit_text(audit: dict[str, Any]) -> str:
         elif "_error" in payload:
             lines.append(f"- {label}: ERROR {payload['_error']}")
         else:
-            keys = ("enabled", "dry_run", "mode", "human_gated")
+            keys = ("enabled", "dry_run", "mode", "human_gated", "shadow_first")
             summary = ", ".join(f"{k}={payload[k]}" for k in keys if k in payload)
             lines.append(f"- {label}: {summary or 'ok'}")
     return "\n".join(lines) + "\n"
@@ -173,6 +201,15 @@ def format_config_audit_text(audit: dict[str, Any]) -> str:
 def digest_safety_summary(settings: Settings) -> dict[str, Any] | None:
     """Bloque safety para el digest diario; nunca lanza."""
     try:
-        return build_config_audit(settings)["safety"]
+        audit = build_config_audit(settings)
+        safety = dict(audit["safety"])
+        learning_mode = (audit.get("file_configs") or {}).get("learning_mode")
+        if isinstance(learning_mode, dict) and "_error" not in learning_mode:
+            safety["learning_mode"] = {
+                "enabled": bool(learning_mode.get("enabled")),
+                "human_gated": bool(learning_mode.get("human_gated", True)),
+                "shadow_first": bool(learning_mode.get("shadow_first")),
+            }
+        return safety
     except Exception:  # noqa: BLE001 - el digest no debe caer por la auditoria
         return None

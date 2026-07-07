@@ -24,6 +24,7 @@ from agente_bolsa.models import (
 )
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.daily_learning import load_daily_learning_context
+from agente_bolsa.tools.learning_mode import LEARNING_EXPERIMENT_SOURCE, active_learning_mode
 from agente_bolsa.tools.operational_health import (
     load_operational_block_context,
     load_operational_response_context,
@@ -327,6 +328,11 @@ def _effective_trade_recommendation_limit(settings: Settings, technical_context:
 
 def _effective_buy_plan_limit(settings: Settings, recommendations: list[TradeRecommendation]) -> int:
     base_limit = max(1, int(settings.max_orders_per_cycle))
+    learning_mode = active_learning_mode(settings)
+    if learning_mode:
+        budget = max(0, int(learning_mode.get("daily_order_budget") or 0))
+        if budget > 0:
+            base_limit = budget
     buy_count = sum(1 for item in recommendations if str(item.action).lower() == "buy")
     if _can_expand_long_only_capacity(settings) and buy_count >= 5:
         return max(base_limit, 5)
@@ -337,6 +343,9 @@ def _effective_buy_plan_limit(settings: Settings, recommendations: list[TradeRec
 
 def _effective_daily_buy_limit(settings: Settings, plans: list[Any]) -> int:
     base_limit = max(0, int(settings.max_daily_buy_orders))
+    learning_mode = active_learning_mode(settings)
+    if learning_mode:
+        base_limit = max(0, int(learning_mode.get("daily_order_budget") or 0))
     buy_count = sum(1 for item in plans if str(getattr(item, "side", "")).lower() == "buy")
     if _can_expand_long_only_capacity(settings) and buy_count >= 5:
         limit = max(base_limit, 5)
@@ -407,12 +416,32 @@ def _effective_market_state_block_reason(settings: Settings, market_state: dict[
     incoherente y dejaba el sistema en 0 trades. Mantiene el bloqueo para INSUFFICIENT
     (integridad) y en modo live (sin cambios). (§2, 25-jun-2026)."""
     reason = _fallback_market_state_block_reason(market_state)
+    if reason == "market_state_partial_missing_macro_or_news" and active_learning_mode(settings):
+        return None
     if (
         reason == "market_state_partial_missing_macro_or_news"
         and str(getattr(settings, "trading_mode", "")).lower() == "paper"
     ):
         return None
     return reason
+
+
+def _material_risk_is_real(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, dict):
+        severity = str(value.get("severity") or value.get("level") or "").lower()
+        return bool(value.get("material")) or severity in {"material", "high", "critical", "block"}
+    return False
+
+
+def _sentiment_item_for_symbol(sentiment_context: dict[str, Any] | None, symbol: str) -> dict[str, Any]:
+    if not sentiment_context:
+        return {}
+    for item in sentiment_context.get("results", []) or []:
+        if str(item.get("symbol") or "").upper() == symbol.upper():
+            return item if isinstance(item, dict) else {}
+    return {}
 
 
 def _effective_research_block_reason(
@@ -2738,6 +2767,9 @@ def validate_entry_quality(
     sentiment_score = _float(sentiment.get("sentiment_score"))
     sentiment_confidence = _float(sentiment.get("confidence")) or 0.0
     sentiment_flags = [str(flag) for flag in sentiment.get("risk_flags", [])]
+    learning_mode = active_learning_mode(settings)
+    sentiment_item = _sentiment_item_for_symbol(sentiment_context, recommendation.symbol)
+    material_risk_real = _material_risk_is_real(sentiment_item.get("material_risk"))
     daily_learning_digest = load_daily_learning_context(settings.data_dir)
     operational_response_context = load_operational_response_context(settings.data_dir)
     learning_prior = candidate.get("learning_prior") or _candidate_learning_prior(
@@ -3043,18 +3075,29 @@ def validate_entry_quality(
     deterministic_fallback = recommendation.source == "deterministic_fallback"
     checks["deterministic_fallback"] = deterministic_fallback
     sentiment_failed = "sentiment_failed" in sentiment_flags
+    sentiment_missing_or_failed = bool(sentiment_failed or sentiment_score is None)
+    sentiment_penalty_disabled = bool(
+        learning_mode
+        and sentiment_missing_or_failed
+        and not material_risk_real
+    )
     checks["sentiment_data_quality"] = {
         "status": "missing_or_failed" if sentiment_failed or sentiment_score is None else "available",
-        "penalized": bool(sentiment_failed or sentiment_score is None),
+        "penalized": bool(sentiment_missing_or_failed and not sentiment_penalty_disabled),
+        "learning_mode_bypass": sentiment_penalty_disabled,
+        "material_risk_real": material_risk_real,
     }
     if (
         settings.news_sentiment_fail_closed_for_buys
         and sentiment_failed
         and not deterministic_fallback
+        and not sentiment_penalty_disabled
     ):
         return False, "sentimiento no validado; compra bloqueada por fallo de noticias", checks
     if sentiment_score is not None and sentiment_confidence >= 0.5 and sentiment_score <= -0.5:
         return False, f"sentimiento negativo confirmado ({sentiment_score})", checks
+    sentiment_score_for_scoring = 0.0 if sentiment_penalty_disabled and sentiment_score is None else sentiment_score
+    sentiment_failed_for_scoring = False if sentiment_penalty_disabled else sentiment_failed
     if settings.entry_score_v2_enabled:
         entry_score = _entry_score_v2(
             settings,
@@ -3069,9 +3112,9 @@ def validate_entry_quality(
             return_20d=return_20d,
             volume_z=volume_z,
             relative_return_20d=relative_return_20d,
-            sentiment_score=sentiment_score,
+            sentiment_score=sentiment_score_for_scoring,
             sentiment_confidence=sentiment_confidence,
-            sentiment_failed=sentiment_failed,
+            sentiment_failed=sentiment_failed_for_scoring,
             learning_prior=learning_prior,
         )
         reward_risk_margin_tolerance = float(settings.entry_score_v2_reward_risk_margin_tolerance)
@@ -4226,7 +4269,11 @@ def deterministic_trade_fallback_recommendations(
 ) -> list[TradeRecommendation]:
     """Conservative fallback for paper trading when the LLM decision layer is unavailable."""
 
-    if _fallback_market_state_block_reason(market_state):
+    if active_learning_mode(settings):
+        block_reason = _effective_market_state_block_reason(settings, market_state)
+    else:
+        block_reason = _fallback_market_state_block_reason(market_state)
+    if block_reason:
         return []
 
     existing_symbols = {
@@ -4346,6 +4393,7 @@ def deterministic_trade_fallback_recommendations(
             take_profit=_float(risk.get("take_profit")),
             target_exposure_pct=float(settings.max_position_exposure),
             source="deterministic_fallback",
+            cohort=LEARNING_EXPERIMENT_SOURCE if active_learning_mode(settings) else None,
         )
         entry_approved, _entry_reason, _entry_checks = validate_entry_quality(
             settings,
@@ -4450,6 +4498,7 @@ def deterministic_trade_fallback_recommendations(
                 invalidation="Stop loss o deterioro tecnico en el siguiente ciclo.",
                 source="deterministic_fallback",
                 aggressiveness_profile=settings.trade_aggressiveness_profile,
+                cohort=LEARNING_EXPERIMENT_SOURCE if active_learning_mode(settings) else None,
             )
         )
     return recommendations
@@ -4465,7 +4514,10 @@ def augment_recommendations_with_deterministic_fallback(
     market_state: dict[str, Any] | None = None,
 ) -> tuple[list[TradeRecommendation], dict[str, Any]]:
     recommendation_limit = max(1, int(limit or _effective_trade_recommendation_limit(settings, technical_context)))
-    block_reason = _fallback_market_state_block_reason(market_state)
+    if active_learning_mode(settings):
+        block_reason = _effective_market_state_block_reason(settings, market_state)
+    else:
+        block_reason = _fallback_market_state_block_reason(market_state)
     if block_reason:
         return recommendations, {
             "added": [],
@@ -4554,11 +4606,23 @@ def build_buy_order_plans(
     dry_run: bool = True,
     rejected: list[dict[str, Any]] | None = None,
     market_state: dict[str, Any] | None = None,
+    ignore_operational_kill_switch: bool = False,
 ) -> list[OrderPlan]:
     """Build risk-checked buy plans. Sell/reduce/exit are kept as recommendations for now."""
 
     plans: list[OrderPlan] = []
     buy_plan_limit = _effective_buy_plan_limit(settings, recommendations)
+    learning_mode = active_learning_mode(settings)
+    learning_notional_cap = (
+        float(learning_mode.get("per_trade_notional_usd") or 0.0)
+        if learning_mode
+        else 0.0
+    )
+    learning_exposure_cap = (
+        float(learning_mode.get("max_portfolio_exposure_pct") or 0.0) / 100.0
+        if learning_mode
+        else 0.0
+    )
     risk_manager = RiskManager(settings)
     open_order_symbols = {order.symbol.upper() for order in portfolio.open_orders}
     existing_position_symbols = {
@@ -4633,7 +4697,11 @@ def build_buy_order_plans(
                     }
                 )
             continue
-        if settings.operational_kill_switch_enabled and operational_block_context.get("block_new_buys"):
+        if (
+            settings.operational_kill_switch_enabled
+            and operational_block_context.get("block_new_buys")
+            and not ignore_operational_kill_switch
+        ):
             if rejected is not None:
                 rejected.append(
                     {
@@ -4733,6 +4801,11 @@ def build_buy_order_plans(
             recommendation,
             sizing_adjustment=sizing_adjustment,
         )
+        if learning_notional_cap > 0:
+            capped_notional = min(notional, learning_notional_cap)
+            sizing_checks["learning_mode_notional_cap"] = learning_notional_cap
+            sizing_checks["learning_mode_notional_capped"] = capped_notional < notional
+            notional = capped_notional
         if notional <= 0:
             if rejected is not None:
                 rejected.append(
@@ -4794,6 +4867,27 @@ def build_buy_order_plans(
             notional=notional,
             entry_price=entry,
         )
+        if learning_exposure_cap > 0 and float(portfolio.portfolio_value or 0.0) > 0:
+            resulting_exposure = (
+                portfolio_risk_context["current_portfolio_exposure"]
+                + planned_buy_exposure
+                + (execution_notional / float(portfolio.portfolio_value))
+            )
+            if resulting_exposure > learning_exposure_cap:
+                if rejected is not None:
+                    rejected.append(
+                        {
+                            "symbol": recommendation.symbol,
+                            "action": recommendation.action,
+                            "stage": "learning_mode_exposure_cap",
+                            "reason": "learning_mode_max_portfolio_exposure_pct_reached",
+                            "checks": {
+                                "resulting_exposure": round(resulting_exposure, 4),
+                                "learning_mode_max_portfolio_exposure_pct": round(learning_exposure_cap * 100.0, 2),
+                            },
+                        }
+                    )
+                continue
         if qty is None or execution_notional < settings.min_order_notional:
             if rejected is not None:
                 rejected.append(
@@ -4835,6 +4929,7 @@ def build_buy_order_plans(
                 size_multiplier=float(sizing_checks.get("size_multiplier") or recommendation.size_multiplier or 1.0),
                 backtest_soft_override=bool(recommendation.backtest_soft_override),
                 soft_override_reasons=list(recommendation.soft_override_reasons or []),
+                cohort=recommendation.cohort,
             )
         )
         planned_buy_symbols.add(recommendation.symbol)
@@ -4992,6 +5087,7 @@ def build_order_plans(
     dry_run: bool = True,
     rejected: list[dict[str, Any]] | None = None,
     market_state: dict[str, Any] | None = None,
+    ignore_operational_kill_switch: bool = False,
 ) -> list[OrderPlan]:
     """Build buy and long-position sell/reduce/exit plans."""
 
@@ -5002,6 +5098,7 @@ def build_order_plans(
         dry_run=dry_run,
         rejected=rejected,
         market_state=market_state,
+        ignore_operational_kill_switch=ignore_operational_kill_switch,
     )
     total_plan_limit = _effective_buy_plan_limit(settings, recommendations)
     open_order_symbols = {order.symbol.upper() for order in portfolio.open_orders}

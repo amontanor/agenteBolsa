@@ -12,6 +12,7 @@ from typing import Any
 
 from .logging_utils import AgentHistoryLogger
 from .models import AgentEvent, Hypothesis
+from .tools.learning_mode import excluded_signal_sources
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -2207,6 +2208,7 @@ class Store:
         limit: int = 500,
         since_date: str | None = None,
         include_lab_book: bool = False,
+        include_learning_experiment: bool = False,
     ) -> list[dict[str, Any]]:
         query = """
             SELECT signal_id, source_run_id, source, symbol, signal_date,
@@ -2216,8 +2218,14 @@ class Store:
             WHERE 1 = 1
         """
         params: list[Any] = []
-        if not include_lab_book:
-            query += " AND coalesce(source, '') != 'lab_book'"
+        excluded = excluded_signal_sources(
+            include_lab_book=include_lab_book,
+            include_learning_experiment=include_learning_experiment,
+        )
+        if excluded:
+            placeholders = ",".join("?" for _ in excluded)
+            query += f" AND coalesce(source, '') NOT IN ({placeholders})"
+            params.extend(excluded)
         if since_date:
             query += " AND signal_date >= ?"
             params.append(since_date)

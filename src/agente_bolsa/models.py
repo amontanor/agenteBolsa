@@ -101,6 +101,7 @@ class TradeRecommendation:
     size_multiplier: float = 1.0
     backtest_soft_override: bool = False
     soft_override_reasons: list[str] = field(default_factory=list)
+    cohort: str | None = None
 
 
 @dataclass(frozen=True)
@@ -120,3 +121,4 @@ class OrderPlan:
     size_multiplier: float = 1.0
     backtest_soft_override: bool = False
     soft_override_reasons: list[str] = field(default_factory=list)
+    cohort: str | None = None

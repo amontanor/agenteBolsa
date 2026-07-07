@@ -44,6 +44,7 @@ def test_safety_ok_with_safe_flags(tmp_path):
     assert audit["safety"]["violations"] == []
     text = format_config_audit_text(audit)
     assert "Safety: OK" in text
+    assert "learning_mode=sin_datos" in text
 
 
 def test_safety_alerts_when_auto_apply_enabled(tmp_path):
@@ -82,6 +83,19 @@ def test_digest_safety_summary_never_raises(tmp_path):
     assert summary is None or isinstance(summary, dict)
 
 
+def test_digest_safety_summary_exposes_learning_mode(tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "learning_mode.json").write_text(
+        json.dumps({"enabled": False, "human_gated": True, "shadow_first": True}),
+        encoding="utf-8",
+    )
+
+    summary = digest_safety_summary(_settings(tmp_path))
+    assert summary is not None
+    assert summary["learning_mode"] == {"enabled": False, "human_gated": True, "shadow_first": True}
+
+
 def test_digest_renders_safety_line_and_cast_counters(tmp_path):
     settings = _settings(tmp_path)
     store = Store(settings.database_path, settings.agent_logs_dir)
@@ -103,9 +117,9 @@ def test_digest_renders_safety_line_and_cast_counters(tmp_path):
         days=1,
         now=datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc),
         data_dir=tmp_path,
-        safety={"ok": True, "violations": []},
+        safety={"ok": True, "violations": [], "learning_mode": {"enabled": False, "shadow_first": True}},
     )
-    assert "Safety: OK" in format_lab_digest_text(digest_ok)
+    assert "Safety: OK | learning_mode=OFF, shadow_first=True" in format_lab_digest_text(digest_ok)
 
     digest_none = build_lab_digest(
         store,
