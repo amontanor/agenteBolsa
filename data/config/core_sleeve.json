@@ -1,12 +1,12 @@
 ﻿{
-    "enabled":  true,
+    "enabled":  false,
     "dry_run":  true,
     "sleeve_fraction":  0.3,
     "rebalance_band_pp":  5,
     "target_vol":  0.12,
     "max_sleeve_fraction_ladder":  [
-        0.3,
-        0.5,
-        0.7
-    ]
+                                       0.3,
+                                       0.5,
+                                       0.7
+                                   ]
 }
