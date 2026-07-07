@@ -24,6 +24,8 @@ def _init_repo(path):
     path.mkdir(parents=True, exist_ok=True)
     (path / "docs").mkdir(exist_ok=True)
     (path / "tests").mkdir(exist_ok=True)
+    (path / "src" / "agente_bolsa").mkdir(parents=True, exist_ok=True)
+    (path / "src" / "agente_bolsa" / "__init__.py").write_text('__version__ = "0.0.1"\n', encoding="utf-8")
     (path / "docs" / "base.md").write_text("base\n", encoding="utf-8")
     _git(path, "init", "-q")
     _git(path, "config", "user.email", "a@b.c")
@@ -348,6 +350,73 @@ def test_code_diff_preview_accepts_src_change_when_touched_test_file_is_executed
     assert artifact["payload"]["tests_ok"] is True
     assert "tests/test_ci_gate_demo.py" in artifact["payload"]["target_paths"]
     assert store.continuous_improvement_applied_changes(limit=10) == []
+
+
+def test_code_diff_preview_adds_deterministic_version_bump(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    settings = _settings(tmp_path, repo)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    monkeypatch.setattr(
+        GitSandbox,
+        "validate",
+        lambda self, **kw: {"ok": True, "steps": [{"step": "pytest", "ok": True, "returncode": 0, "output": "ok"}]},
+    )
+    proposal = _proposal(
+        [
+            {
+                "path": "tests/test_ci_gate_demo.py",
+                "content": "def test_demo_gate_value():\n    assert 1 == 1\n",
+            }
+        ],
+        proposal_id="ci_prop_version_bump",
+    )
+    proposal["payload"]["test_commands"] = ["python -m pytest tests/test_ci_gate_demo.py -q"]
+    validation = _validation()
+    validation["proposal_id"] = "ci_prop_version_bump"
+
+    artifact = CodeDiffPreviewAgent().generate(settings=settings, store=store, proposal=proposal, validation=validation)
+
+    assert artifact["artifact_type"] == "code_diff_preview"
+    assert "diff --git a/src/agente_bolsa/__init__.py b/src/agente_bolsa/__init__.py" in artifact["content_text"]
+    assert '+__version__ = "0.0.2"' in artifact["content_text"]
+    assert artifact["payload"]["version_bump"]["new_version"] == "0.0.2"
+    assert "src/agente_bolsa/__init__.py" in artifact["payload"]["target_paths"]
+
+
+def test_code_diff_preview_ignores_model_version_hunk_and_uses_pipeline_bump(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    settings = _settings(tmp_path, repo)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    monkeypatch.setattr(
+        GitSandbox,
+        "validate",
+        lambda self, **kw: {"ok": True, "steps": [{"step": "pytest", "ok": True, "returncode": 0, "output": "ok"}]},
+    )
+    proposal = _proposal(
+        [
+            {
+                "path": "tests/test_ci_gate_demo.py",
+                "content": "def test_demo_gate_value():\n    assert 1 == 1\n",
+            },
+            {
+                "path": "src/agente_bolsa/__init__.py",
+                "content": '__version__ = "9.9.9"\n',
+            },
+        ],
+        proposal_id="ci_prop_version_hunk_ignored",
+    )
+    proposal["payload"]["test_commands"] = ["python -m pytest tests/test_ci_gate_demo.py -q"]
+    validation = _validation()
+    validation["proposal_id"] = "ci_prop_version_hunk_ignored"
+
+    artifact = CodeDiffPreviewAgent().generate(settings=settings, store=store, proposal=proposal, validation=validation)
+
+    assert artifact["artifact_type"] == "code_diff_preview"
+    assert '+__version__ = "0.0.2"' in artifact["content_text"]
+    assert "9.9.9" not in artifact["content_text"]
+    assert artifact["payload"]["model_touched_version_file"] is True
 
 
 @pytest.mark.parametrize("protected_path", [".env", "src/agente_bolsa/tools/risk.py"])

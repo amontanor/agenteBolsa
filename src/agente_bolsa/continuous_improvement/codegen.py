@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shlex
+from ast import Import, ImportFrom, parse
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -15,6 +16,7 @@ from agente_bolsa.models import new_id
 
 from .experiments import AutoApplyCodeAgent, CodeDiffPreviewAgent
 from .llm_client import ImprovementLLMClient
+from .versioning import VERSION_FILE
 
 if TYPE_CHECKING:  # pragma: no cover - solo anotaciones.
     from agente_bolsa.config import Settings
@@ -34,6 +36,7 @@ CODEGEN_FULL_CONTEXT_MAX_LINES = 900
 CODEGEN_FULL_CONTENT_MAX_LINES = 900
 CODEGEN_DATA_SAMPLE_LINES = 5
 DATA_PATH_RE = re.compile(r"\bdata/[A-Za-z0-9_./-]+\.(?:jsonl|json|csv|tsv)\b")
+CODEGEN_CONTEXT_ALLOWED_PREFIXES: tuple[str, ...] = (*LOW_RISK_CODEGEN_ALLOWED_PREFIXES, "scripts/")
 
 
 class CodegenPatchResponse(BaseModel):
@@ -339,7 +342,7 @@ class CodegenPatchAgent:
         workspace = workspace.resolve()
         context: list[dict[str, Any]] = []
         for rel in candidates[:6]:
-            if not _is_low_risk_codegen_path(rel):
+            if not _is_context_allowed_path(rel):
                 continue
             path = (workspace / rel).resolve()
             try:
@@ -420,6 +423,13 @@ class CodegenPatchAgent:
         payload = proposal.get("payload") or {}
         context_files = self._context_files(settings.improvement_workspace_dir, proposal)
         data_samples = self._data_samples(settings.improvement_workspace_dir, proposal)
+        target_identifier = str(proposal.get("target_identifier") or payload.get("target_identifier") or "")
+        target_rule = (
+            "Debes modificar el target_identifier de la propuesta cuando sea una ruta de codigo existente; "
+            "generar solo tests o documentacion no satisface la propuesta. "
+            if not target_identifier.replace("\\", "/").startswith("tests/")
+            else "El target_identifier es un test existente; en este caso un cambio solo en tests SI satisface la propuesta. "
+        )
         user_payload = {
             "proposal_id": proposal.get("proposal_id"),
             "target_component": proposal.get("target_component"),
@@ -441,9 +451,9 @@ class CodegenPatchAgent:
                     "Responde de forma directa y compacta; no expliques razonamiento ni repitas contexto. "
                     "Debes producir un cambio pequeno, revisable y reversible. Solo puedes tocar rutas bajo: "
                     f"{', '.join(LOW_RISK_CODEGEN_ALLOWED_PREFIXES)}. "
-                    "Debes modificar el target_identifier de la propuesta cuando sea una ruta de codigo existente; "
-                    "generar solo tests o documentacion no satisface la propuesta. "
+                    f"{target_rule}"
                     "Nunca modifiques risk.py, kernel.py, broker.py, execution.py, config.py ni .env. "
+                    f"Nunca modifiques {VERSION_FILE}; el pipeline la bumpea de forma determinista despues de aplicar tu cambio. "
                     "Para archivos existentes grandes usa file_edits {path, old, new}; el bloque old debe copiarse "
                     "VERBATIM del contexto proporcionado, sin reformatear ni normalizar espacios, y debe ser corto y unico. "
                     "Para archivos nuevos o existentes con "
@@ -461,11 +471,11 @@ class CodegenPatchAgent:
         ]
 
     def _context_files(self, workspace: Path, proposal: dict[str, Any]) -> list[dict[str, Any]]:
-        candidates = _candidate_paths_from_proposal(proposal)
+        candidates = _context_candidate_paths(workspace, proposal)
         workspace = workspace.resolve()
         context: list[dict[str, Any]] = []
         for rel in candidates[:4]:
-            if not _is_low_risk_codegen_path(rel):
+            if not _is_context_allowed_path(rel):
                 continue
             path = (workspace / rel).resolve()
             try:
@@ -636,6 +646,13 @@ def _is_low_risk_codegen_path(rel: str) -> bool:
     return any(rel.startswith(prefix) for prefix in LOW_RISK_CODEGEN_ALLOWED_PREFIXES)
 
 
+def _is_context_allowed_path(rel: str) -> bool:
+    rel = rel.replace("\\", "/").lstrip("/")
+    if rel == ".env" or ".." in rel.split("/"):
+        return False
+    return any(rel.startswith(prefix) for prefix in CODEGEN_CONTEXT_ALLOWED_PREFIXES)
+
+
 def _candidate_paths_from_proposal(proposal: dict[str, Any]) -> list[str]:
     payload = proposal.get("payload") or {}
     candidates: list[str] = []
@@ -652,6 +669,101 @@ def _candidate_paths_from_proposal(proposal: dict[str, Any]) -> list[str]:
                 elif isinstance(item, dict) and item.get("path"):
                     candidates.append(str(item["path"]).strip().replace("\\", "/"))
     return list(dict.fromkeys(candidates))
+
+
+def _context_candidate_paths(workspace: Path, proposal: dict[str, Any]) -> list[str]:
+    candidates = _candidate_paths_from_proposal(proposal)
+    if not candidates:
+        return candidates
+    if not all(path.startswith("tests/") for path in candidates):
+        return candidates
+    payload = proposal.get("payload") or {}
+    modules = list(dict.fromkeys([*_modules_under_test_from_payload(payload), *_modules_under_test_from_tests(workspace, candidates)]))
+    return list(dict.fromkeys([*candidates, *modules]))
+
+
+def _modules_under_test_from_payload(payload: dict[str, Any]) -> list[str]:
+    value = payload.get("modules_under_test")
+    if isinstance(value, str) and value.strip():
+        return [_module_name_to_repo_path(value.strip())]
+    if isinstance(value, list):
+        result: list[str] = []
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                result.append(_module_name_to_repo_path(item.strip()))
+        return result
+    return []
+
+
+def _modules_under_test_from_tests(workspace: Path, test_paths: list[str]) -> list[str]:
+    result: list[str] = []
+    workspace = workspace.resolve()
+    for rel in test_paths:
+        path = (workspace / rel).resolve()
+        try:
+            path.relative_to(workspace)
+        except ValueError:
+            continue
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            tree = parse(path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError):
+            continue
+        for node in tree.body:
+            if isinstance(node, Import):
+                for alias in node.names:
+                    target = _module_name_to_repo_path(alias.name)
+                    if target:
+                        result.append(target)
+            elif isinstance(node, ImportFrom):
+                module_name = str(node.module or "")
+                if not module_name.startswith("agente_bolsa."):
+                    continue
+                imported_names = [str(alias.name or "").strip() for alias in node.names if str(alias.name or "").strip()]
+                target = _import_from_to_repo_path(workspace, module_name, imported_names)
+                if target:
+                    result.append(target)
+    return list(dict.fromkeys(result))
+
+
+def _import_from_to_repo_path(workspace: Path, module_name: str, imported_names: list[str]) -> str | None:
+    module_target = _module_name_to_repo_path(module_name)
+    if module_target and (workspace / module_target).exists():
+        return module_target
+    package_target = _module_name_to_package_init(module_name)
+    package_path = workspace / package_target
+    if not package_path.exists():
+        return module_target if module_target and (workspace / module_target).exists() else None
+    for imported_name in imported_names:
+        candidate = package_path.parent / f"{imported_name}.py"
+        if candidate.exists():
+            try:
+                return candidate.resolve().relative_to(workspace.resolve()).as_posix()
+            except ValueError:
+                return None
+    return package_target
+
+
+def _module_name_to_repo_path(module_name: str) -> str | None:
+    normalized = str(module_name or "").strip().replace("\\", "/")
+    if not normalized:
+        return None
+    if normalized.endswith(".py") and "/" in normalized:
+        return normalized.lstrip("/")
+    if normalized == "agente_bolsa":
+        return VERSION_FILE
+    if normalized.startswith("agente_bolsa."):
+        suffix = normalized.removeprefix("agente_bolsa.").replace(".", "/")
+        return f"src/agente_bolsa/{suffix}.py"
+    if normalized.startswith("src/") or normalized.startswith("tests/") or normalized.startswith("docs/") or normalized.startswith("scripts/"):
+        return normalized.lstrip("/")
+    return None
+
+
+def _module_name_to_package_init(module_name: str) -> str:
+    suffix = str(module_name or "").strip().removeprefix("agente_bolsa.").replace(".", "/")
+    return f"src/agente_bolsa/{suffix}/__init__.py"
 
 
 def _data_paths_from_proposal(proposal: dict[str, Any]) -> list[str]:

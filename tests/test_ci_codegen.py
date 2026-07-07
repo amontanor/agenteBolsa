@@ -23,7 +23,10 @@ def _git(repo, *args):
 def _init_repo(path):
     path.mkdir(parents=True, exist_ok=True)
     (path / "docs").mkdir(exist_ok=True)
+    (path / "tests").mkdir(exist_ok=True)
     (path / "src" / "agente_bolsa" / "tools").mkdir(parents=True, exist_ok=True)
+    (path / "src" / "agente_bolsa").mkdir(parents=True, exist_ok=True)
+    (path / "src" / "agente_bolsa" / "__init__.py").write_text('__version__ = "0.0.1"\n', encoding="utf-8")
     (path / "src" / "agente_bolsa" / "tools" / "risk.py").write_text("# risk\n", encoding="utf-8")
     (path / "docs" / "base.md").write_text("base\n", encoding="utf-8")
     _git(path, "init", "-q")
@@ -449,9 +452,77 @@ def test_codegen_prompt_allows_version_file_and_mentions_null_nested_samples(tmp
     system_prompt = messages[0]["content"]
     user_payload = json.loads(messages[1]["content"])
 
-    assert "src/agente_bolsa/__init__.py" in system_prompt
+    assert "Nunca modifiques src/agente_bolsa/__init__.py" in system_prompt
     assert "valores null y claves ausentes" in system_prompt
     assert user_payload["context_files"][0]["path"] == "src/agente_bolsa/__init__.py"
+
+
+def test_codegen_prompt_includes_module_under_test_for_test_only_proposal(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    settings = _settings(tmp_path, repo)
+    digest_path = repo / "src" / "agente_bolsa" / "continuous_improvement" / "digest.py"
+    digest_path.parent.mkdir(parents=True, exist_ok=True)
+    digest_path.write_text("def build_lab_digest():\n    return {}\n", encoding="utf-8")
+    test_path = repo / "tests" / "test_digest_contract.py"
+    test_path.write_text(
+        (
+            "from agente_bolsa.continuous_improvement.digest import build_lab_digest\n"
+            "from agente_bolsa.continuous_improvement import digest\n"
+        ),
+        encoding="utf-8",
+    )
+    proposal = {
+        "proposal_id": "ci_prop_test_only_context",
+        "proposal_type": "CODE_CHANGE",
+        "target_component": "continuous_improvement",
+        "target_identifier": "tests/test_digest_contract.py",
+        "risk_level": "LOW",
+        "payload": {
+            "target_identifier": "tests/test_digest_contract.py",
+            "target_files": ["tests/test_digest_contract.py"],
+            "modules_under_test": ["src/agente_bolsa/continuous_improvement/digest.py"],
+            "rationale": "test",
+        },
+    }
+
+    messages = CodegenPatchAgent()._messages(settings, proposal)
+    system_prompt = messages[0]["content"]
+    user_payload = json.loads(messages[1]["content"])
+    paths = [item["path"] for item in user_payload["context_files"]]
+
+    assert "solo en tests SI satisface la propuesta" in system_prompt
+    assert paths == [
+        "tests/test_digest_contract.py",
+        "src/agente_bolsa/continuous_improvement/digest.py",
+    ]
+
+
+def test_codegen_prompt_accepts_explicit_script_module_under_test(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    settings = _settings(tmp_path, repo)
+    (repo / "scripts").mkdir(exist_ok=True)
+    (repo / "scripts" / "core_sleeve_parity_check.py").write_text("def build_parity_report():\n    return {}\n", encoding="utf-8")
+    test_path = repo / "tests" / "test_parity_contract.py"
+    test_path.write_text("from scripts.core_sleeve_parity_check import build_parity_report\n", encoding="utf-8")
+    proposal = {
+        "proposal_id": "ci_prop_test_only_script_context",
+        "proposal_type": "CODE_CHANGE",
+        "target_component": "continuous_improvement",
+        "target_identifier": "tests/test_parity_contract.py",
+        "risk_level": "LOW",
+        "payload": {
+            "target_identifier": "tests/test_parity_contract.py",
+            "target_files": ["tests/test_parity_contract.py"],
+            "modules_under_test": ["scripts/core_sleeve_parity_check.py"],
+            "rationale": "test",
+        },
+    }
+
+    messages = CodegenPatchAgent()._messages(settings, proposal)
+    user_payload = json.loads(messages[1]["content"])
+    paths = [item["path"] for item in user_payload["context_files"]]
+
+    assert paths == ["tests/test_parity_contract.py", "scripts/core_sleeve_parity_check.py"]
 
 
 def test_codegen_rejects_target_outside_low_risk_allowlist(tmp_path):

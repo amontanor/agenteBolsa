@@ -29,6 +29,13 @@ from .autonomy import (
     path_violation,
 )
 from .sandbox import GitSandbox, GitSandboxError, apply_payload_to_worktree, sandbox_supported
+from .versioning import (
+    VERSION_FILE,
+    bump_version_in_file,
+    requires_version_bump,
+    strip_version_file_from_diff,
+    strip_version_file_from_file_edits,
+)
 
 
 class ExperimentRunner:
@@ -1126,13 +1133,19 @@ class CodeDiffPreviewAgent:
             )
 
         payload = proposal.get("payload", {}) or {}
-        file_edits = payload.get("file_edits") or payload.get("files")
-        patch_text = str(payload.get("patch") or "").strip()
+        raw_file_edits = payload.get("file_edits") or payload.get("files")
+        raw_patch_text = str(payload.get("patch") or "").strip()
+        file_edits, version_edit_removed = strip_version_file_from_file_edits(raw_file_edits)
+        patch_text, version_patch_removed = strip_version_file_from_diff(raw_patch_text)
         change_id = new_id("ci_diff")
         sandbox = GitSandbox(settings, repo_root=workspace)
         try:
             worktree = sandbox.open(change_id)
             apply_payload_to_worktree(worktree, file_edits=file_edits, patch_text=patch_text)
+            target_paths = self._target_rels(workspace, file_edits=raw_file_edits, patch_text=raw_patch_text)
+            version_bump = None
+            if requires_version_bump(target_paths):
+                version_bump = bump_version_in_file(worktree / VERSION_FILE)
             sandbox._git("add", "-N", ".", cwd=worktree)
             diff = sandbox._git("diff", "--binary", "HEAD", cwd=worktree).stdout
             if not diff.strip():
@@ -1144,7 +1157,8 @@ class CodeDiffPreviewAgent:
                     content_text=error,
                     payload={**base_payload, "status": "FAILED", "error": error, "sandbox_change_id": change_id},
                 )
-            target_paths = self._target_rels(workspace, file_edits=file_edits, patch_text=patch_text)
+            if version_bump and VERSION_FILE not in target_paths:
+                target_paths.append(VERSION_FILE)
             gate_error = self._new_code_tests_gate_error(payload=payload, diff=diff, target_paths=target_paths)
             if gate_error:
                 return self._save_artifact(
@@ -1160,6 +1174,8 @@ class CodeDiffPreviewAgent:
                         "gate_reason": "new_code_requires_tests",
                         "sandbox_change_id": change_id,
                         "target_paths": target_paths,
+                        "version_bump": version_bump,
+                        "model_touched_version_file": version_edit_removed or version_patch_removed,
                     },
                 )
             validation_result = sandbox.validate(steps=self._validation_steps(payload))
@@ -1178,6 +1194,8 @@ class CodeDiffPreviewAgent:
                     "validation": validation_result,
                     "sandbox_change_id": change_id,
                     "target_paths": target_paths,
+                    "version_bump": version_bump,
+                    "model_touched_version_file": version_edit_removed or version_patch_removed,
                 },
             )
         except (GitSandboxError, OSError, ValueError, RuntimeError) as exc:

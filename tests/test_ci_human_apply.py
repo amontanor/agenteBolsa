@@ -21,6 +21,8 @@ def _init_repo(path):
     path.mkdir(parents=True, exist_ok=True)
     (path / "docs").mkdir(exist_ok=True)
     (path / "src" / "agente_bolsa" / "tools").mkdir(parents=True, exist_ok=True)
+    (path / "src" / "agente_bolsa").mkdir(parents=True, exist_ok=True)
+    (path / "src" / "agente_bolsa" / "__init__.py").write_text('__version__ = "0.0.1"\n', encoding="utf-8")
     (path / "src" / "agente_bolsa" / "tools" / "risk.py").write_text("# risk\n", encoding="utf-8")
     _git(path, "init", "-q")
     _git(path, "config", "user.email", "a@b.c")
@@ -359,3 +361,49 @@ def test_human_approve_rejected_artifact_keeps_failed_test_evidence(tmp_path):
     assert payload["failure_evidence"] == result["failure_evidence"]
     assert "tests/test_demo.py::test_nope" in result["error"]
     assert _git(repo, "status", "--short").stdout.strip() == ""
+
+
+def test_human_approve_rebumps_version_when_tree_already_moved(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    target = repo / "tests" / "test_feature.py"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("def test_feature():\n    assert False\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "seed feature")
+    (repo / "src" / "agente_bolsa" / "__init__.py").write_text('__version__ = "0.0.2"\n', encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "external version bump")
+    settings = _settings(tmp_path, repo)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    diff_text = """diff --git a/src/agente_bolsa/__init__.py b/src/agente_bolsa/__init__.py
+index 7dea286..27196d6 100644
+--- a/src/agente_bolsa/__init__.py
++++ b/src/agente_bolsa/__init__.py
+@@ -1 +1 @@
+-__version__ = "0.0.1"
++__version__ = "0.0.2"
+diff --git a/tests/test_feature.py b/tests/test_feature.py
+index e1900a0..d4d38ec 100644
+--- a/tests/test_feature.py
++++ b/tests/test_feature.py
+@@ -1,2 +1,2 @@
+ def test_feature():
+-    assert False
++    assert True
+"""
+    proposal_id = _proposal_with_artifact(store, proposal_id="ci_prop_rebump_apply", diff_text=diff_text)
+
+    result = approve_and_apply_code_diff(
+        settings=settings,
+        store=store,
+        proposal_id=proposal_id,
+        actor="pytest",
+        validation_steps=[("unit", ["python", "-m", "pytest", "tests/test_feature.py", "-q"])],
+        backup=False,
+    )
+
+    assert result["ok"] is True
+    assert (repo / "src" / "agente_bolsa" / "__init__.py").read_text(encoding="utf-8") == '__version__ = "0.0.3"\n'
+    assert result["artifact"]["payload"]["version_bump"]["old_version"] == "0.0.2"
+    assert result["artifact"]["payload"]["version_bump"]["new_version"] == "0.0.3"

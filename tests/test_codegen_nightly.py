@@ -233,11 +233,48 @@ def test_codegen_nightly_filters_targets_and_previous_rejections(tmp_path):
         generator=_fake_ready_generator(calls),
     )
 
-    assert calls == [good]
+    assert calls == [rejected, good]
     reasons = {item["proposal_id"]: item["reason"] for item in result["ineligible"]}
     assert reasons[bad_target] == "target_outside_codegen_allowlist"
-    assert reasons[rejected] == "previous_codegen_rejection"
+    assert rejected not in reasons
     assert reasons[rejected_decision] == "previous_codegen_rejection"
+
+
+def test_codegen_nightly_retries_generation_failures_but_blocks_human_rejection_artifact(tmp_path):
+    settings = _settings(tmp_path)
+    store = _store(settings)
+    retryable = _ready_codegen_proposal(store, "ci_prop_retryable_failed", "docs/retryable.md")
+    human_rejected = _ready_codegen_proposal(store, "ci_prop_human_rejected", "docs/human_rejected.md")
+    store.save_continuous_improvement_proposal_artifact(
+        {
+            "artifact_id": "ci_artifact_retryable_failed",
+            "proposal_id": retryable,
+            "artifact_type": "code_diff_codegen_failed",
+            "content_text": "llm timeout",
+            "payload": {"status": "FAILED"},
+        }
+    )
+    store.save_continuous_improvement_proposal_artifact(
+        {
+            "artifact_id": "ci_artifact_human_rejected",
+            "proposal_id": human_rejected,
+            "artifact_type": "code_diff_human_approval_rejected",
+            "content_text": "rechazo humano",
+            "payload": {"status": "REJECTED_BY_HUMAN_REVIEW"},
+        }
+    )
+    calls: list[str] = []
+
+    result = run_codegen_nightly(
+        settings=settings,
+        store=store,
+        config_path=_write_config(tmp_path / "codegen_nightly.json", max_proposals_per_day=5),
+        generator=_fake_ready_generator(calls),
+    )
+
+    assert retryable in calls
+    reasons = {item["proposal_id"]: item["reason"] for item in result["ineligible"]}
+    assert reasons[human_rejected] == "previous_codegen_rejection"
 
 
 def test_codegen_cleanup_rejects_demo_and_verifies_p15_commit(tmp_path):

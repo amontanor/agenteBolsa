@@ -13,6 +13,12 @@ from agente_bolsa.models import new_id
 from agente_bolsa.tools.ops_reports import backup_database
 
 from .sandbox import run_validation_steps
+from .versioning import (
+    VERSION_FILE,
+    bump_version_in_file,
+    requires_version_bump,
+    strip_version_file_from_diff,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - solo anotaciones.
     from agente_bolsa.config import Settings
@@ -85,6 +91,11 @@ def approve_and_apply_code_diff(
     if not apply_result["ok"]:
         error = apply_result["error"]
         return _reject_tests(store, proposal, artifact, actor, error, validation={"ok": False, "steps": []})
+    version_bump = None
+    if requires_version_bump(targets):
+        version_bump = bump_version_in_file(repo / VERSION_FILE)
+        if VERSION_FILE not in targets:
+            targets.append(VERSION_FILE)
     applied_diff_text = str(apply_result["diff_text"])
 
     validation = run_validation_steps(
@@ -138,6 +149,7 @@ def approve_and_apply_code_diff(
             "backup": backup_report,
             "validation": validation,
             "apply_strategy": apply_result["strategy"],
+            "version_bump": version_bump,
             "target_paths": targets,
         },
     )
@@ -159,6 +171,7 @@ def approve_and_apply_code_diff(
                 "manual_approval": True,
                 "approval_artifact_id": approval_artifact["artifact_id"],
                 "apply_strategy": apply_result["strategy"],
+                "version_bump": version_bump,
                 "backup": backup_report,
             },
             "validation_ids": [payload.get("validation_id")] if payload.get("validation_id") else [],
@@ -379,16 +392,17 @@ def _git(repo: Path, *args: str, input_text: str | None = None) -> subprocess.Co
 
 
 def _apply_diff_with_fallback(repo: Path, diff_text: str) -> dict[str, Any]:
+    sanitized_diff, removed_version_hunk = strip_version_file_from_diff(diff_text)
     attempts = [
-        ("3way", diff_text, ("apply", "--index", "--3way", "--whitespace=nowarn", "-")),
+        ("3way", sanitized_diff, ("apply", "--index", "--3way", "--whitespace=nowarn", "-")),
         (
             "ignore_whitespace",
-            diff_text,
+            sanitized_diff,
             ("apply", "--index", "--ignore-whitespace", "--whitespace=nowarn", "-"),
         ),
     ]
-    repaired = _repair_cp1252_mojibake(diff_text)
-    if repaired != diff_text:
+    repaired = _repair_cp1252_mojibake(sanitized_diff)
+    if repaired != sanitized_diff:
         attempts.append(
             (
                 "repair_cp1252_mojibake",
@@ -405,11 +419,24 @@ def _apply_diff_with_fallback(repo: Path, diff_text: str) -> dict[str, Any]:
         )
     errors: list[str] = []
     for strategy, candidate, command in attempts:
+        if not candidate.strip():
+            continue
         result = _git(repo, *command, input_text=candidate)
         if result.returncode == 0:
-            return {"ok": True, "strategy": strategy, "diff_text": candidate}
+            return {
+                "ok": True,
+                "strategy": strategy,
+                "diff_text": candidate,
+                "removed_version_hunk": removed_version_hunk,
+            }
         errors.append(f"{strategy}: {(result.stderr or result.stdout or 'git apply fallo').strip()}")
-    return {"ok": False, "strategy": None, "diff_text": diff_text, "error": " | ".join(errors)}
+    return {
+        "ok": False,
+        "strategy": None,
+        "diff_text": sanitized_diff,
+        "error": " | ".join(errors) or "Diff sin cambios aplicables tras filtrar el hunk de version.",
+        "removed_version_hunk": removed_version_hunk,
+    }
 
 
 def _repair_cp1252_mojibake(text: str) -> str:

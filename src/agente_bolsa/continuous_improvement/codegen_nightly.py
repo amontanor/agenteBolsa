@@ -316,9 +316,9 @@ def _has_previous_codegen_rejection(store: Store, proposal_id: str) -> bool:
     for row in rows:
         artifact_type = str(row["artifact_type"] or "")
         payload = json.loads(row["payload_json"] or "{}")
-        if artifact_type in {"code_diff_preview_invalid", "code_diff_codegen_failed", "code_diff_codegen_blocked"}:
+        if artifact_type == "code_diff_human_approval_rejected":
             return True
-        if str(payload.get("status") or "").upper() in {"REJECTED_BY_TESTS", "BLOCKED", "FAILED"}:
+        if str(payload.get("status") or "").upper() in {"REJECTED_BY_HUMAN_REVIEW", "REJECTED", "BLOCKED_BY_HUMAN_REVIEW"}:
             return True
     return False
 
