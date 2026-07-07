@@ -272,6 +272,7 @@ def test_learning_digest_and_health_reports_reflect_partial_outcomes(tmp_path, m
     assert load_daily_learning_context(tmp_path)["setup_priors_3d"]
     assert load_daily_learning_context(tmp_path)["confidence_calibration_3d"]
     assert load_daily_learning_context(tmp_path)["prior_accuracy_3d"]
+    assert load_daily_learning_context(tmp_path)["llm_status_line"].startswith("LLM: ")
 
 
 def test_learning_digest_exposes_false_positive_and_false_negative_rates(tmp_path, monkeypatch):

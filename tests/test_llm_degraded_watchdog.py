@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from agente_bolsa.tools.llm_degraded_watchdog import evaluate
+from agente_bolsa.tools.llm_degraded_watchdog import evaluate, format_status_line
 
 NOW = datetime(2026, 6, 16, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -61,3 +61,15 @@ def test_recent_decision_overrides_fallback_noise(tmp_path):
     _make_db(db, decision_ages_h=[2.0], sentiment_ages_h=[2.0], recs=recs)
     res = evaluate(db, now=NOW)
     assert res["degraded"] is False
+
+
+def test_status_line_mentions_hours_without_real_response(tmp_path):
+    db = tmp_path / "s.sqlite3"
+    _make_db(db, decision_ages_h=[30.0], sentiment_ages_h=[5.0])
+
+    res = evaluate(db, now=NOW)
+
+    assert res["roles"]["decision"]["ok"] is False
+    assert res["roles"]["sentiment"]["ok"] is True
+    assert "decision=CAIDO" in res["status_line"]
+    assert "30.0h sin respuesta real" in format_status_line(res)
