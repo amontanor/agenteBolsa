@@ -75,3 +75,55 @@ def test_lab_digest_warns_when_overlay_shadow_is_stale(tmp_path):
     assert digest["overlay_shadow"]["market_days_old"] > 3
     assert digest["overlay_shadow"]["stale"] is True
     assert "ADVERTENCIA: senal overlay" in text
+
+
+def test_lab_digest_overlay_shadow_null_fields(tmp_path):
+    store = _store(tmp_path)
+    _write_overlay_log(
+        tmp_path,
+        {
+            "data_date": "2026-07-01",
+            "price": None,
+            "realized_vol_annualized": None,
+            "target_exposures": None,
+        },
+    )
+    digest = build_lab_digest(store, days=1, now=datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc), data_dir=tmp_path)
+    text = format_lab_digest_text(digest)
+
+    assert digest["overlay_shadow"]["available"] is True
+    # Should not crash
+    assert "Overlay shadow" in text
+
+
+def test_lab_digest_overlay_shadow_missing_file(tmp_path):
+    store = _store(tmp_path)
+    # No overlay log file written
+    digest = build_lab_digest(store, days=1, now=datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc), data_dir=tmp_path)
+    text = format_lab_digest_text(digest)
+
+    assert digest["overlay_shadow"]["available"] is False
+    # Ensure no crash and appropriate fallback in text
+    assert "Overlay shadow" in text
+    assert "no disponible" in text.lower()
+
+
+def test_lab_digest_overlay_shadow_missing_target_exposures(tmp_path):
+    store = _store(tmp_path)
+    _write_overlay_log(
+        tmp_path,
+        {
+            "data_date": "2026-07-01",
+            "price": 750.0,
+            "realized_vol_annualized": 0.15,
+            # target_exposures omitted intentionally
+        },
+    )
+    digest = build_lab_digest(store, days=1, now=datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc), data_dir=tmp_path)
+    text = format_lab_digest_text(digest)
+
+    assert digest["overlay_shadow"]["available"] is True
+    assert "Overlay shadow" in text
+    # When target_exposures missing, code computes from realized_vol, so VT10 and VT12 appear
+    assert "VT10=" in text
+    assert "VT12=" in text
