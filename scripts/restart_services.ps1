@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Reinicio LIMPIO de los servicios de agenteBolsa (scheduler + panel web).
+  Reinicio LIMPIO de la pila persistente de agenteBolsa.
 
 .DESCRIPTION
   Evita el problema de procesos duplicados / fantasma que dejaba el sistema
@@ -9,8 +9,9 @@
     2. Mata TODOS los procesos del proyecto (cualquier python: venv o runtime
        de Codex), forzado y por arbol.
     3. Borra el lock obsoleto del scheduler.
-    4. Arranca las tareas programadas (que usan el python del .venv).
-    5. Verifica: una sola instancia de cada servicio + HTTP del panel.
+    4. Arranca scheduler + web por tarea programada.
+    5. Completa la pila con stack_up.ps1.
+    6. Verifica: estado final del stack + HTTP del panel.
 
   Seguro con mercado abierto (paper, no toca ordenes). Lanzar desde la raiz del
   repo. No requiere admin (solo mata/arranca; el registro de tareas si).
@@ -27,6 +28,8 @@ param(
 $ErrorActionPreference = "Continue"
 $Repo = "C:\Antonio\Bref\agenteBolsa"
 Set-Location $Repo
+$StackUpScript = Join-Path $Repo "scripts\stack_up.ps1"
+$StackStatusScript = Join-Path $Repo "scripts\stack_status.ps1"
 
 function Get-ProjectProcs {
     Get-CimInstance Win32_Process |
@@ -54,7 +57,18 @@ Start-ScheduledTask -TaskName AgenteBolsaWeb
 Write-Host "   Esperando a que levanten (Streamlit tarda)..." -ForegroundColor DarkGray
 Start-Sleep -Seconds 30
 
-Write-Host "== 5. Verificacion ==" -ForegroundColor Cyan
+Write-Host "== 5. Levantando supervisores ausentes con stack_up ==" -ForegroundColor Cyan
+if (Test-Path $StackUpScript) {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $StackUpScript
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ("AVISO: stack_up.ps1 devolvio codigo {0}." -f $LASTEXITCODE) -ForegroundColor Yellow
+    }
+    Start-Sleep -Seconds 10
+} else {
+    Write-Host "AVISO: no existe scripts\\stack_up.ps1; no se pudo completar la pila." -ForegroundColor Yellow
+}
+
+Write-Host "== 6. Verificacion base scheduler/web ==" -ForegroundColor Cyan
 $procs = @(Get-ProjectProcs)
 $procs | Select-Object ProcessId, CommandLine | Format-Table -AutoSize -Wrap
 
@@ -75,6 +89,16 @@ try {
     Write-Host ("Panel HTTP {0} en http://127.0.0.1:{1}" -f $code, $WebPort) -ForegroundColor Green
 } catch {
     Write-Host ("Panel aun no responde en :{0} (Streamlit puede tardar 30-60s; reintenta)." -f $WebPort) -ForegroundColor Yellow
+}
+
+Write-Host "`n== 7. Estado final del stack ==" -ForegroundColor Cyan
+if (Test-Path $StackStatusScript) {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $StackStatusScript
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ("AVISO: stack_status.ps1 devolvio codigo {0}." -f $LASTEXITCODE) -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "AVISO: no existe scripts\\stack_status.ps1; no se pudo mostrar el estado final." -ForegroundColor Yellow
 }
 
 Write-Host "`nSugerencia: valida heartbeat con:" -ForegroundColor DarkGray
