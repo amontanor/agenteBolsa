@@ -55,6 +55,34 @@ def _recent_fallback_ratio(con: sqlite3.Connection, since_iso: str) -> dict[str,
     return {"total": total, "fallback": fallback, "ratio": ratio}
 
 
+def _role_snapshot(name: str, hours_since: float | None, limit_hours: float) -> dict[str, Any]:
+    down = hours_since is None or hours_since > limit_hours
+    return {
+        "name": name,
+        "ok": not down,
+        "hours_since_real_response": round(hours_since, 1) if hours_since is not None else None,
+        "max_hours_without_response": limit_hours,
+    }
+
+
+def format_status_line(report: dict[str, Any]) -> str:
+    roles = report.get("roles") or {}
+    decision = roles.get("decision") or {}
+    sentiment = roles.get("sentiment") or {}
+
+    def _status(role: dict[str, Any]) -> str:
+        label = "OK" if role.get("ok") else "CAIDO"
+        hours = role.get("hours_since_real_response")
+        hours_text = "sin dato" if hours is None else f"{hours:.1f}h"
+        return f"{label} ({hours_text} sin respuesta real)"
+
+    return (
+        "LLM: "
+        f"decision={_status(decision)} "
+        f"sentiment={_status(sentiment)}"
+    )
+
+
 def evaluate(
     db_path: str | Path,
     *,
@@ -113,7 +141,12 @@ def evaluate(
             f"({fallback['ratio'] * 100:.0f}%) vienen del fallback determinista."
         )
 
-    return {
+    roles = {
+        "decision": _role_snapshot("decision", hours_decision, max_hours_decision),
+        "sentiment": _role_snapshot("sentiment", hours_sentiment, max_hours_sentiment),
+    }
+
+    report = {
         "as_of": now.isoformat(),
         "degraded": degraded,
         "severity": severity,
@@ -121,6 +154,7 @@ def evaluate(
         "hours_since_decision_llm": round(hours_decision, 1) if hours_decision is not None else None,
         "last_sentiment_llm_at": last_sentiment,
         "hours_since_sentiment_llm": round(hours_sentiment, 1) if hours_sentiment is not None else None,
+        "roles": roles,
         "recent_recommendations": fallback,
         "reasons": reasons,
         "recommended_action": (
@@ -132,3 +166,5 @@ def evaluate(
             else "Sin accion: hay actividad LLM reciente."
         ),
     }
+    report["status_line"] = format_status_line(report)
+    return report
