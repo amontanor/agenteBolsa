@@ -13,6 +13,7 @@ LEARNING_EXPERIMENT_SOURCE = "learning_experiment"
 DEFAULT_LEARNING_MODE_CONFIG: dict[str, Any] = {
     "enabled": False,
     "human_gated": True,
+    "authorized_by": "",
     "daily_order_budget": 3,
     "per_trade_notional_usd": 1000,
     "max_portfolio_exposure_pct": 15,
@@ -53,6 +54,7 @@ def load_learning_mode_config(config_path: Path, *, create: bool = True) -> dict
     config = {**DEFAULT_LEARNING_MODE_CONFIG, **(raw if isinstance(raw, dict) else {})}
     config["enabled"] = bool(config.get("enabled"))
     config["human_gated"] = bool(config.get("human_gated", True))
+    config["authorized_by"] = str(config.get("authorized_by") or "").strip()
     config["shadow_first"] = bool(config.get("shadow_first", True))
     config["daily_order_budget"] = max(0, int(config.get("daily_order_budget") or 0))
     config["per_trade_notional_usd"] = max(0.0, float(config.get("per_trade_notional_usd") or 0.0))

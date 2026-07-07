@@ -442,7 +442,7 @@ def test_deterministic_trade_fallback_uses_selected_candidates_without_llm():
     assert recommendations[0].confidence >= 0.65
 
 
-def test_deterministic_trade_fallback_blocks_partial_market_state_with_missing_macro():
+def test_deterministic_trade_fallback_blocks_partial_market_state_with_missing_macro(tmp_path):
     portfolio = PortfolioSnapshot(
         account_id="paper",
         status="ACTIVE",
@@ -466,13 +466,13 @@ def test_deterministic_trade_fallback_blocks_partial_market_state_with_missing_m
     }
 
     recommendations = deterministic_trade_fallback_recommendations(
-        Settings(),
+        Settings(DATA_DIR=tmp_path),
         portfolio,
         context,
         market_state=market_state,
     )
     merged, metadata = augment_recommendations_with_deterministic_fallback(
-        Settings(),
+        Settings(DATA_DIR=tmp_path),
         portfolio,
         context,
         [],
@@ -3104,7 +3104,7 @@ def test_entry_quality_gate_penalizes_sentiment_failure_by_default(tmp_path):
     assert "sentimiento_no_validado_penalizado" in checks["entry_score_v2"]["reasons"]
 
 
-def test_filter_entry_quality_keeps_entry_score_micro_experiment():
+def test_filter_entry_quality_keeps_entry_score_micro_experiment(tmp_path):
     recommendation = TradeRecommendation(
         symbol="AAPL",
         action="buy",
@@ -3130,7 +3130,7 @@ def test_filter_entry_quality_keeps_entry_score_micro_experiment():
     )
 
     kept, decisions = filter_entry_quality(
-        Settings(ENTRY_QUALITY_MIN_SCORE=10, ENTRY_SCORE_V2_MIN=0.65),
+        Settings(DATA_DIR=tmp_path, ENTRY_QUALITY_MIN_SCORE=10, ENTRY_SCORE_V2_MIN=0.65),
         [recommendation],
         context,
         {
@@ -3150,9 +3150,9 @@ def test_filter_entry_quality_keeps_entry_score_micro_experiment():
     assert decisions[0]["checks"]["entry_score_v2"]["micro_experiment"] is True
 
 
-def test_entry_quality_gate_can_fail_closed_on_sentiment_failure():
+def test_entry_quality_gate_can_fail_closed_on_sentiment_failure(tmp_path):
     approved, reason, checks = validate_entry_quality(
-        Settings(NEWS_SENTIMENT_FAIL_CLOSED_FOR_BUYS=True),
+        Settings(DATA_DIR=tmp_path, NEWS_SENTIMENT_FAIL_CLOSED_FOR_BUYS=True),
         _quality_recommendation(),
         _quality_context(),
         {

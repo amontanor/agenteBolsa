@@ -132,15 +132,16 @@ def build_config_audit(settings: Settings) -> dict[str, Any]:
             }
         )
     learning_mode = file_configs.get("learning_mode")
-    if isinstance(learning_mode, dict) and "_error" not in learning_mode:
+    if isinstance(learning_mode, dict) and "_error" in learning_mode:
         checks.append(
             {
-                "name": "learning_mode.enabled",
-                "value": learning_mode.get("enabled"),
-                "expected": False,
-                "ok": bool(learning_mode.get("enabled")) is False,
+                "name": "learning_mode.config_parseable",
+                "value": learning_mode.get("_error"),
+                "expected": "parseable",
+                "ok": False,
             }
         )
+    elif isinstance(learning_mode, dict):
         checks.append(
             {
                 "name": "learning_mode.human_gated",
@@ -149,6 +150,15 @@ def build_config_audit(settings: Settings) -> dict[str, Any]:
                 "ok": bool(learning_mode.get("human_gated", True)) is True,
             }
         )
+        if bool(learning_mode.get("enabled")) and not str(learning_mode.get("authorized_by") or "").strip():
+            checks.append(
+                {
+                    "name": "learning_mode.sin_autorizacion",
+                    "value": learning_mode.get("authorized_by"),
+                    "expected": "non-empty authorized_by",
+                    "ok": False,
+                }
+            )
     safety = {
         "ok": all(check["ok"] for check in checks),
         "checks": checks,
@@ -167,7 +177,7 @@ def _learning_mode_safety_suffix(audit: dict[str, Any]) -> str:
     if isinstance(learning_mode, dict) and "_error" not in learning_mode:
         enabled = bool(learning_mode.get("enabled"))
         shadow_first = bool(learning_mode.get("shadow_first"))
-        return f", learning_mode={'ON' if enabled else 'OFF'}, shadow_first={shadow_first}"
+        return f" | learning_mode={'ON' if enabled else 'OFF'}, shadow_first={shadow_first}"
     return ", learning_mode=sin_datos"
 
 
@@ -175,9 +185,11 @@ def format_config_audit_text(audit: dict[str, Any]) -> str:
     lines = ["Auditoria de configuracion efectiva", ""]
     safety = audit.get("safety") or {}
     if safety.get("ok"):
-        lines.append(f"Safety: OK (paper, live off, auto-apply off, sleeve dry-run{_learning_mode_safety_suffix(audit)})")
+        lines.append(f"Safety: OK (paper, live off, auto-apply off, sleeve dry-run){_learning_mode_safety_suffix(audit)}")
     else:
-        lines.append(f"Safety: ALERTA -> {', '.join(safety.get('violations') or ['sin datos'])}")
+        lines.append(
+            f"Safety: ALERTA -> {', '.join(safety.get('violations') or ['sin datos'])}{_learning_mode_safety_suffix(audit)}"
+        )
     lines.append("")
     lines.append("| Campo | Efectivo | Default | Divergente |")
     lines.append("|---|---|---|---|")
@@ -209,6 +221,7 @@ def digest_safety_summary(settings: Settings) -> dict[str, Any] | None:
                 "enabled": bool(learning_mode.get("enabled")),
                 "human_gated": bool(learning_mode.get("human_gated", True)),
                 "shadow_first": bool(learning_mode.get("shadow_first")),
+                "authorized_by": str(learning_mode.get("authorized_by") or "").strip(),
             }
         return safety
     except Exception:  # noqa: BLE001 - el digest no debe caer por la auditoria

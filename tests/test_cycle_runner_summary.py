@@ -170,7 +170,7 @@ def test_backtest_gate_blocks_excessive_drawdown():
     assert "max drawdown" in reason
 
 
-def test_apply_daily_buy_limit_records_rejections():
+def test_apply_daily_buy_limit_records_rejections(tmp_path):
     emitted = {}
     rejected = []
 
@@ -189,7 +189,7 @@ def test_apply_daily_buy_limit_records_rejections():
     ]
 
     kept = _apply_daily_buy_limit(
-        Settings(MAX_DAILY_BUY_ORDERS=2, MAX_ORDERS_PER_CYCLE=2),
+        Settings(DATA_DIR=tmp_path, MAX_DAILY_BUY_ORDERS=2, MAX_ORDERS_PER_CYCLE=2),
         FakeStore(),
         FakeReporter(),
         "cycle",

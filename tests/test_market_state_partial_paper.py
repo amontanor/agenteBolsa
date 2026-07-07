@@ -16,8 +16,8 @@ PARTIAL_MACRO = {"data_quality": {"status": "PARTIAL", "notes": ["missing macro/
 INSUFFICIENT = {"data_quality": {"status": "INSUFFICIENT"}}
 
 
-def test_paper_relaxes_partial_missing_macro():
-    paper = Settings(TRADING_MODE="paper")
+def test_paper_relaxes_partial_missing_macro(tmp_path):
+    paper = Settings(DATA_DIR=tmp_path, TRADING_MODE="paper")
     # El diagnostico base no cambia: el reason sigue existiendo.
     assert (
         _fallback_market_state_block_reason(PARTIAL_MACRO)
@@ -27,16 +27,16 @@ def test_paper_relaxes_partial_missing_macro():
     assert _effective_market_state_block_reason(paper, PARTIAL_MACRO) is None
 
 
-def test_live_keeps_partial_block():
-    live = Settings(TRADING_MODE="live")
+def test_live_keeps_partial_block(tmp_path):
+    live = Settings(DATA_DIR=tmp_path, TRADING_MODE="live")
     assert (
         _effective_market_state_block_reason(live, PARTIAL_MACRO)
         == "market_state_partial_missing_macro_or_news"
     )
 
 
-def test_insufficient_always_blocks_even_in_paper():
-    paper = Settings(TRADING_MODE="paper")
+def test_insufficient_always_blocks_even_in_paper(tmp_path):
+    paper = Settings(DATA_DIR=tmp_path, TRADING_MODE="paper")
     assert (
         _effective_market_state_block_reason(paper, INSUFFICIENT)
         == "market_state_data_quality_insufficient"

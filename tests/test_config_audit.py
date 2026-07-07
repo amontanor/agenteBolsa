@@ -47,6 +47,61 @@ def test_safety_ok_with_safe_flags(tmp_path):
     assert "learning_mode=sin_datos" in text
 
 
+def test_safety_learning_mode_enabled_is_not_violation_when_authorized(tmp_path):
+    _write_core_sleeve(tmp_path, dry_run=True)
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "learning_mode.json").write_text(
+        json.dumps(
+            {
+                "enabled": True,
+                "human_gated": True,
+                "shadow_first": False,
+                "authorized_by": "Antonio 2026-07-07",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    audit = build_config_audit(_settings(tmp_path))
+
+    assert audit["safety"]["ok"] is True
+    assert audit["safety"]["violations"] == []
+    text = format_config_audit_text(audit)
+    assert "Safety: OK" in text
+    assert "learning_mode=ON, shadow_first=False" in text
+
+
+def test_safety_learning_mode_enabled_without_authorization_alerts(tmp_path):
+    _write_core_sleeve(tmp_path, dry_run=True)
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "learning_mode.json").write_text(
+        json.dumps({"enabled": True, "human_gated": True, "shadow_first": False, "authorized_by": ""}),
+        encoding="utf-8",
+    )
+
+    audit = build_config_audit(_settings(tmp_path))
+
+    assert audit["safety"]["ok"] is False
+    assert "learning_mode.sin_autorizacion" in audit["safety"]["violations"]
+    text = format_config_audit_text(audit)
+    assert "Safety: ALERTA -> learning_mode.sin_autorizacion" in text
+    assert "learning_mode=ON, shadow_first=False" in text
+
+
+def test_safety_learning_mode_parse_error_alerts(tmp_path):
+    _write_core_sleeve(tmp_path, dry_run=True)
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "learning_mode.json").write_text("{bad json", encoding="utf-8")
+
+    audit = build_config_audit(_settings(tmp_path))
+
+    assert audit["safety"]["ok"] is False
+    assert "learning_mode.config_parseable" in audit["safety"]["violations"]
+
+
 def test_safety_alerts_when_auto_apply_enabled(tmp_path):
     _write_core_sleeve(tmp_path, dry_run=True)
     audit = build_config_audit(_settings(tmp_path, ALLOW_AUTO_APPLY_IMPROVEMENTS=True))
@@ -93,7 +148,12 @@ def test_digest_safety_summary_exposes_learning_mode(tmp_path):
 
     summary = digest_safety_summary(_settings(tmp_path))
     assert summary is not None
-    assert summary["learning_mode"] == {"enabled": False, "human_gated": True, "shadow_first": True}
+    assert summary["learning_mode"] == {
+        "enabled": False,
+        "human_gated": True,
+        "shadow_first": True,
+        "authorized_by": "",
+    }
 
 
 def test_digest_renders_safety_line_and_cast_counters(tmp_path):
@@ -117,9 +177,28 @@ def test_digest_renders_safety_line_and_cast_counters(tmp_path):
         days=1,
         now=datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc),
         data_dir=tmp_path,
-        safety={"ok": True, "violations": [], "learning_mode": {"enabled": False, "shadow_first": True}},
+        safety={
+            "ok": True,
+            "violations": [],
+            "learning_mode": {"enabled": False, "shadow_first": True, "authorized_by": ""},
+        },
     )
     assert "Safety: OK | learning_mode=OFF, shadow_first=True" in format_lab_digest_text(digest_ok)
+
+    digest_alert = build_lab_digest(
+        store,
+        days=1,
+        now=datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc),
+        data_dir=tmp_path,
+        safety={
+            "ok": False,
+            "violations": ["learning_mode.sin_autorizacion"],
+            "learning_mode": {"enabled": True, "shadow_first": False, "authorized_by": ""},
+        },
+    )
+    assert "Safety: ALERTA -> learning_mode.sin_autorizacion | learning_mode=ON, shadow_first=False" in format_lab_digest_text(
+        digest_alert
+    )
 
     digest_none = build_lab_digest(
         store,

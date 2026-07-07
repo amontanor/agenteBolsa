@@ -9,5 +9,6 @@
                                "builtin_pullback"
                            ],
     "shadow_first":  false,
+    "authorized_by":  "Antonio 2026-07-07",
     "notes":  "Experimento de aprendizaje en paper. Solo Antonio debe activarlo o ampliar sus cupos; la firma no puede autohabilitarlo."
 }
