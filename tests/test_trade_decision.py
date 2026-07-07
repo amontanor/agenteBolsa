@@ -905,7 +905,43 @@ def test_augment_recommendations_keeps_llm_buy_and_fills_remaining_capacity():
     assert metadata["replaced_holds"] == []
     assert metadata["added"] == ["FILL"]
     assert next(item for item in merged if item.symbol == "KEEP").source == "llm"
-    assert next(item for item in merged if item.symbol == "FILL").source == "deterministic_capacity_fill"
+    fill_recommendation = next(item for item in merged if item.symbol == "FILL")
+    assert fill_recommendation.source == "deterministic_capacity_fill"
+    assert fill_recommendation.capacity_fill_reason_code == "capacity_fill_tras_llm_ok"
+    assert "Completa capacidad buy no usada por el LLM." in fill_recommendation.reason
+    assert metadata["capacity_fill_reason_code"] == "capacity_fill_tras_llm_ok"
+
+
+def test_augment_recommendations_marks_capacity_fill_as_llm_failure_when_needed():
+    portfolio = PortfolioSnapshot(
+        account_id="paper",
+        status="ACTIVE",
+        currency="USD",
+        cash=20_000,
+        portfolio_value=20_000,
+        buying_power=20_000,
+        positions=[],
+        open_orders=[],
+    )
+    fill = _selection_candidate("FILL", score=17, volume_zscore_20=1.1)
+    fill["selection_score"] = 0.08
+    fill["selection_rank"] = 2
+    context = {"selected_candidates": [fill]}
+
+    merged, metadata = augment_recommendations_with_deterministic_fallback(
+        Settings(MAX_ORDERS_PER_CYCLE=1),
+        portfolio,
+        context,
+        [],
+        limit=1,
+        llm_failed=True,
+    )
+
+    assert len(merged) == 1
+    assert merged[0].source == "deterministic_capacity_fill"
+    assert merged[0].capacity_fill_reason_code == "capacity_fill_por_fallo_llm"
+    assert "tras fallo real del LLM" in merged[0].reason
+    assert metadata["capacity_fill_reason_code"] == "capacity_fill_por_fallo_llm"
 
 
 def test_compact_sentiment_for_prompt_keeps_only_candidate_symbols_and_short_news():

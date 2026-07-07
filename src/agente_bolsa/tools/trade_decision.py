@@ -4266,6 +4266,7 @@ def deterministic_trade_fallback_recommendations(
     *,
     limit: int | None = None,
     market_state: dict[str, Any] | None = None,
+    llm_failed: bool = False,
 ) -> list[TradeRecommendation]:
     """Conservative fallback for paper trading when the LLM decision layer is unavailable."""
 
@@ -4486,7 +4487,8 @@ def deterministic_trade_fallback_recommendations(
                 action="buy",
                 confidence=round(confidence, 2),
                 reason=(
-                    "Fallback determinista por fallo del LLM: candidato strong seleccionado "
+                    f"{'Fallback determinista por fallo del LLM' if llm_failed else 'Fallback determinista'}: "
+                    "candidato strong seleccionado "
                     f"rank={item.get('selection_rank')}, score={item.get('score')}, "
                     f"selection_score={item.get('selection_score')}."
                 ),
@@ -4499,6 +4501,7 @@ def deterministic_trade_fallback_recommendations(
                 source="deterministic_fallback",
                 aggressiveness_profile=settings.trade_aggressiveness_profile,
                 cohort=LEARNING_EXPERIMENT_SOURCE if active_learning_mode(settings) else None,
+                decision_origin="deterministic_fallback_llm_failed" if llm_failed else "deterministic_fallback_augmented",
             )
         )
     return recommendations
@@ -4512,6 +4515,7 @@ def augment_recommendations_with_deterministic_fallback(
     *,
     limit: int | None = None,
     market_state: dict[str, Any] | None = None,
+    llm_failed: bool = False,
 ) -> tuple[list[TradeRecommendation], dict[str, Any]]:
     recommendation_limit = max(1, int(limit or _effective_trade_recommendation_limit(settings, technical_context)))
     if active_learning_mode(settings):
@@ -4555,6 +4559,12 @@ def augment_recommendations_with_deterministic_fallback(
     added: list[str] = []
     replaced_holds: list[str] = []
     merged = list(recommendations)
+    fill_reason_code = "capacity_fill_por_fallo_llm" if llm_failed else "capacity_fill_tras_llm_ok"
+    fill_reason_suffix = (
+        "Completa capacidad buy tras fallo real del LLM."
+        if llm_failed
+        else "Completa capacidad buy no usada por el LLM."
+    )
 
     for fallback in fallback_recommendations:
         symbol = fallback.symbol.upper()
@@ -4567,6 +4577,7 @@ def augment_recommendations_with_deterministic_fallback(
                     fallback,
                     reason=f"{fallback.reason} Override conservador sobre hold del LLM.",
                     source="deterministic_hold_override",
+                    decision_origin="deterministic_hold_override",
                 )
             )
             buy_symbols.add(symbol)
@@ -4579,8 +4590,10 @@ def augment_recommendations_with_deterministic_fallback(
         merged.append(
             replace(
                 fallback,
-                reason=f"{fallback.reason} Completa capacidad buy no usada por el LLM.",
+                reason=f"{fallback.reason} {fill_reason_suffix}",
                 source="deterministic_capacity_fill",
+                decision_origin="deterministic_capacity_fill",
+                capacity_fill_reason_code=fill_reason_code,
             )
         )
         buy_symbols.add(symbol)
@@ -4595,6 +4608,7 @@ def augment_recommendations_with_deterministic_fallback(
         "merged_recommendations": len(merged),
         "non_buy_count": non_buy_count,
         "recommendation_limit": recommendation_limit,
+        "capacity_fill_reason_code": fill_reason_code if added else None,
     }
 
 

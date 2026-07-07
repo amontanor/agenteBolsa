@@ -102,6 +102,8 @@ class TradeRecommendation:
     backtest_soft_override: bool = False
     soft_override_reasons: list[str] = field(default_factory=list)
     cohort: str | None = None
+    decision_origin: str | None = None
+    capacity_fill_reason_code: str | None = None
 
 
 @dataclass(frozen=True)

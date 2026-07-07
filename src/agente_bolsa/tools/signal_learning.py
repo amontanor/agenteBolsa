@@ -383,19 +383,40 @@ def update_signal_decisions(
                 decision = "approved_buy_micro"
             else:
                 decision = "approved_buy"
-        store.update_signal_decision(
-            source_run_id=source_run_id,
-            symbol=symbol,
-            decision=decision,
-            gate={
-                **gate,
-                "llm": {
-                    "action": recommendation.action,
-                    "confidence": recommendation.confidence,
-                    "reason": recommendation.reason,
-                },
+        feature_updates = {
+            "recommendation_source": getattr(recommendation, "source", "llm"),
+            "decision_origin": getattr(recommendation, "decision_origin", None),
+            "capacity_fill_reason_code": getattr(recommendation, "capacity_fill_reason_code", None),
+            "llm_response_status": "failed"
+            if (
+                getattr(recommendation, "decision_origin", None) == "deterministic_fallback_llm_failed"
+                or getattr(recommendation, "capacity_fill_reason_code", None) == "capacity_fill_por_fallo_llm"
+            )
+            else "ok",
+        }
+        gate_updates = {
+            **gate,
+            "llm": {
+                "action": recommendation.action,
+                "confidence": recommendation.confidence,
+                "reason": recommendation.reason,
             },
-        )
+        }
+        try:
+            store.update_signal_decision(
+                source_run_id=source_run_id,
+                symbol=symbol,
+                decision=decision,
+                features=feature_updates,
+                gate=gate_updates,
+            )
+        except TypeError:
+            store.update_signal_decision(
+                source_run_id=source_run_id,
+                symbol=symbol,
+                decision=decision,
+                gate=gate_updates,
+            )
         updated += 1
     return updated
 

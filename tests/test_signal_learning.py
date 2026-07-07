@@ -399,6 +399,53 @@ def test_update_signal_decisions_marks_blocked_entry_quality(tmp_path):
     assert updated == 1
     assert row["decision"] == "blocked_entry_quality"
     assert row["gate"]["entry_quality_gate"]["reason"] == "score bajo"
+    assert row["features"]["recommendation_source"] == "llm"
+    assert row["features"]["llm_response_status"] == "ok"
+
+
+def test_update_signal_decisions_persists_capacity_fill_reason_code_in_features(tmp_path):
+    from agente_bolsa.storage import Store
+
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    store.save_signal_outcome(
+        signal_id="scan-1:AAPL",
+        source_run_id="scan-1",
+        source="test",
+        symbol="AAPL",
+        signal_date="2026-04-27",
+        decision="candidate",
+        features={"score": 16},
+    )
+
+    updated = update_signal_decisions(
+        store,
+        source_run_id="scan-1",
+        recommendations=[
+            TradeRecommendation(
+                symbol="AAPL",
+                action="buy",
+                confidence=0.9,
+                reason="relleno determinista",
+                source="deterministic_capacity_fill",
+                decision_origin="deterministic_capacity_fill",
+                capacity_fill_reason_code="capacity_fill_tras_llm_ok",
+            )
+        ],
+        entry_quality_gate=[
+            {"symbol": "AAPL", "action": "buy", "approved": True, "reason": "entry-quality aprobado", "checks": {}}
+        ],
+        backtest_gate=[],
+        settings=Settings(DATA_DIR=tmp_path),
+    )
+    row = store.signal_outcomes()[0]
+
+    assert updated == 1
+    assert row["decision"] == "approved_buy"
+    assert row["features"]["recommendation_source"] == "deterministic_capacity_fill"
+    assert row["features"]["decision_origin"] == "deterministic_capacity_fill"
+    assert row["features"]["capacity_fill_reason_code"] == "capacity_fill_tras_llm_ok"
+    assert row["features"]["llm_response_status"] == "ok"
 
 
 def test_update_signal_decisions_marks_soft_backtest_override(tmp_path):

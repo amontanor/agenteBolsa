@@ -836,6 +836,7 @@ def _auto_paper_trade(
                 decision_context,
                 limit=locals().get("effective_recommendation_limit"),
                 market_state=market_state,
+                llm_failed=True,
             )
             reporter.emit(
                 "execution_agent",
@@ -904,6 +905,7 @@ def _auto_paper_trade(
             recommendations,
             limit=locals().get("effective_recommendation_limit"),
             market_state=market_state,
+            llm_failed=bool(decision.get("fallback_error")),
         )
         if recommendation_augmentation.get("added"):
             reporter.emit(

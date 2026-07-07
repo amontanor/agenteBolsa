@@ -1414,11 +1414,12 @@ class Store:
         symbol: str,
         decision: str,
         gate: dict[str, Any],
+        features: dict[str, Any] | None = None,
     ) -> None:
         with self.connect() as conn:
             row = conn.execute(
                 """
-                SELECT gate_json
+                SELECT gate_json, features_json
                 FROM signal_outcomes
                 WHERE source_run_id = ? AND symbol = ?
                   AND coalesce(source, '') != 'lab_book'
@@ -1431,14 +1432,17 @@ class Store:
                 return
             existing_gate = json.loads(row["gate_json"] or "{}")
             existing_gate.update(gate)
+            existing_features = json.loads(row["features_json"] or "{}")
+            if features:
+                existing_features.update(features)
             conn.execute(
                 """
                 UPDATE signal_outcomes
-                SET decision = ?, gate_json = ?, updated_at = ?
+                SET decision = ?, gate_json = ?, features_json = ?, updated_at = ?
                 WHERE source_run_id = ? AND symbol = ?
                   AND coalesce(source, '') != 'lab_book'
                 """,
-                (decision, _dumps(existing_gate), _utc_iso(), source_run_id, symbol.upper()),
+                (decision, _dumps(existing_gate), _dumps(existing_features), _utc_iso(), source_run_id, symbol.upper()),
             )
 
     def update_signal_gate(
