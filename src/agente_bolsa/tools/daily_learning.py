@@ -13,6 +13,8 @@ from agente_bolsa.models import new_id
 from agente_bolsa.storage import Store
 
 from .counterfactual_analysis import _compare_policy_rows, _rebuild_signal_cohorts, _session_dates
+from .learning_mode import LEARNING_EXPERIMENT_SOURCE
+from .llm_degraded_watchdog import evaluate as evaluate_llm_watchdog
 from .pre_earnings import load_pre_earnings_learning_context
 from .reporting import write_json_report
 from .signal_learning import HORIZONS, _indicator_tags, _num, update_signal_outcomes
@@ -30,6 +32,18 @@ def _round(value: Any, digits: int = 4) -> float | None:
 
 def _write_report(report: dict[str, Any], reports_dir: Path, prefix: str, run_id: str) -> dict[str, Any]:
     return write_json_report(report, reports_dir, prefix, run_id)
+
+
+def _llm_status_snapshot(store: Store) -> dict[str, Any]:
+    try:
+        return evaluate_llm_watchdog(getattr(store, "database_path", ""))
+    except Exception as exc:  # noqa: BLE001 - el digest nunca debe romper.
+        return {
+            "degraded": None,
+            "severity": "unknown",
+            "roles": {},
+            "status_line": f"LLM: no disponible ({exc})",
+        }
 
 
 def _source_family(row: dict[str, Any]) -> str:
@@ -979,12 +993,160 @@ def _upsert_policy_candidates(
     return candidates
 
 
+def _load_json_file(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _learning_experiment_proposal_candidates(observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    matured = [item for item in observations if _matured_for_horizon(item, 3)]
+    soft_override = [
+        item
+        for item in matured
+        if bool(item.get("features", {}).get("backtest_soft_override"))
+        or bool(item.get("gate", {}).get("backtest_soft_override"))
+    ]
+    if len(soft_override) < 5:
+        return []
+    returns = [_horizon_return(item, 3) for item in soft_override]
+    clean_returns = [value for value in returns if value is not None]
+    if len(clean_returns) < 5:
+        return []
+    avg_return = sum(clean_returns) / len(clean_returns)
+    if avg_return >= 0:
+        return []
+    return [
+        {
+            "proposal_type": "RISK_RULE_CHANGE",
+            "target_component": "learning_mode",
+            "target_identifier": "backtest_near_miss_threshold",
+            "current_value": "near_miss activo con override soft en paper",
+            "proposed_value": "Endurecer learning_near_miss para exigir mejores metricas antes del override soft.",
+            "rationale": "El cohorte learning_experiment muestra expectativa negativa en 3d para overrides near-miss.",
+            "expected_impact": "Reducir entradas de aprendizaje con sesgo negativo persistente.",
+            "risk_level": "MEDIUM",
+            "required_validations": ["tests", "paper_trading_evidence"],
+            "rollback_plan": "Restaurar umbrales near-miss actuales del learning mode.",
+            "promotion_state": "shadow",
+            "evidence": [
+                f"learning_experiment soft_override matured_3d={len(clean_returns)}",
+                f"learning_experiment soft_override avg_return_3d={round(avg_return, 4)}",
+            ],
+            "target_files": ["data/config/learning_mode.json", "src/agente_bolsa/cycle_runner.py"],
+            "test_requirement": "tests del learning mode + evidencia paper del cohorte",
+            "test_commands": ["python -m pytest tests/test_learning_mode.py -q"],
+            "source": "learning_experiment_digest",
+        }
+    ]
+
+
+def _build_learning_experiment_section(
+    store: Store,
+    reports_dir: Path,
+    *,
+    since_date: str,
+    end_date: str | None,
+) -> dict[str, Any]:
+    session_date = end_date
+    shadow_payload = _load_json_file(reports_dir / "latest_learning_mode_shadow.json")
+    if not session_date:
+        session_date = str(shadow_payload.get("session_date") or "")
+    cohort_rows = _rebuild_signal_cohorts(
+        store,
+        since_date=since_date,
+        end_date=end_date,
+        include_learning_experiment=True,
+        sources=[LEARNING_EXPERIMENT_SOURCE],
+    )
+    observations = _materialize_observations(store, cohort_rows) if cohort_rows else []
+    if not session_date and observations:
+        session_date = max(str(item.get("signal_date") or "") for item in observations)
+    session_rows = [item for item in observations if not session_date or item.get("signal_date") == session_date]
+    matured_3d = [item for item in session_rows if _matured_for_horizon(item, 3)]
+    executed = [item for item in session_rows if bool(item.get("executed_buy"))]
+    open_pl = [
+        _num(((item.get("outcome") or {}).get("execution") or {}).get("open_pl"))
+        for item in executed
+    ]
+    clean_open_pl = [value for value in open_pl if value is not None]
+    latest_post_market = _load_json_file(reports_dir / "latest_post_market_learning.json")
+    latest_operational = _load_json_file(reports_dir / "latest_operational_learning.json")
+    post_market_same_session = bool(latest_post_market) and str(latest_post_market.get("session_date") or "") == str(session_date or "")
+    operational_same_session = bool(latest_operational) and str(latest_post_market.get("session_date") or "") == str(session_date or "")
+    proposal_candidates = _learning_experiment_proposal_candidates(session_rows)
+    lessons = []
+    if latest_operational:
+        lessons = [
+            str(item)
+            for item in (latest_operational.get("learning_journal") or [])
+            if "learning_experiment" in json.dumps(item, ensure_ascii=False).lower()
+        ][:5]
+    if not lessons and executed and not proposal_candidates:
+        lessons = ["Opero pero no aprendio nada nuevo."]
+    elif not lessons and shadow_payload:
+        lessons = ["Shadow registrado sin fills reales todavia; quedan pendientes reconciliation y post-market del primer fill."]
+
+    shadow_buys = list(shadow_payload.get("would_buy") or []) if shadow_payload else []
+    pipeline = {
+        "signal_outcomes": {"status": "ok" if cohort_rows else "pending", "count": len(cohort_rows)},
+        "learning_observations": {"status": "ok" if session_rows else "pending", "count": len(session_rows)},
+        "broker_reconciliation": {
+            "status": "ok" if executed else "pending_first_fill",
+            "fills_linked": len(executed),
+        },
+        "post_market_review": {
+            "status": "ok" if executed and post_market_same_session else "pending_first_fill",
+            "available": post_market_same_session,
+        },
+        "memories_lessons": {
+            "status": "ok" if executed and operational_same_session else "pending_first_fill",
+            "available": operational_same_session,
+        },
+        "findings_to_proposals": {
+            "status": "ok" if proposal_candidates else "wired_no_actionable_evidence",
+            "proposal_candidates": len(proposal_candidates),
+        },
+    }
+    return {
+        "available": bool(cohort_rows or shadow_payload),
+        "session_date": session_date,
+        "signals": len(cohort_rows),
+        "observations": len(session_rows),
+        "trades": len(executed),
+        "pnl": {
+            "realized": 0.0,
+            "open": _round(sum(clean_open_pl), 2) if clean_open_pl else None,
+        },
+        "matured_outcomes": {
+            "3d": len(matured_3d),
+        },
+        "shadow": {
+            "available": bool(shadow_payload),
+            "would_buy": shadow_buys,
+            "kill_switch_active": bool((shadow_payload.get("operational_kill_switch") or {}).get("kill_switch_active")),
+        },
+        "lessons": lessons[:5],
+        "adjustments": {
+            "proposal_candidates": proposal_candidates,
+            "status": "opero pero no aprendio nada nuevo." if executed and not proposal_candidates else None,
+        },
+        "pipeline": pipeline,
+    }
+
+
 def _build_digest(
     observations: list[dict[str, Any]],
     health: dict[str, Any],
     candidates: list[dict[str, Any]],
+    llm_status: dict[str, Any],
     pre_earnings_context: dict[str, Any] | None = None,
     same_session_ledger: dict[str, Any] | None = None,
+    learning_experiment_section: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     stats_1d = _feature_bucket_stats(observations, 1, min_samples=3)
     stats_3d = _feature_bucket_stats(observations, 3, min_samples=3)
@@ -1053,6 +1215,8 @@ def _build_digest(
     )
     return {
         "as_of": datetime.now(timezone.utc).isoformat(),
+        "llm_status": llm_status,
+        "llm_status_line": llm_status.get("status_line"),
         "summary": {
             "canonical_observations": health.get("canonical_observations", 0),
             "duplicate_ratio": health.get("duplicate_ratio", 0.0),
@@ -1073,6 +1237,7 @@ def _build_digest(
         "entry_quality_filter_calibration_3d": entry_quality_filter_calibration_3d,
         "backtest_filter_calibration_3d": backtest_filter_calibration_3d,
         "pre_earnings": pre_earnings_context or {"available": False},
+        "learning_experiment_yesterday": learning_experiment_section or {"available": False},
         "active_or_guarded_policies": [
             {
                 "policy_id": item["policy_id"],
@@ -1115,9 +1280,24 @@ def build_learning_daily_run(
     session_date = end_date or (session_dates[-1] if session_dates else since_date)
     health = _build_health(observations, rows)
     policy_candidates = _upsert_policy_candidates(store, observations, session_date)
+    llm_status = _llm_status_snapshot(store)
     pre_earnings_context = load_pre_earnings_learning_context(reports_dir.parent)
     same_session_ledger = _build_same_session_opportunity_ledger(rows, store, session_date)
-    digest = _build_digest(observations, health, policy_candidates, pre_earnings_context, same_session_ledger)
+    learning_experiment_section = _build_learning_experiment_section(
+        store,
+        reports_dir,
+        since_date=since_date,
+        end_date=session_date,
+    )
+    digest = _build_digest(
+        observations,
+        health,
+        policy_candidates,
+        llm_status,
+        pre_earnings_context,
+        same_session_ledger,
+        learning_experiment_section,
+    )
     comparison = _compare_policy_rows(rows, "proposed") if rows else {}
     summary_payload = {
         "session_date": session_date,
@@ -1186,8 +1366,23 @@ def build_learning_digest_report(
     observations = store.learning_observations(since_date=since_date, end_date=end_date, limit=LEDGER_LIMIT)
     health = _build_health(observations, observations)
     candidates = store.learning_policy_candidates(limit=100)
+    llm_status = _llm_status_snapshot(store)
     pre_earnings_context = load_pre_earnings_learning_context(reports_dir.parent)
-    digest = _build_digest(observations, health, candidates, pre_earnings_context)
+    learning_experiment_section = _build_learning_experiment_section(
+        store,
+        reports_dir,
+        since_date=since_date,
+        end_date=end_date,
+    )
+    digest = _build_digest(
+        observations,
+        health,
+        candidates,
+        llm_status,
+        pre_earnings_context,
+        None,
+        learning_experiment_section,
+    )
     report = {
         "run_id": run_id,
         "as_of": datetime.now(timezone.utc).isoformat(),
@@ -1258,9 +1453,12 @@ def load_daily_learning_context(data_dir: Path) -> dict[str, Any]:
     return {
         "available": True,
         "as_of": payload.get("as_of"),
+        "llm_status": payload.get("llm_status", {}),
+        "llm_status_line": payload.get("llm_status_line"),
         "summary": payload.get("summary", {}),
         "guidance": payload.get("guidance", []),
         "pre_earnings": payload.get("pre_earnings", {"available": False}),
+        "learning_experiment_yesterday": payload.get("learning_experiment_yesterday", {"available": False}),
         "active_or_guarded_policies": payload.get("active_or_guarded_policies", []),
         "weak_buckets_3d": payload.get("weak_buckets_3d", [])[:5],
         "strong_buckets_3d": payload.get("strong_buckets_3d", [])[:5],

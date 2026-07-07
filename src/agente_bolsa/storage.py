@@ -2209,6 +2209,7 @@ class Store:
         since_date: str | None = None,
         include_lab_book: bool = False,
         include_learning_experiment: bool = False,
+        sources: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         query = """
             SELECT signal_id, source_run_id, source, symbol, signal_date,
@@ -2229,6 +2230,10 @@ class Store:
         if since_date:
             query += " AND signal_date >= ?"
             params.append(since_date)
+        if sources:
+            placeholders = ",".join("?" for _ in sources)
+            query += f" AND coalesce(source, '') IN ({placeholders})"
+            params.extend(str(source or "") for source in sources)
         query += " ORDER BY signal_date DESC, created_at DESC LIMIT ?"
         params.append(limit)
         rows = self.read_connection().execute(query, params).fetchall()

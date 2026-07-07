@@ -351,8 +351,15 @@ def _signal_rows(
     since_date: str,
     end_date: str | None,
     limit: int = 200000,
+    include_learning_experiment: bool = False,
+    sources: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    rows = store.signal_outcomes(limit=limit, since_date=since_date)
+    rows = store.signal_outcomes(
+        limit=limit,
+        since_date=since_date,
+        include_learning_experiment=include_learning_experiment,
+        sources=sources,
+    )
     if end_date:
         rows = [row for row in rows if row["signal_date"] <= end_date]
     return sorted(rows, key=lambda item: (item.get("signal_date", ""), item.get("created_at", ""), item.get("signal_id", "")))
@@ -619,8 +626,16 @@ def _rebuild_signal_cohorts(
     *,
     since_date: str,
     end_date: str | None,
+    include_learning_experiment: bool = False,
+    sources: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    signals = _signal_rows(store, since_date=since_date, end_date=end_date)
+    signals = _signal_rows(
+        store,
+        since_date=since_date,
+        end_date=end_date,
+        include_learning_experiment=include_learning_experiment,
+        sources=sources,
+    )
     buy_orders = _buy_order_rows(store, since_date=since_date, end_date=end_date)
     recommendations = _trade_recommendation_rows(store, since_date=since_date, end_date=end_date)
     trade_memory_outcomes = _trade_memory_outcomes(store, since_date=since_date, end_date=end_date)

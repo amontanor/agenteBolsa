@@ -2233,6 +2233,17 @@ def command_learning_digest(args: argparse.Namespace) -> None:
     if digest.get("llm_status_line"):
         print(digest["llm_status_line"])
     print(f"Resumen: {digest['summary']}")
+    learning_experiment = digest.get("learning_experiment_yesterday") or {}
+    if learning_experiment.get("available"):
+        print(
+            "Aprendizaje de ayer: "
+            f"signals={learning_experiment.get('signals', 0)} | "
+            f"trades={learning_experiment.get('trades', 0)} | "
+            f"matured_3d={(learning_experiment.get('matured_outcomes') or {}).get('3d', 0)} | "
+            f"pnl_open={learning_experiment.get('pnl', {}).get('open')}"
+        )
+        for item in (learning_experiment.get("lessons") or [])[:3]:
+            print(f"  - {item}")
     if (digest.get("pre_earnings") or {}).get("available"):
         print(f"Pre-earnings: {(digest.get('pre_earnings') or {}).get('summary', {})}")
     print("Guidance:")

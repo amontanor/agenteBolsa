@@ -132,34 +132,44 @@ def persist_findings_to_proposals(
     dry_run: bool = True,
 ) -> dict[str, Any]:
     findings = measured_findings(settings, store)
+    learning_experiment_bridge = _learning_experiment_bridge(settings.data_dir)
     candidates = build_code_change_candidates(findings)[: max(0, min(3, int(limit)))]
     preview = [_proposal_payload(item) for item in candidates]
     if dry_run:
-        return {"ok": True, "dry_run": True, "findings": findings, "created": [], "candidates": preview}
+        return {
+            "ok": True,
+            "dry_run": True,
+            "findings": findings,
+            "created": [],
+            "candidates": preview,
+            "learning_experiment_bridge": learning_experiment_bridge,
+        }
 
     cycle_id = _ensure_bridge_cycle(store)
     created: list[dict[str, Any]] = []
     duplicates: list[dict[str, Any]] = []
-    for item in preview:
+    for item in [*preview, *(learning_experiment_bridge.get("proposal_candidates") or [])]:
         proposal_model = ImprovementProposalPayload.model_validate(item)
         fingerprint = proposal_fingerprint(proposal_model)
         proposal_id = new_id("ci_prop")
+        proposal_type = str(proposal_model.proposal_type or "MONITORING_CHANGE").upper()
+        status = "READY_TO_APPLY" if proposal_type == "CODE_CHANGE" else "PENDING"
         stored_id, inserted = store.upsert_continuous_improvement_proposal(
             {
                 "proposal_id": proposal_id,
                 "cycle_id": cycle_id,
                 "fingerprint": fingerprint,
-                "proposal_type": "CODE_CHANGE",
+                "proposal_type": proposal_type,
                 "target_component": proposal_model.target_component,
                 "target_identifier": proposal_model.target_identifier,
-                "status": "READY_TO_APPLY",
+                "status": status,
                 "priority": "MEDIUM",
                 "risk_level": proposal_model.risk_level,
                 "payload": item,
                 "guard": {
-                    "status": "READY_TO_APPLY",
+                    "status": status,
                     "approved_for_auto_apply": False,
-                    "reasons": ["human_review_required", "findings_to_proposals"],
+                    "reasons": ["human_review_required", "findings_to_proposals", proposal_type.lower()],
                 },
             }
         )
@@ -171,12 +181,12 @@ def persist_findings_to_proposals(
                 "validation_id": new_id("ci_val"),
                 "proposal_id": stored_id,
                 "cycle_id": cycle_id,
-                "status": "READY_TO_APPLY",
+                "status": status,
                 "validation_type": "findings_to_proposals_contract",
                 "payload": {
-                    "objective_status": "READY_TO_APPLY",
+                    "objective_status": status,
                     "checks": [
-                        {"name": "code_change", "passed": True},
+                        {"name": "proposal_type", "passed": True, "detail": proposal_type},
                         {"name": "target_allowlisted", "passed": True},
                         {"name": "tests_declared", "passed": True},
                         {"name": "rollback_declared", "passed": True},
@@ -200,13 +210,23 @@ def persist_findings_to_proposals(
         finished_at=datetime.now(timezone.utc).isoformat(),
         report={"created": created, "duplicates": duplicates, "findings": findings},
     )
-    return {"ok": True, "dry_run": False, "cycle_id": cycle_id, "created": created, "duplicates": duplicates, "findings": findings}
+    return {
+        "ok": True,
+        "dry_run": False,
+        "cycle_id": cycle_id,
+        "created": created,
+        "duplicates": duplicates,
+        "findings": findings,
+        "learning_experiment_bridge": learning_experiment_bridge,
+    }
 
 
 def audit_observation_execution_family(store: Store) -> dict[str, Any]:
     proposals = _observation_family_proposals(store)
     active = [item for item in proposals if str(item.get("status") or "").upper() in NONTERMINAL_STATUSES]
     summary = _recent_learning_observation_summary(store, limit=160)
+    source_counts = summary.get("source_counts") or {}
+    top_source = max(source_counts, key=source_counts.get) if source_counts else "learning_observations"
     return {
         "active_proposals": len(active),
         "total_family_proposals": len(proposals),
@@ -214,8 +234,8 @@ def audit_observation_execution_family(store: Store) -> dict[str, Any]:
         "recent_160_observations": summary,
         "decision": "reject_family",
         "reason": (
-            "Las 160 filas recientes son candidatos de closed_market_study sin barras posteriores maduras, "
-            "no una cola segura de ordenes u observaciones ejecutables."
+            f"Las 160 filas recientes vienen mayoritariamente de {top_source} y siguen sin outcomes maduros/ejecucion real suficiente; "
+            "no son una cola segura de ordenes u observaciones ejecutables."
         ),
     }
 
@@ -390,3 +410,23 @@ def _artifact_text(item: dict[str, Any]) -> str:
             item["proposed_value"],
         ]
     )
+
+
+def _learning_experiment_bridge(data_dir: Path) -> dict[str, Any]:
+    path = data_dir / "reports" / "latest_daily_learning_digest.json"
+    if not path.exists():
+        return {"available": False, "proposal_candidates": [], "reason": "daily_learning_digest_missing"}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {"available": False, "proposal_candidates": [], "reason": "daily_learning_digest_invalid"}
+    section = (payload.get("learning_experiment_yesterday") or {}) if isinstance(payload, dict) else {}
+    return {
+        "available": bool(section.get("available")),
+        "session_date": section.get("session_date"),
+        "pipeline": section.get("pipeline", {}),
+        "proposal_candidates": list((section.get("adjustments") or {}).get("proposal_candidates") or []),
+        "lessons": list(section.get("lessons") or []),
+        "shadow": section.get("shadow", {}),
+        "reason": "ok" if section.get("available") else "learning_experiment_not_available",
+    }
