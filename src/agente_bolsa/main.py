@@ -82,6 +82,7 @@ from .tools.daily_learning import (
 from .tools.execution import submit_paper_order_plan
 from .tools.lab_book import run_lab_book_once
 from .tools.learning_mode import active_learning_mode, learning_mode_source
+from .tools.learning_scoreboard import build_learning_scoreboard, format_learning_scoreboard
 from .tools.live_readiness import build_live_readiness_report
 from .tools.market_state import build_market_state, load_latest_market_state
 from .tools.operational_health import (
@@ -2282,6 +2283,25 @@ def command_learning_promotions(args: argparse.Namespace) -> None:
         print(f"  - [{item['status']}] {item['policy_id']} | promoted_at={item.get('promoted_at') or '-'}")
 
 
+def command_learning_scoreboard(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    report = build_learning_scoreboard(
+        settings,
+        store,
+        settings.data_dir / "reports",
+        new_id("learn_score"),
+        since_date=args.start,
+        end_date=args.end,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    print(format_learning_scoreboard(report))
+
+
 def command_autonomy_digest(args: argparse.Namespace) -> None:
     from .tools.autonomy_digest import build_autonomy_digest, pause_all, resume_all
 
@@ -3511,6 +3531,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     learning_promotions.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     learning_promotions.set_defaults(func=command_learning_promotions)
+
+    learning_scoreboard = subparsers.add_parser(
+        "learning-scoreboard",
+        help="Scoreboard semanal del cohorte learning_experiment con criterio pre-registrado.",
+    )
+    learning_scoreboard.add_argument(
+        "--from",
+        dest="start",
+        default="2026-07-07",
+        help="Fecha inicial YYYY-MM-DD del experimento.",
+    )
+    learning_scoreboard.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
+    learning_scoreboard.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    learning_scoreboard.set_defaults(func=command_learning_scoreboard)
 
     autonomy_digest = subparsers.add_parser(
         "autonomy-digest",
