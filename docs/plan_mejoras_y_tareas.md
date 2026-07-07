@@ -1307,3 +1307,36 @@ minima este corriendo y medida.
   con codigo research arranco 15:05 de hoy; primera madrugada util: domingo).
 - Pendiente para el lunes: P3 (veredicto pullback) + P31 + primera sesion de
   manga dry-run + lab book con mercado abierto + paridad.
+
+---
+
+## 21. GIRO DE OBJETIVO — 7-jul-2026 (decision de Antonio, asumida por el lead)
+
+**Objetivo corregido:** el sistema dinamico opera en paper para APRENDER de sus
+propias operaciones y mejorar con el tiempo. Experimento de aprendizaje, no
+producto de rentabilidad inmediata. Perder al principio es aceptable; la vara es
+la TENDENCIA de mejora medida sin autoengano. La manga core SPY fue un desvio
+(el indice ya lo cubre Antonio por su cuenta): APAGADA el 7-jul
+(enabled=false, dry_run=true; commit 073b7659). El codigo y los estudios de
+vol-target quedan archivados como activo reutilizable, no como rumbo.
+
+**Plan del giro** (`docs/prompts_codex_giro_aprendizaje.md` +
+`docs/prompts_codex_giro_lote_hoy.md`):
+- P-L1 LLM vivo — **HECHO (v0.4.114)**: health check por rol sin falsos
+  positivos (200-vacio ya no es OK), linea `LLM:` permanente en digest, llamada
+  real de decision en llm_usage. Matiz del lead: el fallo de suite que el
+  informe llamo "ajeno" es BLOQUEANTE (gate de approve/nightly) → G0.
+- G0 suite verde (bomba de fechas hardcodeadas en test_lab_book_wall) →
+- G1/P-L2 learning_mode: budget 3 ordenes/dia x $1000, near-miss soft,
+  market_state PARTIAL no estrangula, pullback ACTIVE en el modo, cohorte
+  `learning_experiment` con muralla, shadow_first → flip humano.
+- G2/P-L3 bucle fill→outcome→review→leccion→ajuste verificado eslabon a eslabon
+  + digest "Aprendizaje de ayer".
+- G3/P-L4 scoreboard con criterio PRE-REGISTRADO: aprende si expectancy neta de
+  semanas 5-8 > semanas 1-4, pendiente positiva, y bate al contrafactual
+  (candidatos rechazados / seleccion aleatoria). A las 8 semanas, veredicto en
+  rojo o verde, sin autoengano.
+- G4/P31 nightly: bump por pipeline, contexto de modulo bajo test, relanzar.
+
+**Lo que NO cambia:** paper-only sellado, suelo de kernel, constitucion,
+auto-apply OFF, apply humano, mediciones pre-registradas.
