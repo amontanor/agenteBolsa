@@ -1,13 +1,13 @@
-{
-  "enabled": false,
-  "human_gated": true,
-  "daily_order_budget": 3,
-  "per_trade_notional_usd": 1000,
-  "max_portfolio_exposure_pct": 15,
-  "allowed_strategies": [
-    "builtin_breakout",
-    "builtin_pullback"
-  ],
-  "shadow_first": true,
-  "notes": "Experimento de aprendizaje en paper. Solo Antonio debe activarlo o ampliar sus cupos; la firma no puede autohabilitarlo."
+﻿{
+    "enabled":  true,
+    "human_gated":  true,
+    "daily_order_budget":  3,
+    "per_trade_notional_usd":  1000,
+    "max_portfolio_exposure_pct":  15,
+    "allowed_strategies":  [
+                               "builtin_breakout",
+                               "builtin_pullback"
+                           ],
+    "shadow_first":  false,
+    "notes":  "Experimento de aprendizaje en paper. Solo Antonio debe activarlo o ampliar sus cupos; la firma no puede autohabilitarlo."
 }
