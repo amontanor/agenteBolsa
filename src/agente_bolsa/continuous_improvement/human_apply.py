@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -217,21 +218,30 @@ def _full_validation_steps() -> list[tuple[str, list[str]]]:
 def validation_failure_evidence(validation: dict[str, Any]) -> dict[str, Any]:
     failed_step = next((step for step in validation.get("steps", []) or [] if not step.get("ok")), None)
     if not failed_step:
-        return {"failed_test": None, "returncode": None, "output_tail": ""}
+        return {"failed_test": None, "failed_step": None, "failure_subject": None, "returncode": None, "output_tail": ""}
     output = str(failed_step.get("output") or "")
+    step_name = str(failed_step.get("step") or "")
     return {
         "failed_test": _failed_test_from_output(output),
+        "failed_step": step_name,
+        "failure_subject": _failure_subject_from_output(output, step_name=step_name),
         "returncode": failed_step.get("returncode"),
-        "step": failed_step.get("step"),
         "output_tail": "\n".join(output.splitlines()[-50:]),
     }
 
 
 def _failed_test_from_output(output: str) -> str | None:
+    patterns = (
+        r"^FAILED\s+(\S+::\S+.*?)(?:\s+-\s+.*)?$",
+        r"^ERROR\s+collecting\s+(\S+)$",
+        r"^ERROR\s+(\S+::\S+.*?)(?:\s+-\s+.*)?$",
+    )
     for line in str(output or "").splitlines():
         stripped = line.strip()
-        if stripped.startswith("FAILED ") and "::" in stripped:
-            return stripped.split()[1]
+        for pattern in patterns:
+            match = re.match(pattern, stripped)
+            if match:
+                return match.group(1)
     for line in str(output or "").splitlines():
         stripped = line.strip()
         if stripped.startswith("________________") and stripped.endswith("________________"):
@@ -239,6 +249,22 @@ def _failed_test_from_output(output: str) -> str | None:
             if name:
                 return name
     return None
+
+
+def _failure_subject_from_output(output: str, *, step_name: str) -> str | None:
+    failed_test = _failed_test_from_output(output)
+    if failed_test:
+        return failed_test
+    for line in str(output or "").splitlines():
+        stripped = line.strip()
+        location = re.search(r"([A-Za-z0-9_./\\-]+\.(?:py|ps1|md|json)):(\d+)(?::(\d+))?", stripped)
+        if location:
+            return location.group(0)
+    for line in str(output or "").splitlines():
+        stripped = line.strip()
+        if stripped:
+            return f"{step_name}: {stripped[:160]}" if step_name else stripped[:160]
+    return step_name or None
 
 
 def _live_guard(settings: Settings) -> str | None:
@@ -326,6 +352,9 @@ def _reject_tests(
 ) -> dict[str, Any]:
     proposal_id = proposal["proposal_id"]
     failure_evidence = failure_evidence or validation_failure_evidence(validation)
+    failure_subject = failure_evidence.get("failure_subject")
+    if failure_subject and failure_subject != failure_evidence.get("failed_test") and failure_subject not in error:
+        error = f"{error} Culprit: {failure_subject}"
     artifact = _save_artifact(
         store,
         proposal_id=proposal_id,

@@ -355,12 +355,52 @@ def test_human_approve_rejected_artifact_keeps_failed_test_evidence(tmp_path):
     assert result["ok"] is False
     assert result["status"] == "REJECTED_BY_TESTS"
     assert result["failure_evidence"]["failed_test"] == "tests/test_demo.py::test_nope"
+    assert result["failure_evidence"]["failed_step"] == "pytest"
+    assert result["failure_evidence"]["failure_subject"] == "tests/test_demo.py::test_nope"
     assert result["failure_evidence"]["returncode"] == 1
     assert "FAILED tests/test_demo.py::test_nope" in result["failure_evidence"]["output_tail"]
     payload = result["artifact"]["payload"]
     assert payload["failure_evidence"] == result["failure_evidence"]
     assert "tests/test_demo.py::test_nope" in result["error"]
     assert _git(repo, "status", "--short").stdout.strip() == ""
+
+
+def test_human_approve_rejected_artifact_surfaces_non_pytest_culprit(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    settings = _settings(tmp_path, repo)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    proposal_id = _proposal_with_artifact(store, proposal_id="ci_prop_failing_suite_ruff")
+
+    result = approve_and_apply_code_diff(
+        settings=settings,
+        store=store,
+        proposal_id=proposal_id,
+        actor="pytest",
+        validation_steps=[
+            (
+                "ruff",
+                [
+                    "python",
+                    "-c",
+                    (
+                        "import sys; "
+                        "print('UP015 Unnecessary mode argument'); "
+                        "print('   --> src/agente_bolsa/continuous_improvement/digest.py:968:34'); "
+                        "sys.exit(1)"
+                    ),
+                ],
+            )
+        ],
+        backup=False,
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "REJECTED_BY_TESTS"
+    assert result["failure_evidence"]["failed_test"] is None
+    assert result["failure_evidence"]["failed_step"] == "ruff"
+    assert result["failure_evidence"]["failure_subject"] == "src/agente_bolsa/continuous_improvement/digest.py:968:34"
+    assert "Culprit: src/agente_bolsa/continuous_improvement/digest.py:968:34" in result["error"]
 
 
 def test_human_approve_rebumps_version_when_tree_already_moved(tmp_path):

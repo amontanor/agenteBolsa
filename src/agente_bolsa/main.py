@@ -3009,11 +3009,14 @@ def command_continuous_improvement_lab(args: argparse.Namespace) -> None:
         else:
             failure_evidence = result.get("failure_evidence") or {}
             failed_test = failure_evidence.get("failed_test") or ""
+            failed_step = failure_evidence.get("failed_step") or ""
+            failure_subject = failure_evidence.get("failure_subject") or ""
             print(
                 "APPROVE | "
                 f"proposal={args.proposal} | status={result.get('status')} | "
                 f"commit={result.get('commit')} | applied_change={result.get('applied_change_id')} | "
-                f"error={result.get('error') or ''} | failed_test={failed_test}"
+                f"error={result.get('error') or ''} | failed_test={failed_test} | "
+                f"failed_step={failed_step} | failure_subject={failure_subject}"
             )
         return
     raise ValueError(f"Unknown lab command: {args.lab_command}")
