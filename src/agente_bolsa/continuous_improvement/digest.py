@@ -474,9 +474,12 @@ def _safety_lines(safety: dict[str, Any] | None) -> list[str]:
     learning_mode = safety.get("learning_mode") if isinstance(safety.get("learning_mode"), dict) else None
     learning_suffix = ""
     if learning_mode is not None:
+        authorized_by = str(learning_mode.get("authorized_by") or "").strip()
+        authorized_suffix = f", authorized_by={authorized_by}" if authorized_by else ""
         learning_suffix = (
             f" | learning_mode={'ON' if learning_mode.get('enabled') else 'OFF'}"
             f", shadow_first={bool(learning_mode.get('shadow_first'))}"
+            f"{authorized_suffix}"
         )
     if safety.get("ok"):
         return [f"Safety: OK{learning_suffix}"]

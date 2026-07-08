@@ -24,25 +24,6 @@ function Write-CodegenNightlySupervisorLog {
     Add-Content -Path $LogPath -Value "[$timestamp] $Message" -Encoding UTF8
 }
 
-function Get-NextRunAt {
-    param([string]$TimeText)
-    $parts = $TimeText.Split(":")
-    if ($parts.Count -ne 2) {
-        throw "RunAt invalido. Usa HH:mm, por ejemplo 03:00."
-    }
-    $hour = [int]$parts[0]
-    $minute = [int]$parts[1]
-    if ($hour -lt 0 -or $hour -gt 23 -or $minute -lt 0 -or $minute -gt 59) {
-        throw "RunAt invalido. Usa HH:mm en formato 24h."
-    }
-    $now = Get-Date
-    $candidate = Get-Date -Hour $hour -Minute $minute -Second 0
-    if ($candidate -le $now) {
-        $candidate = $candidate.AddDays(1)
-    }
-    return $candidate
-}
-
 New-Item -ItemType Directory -Force -Path (Split-Path $LogPath -Parent) | Out-Null
 
 if (-not (Test-Path $NightlyScript)) {
@@ -62,7 +43,30 @@ if (-not $lockTaken) {
 
 try {
     while ($true) {
-        $nextRun = Get-NextRunAt -TimeText $RunAt
+        $catchUp = Test-StackDailyCatchUpNeeded -TimeText $RunAt -HasTodayArtifact {
+            param($RunDate)
+            $runsPath = Join-Path $Repo "data\research\codegen_nightly\runs.jsonl"
+            if (-not (Test-Path $runsPath)) {
+                return $false
+            }
+            foreach ($line in Get-Content $runsPath -Encoding UTF8) {
+                if ($line -match [regex]::Escape($RunDate.ToString("yyyy-MM-dd"))) {
+                    return $true
+                }
+            }
+            return $false
+        }
+        if ($catchUp.should_run) {
+            Write-CodegenNightlySupervisorLog "CATCH_UP run_date=$($catchUp.today_run.ToString('yyyy-MM-dd'))"
+            if ($Config -ne "") {
+                & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $NightlyScript -Config $Config
+            } else {
+                & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $NightlyScript
+            }
+            $exitCode = $LASTEXITCODE
+            Write-CodegenNightlySupervisorLog "DONE catch_up exit_code=$exitCode"
+        }
+        $nextRun = $catchUp.next_run
         Write-CodegenNightlySupervisorLog "NEXT_RUN $($nextRun.ToString('s'))"
         while ((Get-Date) -lt $nextRun) {
             $remaining = [int]($nextRun - (Get-Date)).TotalSeconds

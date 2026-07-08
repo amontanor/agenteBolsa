@@ -200,6 +200,19 @@ def test_digest_renders_safety_line_and_cast_counters(tmp_path):
         digest_alert
     )
 
+    digest_authorized = build_lab_digest(
+        store,
+        days=1,
+        now=datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc),
+        data_dir=tmp_path,
+        safety={
+            "ok": True,
+            "violations": [],
+            "learning_mode": {"enabled": True, "shadow_first": False, "authorized_by": "Antonio 2026-07-07"},
+        },
+    )
+    assert "authorized_by=Antonio 2026-07-07" in format_lab_digest_text(digest_authorized)
+
     digest_none = build_lab_digest(
         store,
         days=1,

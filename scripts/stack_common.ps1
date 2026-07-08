@@ -4,6 +4,50 @@ function Get-StackRepoRoot {
     return (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 }
 
+function Get-StackRunSchedule {
+    param(
+        [string]$TimeText,
+        [datetime]$Now = (Get-Date)
+    )
+    $parts = $TimeText.Split(":")
+    if ($parts.Count -ne 2) {
+        throw "RunAt invalido. Usa HH:mm."
+    }
+    $hour = 0
+    $minute = 0
+    if (-not [int]::TryParse($parts[0], [ref]$hour) -or -not [int]::TryParse($parts[1], [ref]$minute)) {
+        throw "RunAt invalido. Usa HH:mm."
+    }
+    if ($hour -lt 0 -or $hour -gt 23 -or $minute -lt 0 -or $minute -gt 59) {
+        throw "RunAt invalido. Usa HH:mm en formato 24h."
+    }
+    $todayRun = Get-Date -Date $Now.Date -Hour $hour -Minute $minute -Second 0
+    $nextRun = if ($todayRun -le $Now) { $todayRun.AddDays(1) } else { $todayRun }
+    return @{
+        today_run = $todayRun
+        next_run = $nextRun
+    }
+}
+
+function Test-StackDailyCatchUpNeeded {
+    param(
+        [string]$TimeText,
+        [scriptblock]$HasTodayArtifact,
+        [datetime]$Now = (Get-Date)
+    )
+    $schedule = Get-StackRunSchedule -TimeText $TimeText -Now $Now
+    $artifactExists = $false
+    if ($HasTodayArtifact) {
+        $artifactExists = [bool](& $HasTodayArtifact $schedule.today_run.Date)
+    }
+    return @{
+        should_run = ($Now -ge $schedule.today_run) -and (-not $artifactExists)
+        artifact_exists = $artifactExists
+        today_run = $schedule.today_run
+        next_run = $schedule.next_run
+    }
+}
+
 function Get-StackRunDir {
     $repo = Get-StackRepoRoot
     $runDir = Join-Path $repo "data\run"

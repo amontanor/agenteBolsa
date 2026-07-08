@@ -25,25 +25,6 @@ function Write-CoreSleeveSupervisorLog {
     Add-Content -Path $RunLog -Value "[$timestamp] $Message" -Encoding UTF8
 }
 
-function Get-NextRunAt {
-    param([string]$TimeText)
-    $parts = $TimeText.Split(":")
-    if ($parts.Count -ne 2) {
-        throw "RunAt invalido. Usa HH:mm, por ejemplo 15:45."
-    }
-    $hour = [int]$parts[0]
-    $minute = [int]$parts[1]
-    if ($hour -lt 0 -or $hour -gt 23 -or $minute -lt 0 -or $minute -gt 59) {
-        throw "RunAt invalido. Usa HH:mm en formato 24h."
-    }
-    $now = Get-Date
-    $candidate = Get-Date -Hour $hour -Minute $minute -Second 0
-    if ($candidate -le $now) {
-        $candidate = $candidate.AddDays(1)
-    }
-    return $candidate
-}
-
 New-Item -ItemType Directory -Force -Path (Split-Path $RunLog -Parent) | Out-Null
 
 if (-not (Test-Path $DailyScript)) {
@@ -63,7 +44,26 @@ if (-not $lockTaken) {
 
 try {
     while ($true) {
-        $nextRun = Get-NextRunAt -TimeText $RunAt
+        $catchUp = Test-StackDailyCatchUpNeeded -TimeText $RunAt -HasTodayArtifact {
+            param($RunDate)
+            $artifactDir = if ($LogDir) { $LogDir } else { Join-Path $Repo "data\research\core_sleeve" }
+            $parityPath = Join-Path $artifactDir ("parity_{0}.md" -f $RunDate.ToString("yyyy-MM-dd"))
+            return Test-Path $parityPath
+        }
+        if ($catchUp.should_run) {
+            Write-CoreSleeveSupervisorLog "CATCH_UP run_date=$($catchUp.today_run.ToString('yyyy-MM-dd'))"
+            $argsList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $DailyScript)
+            if ($Config) {
+                $argsList += @("-Config", $Config)
+            }
+            if ($LogDir) {
+                $argsList += @("-LogDir", $LogDir)
+            }
+            & powershell.exe @argsList
+            $exitCode = $LASTEXITCODE
+            Write-CoreSleeveSupervisorLog "DONE catch_up exit_code=$exitCode"
+        }
+        $nextRun = $catchUp.next_run
         Write-CoreSleeveSupervisorLog "NEXT_RUN $($nextRun.ToString('s'))"
         while ((Get-Date) -lt $nextRun) {
             $remaining = [int]($nextRun - (Get-Date)).TotalSeconds

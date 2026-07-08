@@ -23,25 +23,6 @@ function Write-SupervisorLog {
     Add-Content -Path $LogPath -Value "[$timestamp] $Message" -Encoding UTF8
 }
 
-function Get-NextRunAt {
-    param([string]$TimeText)
-    $parts = $TimeText.Split(":")
-    if ($parts.Count -ne 2) {
-        throw "RunAt invalido. Usa HH:mm, por ejemplo 23:00."
-    }
-    $hour = [int]$parts[0]
-    $minute = [int]$parts[1]
-    if ($hour -lt 0 -or $hour -gt 23 -or $minute -lt 0 -or $minute -gt 59) {
-        throw "RunAt invalido. Usa HH:mm en formato 24h."
-    }
-    $now = Get-Date
-    $candidate = Get-Date -Hour $hour -Minute $minute -Second 0
-    if ($candidate -le $now) {
-        $candidate = $candidate.AddDays(1)
-    }
-    return $candidate
-}
-
 New-Item -ItemType Directory -Force -Path (Split-Path $LogPath -Parent) | Out-Null
 
 if (-not (Test-Path $DailyScript)) {
@@ -61,7 +42,18 @@ if (-not $lockTaken) {
 
 try {
     while ($true) {
-        $nextRun = Get-NextRunAt -TimeText $RunAt
+        $catchUp = Test-StackDailyCatchUpNeeded -TimeText $RunAt -HasTodayArtifact {
+            param($RunDate)
+            $reportPath = Join-Path $Repo "data\research\telegram\reports" ("radar_{0}.md" -f $RunDate.ToString("yyyy-MM-dd"))
+            return Test-Path $reportPath
+        }
+        if ($catchUp.should_run) {
+            Write-SupervisorLog "CATCH_UP run_date=$($catchUp.today_run.ToString('yyyy-MM-dd'))"
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $DailyScript
+            $exitCode = $LASTEXITCODE
+            Write-SupervisorLog "DONE catch_up exit_code=$exitCode"
+        }
+        $nextRun = $catchUp.next_run
         Write-SupervisorLog "NEXT_RUN $($nextRun.ToString('s'))"
         while ((Get-Date) -lt $nextRun) {
             $remaining = [int]($nextRun - (Get-Date)).TotalSeconds
