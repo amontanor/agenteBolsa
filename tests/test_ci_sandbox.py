@@ -315,6 +315,8 @@ def test_code_diff_preview_accepts_src_change_when_touched_test_file_is_executed
     store.ensure_schema()
 
     def _validate(self, **kw):  # noqa: ANN001
+        assert kw["steps"][0][0] == "ruff"
+        assert kw["steps"][0][1][1:] == ["-m", "ruff", "check", "src", "tests"]
         assert any(step[0] == "full_pytest" and "tests/" in step[1] for step in kw["steps"])
         commands = [" ".join(step[1]).replace("\\", "/") for step in kw["steps"]]
         assert any("tests/test_ci_gate_demo.py" in command for command in commands)
@@ -348,7 +350,49 @@ def test_code_diff_preview_accepts_src_change_when_touched_test_file_is_executed
     assert artifact["artifact_type"] == "code_diff_preview"
     assert artifact["payload"]["status"] == "READY_FOR_HUMAN_REVIEW"
     assert artifact["payload"]["tests_ok"] is True
-    assert "tests/test_ci_gate_demo.py" in artifact["payload"]["target_paths"]
+
+
+def test_code_diff_preview_rejects_when_ruff_fails(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    settings = _settings(tmp_path, repo)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+
+    def _validate(self, **kw):  # noqa: ANN001
+        assert kw["steps"][0][0] == "ruff"
+        return {
+            "ok": False,
+            "steps": [
+                {
+                    "step": "ruff",
+                    "ok": False,
+                    "returncode": 1,
+                    "output": "src/agente_bolsa/demo.py:1:8: F401 [*] `os` imported but unused",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(GitSandbox, "validate", _validate)
+    proposal = _proposal(
+        [{"path": "docs/base.md", "old": "base\n", "new": "base\npreview\n"}],
+        proposal_id="ci_prop_diff_preview_failed_ruff",
+    )
+    validation = _validation()
+    validation["proposal_id"] = "ci_prop_diff_preview_failed_ruff"
+
+    artifact = CodeDiffPreviewAgent().generate(
+        settings=settings,
+        store=store,
+        proposal=proposal,
+        validation=validation,
+    )
+
+    assert artifact["artifact_type"] == "code_diff_preview_invalid"
+    assert artifact["payload"]["status"] == "REJECTED_BY_TESTS"
+    assert artifact["payload"]["tests_ok"] is False
+    assert artifact["payload"]["validation"]["steps"][0]["step"] == "ruff"
+    assert "F401" in artifact["payload"]["validation"]["steps"][0]["output"]
+    assert artifact["payload"]["target_paths"] == ["docs/base.md"]
     assert store.continuous_improvement_applied_changes(limit=10) == []
 
 

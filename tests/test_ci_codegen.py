@@ -169,7 +169,9 @@ def test_codegen_preview_produces_diff_artifact_and_no_applied_change(tmp_path, 
 
     def _validate(self, **kw):  # noqa: ANN001
         steps = kw["steps"]
-        assert steps[0][1][1:3] == ["-c", "from pathlib import Path; assert Path('docs/generated.md').exists()"]
+        assert steps[0][0] == "ruff"
+        assert steps[0][1][1:] == ["-m", "ruff", "check", "src", "tests"]
+        assert steps[1][1][1:3] == ["-c", "from pathlib import Path; assert Path('docs/generated.md').exists()"]
         return {"ok": True, "steps": [{"step": "unit", "ok": True, "returncode": 0, "output": "ok"}]}
 
     monkeypatch.setattr(GitSandbox, "validate", _validate)
@@ -306,6 +308,59 @@ def test_codegen_exhausts_two_failed_corrections_and_records_attempts(tmp_path):
     assert len(client.calls) == 3
     assert [item["payload"]["correction_round"] for item in attempts] == [0, 1, 2]
     assert len(invalid) == 3
+
+
+def test_codegen_self_corrects_after_ruff_failure(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    settings = _settings(tmp_path, repo)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    proposal_id = _store_ready_proposal(store)
+    validation_calls = {"count": 0}
+
+    def _validate(self, **kw):  # noqa: ANN001
+        validation_calls["count"] += 1
+        if validation_calls["count"] == 1:
+            assert kw["steps"][0][0] == "ruff"
+            return {
+                "ok": False,
+                "steps": [
+                    {
+                        "step": "ruff",
+                        "ok": False,
+                        "returncode": 1,
+                        "output": "src/agente_bolsa/demo.py:1:8: F401 [*] `os` imported but unused",
+                    }
+                ],
+            }
+        return {"ok": True, "steps": [{"step": "ruff", "ok": True, "returncode": 0, "output": "ok"}]}
+
+    monkeypatch.setattr(GitSandbox, "validate", _validate)
+    client = _SequenceCodegenClient(
+        [
+            {
+                "summary": "Primer intento con lint rojo.",
+                "file_edits": [{"path": "docs/generated.md", "old": "", "new": "demo codegen\n"}],
+                "test_commands": ["python -c \"from pathlib import Path; assert Path('docs/generated.md').exists()\""],
+            },
+            {
+                "summary": "Segundo intento corregido.",
+                "file_edits": [{"path": "docs/generated.md", "old": "", "new": "demo codegen corregido\n"}],
+                "test_commands": ["python -c \"from pathlib import Path; assert Path('docs/generated.md').exists()\""],
+            },
+        ]
+    )
+
+    result = CodegenPatchAgent(client=client).generate_for_proposal(
+        settings=settings,
+        store=store,
+        proposal_id=proposal_id,
+    )
+
+    assert result["ok"] is True
+    assert result["correction_round"] == 1
+    assert len(client.calls) == 2
+    assert "ruff: src/agente_bolsa/demo.py:1:8: F401" in client.calls[1]["messages"][-1]["content"]
 
 
 def test_codegen_accepts_full_content_for_new_file(tmp_path, monkeypatch):

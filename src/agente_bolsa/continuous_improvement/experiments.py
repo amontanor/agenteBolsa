@@ -1269,6 +1269,9 @@ class CodeDiffPreviewAgent:
             elif executable in {"ruff", "ruff.exe"}:
                 parts = [sys.executable, "-m", "ruff", *parts[1:]]
             steps.append((f"proposal_test_{index}", parts))
+        full_ruff = [sys.executable, "-m", "ruff", "check", "src", "tests"]
+        if not any(parts[1:] == full_ruff[1:] for _, parts in steps):
+            steps.insert(0, ("ruff", full_ruff))
         full_pytest = [sys.executable, "-m", "pytest", "tests/", "-x", "-q"]
         if not any(parts[1:] == full_pytest[1:] for _, parts in steps):
             steps.append(("full_pytest", full_pytest))
