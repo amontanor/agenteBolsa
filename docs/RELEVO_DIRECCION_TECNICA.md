@@ -1,6 +1,6 @@
 # Relevo de dirección técnica — agenteBolsa
 
-> **Última actualización: 2026-07-08 ~19:00 CEST (v0.4.132; P-L10 encargado a Codex).**
+> **Última actualización: 2026-07-08 ~19:45 CEST (v0.4.133; P-L10 entregado).**
 > Este documento es el traspaso completo para el LLM que asuma la dirección técnica.
 > Es un documento VIVO: quien dirija debe actualizarlo con cada hito relevante.
 
@@ -118,8 +118,9 @@ máx 15% exposición**. Cohorte etiquetado `source=learning_experiment` con muro
   `sys.executable` y restart no mataba streamlit. Blindado en P-L9A (ruta absoluta del
   venv siempre, detección/matanza de raíces ajenas en stack scripts). Nota: ver hijos
   Python311 colgando del wrapper del venv en Windows es NORMAL (no son raíces).
-- **Decisión low-sample TOMADA (Antonio, 2026-07-08)**: sí, con máximo 1 al día
-  (ver sección 5). Encargada a Codex como P-L10; verificar su entrega y primer uso real.
+- **Low-sample IMPLEMENTADO (P-L10, v0.4.133, 1027 tests)**: excepción activa con
+  cupo 1/día en learning_mode.json; embudo y digest muestran `low_sample_usage`.
+  Pendiente: verificar primer uso real y que el scoreboard separe el sub-cohorte.
 - **Aparcado**: propuesta `ci_prop_b3f950033a99` (sección lab_book en digest) —
   rechazada por gate new_code_requires_tests (diff solo src); necesita regeneración
   con tests. No bloquea nada.
