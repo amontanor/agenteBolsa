@@ -2593,16 +2593,24 @@ def command_kernel_unlock_live(args: argparse.Namespace) -> None:
 
 def command_kernel_seal(args: argparse.Namespace) -> None:
     from .kernel import kernel_seal
+    from .tools.operational_health import clear_kernel_integrity_override_if_recovered
 
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
     result = kernel_seal(settings)
+    cleanup = clear_kernel_integrity_override_if_recovered(
+        settings.data_dir,
+        settings=settings,
+        source="kernel_seal",
+    )
     if getattr(args, "json", False):
-        _print_json({"ok": True, **result})
+        _print_json({"ok": True, **result, "kill_switch_cleanup": cleanup})
         return
     print("KERNEL SEAL")
     print(f"Manifest: {result['path']}")
     print(f"Sellado: {result['sealed_at']}")
+    if cleanup.get("cleared"):
+        print("Override kernel_integrity limpiado tras verificar integridad OK.")
     for rel, digest in result.get("files", {}).items():
         shown = digest[:16] + "..." if isinstance(digest, str) else "(ausente)"
         print(f"  - {rel}: {shown}")

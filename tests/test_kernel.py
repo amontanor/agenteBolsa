@@ -1,5 +1,8 @@
 """Tests del kernel inmutable (T0.1)."""
 
+import json
+from argparse import Namespace
+
 from agente_bolsa.config import Settings
 from agente_bolsa.continuous_improvement.experiments import AutoApplyCodeAgent
 from agente_bolsa.kernel import (
@@ -8,7 +11,9 @@ from agente_bolsa.kernel import (
     kernel_integrity,
     kernel_seal,
 )
+from agente_bolsa.main import command_kernel_seal
 from agente_bolsa.models import PortfolioSnapshot
+from agente_bolsa.tools.operational_health import activate_persistent_kill_switch
 from agente_bolsa.tools.risk import OrderProposal, RiskManager
 
 
@@ -168,6 +173,25 @@ def test_kernel_integrity_detects_manifest_tampering(tmp_path):
     result = kernel_integrity(settings)
     assert result["status"] == "violation"
     assert "src/agente_bolsa/kernel.py" in result["violations"]
+
+
+def test_kernel_seal_clears_kernel_integrity_override_when_resealed(tmp_path, monkeypatch, capsys):
+    settings = _settings(tmp_path)
+    activate_persistent_kill_switch(
+        settings.data_dir,
+        reason="kernel_integrity_violation: src/agente_bolsa/kernel.py",
+        kind="kernel_integrity_violation",
+    )
+    monkeypatch.setattr("agente_bolsa.main.get_settings", lambda: settings)
+    monkeypatch.setattr("agente_bolsa.main.configure_logging", lambda *args, **kwargs: None)
+
+    command_kernel_seal(Namespace(json=True))
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["kill_switch_cleanup"]["cleared"] is True
+    assert payload["kill_switch_cleanup"]["event_payload"]["source"] == "kernel_seal"
+    assert not (settings.data_dir / "state" / "operational_kill_switch.json").exists()
 
 
 def test_kernel_limits_are_frozen():

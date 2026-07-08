@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from agente_bolsa.config import Settings
+from agente_bolsa.logging_utils import log_system_event
 from agente_bolsa.market_calendar import MarketCalendar
 from agente_bolsa.storage import Store
 
@@ -232,9 +233,86 @@ def load_persistent_kill_switch(data_dir: Path) -> dict[str, Any]:
     return payload if bool(payload.get("active")) else {}
 
 
-def load_operational_block_context(data_dir: Path) -> dict[str, Any]:
+def _kernel_integrity_settings(data_dir: Path) -> Any:
+    class _KernelIntegritySettings:
+        def __init__(self, root: Path) -> None:
+            self.state_dir = root / "state"
+
+    return _KernelIntegritySettings(Path(data_dir))
+
+
+def _is_kernel_integrity_override(override: dict[str, Any]) -> bool:
+    kind = str(override.get("kind") or "").strip().lower()
+    reason = str(override.get("reason") or "").strip().lower()
+    return kind == "kernel_integrity_violation" or reason.startswith("kernel_integrity_violation")
+
+
+def clear_kernel_integrity_override_if_recovered(
+    data_dir: Path,
+    *,
+    settings: Settings | Any | None = None,
+    source: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    override = load_persistent_kill_switch(data_dir)
+    if not override or not _is_kernel_integrity_override(override):
+        return {"cleared": False, "reason": "override_not_kernel_integrity"}
+
+    from agente_bolsa.kernel import kernel_integrity
+
+    integrity_settings = settings if settings is not None else _kernel_integrity_settings(data_dir)
+    integrity = kernel_integrity(integrity_settings)
+    if not integrity.get("ok"):
+        return {
+            "cleared": False,
+            "reason": "kernel_still_failing",
+            "integrity": integrity,
+            "override": override,
+        }
+
+    cleared = clear_persistent_kill_switch(data_dir)
+    event_payload = {
+        "source": source,
+        "activated_at": override.get("activated_at"),
+        "kind": override.get("kind"),
+        "reason": override.get("reason"),
+        "verified_at": (now or datetime.now(timezone.utc)).isoformat(),
+    }
+    log_system_event((Path(data_dir) / "logs"), "kernel_integrity_override_cleared", event_payload)
+    return {
+        "cleared": cleared,
+        "reason": "kernel_recovered",
+        "integrity": integrity,
+        "override": override,
+        "event_payload": event_payload,
+    }
+
+
+def load_operational_block_context(
+    data_dir: Path,
+    *,
+    settings: Settings | Any | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
     override = load_persistent_kill_switch(data_dir)
     if override:
+        if _is_kernel_integrity_override(override):
+            recovery = clear_kernel_integrity_override_if_recovered(
+                data_dir,
+                settings=settings,
+                source="load_operational_block_context",
+                now=now,
+            )
+            if recovery.get("cleared"):
+                return {
+                    "available": True,
+                    "as_of": recovery["event_payload"].get("verified_at"),
+                    "kill_switch_active": False,
+                    "block_new_buys": False,
+                    "block_buy_execution": False,
+                    "blocking_alerts": [],
+                    "reasons": ["kernel_integrity_override_expired"],
+                }
         reason = str(override.get("reason") or "kill_switch_persistente_activo")
         return {
             "available": True,

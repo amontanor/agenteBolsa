@@ -4,9 +4,11 @@ import json
 from datetime import datetime, timezone
 
 from agente_bolsa.config import Settings
+from agente_bolsa.kernel import kernel_seal
 from agente_bolsa.main import build_parser
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.operational_health import (
+    activate_persistent_kill_switch,
     build_operational_health_report,
     build_production_health_report,
     load_operational_block_context,
@@ -107,6 +109,29 @@ def test_operational_block_context_activates_kill_switch_on_critical_alerts(tmp_
     assert block["block_new_buys"] is True
     assert block["block_buy_execution"] is True
     assert block["blocking_alerts"][0]["kind"] == "job_failed"
+
+
+def test_operational_block_context_expires_kernel_integrity_override_when_recovered(tmp_path):
+    settings = Settings(DATA_DIR=tmp_path)
+    kernel_seal(settings)
+    override = activate_persistent_kill_switch(
+        settings.data_dir,
+        reason="kernel_integrity_violation: src/agente_bolsa/kernel.py",
+        kind="kernel_integrity_violation",
+    )
+
+    block = load_operational_block_context(settings.data_dir, settings=settings)
+
+    assert override["active"] is True
+    assert block["kill_switch_active"] is False
+    assert block["block_buy_execution"] is False
+    assert block["reasons"] == ["kernel_integrity_override_expired"]
+    assert not (settings.data_dir / "state" / "operational_kill_switch.json").exists()
+    system_log = settings.logs_dir / "system.jsonl"
+    assert system_log.exists()
+    events = [json.loads(line) for line in system_log.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert events[-1]["event_type"] == "kernel_integrity_override_cleared"
+    assert events[-1]["payload"]["source"] == "load_operational_block_context"
 
 
 def test_operational_health_blocks_buys_when_market_data_pipeline_is_stale(tmp_path):
