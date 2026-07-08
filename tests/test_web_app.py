@@ -1,5 +1,6 @@
 from datetime import datetime
 from types import SimpleNamespace
+from typing import Any
 
 import pandas as pd
 
@@ -44,6 +45,7 @@ from agente_bolsa.web_app import (
     _position_evolution_summary,
     _sidebar_version_label,
     _single_symbol_price_frame,
+    _start_schedule,
     _study_price,
     _trim_portfolio_chart_range,
     _web_search_status,
@@ -117,6 +119,46 @@ def test_latest_leaderboard_submission_returns_most_recent_success():
         "gain_pct": 1.25,
         "created_at": "2026-06-21T10:00:00+00:00",
     }
+
+
+def test_start_schedule_uses_managed_python(monkeypatch, tmp_path):
+    managed_python = tmp_path / ".venv" / "Scripts" / "python.exe"
+    managed_python.parent.mkdir(parents=True, exist_ok=True)
+    managed_python.write_text("", encoding="utf-8")
+    calls: dict[str, Any] = {}
+
+    class _FakeHandle:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def write(self, _data):
+            return None
+
+        def close(self):
+            return None
+
+    class _FakePopen:
+        def __init__(self, cmd, **kwargs):
+            calls["cmd"] = cmd
+            calls["kwargs"] = kwargs
+            self.pid = 4321
+
+    settings = SimpleNamespace(logs_dir=tmp_path / "logs", state_dir=tmp_path / "state")
+    monkeypatch.setattr("agente_bolsa.web_app._schedule_process_status", lambda: {"running": False})
+    monkeypatch.setattr("agente_bolsa.web_app._settings", lambda: settings)
+    monkeypatch.setattr("agente_bolsa.web_app.require_managed_python", lambda _root: managed_python)
+    monkeypatch.setattr("agente_bolsa.web_app._schedule_log_file", lambda: tmp_path / "schedule.log")
+    monkeypatch.setattr("agente_bolsa.web_app._pid_file", lambda: tmp_path / "schedule.pid")
+    monkeypatch.setattr("pathlib.Path.open", lambda self, *args, **kwargs: _FakeHandle())
+    monkeypatch.setattr("agente_bolsa.web_app.subprocess.Popen", _FakePopen)
+
+    result = _start_schedule()
+
+    assert result["pid"] == 4321
+    assert calls["cmd"][:4] == [str(managed_python), "-m", "agente_bolsa.main", "schedule"]
 
 
 def test_usage_tokens_reads_compatible_llm_usage_object():

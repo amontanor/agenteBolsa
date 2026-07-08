@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import subprocess
-import sys
 from contextlib import closing
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -44,6 +43,7 @@ from agente_bolsa.continuous_improvement.runtime import ContinuousImprovementLab
 from agente_bolsa.llm_router import primary_llm_endpoint
 from agente_bolsa.market_calendar import MarketCalendar
 from agente_bolsa.models import AgentEvent, PortfolioSnapshot, TradeRecommendation, new_id
+from agente_bolsa.runtime_paths import require_managed_python
 from agente_bolsa.scheduler import scheduler_status
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.adaptive_tuning import adaptive_status, update_adaptive_config
@@ -425,8 +425,9 @@ def _start_schedule() -> dict[str, Any]:
     log_path = _schedule_log_file()
     log_handle = log_path.open("a", encoding="utf-8")
     creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    managed_python = require_managed_python(REPO_ROOT)
     process = subprocess.Popen(
-        [sys.executable, "-m", "agente_bolsa.main", "schedule"],
+        [str(managed_python), "-m", "agente_bolsa.main", "schedule"],
         cwd=REPO_ROOT,
         stdout=log_handle,
         stderr=subprocess.STDOUT,

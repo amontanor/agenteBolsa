@@ -149,6 +149,10 @@ function Get-StackMatchingProcesses {
     return @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -match $Pattern })
 }
 
+function Get-StackManagedPythonPath {
+    return (Join-Path (Get-StackRepoRoot) ".venv\Scripts\python.exe")
+}
+
 function Get-StackRootProcesses {
     param([object[]]$Processes)
     if ($null -eq $Processes -or $Processes.Count -eq 0) {
@@ -159,6 +163,62 @@ function Get-StackRootProcesses {
         $processIds[[int]$process.ProcessId] = $true
     }
     return @($Processes | Where-Object { -not $processIds.ContainsKey([int]$_.ParentProcessId) })
+}
+
+function Test-StackForeignServiceRoot {
+    param(
+        [hashtable]$Service,
+        [object]$Process
+    )
+    if ($null -eq $Process) {
+        return $false
+    }
+    $managedPython = Get-StackManagedPythonPath
+    $commandLine = [string]$Process.CommandLine
+    $executable = [string]$Process.ExecutablePath
+    if ($Service.name -eq "scheduler") {
+        if ($commandLine -match "run_scheduler_supervisor\.ps1") {
+            return $false
+        }
+        return -not ($executable -eq $managedPython)
+    }
+    if ($Service.name -eq "web") {
+        return -not ($executable -eq $managedPython)
+    }
+    return $false
+}
+
+function Get-StackForeignProcesses {
+    $foreign = @()
+    foreach ($service in Get-StackExpectedServices) {
+        if ($service.name -notin @("scheduler", "web")) {
+            continue
+        }
+        $roots = @(Get-StackRootProcesses -Processes (Get-StackMatchingProcesses -Pattern $service.pattern))
+        foreach ($proc in $roots) {
+            if (Test-StackForeignServiceRoot -Service $service -Process $proc) {
+                $foreign += [pscustomobject]@{
+                    service = $service.name
+                    pid = [int]$proc.ProcessId
+                    parent_pid = [int]$proc.ParentProcessId
+                    executable = [string]$proc.ExecutablePath
+                    command_line = [string]$proc.CommandLine
+                }
+            }
+        }
+    }
+    return @($foreign | Sort-Object service, pid -Unique)
+}
+
+function Stop-StackForeignProcesses {
+    $foreign = @(Get-StackForeignProcesses)
+    foreach ($proc in $foreign) {
+        try {
+            taskkill /F /T /PID $proc.pid 2>$null | Out-Null
+        } catch {
+        }
+    }
+    return $foreign
 }
 
 function Get-StackLockInfo {
@@ -205,23 +265,34 @@ function Get-StackServiceStatus {
     } elseif ($rootProcesses.Count -eq 1 -or ($portInfo -and $portInfo.ok) -or $lockInfo.compatible) {
         $state = "CORRIENDO"
     }
+    $foreignRoots = @($rootProcesses | Where-Object { Test-StackForeignServiceRoot -Service $Service -Process $_ })
+    if ($foreignRoots.Count -gt 0) {
+        $state = "FOREIGN"
+    }
     [pscustomobject]@{
         service = $Service.name
         state = $state
         pids = @($rootProcesses | ForEach-Object { $_.ProcessId })
         process_pids = @($processes | ForEach-Object { $_.ProcessId })
+        foreign_pids = @($foreignRoots | ForEach-Object { $_.ProcessId })
         lock_pid = $lockInfo.pid
         lock_ok = [bool]$lockInfo.compatible
         lock_orphan = [bool]$lockInfo.orphan
         port = $Service.port
         http_ok = if ($null -eq $portInfo) { $null } else { [bool]$portInfo.ok }
         command_lines = @($rootProcesses | ForEach-Object { $_.CommandLine })
+        foreign_command_lines = @($foreignRoots | ForEach-Object { $_.CommandLine })
         process_command_lines = @($processes | ForEach-Object { $_.CommandLine })
     }
 }
 
 function Get-StackStatus {
-    return @(Get-StackExpectedServices | ForEach-Object { Get-StackServiceStatus -Service $_ })
+    $services = @(Get-StackExpectedServices | ForEach-Object { Get-StackServiceStatus -Service $_ })
+    $foreign = @(Get-StackForeignProcesses)
+    return [pscustomobject]@{
+        services = $services
+        foreign_processes = $foreign
+    }
 }
 
 function Start-StackSupervisor {

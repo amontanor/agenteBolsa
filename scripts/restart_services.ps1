@@ -30,10 +30,19 @@ $Repo = "C:\Antonio\Bref\agenteBolsa"
 Set-Location $Repo
 $StackUpScript = Join-Path $Repo "scripts\stack_up.ps1"
 $StackStatusScript = Join-Path $Repo "scripts\stack_status.ps1"
+. (Join-Path $Repo "scripts\stack_common.ps1")
 
 function Get-ProjectProcs {
     Get-CimInstance Win32_Process |
-        Where-Object { $_.CommandLine -match 'agente_bolsa\.main (schedule|web)' }
+        Where-Object { $_.CommandLine -and ($_.CommandLine -match 'agente_bolsa\.main (schedule|web)' -or $_.CommandLine -match 'streamlit.*web_app\.py') }
+}
+
+function Invoke-TaskKill {
+    param([int]$Pid)
+    $taskkill = Start-Process -FilePath "taskkill.exe" -ArgumentList @("/F", "/T", "/PID", $Pid) -NoNewWindow -PassThru -Wait
+    if ($taskkill.ExitCode -notin @(0, 128)) {
+        Write-Host ("AVISO: taskkill devolvio codigo {0} para PID {1}." -f $taskkill.ExitCode, $Pid) -ForegroundColor Yellow
+    }
 }
 
 Write-Host "== 1. Parando tareas programadas ==" -ForegroundColor Cyan
@@ -44,7 +53,11 @@ foreach ($t in @("AgenteBolsaScheduler", "AgenteBolsaWeb")) {
 Write-Host "== 2. Matando TODOS los procesos del proyecto (venv y runtime de Codex) ==" -ForegroundColor Cyan
 foreach ($p in Get-ProjectProcs) {
     Write-Host ("  kill PID {0}: {1}" -f $p.ProcessId, $p.CommandLine)
-    taskkill /F /T /PID $p.ProcessId 2>$null | Out-Null
+    Invoke-TaskKill -Pid $p.ProcessId
+}
+$foreignKilled = @(Stop-StackForeignProcesses)
+foreach ($proc in $foreignKilled) {
+    Write-Host ("  kill foreign PID {0}: {1}" -f $proc.pid, $proc.command_line)
 }
 Start-Sleep -Seconds 3
 
@@ -72,16 +85,18 @@ Write-Host "== 6. Verificacion base scheduler/web ==" -ForegroundColor Cyan
 $procs = @(Get-ProjectProcs)
 $procs | Select-Object ProcessId, CommandLine | Format-Table -AutoSize -Wrap
 
-$venvSched = @($procs | Where-Object { $_.CommandLine -match 'schedule' -and $_.CommandLine -match '\\\.venv\\' })
-$rogue     = @($procs | Where-Object { $_.CommandLine -match 'codex-runtimes' })
+$venvSched = @($procs | Where-Object { $_.CommandLine -match 'agente_bolsa\.main schedule' -and $_.CommandLine -match '\\\.venv\\' })
+$foreignNow = @(Get-StackForeignProcesses)
 
-if ($venvSched.Count -eq 1) {
+if ($venvSched.Count -eq 1 -and $foreignNow.Count -eq 0) {
     Write-Host "OK: un unico scheduler del .venv." -ForegroundColor Green
 } else {
-    Write-Host ("AVISO: schedulers del .venv = {0} (esperado 1). Revisa duplicados." -f $venvSched.Count) -ForegroundColor Yellow
+    Write-Host ("AVISO: schedulers del .venv = {0} y procesos ajenos = {1} (esperado 1 y 0)." -f $venvSched.Count, $foreignNow.Count) -ForegroundColor Yellow
 }
-if ($rogue.Count -gt 0) {
-    Write-Host ("AVISO: {0} proceso(s) de codex-runtimes presentes. Solo la tarea programada debe lanzar servicios." -f $rogue.Count) -ForegroundColor Yellow
+if ($foreignNow.Count -gt 0) {
+    foreach ($proc in $foreignNow) {
+        Write-Host ("AVISO: proceso ajeno detectado PID {0}: {1}" -f $proc.pid, $proc.command_line) -ForegroundColor Yellow
+    }
 }
 
 try {

@@ -7,7 +7,6 @@ import json
 import logging
 import socket
 import subprocess
-import sys
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -37,6 +36,7 @@ from .research.telegram_radar.cli import run_ingest as telegram_radar_run_ingest
 from .research.telegram_radar.cli import (
     write_markdown_report as telegram_radar_write_markdown_report,
 )
+from .runtime_paths import require_managed_python
 from .scheduler import (
     _run_pre_earnings_trade_operation,
     broker_reconciliation_job,
@@ -3297,9 +3297,10 @@ def command_web(args: argparse.Namespace) -> None:
     if _is_tcp_port_open(args.host, args.port):
         print(f"Panel web ya corriendo en http://{args.host}:{args.port}; no se lanza otra instancia.")
         return
+    managed_python = require_managed_python()
     app_path = Path(__file__).with_name("web_app.py")
     cmd = [
-        sys.executable,
+        str(managed_python),
         "-m",
         "streamlit",
         "run",

@@ -3,31 +3,20 @@
   Veredicto fiable del estado de agenteBolsa (scheduler + panel web).
 
 .DESCRIPTION
-  En esta maquina cada servicio aparece como DOS procesos: el lanzador del venv
-  (.venv\Scripts\python.exe) y su interprete base (...\Python311\python.exe), que
-  es el que de verdad ejecuta el codigo y tiene el lock. Eso NO es un duplicado:
-  es una sola instancia logica (lanzador + worker).
-
-  Por eso este script no cuenta procesos a ciegas. El criterio de salud es:
-    - existe UN lock de scheduler y su PID esta vivo (= un scheduler activo),
-    - el panel responde HTTP 200,
-    - no hay un SEGUNDO scheduler logico compitiendo (mas de un par),
-    - no hay procesos del runtime de la herramienta (codex-runtimes), que ya no
-      deberian existir tras recrear el venv sobre el Python estable.
-  Solo lee; no mata ni arranca nada.
+  Verifica que scheduler y web esten lanzados desde el .venv gestionado del repo.
+  Cualquier proceso raiz `agente_bolsa.main schedule`, `agente_bolsa.main web` o
+  `streamlit ... web_app.py` cuyo ejecutable no sea `.\.venv\Scripts\python.exe`
+  se considera AJENO al stack gestionado y hace fallar el check.
 #>
 param(
     [int]$WebPort = 8501
 )
 $ErrorActionPreference = "Continue"
 $Repo = "C:\Antonio\Bref\agenteBolsa"
-
-$procs = @(Get-CimInstance Win32_Process |
-    Where-Object { $_.CommandLine -match 'agente_bolsa\.main (schedule|web)' })
-
-$sched = @($procs | Where-Object { $_.CommandLine -match 'agente_bolsa\.main schedule' })
-$web   = @($procs | Where-Object { $_.CommandLine -match 'agente_bolsa\.main web' })
-$rogue = @($procs | Where-Object { $_.CommandLine -match 'codex-runtimes' })
+. (Join-Path $Repo "scripts\stack_common.ps1")
+$status = Get-StackStatus
+$services = @($status.services)
+$foreign = @($status.foreign_processes)
 
 # Lock del scheduler: la fuente de verdad de "quien esta activo".
 $lockPath = Join-Path $Repo "data\state\scheduler.lock"
@@ -43,7 +32,11 @@ $http = $null
 try { $http = (Invoke-WebRequest -UseBasicParsing ("http://127.0.0.1:{0}" -f $WebPort) -TimeoutSec 8).StatusCode } catch { $http = $null }
 
 Write-Host "Procesos agenteBolsa:" -ForegroundColor Cyan
-$procs | Select-Object ProcessId, CreationDate, CommandLine | Format-Table -AutoSize -Wrap
+foreach ($service in $services) {
+    foreach ($line in $service.process_command_lines) {
+        [pscustomobject]@{ service = $service.service; command_line = $line }
+    }
+} | Format-Table -AutoSize -Wrap
 
 if ($lockAlive) {
     Write-Host ("Scheduler activo (lock): PID {0} -> VIVO" -f $lockPid) -ForegroundColor Green
@@ -53,13 +46,11 @@ if ($lockAlive) {
     Write-Host "Scheduler activo (lock): ninguno (no hay lock)" -ForegroundColor Yellow
 }
 
-# --- Veredicto ---
-# Cada servicio logico = hasta 2 procesos (lanzador + base). Mas de 2 = duplicado real.
 $problemas = @()
-if ($rogue.Count -gt 0) { $problemas += "Hay procesos de codex-runtimes (deberian ser 0 tras recrear el venv)." }
+if ($foreign.Count -gt 0) { $problemas += ("Hay {0} proceso(s) ajenos al .venv." -f $foreign.Count) }
 if (-not $lockAlive)    { $problemas += "No hay un scheduler activo con lock vivo." }
-if ($sched.Count -gt 2) { $problemas += ("Mas de un scheduler logico: {0} procesos (esperado 1-2)." -f $sched.Count) }
-if ($web.Count   -gt 2) { $problemas += ("Mas de un web logico: {0} procesos (esperado 1-2)." -f $web.Count) }
+if (($services | Where-Object { $_.service -eq "scheduler" -and $_.state -eq "DUPLICADO" }).Count -gt 0) { $problemas += "Mas de un scheduler logico." }
+if (($services | Where-Object { $_.service -eq "web" -and $_.state -eq "DUPLICADO" }).Count -gt 0) { $problemas += "Mas de un web logico." }
 if ($http -ne 200)      { $problemas += ("El panel no responde HTTP 200 en :{0}." -f $WebPort) }
 
 Write-Host ""
@@ -67,9 +58,10 @@ if ($problemas.Count -eq 0) {
     Write-Host "OK: sistema sano." -ForegroundColor Green
     Write-Host ("  - 1 scheduler activo (PID {0}, con el lock)." -f $lockPid) -ForegroundColor Green
     Write-Host ("  - Panel HTTP {0} en :{1}." -f $http, $WebPort) -ForegroundColor Green
-    Write-Host ("  - {0} proc. scheduler y {1} web = parejas lanzador+base normales (NO es duplicado)." -f $sched.Count, $web.Count) -ForegroundColor DarkGray
+    Write-Host "  - Sin procesos ajenos al .venv." -ForegroundColor Green
 } else {
     Write-Host "ATENCION: hay algo que revisar:" -ForegroundColor Yellow
     foreach ($p in $problemas) { Write-Host ("  -> {0}" -f $p) -ForegroundColor Yellow }
+    foreach ($proc in $foreign) { Write-Host ("  -> FOREIGN PID {0}: {1}" -f $proc.pid, $proc.command_line) -ForegroundColor Yellow }
     Write-Host "ACCION sugerida: scripts\restart_services.ps1 para dejar una sola instancia limpia." -ForegroundColor Yellow
 }

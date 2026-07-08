@@ -25,6 +25,10 @@ def test_command_web_launches_streamlit_when_port_is_closed(monkeypatch, tmp_pat
     calls: list[tuple[list[str], bool]] = []
     monkeypatch.setattr(main, "get_settings", lambda: SimpleNamespace(logs_dir=tmp_path, log_level="INFO"))
     monkeypatch.setattr(main, "_is_tcp_port_open", lambda host, port: False)
+    managed_python = tmp_path / ".venv" / "Scripts" / "python.exe"
+    managed_python.parent.mkdir(parents=True, exist_ok=True)
+    managed_python.write_text("", encoding="utf-8")
+    monkeypatch.setattr(main, "require_managed_python", lambda: managed_python)
     monkeypatch.setattr(main.subprocess, "run", lambda cmd, check=False: calls.append((cmd, check)))
 
     main.command_web(args)
@@ -32,6 +36,6 @@ def test_command_web_launches_streamlit_when_port_is_closed(monkeypatch, tmp_pat
     assert calls
     cmd, check = calls[0]
     assert check is False
-    assert cmd[:4] == [main.sys.executable, "-m", "streamlit", "run"]
+    assert cmd[:4] == [str(managed_python), "-m", "streamlit", "run"]
     assert "--server.port" in cmd
     assert "8501" in cmd

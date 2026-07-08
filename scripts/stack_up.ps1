@@ -14,10 +14,20 @@ $ErrorActionPreference = "Stop"
 
 $repo = Get-StackRepoRoot
 $results = @()
+$killedForeign = @(Stop-StackForeignProcesses)
+foreach ($proc in $killedForeign) {
+    $results += [pscustomobject]@{
+        service = $proc.service
+        action = "killed_foreign"
+        state = "FOREIGN"
+        pids = @($proc.pid)
+        detail = $proc.command_line
+    }
+}
 
 foreach ($service in Get-StackExpectedServices) {
     $status = Get-StackServiceStatus -Service $service
-    if ($status.state -eq "CORRIENDO" -or $status.state -eq "DUPLICADO") {
+    if ($status.state -eq "CORRIENDO" -or $status.state -eq "DUPLICADO" -or $status.state -eq "FOREIGN") {
         $results += [pscustomobject]@{
             service = $service.name
             action = "already"
@@ -64,10 +74,13 @@ foreach ($service in Get-StackExpectedServices) {
 }
 
 if ($Json) {
+    $finalStatus = Get-StackStatus
     [pscustomobject]@{
         generated_at = (Get-Date).ToString("s")
         results = $results
-        status = Get-StackStatus
+        killed_foreign = $killedForeign
+        status = $finalStatus.services
+        foreign_processes = $finalStatus.foreign_processes
     } | ConvertTo-Json -Depth 8
     exit 0
 }
