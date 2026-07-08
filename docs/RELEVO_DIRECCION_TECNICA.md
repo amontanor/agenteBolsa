@@ -1,6 +1,7 @@
 # Relevo de dirección técnica — agenteBolsa
 
-> **Última actualización: 2026-07-08 ~19:45 CEST (v0.4.133; P-L10 entregado).**
+> **Última actualización: 2026-07-08 ~20:15 CEST (v0.4.134; P-L10 low-sample y
+> hotfix P-L11 de restart_services entregados; stack corriendo con ambos).**
 > Este documento es el traspaso completo para el LLM que asuma la dirección técnica.
 > Es un documento VIVO: quien dirija debe actualizarlo con cada hito relevante.
 
@@ -176,6 +177,11 @@ solo lo lee — no se lanza a mano (el supervisor tiene catch-up si se perdió s
    dar comandos a Antonio (pasó con `verify_kernel_integrity`, que no existía).
 8. **El cast se gobierna con topes, no con sermones**: cast_governance rechazó 20
    propuestas sin evidencia en un día. Mantenerlo.
+9. **Los .ps1 se verifican en el host real** (`powershell.exe` 5.1, el que usa
+   Antonio), no en pwsh: un parámetro llamado `Pid` (variable automática read-only)
+   pasó la verificación de P-L9A y reventó el restart en producción (hotfix P-L11).
+10. **Codex deja los lotes staged, no commiteados**: tras cada entrega, comprobar
+   `git status --short` y commitear (lo hace Antonio con mensaje dado por el director).
 
 ## 10. Qué vigilar los próximos días (encargo al nuevo director)
 
