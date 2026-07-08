@@ -9,10 +9,15 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .logging_utils import AgentHistoryLogger
 from .models import AgentEvent, Hypothesis
 from .tools.learning_mode import excluded_signal_sources
+
+ORDER_PLAN_STATUS_PENDING = "PENDING"
+ORDER_PLAN_STATUS_SUBMITTED = "SUBMITTED"
+ORDER_PLAN_STATUS_EXPIRED = "EXPIRED"
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -116,7 +121,10 @@ CREATE TABLE IF NOT EXISTS order_plans (
     approved INTEGER NOT NULL,
     dry_run INTEGER NOT NULL,
     payload_json TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    status_reason TEXT,
+    status_updated_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS broker_orders (
@@ -770,6 +778,18 @@ def _dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=True, default=str)
 
 
+def _utc_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _loads_list(value: str | None) -> list[Any]:
     loaded = json.loads(value or "[]")
     return loaded if isinstance(loaded, list) else []
@@ -848,6 +868,18 @@ class Store:
             conn.executescript(SCHEMA)
             # Migraciones defensivas e idempotentes para bases preexistentes.
             self._ensure_column(conn, "llm_usage", "role", "TEXT")
+            self._ensure_column(conn, "order_plans", "status", f"TEXT NOT NULL DEFAULT '{ORDER_PLAN_STATUS_PENDING}'")
+            self._ensure_column(conn, "order_plans", "status_reason", "TEXT")
+            self._ensure_column(conn, "order_plans", "status_updated_at", "TEXT")
+            conn.execute(
+                """
+                UPDATE order_plans
+                SET status = ?,
+                    status_updated_at = COALESCE(status_updated_at, created_at)
+                WHERE status IS NULL OR TRIM(status) = ''
+                """,
+                (ORDER_PLAN_STATUS_PENDING,),
+            )
 
     @staticmethod
     def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -1034,13 +1066,14 @@ class Store:
         payload: dict[str, Any],
     ) -> None:
         with self.connect() as conn:
+            now = _utc_iso()
             conn.execute(
                 """
                 INSERT OR REPLACE INTO order_plans (
                     plan_id, cycle_id, symbol, side, notional, approved,
-                    dry_run, payload_json, created_at
+                    dry_run, payload_json, created_at, status, status_reason, status_updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     plan_id,
@@ -1051,9 +1084,39 @@ class Store:
                     int(approved),
                     int(dry_run),
                     _dumps(payload),
-                    _utc_iso(),
+                    now,
+                    ORDER_PLAN_STATUS_PENDING,
+                    None,
+                    now,
                 ),
             )
+
+    def order_plans(
+        self,
+        *,
+        statuses: list[str] | None = None,
+        cycle_id: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        query = """
+            SELECT plan_id, cycle_id, symbol, side, notional, approved, dry_run,
+                   payload_json, created_at, status, status_reason, status_updated_at
+            FROM order_plans
+            WHERE 1 = 1
+        """
+        params: list[Any] = []
+        if statuses:
+            placeholders = ",".join("?" for _ in statuses)
+            query += f" AND status IN ({placeholders})"
+            params.extend(statuses)
+        if cycle_id:
+            query += " AND cycle_id = ?"
+            params.append(cycle_id)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [self._order_plan_from_row(row) for row in rows]
 
     def record_llm_usage(
         self,
@@ -1156,15 +1219,17 @@ class Store:
         cycle_id: str | None = None,
         limit: int = 3,
     ) -> list[dict[str, Any]]:
+        self.expire_stale_pending_order_plans()
         query = """
             SELECT plan_id, cycle_id, symbol, side, notional, approved,
-                   dry_run, payload_json, created_at
+                   dry_run, payload_json, created_at, status, status_reason, status_updated_at
             FROM order_plans
             WHERE approved = 1
               AND dry_run = 1
+              AND status = ?
               AND plan_id NOT IN (SELECT plan_id FROM broker_orders)
         """
-        params: list[Any] = []
+        params: list[Any] = [ORDER_PLAN_STATUS_PENDING]
         if cycle_id:
             query += " AND cycle_id = ?"
             params.append(cycle_id)
@@ -1173,20 +1238,89 @@ class Store:
 
         with self.connect() as conn:
             rows = conn.execute(query, params).fetchall()
-        return [
-            {
-                "plan_id": row["plan_id"],
-                "cycle_id": row["cycle_id"],
-                "symbol": row["symbol"],
-                "side": row["side"],
-                "notional": row["notional"],
-                "approved": bool(row["approved"]),
-                "dry_run": bool(row["dry_run"]),
-                "payload": json.loads(row["payload_json"]),
-                "created_at": row["created_at"],
-            }
-            for row in rows
-        ]
+        return [self._order_plan_from_row(row) for row in rows]
+
+    def expire_order_plans(
+        self,
+        plan_ids: list[str],
+        *,
+        reason: str,
+        current_statuses: list[str] | None = None,
+        now: datetime | None = None,
+    ) -> int:
+        if not plan_ids:
+            return 0
+        changed_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
+        placeholders = ",".join("?" for _ in plan_ids)
+        query = f"""
+            UPDATE order_plans
+            SET status = ?,
+                status_reason = ?,
+                status_updated_at = ?
+            WHERE plan_id IN ({placeholders})
+        """
+        params: list[Any] = [ORDER_PLAN_STATUS_EXPIRED, reason, changed_at, *plan_ids]
+        if current_statuses:
+            status_placeholders = ",".join("?" for _ in current_statuses)
+            query += f" AND status IN ({status_placeholders})"
+            params.extend(current_statuses)
+        with self.connect() as conn:
+            cursor = conn.execute(query, params)
+            return int(cursor.rowcount or 0)
+
+    def expire_stale_pending_order_plans(
+        self,
+        *,
+        now: datetime | None = None,
+        reason_prefix: str = "TTL fin de sesion",
+    ) -> list[dict[str, Any]]:
+        reference = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        stale: list[dict[str, Any]] = []
+        for plan in self.order_plans(statuses=[ORDER_PLAN_STATUS_PENDING], limit=5000):
+            created_at = _utc_datetime(plan.get("created_at"))
+            if created_at is None or not self._order_plan_is_expired(created_at, reference):
+                continue
+            market_day = created_at.astimezone(ZoneInfo("America/New_York")).date().isoformat()
+            stale.append(
+                {
+                    **plan,
+                    "expire_reason": f"{reason_prefix}: sesion {market_day} cerrada",
+                }
+            )
+        for plan in stale:
+            self.expire_order_plans(
+                [str(plan["plan_id"])],
+                reason=str(plan["expire_reason"]),
+                current_statuses=[ORDER_PLAN_STATUS_PENDING],
+                now=reference,
+            )
+        return stale
+
+    @staticmethod
+    def _order_plan_is_expired(created_at: datetime, now: datetime) -> bool:
+        market_tz = ZoneInfo("America/New_York")
+        created_market = created_at.astimezone(market_tz)
+        now_market = now.astimezone(market_tz)
+        if now_market.date() > created_market.date():
+            return True
+        return now_market.date() == created_market.date() and now_market.hour >= 16
+
+    @staticmethod
+    def _order_plan_from_row(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "plan_id": row["plan_id"],
+            "cycle_id": row["cycle_id"],
+            "symbol": row["symbol"],
+            "side": row["side"],
+            "notional": row["notional"],
+            "approved": bool(row["approved"]),
+            "dry_run": bool(row["dry_run"]),
+            "payload": json.loads(row["payload_json"]),
+            "created_at": row["created_at"],
+            "status": row["status"],
+            "status_reason": row["status_reason"],
+            "status_updated_at": row["status_updated_at"],
+        }
 
     def save_broker_order(
         self,
@@ -1217,6 +1351,21 @@ class Store:
                     status,
                     _dumps(payload),
                     _utc_iso(),
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE order_plans
+                SET status = ?,
+                    status_reason = ?,
+                    status_updated_at = ?
+                WHERE plan_id = ?
+                """,
+                (
+                    ORDER_PLAN_STATUS_SUBMITTED,
+                    f"broker_order:{broker_order_id}",
+                    _utc_iso(),
+                    plan_id,
                 ),
             )
 
