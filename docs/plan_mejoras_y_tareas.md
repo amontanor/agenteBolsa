@@ -14,6 +14,17 @@
 - Ultima actualizacion: 2026-06-16
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
+### P-L11 - Hotfix restart_services por variable automatica `$PID`. **HECHO (v0.4.134).**
+Se corrige la regresion introducida en `scripts/restart_services.ps1`: el helper
+`Invoke-TaskKill` declaraba un parametro `$Pid`, que colisiona con la variable
+automatica y de solo lectura `$PID` en Windows PowerShell 5.1. Se renombra a
+`$TargetPid`, se actualizan sus call sites y se auditan todos los `.ps1` del repo
+en busca de parametros/variables que usen nombres de automaticas conflictivas
+(`Pid`, `Host`, `Input`, `Args`, `Error`); no se detectan mas casos invalidos.
+Se anade test especifico que parsea el script en PowerShell y falla si reaparece
+`param([int]$Pid)`. Verificacion operativa requerida: restart completo en
+`powershell.exe`, sin errores y con 7/7 servicios en estado `CORRIENDO`.
+
 ### P-L10 - Excepcion low-sample en learning mode (max 1/dia). **HECHO (v0.4.133).**
 Se autoriza, solo dentro de `learning_mode` activo y con `human_gated=true`, una
 excepcion de backtest para senales cuyo unico fallo es `trades < minimo`. La

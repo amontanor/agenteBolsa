@@ -41,3 +41,19 @@ def test_stack_daily_catch_up_skips_when_today_artifact_exists():
 
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == "false"
+
+
+def test_restart_services_script_does_not_use_reserved_pid_parameter():
+    command = r"""
+    $content = Get-Content .\scripts\restart_services.ps1 -Raw
+    if ($content -match 'param\(\[int\]\$Pid\)') {
+        Write-Error 'reserved_pid_parameter_found'
+        exit 1
+    }
+    [void][scriptblock]::Create($content)
+    Write-Output 'ok'
+    """
+    proc = _powershell(command)
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "ok"

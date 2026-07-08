@@ -37,11 +37,24 @@ function Get-ProjectProcs {
         Where-Object { $_.CommandLine -and ($_.CommandLine -match 'agente_bolsa\.main (schedule|web)' -or $_.CommandLine -match 'streamlit.*web_app\.py') }
 }
 
+function Get-ProjectRootProcs {
+    $procs = @(Get-ProjectProcs)
+    $projectPids = @{}
+    foreach ($proc in $procs) {
+        $projectPids[[int]$proc.ProcessId] = $true
+    }
+    @(
+        $procs |
+            Where-Object { -not $projectPids.ContainsKey([int]$_.ParentProcessId) } |
+            Sort-Object ProcessId -Unique
+    )
+}
+
 function Invoke-TaskKill {
-    param([int]$Pid)
-    $taskkill = Start-Process -FilePath "taskkill.exe" -ArgumentList @("/F", "/T", "/PID", $Pid) -NoNewWindow -PassThru -Wait
+    param([int]$TargetPid)
+    $taskkill = Start-Process -FilePath "taskkill.exe" -ArgumentList @("/F", "/T", "/PID", $TargetPid) -NoNewWindow -PassThru -Wait
     if ($taskkill.ExitCode -notin @(0, 128)) {
-        Write-Host ("AVISO: taskkill devolvio codigo {0} para PID {1}." -f $taskkill.ExitCode, $Pid) -ForegroundColor Yellow
+        Write-Host ("AVISO: taskkill devolvio codigo {0} para PID {1}." -f $taskkill.ExitCode, $TargetPid) -ForegroundColor Yellow
     }
 }
 
@@ -51,9 +64,9 @@ foreach ($t in @("AgenteBolsaScheduler", "AgenteBolsaWeb")) {
 }
 
 Write-Host "== 2. Matando TODOS los procesos del proyecto (venv y runtime de Codex) ==" -ForegroundColor Cyan
-foreach ($p in Get-ProjectProcs) {
+foreach ($p in Get-ProjectRootProcs) {
     Write-Host ("  kill PID {0}: {1}" -f $p.ProcessId, $p.CommandLine)
-    Invoke-TaskKill -Pid $p.ProcessId
+    Invoke-TaskKill -TargetPid $p.ProcessId
 }
 $foreignKilled = @(Stop-StackForeignProcesses)
 foreach ($proc in $foreignKilled) {
