@@ -1,6 +1,6 @@
 # Relevo de dirección técnica — agenteBolsa
 
-> **Última actualización: 2026-07-08 ~18:15 CEST (v0.4.132).**
+> **Última actualización: 2026-07-08 ~19:00 CEST (v0.4.132; P-L10 encargado a Codex).**
 > Este documento es el traspaso completo para el LLM que asuma la dirección técnica.
 > Es un documento VIVO: quien dirija debe actualizarlo con cada hito relevante.
 
@@ -86,6 +86,11 @@ máx 15% exposición**. Cohorte etiquetado `source=learning_experiment` con muro
 - Suavizados del gate backtest dentro del modo (near-miss): hit-rate ≥ umbral−3pp,
   PF ≥ 0.95, regímenes negativos ≤2, alpha ≥ −0.5%. El gate de extensión sigue DURO.
   market_state PARTIAL no estrangula; sentiment nulo no veta solo.
+- **Excepción low-sample (autorizada por Antonio 2026-07-08)**: una señal bloqueada
+  SOLO por muestra insuficiente (trades < mínimo) puede operar dentro del cupo,
+  **máximo 1 al día**, etiquetada `low_sample_exploration`. Nunca aplica si además
+  falla hit-rate/PF/regímenes, y el resto de gates (entry-quality, extensión,
+  adversarial) siguen exigiéndose. Implementación: P-L10.
 - Flags de autonomía verificados 8-jul: `AUTO_PAPER_TRADING=true`,
   `REQUIRE_HUMAN_APPROVAL=false`, `TRADING_MODE=paper`, live off. Topes: 4 órdenes/ciclo.
 
@@ -113,9 +118,8 @@ máx 15% exposición**. Cohorte etiquetado `source=learning_experiment` con muro
   `sys.executable` y restart no mataba streamlit. Blindado en P-L9A (ruta absoluta del
   venv siempre, detección/matanza de raíces ajenas en stack scripts). Nota: ver hijos
   Python311 colgando del wrapper del venv en Windows es NORMAL (no son raíces).
-- **Pendiente de decisión de Antonio**: ¿permitir en modo aprendizaje señales bloqueadas
-  SOLO por muestra insuficiente (trades<10), nunca por hit-rate malo? Opciones
-  planteadas: sí / no / sí con máx 1/día (recomendación del director saliente).
+- **Decisión low-sample TOMADA (Antonio, 2026-07-08)**: sí, con máximo 1 al día
+  (ver sección 5). Encargada a Codex como P-L10; verificar su entrega y primer uso real.
 - **Aparcado**: propuesta `ci_prop_b3f950033a99` (sección lab_book en digest) —
   rechazada por gate new_code_requires_tests (diff solo src); necesita regeneración
   con tests. No bloquea nada.
@@ -181,7 +185,8 @@ solo lo lee — no se lanza a mano (el supervisor tiene catch-up si se perdió s
    real vs contrafactual. No tocar el criterio pre-registrado.
 3. **Digest de cada mañana**: línea Safety OK, kill_switch inactivo, market_cycle fresco.
 4. **10-jul**: re-lectura del experimento pullback con datos maduros.
-5. **Decisión low-sample** (sección 7): si Antonio dice sí, prompt corto a Codex con
-   tope y etiqueta; actualizar este documento.
+5. **P-L10 (low-sample, autorizado)**: revisar entrega de Codex, verificar en vivo el
+   primer uso (etiqueta `low_sample_exploration`, tope 1/día) y que el scoreboard
+   separa ese sub-cohorte.
 6. **b3f950**: relanzar cuando la regeneración incluya tests.
 7. **Mantener este documento al día.** Es parte del trabajo, no un extra.
