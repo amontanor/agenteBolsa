@@ -11,6 +11,7 @@ from statistics import median
 from typing import Any
 
 from agente_bolsa.storage import Store
+from agente_bolsa.tools.operational_health import load_operational_block_context
 
 from .codegen_nightly import latest_codegen_nightly_run
 from .research_agenda import build_research_agenda_snapshot
@@ -64,6 +65,7 @@ def build_lab_digest(
     ]
     recent_applied = [item for item in applied_changes if _is_recent(item.get("updated_at"), cutoff)]
     recent_experiments = [item for item in experiments if _is_recent(item.get("updated_at"), cutoff)]
+    safety_payload = _enrich_safety_context(store, data_dir, safety=safety, now=now)
 
     rejection_counts = {
         "self_safety": 0,
@@ -96,7 +98,7 @@ def build_lab_digest(
     return {
         "days": days,
         "generated_at": now.isoformat(),
-        "safety": safety,
+        "safety": safety_payload,
         "window_start": cutoff.isoformat(),
         "proposals": {
             "created": len(recent_proposals_created),
@@ -118,6 +120,62 @@ def build_lab_digest(
         "approval_requests": approval_requests,
         "kpi_funnel": build_kpi_funnel(proposals, experiments, applied_changes, decisions, now=now),
         "proposal_quality": build_proposal_quality_report(store, proposals=proposals, now=now, limit=200),
+    }
+
+
+def _enrich_safety_context(
+    store: Store,
+    data_dir: Path,
+    *,
+    safety: dict[str, Any] | None,
+    now: datetime,
+) -> dict[str, Any]:
+    payload = dict(safety or {"ok": True, "violations": []})
+    payload["market_cycle"] = _market_cycle_safety_snapshot(store, now=now)
+    payload["kill_switch"] = _kill_switch_safety_snapshot(data_dir, now=now)
+    return payload
+
+
+def _market_cycle_safety_snapshot(store: Store, *, now: datetime) -> dict[str, Any]:
+    state = store.get_runtime_value("scheduler_job_status:market_cycle") or {}
+    if not isinstance(state, dict) or not state:
+        return {
+            "available": False,
+            "status": "missing",
+            "age_minutes": None,
+            "reference_at": None,
+        }
+    reference_at = (
+        _parse_iso_datetime(state.get("finished_at"))
+        or _parse_iso_datetime(state.get("updated_at"))
+        or _parse_iso_datetime(state.get("started_at"))
+    )
+    age_minutes = None
+    if reference_at is not None:
+        age_minutes = max(0, int((now - reference_at).total_seconds() // 60))
+    return {
+        "available": True,
+        "status": str(state.get("status") or "unknown"),
+        "detail": str(state.get("detail") or "").strip(),
+        "run_id": state.get("run_id"),
+        "reference_at": reference_at.isoformat() if reference_at else None,
+        "age_minutes": age_minutes,
+    }
+
+
+def _kill_switch_safety_snapshot(data_dir: Path, *, now: datetime) -> dict[str, Any]:
+    block = load_operational_block_context(data_dir, now=now)
+    reference_at = _parse_iso_datetime(block.get("as_of"))
+    age_minutes = None
+    if reference_at is not None:
+        age_minutes = max(0, int((now - reference_at).total_seconds() // 60))
+    reasons = [str(item).strip() for item in block.get("reasons", []) if str(item).strip()]
+    return {
+        "active": bool(block.get("kill_switch_active")),
+        "reason": reasons[0] if reasons else "",
+        "age_minutes": age_minutes,
+        "as_of": block.get("as_of"),
+        "available": bool(block.get("available")),
     }
 
 
@@ -471,6 +529,14 @@ def latest_core_sleeve_signal(data_dir: Path, *, now: datetime | None = None) ->
 def _safety_lines(safety: dict[str, Any] | None) -> list[str]:
     if not isinstance(safety, dict):
         return []
+    violations = [str(item) for item in (safety.get("violations") or []) if str(item).strip()]
+    market_cycle = safety.get("market_cycle") if isinstance(safety.get("market_cycle"), dict) else {}
+    kill_switch = safety.get("kill_switch") if isinstance(safety.get("kill_switch"), dict) else {}
+    if not market_cycle.get("available"):
+        violations.append("market_cycle.sin_registro")
+    if kill_switch.get("active"):
+        reason = str(kill_switch.get("reason") or "sin detalle")
+        violations.append(f"kill_switch.activo:{reason}")
     learning_mode = safety.get("learning_mode") if isinstance(safety.get("learning_mode"), dict) else None
     learning_suffix = ""
     if learning_mode is not None:
@@ -481,10 +547,30 @@ def _safety_lines(safety: dict[str, Any] | None) -> list[str]:
             f", shadow_first={bool(learning_mode.get('shadow_first'))}"
             f"{authorized_suffix}"
         )
-    if safety.get("ok"):
-        return [f"Safety: OK{learning_suffix}"]
-    violations = ", ".join(str(item) for item in (safety.get("violations") or [])) or "sin detalle"
-    return [f"Safety: ALERTA -> {violations}{learning_suffix}"]
+    lines = []
+    if bool(safety.get("ok", True)) and not violations:
+        lines.append(f"Safety: OK{learning_suffix}")
+    else:
+        lines.append(f"Safety: ALERTA -> {', '.join(violations) or 'sin detalle'}{learning_suffix}")
+
+    if market_cycle.get("available"):
+        detail = f", detalle={market_cycle.get('detail')}" if market_cycle.get("detail") else ""
+        age = market_cycle.get("age_minutes")
+        age_text = f"hace {age} min" if age is not None else "antiguedad n/d"
+        lines.append(
+            f"- ultimo market_cycle: {age_text} ({market_cycle.get('status') or 'n/d'}){detail}"
+        )
+    else:
+        lines.append("- ultimo market_cycle: sin registros")
+
+    kill_switch_age = kill_switch.get("age_minutes")
+    kill_switch_age_text = f", antiguedad={kill_switch_age} min" if kill_switch_age is not None else ""
+    kill_switch_reason = str(kill_switch.get("reason") or "sin motivo")
+    if kill_switch.get("active"):
+        lines.append(f"- kill_switch: activo ({kill_switch_reason}{kill_switch_age_text})")
+    else:
+        lines.append(f"- kill_switch: inactivo ({kill_switch_reason}{kill_switch_age_text})")
+    return lines
 
 
 def format_lab_digest_text(digest: dict[str, Any]) -> str:

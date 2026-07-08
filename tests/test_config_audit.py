@@ -169,6 +169,8 @@ def test_digest_renders_safety_line_and_cast_counters(tmp_path):
     )
     text = format_lab_digest_text(digest)
     assert "Safety: ALERTA -> allow_auto_apply_improvements" in text
+    assert "ultimo market_cycle: sin registros" in text
+    assert "kill_switch: inactivo" in text
     assert "cast_cap=0" in text
     assert "not_proposer=0" in text
 
@@ -183,7 +185,7 @@ def test_digest_renders_safety_line_and_cast_counters(tmp_path):
             "learning_mode": {"enabled": False, "shadow_first": True, "authorized_by": ""},
         },
     )
-    assert "Safety: OK | learning_mode=OFF, shadow_first=True" in format_lab_digest_text(digest_ok)
+    assert "Safety: ALERTA -> market_cycle.sin_registro | learning_mode=OFF, shadow_first=True" in format_lab_digest_text(digest_ok)
 
     digest_alert = build_lab_digest(
         store,
@@ -196,7 +198,7 @@ def test_digest_renders_safety_line_and_cast_counters(tmp_path):
             "learning_mode": {"enabled": True, "shadow_first": False, "authorized_by": ""},
         },
     )
-    assert "Safety: ALERTA -> learning_mode.sin_autorizacion | learning_mode=ON, shadow_first=False" in format_lab_digest_text(
+    assert "Safety: ALERTA -> learning_mode.sin_autorizacion, market_cycle.sin_registro | learning_mode=ON, shadow_first=False" in format_lab_digest_text(
         digest_alert
     )
 
@@ -219,4 +221,4 @@ def test_digest_renders_safety_line_and_cast_counters(tmp_path):
         now=datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc),
         data_dir=tmp_path,
     )
-    assert "Safety:" not in format_lab_digest_text(digest_none)
+    assert "Safety: ALERTA -> market_cycle.sin_registro" in format_lab_digest_text(digest_none)

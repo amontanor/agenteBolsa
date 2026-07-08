@@ -15,6 +15,7 @@ from agente_bolsa.continuous_improvement.digest import (
 )
 from agente_bolsa.continuous_improvement.research_agenda import save_research_agenda
 from agente_bolsa.storage import Store
+from agente_bolsa.tools.operational_health import activate_persistent_kill_switch
 
 
 def _settings(tmp_path):
@@ -188,6 +189,58 @@ def test_lab_digest_includes_research_agenda_and_kpis(tmp_path):
     assert "estudios_ejecutados/semana: 1" in text
     assert "Agenda de investigacion" in text
     assert "| pullback | pendiente | 2026-07-06 | medir |" in text
+
+
+def test_lab_digest_safety_includes_market_cycle_and_kill_switch_freshness(tmp_path):
+    store = _store(tmp_path)
+    store.set_runtime_value(
+        "scheduler_job_status:market_cycle",
+        {
+            "job": "market_cycle",
+            "status": "completed",
+            "run_id": "mkt_live",
+            "finished_at": "2026-07-02T11:40:00+00:00",
+            "detail": "ciclo de mercado ejecutado",
+        },
+    )
+
+    digest = build_lab_digest(
+        store,
+        days=1,
+        now=datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc),
+        data_dir=tmp_path,
+        safety={"ok": True, "violations": []},
+    )
+    text = format_lab_digest_text(digest)
+
+    assert digest["safety"]["market_cycle"]["status"] == "completed"
+    assert digest["safety"]["kill_switch"]["active"] is False
+    assert "ultimo market_cycle: hace 20 min (completed)" in text
+    assert "kill_switch: inactivo" in text
+
+
+def test_lab_digest_safety_alerts_on_active_kill_switch_and_missing_cycle(tmp_path):
+    store = _store(tmp_path)
+    activate_persistent_kill_switch(
+        tmp_path,
+        reason="kernel_integrity_violation: src/agente_bolsa/kernel.py",
+        kind="kernel_integrity_violation",
+    )
+
+    digest = build_lab_digest(
+        store,
+        days=1,
+        now=datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc),
+        data_dir=tmp_path,
+        safety={"ok": True, "violations": []},
+    )
+    text = format_lab_digest_text(digest)
+
+    assert "Safety: ALERTA" in text
+    assert "market_cycle.sin_registro" in text
+    assert "kill_switch.activo:kernel_integrity_violation: src/agente_bolsa/kernel.py" in text
+    assert "ultimo market_cycle: sin registros" in text
+    assert "kill_switch: activo" in text
 
 
 def test_proposal_quality_classifier_executable_and_prose_cases():
