@@ -13,11 +13,22 @@ from agente_bolsa.tools.cycle_funnel import (
 
 
 class _FakeStore:
-    def __init__(self, payload: dict, cid: str = "mkt_x", created: str = "2026-06-24T16:00:00Z"):
-        self._ev = {"cycle_id": cid, "created_at": created, "payload_json": json.dumps(payload)}
+    def __init__(
+        self,
+        payload: dict,
+        cid: str = "mkt_x",
+        created: str = "2026-06-24T16:00:00Z",
+        event_type: str = "paper_auto_trade_completed",
+        history: list[dict] | None = None,
+    ):
+        self._ev = {"cycle_id": cid, "created_at": created, "event_type": event_type, "payload_json": json.dumps(payload)}
+        self._history = history or [self._ev]
 
     def latest_event_of_type(self, _types):
         return self._ev
+
+    def latest_events(self, limit):
+        return self._history[:limit]
 
 
 def _write_study(tmp_path):
@@ -85,6 +96,43 @@ def test_funnel_reports_no_recommendations(tmp_path):
     assert "decision" in funnel["cuello"]
 
 
+def test_funnel_prefers_latest_trade_execution_summary_and_exposes_block_reason(tmp_path):
+    settings = Settings(DATA_DIR=str(tmp_path))
+    _write_study(tmp_path)
+    old_completed = {
+        "event_type": "paper_auto_trade_completed",
+        "cycle_id": "mkt_old",
+        "created_at": "2026-07-02T09:00:00Z",
+        "payload_json": json.dumps({"recommendations": [{"symbol": "OLD", "action": "buy"}], "submitted": []}),
+    }
+    latest_summary = {
+        "event_type": "trade_execution_summary",
+        "cycle_id": "mkt_new",
+        "created_at": "2026-07-08T09:15:00Z",
+        "payload_json": json.dumps(
+            {
+                "message": "No compra ni vende en este ciclo. Operational kill switch activo.",
+                "recommendations": [{"symbol": "AAA", "action": "buy"}],
+                "operational_kill_switch": {
+                    "kill_switch_active": True,
+                    "reasons": ["job_failed:market_cycle: broker sync timeout"],
+                },
+                "submitted": [],
+                "failed": [],
+            }
+        ),
+    }
+
+    funnel = build_cycle_funnel(_FakeStore({}, history=[latest_summary, old_completed]), settings)
+
+    assert funnel["run_id"] == "mkt_new"
+    assert funnel["event_type"] == "trade_execution_summary"
+    assert funnel["status"] == "blocked"
+    assert "broker sync timeout" in funnel["status_reason"]
+    assert "flujo_bloqueado" in funnel["cuello"]
+    assert "trade_execution_summary" in format_cycle_funnel(funnel)
+
+
 class _FakeStoreHistory:
     def __init__(self, events):
         self._events = events
@@ -93,10 +141,10 @@ class _FakeStoreHistory:
         return self._events[:limit]
 
 
-def _completed_event(reason: str, submitted: int = 0) -> dict:
+def _completed_event(reason: str, submitted: int = 0, cycle_id: str = "c") -> dict:
     return {
         "event_type": "paper_auto_trade_completed",
-        "cycle_id": "c",
+        "cycle_id": cycle_id,
         "created_at": "t",
         "payload_json": json.dumps(
             {
@@ -116,9 +164,9 @@ def test_cycle_funnel_history_aggregates_rejection_reasons(tmp_path):
 
     settings = Settings(DATA_DIR=str(tmp_path))
     events = [
-        _completed_event("reward_risk_bajo"),
-        _completed_event("reward_risk_bajo"),
-        _completed_event("extension_alta"),
+        _completed_event("reward_risk_bajo", cycle_id="c1"),
+        _completed_event("reward_risk_bajo", cycle_id="c2"),
+        _completed_event("extension_alta", cycle_id="c3"),
         {"event_type": "portfolio_watch", "payload_json": "{}"},  # ruido: se ignora
     ]
     agg = build_cycle_funnel_history(_FakeStoreHistory(events), settings, limit=10)
@@ -127,6 +175,41 @@ def test_cycle_funnel_history_aggregates_rejection_reasons(tmp_path):
     assert agg["total_recomendaciones"] == 3
     assert agg["motivos_rechazo_top"]["entry_quality: reward_risk_bajo"] == 2
     assert "EMBUDO AGREGADO" in format_cycle_funnel_history(agg)
+
+
+def test_cycle_funnel_history_uses_latest_event_per_cycle_and_counts_blocked_flow(tmp_path):
+    from agente_bolsa.tools.cycle_funnel import build_cycle_funnel_history
+
+    settings = Settings(DATA_DIR=str(tmp_path))
+    events = [
+        {
+            "event_type": "trade_execution_summary",
+            "cycle_id": "mkt_2",
+            "created_at": "2026-07-08T09:15:00Z",
+            "payload_json": json.dumps(
+                {
+                    "message": "Operational kill switch activo.",
+                    "operational_kill_switch": {
+                        "kill_switch_active": True,
+                        "reasons": ["job_failed:market_cycle: broker sync timeout"],
+                    },
+                    "submitted": [],
+                }
+            ),
+        },
+        {
+            "event_type": "paper_auto_trade_blocked",
+            "cycle_id": "mkt_2",
+            "created_at": "2026-07-08T09:14:00Z",
+            "payload_json": json.dumps({"message": "Bloqueado."}),
+        },
+        _completed_event("reward_risk_bajo", cycle_id="mkt_1"),
+    ]
+
+    agg = build_cycle_funnel_history(_FakeStoreHistory(events), settings, limit=10)
+
+    assert agg["cycles_analizados"] == 2
+    assert agg["motivos_rechazo_top"]["operational_kill_switch: job_failed:market_cycle: broker sync timeout"] == 1
 
 
 def test_shadow_scoreboard_groups_strategy_and_quartiles():

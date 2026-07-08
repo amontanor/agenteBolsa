@@ -19,6 +19,13 @@ from typing import Any
 
 from ..config import Settings
 
+LATEST_CYCLE_FUNNEL_EVENT_TYPES = (
+    "trade_execution_summary",
+    "paper_auto_trade_completed",
+    "paper_auto_trade_blocked",
+    "scheduled_market_cycle_skipped",
+)
+
 
 def _load_latest_study(settings: Settings) -> dict[str, Any]:
     try:
@@ -66,6 +73,47 @@ def _reason_of(item: dict[str, Any]) -> str:
         if isinstance(reasons, list) and reasons:
             reason = reasons[0]
     return str(reason or "sin motivo")
+
+
+def _decode_event_payload(event: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(event, dict):
+        return {}
+    try:
+        payload = json.loads(event.get("payload_json") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _latest_cycle_funnel_event(store: Any) -> dict[str, Any] | None:
+    if hasattr(store, "latest_events"):
+        for event in store.latest_events(200):
+            if event.get("event_type") in LATEST_CYCLE_FUNNEL_EVENT_TYPES:
+                return event
+    if hasattr(store, "latest_event_of_type"):
+        return store.latest_event_of_type(list(LATEST_CYCLE_FUNNEL_EVENT_TYPES))
+    return None
+
+
+def _event_status(event_type: str, payload: dict[str, Any]) -> tuple[str, str]:
+    message = str(payload.get("message") or "").strip()
+    operational_kill_switch = payload.get("operational_kill_switch") or {}
+    reasons = [str(item).strip() for item in operational_kill_switch.get("reasons", []) if str(item).strip()]
+    if event_type == "scheduled_market_cycle_skipped":
+        return "skipped", message or "mercado cerrado"
+    if event_type == "paper_auto_trade_blocked":
+        return "blocked", message or str(payload.get("blocked") or "auto_paper_trade_blocked")
+    if event_type == "trade_execution_summary":
+        if payload.get("submitted"):
+            return "orders_submitted", message or "ordenes enviadas"
+        if operational_kill_switch.get("kill_switch_active"):
+            return "blocked", "; ".join(reasons[:2]) or message or "operational_kill_switch"
+        if payload.get("failed"):
+            return "failed", message or "fallo en auto paper trading"
+        if payload.get("pending_plans"):
+            return "pending_plans", message or "planes pendientes"
+        return "completed_without_orders", message or "sin ordenes"
+    return "completed", message or "paper_auto_trade_completed"
 
 
 def _summarize(value: Any) -> dict[str, Any]:
@@ -214,14 +262,11 @@ def format_shadow_scoreboard(scoreboard: dict[str, Any]) -> str:
 
 
 def build_cycle_funnel(store: Any, settings: Settings) -> dict[str, Any]:
-    event = store.latest_event_of_type(["paper_auto_trade_completed"])
-    payload: dict[str, Any] = {}
-    if event:
-        try:
-            payload = json.loads(event.get("payload_json") or "{}")
-        except (TypeError, json.JSONDecodeError):
-            payload = {}
+    event = _latest_cycle_funnel_event(store)
+    payload = _decode_event_payload(event)
     study = _load_latest_study(settings)
+    event_type = str((event or {}).get("event_type") or "")
+    status, status_reason = _event_status(event_type, payload)
 
     rejected_plans = payload.get("rejected_order_plans") or []
     plan_reasons = Counter(
@@ -234,6 +279,9 @@ def build_cycle_funnel(store: Any, settings: Settings) -> dict[str, Any]:
     funnel = {
         "run_id": (event or {}).get("cycle_id"),
         "as_of": (event or {}).get("created_at"),
+        "event_type": event_type or None,
+        "status": status,
+        "status_reason": status_reason,
         "stages": {
             "universo": study.get("symbols_scanned"),
             "con_datos": study.get("symbols_with_data"),
@@ -257,12 +305,29 @@ def build_cycle_funnel(store: Any, settings: Settings) -> dict[str, Any]:
             "max_daily_buy_orders": payload.get("effective_max_daily_buy_orders"),
         },
     }
-    funnel["cuello"] = _identify_bottleneck(funnel["stages"])
+    funnel["cuello"] = _identify_bottleneck(
+        funnel["stages"],
+        status=status,
+        status_reason=status_reason,
+        event_type=event_type,
+    )
     return funnel
 
 
-def _identify_bottleneck(stages: dict[str, Any]) -> str:
+def _identify_bottleneck(
+    stages: dict[str, Any],
+    *,
+    status: str | None = None,
+    status_reason: str | None = None,
+    event_type: str | None = None,
+) -> str:
     """Devuelve la primera etapa donde la cuenta cae a 0 / todo se bloquea."""
+    if event_type == "scheduled_market_cycle_skipped":
+        return f"market_cycle_skipped: {status_reason or 'sin motivo'}"
+    if status == "blocked":
+        return f"flujo_bloqueado: {status_reason or 'sin motivo'}"
+    if status == "failed":
+        return f"flujo_fallido: {status_reason or 'sin motivo'}"
     if (stages.get("enviadas") or 0) > 0:
         return "ninguno: se enviaron ordenes"
     rec = stages.get("recomendaciones")
@@ -288,6 +353,12 @@ def format_cycle_funnel(funnel: dict[str, Any]) -> str:
     lines = []
     lines.append(f"EMBUDO DEL CICLO  run_id={funnel.get('run_id') or 'n/d'}  ({funnel.get('as_of') or 'n/d'})")
     lines.append("-" * 64)
+    lines.append(
+        f"  {'fuente':<22} {funnel.get('event_type') or 'n/d'}"
+        f"  | estado={funnel.get('status') or 'n/d'}"
+    )
+    if funnel.get("status_reason"):
+        lines.append(f"  {'motivo':<22} {funnel.get('status_reason')}")
 
     def gate_line(label: str, key: str) -> str:
         g = s.get(key) or {}
@@ -337,14 +408,28 @@ def _cycle_outcome_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(plan, dict):
             motivo = plan.get("reason") or plan.get("rejection_reason") or "sin motivo"
             reasons[f"plan: {motivo}"] += 1
+    operational_kill_switch = payload.get("operational_kill_switch") or {}
+    if operational_kill_switch.get("kill_switch_active"):
+        for reason in operational_kill_switch.get("reasons") or ["kill_switch_activo"]:
+            reasons[f"operational_kill_switch: {reason}"] += 1
     return {"recommendations": n_rec, "submitted": submitted, "reasons": reasons}
 
 
 def build_cycle_funnel_history(store: Any, settings: Settings, limit: int = 20) -> dict[str, Any]:
-    """Agrega los ultimos `limit` ciclos con decision (paper_auto_trade_completed)."""
+    """Agrega los ultimos `limit` ciclos con el ultimo evento observable por ciclo."""
     limit = max(1, int(limit))
     raw = store.latest_events(max(limit * 50, 200))
-    events = [e for e in raw if e.get("event_type") == "paper_auto_trade_completed"][:limit]
+    events: list[dict[str, Any]] = []
+    seen_cycle_ids: set[str] = set()
+    for event in raw:
+        event_type = str(event.get("event_type") or "")
+        cycle_id = str(event.get("cycle_id") or "")
+        if event_type not in LATEST_CYCLE_FUNNEL_EVENT_TYPES or not cycle_id or cycle_id in seen_cycle_ids:
+            continue
+        seen_cycle_ids.add(cycle_id)
+        events.append(event)
+        if len(events) >= limit:
+            break
 
     agg_reasons: Counter = Counter()
     cycles = 0
@@ -385,7 +470,7 @@ def build_cycle_funnel_history(store: Any, settings: Settings, limit: int = 20) 
 def format_cycle_funnel_history(agg: dict[str, Any]) -> str:
     n = agg.get("cycles_analizados", 0)
     lines = [
-        f"EMBUDO AGREGADO  ultimos {n} ciclos con decision",
+        f"EMBUDO AGREGADO  ultimos {n} ciclos observables",
         "-" * 64,
         f"  ciclos con ordenes : {agg.get('ciclos_con_ordenes', 0)}/{n}",
         f"  recomendaciones    : {agg.get('total_recomendaciones', 0)}  (enviadas: {agg.get('total_enviadas', 0)})",
