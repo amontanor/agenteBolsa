@@ -9,6 +9,7 @@
                                "builtin_pullback"
                            ],
     "shadow_first":  false,
-    "authorized_by":  "Antonio 2026-07-07",
-    "notes":  "Experimento de aprendizaje en paper. Solo Antonio debe activarlo o ampliar sus cupos; la firma no puede autohabilitarlo."
+    "low_sample_daily_quota":  1,
+    "authorized_by":  "Antonio 2026-07-08",
+    "notes":  "Experimento de aprendizaje en paper. Solo Antonio debe activarlo o ampliar sus cupos; la firma no puede autohabilitarlo. Excepcion low-sample autorizada por Antonio 2026-07-08 (max 1/dia)."
 }

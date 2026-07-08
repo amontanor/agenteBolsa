@@ -104,6 +104,7 @@ class TradeRecommendation:
     cohort: str | None = None
     decision_origin: str | None = None
     capacity_fill_reason_code: str | None = None
+    tags: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

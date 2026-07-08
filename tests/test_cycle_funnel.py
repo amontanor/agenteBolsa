@@ -133,6 +133,29 @@ def test_funnel_prefers_latest_trade_execution_summary_and_exposes_block_reason(
     assert "trade_execution_summary" in format_cycle_funnel(funnel)
 
 
+def test_funnel_shows_low_sample_usage_line(tmp_path):
+    settings = Settings(DATA_DIR=str(tmp_path))
+    _write_study(tmp_path)
+    payload = {
+        "recommendations": [{"symbol": "AAA", "action": "buy"}],
+        "deterministic_review": [{"symbol": "AAA", "approved": True}],
+        "adversarial_review": [{"symbol": "AAA", "approved": True}],
+        "entry_quality_gate": [{"symbol": "AAA", "approved": True, "reason": "ok"}],
+        "backtest_gate": [{"symbol": "AAA", "approved": True, "reason": "aprobada por excepcion low-sample"}],
+        "rejected_order_plans": [],
+        "submitted": [],
+        "failed": [],
+        "low_sample_usage": {"used": 1, "quota": 1},
+    }
+
+    funnel = build_cycle_funnel(_FakeStore(payload), settings)
+    text = format_cycle_funnel(funnel)
+
+    assert funnel["limites"]["low_sample_usage"]["used"] == 1
+    assert "low_sample" in text
+    assert "1/1 usado hoy" in text
+
+
 class _FakeStoreHistory:
     def __init__(self, events):
         self._events = events

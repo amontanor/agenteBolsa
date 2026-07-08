@@ -9,6 +9,7 @@ from typing import Any
 from agente_bolsa.config import Settings
 
 LEARNING_EXPERIMENT_SOURCE = "learning_experiment"
+LOW_SAMPLE_EXPLORATION_TAG = "low_sample_exploration"
 
 DEFAULT_LEARNING_MODE_CONFIG: dict[str, Any] = {
     "enabled": False,
@@ -19,6 +20,7 @@ DEFAULT_LEARNING_MODE_CONFIG: dict[str, Any] = {
     "max_portfolio_exposure_pct": 15,
     "allowed_strategies": ["builtin_breakout", "builtin_pullback"],
     "shadow_first": True,
+    "low_sample_daily_quota": 0,
     "notes": (
         "Experimento de aprendizaje en paper. Solo Antonio debe activarlo o "
         "ampliar sus cupos; la firma no puede autohabilitarlo."
@@ -56,6 +58,7 @@ def load_learning_mode_config(config_path: Path, *, create: bool = True) -> dict
     config["human_gated"] = bool(config.get("human_gated", True))
     config["authorized_by"] = str(config.get("authorized_by") or "").strip()
     config["shadow_first"] = bool(config.get("shadow_first", True))
+    config["low_sample_daily_quota"] = max(0, int(config.get("low_sample_daily_quota") or 0))
     config["daily_order_budget"] = max(0, int(config.get("daily_order_budget") or 0))
     config["per_trade_notional_usd"] = max(0.0, float(config.get("per_trade_notional_usd") or 0.0))
     config["max_portfolio_exposure_pct"] = max(0.0, float(config.get("max_portfolio_exposure_pct") or 0.0))

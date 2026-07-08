@@ -217,6 +217,45 @@ def test_lab_digest_safety_includes_market_cycle_and_kill_switch_freshness(tmp_p
     assert digest["safety"]["kill_switch"]["active"] is False
     assert "ultimo market_cycle: hace 20 min (completed)" in text
     assert "kill_switch: inactivo" in text
+    assert "low_sample: 0/0 usado hoy" in text
+
+
+def test_lab_digest_shows_low_sample_quota_usage(tmp_path):
+    store = _store(tmp_path)
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "learning_mode.json").write_text(
+        json.dumps(
+            {
+                "enabled": True,
+                "human_gated": True,
+                "shadow_first": False,
+                "low_sample_daily_quota": 1,
+                "authorized_by": "Antonio 2026-07-08",
+            }
+        ),
+        encoding="utf-8",
+    )
+    store.set_runtime_value(
+        "learning_mode_low_sample_usage:2026-07-02",
+        {
+            "session_date": "2026-07-02",
+            "quota": 1,
+            "orders": [{"run_id": "mkt_1", "plan_id": "plan_1", "symbol": "AAPL"}],
+        },
+    )
+
+    digest = build_lab_digest(
+        store,
+        days=1,
+        now=datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc),
+        data_dir=tmp_path,
+        safety={"ok": True, "violations": []},
+    )
+    text = format_lab_digest_text(digest)
+
+    assert digest["low_sample_usage"]["used"] == 1
+    assert "low_sample: 1/1 usado hoy" in text
 
 
 def test_lab_digest_safety_alerts_on_active_kill_switch_and_missing_cycle(tmp_path):

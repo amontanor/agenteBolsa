@@ -3,10 +3,19 @@ from __future__ import annotations
 import json
 
 from agente_bolsa.config import Settings
-from agente_bolsa.cycle_runner import _learning_mode_backtest_near_miss
+from agente_bolsa.cycle_runner import (
+    _apply_backtest_gate,
+    _learning_mode_backtest_near_miss,
+    _low_sample_runtime_key,
+    _market_session_date,
+)
 from agente_bolsa.models import PortfolioSnapshot, RiskDecision, TradeRecommendation
 from agente_bolsa.storage import Store
-from agente_bolsa.tools.learning_mode import LEARNING_EXPERIMENT_SOURCE, load_learning_mode_config
+from agente_bolsa.tools.learning_mode import (
+    LEARNING_EXPERIMENT_SOURCE,
+    LOW_SAMPLE_EXPLORATION_TAG,
+    load_learning_mode_config,
+)
 from agente_bolsa.tools.trade_decision import (
     build_buy_order_plans,
     deterministic_trade_fallback_recommendations,
@@ -193,3 +202,111 @@ def test_learning_mode_accepts_backtest_near_miss_but_rejects_clear_trash(tmp_pa
     assert near_miss_checks["mode"] == "learning_near_miss"
     assert hard_no is False
     assert hard_no_checks["clear_reject"] == "trades_lt_8"
+
+
+class _Reporter:
+    def emit(self, *args, **kwargs):  # pragma: no cover - helper sin comportamiento.
+        return None
+
+
+def test_learning_mode_allows_low_sample_exception_when_only_failure_is_sample(tmp_path, monkeypatch):
+    _write_learning_mode(tmp_path, enabled=True, shadow_first=False, low_sample_daily_quota=1)
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    recommendation = TradeRecommendation(symbol="AAPL", action="buy", confidence=0.8, reason="test")
+    monkeypatch.setattr(
+        "agente_bolsa.cycle_runner.build_symbol_backtest",
+        lambda *args, **kwargs: {
+            "metrics": {"trades": 6, "hit_rate": 0.43, "profit_factor": 0.97, "max_drawdown": -0.03},
+            "benchmark": {"metrics": {"trade_window_alpha": -0.004}},
+            "regime_summary": {},
+            "path": "bt.json",
+        },
+    )
+
+    kept, decisions = _apply_backtest_gate(settings, store, _Reporter(), "run-low-sample", [recommendation])
+
+    assert len(kept) == 1
+    assert kept[0].micro_experiment is True
+    assert LOW_SAMPLE_EXPLORATION_TAG in kept[0].tags
+    assert decisions[0]["approved"] is True
+    assert "aprobada por excepcion low-sample" in decisions[0]["reason"]
+
+
+def test_learning_mode_rejects_low_sample_when_hit_rate_is_bad(tmp_path, monkeypatch):
+    _write_learning_mode(tmp_path, enabled=True, shadow_first=False, low_sample_daily_quota=1)
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    recommendation = TradeRecommendation(symbol="AAPL", action="buy", confidence=0.8, reason="test")
+    monkeypatch.setattr(
+        "agente_bolsa.cycle_runner.build_symbol_backtest",
+        lambda *args, **kwargs: {
+            "metrics": {"trades": 6, "hit_rate": 0.38, "profit_factor": 0.97, "max_drawdown": -0.03},
+            "benchmark": {"metrics": {"trade_window_alpha": -0.004}},
+            "regime_summary": {},
+            "path": "bt.json",
+        },
+    )
+
+    kept, decisions = _apply_backtest_gate(settings, store, _Reporter(), "run-low-sample-bad-hr", [recommendation])
+
+    assert kept == []
+    assert decisions[0]["approved"] is False
+    assert "hit-rate" in decisions[0]["reason"]
+
+
+def test_learning_mode_rejects_second_low_sample_of_day(tmp_path, monkeypatch):
+    _write_learning_mode(tmp_path, enabled=True, shadow_first=False, low_sample_daily_quota=1)
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    session_date = _market_session_date(settings)
+    store.set_runtime_value(
+        _low_sample_runtime_key(session_date),
+        {
+            "session_date": session_date,
+            "quota": 1,
+            "orders": [{"run_id": "prev", "plan_id": "plan-prev", "symbol": "MSFT", "recorded_at": "2026-07-08T10:00:00+00:00"}],
+        },
+    )
+    recommendation = TradeRecommendation(symbol="AAPL", action="buy", confidence=0.8, reason="test")
+    monkeypatch.setattr(
+        "agente_bolsa.cycle_runner.build_symbol_backtest",
+        lambda *args, **kwargs: {
+            "metrics": {"trades": 6, "hit_rate": 0.43, "profit_factor": 0.97, "max_drawdown": -0.03},
+            "benchmark": {"metrics": {"trade_window_alpha": -0.004}},
+            "regime_summary": {},
+            "path": "bt.json",
+        },
+    )
+
+    kept, decisions = _apply_backtest_gate(settings, store, _Reporter(), "run-low-sample-full", [recommendation])
+
+    assert kept == []
+    assert decisions[0]["approved"] is False
+    assert decisions[0]["checks"]["clear_reject"] == "low_sample_daily_quota_exhausted"
+
+
+def test_learning_mode_can_disable_low_sample_quota(tmp_path, monkeypatch):
+    _write_learning_mode(tmp_path, enabled=True, shadow_first=False, low_sample_daily_quota=0)
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    recommendation = TradeRecommendation(symbol="AAPL", action="buy", confidence=0.8, reason="test")
+    monkeypatch.setattr(
+        "agente_bolsa.cycle_runner.build_symbol_backtest",
+        lambda *args, **kwargs: {
+            "metrics": {"trades": 6, "hit_rate": 0.43, "profit_factor": 0.97, "max_drawdown": -0.03},
+            "benchmark": {"metrics": {"trade_window_alpha": -0.004}},
+            "regime_summary": {},
+            "path": "bt.json",
+        },
+    )
+
+    kept, decisions = _apply_backtest_gate(settings, store, _Reporter(), "run-low-sample-off", [recommendation])
+
+    assert kept == []
+    assert decisions[0]["approved"] is False
+    assert decisions[0]["checks"]["clear_reject"] == "low_sample_daily_quota_disabled"

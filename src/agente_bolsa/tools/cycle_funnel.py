@@ -303,6 +303,7 @@ def build_cycle_funnel(store: Any, settings: Settings) -> dict[str, Any]:
         "limites": {
             "max_orders_per_cycle": payload.get("effective_max_orders_per_cycle"),
             "max_daily_buy_orders": payload.get("effective_max_daily_buy_orders"),
+            "low_sample_usage": payload.get("low_sample_usage") or {},
         },
     }
     funnel["cuello"] = _identify_bottleneck(
@@ -381,6 +382,11 @@ def format_cycle_funnel(funnel: dict[str, Any]) -> str:
     if rp.get("total"):
         rs = ", ".join(f"{k} x{v}" for k, v in (rp.get("reasons") or {}).items())
         lines.append(f"  {'planes rechazados':<22} {rp.get('total')}  [{rs}]")
+    low_sample_usage = ((funnel.get("limites") or {}).get("low_sample_usage") or {})
+    if low_sample_usage:
+        lines.append(
+            f"  {'low_sample':<22} {int(low_sample_usage.get('used') or 0)}/{int(low_sample_usage.get('quota') or 0)} usado hoy"
+        )
     lines.append(f"  {'ORDENES enviadas':<22} {s.get('enviadas') or 0}  (fallidas: {s.get('fallidas') or 0})")
     lines.append("-" * 64)
     lines.append(f"  CUELLO: {funnel.get('cuello')}")

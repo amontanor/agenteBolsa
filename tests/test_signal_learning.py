@@ -4,6 +4,7 @@ import pandas as pd
 
 from agente_bolsa.config import Settings
 from agente_bolsa.models import TradeRecommendation
+from agente_bolsa.tools.learning_mode import LOW_SAMPLE_EXPLORATION_TAG
 from agente_bolsa.tools.signal_learning import (
     _combo_key,
     _indicator_tags,
@@ -691,6 +692,53 @@ def test_update_signal_execution_status_marks_submitted(tmp_path):
     assert row["gate"]["execution"]["broker_status"] == "accepted"
     assert row["gate"]["execution"]["notional"] == 1000.0
     assert "backtest_soft_override" not in row["gate"]
+
+
+def test_update_signal_decisions_propagates_low_sample_feature_to_signal_outcomes(tmp_path):
+    from agente_bolsa.storage import Store
+
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    store.save_signal_outcome(
+        signal_id="scan-low:AAPL",
+        source_run_id="scan-low",
+        source="test",
+        symbol="AAPL",
+        signal_date="2026-07-08",
+        decision="candidate",
+        features={},
+        gate={},
+    )
+
+    updated = update_signal_decisions(
+        store,
+        source_run_id="scan-low",
+        recommendations=[
+            TradeRecommendation(
+                symbol="AAPL",
+                action="buy",
+                confidence=0.82,
+                reason="test",
+                micro_experiment=True,
+                tags=[LOW_SAMPLE_EXPLORATION_TAG],
+            )
+        ],
+        entry_quality_gate=[{"symbol": "AAPL", "approved": True, "reason": "ok", "checks": {}}],
+        backtest_gate=[
+            {
+                "symbol": "AAPL",
+                "approved": True,
+                "reason": "aprobada por excepcion low-sample (cupo 1/dia): trades 6 < 10, resto de metricas dentro de near-miss/umbral",
+                "checks": {"mode": "learning_low_sample_exception"},
+            }
+        ],
+        settings=Settings(DATA_DIR=tmp_path),
+    )
+    row = store.signal_outcomes(limit=10, since_date="2026-07-01", include_learning_experiment=True)[0]
+
+    assert updated == 1
+    assert row["features"]["low_sample_exploration"] is True
+    assert LOW_SAMPLE_EXPLORATION_TAG in row["features"]["tags"]
 
 
 def test_backfill_signal_candidates_from_reports_infers_selected_candidates(tmp_path):

@@ -11,6 +11,7 @@ from statistics import median
 from typing import Any
 
 from agente_bolsa.storage import Store
+from agente_bolsa.tools.learning_mode import load_learning_mode_config
 from agente_bolsa.tools.operational_health import load_operational_block_context
 
 from .codegen_nightly import latest_codegen_nightly_run
@@ -66,6 +67,7 @@ def build_lab_digest(
     recent_applied = [item for item in applied_changes if _is_recent(item.get("updated_at"), cutoff)]
     recent_experiments = [item for item in experiments if _is_recent(item.get("updated_at"), cutoff)]
     safety_payload = _enrich_safety_context(store, data_dir, safety=safety, now=now)
+    low_sample_usage = _learning_mode_low_sample_snapshot(store, data_dir, now=now)
 
     rejection_counts = {
         "self_safety": 0,
@@ -99,6 +101,7 @@ def build_lab_digest(
         "days": days,
         "generated_at": now.isoformat(),
         "safety": safety_payload,
+        "low_sample_usage": low_sample_usage,
         "window_start": cutoff.isoformat(),
         "proposals": {
             "created": len(recent_proposals_created),
@@ -176,6 +179,20 @@ def _kill_switch_safety_snapshot(data_dir: Path, *, now: datetime) -> dict[str, 
         "age_minutes": age_minutes,
         "as_of": block.get("as_of"),
         "available": bool(block.get("available")),
+    }
+
+
+def _learning_mode_low_sample_snapshot(store: Store, data_dir: Path, *, now: datetime) -> dict[str, Any]:
+    config = load_learning_mode_config(data_dir / "config" / "learning_mode.json", create=False)
+    session_date = now.astimezone().date().isoformat()
+    payload = store.get_runtime_value(f"learning_mode_low_sample_usage:{session_date}") or {}
+    orders = list(payload.get("orders") or []) if isinstance(payload, dict) else []
+    quota = max(0, int(config.get("low_sample_daily_quota") or 0))
+    return {
+        "session_date": session_date,
+        "quota": quota,
+        "used": len(orders),
+        "enabled": quota > 0,
     }
 
 
@@ -591,6 +608,10 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
         f"Digest diario del lab - ultimos {digest.get('days')} dia(s)",
         f"Generado: {digest.get('generated_at', 'n/d')}",
         *_safety_lines(digest.get("safety")),
+        (
+            f"- low_sample: {int((digest.get('low_sample_usage') or {}).get('used') or 0)}/"
+            f"{int((digest.get('low_sample_usage') or {}).get('quota') or 0)} usado hoy"
+        ),
         "",
         "Propuestas",
         f"- creadas: {(digest.get('proposals') or {}).get('created', 0)}",

@@ -14,6 +14,20 @@
 - Ultima actualizacion: 2026-06-16
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
+### P-L10 - Excepcion low-sample en learning mode (max 1/dia). **HECHO (v0.4.133).**
+Se autoriza, solo dentro de `learning_mode` activo y con `human_gated=true`, una
+excepcion de backtest para senales cuyo unico fallo es `trades < minimo`. La
+senal solo pasa si el resto de metricas sigue dentro de near-miss/umbral; si
+ademas falla hit-rate, profit-factor, alpha o regimens, sigue bloqueada. El cupo
+queda gobernado por `data/config/learning_mode.json` con
+`low_sample_daily_quota` (default de codigo seguro `0`, valor operativo actual
+`1`, autorizado por Antonio 2026-07-08), persistido por dia de mercado en
+SQLite. La orden y su `signal_outcome` se etiquetan `low_sample_exploration`,
+visible en `signal_outcomes.features`, en el `cycle-funnel` y en el digest del
+lab (`low_sample: usado/quota hoy`). Verificado con tests de paso, bloqueo por
+hit-rate, segunda del dia, quota=0 y propagacion de feature, ademas de embudo y
+digest.
+
 ### P34 - Hardening pre-activacion de manga core y paridad diaria. **HECHO (v0.4.113).**
 Se endurece `core_sleeve` antes de cualquier orden real: reserva atomica por
 `data_date`, `client_order_id` estable `core-sleeve-YYYYMMDD`, preview sin envio,

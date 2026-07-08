@@ -25,7 +25,11 @@ from .tools.broker import BrokerClientFactory
 from .tools.costs import TransactionCostModel
 from .tools.deterministic_reviewer import recommendation_input_fingerprint, review_recommendations
 from .tools.execution import submit_paper_order_plan
-from .tools.learning_mode import LEARNING_EXPERIMENT_SOURCE, active_learning_mode
+from .tools.learning_mode import (
+    LEARNING_EXPERIMENT_SOURCE,
+    LOW_SAMPLE_EXPLORATION_TAG,
+    active_learning_mode,
+)
 from .tools.market_snapshot import build_market_snapshot, compact_snapshot_for_prompt
 from .tools.market_state import build_market_state, compact_market_state_for_prompt
 from .tools.operational_health import load_operational_block_context
@@ -225,6 +229,63 @@ def _session_start_utc_iso(settings: Settings) -> str:
     return start_local.astimezone(timezone.utc).isoformat()
 
 
+def _market_session_date(settings: Settings, now: datetime | None = None) -> str:
+    reference = now or datetime.now(timezone.utc)
+    return reference.astimezone(ZoneInfo(settings.local_timezone)).date().isoformat()
+
+
+def _low_sample_runtime_key(session_date: str) -> str:
+    return f"learning_mode_low_sample_usage:{session_date}"
+
+
+def _low_sample_usage_payload(store: Store, settings: Settings, *, now: datetime | None = None) -> dict[str, Any]:
+    learning_mode = active_learning_mode(settings) or {}
+    session_date = _market_session_date(settings, now=now)
+    quota = max(0, int(learning_mode.get("low_sample_daily_quota") or 0))
+    payload = store.get_runtime_value(_low_sample_runtime_key(session_date)) or {}
+    orders = list(payload.get("orders") or []) if isinstance(payload, dict) else []
+    used = len(orders)
+    return {
+        "session_date": session_date,
+        "quota": quota,
+        "used": used,
+        "remaining": max(0, quota - used),
+        "enabled": quota > 0,
+        "orders": orders,
+    }
+
+
+def _register_low_sample_order(
+    store: Store,
+    settings: Settings,
+    *,
+    run_id: str,
+    plan_id: str,
+    symbol: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    usage = _low_sample_usage_payload(store, settings, now=now)
+    order_entry = {
+        "run_id": run_id,
+        "plan_id": plan_id,
+        "symbol": str(symbol).upper(),
+        "recorded_at": (now or datetime.now(timezone.utc)).isoformat(),
+    }
+    updated_orders = [*list(usage.get("orders") or []), order_entry]
+    payload = {
+        "session_date": usage["session_date"],
+        "quota": usage["quota"],
+        "orders": updated_orders,
+    }
+    store.set_runtime_value(_low_sample_runtime_key(usage["session_date"]), payload)
+    return {
+        **usage,
+        "used": len(updated_orders),
+        "remaining": max(0, int(usage["quota"]) - len(updated_orders)),
+        "orders": updated_orders,
+    }
+
+
 def _apply_daily_buy_limit(
     settings: Settings,
     store: Store,
@@ -355,6 +416,90 @@ def _learning_mode_backtest_near_miss(settings: Settings, report: dict[str, Any]
     }
 
 
+def _learning_mode_backtest_low_sample(
+    settings: Settings,
+    store: Store,
+    report: dict[str, Any],
+) -> tuple[bool, dict[str, Any]]:
+    learning_mode = active_learning_mode(settings)
+    if not learning_mode:
+        return False, {}
+    quota = max(0, int(learning_mode.get("low_sample_daily_quota") or 0))
+    if quota <= 0:
+        return False, {
+            "clear_reject": "low_sample_daily_quota_disabled",
+            "reason": "low_sample desactivado: quota diaria = 0",
+        }
+
+    metrics = report.get("metrics", {}) or {}
+    benchmark = ((report.get("benchmark") or {}).get("metrics")) or {}
+    trades = int(metrics.get("trades") or 0)
+    hit_rate = float(metrics.get("hit_rate") or 0.0)
+    profit_factor = metrics.get("profit_factor")
+    profit_factor_value = None if profit_factor is None else float(profit_factor)
+    trade_window_alpha = benchmark.get("trade_window_alpha")
+    alpha_vs_benchmark = benchmark.get("alpha_vs_benchmark")
+    alpha_value = trade_window_alpha if trade_window_alpha is not None else alpha_vs_benchmark
+    negative_regimes = 0
+    for bucket in (report.get("regime_summary") or {}).values():
+        bucket_trades = int(bucket.get("trades") or 0)
+        bucket_avg = bucket.get("avg_return")
+        if (
+            bucket_trades >= int(settings.backtest_gate_min_regime_trades or 0)
+            and bucket_avg is not None
+            and float(bucket_avg) < 0
+        ):
+            negative_regimes += 1
+    if trades >= settings.backtest_gate_min_trades:
+        return False, {"clear_reject": "trades_not_low_sample", "reason": "no es caso low-sample"}
+    if hit_rate < (float(settings.backtest_gate_min_hit_rate) - 0.03):
+        return False, {
+            "clear_reject": "hit_rate_outside_near_miss",
+            "reason": (
+                f"hit-rate {hit_rate:.2%} fuera de near-miss "
+                f"({float(settings.backtest_gate_min_hit_rate) - 0.03:.2%})"
+            ),
+        }
+    if profit_factor_value is None or profit_factor_value < 0.95:
+        return False, {
+            "clear_reject": "profit_factor_outside_near_miss",
+            "reason": f"profit-factor {profit_factor_value} fuera de near-miss 0.95",
+        }
+    if alpha_value is not None and float(alpha_value) < -0.005:
+        return False, {
+            "clear_reject": "alpha_outside_near_miss",
+            "reason": f"alpha {float(alpha_value):.2%} fuera de near-miss -0.50%",
+        }
+    if negative_regimes > 2:
+        return False, {
+            "clear_reject": "negative_regimes_outside_near_miss",
+            "reason": f"regimenes negativos {negative_regimes} > maximo near-miss 2",
+        }
+
+    usage = _low_sample_usage_payload(store, settings)
+    if int(usage["used"]) >= quota:
+        return False, {
+            "clear_reject": "low_sample_daily_quota_exhausted",
+            "reason": f"low_sample agotado hoy: {int(usage['used'])}/{quota} usado(s)",
+            "low_sample_usage": usage,
+        }
+    return True, {
+        "mode": "learning_low_sample_exception",
+        "trades": trades,
+        "min_trades": int(settings.backtest_gate_min_trades),
+        "hit_rate": hit_rate,
+        "profit_factor": profit_factor_value,
+        "alpha_value": alpha_value,
+        "negative_regimes": negative_regimes,
+        "low_sample_usage": usage,
+        "message": (
+            "aprobada por excepcion low-sample (cupo 1/dia): "
+            f"trades {trades} < {int(settings.backtest_gate_min_trades)}, "
+            "resto de metricas dentro de near-miss/umbral"
+        ),
+    }
+
+
 def _write_learning_mode_shadow_report(
     settings: Settings,
     *,
@@ -407,6 +552,7 @@ def _write_learning_mode_shadow_report(
 
 def _apply_backtest_gate(
     settings: Settings,
+    store: Store,
     reporter: EventReporter,
     run_id: str,
     recommendations: list[Any],
@@ -454,8 +600,39 @@ def _apply_backtest_gate(
             )
             if approved:
                 kept.append(recommendation)
-            elif _learning_mode_backtest_near_miss(settings, report)[0]:
-                near_miss_checks = _learning_mode_backtest_near_miss(settings, report)[1]
+            else:
+                low_sample_ok, low_sample_checks = _learning_mode_backtest_low_sample(settings, store, report)
+                if low_sample_ok:
+                    decisions[-1] = {
+                        "symbol": recommendation.symbol,
+                        "approved": True,
+                        "reason": str(low_sample_checks.get("message") or LOW_SAMPLE_EXPLORATION_TAG),
+                        "path": report.get("path"),
+                        "metrics": metrics,
+                        "checks": low_sample_checks,
+                    }
+                    kept.append(
+                        replace(
+                            recommendation,
+                            micro_experiment=True,
+                            backtest_soft_override=True,
+                            soft_override_reasons=[
+                                *list(getattr(recommendation, "soft_override_reasons", []) or []),
+                                LOW_SAMPLE_EXPLORATION_TAG,
+                            ],
+                            cohort=LEARNING_EXPERIMENT_SOURCE,
+                            tags=[
+                                *list(getattr(recommendation, "tags", []) or []),
+                                LOW_SAMPLE_EXPLORATION_TAG,
+                            ],
+                        )
+                    )
+                    continue
+                if low_sample_checks.get("reason"):
+                    decisions[-1]["reason"] = str(low_sample_checks["reason"])
+                    decisions[-1]["checks"] = low_sample_checks
+            near_miss_ok, near_miss_checks = _learning_mode_backtest_near_miss(settings, report)
+            if near_miss_ok:
                 decisions[-1] = {
                     "symbol": recommendation.symbol,
                     "approved": True,
@@ -551,6 +728,64 @@ def _apply_backtest_gate(
             },
         )
     return kept, decisions
+
+
+def _apply_low_sample_daily_quota(
+    settings: Settings,
+    store: Store,
+    reporter: EventReporter,
+    run_id: str,
+    plans: list[Any],
+    *,
+    rejected: list[dict[str, Any]] | None = None,
+) -> list[Any]:
+    usage = _low_sample_usage_payload(store, settings)
+    remaining = int(usage.get("remaining") or 0)
+    if not plans:
+        return plans
+    kept = []
+    blocked = []
+    for plan in plans:
+        recommendation_tags = list(getattr(getattr(plan, "recommendation", None), "tags", []) or [])
+        is_low_sample = LOW_SAMPLE_EXPLORATION_TAG in recommendation_tags
+        if not is_low_sample or str(getattr(plan, "side", "")).lower() != "buy":
+            kept.append(plan)
+            continue
+        if remaining > 0:
+            kept.append(plan)
+            remaining -= 1
+        else:
+            blocked.append(plan)
+    if blocked:
+        for plan in blocked:
+            if rejected is not None:
+                rejected.append(
+                    {
+                        "symbol": plan.symbol,
+                        "action": str(getattr(plan, "side", "")).lower(),
+                        "stage": "low_sample_daily_quota",
+                        "reason": "low_sample_daily_quota_exhausted",
+                        "checks": {
+                            "used_low_sample_orders_today": usage.get("used"),
+                            "low_sample_daily_quota": usage.get("quota"),
+                        },
+                    }
+                )
+        reporter.emit(
+            "risk_manager",
+            "low_sample_daily_quota_applied",
+            run_id,
+            (
+                "Excepcion low-sample agotada hoy: "
+                f"{usage.get('used')}/{usage.get('quota')} ya usadas; "
+                f"bloqueadas: {', '.join(plan.symbol for plan in blocked)}."
+            ),
+            {
+                "usage": usage,
+                "blocked_symbols": [plan.symbol for plan in blocked],
+            },
+        )
+    return kept
 
 
 def _apply_entry_quality_gate(
@@ -1028,6 +1263,7 @@ def _auto_paper_trade(
     )
     gated_recommendations, backtest_gate = _apply_backtest_gate(
         settings,
+        store,
         reporter,
         run_id,
         quality_recommendations,
@@ -1062,7 +1298,9 @@ def _auto_paper_trade(
     effective_daily_limit = _effective_daily_buy_limit(settings, plans)
     approved_buys = sorted({item.symbol for item in gated_recommendations if str(item.action).lower() == "buy"})
     plans = _apply_daily_buy_limit(settings, store, reporter, run_id, plans, rejected=rejected_order_plans)
+    plans = _apply_low_sample_daily_quota(settings, store, reporter, run_id, plans, rejected=rejected_order_plans)
     if learning_mode and bool(learning_mode.get("shadow_first")):
+        low_sample_usage = _low_sample_usage_payload(store, settings)
         shadow_path = _write_learning_mode_shadow_report(
             settings,
             run_id=run_id,
@@ -1113,6 +1351,7 @@ def _auto_paper_trade(
             "effective_max_daily_buy_orders": effective_daily_limit,
             "rejected_order_plans": rejected_order_plans,
             "execution_updates": execution_updates,
+            "low_sample_usage": low_sample_usage,
             "recommendation_augmentation": recommendation_augmentation,
         }
     planned_symbols = [plan.symbol for plan in plans if str(plan.side).lower() == "buy"]
@@ -1128,6 +1367,10 @@ def _auto_paper_trade(
             dry_run=plan.dry_run,
             payload=asdict(plan),
         )
+        recommendation_tags = list(getattr(getattr(plan, "recommendation", None), "tags", []) or [])
+        if LOW_SAMPLE_EXPLORATION_TAG in recommendation_tags and str(plan.side).lower() == "buy":
+            _register_low_sample_order(store, settings, run_id=run_id, plan_id=plan_id, symbol=plan.symbol)
+    low_sample_usage = _low_sample_usage_payload(store, settings)
 
     if not plans:
         execution_updates = update_signal_execution_status(
@@ -1161,6 +1404,7 @@ def _auto_paper_trade(
                 "effective_max_daily_buy_orders": effective_daily_limit,
                 "rejected_order_plans": rejected_order_plans,
                 "execution_updates": execution_updates,
+                "low_sample_usage": low_sample_usage,
                 "recommendation_augmentation": recommendation_augmentation,
                 "submitted": [],
             },
@@ -1178,6 +1422,7 @@ def _auto_paper_trade(
             "effective_max_daily_buy_orders": effective_daily_limit,
             "rejected_order_plans": rejected_order_plans,
             "execution_updates": execution_updates,
+            "low_sample_usage": low_sample_usage,
             "recommendation_augmentation": recommendation_augmentation,
         }
 
@@ -1213,6 +1458,8 @@ def _auto_paper_trade(
                     "take_profit": plan.get("payload", {}).get("take_profit"),
                     "risk_reason": risk_decision.get("reason"),
                     "risk_checks": risk_decision.get("checks", {}),
+                    "tags": list((recommendation or {}).get("tags") or []),
+                    "low_sample_exploration": LOW_SAMPLE_EXPLORATION_TAG in list((recommendation or {}).get("tags") or []),
                 }
             )
         except Exception as exc:  # noqa: BLE001 - one rejected order should not hide the rest.
@@ -1253,6 +1500,7 @@ def _auto_paper_trade(
             "effective_max_daily_buy_orders": effective_daily_limit,
             "rejected_order_plans": rejected_order_plans,
             "execution_updates": execution_updates,
+            "low_sample_usage": low_sample_usage,
             "recommendation_augmentation": recommendation_augmentation,
         },
     )
@@ -1267,6 +1515,7 @@ def _auto_paper_trade(
         "effective_max_daily_buy_orders": effective_daily_limit,
         "rejected_order_plans": rejected_order_plans,
         "execution_updates": execution_updates,
+        "low_sample_usage": low_sample_usage,
         "recommendation_augmentation": recommendation_augmentation,
     }
 

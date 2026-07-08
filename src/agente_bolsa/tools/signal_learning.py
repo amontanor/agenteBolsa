@@ -14,6 +14,7 @@ from agente_bolsa.config import Settings
 from agente_bolsa.models import TradeRecommendation
 from agente_bolsa.storage import Store
 
+from .learning_mode import LOW_SAMPLE_EXPLORATION_TAG
 from .market_data import download_daily_prices
 
 HORIZONS = (1, 3, 5, 10)
@@ -387,6 +388,12 @@ def update_signal_decisions(
             "recommendation_source": getattr(recommendation, "source", "llm"),
             "decision_origin": getattr(recommendation, "decision_origin", None),
             "capacity_fill_reason_code": getattr(recommendation, "capacity_fill_reason_code", None),
+            "low_sample_exploration": bool(
+                LOW_SAMPLE_EXPLORATION_TAG in list(getattr(recommendation, "tags", []) or [])
+                or LOW_SAMPLE_EXPLORATION_TAG in list(getattr(recommendation, "soft_override_reasons", []) or [])
+                or str(((backtest or {}).get("checks") or {}).get("mode") or "") == "learning_low_sample_exception"
+            ),
+            "tags": list(getattr(recommendation, "tags", []) or []),
             "llm_response_status": "failed"
             if (
                 getattr(recommendation, "decision_origin", None) == "deterministic_fallback_llm_failed"
