@@ -276,6 +276,19 @@ def _pct_signed(value: Any) -> str:
     return f"{sign}{amount:.2f}%"
 
 
+def _today_pl_display(today_pl: Any, invested: Any, equity_pct: Any | None) -> dict[str, str | None]:
+    invested_amount = _num(invested)
+    today_amount = _num(today_pl)
+    invested_pct = None
+    if invested_amount is not None and invested_amount > 0 and today_amount is not None:
+        invested_pct = today_amount / invested_amount
+    return {
+        "primary_pct": _pct(invested_pct) if invested_pct is not None else "n/d",
+        "invested_caption": f"sobre invertido ({_money(invested_amount)})",
+        "equity_reference": f"{_pct(equity_pct)} del equity total" if equity_pct is not None else None,
+    }
+
+
 def _num(value: Any) -> float | None:
     try:
         if value is None or value == "":
@@ -1118,6 +1131,7 @@ def _account_group(
 ) -> None:
     total_tone = "good" if (total_pl or 0.0) > 0 else "bad" if (total_pl or 0.0) < 0 else "neutral"
     today_tone = "good" if (today_pl or 0.0) > 0 else "bad" if (today_pl or 0.0) < 0 else "neutral"
+    today_display = _today_pl_display(today_pl, exposure, today_pct)
     tone_class = f"account-pl {total_tone}"
     today_class = f"account-kpi {today_tone}"
     st.markdown(
@@ -1134,7 +1148,14 @@ def _account_group(
                 <div><span>Invertido</span><strong>{_money(exposure)}</strong><em>{_pct(exposure_pct)}</em></div>
             </div>
             <div class="account-kpis">
-                <div class="{today_class}"><span>P/L hoy</span><strong>{_money(today_pl)}</strong><em>{_pct(today_pct)}</em></div>
+                <div class="{today_class}">
+                    <span>P/L hoy</span>
+                    <strong>{_money(today_pl)}</strong>
+                    <em>
+                        <span>{today_display["primary_pct"]} {today_display["invested_caption"]}</span>
+                        <small>{today_display["equity_reference"] or "&nbsp;"}</small>
+                    </em>
+                </div>
                 <div class="account-kpi"><span>Posiciones</span><strong>{positions_count}</strong><em>&nbsp;</em></div>
                 <div class="account-kpi"><span>Ordenes</span><strong>{orders_count}</strong><em>&nbsp;</em></div>
             </div>
@@ -2376,6 +2397,20 @@ def _setup_page() -> None:
             font-size:0.74rem;
             font-style:normal;
             margin-top:3px;
+        }
+        .account-kpi em span {
+            display:block;
+            color:#6b7280;
+            font-size:0.74rem;
+            font-style:normal;
+            margin-bottom:2px;
+        }
+        .account-kpi em small {
+            display:block;
+            color:#9ca3af;
+            font-size:0.68rem;
+            font-style:normal;
+            line-height:1.15;
         }
         .account-kpi.good {background:#f0fdf4; border-color:#bbf7d0;}
         .account-kpi.good strong {color:#15803d;}
@@ -3689,7 +3724,7 @@ def page_dashboard() -> None:
                 portfolio_history,
                 days=int(chart_days),
             )
-            p1, p2, p3, p4 = st.columns(4)
+            p1, p2, p3 = st.columns(3)
             with p1:
                 _compact_metric("P/L desde abril", _money(stats.get("total_pl")), _pct(stats.get("total_plpc_on_equity")), total_tone)
             with p2:
@@ -3705,9 +3740,6 @@ def page_dashboard() -> None:
             with p3:
                 open_pl = _num(stats.get("unrealized_pl")) if stats else 0.0
                 _compact_metric("P/L abierto", _money(open_pl), tone="good" if open_pl > 0 else "bad" if open_pl < 0 else "neutral")
-            with p4:
-                realized_pl = _num(stats.get("realized_pl")) if stats else 0.0
-                _compact_metric("P/L realizado", _money(realized_pl), tone="good" if realized_pl > 0 else "bad" if realized_pl < 0 else "neutral")
 
         st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
         with st.container(border=True):

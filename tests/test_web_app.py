@@ -47,6 +47,7 @@ from agente_bolsa.web_app import (
     _single_symbol_price_frame,
     _start_schedule,
     _study_price,
+    _today_pl_display,
     _trim_portfolio_chart_range,
     _web_search_status,
     update_env_file,
@@ -465,6 +466,36 @@ def test_latest_daily_equity_change_falls_back_to_estimated_series():
     assert change["pl"] == -5.0
     assert change["pl_pct"] == -0.00495
     assert change["source"] == "estimado"
+
+
+def test_today_pl_display_uses_pct_over_invested_as_primary():
+    display = _today_pl_display(38.42, 5246.0, 0.0005)
+
+    assert display == {
+        "primary_pct": "0.73%",
+        "invested_caption": "sobre invertido ($5,246.00)",
+        "equity_reference": "0.05% del equity total",
+    }
+
+
+def test_today_pl_display_returns_nd_when_invested_is_zero():
+    display = _today_pl_display(38.42, 0.0, 0.0005)
+
+    assert display == {
+        "primary_pct": "n/d",
+        "invested_caption": "sobre invertido ($0.00)",
+        "equity_reference": "0.05% del equity total",
+    }
+
+
+def test_today_pl_display_preserves_negative_pct_over_invested():
+    display = _today_pl_display(-52.46, 5246.0, -0.0007)
+
+    assert display == {
+        "primary_pct": "-1.00%",
+        "invested_caption": "sobre invertido ($5,246.00)",
+        "equity_reference": "-0.07% del equity total",
+    }
 
 
 def test_sidebar_version_label_uses_semantic_version():

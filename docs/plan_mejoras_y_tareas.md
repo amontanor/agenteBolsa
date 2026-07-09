@@ -14,6 +14,18 @@
 - Ultima actualizacion: 2026-06-16
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
+### P-L13 - UI panel: P/L del dia sobre invertido y sin tarjeta realizado. **HECHO (v0.4.136).**
+Se ajusta solo la presentacion del panel en `web_app.py` para que la tarjeta
+`P/L hoy` muestre de forma prominente el porcentaje sobre capital realmente
+invertido (`P/L dia / exposure`) usando la misma fuente de datos ya visible en
+`Invertido`, con subtitulo `sobre invertido ($...)` y una referencia secundaria
+pequena sobre equity total. Si `invertido=0`, el porcentaje principal pasa a
+`n/d` sin division por cero. Tambien se elimina de la fila compacta bajo `Valor
+de cartera` la tarjeta `P/L realizado`, quedando solo `P/L desde abril`,
+`P/L ultimos 7d` y `P/L abierto`. Verificacion: tests unitarios del helper de
+formato (normal, invertido=0, negativo), panel real HTTP 200 con captura y
+suite/lint/gates completos.
+
 ### P-L12 - Salud operativa periodica + diagnostico backtest + cadena learning. **HECHO (v0.4.135).**
 Se anade un job residente `operational_health_refresh` al scheduler: corre al
 arrancar y cada 45 minutos, queda visible en `schedule-status` y regenera
