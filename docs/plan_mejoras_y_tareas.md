@@ -14,6 +14,23 @@
 - Ultima actualizacion: 2026-06-16
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
+### P-L12 - Salud operativa periodica + diagnostico backtest + cadena learning. **HECHO (v0.4.135).**
+Se anade un job residente `operational_health_refresh` al scheduler: corre al
+arrancar y cada 45 minutos, queda visible en `schedule-status` y regenera
+`data/reports/latest_operational_health.json` sin reintroducir bloqueo por
+informe rancio; si la regeneracion falla, el kill switch por stale report sigue
+en fail-open. Se corrige un `UnboundLocalError` real (`cannot access local
+variable 'backtest'`) localizado en `tools/signal_learning.py` para ramas
+`hold/no-buy`, con evidencia en `system.log` y `orchestrator.jsonl` y test de
+regresion. Tambien se recompone la cadena de aprendizaje de los fills reales de
+2026-07-08: el digest ya reconoce AIZ/CRWD/ALL via `cohort=learning_experiment`
+en ordenes/planes aunque `recommendation.source` sea `deterministic_*`, muestra
+`trades=3`, `pnl.open=5.99`, snapshot por simbolo/bracket y reutiliza las
+lecciones operativas aunque el reporte legacy no traiga `session_date`.
+Verificacion: tests focales del scheduler, digest y regresion; regeneracion real
+de `learning-digest` y `operational-health`; validacion completa `pytest`,
+`ruff`, `status`, `validate-agent-config` y `run-once --skip-crew`.
+
 ### P-L11 - Hotfix restart_services por variable automatica `$PID`. **HECHO (v0.4.134).**
 Se corrige la regresion introducida en `scripts/restart_services.ps1`: el helper
 `Invoke-TaskKill` declaraba un parametro `$Pid`, que colisiona con la variable

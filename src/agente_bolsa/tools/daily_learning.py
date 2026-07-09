@@ -1045,6 +1045,101 @@ def _learning_experiment_proposal_candidates(observations: list[dict[str, Any]])
     ]
 
 
+def _learning_experiment_execution_summary(
+    store: Store,
+    *,
+    trade_date: str | None,
+    signal_symbols: set[str],
+) -> dict[str, Any]:
+    if not trade_date or not signal_symbols:
+        return {"trades": 0, "open_pl": None, "broker_order_ids": []}
+    memories = store.trade_memory(limit=5000, since_date=trade_date)
+    if not memories:
+        return {"trades": 0, "open_pl": None, "broker_order_ids": []}
+
+    with store.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT broker_order_id, payload_json
+            FROM broker_orders
+            WHERE lower(side) = 'buy'
+            """
+        ).fetchall()
+    learning_order_ids = set()
+    for row in rows:
+        payload = json.loads(row["payload_json"] or "{}")
+        plan_payload = ((payload.get("plan") or {}).get("payload") or {})
+        recommendation = (plan_payload.get("recommendation") or {})
+        recommendation_source = str(recommendation.get("source") or "").strip().lower()
+        recommendation_cohort = str(recommendation.get("cohort") or "").strip().lower()
+        plan_cohort = str(plan_payload.get("cohort") or "").strip().lower()
+        if (
+            recommendation_source == LEARNING_EXPERIMENT_SOURCE
+            or recommendation_cohort == LEARNING_EXPERIMENT_SOURCE
+            or plan_cohort == LEARNING_EXPERIMENT_SOURCE
+        ):
+            learning_order_ids.add(str(row["broker_order_id"] or ""))
+
+    by_order: dict[str, dict[str, Any]] = {}
+    for memory in memories:
+        if str(memory.get("side") or "").lower() != "buy":
+            continue
+        if str(memory.get("trade_date") or "") != trade_date:
+            continue
+        symbol = str(memory.get("symbol") or "").upper()
+        if symbol not in signal_symbols:
+            continue
+        source_order = ((memory.get("thesis") or {}).get("source_order") or {})
+        broker_order_id = str(source_order.get("broker_order_id") or "").strip()
+        if not broker_order_id or broker_order_id not in learning_order_ids:
+            continue
+        by_order.setdefault(
+            broker_order_id,
+            {
+                "symbol": symbol,
+                "open_pl": _num(memory.get("open_pl")),
+            },
+        )
+
+    open_pl_values = [item["open_pl"] for item in by_order.values() if item.get("open_pl") is not None]
+    return {
+        "trades": len(by_order),
+        "open_pl": _round(sum(open_pl_values), 2) if open_pl_values else None,
+        "broker_order_ids": sorted(by_order),
+    }
+
+
+def _learning_experiment_post_market_snapshot(
+    latest_post_market: dict[str, Any],
+    *,
+    signal_symbols: set[str],
+) -> dict[str, Any]:
+    evaluations = latest_post_market.get("trade_evaluations") or []
+    if not evaluations or not signal_symbols:
+        return {"positions": [], "open_pl": None}
+
+    by_symbol: dict[str, dict[str, Any]] = {}
+    for item in evaluations:
+        symbol = str(item.get("symbol") or "").upper()
+        if symbol not in signal_symbols:
+            continue
+        by_symbol[symbol] = {
+            "symbol": symbol,
+            "bracket_state": "closed" if _num(item.get("realized_pl")) is not None else "open",
+            "open_pl": _num(item.get("open_pl")),
+            "realized_pl": _num(item.get("realized_pl")),
+            "verdict": item.get("verdict"),
+            "issue": item.get("issue"),
+        }
+
+    positions = [by_symbol[symbol] for symbol in sorted(by_symbol)]
+    open_pl_values = [item["open_pl"] for item in positions if item.get("open_pl") is not None]
+    return {
+        "positions": positions,
+        "open_pl": _round(sum(open_pl_values), 2) if open_pl_values else None,
+    }
+
+
 def _build_learning_experiment_section(
     store: Store,
     reports_dir: Path,
@@ -1068,25 +1163,42 @@ def _build_learning_experiment_section(
         session_date = max(str(item.get("signal_date") or "") for item in observations)
     session_rows = [item for item in observations if not session_date or item.get("signal_date") == session_date]
     matured_3d = [item for item in session_rows if _matured_for_horizon(item, 3)]
-    executed = [item for item in session_rows if bool(item.get("executed_buy"))]
-    open_pl = [
-        _num(((item.get("outcome") or {}).get("execution") or {}).get("open_pl"))
-        for item in executed
-    ]
-    clean_open_pl = [value for value in open_pl if value is not None]
     latest_post_market = _load_json_file(reports_dir / "latest_post_market_learning.json")
     latest_operational = _load_json_file(reports_dir / "latest_operational_learning.json")
-    post_market_same_session = bool(latest_post_market) and str(latest_post_market.get("session_date") or "") == str(session_date or "")
-    operational_same_session = bool(latest_operational) and str(latest_post_market.get("session_date") or "") == str(session_date or "")
+    execution_session_date = str((latest_post_market.get("session_date") if latest_post_market else "") or "")
+    if not execution_session_date:
+        execution_session_date = str((latest_operational.get("session_date") if latest_operational else "") or "")
+    execution_summary = _learning_experiment_execution_summary(
+        store,
+        trade_date=execution_session_date or session_date,
+        signal_symbols={str(item.get("symbol") or "").upper() for item in session_rows},
+    )
+    session_symbols = {str(item.get("symbol") or "").upper() for item in session_rows}
+    post_market_snapshot = (
+        _learning_experiment_post_market_snapshot(latest_post_market, signal_symbols=session_symbols)
+        if latest_post_market
+        else {"positions": [], "open_pl": None}
+    )
+    executed_count = int(execution_summary.get("trades") or 0)
+    post_market_same_session = bool(latest_post_market) and str(latest_post_market.get("session_date") or "") == str(execution_session_date or "")
+    operational_lessons = latest_operational.get("learning_journal") or [] if latest_operational else []
+    relevant_operational_lessons = [
+        str(item)
+        for item in operational_lessons
+        if (
+            "learning_experiment" in json.dumps(item, ensure_ascii=False).lower()
+            or any(symbol in str(item).upper() for symbol in session_symbols)
+        )
+    ][:5]
+    operational_same_session = bool(latest_operational) and (
+        str(latest_operational.get("session_date") or "") == str(execution_session_date or "")
+        or bool(relevant_operational_lessons)
+    )
     proposal_candidates = _learning_experiment_proposal_candidates(session_rows)
     lessons = []
-    if latest_operational:
-        lessons = [
-            str(item)
-            for item in (latest_operational.get("learning_journal") or [])
-            if "learning_experiment" in json.dumps(item, ensure_ascii=False).lower()
-        ][:5]
-    if not lessons and executed and not proposal_candidates:
+    if relevant_operational_lessons:
+        lessons = relevant_operational_lessons
+    if not lessons and executed_count and not proposal_candidates:
         lessons = ["Opero pero no aprendio nada nuevo."]
     elif not lessons and shadow_payload:
         lessons = ["Shadow registrado sin fills reales todavia; quedan pendientes reconciliation y post-market del primer fill."]
@@ -1096,15 +1208,15 @@ def _build_learning_experiment_section(
         "signal_outcomes": {"status": "ok" if cohort_rows else "pending", "count": len(cohort_rows)},
         "learning_observations": {"status": "ok" if session_rows else "pending", "count": len(session_rows)},
         "broker_reconciliation": {
-            "status": "ok" if executed else "pending_first_fill",
-            "fills_linked": len(executed),
+            "status": "ok" if executed_count else "pending_first_fill",
+            "fills_linked": executed_count,
         },
         "post_market_review": {
-            "status": "ok" if executed and post_market_same_session else "pending_first_fill",
+            "status": "ok" if executed_count and post_market_same_session else "pending_first_fill",
             "available": post_market_same_session,
         },
         "memories_lessons": {
-            "status": "ok" if executed and operational_same_session else "pending_first_fill",
+            "status": "ok" if executed_count and operational_same_session else "pending_first_fill",
             "available": operational_same_session,
         },
         "findings_to_proposals": {
@@ -1117,11 +1229,14 @@ def _build_learning_experiment_section(
         "session_date": session_date,
         "signals": len(cohort_rows),
         "observations": len(session_rows),
-        "trades": len(executed),
+        "trades": executed_count,
         "pnl": {
             "realized": 0.0,
-            "open": _round(sum(clean_open_pl), 2) if clean_open_pl else None,
+            "open": post_market_snapshot.get("open_pl")
+            if post_market_snapshot.get("open_pl") is not None
+            else execution_summary.get("open_pl"),
         },
+        "execution_snapshot": post_market_snapshot.get("positions") or [],
         "matured_outcomes": {
             "3d": len(matured_3d),
         },
@@ -1133,7 +1248,7 @@ def _build_learning_experiment_section(
         "lessons": lessons[:5],
         "adjustments": {
             "proposal_candidates": proposal_candidates,
-            "status": "opero pero no aprendio nada nuevo." if executed and not proposal_candidates else None,
+            "status": "opero pero no aprendio nada nuevo." if executed_count and not proposal_candidates else None,
         },
         "pipeline": pipeline,
     }

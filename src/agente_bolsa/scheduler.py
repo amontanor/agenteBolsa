@@ -39,6 +39,7 @@ from .tools.learning_mode import active_learning_mode, learning_mode_source
 from .tools.news_sentiment import analyze_news_sentiment_for_candidates
 from .tools.operational_health import (
     activate_persistent_kill_switch,
+    build_operational_health_report,
     load_operational_response_context,
 )
 from .tools.opportunities import build_opportunity_snapshot
@@ -68,6 +69,7 @@ from .tools.trade_decision import _annotate_technical_context_with_learning
 from .tools.universe import resolve_study_universe
 
 LOGGER = logging.getLogger(__name__)
+OPERATIONAL_HEALTH_REFRESH_INTERVAL_MINUTES = 45
 
 
 def _scheduler_lock_path(settings: Settings) -> Any:
@@ -2743,6 +2745,44 @@ def broker_reconciliation_job(
         return None
 
 
+def operational_health_refresh_job(
+    settings: Settings,
+    store: Store,
+    *,
+    verbose: bool = True,
+) -> dict[str, Any] | None:
+    run_id = new_id("ops_health")
+    started_at = datetime.now(timezone.utc)
+    try:
+        report = build_operational_health_report(
+            settings,
+            store,
+            settings.data_dir / "reports",
+            run_id,
+        )
+        _set_job_status(
+            store,
+            "operational_health_refresh",
+            status="completed",
+            run_id=run_id,
+            started_at=started_at,
+            detail="operational health refrescado",
+            extra={"report_path": report.get("path")},
+        )
+        return report
+    except Exception as exc:  # noqa: BLE001 - nunca bloquear por fallo del refresh.
+        _set_job_status(
+            store,
+            "operational_health_refresh",
+            status="failed",
+            run_id=run_id,
+            started_at=started_at,
+            detail=str(exc),
+            extra={"error_type": type(exc).__name__},
+        )
+        return None
+
+
 def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose: bool) -> Any:
     if BackgroundScheduler is None or CronTrigger is None or IntervalTrigger is None:
         raise RuntimeError("APScheduler no esta instalado. Instala las dependencias del proyecto para usar schedule.")
@@ -2809,6 +2849,17 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         kwargs={"verbose": verbose},
         id="broker_reconciliation",
         name="Broker order reconciliation after session",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        operational_health_refresh_job,
+        trigger=IntervalTrigger(minutes=OPERATIONAL_HEALTH_REFRESH_INTERVAL_MINUTES),
+        args=[settings, store],
+        kwargs={"verbose": verbose},
+        id="operational_health_refresh",
+        name="Operational health refresh",
         max_instances=1,
         coalesce=True,
         replace_existing=True,
@@ -2899,6 +2950,7 @@ def run_scheduler_forever(settings: Settings, store: Store, *, use_crew: bool, v
         "Scheduler iniciado: vigilancia intradia, pre-earnings, ciclos de mercado y estudios con mercado cerrado.",
         {"jobs": jobs},
     )
+    operational_health_refresh_job(settings, store, verbose=verbose)
     portfolio_watch_job(settings, store, verbose=verbose, force_notify=True)
     bootstrap_status = MarketCalendar(settings.market_calendar, settings.local_timezone).status()
     try:
@@ -2945,6 +2997,7 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
             "daily_study",
             "post_market_review",
             "broker_reconciliation",
+            "operational_health_refresh",
             "overnight_learning_heartbeat",
             "pre_earnings",
             "continuous_improvement",
@@ -3006,6 +3059,14 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
                     "si NYSE esta abierto y faltan "
                     f"{settings.pre_earnings_before_close_minutes} minutos o menos para el cierre, "
                     "ejecuta una vez por sesion el estudio pre-earnings informativo"
+                ),
+            },
+            {
+                "id": "operational_health_refresh",
+                "cadence": f"cada {OPERATIONAL_HEALTH_REFRESH_INTERVAL_MINUTES} minutos",
+                "market_behavior": (
+                    "regenera latest_operational_health.json periodicamente y al arrancar; "
+                    "si falla, el kill switch por informe rancio sigue fail-open"
                 ),
             },
             {

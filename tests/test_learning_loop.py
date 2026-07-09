@@ -72,6 +72,133 @@ def test_learning_digest_exposes_learning_experiment_shadow_without_fills(tmp_pa
     assert section["pipeline"]["broker_reconciliation"]["status"] == "pending_first_fill"
 
 
+def test_learning_digest_counts_learning_experiment_fills_from_real_orders(tmp_path):
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+
+    store.save_signal_outcome(
+        signal_id="learn-aiz",
+        source_run_id="run-learn",
+        source=LEARNING_EXPERIMENT_SOURCE,
+        symbol="AIZ",
+        signal_date="2026-07-07",
+        decision="candidate",
+        features={
+            "score": 15,
+            "entry_price": 281.46,
+            "stop_loss": 269.3732,
+            "take_profit": 296.9527,
+            "cohort": LEARNING_EXPERIMENT_SOURCE,
+            "learning_mode": True,
+        },
+    )
+    store.save_broker_order(
+        broker_order_id="brk-aiz-1",
+        plan_id="plan-aiz-1",
+        cycle_id="20260708-155237",
+        symbol="AIZ",
+        side="buy",
+        status="filled",
+        payload={
+            "plan": {
+                "symbol": "AIZ",
+                "notional": 841.21,
+                "payload": {
+                    "entry_price": 281.46,
+                    "qty": 3,
+                    "cohort": LEARNING_EXPERIMENT_SOURCE,
+                    "recommendation": {
+                        "symbol": "AIZ",
+                        "action": "buy",
+                        "source": "deterministic_capacity_fill",
+                    },
+                },
+            },
+            "broker_order_reconciled": {
+                "filled_at": "2026-07-08T16:03:16.394592+00:00",
+                "filled_avg_price": 281.46,
+                "filled_qty": 3.0,
+            },
+        },
+    )
+    store.save_trade_memory(
+        {
+            "memory_id": "tm-aiz-1",
+            "trade_time": "2026-07-08T16:03:15.842257Z",
+            "trade_date": "2026-07-08",
+            "symbol": "AIZ",
+            "side": "buy",
+            "qty": 3.0,
+            "price": 281.46,
+            "notional": 841.21,
+            "stop_loss": 269.3732,
+            "take_profit": 296.9527,
+            "realized_pl": None,
+            "realized_plpc": None,
+            "open_pl": -10.29,
+            "open_plpc": -0.0122,
+            "verdict": "loser_open",
+            "features": {"same_symbol_buys_day": 1},
+            "thesis": {"source_order": {"broker_order_id": "brk-aiz-1"}},
+            "outcome": {"verdict": "loser_open", "pl": -10.29, "plpc": -0.0122, "realized": False},
+        }
+    )
+    (reports_dir / "latest_learning_mode_shadow.json").write_text(
+        json.dumps({"session_date": "2026-07-07", "would_buy": []}),
+        encoding="utf-8",
+    )
+    (reports_dir / "latest_post_market_learning.json").write_text(
+        json.dumps(
+            {
+                "session_date": "2026-07-08",
+                "trade_evaluations": [
+                    {
+                        "symbol": "AIZ",
+                        "realized_pl": None,
+                        "open_pl": -10.29,
+                        "verdict": "debil_de_momento",
+                        "issue": "Entrada con perdida abierta relevante antes del cierre.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (reports_dir / "latest_operational_learning.json").write_text(
+        json.dumps({"learning_journal": ["Ultimas decisiones revisadas: AIZ buy loser_open (1 orden(es))."]}),
+        encoding="utf-8",
+    )
+
+    report = build_learning_digest_report(
+        store,
+        reports_dir,
+        "digest",
+        since_date="2026-07-07",
+        end_date="2026-07-07",
+    )
+
+    section = report["digest"]["learning_experiment_yesterday"]
+    assert section["trades"] == 1
+    assert section["pnl"]["open"] == -10.29
+    assert section["execution_snapshot"] == [
+        {
+            "symbol": "AIZ",
+            "bracket_state": "open",
+            "open_pl": -10.29,
+            "realized_pl": None,
+            "verdict": "debil_de_momento",
+            "issue": "Entrada con perdida abierta relevante antes del cierre.",
+        }
+    ]
+    assert section["pipeline"]["broker_reconciliation"]["status"] == "ok"
+    assert section["pipeline"]["post_market_review"]["status"] == "ok"
+    assert section["pipeline"]["memories_lessons"]["status"] == "ok"
+    assert section["lessons"] == ["Ultimas decisiones revisadas: AIZ buy loser_open (1 orden(es))."]
+
+
 def test_findings_to_proposals_persists_learning_experiment_bridge_candidates(tmp_path):
     settings = _settings(tmp_path)
     store = Store(settings.database_path, settings.agent_logs_dir)

@@ -377,12 +377,20 @@ def _buy_order_rows(store: Store, *, since_date: str, end_date: str | None) -> l
         ).fetchall()
     result = []
     for row in rows:
-        order_date = _date_text(row["created_at"])
+        payload = json.loads(row["payload_json"] or "{}")
+        broker_reconciled = payload.get("broker_order_reconciled", {}) or {}
+        broker_order = payload.get("broker_order", {}) or {}
+        effective_timestamp = (
+            broker_reconciled.get("filled_at")
+            or broker_order.get("filled_at")
+            or broker_order.get("submitted_at")
+            or row["created_at"]
+        )
+        order_date = _date_text(effective_timestamp)
         if order_date < since_date:
             continue
         if end_date and order_date > end_date:
             continue
-        payload = json.loads(row["payload_json"] or "{}")
         plan = payload.get("plan", {}) or {}
         plan_payload = plan.get("payload", {}) or {}
         recommendation = plan_payload.get("recommendation", {}) or {}
@@ -395,11 +403,15 @@ def _buy_order_rows(store: Store, *, since_date: str, end_date: str | None) -> l
                 "side": str(row["side"]).lower(),
                 "status": row["status"],
                 "created_at": row["created_at"],
+                "effective_at": effective_timestamp,
                 "created_date": order_date,
                 "entry_price": _num(plan_payload.get("entry_price")),
                 "qty": _num(plan_payload.get("qty")),
                 "notional": _num(plan.get("notional") or plan_payload.get("notional")),
                 "recommendation": recommendation,
+                "recommendation_source": str(recommendation.get("source") or "").strip().lower() or None,
+                "recommendation_cohort": str(recommendation.get("cohort") or "").strip().lower() or None,
+                "plan_cohort": str(plan_payload.get("cohort") or "").strip().lower() or None,
             }
         )
     return result
@@ -452,6 +464,14 @@ def _trade_memory_outcomes(store: Store, *, since_date: str, end_date: str | Non
     for key, items in grouped.items():
         pl = sum(_num((item.get("outcome") or {}).get("pl")) or _num(item.get("open_pl")) or _num(item.get("realized_pl")) or 0.0 for item in items)
         notional = sum(_num(item.get("notional")) or 0.0 for item in items)
+        open_pl_values = [_num(item.get("open_pl")) for item in items]
+        open_plpc_values = [_num(item.get("open_plpc")) for item in items]
+        realized_pl_values = [_num(item.get("realized_pl")) for item in items]
+        realized_plpc_values = [_num(item.get("realized_plpc")) for item in items]
+        clean_open_pl = [value for value in open_pl_values if value is not None]
+        clean_open_plpc = [value for value in open_plpc_values if value is not None]
+        clean_realized_pl = [value for value in realized_pl_values if value is not None]
+        clean_realized_plpc = [value for value in realized_plpc_values if value is not None]
         plpc_values = [
             _num(item.get("open_plpc"))
             if _num(item.get("open_plpc")) is not None
@@ -476,6 +496,14 @@ def _trade_memory_outcomes(store: Store, *, since_date: str, end_date: str | Non
             "verdict": verdict,
             "bars_seen": 0,
             "matured_horizons": {"1d": False, "3d": False, "5d": True, "10d": False},
+            "execution": {
+                "open_pl": round(sum(clean_open_pl), 2) if clean_open_pl else None,
+                "open_plpc": _round(sum(clean_open_plpc) / len(clean_open_plpc), 4) if clean_open_plpc else None,
+                "realized_pl": round(sum(clean_realized_pl), 2) if clean_realized_pl else None,
+                "realized_plpc": _round(sum(clean_realized_plpc) / len(clean_realized_plpc), 4)
+                if clean_realized_plpc
+                else None,
+            },
         }
     return outcomes
 
@@ -653,10 +681,28 @@ def _rebuild_signal_cohorts(
         source_run_id = raw.get("source_run_id") or ""
         decision = str(raw.get("decision") or "candidate")
         orders_same_day = orders_by_date_symbol.get((signal_date, symbol), [])
-        executed_buy = decision == "approved_buy" and bool(orders_same_day)
+        source_name = str(raw.get("source") or "").strip().lower()
+        features = raw.get("features", {}) or {}
+        learning_cohort = str(features.get("cohort") or "").strip().lower() == "learning_experiment"
+        matching_learning_orders = [
+            order
+            for order in orders_same_day
+            if (
+                str(order.get("recommendation_source") or "").strip().lower() == "learning_experiment"
+                or str(order.get("recommendation_cohort") or "").strip().lower() == "learning_experiment"
+                or str(order.get("plan_cohort") or "").strip().lower() == "learning_experiment"
+            )
+        ]
+        executed_buy = bool(orders_same_day) and (
+            decision == "approved_buy"
+            or decision == "approved_buy_micro"
+            or decision == "approved_buy_soft_backtest"
+            or (source_name == "learning_experiment" and learning_cohort and bool(matching_learning_orders))
+        )
         duplicate_execution = False
         if executed_buy:
-            duplicate_execution = len(orders_same_day) > 1 or cycle_symbol_counts.get((orders_same_day[0].get("cycle_id") or "", symbol), 0) > 1
+            execution_orders = matching_learning_orders or orders_same_day
+            duplicate_execution = len(execution_orders) > 1 or cycle_symbol_counts.get((execution_orders[0].get("cycle_id") or "", symbol), 0) > 1
 
         outcome = _outcome_with_maturity(raw.get("outcome", {}) or {}, signal_date)
         if executed_buy and not outcome.get("matured"):
@@ -678,7 +724,7 @@ def _rebuild_signal_cohorts(
             "selected_for_llm": bool((raw.get("features", {}) or {}).get("selected_for_llm")),
             "considered_by_llm": decision != "candidate" or bool(recommendations_by_date_symbol.get((signal_date, symbol))),
             "executed_buy": executed_buy,
-            "orders_same_day": len(orders_same_day),
+            "orders_same_day": len(matching_learning_orders or orders_same_day),
             "recommendations_same_day": len(recommendations_by_date_symbol.get((signal_date, symbol), [])),
             "duplicate_execution": duplicate_execution,
             "explanation": _explanation(raw),

@@ -150,6 +150,16 @@ def test_scheduler_status_includes_broker_reconciliation(tmp_path):
     assert "overnight_learning_heartbeat" in status["job_runtime"]
 
 
+def test_scheduler_status_includes_operational_health_refresh(tmp_path):
+    settings = Settings(DATA_DIR=tmp_path)
+
+    status = scheduler_status(settings)
+
+    job_ids = {item["id"] for item in status["jobs"]}
+    assert "operational_health_refresh" in job_ids
+    assert "operational_health_refresh" in status["job_runtime"]
+
+
 def test_overnight_learning_heartbeat_records_llm_usage(tmp_path, monkeypatch):
     settings = Settings(
         DATA_DIR=tmp_path,

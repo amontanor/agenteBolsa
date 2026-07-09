@@ -356,9 +356,9 @@ def update_signal_decisions(
         symbol = recommendation.symbol.upper()
         decision = recommendation.action
         gate = dict(gate_by_symbol.get(symbol, {}))
+        backtest = gate.get("backtest_gate")
         if recommendation.action == "buy":
             entry_gate = gate.get("entry_quality_gate")
-            backtest = gate.get("backtest_gate")
             entry_score = ((entry_gate or {}).get("checks") or {}).get("entry_score_v2") or {}
             # Bug telemetria: un rechazo de entry-quality no debe etiquetarse como
             # aprobado solo porque la recomendacion arrastre micro_experiment desde el

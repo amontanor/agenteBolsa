@@ -808,6 +808,44 @@ def test_backfill_signal_candidates_from_reports_infers_selected_candidates(tmp_
     assert rows["MSFT"]["features"]["selected_for_llm"] is False
 
 
+def test_update_signal_decisions_handles_non_buy_without_backtest_scope_error(tmp_path):
+    from agente_bolsa.storage import Store
+
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    store.save_signal_outcome(
+        signal_id="scan-hold:AAPL",
+        source_run_id="scan-hold",
+        source="test",
+        symbol="AAPL",
+        signal_date="2026-07-08",
+        decision="candidate",
+        features={},
+        gate={},
+    )
+
+    updated = update_signal_decisions(
+        store,
+        source_run_id="scan-hold",
+        recommendations=[
+            TradeRecommendation(
+                symbol="AAPL",
+                action="hold",
+                confidence=0.7,
+                reason="mantener",
+            )
+        ],
+        entry_quality_gate=[],
+        backtest_gate=[],
+        settings=Settings(DATA_DIR=tmp_path),
+    )
+    row = store.signal_outcomes(limit=10, since_date="2026-07-01", include_learning_experiment=True)[0]
+
+    assert updated == 1
+    assert row["decision"] == "hold"
+    assert row["features"]["low_sample_exploration"] is False
+
+
 def test_learning_status_groups_indicator_tags(tmp_path):
     from agente_bolsa.storage import Store
 
