@@ -1,7 +1,8 @@
 # Relevo de dirección técnica — agenteBolsa
 
-> **Última actualización: 2026-07-08 ~20:15 CEST (v0.4.134; P-L10 low-sample y
-> hotfix P-L11 de restart_services entregados; stack corriendo con ambos).**
+> **Última actualización: 2026-07-09 ~14:45 CEST (v0.4.135; P-L12 entregado:
+> cadena de aprendizaje reparada y verificada con los 3 fills reales, crash
+> 'backtest' corregido, salud operativa auto-refrescada cada 45 min).**
 > Este documento es el traspaso completo para el LLM que asuma la dirección técnica.
 > Es un documento VIVO: quien dirija debe actualizarlo con cada hito relevante.
 
@@ -109,11 +110,13 @@ máx 15% exposición**. Cohorte etiquetado `source=learning_experiment` con muro
 ## 7. Estado actual (a fecha de la última actualización)
 
 - **Versión**: 0.4.132 (P-L9A d25b8984, P-L9B 3eb5b58d). 1020 tests verdes, ruff limpio.
-- **8-jul = primer día de operativa autónoma real.** Cadena verificada de punta a punta:
-  ciclo 15:21 UTC → LLM recomendó 4 compras (FDS/BA/AON/AMP) → entry-quality tumbó 2 →
-  backtest tumbó 2 (hit-rate 30%<45%; muestra 6<10 trades) → 0 órdenes, correctamente.
-  La autonomía funciona; los gates vetaron señales flojas de verdad. Contadores base:
-  order_plans=25→(expirados P-L9B, pending=0), broker_orders=33.
+- **8-jul = primer día de operativa autónoma real, CON FILLS.** Por la tarde el
+  sistema envió solo 3 órdenes BRACKET que quedaron `filled`: AIZ y CRWD (ciclo
+  20260708-155237) y ALL (ciclo 20260708-191748) — coincide con el cupo 3/día.
+  Verificar en el digest del 9-jul la etiqueta de cohorte y que arranca la cadena
+  de aprendizaje (outcomes → lecciones). Contadores al cierre: order_plans=28,
+  broker_orders=36. Antes, el ciclo 15:21 había mostrado a los gates vetando
+  señales flojas con motivos medibles (hit-rate 30%<45%, muestra 6<10).
 - **Incidente resuelto 8-jul**: stack paralelo con Python311 del sistema (web+schedule+
   streamlit) competía con el venv — causa raíz: `web_app._start_schedule()` usaba
   `sys.executable` y restart no mataba streamlit. Blindado en P-L9A (ruta absoluta del
@@ -122,6 +125,14 @@ máx 15% exposición**. Cohorte etiquetado `source=learning_experiment` con muro
 - **Low-sample IMPLEMENTADO (P-L10, v0.4.133, 1027 tests)**: excepción activa con
   cupo 1/día en learning_mode.json; embudo y digest muestran `low_sample_usage`.
   Pendiente: verificar primer uso real y que el scoreboard separe el sub-cohorte.
+- **P-L12 (v0.4.135, 1031 tests)**: (a) crash real `UnboundLocalError: backtest` en
+  `signal_learning.py` ruta hold/no-buy corregido (la familia de propuestas de la
+  firma acertaba el síntoma pero alucinaba el fichero `scheduler/market_cycle.py`);
+  (b) cadena de aprendizaje reparada: el cohorte viajaba en `plan.payload.cohort`
+  pero digest/contrafactual cruzaban por `recommendation.source` — ahora aceptan
+  ambos, y el digest muestra los fills reales (día 1: AIZ −10.29, CRWD +15.89,
+  ALL +0.39, neto +5.99, brackets abiertas); (c) job `operational_health_refresh`
+  cada 45 min en el scheduler, fail-open, visible en schedule-status.
 - **Aparcado**: propuesta `ci_prop_b3f950033a99` (sección lab_book en digest) —
   rechazada por gate new_code_requires_tests (diff solo src); necesita regeneración
   con tests. No bloquea nada.
@@ -182,6 +193,11 @@ solo lo lee — no se lanza a mano (el supervisor tiene catch-up si se perdió s
    pasó la verificación de P-L9A y reventó el restart en producción (hotfix P-L11).
 10. **Codex deja los lotes staged, no commiteados**: tras cada entrega, comprobar
    `git status --short` y commitear (lo hace Antonio con mensaje dado por el director).
+11. **Cuando la firma insiste en un error, el síntoma suele ser real aunque el
+   diagnóstico no**: 6+ propuestas citaban un fichero inexistente, pero el crash
+   existía en logs (P-L12B). Verificar en `data/logs/system.log` antes de descartar.
+12. **Tras cada entrega de Codex, reiniciar servicios**: el scheduler residente no
+   carga el código nuevo solo. `restart_services.ps1` (arreglado en P-L11).
 
 ## 10. Qué vigilar los próximos días (encargo al nuevo director)
 
