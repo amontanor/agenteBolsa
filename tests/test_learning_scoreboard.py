@@ -86,8 +86,16 @@ def test_learning_scoreboard_evaluates_pre_registered_criterion_with_synthetic_d
         "2026-08-25",
     ]
     for index, signal_date in enumerate(dates, start=1):
-        store.upsert_learning_observation(_observation(signal_date, f"EXEC{index}", executed=True, return_5d=returns[index - 1]))
-        store.upsert_learning_observation(_observation(signal_date, f"CTRL{index}", executed=False, return_5d=controls[index - 1]))
+        executed = _observation(signal_date, f"EXEC{index}", executed=True, return_5d=returns[index - 1])
+        executed["source_run_ids"] = [f"cycle-{index}"]
+        control = _observation(signal_date, f"CTRL{index}", executed=False, return_5d=controls[index - 1])
+        control["source_run_ids"] = [f"cycle-{index}"]
+        control["decision"] = "approved_buy"
+        control["gate"] = {
+            "execution": {"status": "plan_rejected", "reason": "max_orders_per_cycle_reached"}
+        }
+        store.upsert_learning_observation(executed)
+        store.upsert_learning_observation(control)
 
     monkeypatch.setattr(
         "agente_bolsa.tools.learning_scoreboard._build_spy_forward_returns",
@@ -181,3 +189,49 @@ def test_learning_scoreboard_groups_same_day_returns_for_drawdown(tmp_path, monk
     # Equal-weighted portfolio return is -10 bps after costs, rather than
     # sequentially compounding two simultaneous positions.
     assert report["weekly_rows"][0]["portfolio_max_drawdown"] == -0.001
+
+
+def test_learning_scoreboard_uses_only_same_cycle_eligible_capacity_controls(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    executed = _observation("2026-07-07", "EXEC", executed=True, return_5d=0.03)
+    executed["source_run_ids"] = ["cycle-a"]
+    executed["features"] = {"decision_lineage": {"lineage_status": "verified"}}
+    eligible = _observation("2026-07-07", "NEXT", executed=False, return_5d=0.01)
+    eligible["source_run_ids"] = ["cycle-a"]
+    eligible["decision"] = "approved_buy"
+    eligible["gate"] = {
+        "execution": {"status": "plan_rejected", "reason": "max_orders_per_cycle_reached"}
+    }
+    blocked = _observation("2026-07-07", "BLOCK", executed=False, return_5d=0.20)
+    blocked["source_run_ids"] = ["cycle-a"]
+    blocked["decision"] = "blocked_backtest"
+    other_cycle = _observation("2026-07-07", "OTHER", executed=False, return_5d=0.30)
+    other_cycle["source_run_ids"] = ["cycle-b"]
+    other_cycle["decision"] = "approved_buy"
+    other_cycle["gate"] = {
+        "execution": {"status": "plan_rejected", "reason": "max_orders_per_cycle_reached"}
+    }
+    for row in (executed, eligible, blocked, other_cycle):
+        store.upsert_learning_observation(row)
+    monkeypatch.setattr(
+        "agente_bolsa.tools.learning_scoreboard._build_spy_forward_returns",
+        lambda *_args, **_kwargs: {},
+    )
+
+    report = build_learning_scoreboard(
+        settings,
+        store,
+        tmp_path / "reports",
+        "score",
+        since_date="2026-07-07",
+        end_date="2026-07-20",
+    )
+
+    coverage = report["control_coverage"]
+    assert coverage["status"] == "available"
+    assert coverage["matched_executed"] == 1
+    assert coverage["matched_control_observations"] == 1
+    assert report["weekly_rows"][0]["control_n"] == 1
+    assert report["data_quality"]["blocked_candidates"] == {"blocked_backtest": 1}

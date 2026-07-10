@@ -4721,7 +4721,10 @@ def build_buy_order_plans(
                         },
                     }
                 )
-            break
+            # Seguir recorriendo para dejar trazados todos los candidatos que
+            # pasaron los gates pero quedaron fuera por cupo. Son el control
+            # contrafactual honesto del ciclo y nunca se convierten en planes.
+            continue
         if recommendation.action != "buy":
             continue
         if market_state_block_reason:
@@ -4989,6 +4992,7 @@ def build_buy_order_plans(
                 backtest_soft_override=bool(recommendation.backtest_soft_override),
                 soft_override_reasons=list(recommendation.soft_override_reasons or []),
                 cohort=recommendation.cohort,
+                decision_lineage=dict(recommendation.decision_lineage or {}),
             )
         )
         planned_buy_symbols.add(recommendation.symbol)
@@ -5224,6 +5228,7 @@ def build_order_plans(
                 recommendation=recommendation,
                 risk_decision=decision,
                 dry_run=dry_run,
+                decision_lineage=dict(recommendation.decision_lineage or {}),
             )
         )
 

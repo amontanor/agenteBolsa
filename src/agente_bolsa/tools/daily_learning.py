@@ -219,6 +219,11 @@ def _observation_payload(group: list[dict[str, Any]]) -> dict[str, Any]:
     else:
         explanation_parts.append("solo candidata/no seleccionada")
     explanation = "; ".join(explanation_parts)
+    observation_features = dict(best.get("features", {}) or {})
+    if executed:
+        observation_features["decision_lineage"] = dict(
+            (executed[0].get("features") or {}).get("decision_lineage") or {}
+        )
     return {
         "observation_id": f"{best['signal_date']}:{best['symbol']}:{_source_family(best)}",
         "signal_date": best["signal_date"],
@@ -263,7 +268,7 @@ def _observation_payload(group: list[dict[str, Any]]) -> dict[str, Any]:
             }
             for row in sorted(group, key=lambda item: (item.get("created_at", ""), item.get("signal_id", "")))
         ],
-        "features": best.get("features", {}) or {},
+        "features": observation_features,
         "gate": effective_decision.get("gate", {}) or {},
         "outcome": (executed[0] if executed else best).get("outcome", {}) or {},
         "execution": {

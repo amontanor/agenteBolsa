@@ -13,6 +13,7 @@ from agente_bolsa.config import Settings
 from agente_bolsa.models import PortfolioSnapshot, TradeRecommendation
 from agente_bolsa.storage import Store
 
+from .decision_lineage import legacy_unverified_lineage
 from .reporting import write_json_report
 from .signal_learning import build_learning_status, update_signal_outcomes
 
@@ -394,6 +395,11 @@ def _buy_order_rows(store: Store, *, since_date: str, end_date: str | None) -> l
         plan = payload.get("plan", {}) or {}
         plan_payload = plan.get("payload", {}) or {}
         recommendation = plan_payload.get("recommendation", {}) or {}
+        decision_lineage = (
+            plan_payload.get("decision_lineage")
+            or recommendation.get("decision_lineage")
+            or {}
+        )
         result.append(
             {
                 "broker_order_id": row["broker_order_id"],
@@ -412,6 +418,7 @@ def _buy_order_rows(store: Store, *, since_date: str, end_date: str | None) -> l
                 "recommendation_source": str(recommendation.get("source") or "").strip().lower() or None,
                 "recommendation_cohort": str(recommendation.get("cohort") or "").strip().lower() or None,
                 "plan_cohort": str(plan_payload.get("cohort") or "").strip().lower() or None,
+                "decision_lineage": decision_lineage,
             }
         )
     return result
@@ -697,6 +704,7 @@ def _rebuild_signal_cohorts(
             or (source_name == "learning_experiment" and learning_cohort and bool(matching_learning_orders))
         )
         duplicate_execution = False
+        execution_orders: list[dict[str, Any]] = []
         if executed_buy:
             execution_orders = matching_learning_orders or orders_same_day
             duplicate_execution = len(execution_orders) > 1 or cycle_symbol_counts.get((execution_orders[0].get("cycle_id") or "", symbol), 0) > 1
@@ -705,6 +713,21 @@ def _rebuild_signal_cohorts(
         execution_snapshot = (
             trade_memory_snapshots.get((signal_date, symbol), {}) if executed_buy else {}
         )
+        features = dict(raw.get("features", {}) or {})
+        if executed_buy:
+            verified_lineage = next(
+                (
+                    dict(order.get("decision_lineage") or {})
+                    for order in execution_orders
+                    if str((order.get("decision_lineage") or {}).get("lineage_status") or "")
+                    == "verified"
+                ),
+                None,
+            )
+            features["decision_lineage"] = verified_lineage or legacy_unverified_lineage(
+                cycle_id=execution_orders[0].get("cycle_id") if execution_orders else None,
+                signal_id=raw.get("signal_id"),
+            )
         row = {
             "signal_id": raw["signal_id"],
             "source_run_id": source_run_id,
@@ -712,7 +735,7 @@ def _rebuild_signal_cohorts(
             "signal_date": signal_date,
             "symbol": symbol,
             "decision": decision,
-            "features": raw.get("features", {}) or {},
+            "features": features,
             "gate": raw.get("gate", {}) or {},
             "outcome": outcome,
             "execution_snapshot": execution_snapshot,

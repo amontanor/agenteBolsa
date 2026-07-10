@@ -483,6 +483,8 @@ def test_decision_compare_keeps_trade_memory_out_of_forward_outcomes(tmp_path, m
     assert rows[0]["outcome"]["matured_horizons"]["5d"] is False
     assert rows[0]["execution_snapshot"]["open_pl"] == -25.0
     assert rows[0]["execution_snapshot"]["open_plpc"] == -0.025
+    assert rows[0]["features"]["decision_lineage"]["lineage_status"] == "legacy_unverified"
+    assert rows[0]["features"]["decision_lineage"]["strategy_name"] is None
 
 
 def test_session_retrospective_aggregates_daily_results(tmp_path, monkeypatch):

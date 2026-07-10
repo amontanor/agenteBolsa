@@ -394,6 +394,16 @@ def update_signal_decisions(
                 or str(((backtest or {}).get("checks") or {}).get("mode") or "") == "learning_low_sample_exception"
             ),
             "tags": list(getattr(recommendation, "tags", []) or []),
+            "decision_lineage": {
+                **dict(getattr(recommendation, "decision_lineage", {}) or {}),
+                "low_sample_exploration": bool(
+                    LOW_SAMPLE_EXPLORATION_TAG in list(getattr(recommendation, "tags", []) or [])
+                    or LOW_SAMPLE_EXPLORATION_TAG
+                    in list(getattr(recommendation, "soft_override_reasons", []) or [])
+                    or str(((backtest or {}).get("checks") or {}).get("mode") or "")
+                    == "learning_low_sample_exception"
+                ),
+            },
             "llm_response_status": "failed"
             if (
                 getattr(recommendation, "decision_origin", None) == "deterministic_fallback_llm_failed"

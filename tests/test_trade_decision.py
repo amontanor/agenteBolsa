@@ -1022,6 +1022,7 @@ def test_build_order_plans_uses_whole_share_qty_for_bracket_buys(tmp_path: Path)
         stop_loss=300.0,
         take_profit=382.5,
         target_exposure_pct=0.05,
+        decision_lineage={"lineage_id": "lineage_test", "lineage_status": "verified"},
     )
 
     plans = build_order_plans(Settings(DATA_DIR=tmp_path, USE_BRACKET_ORDERS=True), portfolio, [recommendation])
@@ -1029,7 +1030,50 @@ def test_build_order_plans_uses_whole_share_qty_for_bracket_buys(tmp_path: Path)
     assert len(plans) == 1
     assert plans[0].qty == 3.0
     assert plans[0].notional == 999.0
+    assert plans[0].decision_lineage["lineage_id"] == "lineage_test"
     assert plans[0].risk_decision.checks["execution_sizing"]["execution_sizing"] == "whole_share_bracket"
+
+
+def test_build_order_plans_records_all_capacity_controls(tmp_path: Path):
+    portfolio = PortfolioSnapshot(
+        account_id="paper",
+        status="ACTIVE",
+        currency="USD",
+        cash=100_000,
+        portfolio_value=100_000,
+        buying_power=100_000,
+        positions=[],
+        open_orders=[],
+    )
+    recommendations = [
+        TradeRecommendation(
+            symbol=f"CTRL{i}",
+            action="buy",
+            confidence=0.9,
+            reason="test",
+            entry_price=100.0,
+            stop_loss=95.0,
+            take_profit=110.0,
+            target_exposure_pct=0.01,
+        )
+        for i in range(3)
+    ]
+    rejected = []
+
+    plans = build_order_plans(
+        Settings(
+            DATA_DIR=tmp_path,
+            MAX_ORDERS_PER_CYCLE=1,
+            TRADE_AGGRESSIVENESS_PROFILE="conservative",
+        ),
+        portfolio,
+        recommendations,
+        rejected=rejected,
+    )
+
+    assert len(plans) == 1
+    assert [item["symbol"] for item in rejected] == ["CTRL1", "CTRL2"]
+    assert {item["reason"] for item in rejected} == {"max_orders_per_cycle_reached"}
 
 
 def test_build_order_plans_applies_micro_experiment_size_multiplier(tmp_path: Path):

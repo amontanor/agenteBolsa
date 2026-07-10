@@ -108,12 +108,61 @@ def _cohort_rows(
     *,
     since_date: str,
     end_date: str | None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, list[str]],
+    list[dict[str, Any]],
+]:
     observations = store.learning_observations(since_date=since_date, end_date=end_date, limit=200000)
     cohort = [row for row in observations if str(row.get("source_family") or "") == LEARNING_EXPERIMENT_SOURCE]
     executed = [row for row in cohort if bool(row.get("executed_buy"))]
-    control = [row for row in cohort if not bool(row.get("executed_buy"))]
-    return executed, control
+    all_control = [row for row in cohort if not bool(row.get("executed_buy"))]
+    matches: dict[str, list[str]] = {}
+    matched_by_id: dict[str, dict[str, Any]] = {}
+    allowed_capacity_reasons = {
+        "max_orders_per_cycle_reached",
+        "max_daily_buy_orders_reached",
+        "low_sample_daily_quota_exhausted",
+    }
+
+    def source_ids(row: dict[str, Any]) -> set[str]:
+        return {
+            str(item).removesuffix(":shadow")
+            for item in list(row.get("source_run_ids") or [])
+            if str(item).strip()
+        }
+
+    def eligible_capacity_control(row: dict[str, Any]) -> bool:
+        decision = str(row.get("decision") or "")
+        execution = ((row.get("gate") or {}).get("execution") or {})
+        return decision.startswith("approved_buy") and (
+            str(execution.get("reason") or "") in allowed_capacity_reasons
+            or str(execution.get("status") or "") == "approved_not_planned"
+        )
+
+    def control_sort_key(row: dict[str, Any]) -> tuple[float, float, str]:
+        features = row.get("features") or {}
+        lineage = features.get("decision_lineage") or {}
+        rank = _num(lineage.get("candidate_rank") or features.get("selection_rank") or features.get("score_rank"))
+        score = _num(row.get("best_score") or features.get("score"))
+        return (rank if rank is not None else 1e9, -(score or 0.0), str(row.get("observation_id") or ""))
+
+    for item in executed:
+        item_sources = source_ids(item)
+        candidates = [
+            row
+            for row in all_control
+            if str(row.get("signal_date") or "") == str(item.get("signal_date") or "")
+            and bool(item_sources.intersection(source_ids(row)))
+            and eligible_capacity_control(row)
+        ]
+        selected = sorted(candidates, key=control_sort_key)[:3]
+        observation_id = str(item.get("observation_id") or "")
+        matches[observation_id] = [str(row.get("observation_id") or "") for row in selected]
+        for row in selected:
+            matched_by_id[str(row.get("observation_id") or "")] = row
+    return executed, list(matched_by_id.values()), matches, all_control
 
 
 def _weekly_rows(
@@ -191,7 +240,12 @@ def _weekly_rows(
     return weekly
 
 
-def _data_quality(executed: list[dict[str, Any]], control: list[dict[str, Any]]) -> dict[str, Any]:
+def _data_quality(
+    executed: list[dict[str, Any]],
+    control: list[dict[str, Any]],
+    matches: dict[str, list[str]],
+    all_control: list[dict[str, Any]],
+) -> dict[str, Any]:
     maturity = {
         f"{horizon}d": {
             "executed": sum(_mature_return(row, horizon) is not None for row in executed),
@@ -208,6 +262,17 @@ def _data_quality(executed: list[dict[str, Any]], control: list[dict[str, Any]])
         == "verified"
         for row in executed
     )
+    matched_executed = sum(bool(items) for items in matches.values())
+    blocked_counts: dict[str, int] = defaultdict(int)
+    for row in all_control:
+        decision = str(row.get("decision") or "")
+        if decision.startswith("blocked_"):
+            blocked_counts[decision] += 1
+    regime_pool = sum(
+        bool((row.get("features") or {}).get("market_regime"))
+        for row in all_control
+        if str(row.get("decision") or "") == "candidate"
+    )
     return {
         "eligible_executed": len(executed),
         "eligible_control": len(control),
@@ -219,11 +284,18 @@ def _data_quality(executed: list[dict[str, Any]], control: list[dict[str, Any]])
             "pct": _round(verified_lineage / len(executed), 4) if executed else None,
         },
         "control_coverage": {
-            "method": "legacy_all_nonexecuted",
-            "status": "pending_matched_control_v2",
-            "matched_executed": 0,
+            "method": "same_cycle_eligible_next_best",
+            "status": "available" if matched_executed else "unavailable",
+            "matched_executed": matched_executed,
             "total_executed": len(executed),
-            "pct": 0.0 if executed else None,
+            "pct": _round(matched_executed / len(executed), 4) if executed else None,
+            "matched_control_observations": len(control),
+        },
+        "blocked_candidates": dict(sorted(blocked_counts.items())),
+        "secondary_controls": {
+            "spy": "available_via_alpha_net_vs_spy",
+            "regime_matched_candidate_pool": regime_pool,
+            "status": "diagnostic_only",
         },
     }
 
@@ -307,7 +379,11 @@ def build_learning_scoreboard(
 ) -> dict[str, Any]:
     store.ensure_schema()
     resolved_end_date = _resolved_end_date(end_date)
-    executed, control = _cohort_rows(store, since_date=since_date, end_date=resolved_end_date)
+    executed, control, matches, all_control = _cohort_rows(
+        store,
+        since_date=since_date,
+        end_date=resolved_end_date,
+    )
     weekly_rows = _weekly_rows(
         settings,
         executed,
@@ -316,7 +392,7 @@ def build_learning_scoreboard(
         end_date=resolved_end_date,
     )
     evaluation = _evaluation(weekly_rows, executed_total=len(executed))
-    data_quality = _data_quality(executed, control)
+    data_quality = _data_quality(executed, control, matches, all_control)
     report = {
         "schema_version": 2,
         "run_id": run_id,
@@ -333,6 +409,7 @@ def build_learning_scoreboard(
             "evaluation": evaluation,
         },
         "execution_quality": _execution_quality(executed),
+        "matched_controls": matches,
         "trend": {
             "weekly_expectancy_net_10bps": [
                 {"week": row["week"], "value": row["expectancy_net_10bps"]}

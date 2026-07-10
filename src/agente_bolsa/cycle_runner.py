@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from . import __version__
 from .config import Settings
 from .crew import build_crew
 from .eventing import AgentPhase, EventReporter
@@ -23,6 +24,7 @@ from .tools.adversarial_reviewer import review_recommendations_adversarial
 from .tools.backtest import build_symbol_backtest
 from .tools.broker import BrokerClientFactory
 from .tools.costs import TransactionCostModel
+from .tools.decision_lineage import build_decision_lineage
 from .tools.deterministic_reviewer import recommendation_input_fingerprint, review_recommendations
 from .tools.execution import submit_paper_order_plan
 from .tools.learning_mode import (
@@ -543,6 +545,29 @@ def _annotate_recommendations_with_strategy(
         tags = [*list(getattr(recommendation, "tags", []) or []), f"strategy:{strategy}"]
         tagged.append(replace(recommendation, strategy_name=strategy, tags=tags))
     return tagged
+
+
+def _annotate_recommendations_with_lineage(
+    recommendations: list[Any],
+    technical_context: dict[str, Any],
+    *,
+    cycle_id: str,
+    default_cohort: str | None,
+) -> list[Any]:
+    policy_version = f"agente_bolsa:{__version__}:trade_decision.v2"
+    return [
+        replace(
+            recommendation,
+            decision_lineage=build_decision_lineage(
+                recommendation,
+                technical_context,
+                cycle_id=cycle_id,
+                policy_version=policy_version,
+                default_cohort=default_cohort,
+            ),
+        )
+        for recommendation in recommendations
+    ]
 
 
 def _separate_strategy_paused_plans(
@@ -1267,6 +1292,12 @@ def _auto_paper_trade(
         reviewed_recommendations,
         decision_context,
     )
+    reviewed_recommendations = _annotate_recommendations_with_lineage(
+        reviewed_recommendations,
+        decision_context,
+        cycle_id=run_id,
+        default_cohort=LEARNING_EXPERIMENT_SOURCE if learning_mode else None,
+    )
     if deterministic_review:
         reporter.emit(
             "risk_manager",
@@ -1369,6 +1400,12 @@ def _auto_paper_trade(
         reporter,
         run_id,
         quality_recommendations,
+    )
+    gated_recommendations = _annotate_recommendations_with_lineage(
+        gated_recommendations,
+        decision_context,
+        cycle_id=run_id,
+        default_cohort=LEARNING_EXPERIMENT_SOURCE if learning_mode else None,
     )
     learned_decisions = update_signal_decisions(
         store,
@@ -1597,6 +1634,8 @@ def _auto_paper_trade(
                     "risk_checks": risk_decision.get("checks", {}),
                     "tags": list((recommendation or {}).get("tags") or []),
                     "low_sample_exploration": LOW_SAMPLE_EXPLORATION_TAG in list((recommendation or {}).get("tags") or []),
+                    "decision_lineage": plan.get("payload", {}).get("decision_lineage")
+                    or (recommendation or {}).get("decision_lineage", {}),
                 }
             )
         except Exception as exc:  # noqa: BLE001 - one rejected order should not hide the rest.

@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.140**
+- Version actual: **0.4.141**
 - Ultima actualizacion: 2026-07-10
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -38,9 +38,19 @@ amplia exposicion.
 
 | ID | Mejora | Estado |
 |---|---|---|
-| P-L18 | Linaje `decision_lineage` end-to-end y contrafactual comparable | PENDIENTE |
+| P-L18 | Linaje `decision_lineage` end-to-end y contrafactual comparable | HECHO (v0.4.141) |
 | P-L19 | Contrato de evidencia, procedencia/TTL de diffs y autonomia por impacto | PENDIENTE |
 | P-L20 | Automatizacion postcierre, health ampliado y agenda semanal | PENDIENTE |
+
+### P-L18 - Linaje verificable y control comparable. **HECHO (v0.4.141).**
+Cada recomendacion nueva recibe un `decision_lineage` estable con signal/cycle,
+version de politica, estrategia, origen LLM/determinista/capacity-fill, cohorte,
+low-sample y ranking. El mismo objeto viaja en plan y payload de broker sin tocar
+los modulos protegidos. Las ordenes anteriores permanecen `legacy_unverified` y
+no se les inventa estrategia. El scoreboard usa como control primario solo
+candidatos del mismo ciclo aprobados por gates y excluidos por cupo; bloqueados,
+SPY y pool por regimen se informan aparte. Los controles ausentes se declaran
+`unavailable`, sin sustitucion oportunista.
 
 ### P-L14 - UI panel: fila de `Valor de cartera` con P/L de hoy. **HECHO (v0.4.137).**
 Se sustituye en `web_app.py` la tarjeta `P/L ultimos 7d` por `P/L hoy (desde
