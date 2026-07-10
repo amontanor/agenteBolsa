@@ -1,8 +1,9 @@
 # Relevo de dirección técnica — agenteBolsa
 
-> **Última actualización: 2026-07-09 ~18:45 CEST. Versión 0.4.136 cargada (P-L13:
-> UI del panel — "P/L hoy" en % sobre invertido, fuera la tarjeta P/L realizado).
-> Día 2 del experimento en curso; posiciones abiertas en verde (~+0,9% intradía).**
+> **Última actualización: 2026-07-10 mañana. Versión 0.4.137 (P-L14: fila del
+> gráfico muestra "P/L hoy desde cierre de ayer", misma fuente que el hero).
+> Día 3 del experimento. Hoy en agenda: re-lectura pullback + primer vistazo
+> semanal al scoreboard (`learning-scoreboard`).**
 > Este documento es el traspaso completo para el LLM que asuma la dirección técnica.
 > Es un documento VIVO: quien dirija debe actualizarlo con cada hito relevante.
 
