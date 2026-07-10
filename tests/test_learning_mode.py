@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from agente_bolsa.config import Settings
 from agente_bolsa.cycle_runner import (
@@ -8,6 +9,8 @@ from agente_bolsa.cycle_runner import (
     _learning_mode_backtest_near_miss,
     _low_sample_runtime_key,
     _market_session_date,
+    _separate_strategy_paused_plans,
+    _write_learning_mode_shadow_report,
 )
 from agente_bolsa.models import PortfolioSnapshot, RiskDecision, TradeRecommendation
 from agente_bolsa.storage import Store
@@ -67,7 +70,76 @@ def test_learning_mode_config_defaults_are_created(tmp_path):
     assert config["per_trade_notional_usd"] == 1000
     assert config["max_portfolio_exposure_pct"] == 15
     assert config["allowed_strategies"] == ["builtin_breakout", "builtin_pullback"]
+    assert config["shadow_strategies"] == []
     assert config["shadow_first"] is True
+
+
+def _plan(symbol: str, strategy_name: str):
+    return SimpleNamespace(
+        symbol=symbol,
+        side="buy",
+        notional=1000.0,
+        entry_price=100.0,
+        stop_loss=95.0,
+        take_profit=110.0,
+        backtest_soft_override=False,
+        micro_experiment=False,
+        recommendation=SimpleNamespace(
+            reason="test",
+            source="deterministic_fallback",
+            tags=[f"strategy:{strategy_name}"],
+        ),
+    )
+
+
+def test_strategy_pause_keeps_gated_plan_out_of_execution_and_records_shadow(tmp_path):
+    settings = _settings(tmp_path)
+    pullback = _plan("PULL", "builtin_pullback")
+    breakout = _plan("BRK", "builtin_breakout")
+
+    executable, paused = _separate_strategy_paused_plans(
+        {"shadow_strategies": ["builtin_pullback"]},
+        [pullback, breakout],
+    )
+
+    assert executable == [breakout]
+    assert paused == [(pullback, "builtin_pullback")]
+    path = _write_learning_mode_shadow_report(
+        settings,
+        run_id="run-pause",
+        recommendations=[],
+        plans=[plan for plan, _ in paused],
+        rejected=[],
+        paused_strategies=["builtin_pullback"],
+    )
+    payload = json.loads(open(path, encoding="utf-8").read())
+    assert payload["would_buy"] == [
+        {
+            "symbol": "PULL",
+            "notional": 1000.0,
+            "entry_price": 100.0,
+            "stop_loss": 95.0,
+            "take_profit": 110.0,
+            "reason": "test",
+            "source": "deterministic_fallback",
+            "strategy_name": "builtin_pullback",
+            "shadow_reason": "strategy_paused",
+            "backtest_soft_override": False,
+            "micro_experiment": False,
+        }
+    ]
+
+
+def test_strategy_pause_empty_or_unknown_list_preserves_current_behavior():
+    plan = _plan("BRK", "builtin_breakout")
+
+    executable, paused = _separate_strategy_paused_plans({"shadow_strategies": []}, [plan])
+    assert executable == [plan]
+    assert paused == []
+
+    executable, paused = _separate_strategy_paused_plans({"shadow_strategies": ["unknown_strategy"]}, [plan])
+    assert executable == [plan]
+    assert paused == []
 
 
 def test_signal_outcomes_exclude_learning_experiment_by_default(tmp_path):

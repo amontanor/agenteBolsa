@@ -13,7 +13,7 @@ from agente_bolsa.models import new_id
 from agente_bolsa.storage import Store
 
 from .counterfactual_analysis import _compare_policy_rows, _rebuild_signal_cohorts, _session_dates
-from .learning_mode import LEARNING_EXPERIMENT_SOURCE
+from .learning_mode import LEARNING_EXPERIMENT_SOURCE, load_learning_mode_config
 from .llm_degraded_watchdog import evaluate as evaluate_llm_watchdog
 from .pre_earnings import load_pre_earnings_learning_context
 from .reporting import write_json_report
@@ -1204,6 +1204,27 @@ def _build_learning_experiment_section(
         lessons = ["Shadow registrado sin fills reales todavia; quedan pendientes reconciliation y post-market del primer fill."]
 
     shadow_buys = list(shadow_payload.get("would_buy") or []) if shadow_payload else []
+    paused_strategies = list(
+        load_learning_mode_config(reports_dir.parent / "config" / "learning_mode.json", create=False).get("shadow_strategies")
+        or []
+    )
+    shadow_tally: dict[str, dict[str, Any]] = {
+        str(strategy): {"strategy_name": str(strategy), "would_buy": 0, "paused": True}
+        for strategy in paused_strategies
+        if str(strategy).strip()
+    }
+    for item in shadow_buys:
+        strategy_name = str(item.get("strategy_name") or "sin_estrategia").strip() or "sin_estrategia"
+        row = shadow_tally.setdefault(
+            strategy_name,
+            {
+                "strategy_name": strategy_name,
+                "would_buy": 0,
+                "paused": False,
+            },
+        )
+        row["would_buy"] = int(row.get("would_buy") or 0) + 1
+        row["paused"] = bool(row.get("paused")) or str(item.get("shadow_reason") or "") == "strategy_paused"
     pipeline = {
         "signal_outcomes": {"status": "ok" if cohort_rows else "pending", "count": len(cohort_rows)},
         "learning_observations": {"status": "ok" if session_rows else "pending", "count": len(session_rows)},
@@ -1243,6 +1264,7 @@ def _build_learning_experiment_section(
         "shadow": {
             "available": bool(shadow_payload),
             "would_buy": shadow_buys,
+            "would_buy_by_strategy": sorted(shadow_tally.values(), key=lambda item: str(item["strategy_name"])),
             "kill_switch_active": bool((shadow_payload.get("operational_kill_switch") or {}).get("kill_switch_active")),
         },
         "lessons": lessons[:5],

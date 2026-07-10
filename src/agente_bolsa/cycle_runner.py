@@ -29,6 +29,7 @@ from .tools.learning_mode import (
     LEARNING_EXPERIMENT_SOURCE,
     LOW_SAMPLE_EXPLORATION_TAG,
     active_learning_mode,
+    is_strategy_shadow_paused,
 )
 from .tools.market_snapshot import build_market_snapshot, compact_snapshot_for_prompt
 from .tools.market_state import build_market_state, compact_market_state_for_prompt
@@ -45,8 +46,10 @@ from .tools.trade_decision import (
     build_order_plans,
     deterministic_trade_fallback_recommendations,
     filter_entry_quality,
+    load_daily_learning_context,
     load_latest_sentiment,
     load_latest_technical_candidates,
+    load_operational_response_context,
     record_setup_edge_cycle_shadow,
     request_trade_recommendations,
 )
@@ -500,6 +503,75 @@ def _learning_mode_backtest_low_sample(
     }
 
 
+def _strategy_name_from_recommendation(recommendation: Any) -> str | None:
+    explicit = str(getattr(recommendation, "strategy_name", "") or "").strip()
+    if explicit:
+        return explicit
+    for tag in list(getattr(recommendation, "tags", []) or []):
+        text = str(tag or "")
+        if text.startswith("strategy:"):
+            value = text.removeprefix("strategy:").strip()
+            return value or None
+    return None
+
+
+def _annotate_recommendations_with_strategy(
+    recommendations: list[Any],
+    technical_context: dict[str, Any],
+) -> list[Any]:
+    """Conserva la estrategia seleccionada hasta el plan y la orden.
+
+    El LLM decide por simbolo; el tag inmutable evita que la atribucion de una
+    estrategia pausada dependa de reconstruir el contexto despues del ciclo.
+    """
+    by_symbol: dict[str, str] = {}
+    for bucket in ("selected_candidates", "top_longs", "all_candidates"):
+        for candidate in list((technical_context or {}).get(bucket) or []):
+            if not isinstance(candidate, dict):
+                continue
+            symbol = str(candidate.get("symbol") or "").upper().strip()
+            strategy = str(candidate.get("strategy_name") or "").strip()
+            if symbol and strategy and symbol not in by_symbol:
+                by_symbol[symbol] = strategy
+
+    tagged: list[Any] = []
+    for recommendation in recommendations:
+        strategy = by_symbol.get(str(getattr(recommendation, "symbol", "") or "").upper().strip())
+        if not strategy or _strategy_name_from_recommendation(recommendation):
+            tagged.append(recommendation)
+            continue
+        tags = [*list(getattr(recommendation, "tags", []) or []), f"strategy:{strategy}"]
+        tagged.append(replace(recommendation, strategy_name=strategy, tags=tags))
+    return tagged
+
+
+def _separate_strategy_paused_plans(
+    learning_mode: dict[str, Any] | None,
+    plans: list[Any],
+) -> tuple[list[Any], list[tuple[Any, str]]]:
+    """Separa planes pausados antes de persistirlos o enviarlos al broker."""
+    executable: list[Any] = []
+    shadow: list[tuple[Any, str]] = []
+    for plan in plans:
+        strategy = _strategy_name_from_recommendation(getattr(plan, "recommendation", None))
+        if is_strategy_shadow_paused(learning_mode, strategy):
+            shadow.append((plan, str(strategy)))
+        else:
+            executable.append(plan)
+    return executable, shadow
+
+
+def _write_json_atomic(path: Any, payload: dict[str, Any]) -> None:
+    target = path
+    temporary = target.with_name(f".{target.name}.{new_id('tmp')}")
+    try:
+        temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=True, default=str), encoding="utf-8")
+        temporary.replace(target)
+    finally:
+        if temporary.exists():
+            temporary.unlink(missing_ok=True)
+
+
 def _write_learning_mode_shadow_report(
     settings: Settings,
     *,
@@ -507,6 +579,7 @@ def _write_learning_mode_shadow_report(
     recommendations: list[Any],
     plans: list[Any],
     rejected: list[dict[str, Any]],
+    paused_strategies: list[str] | None = None,
     operational_kill_switch: dict[str, Any] | None = None,
 ) -> str:
     local_day = datetime.now(ZoneInfo(settings.local_timezone)).date().isoformat()
@@ -518,35 +591,42 @@ def _write_learning_mode_shadow_report(
         for item in rejected
         if str(item.get("symbol") or "").strip()
     }
+    paused = {str(item).strip().lower() for item in paused_strategies or [] if str(item).strip()}
+
+    def _would_buy(plan: Any) -> dict[str, Any]:
+        strategy_name = _strategy_name_from_recommendation(plan.recommendation) or (
+            ((gate_by_symbol.get(plan.symbol) or {}).get("checks") or {}).get("strategy_name")
+        )
+        strategy_paused = str(strategy_name or "").strip().lower() in paused
+        return {
+            "symbol": plan.symbol,
+            "notional": plan.notional,
+            "entry_price": plan.entry_price,
+            "stop_loss": plan.stop_loss,
+            "take_profit": plan.take_profit,
+            "reason": plan.recommendation.reason,
+            "source": plan.recommendation.source,
+            "strategy_name": strategy_name,
+            "shadow_reason": "strategy_paused" if strategy_paused else "shadow_first",
+            "backtest_soft_override": bool(plan.backtest_soft_override),
+            "micro_experiment": bool(plan.micro_experiment),
+        }
+
     payload = {
         "run_id": run_id,
         "session_date": local_day,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "mode": "shadow_first",
+        "mode": "strategy_pause" if paused else "shadow_first",
         "cohort": LEARNING_EXPERIMENT_SOURCE,
+        "paused_strategies": sorted(paused),
         "operational_kill_switch": operational_kill_switch or {},
-        "would_buy": [
-            {
-                "symbol": plan.symbol,
-                "notional": plan.notional,
-                "entry_price": plan.entry_price,
-                "stop_loss": plan.stop_loss,
-                "take_profit": plan.take_profit,
-                "reason": plan.recommendation.reason,
-                "source": plan.recommendation.source,
-                "strategy_name": ((gate_by_symbol.get(plan.symbol) or {}).get("checks") or {}).get("strategy_name"),
-                "backtest_soft_override": bool(plan.backtest_soft_override),
-                "micro_experiment": bool(plan.micro_experiment),
-            }
-            for plan in plans
-            if str(plan.side).lower() == "buy"
-        ],
+        "would_buy": [_would_buy(plan) for plan in plans if str(plan.side).lower() == "buy"],
         "rejected": rejected,
         "recommendations": [asdict(item) for item in recommendations],
     }
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=True, default=str), encoding="utf-8")
+    _write_json_atomic(path, payload)
     latest_path = reports_dir / "latest_learning_mode_shadow.json"
-    latest_path.write_text(json.dumps(payload, indent=2, ensure_ascii=True, default=str), encoding="utf-8")
+    _write_json_atomic(latest_path, payload)
     return str(path)
 
 
@@ -795,12 +875,19 @@ def _apply_entry_quality_gate(
     recommendations: list[Any],
     technical_context: dict[str, Any] | None,
     sentiment_context: dict[str, Any] | None,
+    *,
+    learning_mode_config: dict[str, Any] | None = None,
+    daily_learning_digest: dict[str, Any] | None = None,
+    operational_response_context: dict[str, Any] | None = None,
 ) -> tuple[list[Any], list[dict[str, Any]]]:
     kept, decisions = filter_entry_quality(
         settings,
         recommendations,
         technical_context,
         sentiment_context,
+        learning_mode_config=learning_mode_config,
+        daily_learning_digest=daily_learning_digest,
+        operational_response_context=operational_response_context,
     )
     if not decisions or not settings.entry_quality_gate_enabled:
         return kept, decisions
@@ -997,6 +1084,8 @@ def _auto_paper_trade(
         )
         return {"submitted": [], "failed": [], "blocked": "paper_safety"}
     learning_mode = active_learning_mode(settings)
+    daily_learning_digest = load_daily_learning_context(settings.data_dir)
+    operational_response_context = load_operational_response_context(settings.data_dir)
     learning_shadow_only = bool(learning_mode and learning_mode.get("shadow_first"))
     operational_kill_switch = load_operational_block_context(settings.data_dir)
     if (
@@ -1072,6 +1161,9 @@ def _auto_paper_trade(
                 limit=locals().get("effective_recommendation_limit"),
                 market_state=market_state,
                 llm_failed=True,
+                learning_mode_config=learning_mode,
+                daily_learning_digest=daily_learning_digest,
+                operational_response_context=operational_response_context,
             )
             reporter.emit(
                 "execution_agent",
@@ -1141,6 +1233,9 @@ def _auto_paper_trade(
             limit=locals().get("effective_recommendation_limit"),
             market_state=market_state,
             llm_failed=bool(decision.get("fallback_error")),
+            learning_mode_config=learning_mode,
+            daily_learning_digest=daily_learning_digest,
+            operational_response_context=operational_response_context,
         )
         if recommendation_augmentation.get("added"):
             reporter.emit(
@@ -1168,6 +1263,10 @@ def _auto_paper_trade(
             )
             for item in reviewed_recommendations
         ]
+    reviewed_recommendations = _annotate_recommendations_with_strategy(
+        reviewed_recommendations,
+        decision_context,
+    )
     if deterministic_review:
         reporter.emit(
             "risk_manager",
@@ -1260,6 +1359,9 @@ def _auto_paper_trade(
         reviewed_recommendations,
         decision_context,
         sentiment_context,
+        learning_mode_config=learning_mode,
+        daily_learning_digest=daily_learning_digest,
+        operational_response_context=operational_response_context,
     )
     gated_recommendations, backtest_gate = _apply_backtest_gate(
         settings,
@@ -1299,22 +1401,56 @@ def _auto_paper_trade(
     approved_buys = sorted({item.symbol for item in gated_recommendations if str(item.action).lower() == "buy"})
     plans = _apply_daily_buy_limit(settings, store, reporter, run_id, plans, rejected=rejected_order_plans)
     plans = _apply_low_sample_daily_quota(settings, store, reporter, run_id, plans, rejected=rejected_order_plans)
-    if learning_mode and bool(learning_mode.get("shadow_first")):
+    plans, paused_plans = _separate_strategy_paused_plans(learning_mode, plans)
+    if paused_plans:
+        for plan, strategy_name in paused_plans:
+            rejected_order_plans.append(
+                {
+                    "symbol": plan.symbol,
+                    "action": str(getattr(plan, "side", "")).lower(),
+                    "stage": "learning_mode_strategy_pause",
+                    "reason": "strategy_paused_shadow_active",
+                    "checks": {
+                        "strategy_name": strategy_name,
+                        "shadow_active": True,
+                        "execution_blocked": True,
+                    },
+                }
+            )
+        reporter.emit(
+            "execution_agent",
+            "learning_mode_strategy_paused_shadow_logged",
+            run_id,
+            (
+                "Estrategia(s) pausada(s): no se enviaran ordenes y se conservara "
+                "el would_buy en sombra. "
+                f"Planes: {', '.join(f'{plan.symbol}:{strategy}' for plan, strategy in paused_plans)}."
+            ),
+            {
+                "paused_strategies": sorted({strategy for _, strategy in paused_plans}),
+                "symbols": [plan.symbol for plan, _ in paused_plans],
+            },
+        )
+    if learning_mode and (bool(learning_mode.get("shadow_first")) or paused_plans):
         low_sample_usage = _low_sample_usage_payload(store, settings)
+        shadow_plans = [*plans, *(plan for plan, _ in paused_plans)] if bool(learning_mode.get("shadow_first")) else [
+            plan for plan, _ in paused_plans
+        ]
         shadow_path = _write_learning_mode_shadow_report(
             settings,
             run_id=run_id,
             recommendations=reviewed_recommendations,
-            plans=plans,
+            plans=shadow_plans,
             rejected=rejected_order_plans,
+            paused_strategies=list(learning_mode.get("shadow_strategies") or []),
             operational_kill_switch=operational_kill_switch,
         )
         reporter.emit(
             "execution_agent",
             "learning_mode_shadow_logged",
             run_id,
-            "Learning mode en shadow_first: se registro lo que habria comprado sin enviar ordenes.",
-            {"path": shadow_path, "buys": [plan.symbol for plan in plans if str(plan.side).lower() == "buy"]},
+            "Learning mode: se registro lo que habria comprado sin enviar las ordenes pausadas.",
+            {"path": shadow_path, "buys": [plan.symbol for plan in shadow_plans if str(plan.side).lower() == "buy"]},
         )
         if settings.operational_kill_switch_enabled and operational_kill_switch.get("block_buy_execution"):
             reporter.emit(
@@ -1324,36 +1460,37 @@ def _auto_paper_trade(
                 "Operational kill switch activo: learning_mode shadow sigue registrando, pero no enviaria ordenes reales.",
                 operational_kill_switch,
             )
-        execution_updates = update_signal_execution_status(
-            store,
-            source_run_id=decision_context.get("run_id"),
-            approved_symbols=approved_buys,
-            rejected_order_plans=rejected_order_plans,
-            planned_symbols=[],
-            submitted=[],
-            failed=[],
-            effective_max_orders_per_cycle=effective_plan_limit,
-            effective_max_daily_buy_orders=effective_daily_limit,
-        )
-        return {
-            "submitted": [],
-            "failed": [],
-            "shadow_only": True,
-            "shadow_report_path": shadow_path,
-            "operational_kill_switch": operational_kill_switch,
-            "recommendations": [asdict(item) for item in reviewed_recommendations],
-            "deterministic_review": deterministic_review,
-            "adversarial_review": adversarial_review,
-            "entry_quality_gate": entry_quality_gate,
-            "backtest_gate": backtest_gate,
-            "approved_buys": approved_buys,
-            "effective_max_orders_per_cycle": effective_plan_limit,
-            "effective_max_daily_buy_orders": effective_daily_limit,
-            "rejected_order_plans": rejected_order_plans,
-            "execution_updates": execution_updates,
-            "low_sample_usage": low_sample_usage,
-            "recommendation_augmentation": recommendation_augmentation,
-        }
+        if bool(learning_mode.get("shadow_first")):
+            execution_updates = update_signal_execution_status(
+                store,
+                source_run_id=decision_context.get("run_id"),
+                approved_symbols=approved_buys,
+                rejected_order_plans=rejected_order_plans,
+                planned_symbols=[],
+                submitted=[],
+                failed=[],
+                effective_max_orders_per_cycle=effective_plan_limit,
+                effective_max_daily_buy_orders=effective_daily_limit,
+            )
+            return {
+                "submitted": [],
+                "failed": [],
+                "shadow_only": True,
+                "shadow_report_path": shadow_path,
+                "operational_kill_switch": operational_kill_switch,
+                "recommendations": [asdict(item) for item in reviewed_recommendations],
+                "deterministic_review": deterministic_review,
+                "adversarial_review": adversarial_review,
+                "entry_quality_gate": entry_quality_gate,
+                "backtest_gate": backtest_gate,
+                "approved_buys": approved_buys,
+                "effective_max_orders_per_cycle": effective_plan_limit,
+                "effective_max_daily_buy_orders": effective_daily_limit,
+                "rejected_order_plans": rejected_order_plans,
+                "execution_updates": execution_updates,
+                "low_sample_usage": low_sample_usage,
+                "recommendation_augmentation": recommendation_augmentation,
+            }
     planned_symbols = [plan.symbol for plan in plans if str(plan.side).lower() == "buy"]
     for plan in plans:
         plan_id = new_id("plan")

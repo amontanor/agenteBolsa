@@ -11,6 +11,7 @@ from statistics import median
 from typing import Any
 
 from agente_bolsa.storage import Store
+from agente_bolsa.tools.daily_learning import load_daily_learning_context
 from agente_bolsa.tools.learning_mode import load_learning_mode_config
 from agente_bolsa.tools.operational_health import load_operational_block_context
 
@@ -68,6 +69,7 @@ def build_lab_digest(
     recent_experiments = [item for item in experiments if _is_recent(item.get("updated_at"), cutoff)]
     safety_payload = _enrich_safety_context(store, data_dir, safety=safety, now=now)
     low_sample_usage = _learning_mode_low_sample_snapshot(store, data_dir, now=now)
+    learning_experiment = (load_daily_learning_context(data_dir).get("learning_experiment_yesterday") or {})
 
     rejection_counts = {
         "self_safety": 0,
@@ -102,6 +104,7 @@ def build_lab_digest(
         "generated_at": now.isoformat(),
         "safety": safety_payload,
         "low_sample_usage": low_sample_usage,
+        "learning_experiment_yesterday": learning_experiment,
         "window_start": cutoff.isoformat(),
         "proposals": {
             "created": len(recent_proposals_created),
@@ -559,10 +562,12 @@ def _safety_lines(safety: dict[str, Any] | None) -> list[str]:
     if learning_mode is not None:
         authorized_by = str(learning_mode.get("authorized_by") or "").strip()
         authorized_suffix = f", authorized_by={authorized_by}" if authorized_by else ""
+        paused = [str(item).strip() for item in learning_mode.get("shadow_strategies", []) if str(item).strip()]
+        paused_suffix = f", {', '.join(f'{item}=SOMBRA' for item in paused)}" if paused else ""
         learning_suffix = (
             f" | learning_mode={'ON' if learning_mode.get('enabled') else 'OFF'}"
             f", shadow_first={bool(learning_mode.get('shadow_first'))}"
-            f"{authorized_suffix}"
+            f"{paused_suffix}{authorized_suffix}"
         )
     lines = []
     if bool(safety.get("ok", True)) and not violations:
@@ -603,6 +608,7 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
     codegen_nightly = digest.get("codegen_nightly") or {}
     research_mode = digest.get("research_mode") or {}
     research_agenda = digest.get("research_agenda") or {}
+    learning_experiment = digest.get("learning_experiment_yesterday") or {}
 
     lines = [
         f"Digest diario del lab - ultimos {digest.get('days')} dia(s)",
@@ -630,6 +636,31 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
     for item in ready:
         marker = "diff adjunto" if item.get("has_diff") else "sin diff"
         lines.append(f"  - {item.get('proposal_id')} | {item.get('target')} | {marker}")
+
+    lines.extend(["", "Aprendizaje de ayer"])
+    if learning_experiment.get("available"):
+        pnl = learning_experiment.get("pnl") or {}
+        lines.append(
+            f"- sesion: {learning_experiment.get('session_date', 'n/d')} | "
+            f"fills: {learning_experiment.get('trades', 0)} | "
+            f"P&L abierto: {_none_text(pnl.get('open'))} | realizado: {_none_text(pnl.get('realized'))}"
+        )
+        for item in learning_experiment.get("execution_snapshot") or []:
+            lines.append(
+                f"  - {item.get('symbol', 'n/d')}: bracket={item.get('bracket_state', 'n/d')}, "
+                f"P&L abierto={_none_text(item.get('open_pl'))}, realizado={_none_text(item.get('realized_pl'))}"
+            )
+        shadow = learning_experiment.get("shadow") or {}
+        for item in shadow.get("would_buy_by_strategy") or []:
+            suffix = " (SOMBRA por pausa)" if item.get("paused") else ""
+            lines.append(
+                f"  - {item.get('strategy_name', 'sin_estrategia')}{suffix}: "
+                f"habria comprado {int(item.get('would_buy') or 0)}"
+            )
+        for lesson in (learning_experiment.get("lessons") or [])[:3]:
+            lines.append(f"  - leccion: {lesson}")
+    else:
+        lines.append("- No disponible: falta latest_daily_learning_digest.json con cohorte learning_experiment.")
 
     lines.extend(
         [

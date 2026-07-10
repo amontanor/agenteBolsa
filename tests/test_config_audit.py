@@ -152,6 +152,7 @@ def test_digest_safety_summary_exposes_learning_mode(tmp_path):
         "enabled": False,
         "human_gated": True,
         "shadow_first": True,
+        "shadow_strategies": [],
         "authorized_by": "",
     }
 

@@ -96,6 +96,7 @@ class TradeRecommendation:
     time_horizon: str | None = None
     invalidation: str | None = None
     source: str = "llm"
+    strategy_name: str | None = None
     aggressiveness_profile: str | None = None
     micro_experiment: bool = False
     size_multiplier: float = 1.0

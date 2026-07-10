@@ -258,6 +258,43 @@ def test_lab_digest_shows_low_sample_quota_usage(tmp_path):
     assert "low_sample: 1/1 usado hoy" in text
 
 
+def test_lab_digest_renders_learning_experiment_yesterday_with_paused_shadow(tmp_path):
+    store = _store(tmp_path)
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "latest_daily_learning_digest.json").write_text(
+        json.dumps(
+            {
+                "learning_experiment_yesterday": {
+                    "available": True,
+                    "session_date": "2026-07-09",
+                    "trades": 2,
+                    "pnl": {"open": 5.6, "realized": 0.0},
+                    "execution_snapshot": [
+                        {"symbol": "AIZ", "bracket_state": "open", "open_pl": -2.0, "realized_pl": None}
+                    ],
+                    "shadow": {
+                        "would_buy_by_strategy": [
+                            {"strategy_name": "builtin_pullback", "would_buy": 1, "paused": True}
+                        ]
+                    },
+                    "lessons": ["La pausa conserva la medicion sin abrir posicion."],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    text = format_lab_digest_text(
+        build_lab_digest(store, days=1, now=datetime(2026, 7, 10, 6, 0, tzinfo=timezone.utc), data_dir=tmp_path)
+    )
+
+    assert "Aprendizaje de ayer" in text
+    assert "AIZ: bracket=open" in text
+    assert "builtin_pullback (SOMBRA por pausa): habria comprado 1" in text
+    assert "leccion: La pausa conserva la medicion" in text
+
+
 def test_lab_digest_safety_alerts_on_active_kill_switch_and_missing_cycle(tmp_path):
     store = _store(tmp_path)
     activate_persistent_kill_switch(

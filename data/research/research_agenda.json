@@ -5,10 +5,10 @@
       "hypothesis_id": "agenda_pullback_20260706",
       "title": "pullback",
       "status": "pendiente",
-      "target_date": "2026-07-10",
-      "notes": "re-lectura con datos maduros",
+      "target_date": "2026-07-20",
+      "notes": "P-L15 (2026-07-10): extender. 5d neto -1.25% y excess SPY -2.42% (n=295), pero 10d sigue n=0; faltan outcomes 10d maduros de varias fechas de señal. El criterio sectorial sigue inevaluable: 0/684 features con sector persistido.",
       "created_at": "2026-07-02T00:00:00+00:00",
-      "updated_at": "2026-07-08T06:40:00+00:00",
+      "updated_at": "2026-07-10T00:00:00+00:00",
       "closed_at": null
     },
     {

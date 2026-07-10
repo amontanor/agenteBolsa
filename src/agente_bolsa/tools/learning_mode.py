@@ -19,6 +19,7 @@ DEFAULT_LEARNING_MODE_CONFIG: dict[str, Any] = {
     "per_trade_notional_usd": 1000,
     "max_portfolio_exposure_pct": 15,
     "allowed_strategies": ["builtin_breakout", "builtin_pullback"],
+    "shadow_strategies": [],
     "shadow_first": True,
     "low_sample_daily_quota": 0,
     "notes": (
@@ -36,6 +37,7 @@ LEARNING_MODE_GOVERNED_KEYS = {
     "learning_mode_per_trade_notional_usd",
     "learning_mode_max_portfolio_exposure_pct",
     "learning_mode_allowed_strategies",
+    "learning_mode_shadow_strategies",
     "data/config/learning_mode.json",
 }
 
@@ -68,7 +70,26 @@ def load_learning_mode_config(config_path: Path, *, create: bool = True) -> dict
         if isinstance(allowed, list)
         else list(DEFAULT_LEARNING_MODE_CONFIG["allowed_strategies"])
     )
+    shadow_strategies = config.get("shadow_strategies")
+    config["shadow_strategies"] = (
+        list(dict.fromkeys(str(item).strip() for item in shadow_strategies if str(item).strip()))
+        if isinstance(shadow_strategies, list)
+        else []
+    )
     return config
+
+
+def is_strategy_shadow_paused(config: dict[str, Any] | None, strategy_name: str | None) -> bool:
+    """Indica si una estrategia del cohorte solo puede medirse en sombra.
+
+    Las entradas desconocidas de configuracion se toleran deliberadamente: no
+    habilitan nada ni rompen el ciclo. La comparacion es insensible a mayusculas.
+    """
+    strategy = str(strategy_name or "").strip().lower()
+    if not strategy or not isinstance(config, dict):
+        return False
+    paused = config.get("shadow_strategies") or []
+    return strategy in {str(item).strip().lower() for item in paused if str(item).strip()}
 
 
 def active_learning_mode(settings: Settings) -> dict[str, Any] | None:

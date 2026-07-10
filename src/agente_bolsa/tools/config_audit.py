@@ -177,7 +177,10 @@ def _learning_mode_safety_suffix(audit: dict[str, Any]) -> str:
     if isinstance(learning_mode, dict) and "_error" not in learning_mode:
         enabled = bool(learning_mode.get("enabled"))
         shadow_first = bool(learning_mode.get("shadow_first"))
-        return f" | learning_mode={'ON' if enabled else 'OFF'}, shadow_first={shadow_first}"
+        paused = [str(item).strip() for item in learning_mode.get("shadow_strategies", []) if str(item).strip()]
+        paused_text = ", ".join(f"{item}=SOMBRA" for item in paused)
+        suffix = f" | learning_mode={'ON' if enabled else 'OFF'}, shadow_first={shadow_first}"
+        return f"{suffix}, {paused_text}" if paused_text else suffix
     return ", learning_mode=sin_datos"
 
 
@@ -204,7 +207,7 @@ def format_config_audit_text(audit: dict[str, Any]) -> str:
         elif "_error" in payload:
             lines.append(f"- {label}: ERROR {payload['_error']}")
         else:
-            keys = ("enabled", "dry_run", "mode", "human_gated", "shadow_first")
+            keys = ("enabled", "dry_run", "mode", "human_gated", "shadow_first", "shadow_strategies")
             summary = ", ".join(f"{k}={payload[k]}" for k in keys if k in payload)
             lines.append(f"- {label}: {summary or 'ok'}")
     return "\n".join(lines) + "\n"
@@ -221,6 +224,7 @@ def digest_safety_summary(settings: Settings) -> dict[str, Any] | None:
                 "enabled": bool(learning_mode.get("enabled")),
                 "human_gated": bool(learning_mode.get("human_gated", True)),
                 "shadow_first": bool(learning_mode.get("shadow_first")),
+                "shadow_strategies": list(learning_mode.get("shadow_strategies") or []),
                 "authorized_by": str(learning_mode.get("authorized_by") or "").strip(),
             }
         return safety

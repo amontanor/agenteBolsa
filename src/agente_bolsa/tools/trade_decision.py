@@ -243,6 +243,22 @@ def _compact_breakout_for_prompt(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _implicit_learning_context_for_isolated_data_dir(settings: Settings) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Compatibilidad para sandboxes explícitos sin leer el workspace productivo.
+
+    El ciclo operativo inyecta ambos contextos. Las funciones puras no deben usar
+    `data/` por defecto, porque haría que una prueba dependa del digest real. Los
+    tests y herramientas que proporcionan un `DATA_DIR` aislado conservan la
+    posibilidad de preparar allí un digest de aprendizaje deliberadamente.
+    """
+    try:
+        if settings.data_dir.resolve() == Path("data").resolve():
+            return {}, {}
+    except OSError:
+        return {}, {}
+    return load_daily_learning_context(settings.data_dir), load_operational_response_context(settings.data_dir)
+
+
 def _compact_technical_context_for_prompt(
     technical_context: dict[str, Any],
     *,
@@ -2725,6 +2741,10 @@ def validate_entry_quality(
     recommendation: TradeRecommendation,
     technical_context: dict[str, Any] | None,
     sentiment_context: dict[str, Any] | None = None,
+    *,
+    learning_mode_config: dict[str, Any] | None = None,
+    daily_learning_digest: dict[str, Any] | None = None,
+    operational_response_context: dict[str, Any] | None = None,
 ) -> tuple[bool, str, dict[str, Any]]:
     if not settings.entry_quality_gate_enabled or recommendation.action != "buy":
         return True, "entry-quality desactivado o no aplica", {}
@@ -2767,11 +2787,15 @@ def validate_entry_quality(
     sentiment_score = _float(sentiment.get("sentiment_score"))
     sentiment_confidence = _float(sentiment.get("confidence")) or 0.0
     sentiment_flags = [str(flag) for flag in sentiment.get("risk_flags", [])]
-    learning_mode = active_learning_mode(settings)
+    learning_mode = learning_mode_config if learning_mode_config is not None else active_learning_mode(settings)
     sentiment_item = _sentiment_item_for_symbol(sentiment_context, recommendation.symbol)
     material_risk_real = _material_risk_is_real(sentiment_item.get("material_risk"))
-    daily_learning_digest = load_daily_learning_context(settings.data_dir)
-    operational_response_context = load_operational_response_context(settings.data_dir)
+    if daily_learning_digest is None or operational_response_context is None:
+        implicit_daily, implicit_operational = _implicit_learning_context_for_isolated_data_dir(settings)
+        daily_learning_digest = daily_learning_digest if daily_learning_digest is not None else implicit_daily
+        operational_response_context = (
+            operational_response_context if operational_response_context is not None else implicit_operational
+        )
     learning_prior = candidate.get("learning_prior") or _candidate_learning_prior(
         candidate,
         daily_learning_digest,
@@ -3597,6 +3621,10 @@ def filter_entry_quality(
     recommendations: list[TradeRecommendation],
     technical_context: dict[str, Any] | None,
     sentiment_context: dict[str, Any] | None = None,
+    *,
+    learning_mode_config: dict[str, Any] | None = None,
+    daily_learning_digest: dict[str, Any] | None = None,
+    operational_response_context: dict[str, Any] | None = None,
 ) -> tuple[list[TradeRecommendation], list[dict[str, Any]]]:
     kept = []
     decisions = []
@@ -3606,6 +3634,9 @@ def filter_entry_quality(
             recommendation,
             technical_context,
             sentiment_context,
+            learning_mode_config=learning_mode_config,
+            daily_learning_digest=daily_learning_digest,
+            operational_response_context=operational_response_context,
         )
         decisions.append(
             {
@@ -4267,10 +4298,14 @@ def deterministic_trade_fallback_recommendations(
     limit: int | None = None,
     market_state: dict[str, Any] | None = None,
     llm_failed: bool = False,
+    learning_mode_config: dict[str, Any] | None = None,
+    daily_learning_digest: dict[str, Any] | None = None,
+    operational_response_context: dict[str, Any] | None = None,
 ) -> list[TradeRecommendation]:
-    """Conservative fallback for paper trading when the LLM decision layer is unavailable."""
+    """Fallback puro; los contextos operativos se inyectan desde el ciclo."""
 
-    if active_learning_mode(settings):
+    learning_mode = learning_mode_config if learning_mode_config is not None else active_learning_mode(settings)
+    if learning_mode:
         block_reason = _effective_market_state_block_reason(settings, market_state)
     else:
         block_reason = _fallback_market_state_block_reason(market_state)
@@ -4394,13 +4429,16 @@ def deterministic_trade_fallback_recommendations(
             take_profit=_float(risk.get("take_profit")),
             target_exposure_pct=float(settings.max_position_exposure),
             source="deterministic_fallback",
-            cohort=LEARNING_EXPERIMENT_SOURCE if active_learning_mode(settings) else None,
+            cohort=LEARNING_EXPERIMENT_SOURCE if learning_mode else None,
         )
         entry_approved, _entry_reason, _entry_checks = validate_entry_quality(
             settings,
             candidate_recommendation,
             technical_context,
             {"results": []},
+            learning_mode_config=learning_mode_config,
+            daily_learning_digest=daily_learning_digest,
+            operational_response_context=operational_response_context,
         )
         if not entry_approved:
             continue
@@ -4500,7 +4538,7 @@ def deterministic_trade_fallback_recommendations(
                 invalidation="Stop loss o deterioro tecnico en el siguiente ciclo.",
                 source="deterministic_fallback",
                 aggressiveness_profile=settings.trade_aggressiveness_profile,
-                cohort=LEARNING_EXPERIMENT_SOURCE if active_learning_mode(settings) else None,
+                cohort=LEARNING_EXPERIMENT_SOURCE if learning_mode else None,
                 decision_origin="deterministic_fallback_llm_failed" if llm_failed else "deterministic_fallback_augmented",
             )
         )
@@ -4516,9 +4554,13 @@ def augment_recommendations_with_deterministic_fallback(
     limit: int | None = None,
     market_state: dict[str, Any] | None = None,
     llm_failed: bool = False,
+    learning_mode_config: dict[str, Any] | None = None,
+    daily_learning_digest: dict[str, Any] | None = None,
+    operational_response_context: dict[str, Any] | None = None,
 ) -> tuple[list[TradeRecommendation], dict[str, Any]]:
     recommendation_limit = max(1, int(limit or _effective_trade_recommendation_limit(settings, technical_context)))
-    if active_learning_mode(settings):
+    learning_mode = learning_mode_config if learning_mode_config is not None else active_learning_mode(settings)
+    if learning_mode:
         block_reason = _effective_market_state_block_reason(settings, market_state)
     else:
         block_reason = _fallback_market_state_block_reason(market_state)
@@ -4535,6 +4577,9 @@ def augment_recommendations_with_deterministic_fallback(
         technical_context,
         limit=recommendation_limit,
         market_state=market_state,
+        learning_mode_config=learning_mode_config,
+        daily_learning_digest=daily_learning_digest,
+        operational_response_context=operational_response_context,
     )
     if not fallback_recommendations:
         return recommendations, {"added": [], "replaced_holds": [], "fallback_candidates": 0}
