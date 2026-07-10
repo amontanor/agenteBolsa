@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.146**
+- Version actual: **0.4.147**
 - Ultima actualizacion: 2026-07-10
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -44,6 +44,16 @@ amplia exposicion.
 | P-L21 | Reparar y probar el diagnostico PowerShell del stack | HECHO (v0.4.144) |
 | P-L22 | Diagnostico auditable de LLM real, fallback y capacity-fill | HECHO (v0.4.145) |
 | P-L23 | Diagnostico accionable de calidad de datos de mercado | HECHO (v0.4.146) |
+| P-L23R | Prueba determinista de plan manual tras cierre XNYS | HECHO (v0.4.147) |
+
+### P-L23R - Prueba determinista de plan manual tras cierre XNYS. **HECHO (v0.4.147).**
+La prueba de persistencia del plan manual dejaba de ser valida tras el cierre de
+XNYS porque consultaba `pending_order_plans()`, cuya responsabilidad operativa
+es expirar correctamente planes por TTL de fin de sesion. Ahora verifica el
+registro almacenado directamente con `order_plans(statuses=[PENDING])`, y exige
+simbolo, `plan_id` y estado `PENDING`; no depende del reloj real ni cambia
+`web_app.py`, `storage.py` o la politica TTL. La expiracion conserva sus pruebas
+independientes con hora explicita en `test_order_plan_expiration.py`.
 
 ### P-L23 - Diagnostico accionable de calidad de datos de mercado. **HECHO (v0.4.146).**
 `market-data-quality` deja de limitarse a contadores agregados: cada anomalia

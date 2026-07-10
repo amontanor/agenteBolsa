@@ -9,7 +9,7 @@ from agente_bolsa.config import Settings
 from agente_bolsa.eventing import _format_time
 from agente_bolsa.llm_usage import usage_tokens
 from agente_bolsa.models import OrderSnapshot, PortfolioSnapshot, PositionSnapshot
-from agente_bolsa.storage import Store
+from agente_bolsa.storage import ORDER_PLAN_STATUS_PENDING, Store
 from agente_bolsa.web_app import (
     _ci_conversation_groups,
     _ci_global_export_payload,
@@ -1453,7 +1453,8 @@ def test_create_manual_opportunity_plan_saves_pending_plan(tmp_path):
     )
 
     assert result["ok"] is True
-    pending = store.pending_order_plans(limit=20)
+    pending = store.order_plans(statuses=[ORDER_PLAN_STATUS_PENDING], limit=20)
     assert len(pending) == 1
     assert pending[0]["symbol"] == "AAPL"
     assert pending[0]["plan_id"] == result["plan_id"]
+    assert pending[0]["status"] == ORDER_PLAN_STATUS_PENDING
