@@ -245,7 +245,6 @@ def test_findings_to_proposals_persists_learning_experiment_bridge_candidates(tm
     result = persist_findings_to_proposals(settings=settings, store=store, limit=0, dry_run=False)
 
     assert result["learning_experiment_bridge"]["available"] is True
-    assert len(result["created"]) == 1
-    proposal = store.continuous_improvement_proposals(limit=10)[0]
-    assert proposal["proposal_type"] == "RISK_RULE_CHANGE"
-    assert proposal["target_identifier"] == "backtest_near_miss_threshold"
+    assert result["created"] == []
+    assert result["admission_rejections"][0]["reason"] == "proposal_contract_violation"
+    assert store.continuous_improvement_proposals(limit=10) == []

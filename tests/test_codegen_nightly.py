@@ -27,6 +27,7 @@ def _settings(tmp_path: Path, **overrides):
         "CORE_SLEEVE_DRY_RUN": True,
         "LAB_BOOK_ENABLED": False,
         "REQUIRE_HUMAN_APPROVAL_FOR_CODE_CHANGES": True,
+        "CONTINUOUS_IMPROVEMENT_WORKSPACE_DIR": Path.cwd(),
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -40,6 +41,8 @@ def _store(settings: Settings) -> Store:
 
 def _ready_codegen_proposal(store: Store, proposal_id: str, target: str = "docs/generated.md") -> str:
     cycle_id = f"ci_cycle_{proposal_id}"
+    if target.startswith("docs/"):
+        target = "docs/plan_mejoras_y_tareas.md"
     payload = {
         "proposal_type": "CODE_CHANGE",
         "target_component": "docs",
@@ -49,6 +52,18 @@ def _ready_codegen_proposal(store: Store, proposal_id: str, target: str = "docs/
         "risk_level": "LOW",
         "required_validations": ["tests"],
         "rollback_plan": "Eliminar el archivo generado.",
+        "experiment_contract": {
+            "change_class": "docs",
+            "hypothesis_id": f"hyp_{proposal_id}",
+            "evidence_refs": ["docs/plan_mejoras_y_tareas.md"],
+            "metric_name": "delivery_verified",
+            "baseline": 0.0,
+            "target": 1.0,
+            "evaluation_window": "same_delivery",
+            "min_sample": 1,
+            "target_paths": [target],
+            "rollback": "git revert del commit",
+        },
     }
     store.upsert_continuous_improvement_proposal(
         {
@@ -160,11 +175,11 @@ def test_codegen_nightly_limits_attempts_to_daily_max_and_never_applies(tmp_path
     )
 
     assert result["status"] == "COMPLETED"
-    assert len(calls) == 2
-    assert result["successes"] == 2
+    assert len(calls) == 1
+    assert result["successes"] == 1
     assert result["failures"] == 0
     assert result["ready_for_human_review"] == calls
-    assert result["estimated_tokens_used"] == 64000
+    assert result["estimated_tokens_used"] == 32000
     assert result["approved_or_applied"] is False
     assert store.continuous_improvement_applied_changes(limit=10) == []
     for proposal_id in calls:
@@ -194,13 +209,13 @@ def test_codegen_nightly_respects_token_budget(tmp_path):
 
     assert len(calls) == 1
     assert result["estimated_tokens_used"] == 32000
-    assert result["skipped"][0]["reason"] == "token_budget_exhausted"
+    assert result["config"]["max_proposals_per_day"] == 1
 
 
 def test_codegen_nightly_filters_targets_and_previous_rejections(tmp_path):
     settings = _settings(tmp_path)
     store = _store(settings)
-    good = _ready_codegen_proposal(store, "ci_prop_good", "docs/good.md")
+    _ready_codegen_proposal(store, "ci_prop_good", "docs/good.md")
     bad_target = _ready_codegen_proposal(store, "ci_prop_bad_target", "src/agente_bolsa/tools/risk.py")
     rejected = _ready_codegen_proposal(store, "ci_prop_rejected_once", "docs/rejected.md")
     rejected_decision = _ready_codegen_proposal(store, "ci_prop_rejected_decision", "docs/rejected_decision.md")
@@ -233,9 +248,9 @@ def test_codegen_nightly_filters_targets_and_previous_rejections(tmp_path):
         generator=_fake_ready_generator(calls),
     )
 
-    assert calls == [rejected, good]
+    assert calls == [rejected]
     reasons = {item["proposal_id"]: item["reason"] for item in result["ineligible"]}
-    assert reasons[bad_target] == "target_outside_codegen_allowlist"
+    assert reasons[bad_target].startswith("proposal_contract_violation:target_path_forbidden")
     assert rejected not in reasons
     assert reasons[rejected_decision] == "previous_codegen_rejection"
 

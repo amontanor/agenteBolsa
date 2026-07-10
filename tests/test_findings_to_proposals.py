@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from agente_bolsa.config import Settings
 from agente_bolsa.continuous_improvement.codegen_nightly import eligible_codegen_proposals
@@ -16,12 +17,13 @@ def _settings(tmp_path, **overrides):
         "IMPROVEMENT_DRY_RUN": True,
         "ALLOW_AUTO_APPLY_IMPROVEMENTS": False,
         "ALLOW_LIVE_TRADING": False,
+        "CONTINUOUS_IMPROVEMENT_WORKSPACE_DIR": Path.cwd(),
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
 
 
-def test_findings_to_proposals_creates_at_most_three_codegen_ready_items(tmp_path):
+def test_findings_to_proposals_creates_at_most_two_codegen_ready_items(tmp_path):
     settings = _settings(tmp_path)
     (tmp_path / "config").mkdir()
     (tmp_path / "config" / "lab_book.json").write_text('{"enabled": false}', encoding="utf-8")
@@ -37,9 +39,9 @@ def test_findings_to_proposals_creates_at_most_three_codegen_ready_items(tmp_pat
     result = persist_findings_to_proposals(settings=settings, store=store, limit=10, dry_run=False)
 
     assert result["dry_run"] is False
-    assert len(result["created"]) == 3
+    assert len(result["created"]) == 2
     eligible = eligible_codegen_proposals(settings=settings, store=store)
-    assert len(eligible["eligible"]) == 3
+    assert len(eligible["eligible"]) == 2
 
 
 def test_findings_to_proposals_dedupes_existing_candidates(tmp_path):

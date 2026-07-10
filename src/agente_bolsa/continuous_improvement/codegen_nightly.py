@@ -23,6 +23,7 @@ from .codegen import (
     _is_low_risk_codegen_path,
     generate_code_diff_for_proposal,
 )
+from .proposal_contract import validate_experiment_contract
 
 DEFAULT_CODEGEN_NIGHTLY_CONFIG_PATH = Path("data/config/codegen_nightly.json")
 CODEGEN_NIGHTLY_RUN_LOG = Path("research/codegen_nightly/runs.jsonl")
@@ -37,8 +38,8 @@ CodegenGenerator = Callable[..., dict[str, Any]]
 
 DEFAULT_CODEGEN_NIGHTLY_CONFIG: dict[str, Any] = {
     "enabled": True,
-    "max_proposals_per_day": 2,
-    "daily_token_budget": 64000,
+    "max_proposals_per_day": 1,
+    "daily_token_budget": 32000,
     "estimated_tokens_per_proposal": 32000,
     "human_gated": True,
     "notes": "Parametros fuera del allowlist de codegen; solo Antonio debe cambiar cupos.",
@@ -60,7 +61,7 @@ def load_codegen_nightly_config(config_path: Path, *, create: bool = True) -> di
     config = dict(DEFAULT_CODEGEN_NIGHTLY_CONFIG)
     if isinstance(raw, dict):
         config.update(raw)
-    config["max_proposals_per_day"] = max(0, int(config.get("max_proposals_per_day") or 0))
+    config["max_proposals_per_day"] = min(1, max(0, int(config.get("max_proposals_per_day") or 0)))
     config["daily_token_budget"] = max(0, int(config.get("daily_token_budget") or 0))
     config["estimated_tokens_per_proposal"] = max(1, int(config.get("estimated_tokens_per_proposal") or 1))
     config["enabled"] = bool(config.get("enabled"))
@@ -256,6 +257,12 @@ def latest_codegen_nightly_run(data_dir: Path) -> dict[str, Any]:
 def _ineligible_reason(*, settings: Settings, store: Store, proposal: dict[str, Any]) -> str | None:
     if str(proposal.get("proposal_type") or "").upper() != "CODE_CHANGE":
         return "not_code_change"
+    contract = validate_experiment_contract(
+        proposal,
+        workspace=settings.improvement_workspace_dir,
+    )
+    if not contract["valid"]:
+        return "proposal_contract_violation:" + ",".join(contract["failures"])
     if not _has_positive_validation(proposal):
         return "no_positive_validation"
     targets = _candidate_paths_from_proposal(proposal)

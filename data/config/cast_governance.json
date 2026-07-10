@@ -1,6 +1,9 @@
 {
   "enabled": true,
   "human_gated": true,
+  "contract_required_all": true,
+  "max_admitted_per_day": 2,
+  "max_wip": 2,
   "weekly_cap_no_evidence": {
     "OrchestratorAgent": 10
   },

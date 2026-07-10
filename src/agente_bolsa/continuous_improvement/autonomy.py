@@ -209,7 +209,20 @@ def _applied_in_level(store: Store, level: int) -> int:
         1
         for change in changes
         if int(((change.get("decision") or {}).get("autonomy_level")) or 1) == level
+        and _impact_qualified(change)
     )
+
+
+def _impact_qualified(change: dict[str, Any]) -> bool:
+    """Only measured post-apply impact may promote code autonomy."""
+
+    decision = change.get("decision") or {}
+    contract = decision.get("experiment_contract") or {}
+    change_class = str(contract.get("change_class") or "").lower()
+    if change_class not in {"trading", "reliability", "observability"}:
+        return False
+    validation = decision.get("impact_validation") or {}
+    return str(validation.get("status") or "").upper() == "PASSED"
 
 
 def autonomy_promotion_check(store: Store, settings: Settings, *, persist: bool = True) -> dict[str, Any]:

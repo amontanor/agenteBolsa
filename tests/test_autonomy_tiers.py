@@ -84,7 +84,11 @@ def test_promotion_to_level2_with_clean_history(tmp_path):
                 "change_type": "CODE_CHANGE",
                 "status": "APPLIED",
                 "target_key": "x",
-                "decision": {"autonomy_level": 1},
+                "decision": {
+                    "autonomy_level": 1,
+                    "experiment_contract": {"change_class": "reliability"},
+                    "impact_validation": {"status": "PASSED"},
+                },
             }
         )
 

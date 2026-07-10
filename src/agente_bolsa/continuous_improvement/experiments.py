@@ -21,6 +21,7 @@ from agente_bolsa.tools.counterfactual_analysis import (
     build_walk_forward_validation_report,
 )
 
+from .artifact_provenance import build_diff_provenance
 from .autonomy import (
     ALWAYS_BLOCKED_EXACT,
     ALWAYS_BLOCKED_PREFIXES,
@@ -1159,6 +1160,7 @@ class CodeDiffPreviewAgent:
                 )
             if version_bump and VERSION_FILE not in target_paths:
                 target_paths.append(VERSION_FILE)
+            provenance = build_diff_provenance(workspace, target_paths)
             gate_error = self._new_code_tests_gate_error(payload=payload, diff=diff, target_paths=target_paths)
             if gate_error:
                 return self._save_artifact(
@@ -1176,6 +1178,7 @@ class CodeDiffPreviewAgent:
                         "target_paths": target_paths,
                         "version_bump": version_bump,
                         "model_touched_version_file": version_edit_removed or version_patch_removed,
+                        "provenance": provenance,
                     },
                 )
             validation_result = sandbox.validate(steps=self._validation_steps(payload))
@@ -1196,6 +1199,7 @@ class CodeDiffPreviewAgent:
                     "target_paths": target_paths,
                     "version_bump": version_bump,
                     "model_touched_version_file": version_edit_removed or version_patch_removed,
+                    "provenance": provenance,
                 },
             )
         except (GitSandboxError, OSError, ValueError, RuntimeError) as exc:

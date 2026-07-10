@@ -122,6 +122,22 @@ class SpecialistAction(BaseModel):
     required_validations: list[str] = Field(default_factory=list)
 
 
+class ExperimentContract(BaseModel):
+    """Measurable contract required before admitting a new proposal."""
+
+    change_class: Literal["trading", "reliability", "observability", "docs"]
+    hypothesis_id: str
+    evidence_refs: list[str]
+    metric_name: str
+    baseline: float
+    target: float
+    evaluation_window: str
+    min_sample: int = Field(ge=1)
+    target_paths: list[str]
+    rollback: str
+    evidence_as_of: str = ""
+
+
 class ImprovementProposalPayload(BaseModel):
     proposal_type: Literal[
         "PARAMETER_CHANGE",
@@ -144,6 +160,7 @@ class ImprovementProposalPayload(BaseModel):
     promotion_state: Literal["champion", "challenger", "shadow", "micro_experiment", "rejected", "retired"] = "shadow"
     evaluation_window_frozen: bool = False
     next_review_at: str = ""
+    experiment_contract: ExperimentContract | None = None
 
     @field_validator("target_component", "target_identifier", mode="before")
     @classmethod

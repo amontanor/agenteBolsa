@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any
 from agente_bolsa.models import new_id
 from agente_bolsa.tools.ops_reports import backup_database
 
+from .artifact_provenance import validate_diff_provenance
+from .proposal_contract import experiment_contract
 from .sandbox import run_validation_steps
 from .versioning import (
     VERSION_FILE,
@@ -48,8 +50,15 @@ def review_code_diff_artifacts(
     *,
     proposal_id: str | None = None,
     limit: int = 20,
+    workspace: Path | None = None,
 ) -> dict[str, Any]:
     artifacts = _diff_artifacts(store, proposal_id=proposal_id, limit=limit)
+    if workspace is not None:
+        artifacts = [
+            artifact
+            for artifact in artifacts
+            if validate_diff_provenance(workspace, artifact.get("payload") or {})["valid"]
+        ]
     return {"ok": True, "count": len(artifacts), "artifacts": artifacts}
 
 
@@ -80,6 +89,15 @@ def approve_and_apply_code_diff(
     scope_error = _scope_error(targets)
     if scope_error:
         return _abort(store, proposal_id, "BLOCKED", scope_error, actor=actor)
+    freshness = validate_diff_provenance(repo, payload)
+    if not freshness["valid"]:
+        return _invalidate_stale_diff(
+            store,
+            proposal,
+            artifact,
+            failures=freshness["failures"],
+            actor=actor,
+        )
     dirty = _git(repo, "status", "--porcelain", "--untracked-files=all").stdout.strip()
     if dirty:
         return _abort(store, proposal_id, "BLOCKED", "Working tree no esta limpio; aborta apply humano.", actor=actor)
@@ -174,6 +192,8 @@ def approve_and_apply_code_diff(
                 "apply_strategy": apply_result["strategy"],
                 "version_bump": version_bump,
                 "backup": backup_report,
+                "experiment_contract": experiment_contract(proposal),
+                "impact_validation": {"status": "PENDING"},
             },
             "validation_ids": [payload.get("validation_id")] if payload.get("validation_id") else [],
         }
@@ -338,6 +358,60 @@ def _abort(store: Store, proposal_id: str, status: str, error: str, *, actor: st
         payload={"status": status, "error": error, "actor": actor, "applied": False},
     )
     return {"ok": False, "status": status, "proposal_id": proposal_id, "error": error, "artifact": artifact}
+
+
+def _invalidate_stale_diff(
+    store: Store,
+    proposal: dict[str, Any],
+    diff_artifact: dict[str, Any],
+    *,
+    failures: list[str],
+    actor: str,
+) -> dict[str, Any]:
+    proposal_id = str(proposal["proposal_id"])
+    previous = _stale_diff_count(store, proposal_id)
+    terminal = previous >= 1
+    status = "REJECTED" if terminal else "READY_TO_APPLY"
+    error = "Diff obsoleto: " + ", ".join(failures)
+    artifact = _save_artifact(
+        store,
+        proposal_id=proposal_id,
+        artifact_type="code_diff_stale",
+        content_text=error,
+        payload={
+            "status": "STALE_DIFF",
+            "error": error,
+            "actor": actor,
+            "diff_artifact_id": diff_artifact.get("artifact_id"),
+            "regeneration_attempt": previous + 1,
+            "terminal": terminal,
+            "applied": False,
+        },
+    )
+    store.update_continuous_improvement_proposal_status(
+        proposal_id,
+        status=status,
+        actor="HumanApplyCLI",
+        reason=error if terminal else f"{error}. Se permite una regeneracion.",
+        payload={"artifact": artifact, "regeneration_attempt": previous + 1},
+    )
+    return {
+        "ok": False,
+        "status": "REJECTED_STALE_DIFF" if terminal else "STALE_DIFF_REGENERATE",
+        "proposal_id": proposal_id,
+        "error": error,
+        "artifact": artifact,
+    }
+
+
+def _stale_diff_count(store: Store, proposal_id: str) -> int:
+    with store.connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM continuous_improvement_proposal_artifacts "
+            "WHERE proposal_id = ? AND artifact_type = 'code_diff_stale'",
+            (proposal_id,),
+        ).fetchone()
+    return int(row["n"] or 0)
 
 
 def _reject_tests(

@@ -5,6 +5,7 @@ import subprocess
 import pytest
 
 from agente_bolsa.config import Settings
+from agente_bolsa.continuous_improvement.artifact_provenance import build_diff_provenance
 from agente_bolsa.continuous_improvement.human_apply import (
     _repair_cp1252_mojibake,
     approve_and_apply_code_diff,
@@ -68,6 +69,17 @@ index 0000000..f9328a1
 @@ -0,0 +1 @@
 +human apply ok
 """
+    repo = next(
+        parent / "repo"
+        for parent in store.database_path.parents
+        if (parent / "repo" / ".git").exists()
+    )
+    targets = []
+    for line in diff_text.splitlines():
+        if line.startswith("+++ b/") or line.startswith("--- a/"):
+            target = line[6:].strip()
+            if target != "/dev/null" and target not in targets:
+                targets.append(target)
     store.save_continuous_improvement_proposal_artifact(
         {
             "artifact_id": f"{proposal_id}_artifact",
@@ -79,6 +91,7 @@ index 0000000..f9328a1
                 "tests_ok": True,
                 "validation_id": f"{proposal_id}_validation",
                 "validation": {"ok": True, "steps": []},
+                "provenance": build_diff_provenance(repo, targets),
             },
         }
     )
@@ -129,6 +142,39 @@ def test_human_approve_applies_allowlisted_diff_and_records_applied_change(tmp_p
     assert len(changes) == 1
     assert changes[0]["decision"]["manual_approval"] is True
     assert changes[0]["after"]["commit"] == result["commit"]
+    assert _git(repo, "status", "--short").stdout.strip() == ""
+
+
+def test_stale_diff_allows_one_regeneration_then_rejects(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    settings = _settings(tmp_path, repo)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    proposal_id = _proposal_with_artifact(store, proposal_id="ci_prop_stale_twice")
+    (repo / "docs" / "human_apply.md").write_text("external change\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "external target change")
+
+    first = approve_and_apply_code_diff(
+        settings=settings,
+        store=store,
+        proposal_id=proposal_id,
+        actor="pytest",
+        validation_steps=[("unit", ["python", "-c", "assert True"])],
+        backup=False,
+    )
+    second = approve_and_apply_code_diff(
+        settings=settings,
+        store=store,
+        proposal_id=proposal_id,
+        actor="pytest",
+        validation_steps=[("unit", ["python", "-c", "assert True"])],
+        backup=False,
+    )
+
+    assert first["status"] == "STALE_DIFF_REGENERATE"
+    assert second["status"] == "REJECTED_STALE_DIFF"
+    assert store.continuous_improvement_proposal(proposal_id)["status"] == "REJECTED"
     assert _git(repo, "status", "--short").stdout.strip() == ""
 
 

@@ -70,9 +70,6 @@ def evaluate_applied_changes(store: Store, settings: Settings) -> list[dict[str,
 
     rows = store.performance_daily(limit=0)
     rows = sorted(rows, key=lambda item: item["session_date"])
-    if not rows:
-        return []
-
     changes = store.continuous_improvement_applied_changes(statuses=["APPLIED"], limit=500)
     decisions: list[dict[str, Any]] = []
 
@@ -80,6 +77,28 @@ def evaluate_applied_changes(store: Store, settings: Settings) -> list[dict[str,
         if change.get("change_type") != "CODE_CHANGE":
             continue
         change_date = _change_session_date(change)
+        decision = change.get("decision") or {}
+        contract = decision.get("experiment_contract") or {}
+        change_class = str(contract.get("change_class") or "trading").lower()
+        if change_class == "docs":
+            change["decision"] = {
+                **decision,
+                "impact_validation": {"status": "NON_QUALIFYING", "reason": "docs_change"},
+            }
+            store.save_continuous_improvement_applied_change(change)
+            decisions.append(
+                {
+                    "applied_change_id": change.get("applied_change_id"),
+                    "change_date": change_date,
+                    "post_sessions": 0,
+                    "verdict": "NON_QUALIFYING",
+                    "change_class": change_class,
+                }
+            )
+            continue
+        if change_class in {"reliability", "observability"}:
+            decisions.append(_evaluate_operational_change(store, change, contract, change_class))
+            continue
         post = [row for row in rows if row["session_date"] > change_date]
         prior = [row for row in rows if row["session_date"] <= change_date]
 
@@ -92,7 +111,7 @@ def evaluate_applied_changes(store: Store, settings: Settings) -> list[dict[str,
 
         # Aun fuera de la ventana de observacion: el cambio ya "gradua".
         if antiquity > window:
-            decisions.append({**base, "verdict": "GRADUATED"})
+            decisions.append({**base, "verdict": "GRADUATED", "change_class": change_class})
             continue
         # Datos insuficientes para juzgar: esperar.
         prior_window = prior[-antiquity:] if antiquity else []
@@ -151,11 +170,60 @@ def evaluate_applied_changes(store: Store, settings: Settings) -> list[dict[str,
             change["decision"] = {
                 **(change.get("decision") or {}),
                 "watchdog": {"metrics": metrics, "improved": improved},
+                "impact_validation": {
+                    "status": "PASSED" if improved and trades_post >= min_trades else "PENDING",
+                    "metric_name": "iq_score",
+                    "sample": trades_post,
+                    "post": iq_post,
+                    "baseline": iq_prior,
+                },
             }
             store.save_continuous_improvement_applied_change(change)
             decisions.append({**base, "verdict": "HOLD", "metrics": metrics, "improved": improved})
 
     return decisions
+
+
+def _evaluate_operational_change(
+    store: Store,
+    change: dict[str, Any],
+    contract: dict[str, Any],
+    change_class: str,
+) -> dict[str, Any]:
+    """Evaluate non-trading classes only against their declared metric."""
+
+    decision = change.get("decision") or {}
+    metrics = decision.get("post_apply_metrics") or {}
+    metric_name = str(contract.get("metric_name") or "")
+    observed = metrics.get(metric_name) if isinstance(metrics, dict) else None
+    baseline = contract.get("baseline")
+    target = contract.get("target")
+    sample = metrics.get("sample", 0) if isinstance(metrics, dict) else 0
+    min_sample = int(contract.get("min_sample") or 1)
+    passed = False
+    if all(isinstance(value, (int, float)) for value in (observed, baseline, target)) and int(sample or 0) >= min_sample:
+        passed = observed >= target if target >= baseline else observed <= target
+    status = "PASSED" if passed else "PENDING"
+    impact = {
+        "status": status,
+        "change_class": change_class,
+        "metric_name": metric_name,
+        "baseline": baseline,
+        "target": target,
+        "observed": observed,
+        "sample": sample,
+        "min_sample": min_sample,
+    }
+    change["decision"] = {**decision, "impact_validation": impact}
+    store.save_continuous_improvement_applied_change(change)
+    return {
+        "applied_change_id": change.get("applied_change_id"),
+        "change_date": _change_session_date(change),
+        "post_sessions": 0,
+        "verdict": "IMPACT_CONFIRMED" if passed else "WAIT",
+        "change_class": change_class,
+        "metrics": impact,
+    }
 
 
 def execute_rollbacks(store: Store, settings: Settings) -> list[dict[str, Any]]:

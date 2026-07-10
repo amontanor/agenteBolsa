@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .codegen import LOW_RISK_CODEGEN_ALLOWED_PREFIXES
+from .proposal_contract import TERMINAL_PROPOSAL_STATUSES, validate_experiment_contract
 
 if TYPE_CHECKING:  # pragma: no cover - solo tipado
     from agente_bolsa.storage import Store
@@ -27,12 +28,17 @@ if TYPE_CHECKING:  # pragma: no cover - solo tipado
 CAST_CAP_REASON = "cast_cap_exceeded_no_evidence"
 CONTRACT_VIOLATION_REASON = "proposal_contract_violation"
 NOT_A_PROPOSER_REASON = "agent_not_a_proposer"
+ADMISSION_CAP_REASON = "daily_admission_cap_exceeded"
+WIP_CAP_REASON = "proposal_wip_cap_exceeded"
 
 DEFAULT_CAST_GOVERNANCE_CONFIG: dict[str, Any] = {
     "enabled": True,
     "human_gated": True,
     "weekly_cap_no_evidence": {"OrchestratorAgent": 10},
     "contract_agents": ["SoftwareReliabilityAgent", "DataQualityAgent"],
+    "contract_required_all": False,
+    "max_admitted_per_day": 2,
+    "max_wip": 2,
     "retired_proposers": ["StrategyEvaluatorAgent", "ExperimentDesignerAgent"],
     "notes": (
         "Gobierno del cast (P27). Solo Antonio debe cambiar topes o listas; "
@@ -70,6 +76,9 @@ def load_cast_governance_config(config_path: Path, *, create: bool = True) -> di
     config = {**DEFAULT_CAST_GOVERNANCE_CONFIG, **(raw if isinstance(raw, dict) else {})}
     config["enabled"] = bool(config.get("enabled"))
     config["human_gated"] = bool(config.get("human_gated", True))
+    config["contract_required_all"] = bool(config.get("contract_required_all", False))
+    config["max_admitted_per_day"] = max(0, int(config.get("max_admitted_per_day") or 0))
+    config["max_wip"] = max(0, int(config.get("max_wip") or 0))
     caps = config.get("weekly_cap_no_evidence")
     config["weekly_cap_no_evidence"] = (
         {str(k): max(0, int(v)) for k, v in caps.items()}
@@ -210,17 +219,37 @@ def assess_cast_governance(
             ),
             "evidence": {"proposer": proposer},
         }
-    if proposer in set(config.get("contract_agents") or []):
-        failures = contract_violation_detail(proposal, payload)
+    require_evidence_contract = bool(config.get("contract_required_all"))
+    if require_evidence_contract or proposer in set(config.get("contract_agents") or []):
+        if require_evidence_contract:
+            contract_check = validate_experiment_contract(proposal)
+            failures = contract_check["failures"]
+        else:
+            failures = contract_violation_detail(proposal, payload)
         if failures:
             return {
                 "reason": CONTRACT_VIOLATION_REASON,
                 "detail": (
-                    f"{proposer} debe emitir propuestas con el contrato ejecutable "
-                    "(CODE_CHANGE + target_files en allowlist + test_requirement + "
-                    "rollback_plan + evidencia medida)."
+                    f"{proposer} debe emitir propuestas con contrato de evidencia "
+                    "completo, metrica, muestra, targets y rollback verificables."
                 ),
                 "evidence": {"proposer": proposer, "failures": failures},
+            }
+    if require_evidence_contract and store is not None:
+        caps = _admission_counts(store, now=now)
+        daily_cap = int(config.get("max_admitted_per_day") or 0)
+        wip_cap = int(config.get("max_wip") or 0)
+        if daily_cap and caps["today"] > daily_cap:
+            return {
+                "reason": ADMISSION_CAP_REASON,
+                "detail": f"Cupo diario de {daily_cap} propuestas admitidas agotado.",
+                "evidence": caps,
+            }
+        if wip_cap and caps["wip"] > wip_cap:
+            return {
+                "reason": WIP_CAP_REASON,
+                "detail": f"WIP maximo de {wip_cap} propuestas admitidas agotado.",
+                "evidence": caps,
             }
     caps = config.get("weekly_cap_no_evidence") or {}
     cap = caps.get(proposer)
@@ -236,3 +265,35 @@ def assess_cast_governance(
                 "evidence": {"proposer": proposer, "weekly_cap": int(cap), "used": used},
             }
     return None
+
+
+def _admission_counts(store: Store, *, now: datetime | None = None) -> dict[str, int]:
+    """Count only contract-valid proposals; legacy noise does not consume new WIP."""
+
+    reference = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    today = reference.date().isoformat()
+    admitted_today = 0
+    wip = 0
+    with store.connect() as conn:
+        rows = conn.execute(
+            "SELECT proposal_type, target_component, target_identifier, status, payload_json, created_at "
+            "FROM continuous_improvement_proposals"
+        ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            continue
+        proposal = {
+            "proposal_type": row["proposal_type"],
+            "target_component": row["target_component"],
+            "target_identifier": row["target_identifier"],
+            "payload": payload,
+        }
+        if not validate_experiment_contract(proposal)["valid"]:
+            continue
+        if str(row["created_at"] or "")[:10] == today:
+            admitted_today += 1
+        if str(row["status"] or "").upper() not in TERMINAL_PROPOSAL_STATUSES:
+            wip += 1
+    return {"today": admitted_today, "wip": wip}

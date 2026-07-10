@@ -12,6 +12,7 @@ from agente_bolsa.models import new_id
 from agente_bolsa.storage import Store
 
 from .agents import proposal_fingerprint
+from .proposal_contract import validate_experiment_contract
 from .schemas import ImprovementProposalPayload
 
 FINDINGS_TO_PROPOSALS_ACTOR = "FindingsToProposals"
@@ -128,12 +129,12 @@ def persist_findings_to_proposals(
     *,
     settings: Settings,
     store: Store,
-    limit: int = 3,
+    limit: int = 2,
     dry_run: bool = True,
 ) -> dict[str, Any]:
     findings = measured_findings(settings, store)
     learning_experiment_bridge = _learning_experiment_bridge(settings.data_dir)
-    candidates = build_code_change_candidates(findings)[: max(0, min(3, int(limit)))]
+    candidates = build_code_change_candidates(findings)[: max(0, min(2, int(limit)))]
     preview = [_proposal_payload(item) for item in candidates]
     if dry_run:
         return {
@@ -148,7 +149,19 @@ def persist_findings_to_proposals(
     cycle_id = _ensure_bridge_cycle(store)
     created: list[dict[str, Any]] = []
     duplicates: list[dict[str, Any]] = []
-    for item in [*preview, *(learning_experiment_bridge.get("proposal_candidates") or [])]:
+    admission_rejections: list[dict[str, Any]] = []
+    queue = [*preview, *(learning_experiment_bridge.get("proposal_candidates") or [])][:2]
+    for item in queue:
+        contract = validate_experiment_contract(item)
+        if not contract["valid"]:
+            admission_rejections.append(
+                {
+                    "target": item.get("target_identifier"),
+                    "reason": "proposal_contract_violation",
+                    "failures": contract["failures"],
+                }
+            )
+            continue
         proposal_model = ImprovementProposalPayload.model_validate(item)
         fingerprint = proposal_fingerprint(proposal_model)
         proposal_id = new_id("ci_prop")
@@ -208,7 +221,12 @@ def persist_findings_to_proposals(
         cycle_id,
         status="COMPLETED",
         finished_at=datetime.now(timezone.utc).isoformat(),
-        report={"created": created, "duplicates": duplicates, "findings": findings},
+        report={
+            "created": created,
+            "duplicates": duplicates,
+            "admission_rejections": admission_rejections,
+            "findings": findings,
+        },
     )
     return {
         "ok": True,
@@ -216,6 +234,7 @@ def persist_findings_to_proposals(
         "cycle_id": cycle_id,
         "created": created,
         "duplicates": duplicates,
+        "admission_rejections": admission_rejections,
         "findings": findings,
         "learning_experiment_bridge": learning_experiment_bridge,
     }
@@ -269,6 +288,9 @@ def _candidate(
     evidence = []
     if finding and finding.get("value") not in (None, 0, "0", ""):
         evidence.append(f"{finding.get('source')} | {finding.get('metric')}={finding.get('value')} | {finding.get('summary')}")
+    metric = str((finding or {}).get("metric") or "delivery_verified")
+    baseline = float((finding or {}).get("value") or 0.0)
+    target_value = baseline + 1.0
     return {
         "proposal_type": "CODE_CHANGE",
         "target_component": "continuous_improvement",
@@ -286,6 +308,18 @@ def _candidate(
         "test_requirement": "; ".join(tests),
         "test_commands": [f"python -m pytest {' '.join(tests)} -q"],
         "source": FINDINGS_TO_PROPOSALS_ACTOR,
+        "experiment_contract": {
+            "change_class": "observability",
+            "hypothesis_id": f"finding:{(finding or {}).get('finding_id') or target}",
+            "evidence_refs": [str((finding or {}).get("source") or "measured_findings")],
+            "metric_name": metric,
+            "baseline": baseline,
+            "target": target_value,
+            "evaluation_window": "delivery plus 30 observations",
+            "min_sample": 30,
+            "target_paths": [target, *tests],
+            "rollback": rollback,
+        },
     }
 
 

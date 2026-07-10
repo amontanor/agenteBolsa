@@ -168,13 +168,22 @@ def test_lab_digest_counts_synthetic_categories(tmp_path):
         "cast_cap": 0,
         "contract": 0,
         "not_proposer": 0,
+        "admission_cap": 0,
+        "wip_cap": 0,
         "otros": 1,
     }
     assert digest["proposals"]["ready_to_apply_count"] == 1
     assert digest["proposals"]["ready_to_apply"][0]["has_diff"] is True
     assert digest["requires_attention"][0]["proposal_id"] == "ci_prop_ready"
     assert digest["applied_changes"]["by_status"]["APPLIED"] == 1
-    assert digest["experiments"] == {"run": 2, "passed": 1, "failed": 1}
+    assert digest["experiments"] == {
+        "run": 2,
+        "passed": 1,
+        "failed": 1,
+        "evidence_experiments": 0,
+        "operational_checks": 1,
+        "failed_runs": 1,
+    }
 
 
 def test_constitution_covers_all_security_and_governance_settings():

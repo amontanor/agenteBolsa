@@ -15,7 +15,9 @@ from agente_bolsa.tools.daily_learning import load_daily_learning_context
 from agente_bolsa.tools.learning_mode import load_learning_mode_config
 from agente_bolsa.tools.operational_health import load_operational_block_context
 
+from .artifact_provenance import validate_diff_provenance
 from .codegen_nightly import latest_codegen_nightly_run
+from .proposal_contract import classify_experiment, validate_experiment_contract
 from .research_agenda import build_research_agenda_snapshot
 
 REJECTION_BUCKETS = {
@@ -25,6 +27,8 @@ REJECTION_BUCKETS = {
     "cast_cap_exceeded_no_evidence": "cast_cap",
     "proposal_contract_violation": "contract",
     "agent_not_a_proposer": "not_proposer",
+    "daily_admission_cap_exceeded": "admission_cap",
+    "proposal_wip_cap_exceeded": "wip_cap",
 }
 TERMINAL_PROPOSAL_STATUSES = {
     "APPLIED",
@@ -78,11 +82,18 @@ def build_lab_digest(
         "cast_cap": 0,
         "contract": 0,
         "not_proposer": 0,
+        "admission_cap": 0,
+        "wip_cap": 0,
         "otros": 0,
     }
     for proposal in recent_rejected:
         rejection_counts[_rejection_bucket(store, proposal)] += 1
 
+    proposal_map = {str(item.get("proposal_id") or ""): item for item in proposals}
+    experiment_classes = Counter(
+        classify_experiment(item, proposal_map.get(str(item.get("proposal_id") or "")))
+        for item in recent_experiments
+    )
     experiment_counts = {
         "run": len(recent_experiments),
         "passed": sum(1 for item in recent_experiments if str(item.get("status") or "").upper() in {"PASSED", "APPLIED"}),
@@ -91,6 +102,9 @@ def build_lab_digest(
             for item in recent_experiments
             if str(item.get("status") or "").upper() in {"FAILED", "REJECTED_BY_TESTS", "BLOCKED", "ROLLBACK_FAILED"}
         ),
+        "evidence_experiments": experiment_classes["evidence_experiments"],
+        "operational_checks": experiment_classes["operational_checks"],
+        "failed_runs": experiment_classes["failed_runs"],
     }
     applied_counts: dict[str, int] = {}
     for item in recent_applied:
@@ -98,7 +112,8 @@ def build_lab_digest(
         applied_counts[status] = applied_counts.get(status, 0) + 1
 
     attention = [item for item in ready_to_apply if item["has_diff"]]
-    approval_requests = ready_for_human_approval_requests(store, limit=200)
+    workspace = data_dir.parent if (data_dir.parent / ".git").exists() else None
+    approval_requests = ready_for_human_approval_requests(store, limit=200, workspace=workspace)
     return {
         "days": days,
         "generated_at": now.isoformat(),
@@ -282,15 +297,21 @@ def classify_proposal_quality(proposal: dict[str, Any]) -> dict[str, Any]:
     current_value = str(payload.get("current_value") or "").strip()
     proposed_value = str(payload.get("proposed_value") or "").strip()
 
+    contract = validate_experiment_contract(proposal)
     if _has_diff_spec(payload, text):
-        return {"class": EXECUTABLE, "reason": "diff_or_targets"}
+        return {
+            "class": EXECUTABLE,
+            "reason": "diff_or_targets",
+            "contract_complete": contract["valid"],
+            "contract_failures": contract["failures"],
+        }
     if target_identifier and current_value and proposed_value and current_value != proposed_value:
-        return {"class": EXECUTABLE, "reason": "parameter_current_to_proposed"}
+        return {"class": EXECUTABLE, "reason": "parameter_current_to_proposed", "contract_complete": contract["valid"]}
     if target_identifier and _contains_current_to_proposed(text):
-        return {"class": EXECUTABLE, "reason": "text_current_to_proposed"}
+        return {"class": EXECUTABLE, "reason": "text_current_to_proposed", "contract_complete": contract["valid"]}
     if _has_shadow_rule(payload, text):
-        return {"class": EXECUTABLE, "reason": "concrete_shadow_rule"}
-    return {"class": PROSE, "reason": "no_deterministic_execution_spec"}
+        return {"class": EXECUTABLE, "reason": "concrete_shadow_rule", "contract_complete": contract["valid"]}
+    return {"class": PROSE, "reason": "no_deterministic_execution_spec", "contract_complete": contract["valid"]}
 
 
 def build_proposal_quality_report(
@@ -311,6 +332,7 @@ def build_proposal_quality_report(
             "proposal_id": proposal.get("proposal_id"),
             "class": classification["class"],
             "reason": classification["reason"],
+            "contract_complete": bool(classification.get("contract_complete")),
             "proposer": _proposal_proposer(proposal, initiative_owner),
             "week_start": _week_start((_parse_iso_datetime(str(proposal.get("created_at") or "")) or now).date()).isoformat(),
             "title": _proposal_title(proposal),
@@ -338,6 +360,11 @@ def build_proposal_quality_report(
     return {
         "sample_size": len(classified),
         "generated_at": now.isoformat(),
+        "contract_complete": sum(1 for item in classified if item["contract_complete"]),
+        "contract_complete_pct": round(
+            100.0 * sum(1 for item in classified if item["contract_complete"]) / max(1, len(classified)),
+            2,
+        ),
         "global": _counter_payload(global_counts),
         "by_agent": {agent: _counter_payload(counts) for agent, counts in sorted(by_agent.items())},
         "by_week": {week: _counter_payload(counts) for week, counts in sorted(by_week.items())},
@@ -428,7 +455,12 @@ def build_research_mode_usage(store: Store, *, now: datetime | None = None) -> d
     }
 
 
-def ready_for_human_approval_requests(store: Store, *, limit: int = 200) -> list[dict[str, Any]]:
+def ready_for_human_approval_requests(
+    store: Store,
+    *,
+    limit: int = 200,
+    workspace: Path | None = None,
+) -> list[dict[str, Any]]:
     query = """
         SELECT artifact_id, proposal_id, artifact_type, content_text, payload_json,
                created_at, updated_at
@@ -450,6 +482,8 @@ def ready_for_human_approval_requests(store: Store, *, limit: int = 200) -> list
     for row in rows:
         payload = json.loads(row["payload_json"] or "{}")
         if payload.get("status") != "READY_FOR_HUMAN_REVIEW" or payload.get("tests_ok") is not True:
+            continue
+        if workspace is not None and not validate_diff_provenance(workspace, payload)["valid"]:
             continue
         proposal = proposals.get(str(row["proposal_id"])) or {}
         proposal_status = str(proposal.get("status") or "").upper()

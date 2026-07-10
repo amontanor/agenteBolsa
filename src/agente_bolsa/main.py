@@ -2988,7 +2988,12 @@ def command_continuous_improvement_lab(args: argparse.Namespace) -> None:
     if args.lab_command == "review":
         from .continuous_improvement.human_apply import review_code_diff_artifacts
 
-        result = review_code_diff_artifacts(store, proposal_id=args.proposal, limit=args.limit)
+        result = review_code_diff_artifacts(
+            store,
+            proposal_id=args.proposal,
+            limit=args.limit,
+            workspace=settings.improvement_workspace_dir,
+        )
         if args.json:
             _print_json(result)
         else:
@@ -3802,7 +3807,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ci_lab_codegen_nightly = ci_lab_subparsers.add_parser(
         "codegen-nightly",
-        help="Genera hasta dos diffs revisables al dia para propuestas CODE_CHANGE elegibles.",
+        help="Genera un unico diff revisable al dia para propuestas CODE_CHANGE elegibles.",
     )
     ci_lab_codegen_nightly.add_argument(
         "--config",
@@ -3820,7 +3825,7 @@ def build_parser() -> argparse.ArgumentParser:
         "findings-to-proposals",
         help="Convierte hallazgos medidos en propuestas CODE_CHANGE revisables.",
     )
-    ci_lab_findings.add_argument("--limit", type=int, default=3, help="Maximo 3 propuestas nuevas por ejecucion.")
+    ci_lab_findings.add_argument("--limit", type=int, default=2, help="Maximo 2 propuestas nuevas por ejecucion.")
     ci_lab_findings.add_argument("--apply", action="store_true", help="Persiste propuestas; sin esto solo previsualiza.")
     ci_lab_findings.add_argument(
         "--settle-observations",

@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.141**
+- Version actual: **0.4.142**
 - Ultima actualizacion: 2026-07-10
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -39,8 +39,20 @@ amplia exposicion.
 | ID | Mejora | Estado |
 |---|---|---|
 | P-L18 | Linaje `decision_lineage` end-to-end y contrafactual comparable | HECHO (v0.4.141) |
-| P-L19 | Contrato de evidencia, procedencia/TTL de diffs y autonomia por impacto | PENDIENTE |
+| P-L19 | Contrato de evidencia, procedencia/TTL de diffs y autonomia por impacto | HECHO (v0.4.142) |
 | P-L20 | Automatizacion postcierre, health ampliado y agenda semanal | PENDIENTE |
+
+### P-L19 - Fabrica de evidencia y diffs no rancios. **HECHO (v0.4.142).**
+Toda propuesta nueva necesita contrato con clase, hipotesis, evidencia, metrica,
+baseline, target, ventana, muestra, rutas y rollback. El gate previo a codegen
+rechaza contratos incompletos, rutas inexistentes/fuera de allowlist, evidencia
+rancia, objetivos vagos y peticiones de relajar seguridad. La lectura historica
+separa `evidence_experiments`, `operational_checks` y `failed_runs` sin reescribir
+las 483 filas. Los diffs llevan commit/version base, hashes de targets y fecha,
+caducan a las 24h y solo admiten una regeneracion. Se limita la admision a dos
+propuestas con WIP dos y el codegen a uno por noche. Docs/tests/digest no
+promocionan autonomia; solo impacto post-aplicacion `PASSED` de trading,
+fiabilidad u observabilidad. El apply continua exclusivamente humano.
 
 ### P-L18 - Linaje verificable y control comparable. **HECHO (v0.4.141).**
 Cada recomendacion nueva recibe un `decision_lineage` estable con signal/cycle,

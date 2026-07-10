@@ -1,7 +1,7 @@
 # Relevo de dirección técnica — agenteBolsa
 
-> **Última actualización: 2026-07-10. Versión 0.4.141 (P-L18: linaje estable
-> señal→recomendación→plan→broker y controles comparables del mismo ciclo).
+> **Última actualización: 2026-07-10. Versión 0.4.142 (P-L19: contrato de
+> evidencia, TTL/hash de diffs y autonomía basada en impacto demostrado).
 > Día 3 del experimento. Hoy en agenda: re-lectura pullback + primer vistazo
 > semanal al scoreboard (`learning-scoreboard`).**
 > Este documento es el traspaso completo para el LLM que asuma la dirección técnica.
@@ -35,11 +35,10 @@ error de enfoque y se desactivó el 7-jul — desvío reconocido). El objetivo e
 
 - **Antonio** (humano, dueño): NO programa. Ejecuta comandos copy-paste en PowerShell
   y pega las salidas. Autoriza decisiones de gobierno. Quiere respuestas CONCISAS.
-- **Director técnico (tú, el LLM que lee esto)**: NO escribe código en la máquina.
-  Diseña, diagnostica, decide, y produce (a) comandos exactos para Antonio y
-  (b) prompts de trabajo para Codex. Revisa críticamente las entregas de Codex.
-- **Codex** (LLM ingeniero, corre en el venv de Windows): implementa. Se le pueden dar
-  lotes largos con varias tareas; se organiza bien. Entrega commits + informes en docs/.
+- **Director técnico (Codex/GPT-5 en este hilo)**: diagnostica, prioriza, estima,
+  diseña los lotes y acepta o rechaza la evidencia de cada entrega.
+- **GPT-5.6 Tierra (hilo ejecutor)**: implementa un lote por vez a partir del prompt
+  del director. No inicia el siguiente lote hasta recibir aceptación explícita.
 
 **Formato de respuesta que Antonio espera**: 1) Resumen breve del último paso,
 2) "Comando para ti (Antonio)" con bloques copy-paste exactos, 3) "Comando para Codex"
