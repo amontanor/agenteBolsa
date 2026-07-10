@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.144**
+- Version actual: **0.4.145**
 - Ultima actualizacion: 2026-07-10
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -42,6 +42,17 @@ amplia exposicion.
 | P-L19 | Contrato de evidencia, procedencia/TTL de diffs y autonomia por impacto | HECHO (v0.4.142) |
 | P-L20 | Automatizacion postcierre, health ampliado y agenda semanal | HECHO (v0.4.143) |
 | P-L21 | Reparar y probar el diagnostico PowerShell del stack | HECHO (v0.4.144) |
+| P-L22 | Diagnostico auditable de LLM real, fallback y capacity-fill | HECHO (v0.4.145) |
+
+### P-L22 - Verdad del fallback LLM. **HECHO (v0.4.145).**
+Se publica `latest_llm_decision_quality.json`, que separa recomendaciones LLM
+reales, fallback tras fallo de LLM, relleno determinista de capacidad tras LLM
+correcto y datos legacy sin causa verificable. `production-health` conserva sus
+campos de compatibilidad y anade desglose por motivo; el digest muestra los cuatro
+contadores. La medicion no altera proveedor, prompt, routing, gates ni ordenes.
+La fotografia inicial fue 302 decisiones: 118 LLM reales, 184 deterministas, de
+las que 167 eran `capacity_fill_after_llm_ok`, 7 fallos por respuesta/esquema y
+10 sin evidencia historica suficiente (`unknown`).
 
 ### P-L21 - Diagnostico fiable del stack. **HECHO (v0.4.144).**
 `scripts/check_services.ps1` deja de encadenar directamente un bloque `foreach`

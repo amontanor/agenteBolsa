@@ -164,6 +164,8 @@ def test_digest_has_exactly_one_director_decision(tmp_path):
     text = format_lab_digest_text(digest)
 
     assert set(digest["director_brief"]["decision_requested"]) >= {"required", "kind", "question"}
+    assert digest["llm_decision_quality"]["summary"]["status"] == "unavailable"
+    assert "- LLM decision:" in text
     assert text.count("- decision solicitada:") == 1
 
 
@@ -233,6 +235,8 @@ def test_production_health_tracks_ttl_coherence_fallback_and_overlap(tmp_path):
     assert report["scheduler_coherence"]["coherent"] is True
     assert report["llm_quality"]["basis"] == "trade_recommendations"
     assert report["llm_quality"]["fallback_ratio"] == 0.6667
+    assert report["llm_quality"]["fallback_reasons"] == {"unknown": 2}
+    assert report["llm_decision_quality"]["summary"]["fallback_decisions"] == 2
     assert report["post_market_runtime"]["overlapping_jobs"] == ["market_cycle"]
 
 

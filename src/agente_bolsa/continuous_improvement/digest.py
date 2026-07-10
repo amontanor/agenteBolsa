@@ -13,6 +13,7 @@ from typing import Any
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.daily_learning import load_daily_learning_context
 from agente_bolsa.tools.learning_mode import load_learning_mode_config
+from agente_bolsa.tools.llm_decision_quality import build_llm_decision_quality
 from agente_bolsa.tools.operational_health import load_operational_block_context
 
 from .artifact_provenance import validate_diff_provenance
@@ -84,6 +85,7 @@ def build_lab_digest(
     safety_payload = _enrich_safety_context(store, data_dir, safety=safety, now=now)
     low_sample_usage = _learning_mode_low_sample_snapshot(store, data_dir, now=now)
     learning_experiment = (load_daily_learning_context(data_dir).get("learning_experiment_yesterday") or {})
+    llm_decision_quality = build_llm_decision_quality(store, now=now)
 
     rejection_counts = {
         "self_safety": 0,
@@ -137,6 +139,7 @@ def build_lab_digest(
         "safety": safety_payload,
         "low_sample_usage": low_sample_usage,
         "learning_experiment_yesterday": learning_experiment,
+        "llm_decision_quality": llm_decision_quality,
         "director_brief": director_brief,
         "window_start": cutoff.isoformat(),
         "proposals": {
@@ -715,6 +718,8 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
     research_mode = digest.get("research_mode") or {}
     research_agenda = digest.get("research_agenda") or {}
     learning_experiment = digest.get("learning_experiment_yesterday") or {}
+    llm_quality = digest.get("llm_decision_quality") or {}
+    llm_summary = llm_quality.get("summary") or {}
     director = digest.get("director_brief") or {}
     decision_requested = director.get("decision_requested") or {}
     evaluation = (director.get("results") or {}).get("evaluation") or {}
@@ -733,6 +738,13 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
         ),
         f"- bloqueos: {len(director.get('blockers') or [])}",
         f"- hipotesis abiertas: {len(director.get('hypotheses') or [])}",
+        (
+            "- LLM decision: "
+            f"real={_none_text(llm_summary.get('real_decisions'))} | "
+            f"fallback={_none_text(llm_summary.get('fallback_decisions'))} | "
+            f"fallo_LLM={_none_text(llm_summary.get('llm_failure_fallback_decisions'))} | "
+            f"unknown={_none_text(llm_summary.get('unknown_decisions'))}"
+        ),
         f"- decision solicitada: {decision_requested.get('question', 'Sin dato')}",
         *_safety_lines(digest.get("safety")),
         (

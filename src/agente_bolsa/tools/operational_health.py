@@ -13,6 +13,7 @@ from agente_bolsa.logging_utils import log_system_event
 from agente_bolsa.market_calendar import MarketCalendar
 from agente_bolsa.storage import Store
 
+from .llm_decision_quality import build_llm_decision_quality, write_llm_decision_quality_report
 from .reporting import write_json_report
 
 JOB_NAMES = [
@@ -708,42 +709,31 @@ def _scheduler_coherence(settings: Settings, heartbeat: dict[str, Any]) -> dict[
 
 
 def _llm_fallback_ratio(store: Store, *, now: datetime | None = None) -> dict[str, Any]:
+    decision_quality = build_llm_decision_quality(store, now=now)
+    summary = decision_quality["summary"]
+    if summary["known_decisions"]:
+        return {
+            "window_days": decision_quality["window"]["days"],
+            "basis": decision_quality["basis"],
+            "decisions": summary["known_decisions"],
+            "unknown_decisions": summary["unknown_decisions"],
+            "real_decisions": summary["real_decisions"],
+            "fallback_decisions": summary["fallback_decisions"],
+            "llm_failure_fallback_decisions": summary["llm_failure_fallback_decisions"],
+            "deterministic_after_llm_ok_decisions": summary["deterministic_after_llm_ok_decisions"],
+            "real_ratio": summary["real_ratio"],
+            "fallback_ratio": summary["fallback_ratio"],
+            "llm_failure_fallback_ratio": summary["llm_failure_fallback_ratio"],
+            "fallback_reasons": decision_quality["by_fallback_reason"],
+            "status": summary["status"],
+        }
     reference = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     cutoff = (reference - timedelta(days=7)).isoformat()
     with store.connect() as conn:
-        recommendation_rows = conn.execute(
-            "SELECT payload_json FROM trade_recommendations WHERE created_at >= ?",
-            (cutoff,),
-        ).fetchall()
         rows = conn.execute(
             "SELECT source, request_count, payload_json FROM llm_usage WHERE created_at >= ?",
             (cutoff,),
         ).fetchall()
-    decision_total = 0
-    decision_fallback = 0
-    for row in recommendation_rows:
-        try:
-            payload = json.loads(row["payload_json"] or "{}")
-        except json.JSONDecodeError:
-            continue
-        source = str(payload.get("source") or payload.get("decision_origin") or "").lower()
-        if source == "llm":
-            decision_total += 1
-        elif source.startswith("deterministic") or source in {"capacity_fill", "fallback"}:
-            decision_total += 1
-            decision_fallback += 1
-    if decision_total:
-        real = decision_total - decision_fallback
-        return {
-            "window_days": 7,
-            "basis": "trade_recommendations",
-            "decisions": decision_total,
-            "real_decisions": real,
-            "fallback_decisions": decision_fallback,
-            "real_ratio": round(real / decision_total, 4),
-            "fallback_ratio": round(decision_fallback / decision_total, 4),
-            "status": "available",
-        }
     total = 0
     fallback = 0
     for row in rows:
@@ -923,6 +913,7 @@ def build_production_health_report(
     )
     market_data_quality = _market_data_quality_freshness(settings.data_dir)
     scheduler_coherence = _scheduler_coherence(settings, scheduler_freshness)
+    llm_decision_quality = write_llm_decision_quality_report(store, reports_dir, run_id)
     llm_quality = _llm_fallback_ratio(store)
     post_market_runtime = _post_market_runtime_health(scheduler_runtime, settings.data_dir)
 
@@ -1031,6 +1022,11 @@ def build_production_health_report(
             "market_data_quality": market_data_quality,
             "scheduler_coherence": scheduler_coherence,
             "llm_quality": llm_quality,
+            "llm_decision_quality": {
+                "path": llm_decision_quality.get("path"),
+                "latest_path": llm_decision_quality.get("latest_path"),
+                "summary": llm_decision_quality.get("summary"),
+            },
             "post_market_runtime": post_market_runtime,
         },
         "operational_health": operational_report,
@@ -1040,6 +1036,11 @@ def build_production_health_report(
         "scheduler_coherence": scheduler_coherence,
         "market_data_quality": market_data_quality,
         "llm_quality": llm_quality,
+        "llm_decision_quality": {
+            "path": llm_decision_quality.get("path"),
+            "latest_path": llm_decision_quality.get("latest_path"),
+            "summary": llm_decision_quality.get("summary"),
+        },
         "post_market_runtime": post_market_runtime,
         "continuous_improvement": continuous_improvement_summary,
     }

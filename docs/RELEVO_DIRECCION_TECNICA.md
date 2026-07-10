@@ -1,7 +1,7 @@
 # Relevo de dirección técnica — agenteBolsa
 
-> **Última actualización: 2026-07-10. Versión 0.4.144 (P-L21: diagnóstico
-> PowerShell del stack reparado y cubierto por regresión).
+> **Última actualización: 2026-07-10. Versión 0.4.145 (P-L22: fallback LLM
+> separado de capacity-fill y causas no verificables declaradas).
 > Día 3 del experimento. Hoy en agenda: re-lectura pullback + primer vistazo
 > semanal al scoreboard (`learning-scoreboard`).**
 > Este documento es el traspaso completo para el LLM que asuma la dirección técnica.
