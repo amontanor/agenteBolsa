@@ -427,7 +427,7 @@ def test_decision_compare_rank_shadow_uses_priority_not_only_raw_score(tmp_path,
     assert example["with_priority"] > example["replace_priority"]
 
 
-def test_decision_compare_uses_trade_memory_for_executed_outcomes(tmp_path, monkeypatch):
+def test_decision_compare_keeps_trade_memory_out_of_forward_outcomes(tmp_path, monkeypatch):
     monkeypatch.setattr("agente_bolsa.tools.counterfactual_analysis.update_signal_outcomes", lambda *args, **kwargs: {"updated": 0})
     store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
     store.ensure_schema()
@@ -472,9 +472,17 @@ def test_decision_compare_uses_trade_memory_for_executed_outcomes(tmp_path, monk
         policy="proposed",
     )
 
-    assert report["summary"]["current"]["matured"] == 1
-    assert report["summary"]["current"]["losers"] == 1
-    assert report["summary"]["current"]["avg_return_5d"] == -0.025
+    assert report["summary"]["current"]["matured"] == 0
+    assert report["summary"]["current"]["losers"] == 0
+    assert report["summary"]["current"]["avg_return_5d"] is None
+
+    from agente_bolsa.tools.counterfactual_analysis import _rebuild_signal_cohorts
+
+    rows = _rebuild_signal_cohorts(store, since_date="2026-05-02", end_date="2026-05-02")
+    assert rows[0]["outcome"].get("return_5d") is None
+    assert rows[0]["outcome"]["matured_horizons"]["5d"] is False
+    assert rows[0]["execution_snapshot"]["open_pl"] == -25.0
+    assert rows[0]["execution_snapshot"]["open_plpc"] == -0.025
 
 
 def test_session_retrospective_aggregates_daily_results(tmp_path, monkeypatch):

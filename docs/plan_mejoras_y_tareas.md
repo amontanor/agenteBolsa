@@ -10,9 +10,37 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.0** (0.1.13 -> 0.2.0 -> 0.3.0 -> 0.4.0)
-- Ultima actualizacion: 2026-06-16
+- Version actual: **0.4.140**
+- Ultima actualizacion: 2026-07-10
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
+
+### P-L17 - Verdad de medicion: outcomes forward separados de ejecucion. **HECHO (v0.4.140).**
+Se elimina la contaminacion que convertia P/L abierto de `trade_memory` en
+`return_5d` maduro. El P/L vivo pasa a `execution_snapshot`; los retornos
+1d/3d/5d/10d solo maduran cuando existen las barras posteriores del mercado.
+`learning-scoreboard` publica schema v2, resuelve la fecha final por defecto,
+ancla semanas al 7-jul y calcula drawdown sobre cartera diaria. La CI cubre ahora
+Python, documentacion activa y JSON de gobierno contra NUL/UTF-8/sintaxis rota.
+Verificacion: tests focales, suite completa, Ruff y gates operativos.
+
+### P-L16 - Pausa operativa de pullback con sombra activa. **HECHO (v0.4.139).**
+`builtin_pullback` permanece generando señales y outcomes, pero no puede crear
+planes ni ordenes hasta la relectura pre-registrada del 20-jul. Desde esta
+entrega se propaga la estrategia en planes nuevos; las seis ejecuciones previas
+siguen sin atribucion historica verificable.
+
+### P-L15 - Relectura pullback con datos maduros. **HECHO (estudio 2026-07-10).**
+El horizonte 5d fue negativo (-1,25% neto, excess SPY -2,42%, n=295). Se extiende
+la hipotesis hasta 20-jul porque 10d aun no era evaluable; no se promociona ni se
+amplia exposicion.
+
+### Backlog director vigente (2026-07-10)
+
+| ID | Mejora | Estado |
+|---|---|---|
+| P-L18 | Linaje `decision_lineage` end-to-end y contrafactual comparable | PENDIENTE |
+| P-L19 | Contrato de evidencia, procedencia/TTL de diffs y autonomia por impacto | PENDIENTE |
+| P-L20 | Automatizacion postcierre, health ampliado y agenda semanal | PENDIENTE |
 
 ### P-L14 - UI panel: fila de `Valor de cartera` con P/L de hoy. **HECHO (v0.4.137).**
 Se sustituye en `web_app.py` la tarjeta `P/L ultimos 7d` por `P/L hoy (desde
@@ -962,7 +990,7 @@ en shadow, a validar con dias/regimenes.
    estudios de edge). Cuidando el matching senal->outcome. Con test.
 3. Medir (en dias) pullback-shadow vs breakout, y los forward outcomes de §1. Promover solo con
    evidencia OOS neta de costes.
-                                                                                          
+
 ## 15. Cierre 25-jun (tarde): cadena de medicion pullback verificada end-to-end
 
 Tras pullback (B3) y T6, se cerro el riesgo de que la medicion del pullback fuese inutil dentro

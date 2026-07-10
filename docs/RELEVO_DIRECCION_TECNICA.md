@@ -1,7 +1,7 @@
 # Relevo de dirección técnica — agenteBolsa
 
-> **Última actualización: 2026-07-10 mañana. Versión 0.4.137 (P-L14: fila del
-> gráfico muestra "P/L hoy desde cierre de ayer", misma fuente que el hero).
+> **Última actualización: 2026-07-10. Versión 0.4.140 (P-L17: retornos forward
+> separados del P/L de ejecución y scoreboard v2 sin contaminación temporal).
 > Día 3 del experimento. Hoy en agenda: re-lectura pullback + primer vistazo
 > semanal al scoreboard (`learning-scoreboard`).**
 > Este documento es el traspaso completo para el LLM que asuma la dirección técnica.
@@ -110,7 +110,7 @@ máx 15% exposición**. Cohorte etiquetado `source=learning_experiment` con muro
 
 ## 7. Estado actual (a fecha de la última actualización)
 
-- **Versión**: 0.4.132 (P-L9A d25b8984, P-L9B 3eb5b58d). 1020 tests verdes, ruff limpio.
+- **Versión**: 0.4.140. 1038+ tests verdes y Ruff limpio antes de P-L17.
 - **8-jul = primer día de operativa autónoma real, CON FILLS.** Por la tarde el
   sistema envió solo 3 órdenes BRACKET que quedaron `filled`: AIZ y CRWD (ciclo
   20260708-155237) y ALL (ciclo 20260708-191748) — coincide con el cupo 3/día.

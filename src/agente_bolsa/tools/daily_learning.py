@@ -270,6 +270,7 @@ def _observation_payload(group: list[dict[str, Any]]) -> dict[str, Any]:
             "executed_rows": len(executed),
             "duplicate_execution": any(bool((row.get("flags") or {}).get("duplicate_execution")) for row in group),
             "orders_same_day": sum(int(row.get("orders_same_day") or 0) for row in group),
+            "execution_snapshot": (executed[0] if executed else best).get("execution_snapshot", {}) or {},
         },
         "created_at": first_seen,
     }

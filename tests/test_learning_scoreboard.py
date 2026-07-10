@@ -19,7 +19,15 @@ def _settings(tmp_path):
     )
 
 
-def _observation(signal_date: str, symbol: str, *, executed: bool, return_5d: float) -> dict[str, object]:
+def _observation(
+    signal_date: str,
+    symbol: str,
+    *,
+    executed: bool,
+    return_5d: float | None,
+    mature_5d: bool = True,
+    outcome_source: str | None = None,
+) -> dict[str, object]:
     return {
         "observation_id": f"{signal_date}:{symbol}:{'exec' if executed else 'ctrl'}",
         "signal_date": signal_date,
@@ -36,7 +44,8 @@ def _observation(signal_date: str, symbol: str, *, executed: bool, return_5d: fl
         "gate": {},
         "outcome": {
             "return_5d": return_5d,
-            "matured_horizons": {"5d": True},
+            "matured_horizons": {"5d": mature_5d},
+            "source": outcome_source,
         },
         "execution": {},
     }
@@ -56,6 +65,8 @@ def test_learning_scoreboard_marks_pending_without_executed_cohort(tmp_path, mon
     assert report["evaluation"]["status"] == "pending_no_executed_cohort"
     assert report["evaluation"]["criterion_verbatim"] == LEARNING_SCOREBOARD_CRITERION
     assert report["weekly_rows"] == []
+    assert report["schema_version"] == 2
+    assert report["period"]["to"] is not None
 
 
 def test_learning_scoreboard_evaluates_pre_registered_criterion_with_synthetic_data(tmp_path, monkeypatch):
@@ -100,3 +111,73 @@ def test_learning_scoreboard_evaluates_pre_registered_criterion_with_synthetic_d
     assert evaluation["beats_counterfactual"] is True
     assert evaluation["learns"] is True
     assert evaluation["status"] == "learning_confirmed"
+    assert report["weekly_rows"][0]["policy_expectancy_net_10bps"] == report["weekly_rows"][0]["expectancy_net_10bps"]
+
+
+def test_learning_scoreboard_excludes_trade_memory_and_immature_returns(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    store.upsert_learning_observation(
+        _observation(
+            "2026-07-08",
+            "OPEN",
+            executed=True,
+            return_5d=0.04,
+            mature_5d=True,
+            outcome_source="trade_memory",
+        )
+    )
+    store.upsert_learning_observation(
+        _observation(
+            "2026-07-09",
+            "EARLY",
+            executed=True,
+            return_5d=0.02,
+            mature_5d=False,
+        )
+    )
+    monkeypatch.setattr(
+        "agente_bolsa.tools.learning_scoreboard._build_spy_forward_returns",
+        lambda *_args, **_kwargs: {},
+    )
+
+    report = build_learning_scoreboard(
+        settings,
+        store,
+        tmp_path / "reports",
+        "score",
+        since_date="2026-07-07",
+        end_date="2026-07-10",
+    )
+
+    assert report["weekly_rows"][0]["n"] == 0
+    assert report["weekly_rows"][0]["expectancy_net_10bps"] is None
+    assert report["evaluation"]["status"] == "pending_maturity"
+    assert report["data_quality"]["excluded_trade_memory_as_forward"] == 1
+    assert report["maturity_by_horizon"]["5d"]["executed"] == 0
+
+
+def test_learning_scoreboard_groups_same_day_returns_for_drawdown(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    store.upsert_learning_observation(_observation("2026-07-07", "WIN", executed=True, return_5d=0.10))
+    store.upsert_learning_observation(_observation("2026-07-07", "LOSE", executed=True, return_5d=-0.10))
+    monkeypatch.setattr(
+        "agente_bolsa.tools.learning_scoreboard._build_spy_forward_returns",
+        lambda *_args, **_kwargs: {},
+    )
+
+    report = build_learning_scoreboard(
+        settings,
+        store,
+        tmp_path / "reports",
+        "score",
+        since_date="2026-07-07",
+        end_date="2026-07-20",
+    )
+
+    # Equal-weighted portfolio return is -10 bps after costs, rather than
+    # sequentially compounding two simultaneous positions.
+    assert report["weekly_rows"][0]["portfolio_max_drawdown"] == -0.001

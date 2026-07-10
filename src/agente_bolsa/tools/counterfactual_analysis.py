@@ -449,7 +449,19 @@ def _trade_recommendation_rows(store: Store, *, since_date: str, end_date: str |
     return result
 
 
-def _trade_memory_outcomes(store: Store, *, since_date: str, end_date: str | None) -> dict[tuple[str, str], dict[str, Any]]:
+def _trade_memory_execution_snapshots(
+    store: Store,
+    *,
+    since_date: str,
+    end_date: str | None,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """Build execution-only snapshots without manufacturing forward returns.
+
+    ``trade_memory`` is a live/realized broker view.  It is useful to explain
+    fills and bracket state, but it is not a market-forward observation at any
+    fixed horizon.  In particular, open P/L after one session must never be
+    exposed as a mature 5d return.
+    """
     memories = store.trade_memory(limit=10000, since_date=since_date)
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for memory in memories:
@@ -460,7 +472,7 @@ def _trade_memory_outcomes(store: Store, *, since_date: str, end_date: str | Non
             continue
         grouped[(trade_date, str(memory.get("symbol") or "").upper())].append(memory)
 
-    outcomes = {}
+    snapshots = {}
     for key, items in grouped.items():
         pl = sum(_num((item.get("outcome") or {}).get("pl")) or _num(item.get("open_pl")) or _num(item.get("realized_pl")) or 0.0 for item in items)
         notional = sum(_num(item.get("notional")) or 0.0 for item in items)
@@ -480,32 +492,19 @@ def _trade_memory_outcomes(store: Store, *, since_date: str, end_date: str | Non
         ]
         clean_plpc = [value for value in plpc_values if value is not None]
         plpc = sum(clean_plpc) / len(clean_plpc) if clean_plpc else (pl / notional if notional else None)
-        if pl > 0:
-            verdict = "winner_trade_memory"
-        elif pl < 0:
-            verdict = "loser_trade_memory"
-        else:
-            verdict = "flat_trade_memory"
-        outcomes[key] = {
-            "available": True,
-            "matured": True,
+        snapshots[key] = {
             "source": "trade_memory",
-            "trade_memory_pl": round(pl, 2),
-            "trade_memory_plpc": _round(plpc, 4),
-            "return_5d": _round(plpc, 4),
-            "verdict": verdict,
-            "bars_seen": 0,
-            "matured_horizons": {"1d": False, "3d": False, "5d": True, "10d": False},
-            "execution": {
-                "open_pl": round(sum(clean_open_pl), 2) if clean_open_pl else None,
-                "open_plpc": _round(sum(clean_open_plpc) / len(clean_open_plpc), 4) if clean_open_plpc else None,
-                "realized_pl": round(sum(clean_realized_pl), 2) if clean_realized_pl else None,
-                "realized_plpc": _round(sum(clean_realized_plpc) / len(clean_realized_plpc), 4)
-                if clean_realized_plpc
-                else None,
-            },
+            "pl": round(pl, 2),
+            "plpc": _round(plpc, 4),
+            "open_pl": round(sum(clean_open_pl), 2) if clean_open_pl else None,
+            "open_plpc": _round(sum(clean_open_plpc) / len(clean_open_plpc), 4) if clean_open_plpc else None,
+            "realized_pl": round(sum(clean_realized_pl), 2) if clean_realized_pl else None,
+            "realized_plpc": _round(sum(clean_realized_plpc) / len(clean_realized_plpc), 4)
+            if clean_realized_plpc
+            else None,
+            "position_state": "closed" if clean_realized_plpc else "open",
         }
-    return outcomes
+    return snapshots
 
 
 def _candidate_score(row: dict[str, Any]) -> float:
@@ -615,10 +614,6 @@ def _explanation(row: dict[str, Any]) -> str:
 def _outcome_with_maturity(outcome: dict[str, Any], signal_date: str) -> dict[str, Any]:
     current = dict(outcome or {})
     ref_horizons = [1, 3, 5, 10]
-    maturity_horizon = 10
-    for horizon in ref_horizons:
-        if current.get(f"return_{horizon}d") is not None:
-            maturity_horizon = max(maturity_horizon, horizon)
     signal_day = _parse_date(signal_date)
     today = _parse_date(_today_iso())
     days_elapsed = (today - signal_day).days if signal_day and today else None
@@ -627,11 +622,9 @@ def _outcome_with_maturity(outcome: dict[str, Any], signal_date: str) -> dict[st
     current["matured_horizons"] = {
         f"{h}d": current.get(f"return_{h}d") is not None for h in ref_horizons
     }
-    current["matured"] = bool(current.get("matured")) or bool(current["matured_horizons"]["10d"])
+    current["matured"] = any(bool(value) for value in current["matured_horizons"].values())
     if not current["available"] and current["bars_seen"] > 0:
         current["available"] = True
-    if not current["matured"] and days_elapsed is not None and days_elapsed >= 10 and current["bars_seen"] >= 10:
-        current["matured"] = True
     current["days_elapsed"] = days_elapsed
     current["label"] = _outcome_label(current)
     return current
@@ -666,7 +659,11 @@ def _rebuild_signal_cohorts(
     )
     buy_orders = _buy_order_rows(store, since_date=since_date, end_date=end_date)
     recommendations = _trade_recommendation_rows(store, since_date=since_date, end_date=end_date)
-    trade_memory_outcomes = _trade_memory_outcomes(store, since_date=since_date, end_date=end_date)
+    trade_memory_snapshots = _trade_memory_execution_snapshots(
+        store,
+        since_date=since_date,
+        end_date=end_date,
+    )
     orders_by_date_symbol, cycle_symbol_counts = _group_buy_orders(buy_orders)
     recommendations_by_date_symbol: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for recommendation in recommendations:
@@ -705,10 +702,9 @@ def _rebuild_signal_cohorts(
             duplicate_execution = len(execution_orders) > 1 or cycle_symbol_counts.get((execution_orders[0].get("cycle_id") or "", symbol), 0) > 1
 
         outcome = _outcome_with_maturity(raw.get("outcome", {}) or {}, signal_date)
-        if executed_buy and not outcome.get("matured"):
-            trade_outcome = trade_memory_outcomes.get((signal_date, symbol))
-            if trade_outcome:
-                outcome = _outcome_with_maturity(trade_outcome, signal_date)
+        execution_snapshot = (
+            trade_memory_snapshots.get((signal_date, symbol), {}) if executed_buy else {}
+        )
         row = {
             "signal_id": raw["signal_id"],
             "source_run_id": source_run_id,
@@ -719,6 +715,7 @@ def _rebuild_signal_cohorts(
             "features": raw.get("features", {}) or {},
             "gate": raw.get("gate", {}) or {},
             "outcome": outcome,
+            "execution_snapshot": execution_snapshot,
             "created_at": raw.get("created_at"),
             "updated_at": raw.get("updated_at"),
             "selected_for_llm": bool((raw.get("features", {}) or {}).get("selected_for_llm")),
