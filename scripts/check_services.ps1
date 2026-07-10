@@ -32,11 +32,14 @@ $http = $null
 try { $http = (Invoke-WebRequest -UseBasicParsing ("http://127.0.0.1:{0}" -f $WebPort) -TimeoutSec 8).StatusCode } catch { $http = $null }
 
 Write-Host "Procesos agenteBolsa:" -ForegroundColor Cyan
-foreach ($service in $services) {
-    foreach ($line in $service.process_command_lines) {
-        [pscustomobject]@{ service = $service.service; command_line = $line }
+$processRows = @(
+    foreach ($service in $services) {
+        foreach ($line in $service.process_command_lines) {
+            [pscustomobject]@{ service = $service.service; command_line = $line }
+        }
     }
-} | Format-Table -AutoSize -Wrap
+)
+$processRows | Format-Table -AutoSize -Wrap
 
 if ($lockAlive) {
     Write-Host ("Scheduler activo (lock): PID {0} -> VIVO" -f $lockPid) -ForegroundColor Green

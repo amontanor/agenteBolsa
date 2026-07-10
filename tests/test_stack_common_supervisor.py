@@ -57,3 +57,29 @@ def test_restart_services_script_does_not_use_reserved_pid_parameter():
 
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == "ok"
+
+
+def test_check_services_script_parses_in_windows_powershell_51():
+    command = r"""
+    $tokens = $null
+    $errors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile(
+        (Resolve-Path .\scripts\check_services.ps1),
+        [ref]$tokens,
+        [ref]$errors
+    )
+    if ($errors.Count -gt 0) {
+        $errors | ForEach-Object { Write-Error $_.Message }
+        exit 1
+    }
+    $content = Get-Content .\scripts\check_services.ps1 -Raw
+    if ($content -notmatch '\$processRows\s*=\s*@\(') {
+        Write-Error 'process_rows_are_not_materialized_before_formatting'
+        exit 1
+    }
+    Write-Output 'ok'
+    """
+    proc = _powershell(command)
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "ok"

@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.143**
+- Version actual: **0.4.144**
 - Ultima actualizacion: 2026-07-10
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -41,6 +41,15 @@ amplia exposicion.
 | P-L18 | Linaje `decision_lineage` end-to-end y contrafactual comparable | HECHO (v0.4.141) |
 | P-L19 | Contrato de evidencia, procedencia/TTL de diffs y autonomia por impacto | HECHO (v0.4.142) |
 | P-L20 | Automatizacion postcierre, health ampliado y agenda semanal | HECHO (v0.4.143) |
+| P-L21 | Reparar y probar el diagnostico PowerShell del stack | HECHO (v0.4.144) |
+
+### P-L21 - Diagnostico fiable del stack. **HECHO (v0.4.144).**
+`scripts/check_services.ps1` deja de encadenar directamente un bloque `foreach`
+a `Format-Table`, sintaxis que Windows PowerShell 5.1 rechazaba con
+`EmptyPipeElement`. El script materializa primero las filas y luego las formatea.
+Una prueba de regresion usa el parser real de PowerShell y exige esta estructura,
+evitando que el diagnostico vuelva a romperse. No cambia procesos, trading ni
+politica; solo restaura la herramienta de verificacion operativa.
 
 ### P-L20 - Operacion autonoma, health y agenda diaria. **HECHO (v0.4.143).**
 El job postmercado ejecuta y publica una cadena unica: reconciliacion, outcomes y
