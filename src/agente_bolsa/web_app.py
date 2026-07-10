@@ -289,6 +289,18 @@ def _today_pl_display(today_pl: Any, invested: Any, equity_pct: Any | None) -> d
     }
 
 
+def _today_pl_metric_payload(today_pl: Any, invested: Any, equity_pct: Any | None) -> dict[str, Any]:
+    display = _today_pl_display(today_pl, invested, equity_pct)
+    detail_parts = [f"{display['primary_pct']} {display['invested_caption']}"]
+    if display.get("equity_reference"):
+        detail_parts.append(f"<small>{display['equity_reference']}</small>")
+    return {
+        "amount": _money(today_pl),
+        "detail_html": "<br>".join(detail_parts),
+        "display": display,
+    }
+
+
 def _num(value: Any) -> float | None:
     try:
         if value is None or value == "":
@@ -1131,7 +1143,8 @@ def _account_group(
 ) -> None:
     total_tone = "good" if (total_pl or 0.0) > 0 else "bad" if (total_pl or 0.0) < 0 else "neutral"
     today_tone = "good" if (today_pl or 0.0) > 0 else "bad" if (today_pl or 0.0) < 0 else "neutral"
-    today_display = _today_pl_display(today_pl, exposure, today_pct)
+    today_metric = _today_pl_metric_payload(today_pl, exposure, today_pct)
+    today_display = today_metric["display"]
     tone_class = f"account-pl {total_tone}"
     today_class = f"account-kpi {today_tone}"
     st.markdown(
@@ -1150,7 +1163,7 @@ def _account_group(
             <div class="account-kpis">
                 <div class="{today_class}">
                     <span>P/L hoy</span>
-                    <strong>{_money(today_pl)}</strong>
+                    <strong>{today_metric["amount"]}</strong>
                     <em>
                         <span>{today_display["primary_pct"]} {today_display["invested_caption"]}</span>
                         <small>{today_display["equity_reference"] or "&nbsp;"}</small>
@@ -3718,23 +3731,22 @@ def page_dashboard() -> None:
                     key="portfolio_chart_days",
                     label_visibility="collapsed",
                 )
-            visible_range_summary = _portfolio_value_chart(
+            _portfolio_value_chart(
                 history,
                 portfolio.portfolio_value if portfolio else None,
                 portfolio_history,
                 days=int(chart_days),
             )
+            today_metric = _today_pl_metric_payload(today_total, exposure, today_pct)
             p1, p2, p3 = st.columns(3)
             with p1:
                 _compact_metric("P/L desde abril", _money(stats.get("total_pl")), _pct(stats.get("total_plpc_on_equity")), total_tone)
             with p2:
-                visible_pl = _num((visible_range_summary or {}).get("pl"))
-                visible_pct = _num((visible_range_summary or {}).get("pl_pct"))
-                visible_tone = "good" if (visible_pl or 0.0) > 0 else "bad" if (visible_pl or 0.0) < 0 else "neutral"
+                visible_tone = "good" if today_total > 0 else "bad" if today_total < 0 else "neutral"
                 _compact_metric(
-                    f"P/L ultimos {int(chart_days)}d",
-                    _money(visible_pl),
-                    _pct(visible_pct) if visible_pct is not None else None,
+                    "P/L hoy (desde cierre de ayer)",
+                    today_metric["amount"],
+                    today_metric["detail_html"],
                     visible_tone,
                 )
             with p3:

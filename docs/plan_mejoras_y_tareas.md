@@ -14,6 +14,16 @@
 - Ultima actualizacion: 2026-06-16
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
+### P-L14 - UI panel: fila de `Valor de cartera` con P/L de hoy. **HECHO (v0.4.137).**
+Se sustituye en `web_app.py` la tarjeta `P/L ultimos 7d` por `P/L hoy (desde
+cierre de ayer)` y se la alimenta exactamente desde la misma fuente que la
+tarjeta hero (`_latest_daily_equity_change` + capital `exposure`). Ambos sitios
+comparten ahora el helper `_today_pl_metric_payload`, de modo que importe y
+porcentaje sobre invertido salen del mismo payload y permanecen sincronizados.
+La fila queda en tres tarjetas: `P/L desde abril`, `P/L hoy (desde cierre de
+ayer)` y `P/L abierto`. Verificacion: tests unitarios de consistencia, panel
+real reiniciado con captura y suite/lint/gates completos.
+
 ### P-L13 - UI panel: P/L del dia sobre invertido y sin tarjeta realizado. **HECHO (v0.4.136).**
 Se ajusta solo la presentacion del panel en `web_app.py` para que la tarjeta
 `P/L hoy` muestre de forma prominente el porcentaje sobre capital realmente

@@ -48,6 +48,7 @@ from agente_bolsa.web_app import (
     _start_schedule,
     _study_price,
     _today_pl_display,
+    _today_pl_metric_payload,
     _trim_portfolio_chart_range,
     _web_search_status,
     update_env_file,
@@ -496,6 +497,14 @@ def test_today_pl_display_preserves_negative_pct_over_invested():
         "invested_caption": "sobre invertido ($5,246.00)",
         "equity_reference": "-0.07% del equity total",
     }
+
+
+def test_today_pl_metric_payload_reuses_same_display_as_hero():
+    payload = _today_pl_metric_payload(38.42, 5246.0, 0.0005)
+
+    assert payload["amount"] == "$38.42"
+    assert payload["display"] == _today_pl_display(38.42, 5246.0, 0.0005)
+    assert payload["detail_html"] == "0.73% sobre invertido ($5,246.00)<br><small>0.05% del equity total</small>"
 
 
 def test_sidebar_version_label_uses_semantic_version():
