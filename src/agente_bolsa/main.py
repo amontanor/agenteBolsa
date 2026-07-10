@@ -2724,6 +2724,12 @@ def command_production_health(args: argparse.Namespace) -> None:
         f"Scheduler: {report['summary'].get('scheduler_heartbeat', {}).get('status')} | "
         f"CI: {report['summary'].get('continuous_improvement_heartbeat', {}).get('status')}"
     )
+    print(
+        f"Coherencia scheduler: {(report.get('scheduler_coherence') or {}).get('status')} | "
+        f"market-data-quality: {(report.get('market_data_quality') or {}).get('status')} | "
+        f"fallback LLM 7d: {(report.get('llm_quality') or {}).get('fallback_ratio')} | "
+        f"solapes postmarket: {(report.get('post_market_runtime') or {}).get('overlap_count')}"
+    )
     for item in report.get("alerts", [])[:12]:
         scope = item.get("job") or item.get("scope") or "-"
         print(f"  - [{item['severity']}] {item['kind']} | {scope} | {item['detail']}")

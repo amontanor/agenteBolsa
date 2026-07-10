@@ -50,6 +50,41 @@ DEFAULT_RESEARCH_AGENDA = [
         "target_date": "2026-07-02",
         "notes": "P21: validar si ext_sma20=-23.35% es dato real o corrupto.",
     },
+    {
+        "hypothesis_id": "agenda_builtin_breakout_edge_20260901",
+        "title": "edge builtin_breakout",
+        "status": "en_curso",
+        "target_date": "2026-09-01",
+        "notes": "Medicion diaria 5d/10d neta y excess SPY; no cambia politica.",
+    },
+    {
+        "hypothesis_id": "agenda_llm_vs_fallback_20260901",
+        "title": "LLM vs fallback determinista",
+        "status": "en_curso",
+        "target_date": "2026-09-01",
+        "notes": "Comparar expectancy y cobertura por decision_source.",
+    },
+    {
+        "hypothesis_id": "agenda_low_sample_subcohort_20260901",
+        "title": "low_sample como subcohorte",
+        "status": "en_curso",
+        "target_date": "2026-09-01",
+        "notes": "Medir separado; no ampliar excepcion durante el experimento.",
+    },
+    {
+        "hypothesis_id": "agenda_gate_effectiveness_20260901",
+        "title": "ganadores bloqueados y perdidas evitadas",
+        "status": "en_curso",
+        "target_date": "2026-09-01",
+        "notes": "Atribuir outcomes maduros a cada gate sin usarlos como control primario.",
+    },
+    {
+        "hypothesis_id": "agenda_excursions_setups_regimes_20260901",
+        "title": "MFE MAE salidas setups y regimenes",
+        "status": "en_curso",
+        "target_date": "2026-09-01",
+        "notes": "Medir stops, take-profit, time-stop y rendimiento por setup/regimen.",
+    },
 ]
 
 

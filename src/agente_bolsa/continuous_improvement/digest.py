@@ -43,6 +43,16 @@ EXECUTABLE = "EJECUTABLE"
 PROSE = "PROSA"
 
 
+def _load_json_file(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def build_lab_digest(
     store: Store,
     *,
@@ -114,12 +124,20 @@ def build_lab_digest(
     attention = [item for item in ready_to_apply if item["has_diff"]]
     workspace = data_dir.parent if (data_dir.parent / ".git").exists() else None
     approval_requests = ready_for_human_approval_requests(store, limit=200, workspace=workspace)
+    research_agenda = build_research_agenda_snapshot(data_dir, experiments, now=now)
+    director_brief = _director_brief(
+        data_dir=data_dir,
+        safety=safety_payload,
+        approval_requests=approval_requests,
+        research_agenda=research_agenda,
+    )
     return {
         "days": days,
         "generated_at": now.isoformat(),
         "safety": safety_payload,
         "low_sample_usage": low_sample_usage,
         "learning_experiment_yesterday": learning_experiment,
+        "director_brief": director_brief,
         "window_start": cutoff.isoformat(),
         "proposals": {
             "created": len(recent_proposals_created),
@@ -136,11 +154,65 @@ def build_lab_digest(
         "core_sleeve": latest_core_sleeve_signal(data_dir, now=now),
         "codegen_nightly": latest_codegen_nightly_run(data_dir),
         "research_mode": build_research_mode_usage(store, now=now),
-        "research_agenda": build_research_agenda_snapshot(data_dir, experiments, now=now),
+        "research_agenda": research_agenda,
         "requires_attention": attention,
         "approval_requests": approval_requests,
         "kpi_funnel": build_kpi_funnel(proposals, experiments, applied_changes, decisions, now=now),
         "proposal_quality": build_proposal_quality_report(store, proposals=proposals, now=now, limit=200),
+    }
+
+
+def _director_brief(
+    *,
+    data_dir: Path,
+    safety: dict[str, Any],
+    approval_requests: list[dict[str, Any]],
+    research_agenda: dict[str, Any],
+) -> dict[str, Any]:
+    scoreboard = _load_json_file(data_dir / "reports" / "latest_learning_scoreboard.json") or {}
+    research = _load_json_file(data_dir / "reports" / "latest_autonomous_research.json") or {}
+    data_quality = scoreboard.get("data_quality") or {}
+    blockers = [str(item) for item in safety.get("violations") or []]
+    blockers.extend(str(item) for item in data_quality.get("issues") or [])
+    open_hypotheses = [
+        {
+            "hypothesis_id": item.get("hypothesis_id"),
+            "title": item.get("title"),
+            "target_date": item.get("target_date"),
+            "status": item.get("status"),
+        }
+        for item in research_agenda.get("items") or []
+        if str(item.get("status") or "") in {"pendiente", "en_curso"}
+    ]
+    decision_requested = (
+        {
+            "required": True,
+            "kind": "human_code_apply",
+            "proposal_id": approval_requests[0].get("proposal_id"),
+            "question": "Revisar el unico diff vigente y decidir aprobar o rechazar.",
+        }
+        if approval_requests
+        else {
+            "required": False,
+            "kind": "none",
+            "proposal_id": None,
+            "question": "Sin decision humana requerida; mantener politica y limites congelados.",
+        }
+    )
+    return {
+        "results": {
+            "evaluation": scoreboard.get("evaluation") or {"status": "unavailable"},
+            "research_sample": research.get("sample") or {"status": "unavailable"},
+        },
+        "coverage": {
+            "lineage": scoreboard.get("lineage_coverage") or {"status": "unavailable"},
+            "control": scoreboard.get("control_coverage") or {"status": "unavailable"},
+            "maturity": scoreboard.get("maturity_by_horizon") or {"status": "unavailable"},
+        },
+        "blockers": blockers,
+        "hypotheses": open_hypotheses,
+        "decision_requested": decision_requested,
+        "activity_counts_are_secondary": True,
     }
 
 
@@ -643,10 +715,25 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
     research_mode = digest.get("research_mode") or {}
     research_agenda = digest.get("research_agenda") or {}
     learning_experiment = digest.get("learning_experiment_yesterday") or {}
+    director = digest.get("director_brief") or {}
+    decision_requested = director.get("decision_requested") or {}
+    evaluation = (director.get("results") or {}).get("evaluation") or {}
+    coverage = director.get("coverage") or {}
 
     lines = [
         f"Digest diario del lab - ultimos {digest.get('days')} dia(s)",
         f"Generado: {digest.get('generated_at', 'n/d')}",
+        "",
+        "RESUMEN DIRECTOR",
+        f"- resultado aprendizaje: {evaluation.get('status', 'unavailable')}",
+        (
+            "- cobertura: "
+            f"linaje={_none_text((coverage.get('lineage') or {}).get('pct'))}, "
+            f"control={_none_text((coverage.get('control') or {}).get('pct'))}"
+        ),
+        f"- bloqueos: {len(director.get('blockers') or [])}",
+        f"- hipotesis abiertas: {len(director.get('hypotheses') or [])}",
+        f"- decision solicitada: {decision_requested.get('question', 'Sin dato')}",
         *_safety_lines(digest.get("safety")),
         (
             f"- low_sample: {int((digest.get('low_sample_usage') or {}).get('used') or 0)}/"

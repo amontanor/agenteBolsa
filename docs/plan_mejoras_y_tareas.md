@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.142**
+- Version actual: **0.4.143**
 - Ultima actualizacion: 2026-07-10
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -40,7 +40,19 @@ amplia exposicion.
 |---|---|---|
 | P-L18 | Linaje `decision_lineage` end-to-end y contrafactual comparable | HECHO (v0.4.141) |
 | P-L19 | Contrato de evidencia, procedencia/TTL de diffs y autonomia por impacto | HECHO (v0.4.142) |
-| P-L20 | Automatizacion postcierre, health ampliado y agenda semanal | PENDIENTE |
+| P-L20 | Automatizacion postcierre, health ampliado y agenda semanal | HECHO (v0.4.143) |
+
+### P-L20 - Operacion autonoma, health y agenda diaria. **HECHO (v0.4.143).**
+El job postmercado ejecuta y publica una cadena unica: reconciliacion, outcomes y
+observaciones maduras, linaje, scoreboard v2, investigacion observacional y
+digest. Los viernes a las 23:15 Europe/Madrid se repite como revision semanal
+idempotente. El digest abre con resultados, coberturas, bloqueos, hipotesis y una
+sola decision solicitada. `production-health` incorpora TTL 26h de calidad de
+datos, coherencia PID/lock/heartbeat, ratio LLM real/fallback de 7d, duracion y
+solapes postmercado. La investigacion diaria separa estrategia, decision_source,
+low-sample, gates, MFE/MAE/salidas y setup/regimen; dimensiones sin datos quedan
+`unavailable`. Pullback sigue en sombra y su gate exige todas las condiciones
+pre-registradas. No se modifica politica ni limites hasta el 1-sep.
 
 ### P-L19 - Fabrica de evidencia y diffs no rancios. **HECHO (v0.4.142).**
 Toda propuesta nueva necesita contrato con clase, hipotesis, evidencia, metrica,

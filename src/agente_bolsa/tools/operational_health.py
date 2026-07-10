@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,8 @@ JOB_NAMES = [
     "closed_market_technical_study",
     "daily_study",
     "post_market_review",
+    "broker_reconciliation",
+    "operational_health_refresh",
     "pre_earnings",
 ]
 
@@ -46,6 +49,7 @@ DATA_PIPELINE_REPORT_PATTERNS = (
     "breakout_scan_*.json",
     "closed_market_technical_study_*.json",
 )
+MARKET_DATA_QUALITY_TTL_SECONDS = 26 * 60 * 60
 
 
 def _job_state_key(job_name: str) -> str:
@@ -635,6 +639,174 @@ def _ci_backlog_alerts(settings: Settings, store: Store) -> tuple[dict[str, Any]
     return summary, alerts
 
 
+def _market_data_quality_freshness(
+    data_dir: Path,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    path = data_dir / "reports" / "latest_market_data_quality.json"
+    reference = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    payload = _load_json(path) or {}
+    report_at = _parse_datetime(payload.get("as_of")) if payload else None
+    if report_at is None and path.exists():
+        report_at = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    age_seconds = max(0.0, (reference - report_at).total_seconds()) if report_at else None
+    return {
+        "status": "fresh" if age_seconds is not None and age_seconds <= MARKET_DATA_QUALITY_TTL_SECONDS else "stale_or_missing",
+        "path": str(path),
+        "report_at": report_at.isoformat() if report_at else None,
+        "age_seconds": round(age_seconds, 3) if age_seconds is not None else None,
+        "max_age_seconds": MARKET_DATA_QUALITY_TTL_SECONDS,
+        "is_fresh": age_seconds is not None and age_seconds <= MARKET_DATA_QUALITY_TTL_SECONDS,
+    }
+
+
+def _pid_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))
+            if not handle:
+                return False
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return True
+        except Exception:  # noqa: BLE001 - health must remain read-only and resilient.
+            return False
+    try:
+        os.kill(pid, 0)
+    except (OSError, SystemError):
+        return False
+    return True
+
+
+def _scheduler_coherence(settings: Settings, heartbeat: dict[str, Any]) -> dict[str, Any]:
+    path = settings.state_dir / "scheduler.lock"
+    payload = _load_json(path) or {}
+    if not payload and path.exists():
+        try:
+            payload = {"pid": int(path.read_text(encoding="utf-8").strip()), "kind": "legacy"}
+        except (OSError, ValueError):
+            payload = {}
+    pid = int(payload.get("pid") or 0)
+    pid_alive = _pid_running(pid)
+    lock_valid = bool(payload) and str(payload.get("kind") or "scheduler") in {"scheduler", "legacy"}
+    heartbeat_fresh = bool(heartbeat.get("is_fresh"))
+    coherent = lock_valid and pid_alive and heartbeat_fresh
+    return {
+        "status": "coherent" if coherent else "incoherent",
+        "lock_path": str(path),
+        "lock_exists": path.exists(),
+        "lock_kind": payload.get("kind"),
+        "pid": pid or None,
+        "pid_alive": pid_alive,
+        "heartbeat_fresh": heartbeat_fresh,
+        "coherent": coherent,
+    }
+
+
+def _llm_fallback_ratio(store: Store, *, now: datetime | None = None) -> dict[str, Any]:
+    reference = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    cutoff = (reference - timedelta(days=7)).isoformat()
+    with store.connect() as conn:
+        recommendation_rows = conn.execute(
+            "SELECT payload_json FROM trade_recommendations WHERE created_at >= ?",
+            (cutoff,),
+        ).fetchall()
+        rows = conn.execute(
+            "SELECT source, request_count, payload_json FROM llm_usage WHERE created_at >= ?",
+            (cutoff,),
+        ).fetchall()
+    decision_total = 0
+    decision_fallback = 0
+    for row in recommendation_rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            continue
+        source = str(payload.get("source") or payload.get("decision_origin") or "").lower()
+        if source == "llm":
+            decision_total += 1
+        elif source.startswith("deterministic") or source in {"capacity_fill", "fallback"}:
+            decision_total += 1
+            decision_fallback += 1
+    if decision_total:
+        real = decision_total - decision_fallback
+        return {
+            "window_days": 7,
+            "basis": "trade_recommendations",
+            "decisions": decision_total,
+            "real_decisions": real,
+            "fallback_decisions": decision_fallback,
+            "real_ratio": round(real / decision_total, 4),
+            "fallback_ratio": round(decision_fallback / decision_total, 4),
+            "status": "available",
+        }
+    total = 0
+    fallback = 0
+    for row in rows:
+        count = max(1, int(row["request_count"] or 0))
+        total += count
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        marker = " ".join(
+            str(value or "").lower()
+            for value in (row["source"], payload.get("decision_origin"), payload.get("provider"))
+        )
+        if payload.get("fallback_used") is True or "fallback" in marker or "deterministic" in marker:
+            fallback += count
+    real = max(0, total - fallback)
+    return {
+        "window_days": 7,
+        "basis": "llm_usage_fallback",
+        "requests": total,
+        "real_requests": real,
+        "fallback_requests": fallback,
+        "real_ratio": round(real / total, 4) if total else None,
+        "fallback_ratio": round(fallback / total, 4) if total else None,
+        "status": "available" if total else "unavailable",
+    }
+
+
+def _post_market_runtime_health(job_runtime: dict[str, Any], data_dir: Path) -> dict[str, Any]:
+    post = job_runtime.get("post_market_review") or {}
+    post_status = str(post.get("status") or "")
+    post_start = _parse_datetime(post.get("started_at"))
+    post_end = _parse_datetime(post.get("finished_at"))
+    overlaps = []
+    if post_status == "completed" and post_start and post_end:
+        for name, state in job_runtime.items():
+            if name == "post_market_review" or not isinstance(state, dict):
+                continue
+            start = _parse_datetime(state.get("started_at"))
+            end = _parse_datetime(state.get("finished_at"))
+            if start and end and max(post_start, start) < min(post_end, end):
+                overlaps.append(name)
+    measurement = _latest_report_payload(data_dir, "latest_post_market_measurement_pipeline.json") or {}
+    post_market_report = _latest_report_payload(data_dir, "latest_post_market_learning.json") or {}
+    reported_steps = post_market_report.get("pipeline_steps") or {}
+    reported_duration = sum(
+        float(value) for value in reported_steps.values() if isinstance(value, (int, float))
+    )
+    return {
+        "status": "available" if post_status == "completed" and post_start and post_end else "unavailable",
+        "latest_scheduler_status": post_status or "missing",
+        "duration_seconds": post.get("duration_seconds") if post_status == "completed" else None,
+        "reported_pipeline_duration_seconds": round(reported_duration, 3) if reported_steps else None,
+        "started_at": post.get("started_at"),
+        "finished_at": post.get("finished_at"),
+        "overlap_count": len(overlaps),
+        "overlap_status": "measured" if post_status == "completed" and post_start and post_end else "unavailable",
+        "overlapping_jobs": sorted(overlaps),
+        "measurement_timings": measurement.get("timings") or {},
+        "measurement_session_date": measurement.get("session_date"),
+    }
+
+
 def _response_id(kind: str, scope: str) -> str:
     clean_scope = scope.replace(" ", "_").replace("/", "_") or "global"
     return f"{kind}:{clean_scope}"
@@ -749,6 +921,10 @@ def build_production_health_report(
         latest_scheduler_update.isoformat() if latest_scheduler_update else None,
         max_age_seconds=scheduler_max_age_seconds,
     )
+    market_data_quality = _market_data_quality_freshness(settings.data_dir)
+    scheduler_coherence = _scheduler_coherence(settings, scheduler_freshness)
+    llm_quality = _llm_fallback_ratio(store)
+    post_market_runtime = _post_market_runtime_health(scheduler_runtime, settings.data_dir)
 
     continuous_improvement_summary = {
         "enabled": settings.continuous_improvement_enabled,
@@ -792,6 +968,48 @@ def build_production_health_report(
                 ),
             }
         )
+    if not market_data_quality["is_fresh"]:
+        alerts.append(
+            {
+                "severity": "warning",
+                "kind": "market_data_quality_stale",
+                "scope": "market_data_quality",
+                "detail": (
+                    "latest_market_data_quality.json ausente o con mas de 26 horas "
+                    f"(age={market_data_quality.get('age_seconds')})."
+                ),
+            }
+        )
+    if not scheduler_coherence["coherent"]:
+        alerts.append(
+            {
+                "severity": "critical" if scheduler_coherence["lock_exists"] else "warning",
+                "kind": "scheduler_pid_lock_heartbeat_incoherent",
+                "scope": "scheduler",
+                "detail": (
+                    f"lock={scheduler_coherence['lock_exists']} pid_alive={scheduler_coherence['pid_alive']} "
+                    f"heartbeat_fresh={scheduler_coherence['heartbeat_fresh']}."
+                ),
+            }
+        )
+    if isinstance(llm_quality.get("fallback_ratio"), (int, float)) and llm_quality["fallback_ratio"] > 0.50:
+        alerts.append(
+            {
+                "severity": "warning",
+                "kind": "llm_fallback_ratio_high",
+                "scope": "llm",
+                "detail": f"Fallback LLM 7d={llm_quality['fallback_ratio']:.1%} (>50%).",
+            }
+        )
+    if post_market_runtime["overlap_count"]:
+        alerts.append(
+            {
+                "severity": "warning",
+                "kind": "post_market_pipeline_overlap",
+                "scope": "post_market_review",
+                "detail": "Solapamiento con: " + ", ".join(post_market_runtime["overlapping_jobs"]),
+            }
+        )
 
     severity_counts = {
         "critical": sum(1 for item in alerts if item["severity"] == "critical"),
@@ -810,11 +1028,19 @@ def build_production_health_report(
             "responses": len(responses),
             "scheduler_heartbeat": scheduler_freshness,
             "continuous_improvement_heartbeat": ci_freshness,
+            "market_data_quality": market_data_quality,
+            "scheduler_coherence": scheduler_coherence,
+            "llm_quality": llm_quality,
+            "post_market_runtime": post_market_runtime,
         },
         "operational_health": operational_report,
         "alerts": alerts,
         "responses": responses,
         "scheduler_heartbeat": scheduler_freshness,
+        "scheduler_coherence": scheduler_coherence,
+        "market_data_quality": market_data_quality,
+        "llm_quality": llm_quality,
+        "post_market_runtime": post_market_runtime,
         "continuous_improvement": continuous_improvement_summary,
     }
     return write_json_report(report, reports_dir, "production_health", run_id, latest_filename="latest_production_health.json")

@@ -1,7 +1,7 @@
 # Relevo de dirección técnica — agenteBolsa
 
-> **Última actualización: 2026-07-10. Versión 0.4.142 (P-L19: contrato de
-> evidencia, TTL/hash de diffs y autonomía basada en impacto demostrado).
+> **Última actualización: 2026-07-10. Versión 0.4.143 (P-L20: pipeline
+> postmercado completo, health ampliado y revisión semanal autónoma).
 > Día 3 del experimento. Hoy en agenda: re-lectura pullback + primer vistazo
 > semanal al scoreboard (`learning-scoreboard`).**
 > Este documento es el traspaso completo para el LLM que asuma la dirección técnica.

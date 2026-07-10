@@ -8,6 +8,7 @@ import os
 import time
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -22,6 +23,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised by import-only test 
 
 from ._utils import log_swallow
 from .config import Settings
+from .continuous_improvement.digest import build_lab_digest, format_lab_digest_text
 from .continuous_improvement.runtime import ContinuousImprovementLabRuntime
 from .cycle_runner import run_observable_cycle
 from .eventing import EventReporter
@@ -30,12 +32,14 @@ from .logging_utils import log_system_event
 from .market_calendar import MarketCalendar
 from .models import new_id
 from .storage import Store
+from .tools.autonomous_research import build_autonomous_research_report
 from .tools.breakout_scanner import build_breakout_scan, merge_breakout_universe
 from .tools.broker import BrokerClientFactory
 from .tools.broker_reconciliation import reconcile_broker_orders
 from .tools.daily_learning import build_learning_digest_report, load_daily_learning_context
 from .tools.execution import submit_paper_order_plan
 from .tools.learning_mode import active_learning_mode, learning_mode_source
+from .tools.learning_scoreboard import build_learning_scoreboard
 from .tools.news_sentiment import analyze_news_sentiment_for_candidates
 from .tools.operational_health import (
     activate_persistent_kill_switch,
@@ -62,6 +66,7 @@ from .tools.pre_earnings import (
     record_pre_earnings_predictions,
     update_pre_earnings_outcomes,
 )
+from .tools.reporting import write_json_report
 from .tools.retention import cleanup_runtime_data
 from .tools.signal_learning import record_signal_candidates
 from .tools.technical_study import build_closed_market_technical_study
@@ -2153,6 +2158,97 @@ def _run_nightly_retrospective(
         )
 
 
+def _write_text_atomic(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(text, encoding="utf-8", newline="\n")
+    temporary.replace(path)
+
+
+def _run_post_market_measurement_pipeline(
+    settings: Settings,
+    store: Store,
+    *,
+    session_date: str,
+    run_id: str,
+    weekly: bool = False,
+) -> dict[str, Any]:
+    """Outcomes/observations are already materialized; publish research truth next."""
+
+    reports_dir = settings.data_dir / "reports"
+    timings: dict[str, float] = {}
+    started = time.perf_counter()
+    scoreboard = build_learning_scoreboard(
+        settings,
+        store,
+        reports_dir,
+        f"{run_id}_scoreboard",
+        since_date="2026-07-07",
+        end_date=session_date,
+    )
+    timings["scoreboard_seconds"] = round(time.perf_counter() - started, 3)
+
+    started = time.perf_counter()
+    research = build_autonomous_research_report(
+        store,
+        reports_dir,
+        f"{run_id}_research",
+        since_date="2026-07-07",
+        end_date=session_date,
+    )
+    timings["research_seconds"] = round(time.perf_counter() - started, 3)
+
+    started = time.perf_counter()
+    digest = build_lab_digest(store, days=7 if weekly else 1, data_dir=settings.data_dir)
+    digest_report = write_json_report(
+        digest,
+        reports_dir,
+        "continuous_improvement_digest",
+        run_id,
+        latest_filename="latest_continuous_improvement_digest.json",
+    )
+    _write_text_atomic(
+        reports_dir / "latest_continuous_improvement_digest.md",
+        format_lab_digest_text(digest),
+    )
+    timings["digest_seconds"] = round(time.perf_counter() - started, 3)
+
+    report = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "session_date": session_date,
+        "weekly": weekly,
+        "sequence": [
+            "broker_reconciliation",
+            "market_forward_outcomes",
+            "learning_observations_and_lineage",
+            "learning_scoreboard",
+            "autonomous_research",
+            "continuous_improvement_digest",
+        ],
+        "timings": timings,
+        "scoreboard": {
+            "path": scoreboard.get("path"),
+            "evaluation": scoreboard.get("evaluation"),
+            "lineage_coverage": scoreboard.get("lineage_coverage"),
+            "control_coverage": scoreboard.get("control_coverage"),
+        },
+        "research": {"path": research.get("path"), "sample": research.get("sample")},
+        "digest": {
+            "path": digest_report.get("path"),
+            "decision_requested": (digest.get("director_brief") or {}).get("decision_requested"),
+        },
+    }
+    return write_json_report(
+        report,
+        reports_dir,
+        "post_market_measurement_pipeline",
+        run_id,
+        latest_filename="latest_post_market_measurement_pipeline.json",
+    )
+
+
 def post_market_review_job(
     settings: Settings,
     store: Store,
@@ -2205,6 +2301,13 @@ def post_market_review_job(
             session_date=session_date,
             use_llm=use_llm and settings.post_market_review_use_llm,
         )
+        measurement_pipeline = _run_post_market_measurement_pipeline(
+            settings,
+            store,
+            session_date=session_date,
+            run_id=f"{run_id}_measure",
+        )
+        report["measurement_pipeline"] = measurement_pipeline
         store.set_runtime_value(state_key, session_date)
         _persist_daily_performance(settings, store, session_date, reporter, run_id)
         _run_change_watchdog(settings, store, reporter, run_id)
@@ -2231,6 +2334,7 @@ def post_market_review_job(
                 "session_date": session_date,
                 "summary": report["summary"],
                 "broker_reconciliation": reconciliation,
+                "measurement_pipeline": measurement_pipeline,
                 "proposed_improvements": improvements[:5],
                 "next_session_guidance": report.get("next_session_guidance", [])[:8],
             },
@@ -2249,6 +2353,7 @@ def post_market_review_job(
                     "signal_execution_updates": reconciliation.get("signal_execution_updates", 0),
                     "learning_execution_updates": reconciliation.get("learning_execution_updates", 0),
                 },
+                "measurement_pipeline_path": measurement_pipeline.get("path"),
             },
         )
         return report
@@ -2783,6 +2888,69 @@ def operational_health_refresh_job(
         return None
 
 
+def weekly_learning_review_job(
+    settings: Settings,
+    store: Store,
+    *,
+    verbose: bool = True,
+    force: bool = False,
+) -> dict[str, Any] | None:
+    """Friday review with one decision request and no policy mutation."""
+
+    run_id = new_id("weekly_learning")
+    started_at = datetime.now(timezone.utc)
+    local_now = started_at.astimezone(ZoneInfo(settings.local_timezone))
+    iso_year, iso_week, _weekday = local_now.isocalendar()
+    review_key = f"{iso_year}-W{iso_week:02d}"
+    state_key = "weekly_learning_review_last_week"
+    if not force and store.get_runtime_value(state_key) == review_key:
+        _set_job_status(
+            store,
+            "weekly_learning_review",
+            status="skipped",
+            run_id=run_id,
+            started_at=started_at,
+            detail=f"revision {review_key} ya ejecutada",
+        )
+        return None
+    try:
+        session_date = local_now.date().isoformat()
+        report = _run_post_market_measurement_pipeline(
+            settings,
+            store,
+            session_date=session_date,
+            run_id=run_id,
+            weekly=True,
+        )
+        store.set_runtime_value(state_key, review_key)
+        _set_job_status(
+            store,
+            "weekly_learning_review",
+            status="completed",
+            run_id=run_id,
+            started_at=started_at,
+            detail=f"revision semanal {review_key} completada",
+            extra={
+                "report_path": report.get("path"),
+                "decision_requested": (report.get("digest") or {}).get("decision_requested"),
+            },
+        )
+        return report
+    except Exception as exc:  # noqa: BLE001 - review weekly cannot stop scheduler.
+        _set_job_status(
+            store,
+            "weekly_learning_review",
+            status="failed",
+            run_id=run_id,
+            started_at=started_at,
+            detail=str(exc),
+            extra={"error_type": type(exc).__name__},
+        )
+        if verbose:
+            LOGGER.exception("Fallo en revision semanal de aprendizaje")
+        return None
+
+
 def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose: bool) -> Any:
     if BackgroundScheduler is None or CronTrigger is None or IntervalTrigger is None:
         raise RuntimeError("APScheduler no esta instalado. Instala las dependencias del proyecto para usar schedule.")
@@ -2860,6 +3028,17 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         kwargs={"verbose": verbose},
         id="operational_health_refresh",
         name="Operational health refresh",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        weekly_learning_review_job,
+        trigger=CronTrigger(day_of_week="fri", hour=23, minute=15, timezone=local_tz),
+        args=[settings, store],
+        kwargs={"verbose": verbose},
+        id="weekly_learning_review",
+        name="Friday learning review",
         max_instances=1,
         coalesce=True,
         replace_existing=True,
@@ -2998,6 +3177,7 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
             "post_market_review",
             "broker_reconciliation",
             "operational_health_refresh",
+            "weekly_learning_review",
             "overnight_learning_heartbeat",
             "pre_earnings",
             "continuous_improvement",
@@ -3067,6 +3247,14 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
                 "market_behavior": (
                     "regenera latest_operational_health.json periodicamente y al arrancar; "
                     "si falla, el kill switch por informe rancio sigue fail-open"
+                ),
+            },
+            {
+                "id": "weekly_learning_review",
+                "cadence": f"viernes 23:15 {settings.local_timezone}",
+                "market_behavior": (
+                    "republica scoreboard, investigacion y digest semanal con una sola decision solicitada; "
+                    "no cambia politica"
                 ),
             },
             {
