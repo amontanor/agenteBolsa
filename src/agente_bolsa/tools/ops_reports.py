@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -40,6 +41,128 @@ def _read_json(path: Path) -> dict[str, Any]:
         return {"available": True, "path": str(path), "payload": json.loads(path.read_text(encoding="utf-8"))}
     except (OSError, json.JSONDecodeError):
         return {"available": False, "path": str(path)}
+
+
+def _market_data_anomalies(
+    prices: pd.DataFrame,
+    meta: dict[str, Any],
+    symbols: list[str],
+) -> list[dict[str, Any]]:
+    """Describe anomalías observadas sin alterar barras ni decisiones operativas.
+
+    Reglas conservadoras: solo una barra OHLC inválida en la fecha más reciente
+    observada del símbolo se clasifica como bloqueante para el escaneo. Volumen
+    inválido y barras históricas son advertencias; gaps extremos son informativos.
+    Los avisos antiguos sin fila verificable se conservan como ``unavailable``.
+    """
+    provider = meta.get("source") or "unavailable"
+    cache = {
+        "cache_hit": bool(meta.get("cache_hit")),
+        "cache_key": meta.get("cache_key"),
+        "cache_age_seconds": meta.get("cache_age_seconds"),
+    }
+    multi_symbol = isinstance(prices.columns, pd.MultiIndex)
+    anomalies: list[dict[str, Any]] = []
+    detailed_symbols: set[str] = set()
+
+    for symbol in sorted({str(item).upper() for item in symbols if str(item).strip()}):
+        try:
+            frame = prices[symbol].copy() if multi_symbol else prices.copy()
+        except KeyError:
+            continue
+        if frame.empty:
+            continue
+        frame = frame.dropna(how="all")
+        if frame.empty:
+            continue
+        detailed_symbols.add(symbol)
+        latest_date = max(str(index)[:10] for index in frame.index)
+        previous_close: float | None = None
+        for index, row in frame.sort_index(kind="stable").iterrows():
+            date_text = str(index)[:10]
+            values = {field: pd.to_numeric(pd.Series([row.get(field)]), errors="coerce").iloc[0] for field in ("Open", "High", "Low", "Close", "Volume")}
+            open_, high, low, close, volume = (values[field] for field in ("Open", "High", "Low", "Close", "Volume"))
+            ohlc_invalid: list[str] = []
+            for field, value in (("open", open_), ("high", high), ("low", low), ("close", close)):
+                if pd.isna(value) or not math.isfinite(float(value)) or float(value) <= 0:
+                    ohlc_invalid.append(field)
+            if not ohlc_invalid:
+                if float(high) < float(low):
+                    ohlc_invalid.extend(["high", "low"])
+                if float(high) < max(float(open_), float(close)):
+                    ohlc_invalid.append("high")
+                if float(low) > min(float(open_), float(close)):
+                    ohlc_invalid.append("low")
+            if ohlc_invalid:
+                affects_scan = date_text == latest_date
+                anomalies.append(
+                    {
+                        "symbol": symbol,
+                        "date": date_text,
+                        "invalid_fields": sorted(set(ohlc_invalid)),
+                        "invalidity_class": "ohlc_invalid",
+                        "severity": "bloqueante" if affects_scan else "advertencia",
+                        "provider": provider,
+                        "cache": cache,
+                        "affects_operational_scan": affects_scan,
+                    }
+                )
+            if not pd.isna(volume) and (not math.isfinite(float(volume)) or float(volume) < 0):
+                anomalies.append(
+                    {
+                        "symbol": symbol,
+                        "date": date_text,
+                        "invalid_fields": ["volume"],
+                        "invalidity_class": "volume_invalid",
+                        "severity": "advertencia",
+                        "provider": provider,
+                        "cache": cache,
+                        "affects_operational_scan": False,
+                    }
+                )
+            if previous_close is not None and not pd.isna(open_) and previous_close != 0 and abs(float(open_) - previous_close) / abs(previous_close) > 0.35:
+                anomalies.append(
+                    {
+                        "symbol": symbol,
+                        "date": date_text,
+                        "invalid_fields": ["open", "close"],
+                        "invalidity_class": "suspicious_gap",
+                        "severity": "informativa",
+                        "provider": provider,
+                        "cache": cache,
+                        "affects_operational_scan": False,
+                    }
+                )
+            if not pd.isna(close) and math.isfinite(float(close)) and float(close) > 0:
+                previous_close = float(close)
+
+    # La metadata histórica solo trae contadores/texto; no se atribuye una causa.
+    for alert in meta.get("validation_alerts") or []:
+        text = str(alert)
+        symbol = text.split(":", 1)[0].strip().upper() if ":" in text else "unavailable"
+        if symbol in detailed_symbols:
+            continue
+        anomalies.append(
+            {
+                "symbol": symbol or "unavailable",
+                "date": "unavailable",
+                "invalid_fields": [],
+                "invalidity_class": "unavailable",
+                "severity": "informativa",
+                "provider": provider,
+                "cache": cache,
+                "affects_operational_scan": "unavailable",
+            }
+        )
+
+    unique: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for item in anomalies:
+        key = (
+            item["symbol"], item["date"], tuple(item["invalid_fields"]), item["invalidity_class"],
+            item["provider"], item["cache"].get("cache_key"),
+        )
+        unique.setdefault(key, item)
+    return [unique[key] for key in sorted(unique)]
 
 
 def _benchmark_return(symbol: str, start: str, end: str, settings: Settings) -> dict[str, Any]:
@@ -113,6 +236,7 @@ def build_market_data_quality_report(
             "error": str(exc),
         }
         warnings.append(f"Descarga de mercado fallida: {exc}")
+    anomalies = _market_data_anomalies(prices, meta, symbols)
     alerts = list(meta.get("validation_alerts") or [])
     if meta.get("missing_symbols_count"):
         alerts.append(f"Faltan {meta['missing_symbols_count']} simbolos sobre {meta.get('requested_count', 0)}")
@@ -128,15 +252,22 @@ def build_market_data_quality_report(
             "cache_hit": bool(meta.get("cache_hit")),
             "cache_age_seconds": meta.get("cache_age_seconds"),
             "alerts": len(alerts),
+            "anomalies_unique": len(anomalies),
+            "real_blockers": sum(1 for item in anomalies if item["severity"] == "bloqueante"),
             "blockers": int(meta.get("coverage_ratio", 0.0) < 0.95 or bool(meta.get("missing_symbols_count"))),
         },
         "period": {"from": start_value, "to": end_value},
         "market_data": meta,
+        "anomalies": anomalies,
         "alerts": alerts,
         "warnings": warnings,
         "sample_rows": int(len(prices)),
         "required_action": (
-            "Revisar simbolos faltantes y anomalias antes de confiar en el scan operativo."
+            "Revisar las anomalías bloqueantes antes del siguiente escaneo operativo."
+            if any(item["severity"] == "bloqueante" for item in anomalies)
+            else "Revisar advertencias de calidad de datos; no bloquean el escaneo operativo."
+            if anomalies
+            else "Revisar simbolos faltantes antes de confiar en el scan operativo."
             if alerts
             else "Cobertura suficiente para paper trading conservador."
         ),

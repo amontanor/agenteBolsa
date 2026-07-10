@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.145**
+- Version actual: **0.4.146**
 - Ultima actualizacion: 2026-07-10
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -43,6 +43,22 @@ amplia exposicion.
 | P-L20 | Automatizacion postcierre, health ampliado y agenda semanal | HECHO (v0.4.143) |
 | P-L21 | Reparar y probar el diagnostico PowerShell del stack | HECHO (v0.4.144) |
 | P-L22 | Diagnostico auditable de LLM real, fallback y capacity-fill | HECHO (v0.4.145) |
+| P-L23 | Diagnostico accionable de calidad de datos de mercado | HECHO (v0.4.146) |
+
+### P-L23 - Diagnostico accionable de calidad de datos de mercado. **HECHO (v0.4.146).**
+`market-data-quality` deja de limitarse a contadores agregados: cada anomalia
+identifica simbolo, fecha, campos invalidos, clase, proveedor, procedencia de
+cache e impacto declarado sobre el escaneo. Las reglas conservadoras son
+explicitas: OHLC invalido en la ultima fecha observada es bloqueante diagnostico;
+OHLC historico o volumen invalido son advertencias; gaps extremos son
+informativos. Los avisos legacy sin fila verificable se marcan `unavailable`,
+sin inventar causa. La identidad estable de barra evita duplicados de cache. El
+digest incorpora cobertura, bloqueos diagnosticos, anomalias unicas y accion.
+No se modifican barras, proveedor, gates, ranking, ordenes ni politica de
+bloqueo. La evidencia inicial del cache `600f58bc83572a79` (yfinance, no cache
+hit) mantiene cobertura 500/500 y bloqueos de cobertura 0, y concreta 25 OHLC
+invalidos de 2026-07-10 que afectan al escaneo; requiere revision antes del
+siguiente escaneo, sin aplicar correccion automatica.
 
 ### P-L22 - Verdad del fallback LLM. **HECHO (v0.4.145).**
 Se publica `latest_llm_decision_quality.json`, que separa recomendaciones LLM

@@ -169,6 +169,34 @@ def test_digest_has_exactly_one_director_decision(tmp_path):
     assert text.count("- decision solicitada:") == 1
 
 
+def test_digest_includes_actionable_market_data_quality(tmp_path):
+    settings = _settings(tmp_path)
+    store = _store(settings)
+    reports = tmp_path / "reports"
+    reports.mkdir(parents=True)
+    (reports / "latest_market_data_quality.json").write_text(
+        json.dumps(
+            {
+                "summary": {"coverage_ratio": 1.0, "real_blockers": 1, "anomalies_unique": 2},
+                "required_action": "Revisar las anomalías bloqueantes antes del siguiente escaneo operativo.",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    digest = build_lab_digest(store, data_dir=tmp_path)
+    text = format_lab_digest_text(digest)
+
+    assert digest["director_brief"]["market_data_quality"] == {
+        "status": "available",
+        "coverage": 1.0,
+        "real_blockers": 1,
+        "anomalies_unique": 2,
+        "required_action": "Revisar las anomalías bloqueantes antes del siguiente escaneo operativo.",
+    }
+    assert "market-data-quality: cobertura=1.0 | bloqueos_reales=1 | anomalías_únicas=2" in text
+
+
 def test_production_health_tracks_ttl_coherence_fallback_and_overlap(tmp_path):
     settings = _settings(tmp_path)
     store = _store(settings)

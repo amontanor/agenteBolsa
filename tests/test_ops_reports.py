@@ -53,7 +53,105 @@ def test_market_data_quality_report_writes_latest(monkeypatch, tmp_path):
 
     assert report["summary"]["provider_used"] == "fmp"
     assert report["summary"]["coverage_ratio"] == 1.0
+    assert report["anomalies"] == []
     assert (tmp_path / "reports" / "latest_market_data_quality.json").exists()
+
+
+def _quality_report(monkeypatch, tmp_path, frame, meta):
+    settings = _settings(tmp_path)
+    monkeypatch.setattr("agente_bolsa.tools.ops_reports.resolve_study_universe", lambda *args, **kwargs: ["AAPL"])
+    monkeypatch.setattr(
+        "agente_bolsa.tools.ops_reports.download_daily_prices_with_metadata",
+        lambda *args, **kwargs: (frame, meta),
+    )
+    return build_market_data_quality_report(settings, tmp_path / "reports", "dq_test")
+
+
+def _quality_meta(**overrides):
+    meta = {
+        "source": "fmp",
+        "requested_count": 1,
+        "symbols_with_data_count": 1,
+        "coverage_ratio": 1.0,
+        "cache_hit": True,
+        "cache_key": "stable-cache-key",
+        "cache_age_seconds": 12.0,
+        "validation_alerts": [],
+        "missing_symbols_count": 0,
+    }
+    meta.update(overrides)
+    return meta
+
+
+def test_market_data_quality_identifies_latest_invalid_ohlc_as_blocking(monkeypatch, tmp_path):
+    frame = pd.DataFrame(
+        {"Open": [100.0], "High": [99.0], "Low": [98.0], "Close": [101.0], "Volume": [1000.0]},
+        index=pd.to_datetime(["2026-05-01"]),
+    )
+
+    report = _quality_report(monkeypatch, tmp_path, frame, _quality_meta())
+
+    assert report["anomalies"] == [
+        {
+            "symbol": "AAPL",
+            "date": "2026-05-01",
+            "invalid_fields": ["high"],
+            "invalidity_class": "ohlc_invalid",
+            "severity": "bloqueante",
+            "provider": "fmp",
+            "cache": {"cache_hit": True, "cache_key": "stable-cache-key", "cache_age_seconds": 12.0},
+            "affects_operational_scan": True,
+        }
+    ]
+    assert report["summary"]["real_blockers"] == 1
+
+
+def test_market_data_quality_identifies_invalid_volume_as_warning(monkeypatch, tmp_path):
+    frame = pd.DataFrame(
+        {"Open": [100.0], "High": [101.0], "Low": [99.0], "Close": [100.0], "Volume": [-1.0]},
+        index=pd.to_datetime(["2026-05-01"]),
+    )
+
+    report = _quality_report(monkeypatch, tmp_path, frame, _quality_meta())
+
+    anomaly = report["anomalies"][0]
+    assert anomaly["invalidity_class"] == "volume_invalid"
+    assert anomaly["severity"] == "advertencia"
+    assert anomaly["affects_operational_scan"] is False
+
+
+def test_market_data_quality_deduplicates_repeated_cached_bar(monkeypatch, tmp_path):
+    frame = pd.DataFrame(
+        {"Open": [100.0, 100.0], "High": [99.0, 99.0], "Low": [98.0, 98.0], "Close": [101.0, 101.0], "Volume": [1000.0, 1000.0]},
+        index=pd.to_datetime(["2026-05-01", "2026-05-01"]),
+    )
+
+    report = _quality_report(monkeypatch, tmp_path, frame, _quality_meta())
+
+    assert len(report["anomalies"]) == 1
+    assert report["summary"]["anomalies_unique"] == 1
+
+
+def test_market_data_quality_marks_legacy_alert_without_detail_unavailable(monkeypatch, tmp_path):
+    frame = pd.DataFrame(
+        {"Open": [100.0], "High": [101.0], "Low": [99.0], "Close": [100.0], "Volume": [1000.0]},
+        index=pd.to_datetime(["2026-05-01"]),
+    )
+
+    report = _quality_report(monkeypatch, tmp_path, frame, _quality_meta(validation_alerts=["MSFT: 1 barras invalidas"]))
+
+    assert report["anomalies"] == [
+        {
+            "symbol": "MSFT",
+            "date": "unavailable",
+            "invalid_fields": [],
+            "invalidity_class": "unavailable",
+            "severity": "informativa",
+            "provider": "fmp",
+            "cache": {"cache_hit": True, "cache_key": "stable-cache-key", "cache_age_seconds": 12.0},
+            "affects_operational_scan": "unavailable",
+        }
+    ]
 
 
 def test_weekly_trading_review_aggregates_gates(monkeypatch, tmp_path):

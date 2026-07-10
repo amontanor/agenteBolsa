@@ -174,6 +174,7 @@ def _director_brief(
 ) -> dict[str, Any]:
     scoreboard = _load_json_file(data_dir / "reports" / "latest_learning_scoreboard.json") or {}
     research = _load_json_file(data_dir / "reports" / "latest_autonomous_research.json") or {}
+    market_quality = _load_json_file(data_dir / "reports" / "latest_market_data_quality.json")
     data_quality = scoreboard.get("data_quality") or {}
     blockers = [str(item) for item in safety.get("violations") or []]
     blockers.extend(str(item) for item in data_quality.get("issues") or [])
@@ -212,10 +213,30 @@ def _director_brief(
             "control": scoreboard.get("control_coverage") or {"status": "unavailable"},
             "maturity": scoreboard.get("maturity_by_horizon") or {"status": "unavailable"},
         },
+        "market_data_quality": _market_data_quality_digest(market_quality),
         "blockers": blockers,
         "hypotheses": open_hypotheses,
         "decision_requested": decision_requested,
         "activity_counts_are_secondary": True,
+    }
+
+
+def _market_data_quality_digest(report: dict[str, Any] | None) -> dict[str, Any]:
+    if not report:
+        return {
+            "status": "unavailable",
+            "coverage": "unavailable",
+            "real_blockers": "unavailable",
+            "anomalies_unique": "unavailable",
+            "required_action": "unavailable: falta latest_market_data_quality.json",
+        }
+    summary = report.get("summary") or {}
+    return {
+        "status": "available",
+        "coverage": summary.get("coverage_ratio", "unavailable"),
+        "real_blockers": summary.get("real_blockers", "unavailable"),
+        "anomalies_unique": summary.get("anomalies_unique", "unavailable"),
+        "required_action": report.get("required_action") or "unavailable: falta acción requerida",
     }
 
 
@@ -724,6 +745,7 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
     decision_requested = director.get("decision_requested") or {}
     evaluation = (director.get("results") or {}).get("evaluation") or {}
     coverage = director.get("coverage") or {}
+    market_quality = director.get("market_data_quality") or {}
 
     lines = [
         f"Digest diario del lab - ultimos {digest.get('days')} dia(s)",
@@ -737,6 +759,13 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
             f"control={_none_text((coverage.get('control') or {}).get('pct'))}"
         ),
         f"- bloqueos: {len(director.get('blockers') or [])}",
+        (
+            "- market-data-quality: "
+            f"cobertura={_none_text(market_quality.get('coverage'))} | "
+            f"bloqueos_reales={_none_text(market_quality.get('real_blockers'))} | "
+            f"anomalías_únicas={_none_text(market_quality.get('anomalies_unique'))}"
+        ),
+        f"- acción calidad de datos: {market_quality.get('required_action', 'unavailable')}",
         f"- hipotesis abiertas: {len(director.get('hypotheses') or [])}",
         (
             "- LLM decision: "
