@@ -1,69 +1,86 @@
-# Informe P-L27B — auditoría MFE/MAE y geometría stop/take
+# Informe P-L27B - auditoria MFE/MAE y geometria stop/take
 
 Fecha: 2026-07-11
-Versión: 0.4.153
-Commit de partida: 9fedb90b
+Version: 0.4.154 (correccion P-L27BR)
+Commit de partida P-L27BR: f531e4bb
 
 ## Resultado
 
-Se añadió el comando solo lectura `excursion-quality-report`. Lee
-`signal_outcomes` sin crear experimentos, alterar históricos ni escribir
-artefactos. Su JSON tiene schema `p-l27b.excursion-quality.v1`, incluye los
-parámetros de fecha/horizonte/muestra y un `content_hash` determinista. La
-ventana por defecto es la reciente; `--historical` solicita explícitamente todo
-el historial disponible.
+`excursion-quality-report` es una lectura observacional y pura de
+`signal_outcomes`: no crea experimentos, propuestas ni artefactos, y no altera
+historicos. El schema final es `p-l27b.excursion-quality.v2`; incluye parametros
+resueltos, fechas, calidad de datos y un `content_hash` estable que excluye solo
+`generated_at`.
 
-## Definiciones y límites
+## Correccion dimensional P-L27BR
 
-`risk_distance = entry_price - stop_loss`, `reward_distance = take_profit -
-entry_price`, `stop_distance_pct = risk_distance / entry_price`,
-`take_distance_pct = reward_distance / entry_price`, `reward_risk_ratio =
-reward_distance / risk_distance`, `mae_r = abs(min(mae, 0)) / risk_distance`,
-`mfe_r = max(mfe, 0) / risk_distance`, `target_attainment = mfe_r /
-reward_risk_ratio`. MFE/MAE son fracciones decimales respecto a la entrada,
-producidas por `signal_learning.py`, y actualmente corresponden a la ventana
-10d; por ello no se reinterpretan como excursiones 1d/3d/5d. La geometría se
-evalúa para señales long; señales no-long se conservan como exclusión auditable
-porque el productor actual no publica excursiones direccionales comparables.
-No se calculan alpha, exceso frente a SPY, causalidad, significancia ni
-drawdown de cartera: no hay datos locales suficientes para ello.
+La causa raiz de P-L27B v1 fue mezclar unidades: entry, stop y take son precios
+absolutos; MFE/MAE son fracciones decimales respecto a entry. V1 dividia una
+fraccion por una distancia monetaria, asi que sus `mfe_r`, `mae_r`,
+`stop_consumption` y `target_attainment` quedan invalidados y no son comparables.
 
-## Lectura local determinista
+Las formulas v2 para long son:
 
-Ejecución: `excursion-quality-report --from 2026-06-01 --to 2026-07-10
---min-sample 300 --json`.
+- `risk_distance_price = entry_price - stop_loss` (precio)
+- `reward_distance_price = take_profit - entry_price` (precio)
+- `stop_distance_pct = risk_distance_price / entry_price` (fraccion decimal)
+- `take_distance_pct = reward_distance_price / entry_price` (fraccion decimal)
+- `reward_risk_ratio = reward_distance_price / risk_distance_price` (multiplo R)
+- `mae_r = abs(min(mae_decimal, 0)) / stop_distance_pct` (multiplo R)
+- `mfe_r = max(mfe_decimal, 0) / stop_distance_pct` (multiplo R)
+- `target_attainment = max(mfe_decimal, 0) / take_distance_pct = mfe_r / target_r`
 
-- 328.266 filas seleccionadas; 582.007 observaciones maduras por horizonte
-  (una fila puede aportar varios horizontes), 11.149 inmaduras y 80.471
-  excluidas por `direction_not_long`.
-- Cobertura válida sobre maduras: 1.0; imputaciones: 0; linaje: 582.007
-  `legacy_unverified`, 0 verificadas.
-- 1d: n=148.289, media/mediana retorno -0,000116/-0,001600, MFE medio
-  0,063059, MAE medio -0,051997.
-- 3d: n=148.289, media/mediana -0,000922/-0,000100.
-- 5d: n=145.749, media/mediana 0,002992/0,005400.
-- 10d: n=139.680, media/mediana 0,009844/0,015900.
-- En los cuatro horizontes la geometría reward/risk mediana es 1,5 y el
-  estado es `evaluable` con la muestra mínima 300.
+Ejemplo obligatorio: entry=100, stop=90, take=130, MFE=0.20 y MAE=-0.05 da
+stop_distance_pct=0.10, take_distance_pct=0.30, target_r=3, MFE=2R, MAE=0.5R
+y target_attainment=0.666667. La misma geometria a entry=10, stop=9, take=13
+produce los mismos multiplos R.
 
-Estas cifras describen retornos forward y excursiones de señales, no profits
-ejecutados ni una mejora de trading.
+## Conteos y semantica temporal
 
-## Compatibilidad y seguridad
+El informe separa ahora filas fuente de observaciones fila×horizonte:
+`selected_source_rows`, `valid_geometry_source_rows`,
+`excluded_source_rows` y sus motivos son contadores de fuente. Por separado,
+`selected_horizon_observations`, madurez, validas y excluidas son contadores de
+fila×horizonte. `geometry_coverage` usa long fuente como denominador;
+`matured_valid_coverage` usa observaciones maduras como denominador.
 
-Los registros históricos no se reescriben ni se rellenan. La salida distingue
-madurez, exclusiones, cobertura, concentración temporal/simbólica y deuda de
-linaje. No se tocaron estrategias, señales, ranking, gates, órdenes, exposición,
-horarios, timeouts ni archivos protegidos. El límite de dos admisiones diarias,
-WIP nuevo máximo dos, un codegen nocturno y `ALLOW_AUTO_APPLY_IMPROVEMENTS=false`
-permanece sin cambios; este informe no admite propuestas ni puede aplicar código.
+Toda excursion usa `excursion_horizon=10d`. Las vistas 1d/3d/5d llevan
+`return_horizon` explicito y la advertencia `observational_mismatched_horizon`:
+relacionan retorno temprano con MFE/MAE de 10d, por lo que son solo descriptivas
+y no producen recomendaciones. Grupos y buckets se publican por horizonte para
+evitar presentar una senal como cuatro senales.
 
-## Pruebas
+## Lectura local corregida
 
-`tests/test_excursion_quality.py` cubre geometría completa, fórmulas, campos
-ausentes/no numéricos, inmadurez, filtros de fechas/horizonte, vista histórica,
-muestra mínima, argumentos inválidos, salida `unavailable` y ausencia de
-mutaciones. No llama a red ni a LLM. La suite completa y los gates operativos se
-registran en la entrega del commit.
+Ejecucion: `excursion-quality-report --from 2026-06-01 --to 2026-07-10
+--horizon 10d --min-sample 300 --json`.
 
-La siguiente hipótesis de investigación queda deliberadamente fuera de P-L27B.
+- 228.760 filas fuente: 148.289 long y 80.471 short; direction ausente e
+  invalida: 0. Short permanece excluida explicitamente porque el productor no
+  ofrece excursion direccional short verificable.
+- Vista 10d: 228.760 observaciones seleccionadas, 216.982 maduras, 139.680
+  maduras-validas y 77.302 maduras excluidas por short.
+- `matured_valid_coverage=0.643740`; cero imputaciones; 139.680 legacy sin
+  linaje verificable y cero verificadas.
+- Metricas 10d corregidas: retorno medio/mediano 0.9844%/1.59%; MFE medio
+  1.135488R; MAE medio 0.818641R; alcance medio de target 0.756992; reward/risk
+  medio y mediano 1.5R.
+
+Son estadisticas descriptivas de senales, no P&L ejecutado, alpha, exceso SPY,
+causalidad, significancia ni mejora de profits.
+
+## Idempotencia, seguridad y pruebas
+
+Sin `--to`, los datos locales resolvieron 2026-07-07. Repetir con
+`--to 2026-07-07` produjo el mismo `content_hash`; cambiar la fecha resuelta
+cambia los parametros y el hash como corresponde. La lectura no modifica Store.
+
+Las pruebas cubren formulas dimensionales, invariancia, escala de precios,
+bordes y cobertura de buckets, signos MFE/MAE, cada exclusion, direction short/
+ausente/invalida, conteos fuente/horizonte, estados, linaje, semantica temporal,
+hash, JSON, lectura pura y CLI con Store temporal. No se llama a red, LLM,
+codegen, ordenes ni propuestas.
+
+No se modificaron estrategias, senales, ranking, gates, stops, takes, ordenes,
+exposicion, horarios, timeouts, archivos protegidos ni registros historicos.
+P-L27B sigue pendiente de aceptacion de direccion tecnica tras revisar P-L27BR.

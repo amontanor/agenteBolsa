@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.153**
+- Version actual: **0.4.154**
 - Ultima actualizacion: 2026-07-10
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -50,9 +50,19 @@ amplia exposicion.
 | P-L24R2 | Segmentos reales de decision, gates, persistencia e informes | HECHO (v0.4.150) |
 | P-L24R3 | Integracion real y eliminacion de duplicacion temporal | HECHO (v0.4.151) |
 | P-L26B | Contrato ejecutable desde hallazgos medidos | HECHO (v0.4.152) |
-| P-L27B | Auditoria MFE/MAE y geometria stop/take | HECHO (v0.4.153) |
+| P-L27B | Auditoria MFE/MAE y geometria stop/take | CORREGIDO, pendiente de aceptacion (v0.4.154) |
+| P-L27BR | Correccion dimensional, conteos y pruebas MFE/MAE | HECHO (v0.4.154) |
 
-### P-L27B - Auditoria MFE/MAE y geometria stop/take. **HECHO (v0.4.153).**
+### P-L27BR - Correccion dimensional, conteos y pruebas MFE/MAE. **HECHO (v0.4.154).**
+P-L27B queda corregido antes de aceptacion: `mfe_10d` y `mae_10d` son
+fracciones sobre el precio de entrada, por lo que los multiplos R se normalizan
+por `stop_distance_pct`, nunca por una distancia monetaria. El schema v2 separa
+filas fuente de observaciones fila×horizonte, clasifica `short`, ausente e
+invalida por separado, y etiqueta toda excursion como 10d. Los retornos 1d/3d/5d
+son vistas auxiliares con horizonte no coincidente. Las metricas R de v1 son
+dimensionalmente invalidas y no comparables. No cambia trading ni historicos.
+
+### P-L27B - Auditoria MFE/MAE y geometria stop/take. **CORREGIDO, pendiente de aceptacion (v0.4.154).**
 Se incorpora `excursion-quality-report`, una lectura observacional y
 determinista de `signal_outcomes`. Calcula MFE/MAE forward, consumo del stop,
 alcance del objetivo y reward/risk por horizonte y cohortes, con muestra minima,
