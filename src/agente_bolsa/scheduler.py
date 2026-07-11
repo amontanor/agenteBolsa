@@ -40,6 +40,7 @@ from .tools.daily_learning import build_learning_digest_report, load_daily_learn
 from .tools.execution import submit_paper_order_plan
 from .tools.learning_mode import active_learning_mode, learning_mode_source
 from .tools.learning_scoreboard import build_learning_scoreboard
+from .tools.market_cycle_timing import MarketCycleTiming
 from .tools.news_sentiment import analyze_news_sentiment_for_candidates
 from .tools.operational_health import (
     activate_persistent_kill_switch,
@@ -1327,6 +1328,7 @@ def market_cycle_job(
 ) -> None:
     run_id = new_id("mkt")
     started_at = datetime.now(timezone.utc)
+    timing = MarketCycleTiming(settings.data_dir / "reports", run_id, started_at=started_at)
     calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
     status = calendar.status()
     reporter = _reporter(settings, store, verbose)
@@ -1347,162 +1349,79 @@ def market_cycle_job(
             status.as_dict(),
         )
         _set_job_status(store, "market_cycle", status="skipped", run_id=run_id, started_at=started_at, detail="mercado cerrado")
+        timing.finalize("skipped")
         return
 
     cycle_settings = settings
     technical_context: dict[str, Any] | None = None
     if settings.intraday_technical_scan_enabled:
-        universe_name = settings.intraday_technical_scan_universe or settings.closed_market_study_universe
-        max_symbols = settings.intraday_technical_scan_max_symbols or settings.closed_market_study_max_symbols
-        reporter.emit(
-            "technical_analyst",
-            "intraday_technical_scan_started",
-            run_id,
-            f"Escaneo tecnico intradia iniciado: {universe_name}, max {max_symbols} simbolos.",
-            {"universe": universe_name, "max_symbols": max_symbols},
-        )
-        symbols = resolve_study_universe(
-            universe_name,
-            settings.universe,
-            max_symbols,
-            settings.data_dir / "cache",
-        )
-        report = build_closed_market_technical_study(
-            symbols,
-            settings.data_dir / "reports",
-            run_id,
-            benchmark_symbol=settings.benchmark_symbol,
-            store=store,
-            learning_mode_config=active_learning_mode(settings),
-        )
-        selected_candidates, selected_symbols = _selected_candidates(report, settings)
-        report["selected_candidates"] = selected_candidates
+        timing.start("technical_analysis")
         try:
-            from .tools.market_state import load_latest_market_state
-
-            latest_market_state = load_latest_market_state(settings.data_dir / "reports")
-            if latest_market_state:
-                report["market_state"] = latest_market_state
-        except Exception as exc:  # noqa: BLE001 - el ledger no debe romper el ciclo.
-            log_swallow(LOGGER, "adjuntar regimen al ledger intradia", exc)
-        signals_saved = record_signal_candidates(
-            store,
-            report,
-            source=learning_mode_source(settings=settings, default_source="intraday_scan"),
-        )
-        top_longs = ", ".join(item["symbol"] for item in report["top_longs"][:5]) or "sin candidatos"
-        top_shorts = ", ".join(item["symbol"] for item in report["top_shorts"][:5]) or "sin candidatos"
-        reporter.emit(
-            "technical_analyst",
-            "intraday_technical_scan_completed",
-            run_id,
-            f"Escaneo tecnico listo. Largos: {top_longs}. Cortos: {top_shorts}.",
-            {
-                "path": report["path"],
-                "symbols_scanned": report["symbols_scanned"],
-                "symbols_with_data": report["symbols_with_data"],
-                "signals_saved": signals_saved,
-                "selected_symbols": selected_symbols,
-                "analysis_plan_counts": report["analysis_plan_counts"],
-            },
-        )
-        technical_context = _compact_scan_context(report, selected_candidates)
-
-        try:
-            breakout_symbols = merge_breakout_universe(symbols, settings.breakout_watchlist)
-            breakout_report = build_breakout_scan(
-                breakout_symbols,
-                settings.data_dir / "reports",
-                run_id,
-            )
-            confirmed = breakout_report.get("confirmed", [])
-            tradable = [item for item in confirmed if item.get("tradable")]
-            watch = breakout_report.get("watch", [])
-            blocked = breakout_report.get("blocked_or_failed", [])
-            confirmed_text = ", ".join(
-                f"{item['symbol']} ({item['risk_level']})" for item in confirmed[:5]
-            ) or "ninguna"
-            watch_text = ", ".join(item["symbol"] for item in watch[:5]) or "ninguna"
+            universe_name = settings.intraday_technical_scan_universe or settings.closed_market_study_universe
+            max_symbols = settings.intraday_technical_scan_max_symbols or settings.closed_market_study_max_symbols
             reporter.emit(
-                "technical_analyst",
-                "intraday_breakout_scan_completed",
-                run_id,
-                (
-                    "Rupturas revisadas. "
-                    f"Confirmadas: {confirmed_text}. Vigilancia: {watch_text}. "
-                    f"Operables conservadoras: {len(tradable)}; bloqueadas/fallidas: {len(blocked)}."
-                ),
-                {
-                    "path": breakout_report["path"],
-                    "symbols_scanned": breakout_report["symbols_scanned"],
-                    "confirmed": confirmed[:10],
-                    "watch": watch[:10],
-                    "tradable_symbols": [item["symbol"] for item in tradable[:10]],
-                    "blocked_or_failed_count": len(blocked),
-                    "warnings": breakout_report["warnings"][:10],
-                },
+                "technical_analyst", "intraday_technical_scan_started", run_id,
+                f"Escaneo tecnico intradia iniciado: {universe_name}, max {max_symbols} simbolos.",
+                {"universe": universe_name, "max_symbols": max_symbols},
             )
-            if technical_context is not None:
+            symbols = resolve_study_universe(universe_name, settings.universe, max_symbols, settings.data_dir / "cache")
+            report = build_closed_market_technical_study(
+                symbols, settings.data_dir / "reports", run_id, benchmark_symbol=settings.benchmark_symbol,
+                store=store, learning_mode_config=active_learning_mode(settings),
+            )
+            selected_candidates, selected_symbols = _selected_candidates(report, settings)
+            report["selected_candidates"] = selected_candidates
+            try:
+                from .tools.market_state import load_latest_market_state
+                latest_market_state = load_latest_market_state(settings.data_dir / "reports")
+                if latest_market_state:
+                    report["market_state"] = latest_market_state
+            except Exception as exc:  # noqa: BLE001
+                log_swallow(LOGGER, "adjuntar regimen al ledger intradia", exc)
+            signals_saved = record_signal_candidates(
+                store, report, source=learning_mode_source(settings=settings, default_source="intraday_scan")
+            )
+            top_longs = ", ".join(item["symbol"] for item in report["top_longs"][:5]) or "sin candidatos"
+            top_shorts = ", ".join(item["symbol"] for item in report["top_shorts"][:5]) or "sin candidatos"
+            reporter.emit(
+                "technical_analyst", "intraday_technical_scan_completed", run_id,
+                f"Escaneo tecnico listo. Largos: {top_longs}. Cortos: {top_shorts}.",
+                {"path": report["path"], "symbols_scanned": report["symbols_scanned"], "symbols_with_data": report["symbols_with_data"], "signals_saved": signals_saved, "selected_symbols": selected_symbols, "analysis_plan_counts": report["analysis_plan_counts"]},
+            )
+            technical_context = _compact_scan_context(report, selected_candidates)
+            try:
+                breakout_report = build_breakout_scan(merge_breakout_universe(symbols, settings.breakout_watchlist), settings.data_dir / "reports", run_id)
+                confirmed = breakout_report.get("confirmed", [])
+                watch = breakout_report.get("watch", [])
+                blocked = breakout_report.get("blocked_or_failed", [])
+                tradable = [item for item in confirmed if item.get("tradable")]
+                reporter.emit(
+                    "technical_analyst", "intraday_breakout_scan_completed", run_id,
+                    f"Rupturas revisadas. Operables conservadoras: {len(tradable)}; bloqueadas/fallidas: {len(blocked)}.",
+                    {"path": breakout_report["path"], "symbols_scanned": breakout_report["symbols_scanned"], "confirmed": confirmed[:10], "watch": watch[:10], "tradable_symbols": [item["symbol"] for item in tradable[:10]], "blocked_or_failed_count": len(blocked), "warnings": breakout_report["warnings"][:10]},
+                )
                 technical_context["breakout_scan_path"] = breakout_report["path"]
                 technical_context["breakout_confirmed"] = confirmed[:5]
                 technical_context["breakout_watch"] = watch[:5]
-        except Exception as exc:  # noqa: BLE001 - breakout scan must not block the cycle.
-            reporter.emit(
-                "technical_analyst",
-                "intraday_breakout_scan_failed",
-                run_id,
-                f"Escaneo de rupturas fallido: {exc}",
-                {"error": repr(exc)},
-            )
-
-        if settings.news_sentiment_enabled and settings.intraday_news_sentiment_enabled and use_crew and selected_candidates:
-            reporter.emit(
-                "macro_news_researcher",
-                "intraday_news_sentiment_started",
-                run_id,
-                f"Validando noticias intradia para {len(selected_candidates)} candidatos tecnicos.",
-                {
-                    "symbols": [item["symbol"] for item in selected_candidates],
-                    "news_items_per_symbol": settings.news_items_per_symbol,
-                },
-            )
-            sentiment_report = analyze_news_sentiment_for_candidates(
-                settings,
-                selected_candidates,
-                settings.data_dir / "reports",
-                run_id,
-                max_news_items=settings.news_items_per_symbol,
-            )
-            supportive = [
-                item["symbol"]
-                for item in sentiment_report["results"]
-                if item.get("sentiment", {}).get("supports_technical_setup")
-            ]
-            reporter.emit(
-                "macro_news_researcher",
-                "intraday_news_sentiment_completed",
-                run_id,
-                f"Noticias intradia listas. Apoyan tesis: {', '.join(supportive) or 'sin apoyos claros'}.",
-                {
-                    "path": sentiment_report["path"],
-                    "symbols_analyzed": sentiment_report["symbols_analyzed"],
-                    "supportive": supportive,
-                    "warnings": sentiment_report["warnings"][:10],
-                },
-            )
-            if technical_context is not None:
+            except Exception as exc:  # noqa: BLE001
+                reporter.emit("technical_analyst", "intraday_breakout_scan_failed", run_id, f"Escaneo de rupturas fallido: {exc}", {"error": repr(exc)})
+            if settings.news_sentiment_enabled and settings.intraday_news_sentiment_enabled and use_crew and selected_candidates:
+                reporter.emit("macro_news_researcher", "intraday_news_sentiment_started", run_id, f"Validando noticias intradia para {len(selected_candidates)} candidatos tecnicos.", {"symbols": [item["symbol"] for item in selected_candidates], "news_items_per_symbol": settings.news_items_per_symbol})
+                sentiment_report = analyze_news_sentiment_for_candidates(settings, selected_candidates, settings.data_dir / "reports", run_id, max_news_items=settings.news_items_per_symbol)
+                supportive = [item["symbol"] for item in sentiment_report["results"] if item.get("sentiment", {}).get("supports_technical_setup")]
+                reporter.emit("macro_news_researcher", "intraday_news_sentiment_completed", run_id, f"Noticias intradia listas. Apoyan tesis: {', '.join(supportive) or 'sin apoyos claros'}.", {"path": sentiment_report["path"], "symbols_analyzed": sentiment_report["symbols_analyzed"], "supportive": supportive, "warnings": sentiment_report["warnings"][:10]})
                 technical_context["news_sentiment_path"] = sentiment_report["path"]
                 technical_context["news_supportive_symbols"] = supportive
-
-        if selected_symbols:
-            cycle_settings = settings.model_copy(update={"default_universe": ",".join(selected_symbols)})
-            reporter.emit(
-                "orchestrator",
-                "intraday_candidate_universe_selected",
-                run_id,
-                f"Ciclo LLM usara candidatos tecnicos: {', '.join(selected_symbols)}.",
-                {"selected_symbols": selected_symbols},
-            )
+            if selected_symbols:
+                cycle_settings = settings.model_copy(update={"default_universe": ",".join(selected_symbols)})
+                reporter.emit("orchestrator", "intraday_candidate_universe_selected", run_id, f"Ciclo LLM usara candidatos tecnicos: {', '.join(selected_symbols)}.", {"selected_symbols": selected_symbols})
+            timing.finish("technical_analysis")
+        except Exception as exc:
+            timing.fail("technical_analysis", exc)
+            timing.finalize("failed", error=exc)
+            raise
+    else:
+        timing.skip("technical_analysis", "escaneo tecnico intradia desactivado")
 
     try:
         run_observable_cycle(
@@ -1511,6 +1430,8 @@ def market_cycle_job(
             use_crew=use_crew,
             verbose=verbose,
             technical_context=technical_context,
+            run_id=run_id,
+            timing=timing,
         )
         _set_job_status(
             store,
@@ -1525,6 +1446,7 @@ def market_cycle_job(
             },
         )
     except Exception as exc:
+        timing.finalize("failed", error=exc)
         _set_job_status(
             store,
             "market_cycle",

@@ -14,6 +14,7 @@ from agente_bolsa.market_calendar import MarketCalendar
 from agente_bolsa.storage import Store
 
 from .llm_decision_quality import build_llm_decision_quality, write_llm_decision_quality_report
+from .market_cycle_timing import summarize_market_cycle_timings
 from .reporting import write_json_report
 
 JOB_NAMES = [
@@ -916,6 +917,7 @@ def build_production_health_report(
     llm_decision_quality = write_llm_decision_quality_report(store, reports_dir, run_id)
     llm_quality = _llm_fallback_ratio(store)
     post_market_runtime = _post_market_runtime_health(scheduler_runtime, settings.data_dir)
+    market_cycle_timing = summarize_market_cycle_timings(reports_dir, limit=20)
 
     continuous_improvement_summary = {
         "enabled": settings.continuous_improvement_enabled,
@@ -1028,6 +1030,7 @@ def build_production_health_report(
                 "summary": llm_decision_quality.get("summary"),
             },
             "post_market_runtime": post_market_runtime,
+            "market_cycle_timing": market_cycle_timing,
         },
         "operational_health": operational_report,
         "alerts": alerts,
@@ -1042,6 +1045,7 @@ def build_production_health_report(
             "summary": llm_decision_quality.get("summary"),
         },
         "post_market_runtime": post_market_runtime,
+        "market_cycle_timing": market_cycle_timing,
         "continuous_improvement": continuous_improvement_summary,
     }
     return write_json_report(report, reports_dir, "production_health", run_id, latest_filename="latest_production_health.json")

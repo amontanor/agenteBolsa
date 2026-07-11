@@ -33,6 +33,7 @@ from .tools.learning_mode import (
     active_learning_mode,
     is_strategy_shadow_paused,
 )
+from .tools.market_cycle_timing import MarketCycleTiming
 from .tools.market_snapshot import build_market_snapshot, compact_snapshot_for_prompt
 from .tools.market_state import build_market_state, compact_market_state_for_prompt
 from .tools.operational_health import load_operational_block_context
@@ -1703,12 +1704,15 @@ def run_observable_cycle(
     use_crew: bool = True,
     verbose: bool = True,
     technical_context: dict[str, Any] | None = None,
+    run_id: str | None = None,
+    timing: MarketCycleTiming | None = None,
 ) -> dict[str, Any]:
     """Run one cycle and make every phase visible in the console and logs."""
 
     settings.assert_trading_safety()
     store.ensure_schema()
-    run_id = cycle_id()
+    run_id = run_id or cycle_id()
+    timing = timing or MarketCycleTiming(settings.data_dir / "reports", run_id)
     reporter = EventReporter(store, verbose=verbose)
 
     log_system_event(settings.logs_dir, "cycle_started", {"cycle_id": run_id})
@@ -1736,6 +1740,7 @@ def run_observable_cycle(
         _compact_technical_context_for_prompt(technical_context or {}) if technical_context else {},
         ensure_ascii=True,
     )
+    timing.start("data_loading")
     try:
         reporter.emit(
             "market_data_researcher",
@@ -1759,7 +1764,9 @@ def run_observable_cycle(
             f"Snapshot guardado con {len(market_snapshot.get('symbols', {}))} simbolos.",
             {"path": market_snapshot.get("path"), "warnings": market_snapshot.get("warnings", [])},
         )
+        timing.finish("data_loading")
     except Exception as exc:  # noqa: BLE001 - CrewAI can still run, but it must know data is missing.
+        timing.fail("data_loading", exc)
         json_safe_error = {"error": str(exc)}
         market_snapshot_prompt = json.dumps(json_safe_error, ensure_ascii=True)
         reporter.emit(
@@ -1770,6 +1777,7 @@ def run_observable_cycle(
             json_safe_error,
         )
 
+    timing.start("report_generation")
     try:
         reporter.emit(
             "market_regime_strategist",
@@ -1799,7 +1807,9 @@ def run_observable_cycle(
                 "warnings": market_state.get("warnings", []),
             },
         )
+        timing.finish("report_generation")
     except Exception as exc:  # noqa: BLE001
+        timing.fail("report_generation", exc)
         market_state_prompt = json.dumps({"error": str(exc)}, ensure_ascii=True)
         reporter.emit(
             "market_regime_strategist",
@@ -1811,6 +1821,7 @@ def run_observable_cycle(
 
     crew_result: str | None = None
     if use_crew:
+        timing.start("llm_decision")
         endpoint, _attempts = select_preferred_endpoint(settings)
         reporter.emit(
             "orchestrator",
@@ -1850,7 +1861,9 @@ def run_observable_cycle(
                 "CrewAI completo el ciclo de razonamiento.",
                 {"result_preview": crew_result[:1000], "crew_stdout_path": str(crew_stdout_path)},
             )
+            timing.finish("llm_decision")
         except Exception as exc:
+            timing.fail("llm_decision", exc)
             reporter.emit(
                 "orchestrator",
                 "crew_failed",
@@ -1859,6 +1872,7 @@ def run_observable_cycle(
                 {"error": str(exc), "fallback": "direct_llm_decision"},
             )
     else:
+        timing.skip("llm_decision", "CrewAI omitido por parametro --skip-crew")
         reporter.emit(
             "orchestrator",
             "crew_skipped",
@@ -1868,8 +1882,26 @@ def run_observable_cycle(
 
     auto_result = None
     if use_crew:
-        auto_result = _auto_paper_trade(settings, store, reporter, run_id, technical_context, market_snapshot, market_state)
-    _record_trade_summary(settings, store, reporter, run_id, auto_result)
+        timing.start("deterministic_gates")
+        try:
+            auto_result = _auto_paper_trade(settings, store, reporter, run_id, technical_context, market_snapshot, market_state)
+            timing.finish("deterministic_gates")
+        except Exception as exc:
+            timing.fail("deterministic_gates", exc)
+            timing.finalize("failed", error=exc)
+            raise
+    else:
+        timing.skip("deterministic_gates", "sin decision LLM al omitir CrewAI")
+    timing.start("persistence")
+    try:
+        _record_trade_summary(settings, store, reporter, run_id, auto_result)
+        timing.finish("persistence")
+    except Exception as exc:
+        timing.fail("persistence", exc)
+        timing.finalize("failed", error=exc)
+        raise
+    if not timing.is_running("technical_analysis"):
+        timing.skip("technical_analysis", "sin escaneo tecnico intradia instrumentado")
     reporter.emit(
         "orchestrator",
         "cycle_completed",
@@ -1877,6 +1909,7 @@ def run_observable_cycle(
         "Ciclo finalizado. Estado persistido en SQLite y JSONL por agente.",
     )
     log_system_event(settings.logs_dir, "cycle_completed", {"cycle_id": run_id})
+    timing.finalize("completed")
     return {
         "cycle_id": run_id,
         "crew_result": crew_result,

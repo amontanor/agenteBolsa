@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.147**
+- Version actual: **0.4.148**
 - Ultima actualizacion: 2026-07-10
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -45,6 +45,18 @@ amplia exposicion.
 | P-L22 | Diagnostico auditable de LLM real, fallback y capacity-fill | HECHO (v0.4.145) |
 | P-L23 | Diagnostico accionable de calidad de datos de mercado | HECHO (v0.4.146) |
 | P-L23R | Prueba determinista de plan manual tras cierre XNYS | HECHO (v0.4.147) |
+| P-L24 | Trazabilidad de duracion del ciclo de mercado | HECHO (v0.4.148) |
+
+### P-L24 - Trazabilidad de duracion del ciclo de mercado. **HECHO (v0.4.148).**
+Cada `market_cycle` publica un reporte JSON con ciclo, inicio, fin, duracion,
+estado, version y seis etapas: datos, analisis tecnico, decision LLM, gates,
+persistencia e informes. Cada etapa registra estado, timestamps, duracion y
+error/motivo solo si existe. El reporte se conserva aun si una etapa posterior
+falla; las etapas omitidas se declaran `skipped` y los historicos sin desglose
+quedan `unavailable`. `production-health` resume hasta 20 muestras (p50/p95/max,
+excesos de 600s, etapa dominante y cobertura) y el digest muestra el resumen sin
+recomendar optimizaciones. No cambian cadencia, paralelismo, timeouts, proveedor,
+modelos, gates, seleccion ni ordenes.
 
 ### P-L23R - Prueba determinista de plan manual tras cierre XNYS. **HECHO (v0.4.147).**
 La prueba de persistencia del plan manual dejaba de ser valida tras el cierre de

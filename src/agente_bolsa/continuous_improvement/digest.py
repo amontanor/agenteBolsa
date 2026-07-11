@@ -14,6 +14,7 @@ from agente_bolsa.storage import Store
 from agente_bolsa.tools.daily_learning import load_daily_learning_context
 from agente_bolsa.tools.learning_mode import load_learning_mode_config
 from agente_bolsa.tools.llm_decision_quality import build_llm_decision_quality
+from agente_bolsa.tools.market_cycle_timing import summarize_market_cycle_timings
 from agente_bolsa.tools.operational_health import load_operational_block_context
 
 from .artifact_provenance import validate_diff_provenance
@@ -175,6 +176,7 @@ def _director_brief(
     scoreboard = _load_json_file(data_dir / "reports" / "latest_learning_scoreboard.json") or {}
     research = _load_json_file(data_dir / "reports" / "latest_autonomous_research.json") or {}
     market_quality = _load_json_file(data_dir / "reports" / "latest_market_data_quality.json")
+    market_cycle_timing = summarize_market_cycle_timings(data_dir / "reports", limit=20)
     data_quality = scoreboard.get("data_quality") or {}
     blockers = [str(item) for item in safety.get("violations") or []]
     blockers.extend(str(item) for item in data_quality.get("issues") or [])
@@ -214,6 +216,7 @@ def _director_brief(
             "maturity": scoreboard.get("maturity_by_horizon") or {"status": "unavailable"},
         },
         "market_data_quality": _market_data_quality_digest(market_quality),
+        "market_cycle_timing": market_cycle_timing,
         "blockers": blockers,
         "hypotheses": open_hypotheses,
         "decision_requested": decision_requested,
@@ -746,6 +749,7 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
     evaluation = (director.get("results") or {}).get("evaluation") or {}
     coverage = director.get("coverage") or {}
     market_quality = director.get("market_data_quality") or {}
+    cycle_timing = director.get("market_cycle_timing") or {}
 
     lines = [
         f"Digest diario del lab - ultimos {digest.get('days')} dia(s)",
@@ -766,6 +770,14 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
             f"anomalías_únicas={_none_text(market_quality.get('anomalies_unique'))}"
         ),
         f"- acción calidad de datos: {market_quality.get('required_action', 'unavailable')}",
+        (
+            "- duracion market_cycle: "
+            f"muestra={_none_text(cycle_timing.get('sample_available'))} | "
+            f"p50={_none_text((cycle_timing.get('total_duration_seconds') or {}).get('p50'))}s | "
+            f"p95={_none_text((cycle_timing.get('total_duration_seconds') or {}).get('p95'))}s | "
+            f">600s={_none_text((cycle_timing.get('over_600_seconds') or {}).get('count'))} | "
+            f"etapa_p95={_none_text((cycle_timing.get('dominant_stage') or {}).get('p95'))}"
+        ),
         f"- hipotesis abiertas: {len(director.get('hypotheses') or [])}",
         (
             "- LLM decision: "
