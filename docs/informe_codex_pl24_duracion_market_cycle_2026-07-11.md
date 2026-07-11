@@ -1,6 +1,19 @@
 # P-L24 - Trazabilidad de duracion del ciclo de mercado
 
-Version: 0.4.148
+Version: 0.4.149 (P-L24R)
+
+## Correccion P-L24R
+
+Se restaura el bloque de scheduler a la referencia P-L23R, preservando mensajes,
+payloads, tolerancia a fallos de breakout y comportamiento de noticias. Los hooks
+solo inician/finalizan el tramo tecnico y propagan el mismo `cycle_id`.
+
+Las etapas llevan segmentos: la llamada `request_trade_recommendations` se mide
+como `structured_recommendations` dentro de `llm_decision`; la revision
+determinista y adversarial se registran como segmentos de `deterministic_gates`.
+El reporte anade `tracked_duration_seconds` y `unattributed_duration_seconds`,
+siempre no negativo. El tiempo no instrumentado permanece explicito en vez de
+atribuirse falsamente a gates o informes.
 
 ## Instrumentacion
 

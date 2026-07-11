@@ -1084,6 +1084,7 @@ def _auto_paper_trade(
     technical_context: dict[str, Any] | None,
     market_snapshot: dict[str, Any] | None,
     market_state: dict[str, Any] | None,
+    timing: MarketCycleTiming | None = None,
 ) -> dict[str, Any] | None:
     if not settings.auto_paper_trading:
         return None
@@ -1170,14 +1171,11 @@ def _auto_paper_trade(
                 "effective_max_daily_buy_orders": max(settings.max_daily_buy_orders, effective_recommendation_limit),
             },
         )
-        decision = request_trade_recommendations(
-            settings,
-            portfolio,
-            decision_context,
-            sentiment_context,
-            rebalance_context,
-            market_state,
-        )
+        if timing is None:
+            decision = request_trade_recommendations(settings, portfolio, decision_context, sentiment_context, rebalance_context, market_state)
+        else:
+            with timing.measure("llm_decision", "structured_recommendations"):
+                decision = request_trade_recommendations(settings, portfolio, decision_context, sentiment_context, rebalance_context, market_state)
     except Exception as exc:  # noqa: BLE001 - bad LLM JSON or broker read must not stop scheduler.
         if settings.deterministic_trade_fallback_enabled and "portfolio" in locals() and "decision_context" in locals():
             fallback_recommendations = deterministic_trade_fallback_recommendations(
@@ -1274,13 +1272,11 @@ def _auto_paper_trade(
                 ),
                 recommendation_augmentation,
             )
-    reviewed_recommendations, deterministic_review = review_recommendations(
-        settings,
-        recommendations,
-        decision_context,
-        sentiment_context,
-        market_state,
-    )
+    if timing is None:
+        reviewed_recommendations, deterministic_review = review_recommendations(settings, recommendations, decision_context, sentiment_context, market_state)
+    else:
+        with timing.measure("deterministic_gates", "deterministic_review"):
+            reviewed_recommendations, deterministic_review = review_recommendations(settings, recommendations, decision_context, sentiment_context, market_state)
     if learning_mode:
         reviewed_recommendations = [
             replace(
@@ -1311,11 +1307,11 @@ def _auto_paper_trade(
             ),
             {"decisions": deterministic_review},
         )
-    adversarial_review = review_recommendations_adversarial(
-        reviewed_recommendations,
-        technical_context=decision_context,
-        market_state=market_state,
-    )
+    if timing is None:
+        adversarial_review = review_recommendations_adversarial(reviewed_recommendations, technical_context=decision_context, market_state=market_state)
+    else:
+        with timing.measure("deterministic_gates", "adversarial_review"):
+            adversarial_review = review_recommendations_adversarial(reviewed_recommendations, technical_context=decision_context, market_state=market_state)
     if adversarial_review:
         reporter.emit(
             "risk_manager",
@@ -1882,24 +1878,15 @@ def run_observable_cycle(
 
     auto_result = None
     if use_crew:
-        timing.start("deterministic_gates")
         try:
-            auto_result = _auto_paper_trade(settings, store, reporter, run_id, technical_context, market_snapshot, market_state)
-            timing.finish("deterministic_gates")
+            auto_result = _auto_paper_trade(settings, store, reporter, run_id, technical_context, market_snapshot, market_state, timing=timing)
         except Exception as exc:
-            timing.fail("deterministic_gates", exc)
             timing.finalize("failed", error=exc)
             raise
     else:
         timing.skip("deterministic_gates", "sin decision LLM al omitir CrewAI")
-    timing.start("persistence")
-    try:
+    with timing.measure("persistence", "trade_summary"):
         _record_trade_summary(settings, store, reporter, run_id, auto_result)
-        timing.finish("persistence")
-    except Exception as exc:
-        timing.fail("persistence", exc)
-        timing.finalize("failed", error=exc)
-        raise
     if not timing.is_running("technical_analysis"):
         timing.skip("technical_analysis", "sin escaneo tecnico intradia instrumentado")
     reporter.emit(

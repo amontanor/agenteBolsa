@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.148**
+- Version actual: **0.4.149**
 - Ultima actualizacion: 2026-07-10
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -46,6 +46,14 @@ amplia exposicion.
 | P-L23 | Diagnostico accionable de calidad de datos de mercado | HECHO (v0.4.146) |
 | P-L23R | Prueba determinista de plan manual tras cierre XNYS | HECHO (v0.4.147) |
 | P-L24 | Trazabilidad de duracion del ciclo de mercado | HECHO (v0.4.148) |
+| P-L24R | Precision y aislamiento de la instrumentacion temporal | HECHO (v0.4.149) |
+
+### P-L24R - Precision y aislamiento de la instrumentacion temporal. **HECHO (v0.4.149).**
+Se restaura `scheduler.py` al comportamiento y mensajes de P-L23R, con hooks
+minimos de timing. La medicion expone segmentos y separa la recomendacion LLM
+estructurada de revisiones deterministas; incorpora duracion trazada y no
+atribuida, sin contar dos veces intervalos. No cambia trading ni se infieren
+duraciones historicas.
 
 ### P-L24 - Trazabilidad de duracion del ciclo de mercado. **HECHO (v0.4.148).**
 Cada `market_cycle` publica un reporte JSON con ciclo, inicio, fin, duracion,

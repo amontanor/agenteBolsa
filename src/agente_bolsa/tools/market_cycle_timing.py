@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,18 @@ class MarketCycleTiming:
             return
         _finish(stage, "completed", finished_at or datetime.now(timezone.utc))
 
+    @contextmanager
+    def measure(self, name: str, segment: str):
+        """Measure one explicit, non-overlapping segment of a declared stage."""
+        started = datetime.now(timezone.utc)
+        try:
+            yield
+        except Exception as exc:
+            self._append_segment(name, segment, started, datetime.now(timezone.utc), "failed", str(exc))
+            raise
+        else:
+            self._append_segment(name, segment, started, datetime.now(timezone.utc), "completed")
+
     def fail(self, name: str, error: Exception | str, *, finished_at: datetime | None = None) -> None:
         stage = self._stages[name]
         if stage["status"] != "running":
@@ -81,6 +94,12 @@ class MarketCycleTiming:
             "system_version": __version__,
             "stages": self._stages,
         }
+        payload["tracked_duration_seconds"] = round(
+            sum(float(stage.get("duration_seconds") or 0.0) for stage in self._stages.values()), 4
+        )
+        payload["unattributed_duration_seconds"] = round(
+            max(0.0, float(payload["duration_seconds"]) - float(payload["tracked_duration_seconds"])), 4
+        )
         if error is not None:
             payload["error"] = str(error)
         return write_json_report(
@@ -90,6 +109,45 @@ class MarketCycleTiming:
             self.cycle_id,
             latest_filename="latest_market_cycle_timing.json",
         )
+
+    def _append_segment(
+        self,
+        name: str,
+        segment: str,
+        started: datetime,
+        finished: datetime,
+        status: str,
+        error: str | None = None,
+    ) -> None:
+        stage = self._stages[name]
+        if stage["status"] == "unavailable":
+            self.start(name, started_at=started)
+            stage = self._stages[name]
+        if "segments" not in stage and stage.get("duration_seconds") is not None:
+            stage["segments"] = [
+                {
+                    "name": "prior_measured_work",
+                    "started_at": stage.get("started_at"),
+                    "finished_at": stage.get("finished_at"),
+                    "duration_seconds": stage.get("duration_seconds"),
+                    "status": stage.get("status"),
+                }
+            ]
+        entry = {
+            "name": segment,
+            "started_at": _iso(started),
+            "finished_at": _iso(finished),
+            "duration_seconds": _duration(started, finished),
+            "status": status,
+        }
+        if error:
+            entry["error"] = error
+        segments = stage.setdefault("segments", [])
+        segments.append(entry)
+        stage["started_at"] = min(item["started_at"] for item in segments)
+        stage["finished_at"] = max(item["finished_at"] for item in segments)
+        stage["duration_seconds"] = round(sum(float(item["duration_seconds"]) for item in segments), 4)
+        stage["status"] = "failed" if any(item["status"] == "failed" for item in segments) else "completed"
 
 
 def summarize_market_cycle_timings(reports_dir: Path, *, limit: int = 20) -> dict[str, Any]:
