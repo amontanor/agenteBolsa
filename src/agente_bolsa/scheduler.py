@@ -69,6 +69,7 @@ from .tools.pre_earnings import (
 )
 from .tools.reporting import write_json_report
 from .tools.retention import cleanup_runtime_data
+from .tools.rr_cohort import write_rr_cohort_report
 from .tools.signal_learning import record_signal_candidates
 from .tools.technical_study import build_closed_market_technical_study
 from .tools.trade_decision import _annotate_technical_context_with_learning
@@ -2199,6 +2200,13 @@ def _run_post_market_measurement_pipeline(
     timings["scoreboard_seconds"] = round(time.perf_counter() - started, 3)
 
     started = time.perf_counter()
+    try:
+        rr_cohort = write_rr_cohort_report(store, reports_dir, f"{run_id}_rr_cohort")
+    except Exception as exc:  # noqa: BLE001 - observabilidad no bloquea trading.
+        rr_cohort = {"status": "failed", "error": repr(exc)}
+    timings["rr_cohort_seconds"] = round(time.perf_counter() - started, 3)
+
+    started = time.perf_counter()
     research = build_autonomous_research_report(
         store,
         reports_dir,
@@ -2234,6 +2242,7 @@ def _run_post_market_measurement_pipeline(
             "market_forward_outcomes",
             "learning_observations_and_lineage",
             "learning_scoreboard",
+            "rr_cohort",
             "autonomous_research",
             "continuous_improvement_digest",
         ],
@@ -2244,6 +2253,7 @@ def _run_post_market_measurement_pipeline(
             "lineage_coverage": scoreboard.get("lineage_coverage"),
             "control_coverage": scoreboard.get("control_coverage"),
         },
+        "rr_cohort": {"path": rr_cohort.get("path"), "status": rr_cohort.get("overall_status") or rr_cohort.get("status")},
         "research": {"path": research.get("path"), "sample": research.get("sample")},
         "digest": {
             "path": digest_report.get("path"),

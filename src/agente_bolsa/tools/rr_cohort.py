@@ -1,0 +1,416 @@
+"""Prospective, observational P-L27D reward/risk cohort.
+
+The cohort only records existing long signals.  It never alters a decision,
+geometry, gate, order, execution path, or historical observation.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import statistics
+from collections import Counter
+from datetime import date, datetime, timedelta, timezone
+from typing import Any
+
+from agente_bolsa.market_calendar import MarketCalendar
+from agente_bolsa.storage import Store
+
+from .reporting import write_json_report
+
+SCHEMA_VERSION = "p-l27d.rr-cohort.v1"
+COHORT_FEATURE_KEY = "rr_cohort_p_l27d"
+COHORT_START = "2026-07-13"
+HYPOTHESIS_ID = "pl27d_rr_1_1_5_vs_1_5_2"
+MIN_SAMPLE = 300
+MIN_CLUSTERS = 100
+MAX_CONTROLS = 3
+MAX_SESSIONS = 40
+CAPACITY_REASONS = {
+    "max_orders_per_cycle_reached",
+    "max_daily_buy_orders_reached",
+    "low_sample_daily_quota_exhausted",
+}
+CONTRACT = {
+    "hypothesis_id": HYPOTHESIS_ID,
+    "change_class": "observability",
+    "horizon_sessions_xnys": 10,
+    "arms": {"A": {"rr_gte": 1.0, "rr_lt": 1.5}, "B": {"rr_gte": 1.5, "rr_lt": 2.0}},
+    "min_sample_per_arm": MIN_SAMPLE,
+    "min_symbol_date_clusters_per_arm": MIN_CLUSTERS,
+    "max_top_1_share": 0.20,
+    "max_sessions": MAX_SESSIONS,
+    "primary_metrics": ["mean_return_10d_a_minus_b", "median_return_10d_a_minus_b", "positive_rate_a_minus_b"],
+    "success": "las tres diferencias positivas en dos ventanas cronologicas maduras consecutivas con muestra, clusters, concentracion, linaje y control validos",
+    "invalidation": "cambio de signo en dos ventanas maduras consecutivas, muestra insuficiente, concentracion, control no comparable o contaminacion/falta de linaje",
+    "unavailable_metrics": ["costs", "alpha", "spy", "executed_pnl"],
+}
+
+
+def sync_rr_cohort_observations(store: Store, observations: list[dict[str, Any]]) -> dict[str, int]:
+    """Append the immutable cohort card to eligible prospective observations."""
+    all_observations = store.learning_observations(since_date=COHORT_START, limit=200_000)
+    controls_by_key = _control_candidates(all_observations)
+    result = Counter()
+    for observation in observations:
+        if str(observation.get("signal_date") or "") < COHORT_START:
+            continue
+        card, reason = _cohort_card(observation, controls_by_key)
+        features = dict(observation.get("features") or {})
+        existing = features.get(COHORT_FEATURE_KEY)
+        if existing and isinstance(existing, dict) and existing.get("hypothesis_id") == HYPOTHESIS_ID:
+            card["observation_id"] = existing.get("observation_id") or card.get("observation_id")
+        features[COHORT_FEATURE_KEY] = card
+        store.upsert_learning_observation({**observation, "features": features})
+        result["recorded" if reason is None else f"excluded_{reason}"] += 1
+    return dict(result)
+
+
+def build_rr_cohort_report(
+    store: Store,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+    window: str = "all",
+    include_legacy_context: bool = False,
+) -> dict[str, Any]:
+    """Read the prospective cards and evaluate only their pre-registered contract."""
+    if window not in {"all", "first", "second"}:
+        return _unavailable("window_invalid", {"window": window})
+    start = start or COHORT_START
+    observations = store.learning_observations(since_date=start, end_date=end, limit=200_000)
+    cards = [dict((item.get("features") or {}).get(COHORT_FEATURE_KEY) or {}) for item in observations]
+    cards = [card for card in cards if card.get("hypothesis_id") == HYPOTHESIS_ID]
+    if end:
+        cards = [card for card in cards if str(card.get("signal_date") or "") <= end]
+    first, second = _split_windows(cards)
+    selected = {"all": cards, "first": first, "second": second}[window]
+    report = {
+        "schema_version": SCHEMA_VERSION,
+        "observational_only": True,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "contract": CONTRACT,
+        "cohort_start": COHORT_START,
+        "parameters": {"from": start, "to": end, "window": window, "include_legacy_context": include_legacy_context},
+        "sessions_xnys": _session_summary(start, end),
+        "views": {
+            "selected": _view(selected),
+            "first": _view(first),
+            "second": _view(second),
+        },
+        "exclusions": _exclusions(cards),
+        "criteria": _criteria(first, second),
+        "legacy_context": _legacy_context(store) if include_legacy_context else None,
+        "next_evaluable_date": _nth_xnys_session(COHORT_START, 10),
+        "warnings": [
+            "Cohorte prospectiva observacional: no modifica geometria, seleccion, gates, ordenes ni ejecucion.",
+            "P&L, costes, alpha y SPY permanecen unavailable sin evidencia comparable.",
+        ],
+    }
+    report["overall_status"] = _overall_status(cards, first, second, report["criteria"])
+    report["content_hash"] = _content_hash(report)
+    return report
+
+
+def write_rr_cohort_report(store: Store, reports_dir: Any, run_id: str) -> dict[str, Any]:
+    return write_json_report(
+        build_rr_cohort_report(store),
+        reports_dir,
+        "rr_cohort",
+        run_id,
+        latest_filename="latest_rr_cohort.json",
+    )
+
+
+def rr_cohort_digest_summary(store: Store) -> dict[str, Any]:
+    report = build_rr_cohort_report(store)
+    selected = report["views"]["selected"]
+    return {
+        "status": report["overall_status"],
+        "sessions_xnys": report["sessions_xnys"],
+        "mature_by_arm": {arm: selected["arms"][arm]["matured_count"] for arm in ("A", "B")},
+        "lineage_coverage": selected["lineage_coverage"],
+        "control_coverage": selected["control_coverage"],
+        "criteria_pending": [key for key, value in report["criteria"].items() if value is not True],
+        "next_evaluable_date": report["next_evaluable_date"],
+    }
+
+
+def _cohort_card(
+    observation: dict[str, Any],
+    controls_by_key: dict[tuple[str, str], list[dict[str, Any]]],
+) -> tuple[dict[str, Any], str | None]:
+    features = dict(observation.get("features") or {})
+    lineage = dict(features.get("decision_lineage") or {})
+    outcome = dict(observation.get("outcome") or {})
+    direction = str(features.get("direction") or "").lower()
+    entry, stop, take = features.get("entry_price"), features.get("stop_loss"), features.get("take_profit")
+    reason = _eligibility_reason(observation, direction, entry, stop, take, lineage)
+    geometry = _geometry(entry, stop, take) if reason is None else {}
+    arm = _arm(geometry.get("reward_risk_ratio")) if geometry else None
+    if reason is None and arm is None:
+        reason = "rr_outside_contract"
+    maturity = bool((outcome.get("matured_horizons") or {}).get("10d")) and _number(outcome.get("return_10d"))
+    cycle_id = lineage.get("cycle_id")
+    candidates = controls_by_key.get((str(cycle_id or ""), str(observation.get("signal_date") or "")), [])
+    controls = [
+        item
+        for item in candidates
+        if item.get("observation_id") != observation.get("observation_id")
+        and _same_gates_and_theory(observation, item)
+    ][:MAX_CONTROLS]
+    control_reason = None if controls else "no_comparable_control_same_cycle"
+    return ({
+        "observation_id": f"rrcohort:{observation.get('observation_id')}",
+        "hypothesis_id": HYPOTHESIS_ID,
+        "cohort_start": COHORT_START,
+        "signal_id": observation.get("best_signal_id"),
+        "lineage_id": lineage.get("lineage_id"),
+        "lineage_status": lineage.get("lineage_status") or "legacy_unverified",
+        "cycle_id": cycle_id,
+        "signal_date": observation.get("signal_date"),
+        "timestamp": observation.get("first_seen_at"),
+        "symbol": observation.get("symbol"),
+        "direction": direction or None,
+        "entry_price": entry,
+        "stop_loss": stop,
+        "take_profit": take,
+        **geometry,
+        "rr_arm": arm,
+        "strategy_name": lineage.get("strategy_name"),
+        "strategy_version": lineage.get("strategy_version"),
+        "decision_source": lineage.get("decision_source"),
+        "candidate_rank": lineage.get("candidate_rank"),
+        "setup_quality": features.get("setup_quality"),
+        "executed": bool(observation.get("executed_buy")),
+        "comparable_control_available": bool(controls),
+        "comparable_control_reason": control_reason,
+        "comparable_control_ids": [item.get("observation_id") for item in controls],
+        "maturity_status_10d": "mature" if maturity else "immature",
+        "return_10d": float(outcome["return_10d"]) if maturity else None,
+        "outcome_source": outcome.get("source") or "signal_outcomes",
+        "data_quality_warnings": [] if reason is None else [reason],
+        "eligibility_status": "eligible" if reason is None else "excluded",
+        "exclusion_reason": reason,
+    }, reason)
+
+
+def _control_candidates(observations: list[dict[str, Any]]) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    result: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for item in observations:
+        features = item.get("features") or {}
+        lineage = features.get("decision_lineage") or {}
+        cycle_id = str(lineage.get("cycle_id") or "")
+        if not cycle_id or not _control_eligible(item):
+            continue
+        result.setdefault((cycle_id, str(item.get("signal_date") or "")), []).append(item)
+    for key, items in result.items():
+        result[key] = sorted(items, key=_control_sort_key)[:MAX_CONTROLS]
+    return result
+
+
+def _control_eligible(item: dict[str, Any]) -> bool:
+    features, gate, execution = item.get("features") or {}, item.get("gate") or {}, item.get("execution") or {}
+    lineage = features.get("decision_lineage") or {}
+    if str(lineage.get("lineage_status") or "") != "verified" or bool(item.get("executed_buy")):
+        return False
+    if str(features.get("direction") or "").lower() != "long" or not _geometry(features.get("entry_price"), features.get("stop_loss"), features.get("take_profit")):
+        return False
+    if str(item.get("decision") or "") != "approved_buy":
+        return False
+    reason = str(execution.get("reason") or gate.get("execution", {}).get("reason") or "")
+    return reason in CAPACITY_REASONS or str(gate.get("execution", {}).get("status") or "") == "approved_not_planned"
+
+
+def _control_sort_key(item: dict[str, Any]) -> tuple[float, str]:
+    lineage = (item.get("features") or {}).get("decision_lineage") or {}
+    rank = lineage.get("candidate_rank")
+    return (float(rank) if _number(rank) else math.inf, str(item.get("observation_id") or ""))
+
+
+def _same_gates_and_theory(primary: dict[str, Any], control: dict[str, Any]) -> bool:
+    """Keep control selection descriptive and limited to comparable candidates."""
+    primary_features = primary.get("features") or {}
+    control_features = control.get("features") or {}
+    for key in ("entry_price", "stop_loss", "take_profit"):
+        if not _number(primary_features.get(key)) or not _number(control_features.get(key)):
+            return False
+    primary_gate = primary.get("gate") or {}
+    control_gate = control.get("gate") or {}
+    return (
+        primary_features.get("entry_price") == control_features.get("entry_price")
+        and primary_features.get("stop_loss") == control_features.get("stop_loss")
+        and primary_features.get("take_profit") == control_features.get("take_profit")
+        and primary_gate.get("gate_status") == control_gate.get("gate_status")
+    )
+
+
+def _eligibility_reason(observation: dict[str, Any], direction: str, entry: Any, stop: Any, take: Any, lineage: dict[str, Any]) -> str | None:
+    if direction != "long":
+        return "direction_not_long"
+    if not _geometry(entry, stop, take):
+        return "geometry_invalid"
+    if not observation.get("best_signal_id"):
+        return "signal_id_missing"
+    if str(lineage.get("lineage_status") or "") != "verified" or not lineage.get("lineage_id"):
+        return "lineage_not_verified"
+    if not lineage.get("cycle_id"):
+        return "cycle_id_missing"
+    if not observation.get("symbol") or not observation.get("signal_date"):
+        return "symbol_or_date_missing"
+    return None
+
+
+def _geometry(entry: Any, stop: Any, take: Any) -> dict[str, float]:
+    if not all(_number(value) for value in (entry, stop, take)) or entry <= 0 or stop >= entry or take <= entry:
+        return {}
+    risk = float(entry) - float(stop)
+    reward = float(take) - float(entry)
+    return {"risk_distance": risk, "reward_distance": reward, "stop_distance_pct": risk / float(entry), "take_distance_pct": reward / float(entry), "reward_risk_ratio": reward / risk}
+
+
+def _arm(value: Any) -> str | None:
+    if not _number(value):
+        return None
+    if 1.0 <= value < 1.5:
+        return "A"
+    if 1.5 <= value < 2.0:
+        return "B"
+    return None
+
+
+def _split_windows(cards: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    dates = sorted({str(card.get("signal_date") or "") for card in cards if card.get("signal_date")})
+    midpoint = (len(dates) + 1) // 2
+    first_dates = set(dates[:midpoint])
+    return [card for card in cards if card.get("signal_date") in first_dates], [card for card in cards if card.get("signal_date") not in first_dates]
+
+
+def _view(cards: list[dict[str, Any]]) -> dict[str, Any]:
+    eligible = [card for card in cards if card.get("eligibility_status") == "eligible"]
+    mature = [card for card in eligible if card.get("maturity_status_10d") == "mature"]
+    arms = {arm: _arm_metrics([card for card in mature if card.get("rr_arm") == arm]) for arm in ("A", "B")}
+    return {"raw_count": len(cards), "eligible_count": len(eligible), "immature_count": len(eligible) - len(mature), "mature_count": len(mature), "arms": arms, "differences_a_minus_b": _differences(arms), "lineage_coverage": _ratio(sum(card.get("lineage_status") == "verified" for card in eligible), len(eligible)), "control_coverage": _ratio(sum(bool(card.get("comparable_control_available")) for card in eligible), len(eligible))}
+
+
+def _arm_metrics(cards: list[dict[str, Any]]) -> dict[str, Any]:
+    returns = [float(card["return_10d"]) for card in cards if _number(card.get("return_10d"))]
+    symbols, dates = Counter(str(card.get("symbol") or "") for card in cards), Counter(str(card.get("signal_date") or "") for card in cards)
+    return {"matured_count": len(returns), "symbol_date_clusters": len({(card.get("symbol"), card.get("signal_date")) for card in cards}), "unique_symbols": len(symbols), "unique_dates": len(dates), "top_1_symbol_share": _ratio(max(symbols.values(), default=0), len(cards)), "top_1_date_share": _ratio(max(dates.values(), default=0), len(cards)), "mean_return_10d": _mean(returns), "median_return_10d": _median(returns), "positive_rate": _ratio(sum(value > 0 for value in returns), len(returns))}
+
+
+def _differences(arms: dict[str, dict[str, Any]]) -> dict[str, float | None]:
+    return {"mean_return_10d": _difference(arms["A"].get("mean_return_10d"), arms["B"].get("mean_return_10d")), "median_return_10d": _difference(arms["A"].get("median_return_10d"), arms["B"].get("median_return_10d")), "positive_rate": _difference(arms["A"].get("positive_rate"), arms["B"].get("positive_rate"))}
+
+
+def _criteria(first: list[dict[str, Any]], second: list[dict[str, Any]]) -> dict[str, bool | None]:
+    views = [_view(first), _view(second)]
+    pending = {
+        "two_chronological_windows": None,
+        "sample_clusters_concentration": None,
+        "lineage": None,
+        "control": None,
+        "all_differences_positive": None,
+        "signs_consecutive": None,
+    }
+    if not first or not second:
+        return pending
+    def arm_ok(view: dict[str, Any], arm: str) -> bool:
+        item = view["arms"][arm]
+        return item["matured_count"] >= MIN_SAMPLE and item["symbol_date_clusters"] >= MIN_CLUSTERS and (item["top_1_symbol_share"] or 1) < .2 and (item["top_1_date_share"] or 1) < .2
+    diffs = [view["differences_a_minus_b"] for view in views]
+    return {
+        "two_chronological_windows": True,
+        "sample_clusters_concentration": all(arm_ok(view, arm) for view in views for arm in ("A", "B")),
+        "lineage": all((view["lineage_coverage"] or 0) == 1 for view in views),
+        "control": all((view["control_coverage"] or 0) > 0 for view in views),
+        "all_differences_positive": all(all((diff.get(key) or 0) > 0 for key in diff) for diff in diffs),
+        "signs_consecutive": all((diffs[0].get(key) or 0) * (diffs[1].get(key) or 0) > 0 for key in diffs[0]),
+    }
+
+
+def _overall_status(cards: list[dict[str, Any]], first: list[dict[str, Any]], second: list[dict[str, Any]], criteria: dict[str, bool | None]) -> str:
+    eligible = [card for card in cards if card.get("eligibility_status") == "eligible"]
+    mature = [card for card in eligible if card.get("maturity_status_10d") == "mature"]
+    if not cards:
+        return "collecting"
+    if not mature:
+        return "immature"
+    if any(card.get("lineage_status") != "verified" for card in eligible):
+        return "unavailable"
+    if any(criteria.get(key) is None for key in criteria):
+        return "immature"
+    if criteria.get("sample_clusters_concentration") is False:
+        return "insufficient_sample"
+    if criteria.get("all_differences_positive") is False and criteria.get("signs_consecutive") is False:
+        return "invalidated"
+    if all(value is True for value in criteria.values()):
+        return "descriptively_supported"
+    return "not_supported"
+
+
+def _exclusions(cards: list[dict[str, Any]]) -> dict[str, int]:
+    return dict(sorted(Counter(card.get("exclusion_reason") for card in cards if card.get("exclusion_reason")).items()))
+
+
+def _legacy_context(store: Store) -> dict[str, Any]:
+    rows = store.signal_outcomes(limit=200_000)
+    return {"status": "context_only", "primary_excluded": True, "signal_outcomes_rows_read": len(rows), "reason": "legacy_unverified_no_se_reinterpreta_como_cohorte_prospectiva"}
+
+
+def _session_summary(start: str, end: str | None) -> dict[str, Any]:
+    end = end or date.today().isoformat()
+    return {"calendar": "XNYS", "completed_since_start": _session_count(start, end), "max_sessions": MAX_SESSIONS}
+
+
+def _session_count(start: str, end: str) -> int:
+    if end < start:
+        return 0
+    calendar = MarketCalendar()._calendar
+    if calendar is None:
+        return sum((date.fromisoformat(start) + timedelta(days=index)).weekday() < 5 for index in range((date.fromisoformat(end) - date.fromisoformat(start)).days + 1))
+    return len(calendar.schedule(start_date=start, end_date=end))
+
+
+def _nth_xnys_session(start: str, count: int) -> str | None:
+    calendar = MarketCalendar()._calendar
+    if calendar is None:
+        day = date.fromisoformat(start)
+        found = 0
+        while found < count:
+            if day.weekday() < 5:
+                found += 1
+            day += timedelta(days=1)
+        return day.isoformat()
+    schedule = calendar.schedule(start_date=start, end_date=(date.fromisoformat(start) + timedelta(days=30)).isoformat())
+    return str(schedule.index[count - 1].date()) if len(schedule) >= count else None
+
+
+def _number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+
+
+def _ratio(numerator: int, denominator: int) -> float | None:
+    return round(numerator / denominator, 6) if denominator else None
+
+
+def _mean(values: list[float]) -> float | None:
+    return round(statistics.mean(values), 6) if values else None
+
+
+def _median(values: list[float]) -> float | None:
+    return round(statistics.median(values), 6) if values else None
+
+
+def _difference(left: float | None, right: float | None) -> float | None:
+    return round(left - right, 6) if left is not None and right is not None else None
+
+
+def _content_hash(report: dict[str, Any]) -> str:
+    stable = {key: value for key, value in report.items() if key not in {"generated_at", "content_hash"}}
+    return hashlib.sha256(json.dumps(stable, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _unavailable(reason: str, parameters: dict[str, Any]) -> dict[str, Any]:
+    return {"schema_version": SCHEMA_VERSION, "observational_only": True, "overall_status": "unavailable", "reason": reason, "parameters": parameters}

@@ -93,6 +93,10 @@ def test_post_market_measurement_pipeline_publishes_sequence(tmp_path, monkeypat
         lambda *args, **kwargs: {"path": "research.json", "sample": {"matured_5d": 0}},
     )
     monkeypatch.setattr(
+        "agente_bolsa.scheduler.write_rr_cohort_report",
+        lambda *args, **kwargs: {"path": "rr_cohort.json", "overall_status": "collecting"},
+    )
+    monkeypatch.setattr(
         "agente_bolsa.scheduler.build_lab_digest",
         lambda *args, **kwargs: {
             "days": 1,
@@ -116,10 +120,25 @@ def test_post_market_measurement_pipeline_publishes_sequence(tmp_path, monkeypat
         "market_forward_outcomes",
         "learning_observations_and_lineage",
         "learning_scoreboard",
+        "rr_cohort",
         "autonomous_research",
         "continuous_improvement_digest",
     ]
     assert (tmp_path / "reports" / "latest_continuous_improvement_digest.md").read_text(encoding="utf-8") == "digest\n"
+
+
+def test_post_market_rr_cohort_failure_is_tolerated(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    store = _store(settings)
+    monkeypatch.setattr("agente_bolsa.scheduler.build_learning_scoreboard", lambda *args, **kwargs: {"path": "score", "evaluation": {}, "lineage_coverage": {}, "control_coverage": {}})
+    monkeypatch.setattr("agente_bolsa.scheduler.build_autonomous_research_report", lambda *args, **kwargs: {"path": "research", "sample": {}})
+    monkeypatch.setattr("agente_bolsa.scheduler.build_lab_digest", lambda *args, **kwargs: {"director_brief": {"decision_requested": {}}})
+    monkeypatch.setattr("agente_bolsa.scheduler.format_lab_digest_text", lambda *_args: "digest\n")
+    monkeypatch.setattr("agente_bolsa.scheduler.write_rr_cohort_report", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("observability failed")))
+
+    report = _run_post_market_measurement_pipeline(settings, store, session_date="2026-07-10", run_id="rr_failure")
+
+    assert report["rr_cohort"]["status"] == "failed"
 
 
 def test_weekly_review_is_idempotent_and_visible_in_scheduler(tmp_path, monkeypatch):

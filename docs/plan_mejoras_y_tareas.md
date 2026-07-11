@@ -10,8 +10,8 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.154**
-- Ultima actualizacion: 2026-07-10
+- Version actual: **0.4.155**
+- Ultima actualizacion: 2026-07-11
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
 ### P-L17 - Verdad de medicion: outcomes forward separados de ejecucion. **HECHO (v0.4.140).**
@@ -52,6 +52,18 @@ amplia exposicion.
 | P-L26B | Contrato ejecutable desde hallazgos medidos | HECHO (v0.4.152) |
 | P-L27B | Auditoria MFE/MAE y geometria stop/take | CORREGIDO, pendiente de aceptacion (v0.4.154) |
 | P-L27BR | Correccion dimensional, conteos y pruebas MFE/MAE | HECHO (v0.4.154) |
+| P-L27D | Cohorte prospectiva observacional reward/risk | HECHO (v0.4.155; recopilando desde 2026-07-13) |
+
+### P-L27D - Cohorte prospectiva observacional reward/risk. **HECHO (v0.4.155).**
+Se registra, exclusivamente en `learning_observations.features`, la cohorte
+pre-registrada `pl27d_rr_1_1_5_vs_1_5_2`: senales long con geometria valida y
+linaje/ciclo verificados, arm A [1, 1.5) frente a arm B [1.5, 2). La captura
+empieza el primer XNYS completo posterior al despliegue, **2026-07-13**, y solo
+evalua retornos forward 10d maduros. El informe `rr-cohort-report` separa
+inelegibles, inmaduros, muestra, clusters, concentracion y controles
+comparables; no calcula P&L, costes, alpha ni SPY y no cambia trading, gates,
+ordenes, estrategia ni historicos. La integracion post-market es tolerante a
+fallos y conserva la cadencia existente.
 
 ### P-L27BR - Correccion dimensional, conteos y pruebas MFE/MAE. **HECHO (v0.4.154).**
 P-L27B queda corregido antes de aceptacion: `mfe_10d` y `mae_10d` son

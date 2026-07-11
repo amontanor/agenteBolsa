@@ -115,6 +115,7 @@ from .tools.pre_earnings import (
     update_pre_earnings_outcomes,
 )
 from .tools.retention import cleanup_runtime_data
+from .tools.rr_cohort import build_rr_cohort_report
 from .tools.signal_learning import (
     backfill_signal_candidates_from_reports,
     build_learning_status,
@@ -2322,6 +2323,23 @@ def command_excursion_quality_report(args: argparse.Namespace) -> None:
     print(json.dumps(report, indent=2, ensure_ascii=True, default=str))
 
 
+def command_rr_cohort_report(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    report = build_rr_cohort_report(
+        store,
+        start=args.start,
+        end=args.end,
+        window=args.window,
+        include_legacy_context=args.include_legacy_context,
+    )
+    if args.json:
+        _print_json({"ok": report.get("overall_status") != "unavailable", **report})
+        return
+    print(json.dumps(report, indent=2, ensure_ascii=True, default=str))
+
+
 def command_autonomy_digest(args: argparse.Namespace) -> None:
     from .tools.autonomy_digest import build_autonomy_digest, pause_all, resume_all
 
@@ -3602,6 +3620,17 @@ def build_parser() -> argparse.ArgumentParser:
     excursion_quality.add_argument("--historical", action="store_true", help="Incluye todo el historial disponible.")
     excursion_quality.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     excursion_quality.set_defaults(func=command_excursion_quality_report)
+
+    rr_cohort = subparsers.add_parser(
+        "rr-cohort-report",
+        help="Cohorte observacional prospectiva reward/risk P-L27D.",
+    )
+    rr_cohort.add_argument("--from", dest="start", help="Fecha inicial YYYY-MM-DD.")
+    rr_cohort.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
+    rr_cohort.add_argument("--window", choices=("first", "second", "all"), default="all")
+    rr_cohort.add_argument("--include-legacy-context", action="store_true")
+    rr_cohort.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    rr_cohort.set_defaults(func=command_rr_cohort_report)
 
     autonomy_digest = subparsers.add_parser(
         "autonomy-digest",

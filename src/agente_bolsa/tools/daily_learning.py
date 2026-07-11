@@ -17,6 +17,7 @@ from .learning_mode import LEARNING_EXPERIMENT_SOURCE, load_learning_mode_config
 from .llm_degraded_watchdog import evaluate as evaluate_llm_watchdog
 from .pre_earnings import load_pre_earnings_learning_context
 from .reporting import write_json_report
+from .rr_cohort import rr_cohort_digest_summary, sync_rr_cohort_observations
 from .signal_learning import HORIZONS, _indicator_tags, _num, update_signal_outcomes
 
 DEFAULT_DAILY_LEARNING_START = "2026-04-01"
@@ -1419,6 +1420,7 @@ def build_learning_daily_run(
     update_result = update_signal_outcomes(settings, store, since_date=since_date, limit=LEDGER_LIMIT)
     rows = _rebuild_signal_cohorts(store, since_date=since_date, end_date=end_date)
     observations = _materialize_observations(store, rows)
+    rr_cohort_sync = sync_rr_cohort_observations(store, observations)
     session_dates = _session_dates(rows)
     session_date = end_date or (session_dates[-1] if session_dates else since_date)
     health = _build_health(observations, rows)
@@ -1441,12 +1443,14 @@ def build_learning_daily_run(
         same_session_ledger,
         learning_experiment_section,
     )
+    digest["rr_cohort"] = rr_cohort_digest_summary(store)
     comparison = _compare_policy_rows(rows, "proposed") if rows else {}
     summary_payload = {
         "session_date": session_date,
         "health": health,
         "digest": digest,
         "policy_comparison": comparison,
+        "rr_cohort_sync": rr_cohort_sync,
     }
     store.upsert_learning_daily_summary(
         summary_id=f"daily:{session_date}",
@@ -1526,6 +1530,7 @@ def build_learning_digest_report(
         None,
         learning_experiment_section,
     )
+    digest["rr_cohort"] = rr_cohort_digest_summary(store)
     report = {
         "run_id": run_id,
         "as_of": datetime.now(timezone.utc).isoformat(),
