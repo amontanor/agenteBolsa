@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import math
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,6 +21,11 @@ STAGES = (
     "persistence",
     "report_generation",
 )
+
+
+def optional_measure(timing: MarketCycleTiming | None, stage: str, segment: str):
+    """Return a timing context when available without changing the wrapped flow."""
+    return timing.measure(stage, segment) if timing is not None else nullcontext()
 
 
 class MarketCycleTiming:

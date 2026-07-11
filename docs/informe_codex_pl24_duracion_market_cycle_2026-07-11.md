@@ -1,6 +1,22 @@
 # P-L24 - Trazabilidad de duracion del ciclo de mercado
 
-Version: 0.4.150 (P-L24R2)
+Version: 0.4.151 (P-L24R3)
+
+## Correccion P-L24R3
+
+`cycle_runner.py` vuelve a tener una unica implementacion de cada llamada de
+produccion: `optional_measure` aplica el segmento si existe registrador y un
+contexto nulo si no. Se instrumentan tambien `update_signal_execution_status`
+como `persistence/execution_status_updates` y el informe shadow como
+`report_generation/learning_shadow_report`.
+
+La integracion aislada ejecuta el flujo real `_auto_paper_trade` y comprueba:
+recomendacion estructurada en `llm_decision`, revisiones/gates/planes en
+`deterministic_gates`, escrituras en `persistence`, el informe shadow en
+`report_generation`, fallo de segmento conservando los anteriores, solape cero
+en el recorrido normal y equivalencia observable con `timing=None`. La llamada
+`submit_paper_order_plan` se ejecuta pero no se atribuye a gates ni persistencia.
+No se produjo una muestra operativa nueva durante el fin de semana.
 
 ## Correccion P-L24R2
 

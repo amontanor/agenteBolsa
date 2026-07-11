@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.150**
+- Version actual: **0.4.151**
 - Ultima actualizacion: 2026-07-10
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -48,6 +48,15 @@ amplia exposicion.
 | P-L24 | Trazabilidad de duracion del ciclo de mercado | HECHO (v0.4.148) |
 | P-L24R | Precision y aislamiento de la instrumentacion temporal | HECHO (v0.4.149) |
 | P-L24R2 | Segmentos reales de decision, gates, persistencia e informes | HECHO (v0.4.150) |
+| P-L24R3 | Integracion real y eliminacion de duplicacion temporal | HECHO (v0.4.151) |
+
+### P-L24R3 - Integracion real y eliminacion de duplicacion temporal. **HECHO (v0.4.151).**
+`optional_measure` conserva una sola rama de produccion al envolver cada llamada
+instrumentada o un `nullcontext` cuando no hay registrador. Las pruebas de
+integracion ejecutan `_auto_paper_trade` con dependencias aisladas y verifican
+la atribucion real de recomendaciones, gates, persistencia, estado de ejecucion
+e informe shadow; el broker permanece fuera de las etapas. No cambian paper
+trading, decisiones, gates, ordenes, mensajes, payloads ni su orden.
 
 ### P-L24R - Precision y aislamiento de la instrumentacion temporal. **HECHO (v0.4.149).**
 Se restaura `scheduler.py` al comportamiento y mensajes de P-L23R, con hooks

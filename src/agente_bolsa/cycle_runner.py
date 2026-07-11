@@ -33,7 +33,7 @@ from .tools.learning_mode import (
     active_learning_mode,
     is_strategy_shadow_paused,
 )
-from .tools.market_cycle_timing import MarketCycleTiming
+from .tools.market_cycle_timing import MarketCycleTiming, optional_measure
 from .tools.market_snapshot import build_market_snapshot, compact_snapshot_for_prompt
 from .tools.market_state import build_market_state, compact_market_state_for_prompt
 from .tools.operational_health import load_operational_block_context
@@ -1171,11 +1171,8 @@ def _auto_paper_trade(
                 "effective_max_daily_buy_orders": max(settings.max_daily_buy_orders, effective_recommendation_limit),
             },
         )
-        if timing is None:
+        with optional_measure(timing, "llm_decision", "structured_recommendations"):
             decision = request_trade_recommendations(settings, portfolio, decision_context, sentiment_context, rebalance_context, market_state)
-        else:
-            with timing.measure("llm_decision", "structured_recommendations"):
-                decision = request_trade_recommendations(settings, portfolio, decision_context, sentiment_context, rebalance_context, market_state)
     except Exception as exc:  # noqa: BLE001 - bad LLM JSON or broker read must not stop scheduler.
         if settings.deterministic_trade_fallback_enabled and "portfolio" in locals() and "decision_context" in locals():
             fallback_recommendations = deterministic_trade_fallback_recommendations(
@@ -1272,11 +1269,8 @@ def _auto_paper_trade(
                 ),
                 recommendation_augmentation,
             )
-    if timing is None:
+    with optional_measure(timing, "deterministic_gates", "deterministic_review"):
         reviewed_recommendations, deterministic_review = review_recommendations(settings, recommendations, decision_context, sentiment_context, market_state)
-    else:
-        with timing.measure("deterministic_gates", "deterministic_review"):
-            reviewed_recommendations, deterministic_review = review_recommendations(settings, recommendations, decision_context, sentiment_context, market_state)
     if learning_mode:
         reviewed_recommendations = [
             replace(
@@ -1307,11 +1301,8 @@ def _auto_paper_trade(
             ),
             {"decisions": deterministic_review},
         )
-    if timing is None:
+    with optional_measure(timing, "deterministic_gates", "adversarial_review"):
         adversarial_review = review_recommendations_adversarial(reviewed_recommendations, technical_context=decision_context, market_state=market_state)
-    else:
-        with timing.measure("deterministic_gates", "adversarial_review"):
-            adversarial_review = review_recommendations_adversarial(reviewed_recommendations, technical_context=decision_context, market_state=market_state)
     if adversarial_review:
         reporter.emit(
             "risk_manager",
@@ -1354,7 +1345,7 @@ def _auto_paper_trade(
             model_info=model_info,
             gate_config=gate_config,
         )
-        if timing is None:
+        with optional_measure(timing, "persistence", "recommendation_records"):
             store.save_trade_recommendation(
                 recommendation_id=new_id("rec"), cycle_id=run_id, symbol=recommendation.symbol,
                 action=recommendation.action, confidence=recommendation.confidence, payload={
@@ -1376,19 +1367,8 @@ def _auto_paper_trade(
                 "model_info": model_info,
                 },
             )
-        else:
-            with timing.measure("persistence", "recommendation_records"):
-                store.save_trade_recommendation(
-                    recommendation_id=new_id("rec"), cycle_id=run_id, symbol=recommendation.symbol,
-                    action=recommendation.action, confidence=recommendation.confidence, payload={
-                    **asdict(recommendation), "deterministic_review": review_row, "adversarial_review": adversarial_row,
-                    "decision_input_fingerprint": fingerprint, "market_state_quality": ((market_state or {}).get("data_quality") or {}).get("status"),
-                    "prompt_version": "trade_decision.v2", "model_config_hash": _payload_hash(model_info), "feature_hash": _payload_hash(decision_context),
-                    "data_provider_hash": _payload_hash({"market_state_provider": (market_state or {}).get("provider"), "market_snapshot_provider": (market_snapshot or {}).get("provider"), "data_vendor_quality": ((market_state or {}).get("data_quality") or {}).get("data_vendor_quality")}), "model_info": model_info,
-                    },
-                )
 
-    if timing is None:
+    with optional_measure(timing, "deterministic_gates", "entry_quality_gate"):
         quality_recommendations, entry_quality_gate = _apply_entry_quality_gate(
         settings,
         reporter,
@@ -1400,13 +1380,7 @@ def _auto_paper_trade(
         daily_learning_digest=daily_learning_digest,
         operational_response_context=operational_response_context,
         )
-    else:
-        with timing.measure("deterministic_gates", "entry_quality_gate"):
-            quality_recommendations, entry_quality_gate = _apply_entry_quality_gate(
-                settings, reporter, run_id, reviewed_recommendations, decision_context, sentiment_context,
-                learning_mode_config=learning_mode, daily_learning_digest=daily_learning_digest, operational_response_context=operational_response_context,
-            )
-    if timing is None:
+    with optional_measure(timing, "deterministic_gates", "backtest_gate"):
         gated_recommendations, backtest_gate = _apply_backtest_gate(
         settings,
         store,
@@ -1414,16 +1388,13 @@ def _auto_paper_trade(
         run_id,
         quality_recommendations,
         )
-    else:
-        with timing.measure("deterministic_gates", "backtest_gate"):
-            gated_recommendations, backtest_gate = _apply_backtest_gate(settings, store, reporter, run_id, quality_recommendations)
     gated_recommendations = _annotate_recommendations_with_lineage(
         gated_recommendations,
         decision_context,
         cycle_id=run_id,
         default_cohort=LEARNING_EXPERIMENT_SOURCE if learning_mode else None,
     )
-    if timing is None:
+    with optional_measure(timing, "persistence", "signal_decision_updates"):
         learned_decisions = update_signal_decisions(
         store,
         source_run_id=decision_context.get("run_id"),
@@ -1432,9 +1403,6 @@ def _auto_paper_trade(
         backtest_gate=backtest_gate,
         settings=settings,
         )
-    else:
-        with timing.measure("persistence", "signal_decision_updates"):
-            learned_decisions = update_signal_decisions(store, source_run_id=decision_context.get("run_id"), recommendations=reviewed_recommendations, entry_quality_gate=entry_quality_gate, backtest_gate=backtest_gate, settings=settings)
     if learned_decisions:
         reporter.emit(
             "self_improvement_engineer",
@@ -1444,7 +1412,7 @@ def _auto_paper_trade(
             {"source_run_id": decision_context.get("run_id"), "updated": learned_decisions},
         )
     rejected_order_plans: list[dict[str, Any]] = []
-    if timing is None:
+    with optional_measure(timing, "deterministic_gates", "order_plan_build"):
         plans = build_order_plans(
         settings,
         portfolio,
@@ -1454,23 +1422,15 @@ def _auto_paper_trade(
         market_state=market_state,
         ignore_operational_kill_switch=learning_shadow_only,
         )
-    else:
-        with timing.measure("deterministic_gates", "order_plan_build"):
-            plans = build_order_plans(settings, portfolio, gated_recommendations, dry_run=True, rejected=rejected_order_plans, market_state=market_state, ignore_operational_kill_switch=learning_shadow_only)
     effective_plan_limit = _effective_buy_plan_limit(settings, gated_recommendations)
     effective_daily_limit = _effective_daily_buy_limit(settings, plans)
     approved_buys = sorted({item.symbol for item in gated_recommendations if str(item.action).lower() == "buy"})
-    if timing is None:
+    with optional_measure(timing, "deterministic_gates", "daily_buy_limit"):
         plans = _apply_daily_buy_limit(settings, store, reporter, run_id, plans, rejected=rejected_order_plans)
+    with optional_measure(timing, "deterministic_gates", "low_sample_quota"):
         plans = _apply_low_sample_daily_quota(settings, store, reporter, run_id, plans, rejected=rejected_order_plans)
+    with optional_measure(timing, "deterministic_gates", "strategy_pause_filter"):
         plans, paused_plans = _separate_strategy_paused_plans(learning_mode, plans)
-    else:
-        with timing.measure("deterministic_gates", "daily_buy_limit"):
-            plans = _apply_daily_buy_limit(settings, store, reporter, run_id, plans, rejected=rejected_order_plans)
-        with timing.measure("deterministic_gates", "low_sample_quota"):
-            plans = _apply_low_sample_daily_quota(settings, store, reporter, run_id, plans, rejected=rejected_order_plans)
-        with timing.measure("deterministic_gates", "strategy_pause_filter"):
-            plans, paused_plans = _separate_strategy_paused_plans(learning_mode, plans)
     if paused_plans:
         for plan, strategy_name in paused_plans:
             rejected_order_plans.append(
@@ -1505,15 +1465,16 @@ def _auto_paper_trade(
         shadow_plans = [*plans, *(plan for plan, _ in paused_plans)] if bool(learning_mode.get("shadow_first")) else [
             plan for plan, _ in paused_plans
         ]
-        shadow_path = _write_learning_mode_shadow_report(
-            settings,
-            run_id=run_id,
-            recommendations=reviewed_recommendations,
-            plans=shadow_plans,
-            rejected=rejected_order_plans,
-            paused_strategies=list(learning_mode.get("shadow_strategies") or []),
-            operational_kill_switch=operational_kill_switch,
-        )
+        with optional_measure(timing, "report_generation", "learning_shadow_report"):
+            shadow_path = _write_learning_mode_shadow_report(
+                settings,
+                run_id=run_id,
+                recommendations=reviewed_recommendations,
+                plans=shadow_plans,
+                rejected=rejected_order_plans,
+                paused_strategies=list(learning_mode.get("shadow_strategies") or []),
+                operational_kill_switch=operational_kill_switch,
+            )
         reporter.emit(
             "execution_agent",
             "learning_mode_shadow_logged",
@@ -1530,17 +1491,18 @@ def _auto_paper_trade(
                 operational_kill_switch,
             )
         if bool(learning_mode.get("shadow_first")):
-            execution_updates = update_signal_execution_status(
-                store,
-                source_run_id=decision_context.get("run_id"),
-                approved_symbols=approved_buys,
-                rejected_order_plans=rejected_order_plans,
-                planned_symbols=[],
-                submitted=[],
-                failed=[],
-                effective_max_orders_per_cycle=effective_plan_limit,
-                effective_max_daily_buy_orders=effective_daily_limit,
-            )
+            with optional_measure(timing, "persistence", "execution_status_updates"):
+                execution_updates = update_signal_execution_status(
+                    store,
+                    source_run_id=decision_context.get("run_id"),
+                    approved_symbols=approved_buys,
+                    rejected_order_plans=rejected_order_plans,
+                    planned_symbols=[],
+                    submitted=[],
+                    failed=[],
+                    effective_max_orders_per_cycle=effective_plan_limit,
+                    effective_max_daily_buy_orders=effective_daily_limit,
+                )
             return {
                 "submitted": [],
                 "failed": [],
@@ -1563,7 +1525,7 @@ def _auto_paper_trade(
     planned_symbols = [plan.symbol for plan in plans if str(plan.side).lower() == "buy"]
     for plan in plans:
         plan_id = new_id("plan")
-        if timing is None:
+        with optional_measure(timing, "persistence", "order_plan_records"):
             store.save_order_plan(
                 plan_id=plan_id, cycle_id=run_id, symbol=plan.symbol, side=plan.side,
                 notional=plan.notional, approved=plan.risk_decision.approved, dry_run=plan.dry_run, payload=asdict(plan),
@@ -1571,29 +1533,21 @@ def _auto_paper_trade(
             recommendation_tags = list(getattr(getattr(plan, "recommendation", None), "tags", []) or [])
             if LOW_SAMPLE_EXPLORATION_TAG in recommendation_tags and str(plan.side).lower() == "buy":
                 _register_low_sample_order(store, settings, run_id=run_id, plan_id=plan_id, symbol=plan.symbol)
-        else:
-            with timing.measure("persistence", "order_plan_records"):
-                store.save_order_plan(
-                    plan_id=plan_id, cycle_id=run_id, symbol=plan.symbol, side=plan.side,
-                    notional=plan.notional, approved=plan.risk_decision.approved, dry_run=plan.dry_run, payload=asdict(plan),
-                )
-                recommendation_tags = list(getattr(getattr(plan, "recommendation", None), "tags", []) or [])
-                if LOW_SAMPLE_EXPLORATION_TAG in recommendation_tags and str(plan.side).lower() == "buy":
-                    _register_low_sample_order(store, settings, run_id=run_id, plan_id=plan_id, symbol=plan.symbol)
     low_sample_usage = _low_sample_usage_payload(store, settings)
 
     if not plans:
-        execution_updates = update_signal_execution_status(
-            store,
-            source_run_id=decision_context.get("run_id"),
-            approved_symbols=approved_buys,
-            rejected_order_plans=rejected_order_plans,
-            planned_symbols=[],
-            submitted=[],
-            failed=[],
-            effective_max_orders_per_cycle=effective_plan_limit,
-            effective_max_daily_buy_orders=effective_daily_limit,
-        )
+        with optional_measure(timing, "persistence", "execution_status_updates"):
+            execution_updates = update_signal_execution_status(
+                store,
+                source_run_id=decision_context.get("run_id"),
+                approved_symbols=approved_buys,
+                rejected_order_plans=rejected_order_plans,
+                planned_symbols=[],
+                submitted=[],
+                failed=[],
+                effective_max_orders_per_cycle=effective_plan_limit,
+                effective_max_daily_buy_orders=effective_daily_limit,
+            )
         actions = ", ".join(
             f"{item.symbol}:{item.action}:{item.confidence:.2f}" for item in reviewed_recommendations
         ) or "sin recomendaciones"
@@ -1685,17 +1639,18 @@ def _auto_paper_trade(
         fail_text = "; fallos: " + ", ".join(f"{item['symbol']} {item['side']}: {item['error']}" for item in failed)
     else:
         fail_text = ""
-    execution_updates = update_signal_execution_status(
-        store,
-        source_run_id=decision_context.get("run_id"),
-        approved_symbols=approved_buys,
-        rejected_order_plans=rejected_order_plans,
-        planned_symbols=planned_symbols,
-        submitted=submitted,
-        failed=failed,
-        effective_max_orders_per_cycle=effective_plan_limit,
-        effective_max_daily_buy_orders=effective_daily_limit,
-    )
+    with optional_measure(timing, "persistence", "execution_status_updates"):
+        execution_updates = update_signal_execution_status(
+            store,
+            source_run_id=decision_context.get("run_id"),
+            approved_symbols=approved_buys,
+            rejected_order_plans=rejected_order_plans,
+            planned_symbols=planned_symbols,
+            submitted=submitted,
+            failed=failed,
+            effective_max_orders_per_cycle=effective_plan_limit,
+            effective_max_daily_buy_orders=effective_daily_limit,
+        )
     reporter.emit(
         "execution_agent",
         "paper_auto_trade_completed",
