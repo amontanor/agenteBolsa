@@ -1,6 +1,14 @@
 # P-L24 - Trazabilidad de duracion del ciclo de mercado
 
-Version: 0.4.149 (P-L24R)
+Version: 0.4.150 (P-L24R2)
+
+## Correccion P-L24R2
+
+Sin reescribir `scheduler.py`, se completan los segmentos concretos de CrewAI,
+recomendacion estructurada, gates y persistencia. `tracked_duration_seconds` usa la
+union de intervalos y `segment_overlap_count` declara solapes; los historicos sin
+segmentos siguen `unavailable`. No cambia trading ni se inventa muestra real fuera
+de mercado.
 
 ## Correccion P-L24R
 

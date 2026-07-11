@@ -35,7 +35,7 @@ def test_market_cycle_timing_keeps_completed_stages_when_later_stage_fails(tmp_p
     assert report["status"] == "failed"
     assert report["stages"]["data_loading"]["duration_seconds"] == 12.0
     assert report["stages"]["technical_analysis"]["error"] == "download timeout"
-    assert report["stages"]["llm_decision"]["status"] == "skipped"
+    assert report["stages"]["llm_decision"]["status"] == "unavailable"
 
 
 def test_market_cycle_timing_marks_omitted_stage_skipped(tmp_path):
@@ -78,3 +78,29 @@ def test_market_cycle_timing_summary_is_unavailable_without_sample(tmp_path):
     assert summary["status"] == "unavailable"
     assert summary["sample_available"] == 0
     assert summary["total_duration_seconds"]["p50"] is None
+
+
+def test_market_cycle_timing_keeps_skipped_segment_with_completed_work(tmp_path):
+    timing = MarketCycleTiming(tmp_path, "segments", started_at=_at(0))
+    timing.skip_segment("llm_decision", "crew_reasoning", "CrewAI omitido por parametro --skip-crew")
+    timing._append_segment("llm_decision", "structured_recommendations", _at(2), _at(5), "completed")
+
+    report = timing.finalize("completed", finished_at=_at(8))
+
+    assert [item["name"] for item in report["stages"]["llm_decision"]["segments"]] == [
+        "crew_reasoning",
+        "structured_recommendations",
+    ]
+    assert report["stages"]["llm_decision"]["status"] == "completed"
+
+
+def test_market_cycle_timing_deduplicates_overlapping_segments(tmp_path):
+    timing = MarketCycleTiming(tmp_path, "overlap", started_at=_at(0))
+    timing._append_segment("data_loading", "one", _at(0), _at(10), "completed")
+    timing._append_segment("technical_analysis", "two", _at(5), _at(15), "completed")
+
+    report = timing.finalize("completed", finished_at=_at(20))
+
+    assert report["segment_overlap_count"] == 1
+    assert report["tracked_duration_seconds"] == 15.0
+    assert report["unattributed_duration_seconds"] == 5.0

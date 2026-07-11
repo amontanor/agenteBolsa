@@ -47,7 +47,12 @@ class MarketCycleTiming:
         stage = self._stages[name]
         if stage["status"] != "running":
             return
-        _finish(stage, "completed", finished_at or datetime.now(timezone.utc))
+        finished = finished_at or datetime.now(timezone.utc)
+        started = _parse(stage.get("started_at"))
+        if started:
+            self._append_segment(name, name, started, finished, "completed")
+        else:
+            _finish(stage, "completed", finished)
 
     @contextmanager
     def measure(self, name: str, segment: str):
@@ -78,13 +83,22 @@ class MarketCycleTiming:
             "reason": reason,
         }
 
+    def skip_segment(self, name: str, segment: str, reason: str) -> None:
+        """Record an omitted segment while preserving completed stage work."""
+        stage = self._stages[name]
+        if stage["status"] == "unavailable":
+            stage = self._stages[name] = _unavailable_stage()
+            stage["segments"] = []
+        stage.setdefault("segments", []).append(
+            {"name": segment, "started_at": None, "finished_at": None, "duration_seconds": None, "status": "skipped", "reason": reason}
+        )
+        _refresh_stage(stage)
+
     def finalize(self, status: str, *, error: Exception | str | None = None, finished_at: datetime | None = None) -> dict[str, Any]:
         finished = (finished_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
-        for name, stage in self._stages.items():
+        for stage in self._stages.values():
             if stage["status"] == "running":
                 _finish(stage, "failed" if status == "failed" else "unavailable", finished, error=str(error) if error else None)
-            elif stage["status"] == "unavailable":
-                self.skip(name, "sin instrumentacion en este ciclo")
         payload = {
             "cycle_id": self.cycle_id,
             "started_at": _iso(self.started_at),
@@ -94,9 +108,9 @@ class MarketCycleTiming:
             "system_version": __version__,
             "stages": self._stages,
         }
-        payload["tracked_duration_seconds"] = round(
-            sum(float(stage.get("duration_seconds") or 0.0) for stage in self._stages.values()), 4
-        )
+        tracked, overlaps = _tracked_duration(self._stages)
+        payload["tracked_duration_seconds"] = tracked
+        payload["segment_overlap_count"] = overlaps
         payload["unattributed_duration_seconds"] = round(
             max(0.0, float(payload["duration_seconds"]) - float(payload["tracked_duration_seconds"])), 4
         )
@@ -123,16 +137,6 @@ class MarketCycleTiming:
         if stage["status"] == "unavailable":
             self.start(name, started_at=started)
             stage = self._stages[name]
-        if "segments" not in stage and stage.get("duration_seconds") is not None:
-            stage["segments"] = [
-                {
-                    "name": "prior_measured_work",
-                    "started_at": stage.get("started_at"),
-                    "finished_at": stage.get("finished_at"),
-                    "duration_seconds": stage.get("duration_seconds"),
-                    "status": stage.get("status"),
-                }
-            ]
         entry = {
             "name": segment,
             "started_at": _iso(started),
@@ -144,10 +148,7 @@ class MarketCycleTiming:
             entry["error"] = error
         segments = stage.setdefault("segments", [])
         segments.append(entry)
-        stage["started_at"] = min(item["started_at"] for item in segments)
-        stage["finished_at"] = max(item["finished_at"] for item in segments)
-        stage["duration_seconds"] = round(sum(float(item["duration_seconds"]) for item in segments), 4)
-        stage["status"] = "failed" if any(item["status"] == "failed" for item in segments) else "completed"
+        _refresh_stage(stage)
 
 
 def summarize_market_cycle_timings(reports_dir: Path, *, limit: int = 20) -> dict[str, Any]:
@@ -188,6 +189,45 @@ def summarize_market_cycle_timings(reports_dir: Path, *, limit: int = 20) -> dic
 
 def _unavailable_stage() -> dict[str, Any]:
     return {"started_at": None, "finished_at": None, "duration_seconds": None, "status": "unavailable"}
+
+
+def _refresh_stage(stage: dict[str, Any]) -> None:
+    segments = stage.get("segments", [])
+    measured = [item for item in segments if item.get("started_at") and item.get("finished_at")]
+    if not measured:
+        if segments:
+            stage.update({"started_at": None, "finished_at": None, "duration_seconds": None, "status": "skipped"})
+            stage["reason"] = next((str(item["reason"]) for item in segments if item.get("reason")), "segmentos omitidos")
+        return
+    stage["started_at"] = min(str(item["started_at"]) for item in measured)
+    stage["finished_at"] = max(str(item["finished_at"]) for item in measured)
+    stage["duration_seconds"] = round(sum(float(item.get("duration_seconds") or 0.0) for item in measured), 4)
+    stage["status"] = "failed" if any(item.get("status") == "failed" for item in measured) else "completed"
+
+
+def _tracked_duration(stages: dict[str, dict[str, Any]]) -> tuple[float, int]:
+    intervals: list[tuple[datetime, datetime]] = []
+    for stage in stages.values():
+        for segment in stage.get("segments", []):
+            started, finished = _parse(segment.get("started_at")), _parse(segment.get("finished_at"))
+            if started and finished and finished >= started:
+                intervals.append((started, finished))
+    if not intervals:
+        return 0.0, 0
+    intervals.sort(key=lambda item: item[0])
+    merged_start, merged_end = intervals[0]
+    seconds = 0.0
+    overlaps = 0
+    for started, finished in intervals[1:]:
+        if started < merged_end:
+            overlaps += 1
+            if finished > merged_end:
+                merged_end = finished
+            continue
+        seconds += (merged_end - merged_start).total_seconds()
+        merged_start, merged_end = started, finished
+    seconds += (merged_end - merged_start).total_seconds()
+    return round(seconds, 4), overlaps
 
 
 def _finish(stage: dict[str, Any], status: str, finished_at: datetime, *, error: str | None = None) -> None:

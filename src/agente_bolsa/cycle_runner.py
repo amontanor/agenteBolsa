@@ -1354,13 +1354,10 @@ def _auto_paper_trade(
             model_info=model_info,
             gate_config=gate_config,
         )
-        store.save_trade_recommendation(
-            recommendation_id=new_id("rec"),
-            cycle_id=run_id,
-            symbol=recommendation.symbol,
-            action=recommendation.action,
-            confidence=recommendation.confidence,
-            payload={
+        if timing is None:
+            store.save_trade_recommendation(
+                recommendation_id=new_id("rec"), cycle_id=run_id, symbol=recommendation.symbol,
+                action=recommendation.action, confidence=recommendation.confidence, payload={
                 **asdict(recommendation),
                 "deterministic_review": review_row,
                 "adversarial_review": adversarial_row,
@@ -1377,10 +1374,22 @@ def _auto_paper_trade(
                     }
                 ),
                 "model_info": model_info,
-            },
-        )
+                },
+            )
+        else:
+            with timing.measure("persistence", "recommendation_records"):
+                store.save_trade_recommendation(
+                    recommendation_id=new_id("rec"), cycle_id=run_id, symbol=recommendation.symbol,
+                    action=recommendation.action, confidence=recommendation.confidence, payload={
+                    **asdict(recommendation), "deterministic_review": review_row, "adversarial_review": adversarial_row,
+                    "decision_input_fingerprint": fingerprint, "market_state_quality": ((market_state or {}).get("data_quality") or {}).get("status"),
+                    "prompt_version": "trade_decision.v2", "model_config_hash": _payload_hash(model_info), "feature_hash": _payload_hash(decision_context),
+                    "data_provider_hash": _payload_hash({"market_state_provider": (market_state or {}).get("provider"), "market_snapshot_provider": (market_snapshot or {}).get("provider"), "data_vendor_quality": ((market_state or {}).get("data_quality") or {}).get("data_vendor_quality")}), "model_info": model_info,
+                    },
+                )
 
-    quality_recommendations, entry_quality_gate = _apply_entry_quality_gate(
+    if timing is None:
+        quality_recommendations, entry_quality_gate = _apply_entry_quality_gate(
         settings,
         reporter,
         run_id,
@@ -1390,28 +1399,42 @@ def _auto_paper_trade(
         learning_mode_config=learning_mode,
         daily_learning_digest=daily_learning_digest,
         operational_response_context=operational_response_context,
-    )
-    gated_recommendations, backtest_gate = _apply_backtest_gate(
+        )
+    else:
+        with timing.measure("deterministic_gates", "entry_quality_gate"):
+            quality_recommendations, entry_quality_gate = _apply_entry_quality_gate(
+                settings, reporter, run_id, reviewed_recommendations, decision_context, sentiment_context,
+                learning_mode_config=learning_mode, daily_learning_digest=daily_learning_digest, operational_response_context=operational_response_context,
+            )
+    if timing is None:
+        gated_recommendations, backtest_gate = _apply_backtest_gate(
         settings,
         store,
         reporter,
         run_id,
         quality_recommendations,
-    )
+        )
+    else:
+        with timing.measure("deterministic_gates", "backtest_gate"):
+            gated_recommendations, backtest_gate = _apply_backtest_gate(settings, store, reporter, run_id, quality_recommendations)
     gated_recommendations = _annotate_recommendations_with_lineage(
         gated_recommendations,
         decision_context,
         cycle_id=run_id,
         default_cohort=LEARNING_EXPERIMENT_SOURCE if learning_mode else None,
     )
-    learned_decisions = update_signal_decisions(
+    if timing is None:
+        learned_decisions = update_signal_decisions(
         store,
         source_run_id=decision_context.get("run_id"),
         recommendations=reviewed_recommendations,
         entry_quality_gate=entry_quality_gate,
         backtest_gate=backtest_gate,
         settings=settings,
-    )
+        )
+    else:
+        with timing.measure("persistence", "signal_decision_updates"):
+            learned_decisions = update_signal_decisions(store, source_run_id=decision_context.get("run_id"), recommendations=reviewed_recommendations, entry_quality_gate=entry_quality_gate, backtest_gate=backtest_gate, settings=settings)
     if learned_decisions:
         reporter.emit(
             "self_improvement_engineer",
@@ -1421,7 +1444,8 @@ def _auto_paper_trade(
             {"source_run_id": decision_context.get("run_id"), "updated": learned_decisions},
         )
     rejected_order_plans: list[dict[str, Any]] = []
-    plans = build_order_plans(
+    if timing is None:
+        plans = build_order_plans(
         settings,
         portfolio,
         gated_recommendations,
@@ -1429,13 +1453,24 @@ def _auto_paper_trade(
         rejected=rejected_order_plans,
         market_state=market_state,
         ignore_operational_kill_switch=learning_shadow_only,
-    )
+        )
+    else:
+        with timing.measure("deterministic_gates", "order_plan_build"):
+            plans = build_order_plans(settings, portfolio, gated_recommendations, dry_run=True, rejected=rejected_order_plans, market_state=market_state, ignore_operational_kill_switch=learning_shadow_only)
     effective_plan_limit = _effective_buy_plan_limit(settings, gated_recommendations)
     effective_daily_limit = _effective_daily_buy_limit(settings, plans)
     approved_buys = sorted({item.symbol for item in gated_recommendations if str(item.action).lower() == "buy"})
-    plans = _apply_daily_buy_limit(settings, store, reporter, run_id, plans, rejected=rejected_order_plans)
-    plans = _apply_low_sample_daily_quota(settings, store, reporter, run_id, plans, rejected=rejected_order_plans)
-    plans, paused_plans = _separate_strategy_paused_plans(learning_mode, plans)
+    if timing is None:
+        plans = _apply_daily_buy_limit(settings, store, reporter, run_id, plans, rejected=rejected_order_plans)
+        plans = _apply_low_sample_daily_quota(settings, store, reporter, run_id, plans, rejected=rejected_order_plans)
+        plans, paused_plans = _separate_strategy_paused_plans(learning_mode, plans)
+    else:
+        with timing.measure("deterministic_gates", "daily_buy_limit"):
+            plans = _apply_daily_buy_limit(settings, store, reporter, run_id, plans, rejected=rejected_order_plans)
+        with timing.measure("deterministic_gates", "low_sample_quota"):
+            plans = _apply_low_sample_daily_quota(settings, store, reporter, run_id, plans, rejected=rejected_order_plans)
+        with timing.measure("deterministic_gates", "strategy_pause_filter"):
+            plans, paused_plans = _separate_strategy_paused_plans(learning_mode, plans)
     if paused_plans:
         for plan, strategy_name in paused_plans:
             rejected_order_plans.append(
@@ -1528,19 +1563,23 @@ def _auto_paper_trade(
     planned_symbols = [plan.symbol for plan in plans if str(plan.side).lower() == "buy"]
     for plan in plans:
         plan_id = new_id("plan")
-        store.save_order_plan(
-            plan_id=plan_id,
-            cycle_id=run_id,
-            symbol=plan.symbol,
-            side=plan.side,
-            notional=plan.notional,
-            approved=plan.risk_decision.approved,
-            dry_run=plan.dry_run,
-            payload=asdict(plan),
-        )
-        recommendation_tags = list(getattr(getattr(plan, "recommendation", None), "tags", []) or [])
-        if LOW_SAMPLE_EXPLORATION_TAG in recommendation_tags and str(plan.side).lower() == "buy":
-            _register_low_sample_order(store, settings, run_id=run_id, plan_id=plan_id, symbol=plan.symbol)
+        if timing is None:
+            store.save_order_plan(
+                plan_id=plan_id, cycle_id=run_id, symbol=plan.symbol, side=plan.side,
+                notional=plan.notional, approved=plan.risk_decision.approved, dry_run=plan.dry_run, payload=asdict(plan),
+            )
+            recommendation_tags = list(getattr(getattr(plan, "recommendation", None), "tags", []) or [])
+            if LOW_SAMPLE_EXPLORATION_TAG in recommendation_tags and str(plan.side).lower() == "buy":
+                _register_low_sample_order(store, settings, run_id=run_id, plan_id=plan_id, symbol=plan.symbol)
+        else:
+            with timing.measure("persistence", "order_plan_records"):
+                store.save_order_plan(
+                    plan_id=plan_id, cycle_id=run_id, symbol=plan.symbol, side=plan.side,
+                    notional=plan.notional, approved=plan.risk_decision.approved, dry_run=plan.dry_run, payload=asdict(plan),
+                )
+                recommendation_tags = list(getattr(getattr(plan, "recommendation", None), "tags", []) or [])
+                if LOW_SAMPLE_EXPLORATION_TAG in recommendation_tags and str(plan.side).lower() == "buy":
+                    _register_low_sample_order(store, settings, run_id=run_id, plan_id=plan_id, symbol=plan.symbol)
     low_sample_usage = _low_sample_usage_payload(store, settings)
 
     if not plans:
@@ -1736,7 +1775,6 @@ def run_observable_cycle(
         _compact_technical_context_for_prompt(technical_context or {}) if technical_context else {},
         ensure_ascii=True,
     )
-    timing.start("data_loading")
     try:
         reporter.emit(
             "market_data_researcher",
@@ -1744,14 +1782,11 @@ def run_observable_cycle(
             run_id,
             "Descargando precios reales y calculando variables tecnicas basicas.",
         )
-        market_snapshot = build_market_snapshot(
-            settings.universe,
-            settings.benchmark_symbol,
-            settings.data_dir / "reports",
-            run_id,
-            provider=settings.market_data_provider,
-            fmp_api_key=settings.fmp_api_key,
-        )
+        with timing.measure("data_loading", "market_snapshot"):
+            market_snapshot = build_market_snapshot(
+                settings.universe, settings.benchmark_symbol, settings.data_dir / "reports", run_id,
+                provider=settings.market_data_provider, fmp_api_key=settings.fmp_api_key,
+            )
         market_snapshot_prompt = compact_snapshot_for_prompt(market_snapshot, max_chars=2500)
         reporter.emit(
             "market_data_researcher",
@@ -1760,9 +1795,7 @@ def run_observable_cycle(
             f"Snapshot guardado con {len(market_snapshot.get('symbols', {}))} simbolos.",
             {"path": market_snapshot.get("path"), "warnings": market_snapshot.get("warnings", [])},
         )
-        timing.finish("data_loading")
     except Exception as exc:  # noqa: BLE001 - CrewAI can still run, but it must know data is missing.
-        timing.fail("data_loading", exc)
         json_safe_error = {"error": str(exc)}
         market_snapshot_prompt = json.dumps(json_safe_error, ensure_ascii=True)
         reporter.emit(
@@ -1773,7 +1806,6 @@ def run_observable_cycle(
             json_safe_error,
         )
 
-    timing.start("report_generation")
     try:
         reporter.emit(
             "market_regime_strategist",
@@ -1781,12 +1813,8 @@ def run_observable_cycle(
             run_id,
             "Construyendo estado de mercado unificado con regimen, amplitud, sentimiento y calidad de datos.",
         )
-        market_state = build_market_state(
-            settings,
-            settings.data_dir / "reports",
-            run_id,
-            market_snapshot=market_snapshot,
-        )
+        with timing.measure("report_generation", "market_state_report"):
+            market_state = build_market_state(settings, settings.data_dir / "reports", run_id, market_snapshot=market_snapshot)
         market_state_prompt = compact_market_state_for_prompt(market_state, max_chars=2500)
         state_quality = ((market_state.get("data_quality") or {}).get("status") or "UNKNOWN").upper()
         event_type = "market_state_completed" if state_quality == "GOOD" else "market_state_degraded"
@@ -1803,9 +1831,7 @@ def run_observable_cycle(
                 "warnings": market_state.get("warnings", []),
             },
         )
-        timing.finish("report_generation")
     except Exception as exc:  # noqa: BLE001
-        timing.fail("report_generation", exc)
         market_state_prompt = json.dumps({"error": str(exc)}, ensure_ascii=True)
         reporter.emit(
             "market_regime_strategist",
@@ -1817,7 +1843,6 @@ def run_observable_cycle(
 
     crew_result: str | None = None
     if use_crew:
-        timing.start("llm_decision")
         endpoint, _attempts = select_preferred_endpoint(settings)
         reporter.emit(
             "orchestrator",
@@ -1829,11 +1854,12 @@ def run_observable_cycle(
             crew = build_crew(settings)
             crew_stdout_path = settings.logs_dir / f"crew_stdout_{run_id}.log"
             crew_stdout_path.parent.mkdir(parents=True, exist_ok=True)
-            with crew_stdout_path.open("w", encoding="utf-8") as crew_stdout:
-                logging.disable(logging.INFO)
-                try:
-                    with redirect_stdout(crew_stdout), redirect_stderr(crew_stdout):
-                        result = crew.kickoff(
+            with timing.measure("llm_decision", "crew_reasoning"):
+                with crew_stdout_path.open("w", encoding="utf-8") as crew_stdout:
+                    logging.disable(logging.INFO)
+                    try:
+                        with redirect_stdout(crew_stdout), redirect_stderr(crew_stdout):
+                            result = crew.kickoff(
                             inputs={
                                 "universe": ", ".join(settings.universe),
                                 "cycle_id": run_id,
@@ -1846,9 +1872,9 @@ def run_observable_cycle(
                                     "convertir recomendaciones en planes de orden."
                                 ),
                             }
-                        )
-                finally:
-                    logging.disable(logging.NOTSET)
+                            )
+                    finally:
+                        logging.disable(logging.NOTSET)
             crew_result = str(result)
             reporter.emit(
                 "orchestrator",
@@ -1857,9 +1883,7 @@ def run_observable_cycle(
                 "CrewAI completo el ciclo de razonamiento.",
                 {"result_preview": crew_result[:1000], "crew_stdout_path": str(crew_stdout_path)},
             )
-            timing.finish("llm_decision")
         except Exception as exc:
-            timing.fail("llm_decision", exc)
             reporter.emit(
                 "orchestrator",
                 "crew_failed",
@@ -1868,7 +1892,7 @@ def run_observable_cycle(
                 {"error": str(exc), "fallback": "direct_llm_decision"},
             )
     else:
-        timing.skip("llm_decision", "CrewAI omitido por parametro --skip-crew")
+        timing.skip_segment("llm_decision", "crew_reasoning", "CrewAI omitido por parametro --skip-crew")
         reporter.emit(
             "orchestrator",
             "crew_skipped",

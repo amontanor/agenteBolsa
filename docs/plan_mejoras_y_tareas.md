@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.149**
+- Version actual: **0.4.150**
 - Ultima actualizacion: 2026-07-10
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -47,6 +47,7 @@ amplia exposicion.
 | P-L23R | Prueba determinista de plan manual tras cierre XNYS | HECHO (v0.4.147) |
 | P-L24 | Trazabilidad de duracion del ciclo de mercado | HECHO (v0.4.148) |
 | P-L24R | Precision y aislamiento de la instrumentacion temporal | HECHO (v0.4.149) |
+| P-L24R2 | Segmentos reales de decision, gates, persistencia e informes | HECHO (v0.4.150) |
 
 ### P-L24R - Precision y aislamiento de la instrumentacion temporal. **HECHO (v0.4.149).**
 Se restaura `scheduler.py` al comportamiento y mensajes de P-L23R, con hooks
@@ -54,6 +55,9 @@ minimos de timing. La medicion expone segmentos y separa la recomendacion LLM
 estructurada de revisiones deterministas; incorpora duracion trazada y no
 atribuida, sin contar dos veces intervalos. No cambia trading ni se infieren
 duraciones historicas.
+
+### P-L24R2 - Segmentos reales de decision, gates, persistencia e informes. **HECHO (v0.4.150).**
+La instrumentacion conserva el scheduler restaurado y mide segmentos concretos: razonamiento CrewAI y recomendacion estructurada; revision, adversarial, entry-quality, backtest, planes y limites; y las escrituras de recomendaciones, decisiones y planes. La duracion trazada se calcula por la union de intervalos, publica `segment_overlap_count` y declara la no atribuida sin valores negativos. No cambia decisiones, gates, ordenes ni datos; el fin de semana mantiene la muestra real como `unavailable` cuando no hay ciclo instrumentado.
 
 ### P-L24 - Trazabilidad de duracion del ciclo de mercado. **HECHO (v0.4.148).**
 Cada `market_cycle` publica un reporte JSON con ciclo, inicio, fin, duracion,
