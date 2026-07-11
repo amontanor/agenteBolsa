@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.155**
+- Version actual: **0.4.156**
 - Ultima actualizacion: 2026-07-11
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -53,6 +53,17 @@ amplia exposicion.
 | P-L27B | Auditoria MFE/MAE y geometria stop/take | CORREGIDO, pendiente de aceptacion (v0.4.154) |
 | P-L27BR | Correccion dimensional, conteos y pruebas MFE/MAE | HECHO (v0.4.154) |
 | P-L27D | Cohorte prospectiva observacional reward/risk | HECHO (v0.4.155; recopilando desde 2026-07-13) |
+| P-L27DR | Semantica de sesiones posteriores de cohorte RR | HECHO (v0.4.156) |
+
+### P-L27DR - Semantica de sesiones posteriores de cohorte RR. **HECHO (v0.4.156).**
+P-L27D incluia por error la sesion de la senal al calcular la decima sesion.
+El calendario v2 usa ahora sesiones XNYS estrictamente posteriores, como el
+productor de outcomes: una senal del 13-jul solo puede madurar tras el cierre
+del 27-jul. El informe separa sesiones completas de recogida, sesiones
+posteriores por senal, primera madurez posible y evaluabilidad de cohorte. Esta
+ultima sigue `unavailable` hasta cumplir todos los requisitos de muestra,
+clusters, ventanas, concentracion, linaje y control; no hay cambio de contrato
+estadistico, captura, trading ni historicos.
 
 ### P-L27D - Cohorte prospectiva observacional reward/risk. **HECHO (v0.4.155).**
 Se registra, exclusivamente en `learning_observations.features`, la cohorte

@@ -19,7 +19,8 @@ from agente_bolsa.storage import Store
 
 from .reporting import write_json_report
 
-SCHEMA_VERSION = "p-l27d.rr-cohort.v1"
+SCHEMA_VERSION = "p-l27d.rr-cohort.v2"
+LEGACY_SCHEMA_VERSION = "p-l27d.rr-cohort.v1"
 COHORT_FEATURE_KEY = "rr_cohort_p_l27d"
 COHORT_START = "2026-07-13"
 HYPOTHESIS_ID = "pl27d_rr_1_1_5_vs_1_5_2"
@@ -86,6 +87,7 @@ def build_rr_cohort_report(
         cards = [card for card in cards if str(card.get("signal_date") or "") <= end]
     first, second = _split_windows(cards)
     selected = {"all": cards, "first": first, "second": second}[window]
+    as_of = _report_as_of(end)
     report = {
         "schema_version": SCHEMA_VERSION,
         "observational_only": True,
@@ -93,22 +95,27 @@ def build_rr_cohort_report(
         "contract": CONTRACT,
         "cohort_start": COHORT_START,
         "parameters": {"from": start, "to": end, "window": window, "include_legacy_context": include_legacy_context},
-        "sessions_xnys": _session_summary(start, end),
+        "collection_sessions_completed": _collection_sessions_completed(COHORT_START, as_of),
+        "collection_max_sessions": MAX_SESSIONS,
+        "calendar": "XNYS",
         "views": {
-            "selected": _view(selected),
-            "first": _view(first),
-            "second": _view(second),
+            "selected": _view(selected, as_of=as_of),
+            "first": _view(first, as_of=as_of),
+            "second": _view(second, as_of=as_of),
         },
         "exclusions": _exclusions(cards),
-        "criteria": _criteria(first, second),
+        "criteria": _criteria(first, second, as_of=as_of),
         "legacy_context": _legacy_context(store) if include_legacy_context else None,
-        "next_evaluable_date": _nth_xnys_session(COHORT_START, 10),
+        "earliest_possible_first_maturity_date": nth_xnys_session_after(COHORT_START, 10),
+        "next_possible_maturity_date": _next_possible_maturity_date(cards),
+        "cohort_evaluation_date": "unavailable",
         "warnings": [
             "Cohorte prospectiva observacional: no modifica geometria, seleccion, gates, ordenes ni ejecucion.",
             "P&L, costes, alpha y SPY permanecen unavailable sin evidencia comparable.",
         ],
     }
     report["overall_status"] = _overall_status(cards, first, second, report["criteria"])
+    report["evaluation_status"] = report["overall_status"]
     report["content_hash"] = _content_hash(report)
     return report
 
@@ -128,12 +135,12 @@ def rr_cohort_digest_summary(store: Store) -> dict[str, Any]:
     selected = report["views"]["selected"]
     return {
         "status": report["overall_status"],
-        "sessions_xnys": report["sessions_xnys"],
+        "collection_sessions_completed": report["collection_sessions_completed"],
         "mature_by_arm": {arm: selected["arms"][arm]["matured_count"] for arm in ("A", "B")},
         "lineage_coverage": selected["lineage_coverage"],
         "control_coverage": selected["control_coverage"],
         "criteria_pending": [key for key, value in report["criteria"].items() if value is not True],
-        "next_evaluable_date": report["next_evaluable_date"],
+        "next_possible_maturity_date": report["next_possible_maturity_date"],
     }
 
 
@@ -163,6 +170,8 @@ def _cohort_card(
     control_reason = None if controls else "no_comparable_control_same_cycle"
     return ({
         "observation_id": f"rrcohort:{observation.get('observation_id')}",
+        "schema_version": SCHEMA_VERSION,
+        "temporal_semantics": "strict_post_signal_sessions",
         "hypothesis_id": HYPOTHESIS_ID,
         "cohort_start": COHORT_START,
         "signal_id": observation.get("best_signal_id"),
@@ -281,17 +290,35 @@ def _arm(value: Any) -> str | None:
 
 
 def _split_windows(cards: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split only mature observations, keeping every signal date intact."""
+    cards = [card for card in cards if card.get("maturity_status_10d") == "mature"]
     dates = sorted({str(card.get("signal_date") or "") for card in cards if card.get("signal_date")})
     midpoint = (len(dates) + 1) // 2
     first_dates = set(dates[:midpoint])
     return [card for card in cards if card.get("signal_date") in first_dates], [card for card in cards if card.get("signal_date") not in first_dates]
 
 
-def _view(cards: list[dict[str, Any]]) -> dict[str, Any]:
+def _view(cards: list[dict[str, Any]], *, as_of: datetime) -> dict[str, Any]:
+    cards = [_temporal_card(card, as_of) for card in cards]
     eligible = [card for card in cards if card.get("eligibility_status") == "eligible"]
     mature = [card for card in eligible if card.get("maturity_status_10d") == "mature"]
     arms = {arm: _arm_metrics([card for card in mature if card.get("rr_arm") == arm]) for arm in ("A", "B")}
-    return {"raw_count": len(cards), "eligible_count": len(eligible), "immature_count": len(eligible) - len(mature), "mature_count": len(mature), "arms": arms, "differences_a_minus_b": _differences(arms), "lineage_coverage": _ratio(sum(card.get("lineage_status") == "verified" for card in eligible), len(eligible)), "control_coverage": _ratio(sum(bool(card.get("comparable_control_available")) for card in eligible), len(eligible))}
+    return {
+        "raw_count": len(cards),
+        "eligible_count": len(eligible),
+        "immature_count": len(eligible) - len(mature),
+        "mature_count": len(mature),
+        "arms": arms,
+        "differences_a_minus_b": _differences(arms),
+        "lineage_coverage": _ratio(sum(card.get("lineage_status") == "verified" for card in eligible), len(eligible)),
+        "control_coverage": _ratio(sum(bool(card.get("comparable_control_available")) for card in eligible), len(eligible)),
+        "post_signal_sessions_completed_by_observation": {
+            str(card.get("observation_id")): card.get("post_signal_sessions_completed") for card in eligible
+        },
+        "temporal_semantics_by_observation": {
+            str(card.get("observation_id")): card.get("temporal_semantics") for card in cards
+        },
+    }
 
 
 def _arm_metrics(cards: list[dict[str, Any]]) -> dict[str, Any]:
@@ -304,8 +331,8 @@ def _differences(arms: dict[str, dict[str, Any]]) -> dict[str, float | None]:
     return {"mean_return_10d": _difference(arms["A"].get("mean_return_10d"), arms["B"].get("mean_return_10d")), "median_return_10d": _difference(arms["A"].get("median_return_10d"), arms["B"].get("median_return_10d")), "positive_rate": _difference(arms["A"].get("positive_rate"), arms["B"].get("positive_rate"))}
 
 
-def _criteria(first: list[dict[str, Any]], second: list[dict[str, Any]]) -> dict[str, bool | None]:
-    views = [_view(first), _view(second)]
+def _criteria(first: list[dict[str, Any]], second: list[dict[str, Any]], *, as_of: datetime) -> dict[str, bool | None]:
+    views = [_view(first, as_of=as_of), _view(second, as_of=as_of)]
     pending = {
         "two_chronological_windows": None,
         "sample_clusters_concentration": None,
@@ -359,32 +386,105 @@ def _legacy_context(store: Store) -> dict[str, Any]:
     return {"status": "context_only", "primary_excluded": True, "signal_outcomes_rows_read": len(rows), "reason": "legacy_unverified_no_se_reinterpreta_como_cohorte_prospectiva"}
 
 
-def _session_summary(start: str, end: str | None) -> dict[str, Any]:
-    end = end or date.today().isoformat()
-    return {"calendar": "XNYS", "completed_since_start": _session_count(start, end), "max_sessions": MAX_SESSIONS}
+def nth_xnys_session_after(signal_date: str, count: int) -> str | None:
+    """Return the nth XNYS session strictly after ``signal_date``.
 
-
-def _session_count(start: str, end: str) -> int:
-    if end < start:
-        return 0
+    This deliberately cannot include the signal session.  It mirrors the
+    outcome producer, which only consumes bars whose date is greater than the
+    signal date.
+    """
+    if count < 1:
+        raise ValueError("count must be at least one")
+    start = date.fromisoformat(signal_date) + timedelta(days=1)
     calendar = MarketCalendar()._calendar
     if calendar is None:
-        return sum((date.fromisoformat(start) + timedelta(days=index)).weekday() < 5 for index in range((date.fromisoformat(end) - date.fromisoformat(start)).days + 1))
-    return len(calendar.schedule(start_date=start, end_date=end))
-
-
-def _nth_xnys_session(start: str, count: int) -> str | None:
-    calendar = MarketCalendar()._calendar
-    if calendar is None:
-        day = date.fromisoformat(start)
+        day = start
         found = 0
         while found < count:
             if day.weekday() < 5:
                 found += 1
+                if found == count:
+                    return day.isoformat()
             day += timedelta(days=1)
-        return day.isoformat()
-    schedule = calendar.schedule(start_date=start, end_date=(date.fromisoformat(start) + timedelta(days=30)).isoformat())
+        return None
+    schedule = calendar.schedule(start_date=start.isoformat(), end_date=(start + timedelta(days=45)).isoformat())
     return str(schedule.index[count - 1].date()) if len(schedule) >= count else None
+
+
+def _report_as_of(end: str | None) -> datetime:
+    if end is None:
+        return datetime.now(timezone.utc)
+    return _session_close_at(end) or datetime.combine(date.fromisoformat(end), datetime.max.time(), tzinfo=timezone.utc)
+
+
+def _session_close_at(session_date: str) -> datetime | None:
+    calendar = MarketCalendar()._calendar
+    if calendar is None:
+        day = date.fromisoformat(session_date)
+        if day.weekday() >= 5:
+            return None
+        return datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc) + timedelta(hours=21)
+    schedule = calendar.schedule(start_date=session_date, end_date=session_date)
+    if schedule.empty:
+        return None
+    return schedule.iloc[0]["market_close"].to_pydatetime().astimezone(timezone.utc)
+
+
+def _collection_sessions_completed(start: str, as_of: datetime) -> int:
+    if as_of.date().isoformat() < start:
+        return 0
+    calendar = MarketCalendar()._calendar
+    if calendar is None:
+        return sum(
+            1
+            for index in range((as_of.date() - date.fromisoformat(start)).days + 1)
+            if (date.fromisoformat(start) + timedelta(days=index)).weekday() < 5
+            and _session_close_at((date.fromisoformat(start) + timedelta(days=index)).isoformat()) <= as_of
+        )
+    schedule = calendar.schedule(start_date=start, end_date=as_of.date().isoformat())
+    return sum(close.to_pydatetime().astimezone(timezone.utc) <= as_of for close in schedule["market_close"])
+
+
+def _post_signal_sessions_completed(signal_date: str, as_of: datetime) -> int:
+    first_after = (date.fromisoformat(signal_date) + timedelta(days=1)).isoformat()
+    if as_of.date().isoformat() < first_after:
+        return 0
+    calendar = MarketCalendar()._calendar
+    if calendar is None:
+        return sum(
+            1
+            for index in range((as_of.date() - date.fromisoformat(first_after)).days + 1)
+            if (date.fromisoformat(first_after) + timedelta(days=index)).weekday() < 5
+            and _session_close_at((date.fromisoformat(first_after) + timedelta(days=index)).isoformat()) <= as_of
+        )
+    schedule = calendar.schedule(start_date=first_after, end_date=as_of.date().isoformat())
+    return sum(close.to_pydatetime().astimezone(timezone.utc) <= as_of for close in schedule["market_close"])
+
+
+def _temporal_card(card: dict[str, Any], as_of: datetime) -> dict[str, Any]:
+    result = dict(card)
+    signal_date = str(result.get("signal_date") or "")
+    if not signal_date:
+        return result
+    post_sessions = _post_signal_sessions_completed(signal_date, as_of)
+    result["post_signal_sessions_completed"] = post_sessions
+    result["earliest_possible_maturity_date"] = nth_xnys_session_after(signal_date, 10)
+    if result.get("schema_version") != SCHEMA_VERSION:
+        result["temporal_semantics"] = "legacy_semantics"
+    warnings = list(result.get("data_quality_warnings") or [])
+    if post_sessions >= 10 and result.get("maturity_status_10d") == "immature":
+        warnings.append("calendar_maturity_due_outcome_immature")
+    result["data_quality_warnings"] = list(dict.fromkeys(warnings))
+    return result
+
+
+def _next_possible_maturity_date(cards: list[dict[str, Any]]) -> str | None:
+    dates = [
+        nth_xnys_session_after(str(card.get("signal_date")), 10)
+        for card in cards
+        if card.get("eligibility_status") == "eligible" and card.get("maturity_status_10d") == "immature"
+    ]
+    return min((value for value in dates if value), default=nth_xnys_session_after(COHORT_START, 10))
 
 
 def _number(value: Any) -> bool:

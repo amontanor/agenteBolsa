@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -12,9 +13,12 @@ from agente_bolsa.tools.rr_cohort import (
     COHORT_START,
     CONTRACT,
     HYPOTHESIS_ID,
-    _nth_xnys_session,
-    _session_count,
+    _collection_sessions_completed,
+    _post_signal_sessions_completed,
+    _session_close_at,
+    _temporal_card,
     build_rr_cohort_report,
+    nth_xnys_session_after,
     sync_rr_cohort_observations,
 )
 
@@ -193,8 +197,46 @@ def test_chronological_windows_keep_dates_atomic_and_hash_ignores_generated_at()
 
 
 def test_xnys_session_calendar_excludes_weekends_and_independence_day_observance():
-    assert _session_count("2026-07-02", "2026-07-06") == 2
-    assert _nth_xnys_session(COHORT_START, 10) == "2026-07-24"
+    assert nth_xnys_session_after("2026-07-13", 1) == "2026-07-14"
+    assert nth_xnys_session_after("2026-07-13", 10) == "2026-07-27"
+    assert nth_xnys_session_after("2026-07-02", 1) == "2026-07-06"
+    assert nth_xnys_session_after("2026-07-04", 1) == "2026-07-06"
+    with pytest.raises(ValueError):
+        nth_xnys_session_after("2026-07-13", 0)
+
+
+def test_collection_and_post_signal_sessions_respect_xnys_close_time():
+    close = _session_close_at("2026-07-13")
+    assert close is not None
+    assert _collection_sessions_completed(COHORT_START, close - timedelta(minutes=1)) == 0
+    assert _collection_sessions_completed(COHORT_START, close + timedelta(minutes=1)) == 1
+    assert _post_signal_sessions_completed("2026-07-13", close + timedelta(minutes=1)) == 0
+    assert _post_signal_sessions_completed("2026-07-13", _session_close_at("2026-07-24")) == 9
+    assert _post_signal_sessions_completed("2026-07-13", _session_close_at("2026-07-27")) == 10
+
+
+def test_report_uses_outcome_maturity_as_authority_and_separates_temporal_fields():
+    store = FakeStore([observation(1, mature=False)])
+    sync_rr_cohort_observations(store, store.learning_observations())
+    report = build_rr_cohort_report(store, end="2026-07-27")
+    selected = report["views"]["selected"]
+    card = _temporal_card(cards(store)[0], _session_close_at("2026-07-27"))
+    assert report["schema_version"] == "p-l27d.rr-cohort.v2"
+    assert report["collection_sessions_completed"] == 11
+    assert report["earliest_possible_first_maturity_date"] == "2026-07-27"
+    assert report["cohort_evaluation_date"] == "unavailable"
+    assert selected["post_signal_sessions_completed_by_observation"]["rrcohort:observation-1"] == 10
+    assert card["maturity_status_10d"] == "immature"
+    assert "calendar_maturity_due_outcome_immature" in card["data_quality_warnings"]
+
+
+def test_v1_cards_are_read_only_compatible_and_marked_legacy_temporal_semantics():
+    store = FakeStore([observation(1)])
+    sync_rr_cohort_observations(store, store.learning_observations())
+    store.rows[0]["features"][COHORT_FEATURE_KEY].pop("schema_version")
+    store.rows[0]["features"][COHORT_FEATURE_KEY].pop("temporal_semantics")
+    report = build_rr_cohort_report(store, end="2026-07-13")
+    assert report["views"]["selected"]["temporal_semantics_by_observation"]["rrcohort:observation-1"] == "legacy_semantics"
 
 
 def test_cli_json_uses_read_only_report(monkeypatch, capsys):
