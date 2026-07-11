@@ -10,6 +10,8 @@ from typing import Any
 from .codegen import _candidate_paths_from_proposal, _is_low_risk_codegen_path
 
 CHANGE_CLASSES = frozenset({"trading", "reliability", "observability", "docs"})
+ORIGIN_ROLES = frozenset({"data_quality_observer", "market_outcome_analyst", "research_portfolio_manager", "hypothesis_designer", "evidence_validator", "adversarial_reviewer", "safety_guardian", "findings_to_proposals", "human_operator", "system_scheduler"})
+ORIGIN_KINDS = frozenset({"deterministic", "llm", "human", "system"})
 MIN_EVIDENCE_SAMPLE = 30
 VAGUE_METRICS = frozenset({"", "improve", "improvement", "mejora", "quality", "score", "metric"})
 CLASS_METRIC_MARKERS = {
@@ -33,6 +35,55 @@ _SAFETY_RELAXATION_MARKERS = (
 
 
 @dataclass(frozen=True)
+class Origin:
+    """Immutable, deterministic provenance for newly admitted evidence."""
+    origin_role: str
+    origin_run_id: str
+    origin_kind: str
+    evidence_class: str
+    producer: str
+    producer_version: str
+    observed_at: str
+    source_event_ids: tuple[str, ...] = ()
+
+    def as_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["source_event_ids"] = list(self.source_event_ids)
+        return payload
+
+
+def validate_origin(origin: Any, *, change_class: str | None = None) -> dict[str, Any]:
+    """Single deterministic origin validator; never infers historical authors."""
+    failures: list[str] = []
+    if not isinstance(origin, dict):
+        return {"valid": False, "failures": ["origin_missing"], "origin": {}}
+    normalized = dict(origin)
+    role = str(normalized.get("origin_role") or "").strip()
+    if role not in ORIGIN_ROLES:
+        failures.append("origin_role_invalid")
+    if not str(normalized.get("origin_run_id") or "").strip():
+        failures.append("origin_run_id_missing")
+    if str(normalized.get("origin_kind") or "").strip() not in ORIGIN_KINDS:
+        failures.append("origin_kind_invalid")
+    evidence_class = str(normalized.get("evidence_class") or "").strip().lower()
+    if evidence_class not in CHANGE_CLASSES:
+        failures.append("origin_evidence_class_invalid")
+    elif change_class and evidence_class != change_class:
+        failures.append("origin_evidence_class_mismatch")
+    if not str(normalized.get("producer") or "").strip():
+        failures.append("origin_producer_missing")
+    if not str(normalized.get("producer_version") or "").strip():
+        failures.append("origin_producer_version_missing")
+    if _parse_datetime(normalized.get("observed_at")) is None:
+        failures.append("origin_observed_at_invalid")
+    event_ids = normalized.get("source_event_ids")
+    if not isinstance(event_ids, list) or any(not isinstance(item, str) or not item.strip() for item in event_ids):
+        failures.append("origin_source_event_ids_invalid")
+    normalized["evidence_class"] = evidence_class
+    return {"valid": not failures, "failures": failures, "origin": normalized}
+
+
+@dataclass(frozen=True)
 class EvidenceCard:
     """Immutable measured evidence carried unchanged into a proposal contract."""
 
@@ -48,11 +99,14 @@ class EvidenceCard:
     rollback: str
     finding_source: str
     improvement_direction: str = "increase"
+    origin: Origin | None = None
 
     def as_contract(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["evidence_refs"] = list(self.evidence_refs)
         payload["target_paths"] = list(self.target_paths)
+        if self.origin is not None:
+            payload["origin"] = self.origin.as_dict()
         return payload
 
 
@@ -98,6 +152,9 @@ def validate_experiment_contract(
     change_class = str(contract.get("change_class") or "").strip().lower()
     if change_class not in CHANGE_CLASSES:
         failures.append("change_class_invalid")
+    origin_validation = validate_origin(contract.get("origin") or payload.get("origin"), change_class=change_class)
+    if not origin_validation["valid"]:
+        failures.extend(origin_validation["failures"])
     for field in ("hypothesis_id", "metric_name", "evaluation_window", "rollback"):
         if not str(contract.get(field) or "").strip():
             failures.append(f"missing_{field}")
@@ -178,7 +235,7 @@ def validate_experiment_contract(
     return {
         "valid": not failures,
         "failures": list(dict.fromkeys(failures)),
-        "contract": {**contract, "change_class": change_class, "target_paths": normalized_targets},
+        "contract": {**contract, "change_class": change_class, "target_paths": normalized_targets, "origin": origin_validation["origin"]},
     }
 
 

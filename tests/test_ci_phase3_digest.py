@@ -160,7 +160,8 @@ def test_evidence_factory_metrics_separate_new_wip_from_legacy_debt():
         "evaluation_window": "same delivery",
         "min_sample": 30,
         "target_paths": ["docs/plan_mejoras_y_tareas.md"],
-        "rollback": "git revert",
+            "rollback": "git revert",
+            "origin": {"origin_role": "findings_to_proposals", "origin_run_id": "test-run", "origin_kind": "deterministic", "evidence_class": "docs", "producer": "tests", "producer_version": "test", "observed_at": "2026-07-11T00:00:00+00:00", "source_event_ids": []},
     }
     valid = {"proposal_type": "CODE_CHANGE", "status": "READY_TO_APPLY", "payload": {"target_files": ["docs/plan_mejoras_y_tareas.md"], "expected_impact": "verificar entrega", "experiment_contract": contract}}
     legacy = {"proposal_type": "MONITORING_CHANGE", "status": "PENDING", "payload": {"proposed_value": "prosa"}}

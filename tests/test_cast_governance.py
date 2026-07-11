@@ -39,6 +39,9 @@ def _store(settings) -> Store:
 
 
 def _proposal(payload: dict, *, proposal_type: str = "MONITORING_CHANGE") -> dict:
+    contract = payload.get("experiment_contract") if isinstance(payload, dict) else None
+    if isinstance(contract, dict) and "origin" not in contract:
+        contract["origin"] = {"origin_role": "findings_to_proposals", "origin_run_id": "test-run", "origin_kind": "deterministic", "evidence_class": contract.get("change_class", "docs"), "producer": "tests", "producer_version": "test", "observed_at": "2026-07-11T00:00:00+00:00", "source_event_ids": []}
     return {
         "proposal_id": new_id("ci_prop_test"),
         "cycle_id": new_id("ci_cycle_test"),

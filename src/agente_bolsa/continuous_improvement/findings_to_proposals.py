@@ -13,7 +13,12 @@ from agente_bolsa.storage import Store
 
 from .agents import proposal_fingerprint
 from .cast_governance import assess_cast_governance, load_cast_governance_config
-from .proposal_contract import EvidenceCard, historical_contract_class, validate_experiment_contract
+from .proposal_contract import (
+    EvidenceCard,
+    Origin,
+    historical_contract_class,
+    validate_experiment_contract,
+)
 from .schemas import ImprovementProposalPayload
 
 FINDINGS_TO_PROPOSALS_ACTOR = "FindingsToProposals"
@@ -31,6 +36,7 @@ NONTERMINAL_STATUSES = {
 
 def measured_findings(settings: Settings, store: Store) -> list[dict[str, Any]]:
     data_dir = settings.data_dir
+    run_id = new_id("finding_run")
     findings = [
         {
             "finding_id": "lab_book_digest_visibility",
@@ -97,6 +103,18 @@ def measured_findings(settings: Settings, store: Store) -> list[dict[str, Any]]:
                 "summary": "La muestra reciente conserva propuestas de prosa que no alimentan codegen.",
             }
         )
+    observed_at = datetime.now(timezone.utc).isoformat()
+    for finding in findings:
+        finding["origin"] = {
+            "origin_role": "findings_to_proposals",
+            "origin_run_id": run_id,
+            "origin_kind": "deterministic",
+            "evidence_class": finding.get("change_class") or "observability",
+            "producer": "continuous_improvement.findings_to_proposals",
+            "producer_version": "0.4.157",
+            "observed_at": observed_at,
+            "source_event_ids": [],
+        }
     return findings
 
 
@@ -358,6 +376,7 @@ def _candidate(
         rollback=rollback,
         finding_source=str(finding.get("source") or ""),
         improvement_direction=str(finding.get("improvement_direction") or "increase"),
+        origin=Origin(**dict(finding.get("origin") or {})),
     )
     return {
         "proposal_type": "CODE_CHANGE",
@@ -379,6 +398,7 @@ def _candidate(
         "finding_kind": "evidence_experiment",
         "evidence_card": card.as_contract(),
         "experiment_contract": card.as_contract(),
+        "origin": card.origin.as_dict() if card.origin else {},
     }
 
 

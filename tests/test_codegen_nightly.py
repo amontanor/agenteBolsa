@@ -63,6 +63,7 @@ def _ready_codegen_proposal(store: Store, proposal_id: str, target: str = "docs/
             "min_sample": 30,
             "target_paths": [target],
             "rollback": "git revert del commit",
+            "origin": {"origin_role": "findings_to_proposals", "origin_run_id": "test-run", "origin_kind": "deterministic", "evidence_class": "docs", "producer": "tests", "producer_version": "test", "observed_at": "2026-07-11T00:00:00+00:00", "source_event_ids": []},
         },
     }
     store.upsert_continuous_improvement_proposal(

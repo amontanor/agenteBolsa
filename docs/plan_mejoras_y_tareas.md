@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.156**
+- Version actual: **0.4.157**
 - Ultima actualizacion: 2026-07-11
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -54,6 +54,14 @@ amplia exposicion.
 | P-L27BR | Correccion dimensional, conteos y pruebas MFE/MAE | HECHO (v0.4.154) |
 | P-L27D | Cohorte prospectiva observacional reward/risk | HECHO (v0.4.155; recopilando desde 2026-07-13) |
 | P-L27DR | Semantica de sesiones posteriores de cohorte RR | HECHO (v0.4.156) |
+| P-L28B | Atribucion normalizada y digest de utilidad por origen | HECHO (v0.4.157) |
+
+### P-L28B - Atribucion normalizada y digest de utilidad por origen. **HECHO (v0.4.157).**
+Los contratos nuevos exigen `origin` inmutable y validado antes de admision:
+rol normalizado, run, tipo, clase de evidencia, productor/version, timestamp y
+eventos fuente. `findings_to_proposals` lo genera deterministamente; el digest
+separa atribuidos, legacy sin atribucion e invalidos y publica embudo/estado de
+utilidad sin inferir autores historicos. No cambia trading, autonomia ni apply.
 
 ### P-L27DR - Semantica de sesiones posteriores de cohorte RR. **HECHO (v0.4.156).**
 P-L27D incluia por error la sesion de la senal al calcular la decima sesion.

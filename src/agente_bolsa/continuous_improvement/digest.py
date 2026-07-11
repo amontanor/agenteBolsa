@@ -23,6 +23,7 @@ from .proposal_contract import (
     classify_experiment,
     historical_contract_class,
     validate_experiment_contract,
+    validate_origin,
 )
 from .research_agenda import build_research_agenda_snapshot
 
@@ -168,6 +169,7 @@ def build_lab_digest(
         "kpi_funnel": build_kpi_funnel(proposals, experiments, applied_changes, decisions, now=now),
         "proposal_quality": build_proposal_quality_report(store, proposals=proposals, now=now, limit=200),
         "evidence_factory": build_evidence_factory_metrics(proposals, applied_changes, recent_rejected),
+        "origin_utility": build_origin_utility_metrics(proposals, applied_changes),
     }
 
 
@@ -218,6 +220,54 @@ def build_evidence_factory_metrics(
         "post_apply_evaluated": len(evaluated),
         "post_apply_active": len(active),
     }
+
+
+def build_origin_utility_metrics(proposals: list[dict[str, Any]], applied_changes: list[dict[str, Any]]) -> dict[str, Any]:
+    """Read-only origin funnel; legacy rows remain unattributed rather than guessed."""
+    origins: dict[str, dict[str, Any]] = {}
+    legacy = invalid = 0
+    for proposal in proposals:
+        payload = proposal.get("payload") or {}
+        contract = validate_experiment_contract(proposal).get("contract") or {}
+        origin = contract.get("origin") or payload.get("origin")
+        check = validate_origin(origin, change_class=str(contract.get("change_class") or ""))
+        if not origin:
+            legacy += 1
+            continue
+        if not check["valid"]:
+            invalid += 1
+            continue
+        role = check["origin"]["origin_role"]
+        item = origins.setdefault(role, {"runs": set(), "findings": 0, "evidence_experiments_proposed": 0, "admitted": 0, "ready_to_apply": 0, "applied": 0, "rolled_back": 0, "post_apply_evaluated": 0, "demonstrated_improvements": 0})
+        item["runs"].add(check["origin"]["origin_run_id"])
+        item["findings"] += 1
+        item["evidence_experiments_proposed"] += 1
+        if validate_experiment_contract(proposal)["valid"]:
+            item["admitted"] += 1
+        if str(proposal.get("status") or "").upper() == "READY_TO_APPLY":
+            item["ready_to_apply"] += 1
+    for change in applied_changes:
+        origin = ((change.get("decision") or {}).get("experiment_contract") or {}).get("origin")
+        check = validate_origin(origin)
+        if not check["valid"]:
+            continue
+        item = origins.setdefault(check["origin"]["origin_role"], {"runs": set(), "findings": 0, "evidence_experiments_proposed": 0, "admitted": 0, "ready_to_apply": 0, "applied": 0, "rolled_back": 0, "post_apply_evaluated": 0, "demonstrated_improvements": 0})
+        status = str(change.get("status") or "").upper()
+        item["applied"] += status == "APPLIED"
+        item["rolled_back"] += status == "ROLLED_BACK"
+        impact = ((change.get("decision") or {}).get("impact_validation") or {}).get("status", "").upper()
+        item["post_apply_evaluated"] += impact in {"PASSED", "FAILED", "NON_QUALIFYING"}
+        item["demonstrated_improvements"] += impact == "PASSED"
+    rendered = {}
+    for role, item in origins.items():
+        runs = len(item.pop("runs"))
+        admitted = item["admitted"]
+        evaluated = item["post_apply_evaluated"]
+        state = "no_data" if not item["findings"] else "collecting"
+        if admitted and evaluated:
+            state = "useful_demonstrated" if item["demonstrated_improvements"] else "no_improvement_demonstrated"
+        rendered[role] = {**item, "runs": runs, "contract_compliance_rate": round(admitted / item["findings"], 4) if item["findings"] else None, "admission_rate": round(admitted / item["findings"], 4) if item["findings"] else None, "post_apply_evaluation_coverage": round(evaluated / item["applied"], 4) if item["applied"] else None, "demonstrated_improvement_rate": round(item["demonstrated_improvements"] / evaluated, 4) if evaluated else None, "utility_status": state}
+    return {"attribution_coverage_new": round(sum(item["findings"] for item in rendered.values()) / len(proposals), 4) if proposals else None, "legacy_unattributed_count": legacy, "invalid_origin_count": invalid, "attributed_runs": sum(item["runs"] for item in rendered.values()), "origins": rendered}
 
 
 def _director_brief(

@@ -29,6 +29,16 @@ def _proposal(tmp_path, **contract_overrides):
         "min_sample": 30,
         "target_paths": ["docs/target.md"],
         "rollback": "git revert",
+        "origin": {
+            "origin_role": "findings_to_proposals",
+            "origin_run_id": "test-run",
+            "origin_kind": "deterministic",
+            "evidence_class": "reliability",
+            "producer": "tests.test_proposal_contract",
+            "producer_version": "test",
+            "observed_at": "2026-07-11T00:00:00+00:00",
+            "source_event_ids": [],
+        },
     }
     contract.update(contract_overrides)
     return {
