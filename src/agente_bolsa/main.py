@@ -79,6 +79,7 @@ from .tools.daily_learning import (
     build_policy_candidates_report,
     load_daily_learning_context,
 )
+from .tools.excursion_quality import build_excursion_quality_report
 from .tools.execution import submit_paper_order_plan
 from .tools.lab_book import run_lab_book_once
 from .tools.learning_mode import active_learning_mode, learning_mode_source
@@ -2302,6 +2303,25 @@ def command_learning_scoreboard(args: argparse.Namespace) -> None:
     print(format_learning_scoreboard(report))
 
 
+def command_excursion_quality_report(args: argparse.Namespace) -> None:
+    """Print the read-only P-L27B MFE/MAE quality report."""
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    report = build_excursion_quality_report(
+        store,
+        start=args.start,
+        end=args.end,
+        horizon=args.horizon,
+        min_sample=args.min_sample,
+        historical=args.historical,
+    )
+    if args.json:
+        _print_json({"ok": report.get("status") != "unavailable", **report})
+        return
+    print(json.dumps(report, indent=2, ensure_ascii=True, default=str))
+
+
 def command_autonomy_digest(args: argparse.Namespace) -> None:
     from .tools.autonomy_digest import build_autonomy_digest, pause_all, resume_all
 
@@ -3568,6 +3588,20 @@ def build_parser() -> argparse.ArgumentParser:
     learning_scoreboard.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
     learning_scoreboard.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     learning_scoreboard.set_defaults(func=command_learning_scoreboard)
+
+    excursion_quality = subparsers.add_parser(
+        "excursion-quality-report",
+        help="Auditoria observacional MFE/MAE y geometria stop/take (P-L27B).",
+    )
+    excursion_quality.add_argument("--from", dest="start", help="Fecha inicial YYYY-MM-DD.")
+    excursion_quality.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
+    excursion_quality.add_argument(
+        "--horizon", choices=("all", "1d", "3d", "5d", "10d"), default="all", help="Horizonte forward."
+    )
+    excursion_quality.add_argument("--min-sample", type=int, default=300, help="Muestra minima para marcar evaluable.")
+    excursion_quality.add_argument("--historical", action="store_true", help="Incluye todo el historial disponible.")
+    excursion_quality.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    excursion_quality.set_defaults(func=command_excursion_quality_report)
 
     autonomy_digest = subparsers.add_parser(
         "autonomy-digest",

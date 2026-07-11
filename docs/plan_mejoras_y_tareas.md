@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.152**
+- Version actual: **0.4.153**
 - Ultima actualizacion: 2026-07-10
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -50,6 +50,18 @@ amplia exposicion.
 | P-L24R2 | Segmentos reales de decision, gates, persistencia e informes | HECHO (v0.4.150) |
 | P-L24R3 | Integracion real y eliminacion de duplicacion temporal | HECHO (v0.4.151) |
 | P-L26B | Contrato ejecutable desde hallazgos medidos | HECHO (v0.4.152) |
+| P-L27B | Auditoria MFE/MAE y geometria stop/take | HECHO (v0.4.153) |
+
+### P-L27B - Auditoria MFE/MAE y geometria stop/take. **HECHO (v0.4.153).**
+Se incorpora `excursion-quality-report`, una lectura observacional y
+determinista de `signal_outcomes`. Calcula MFE/MAE forward, consumo del stop,
+alcance del objetivo y reward/risk por horizonte y cohortes, con muestra minima,
+madurez, exclusiones, cobertura, concentracion y estado de linaje. No imputa
+datos ni calcula alpha, SPY, causalidad o drawdown de cartera; las excursiones
+disponibles son las fracciones decimales de 10d producidas por
+`signal_learning.py`. La vista historica se activa explicitamente con
+`--historical`; no reescribe registros ni cambia trading, gates, ordenes o
+cadencia operativa. La hipotesis siguiente queda fuera de este lote.
 
 ### P-L26B - Contrato ejecutable desde hallazgos medidos. **HECHO (v0.4.152).**
 Los hallazgos medidos conservan una tarjeta inmutable y se convierten en
