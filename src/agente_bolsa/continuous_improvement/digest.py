@@ -19,7 +19,11 @@ from agente_bolsa.tools.operational_health import load_operational_block_context
 
 from .artifact_provenance import validate_diff_provenance
 from .codegen_nightly import latest_codegen_nightly_run
-from .proposal_contract import classify_experiment, validate_experiment_contract
+from .proposal_contract import (
+    classify_experiment,
+    historical_contract_class,
+    validate_experiment_contract,
+)
 from .research_agenda import build_research_agenda_snapshot
 
 REJECTION_BUCKETS = {
@@ -163,6 +167,56 @@ def build_lab_digest(
         "approval_requests": approval_requests,
         "kpi_funnel": build_kpi_funnel(proposals, experiments, applied_changes, decisions, now=now),
         "proposal_quality": build_proposal_quality_report(store, proposals=proposals, now=now, limit=200),
+        "evidence_factory": build_evidence_factory_metrics(proposals, applied_changes, recent_rejected),
+    }
+
+
+def build_evidence_factory_metrics(
+    proposals: list[dict[str, Any]],
+    applied_changes: list[dict[str, Any]],
+    recent_rejected: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Calculate evidence quality without backfilling historical proposals."""
+    classes = Counter(historical_contract_class(item) for item in proposals)
+    valid = [item for item in proposals if validate_experiment_contract(item)["valid"]]
+    sample = proposals[:200]
+    prose = sum(1 for item in sample if classify_proposal_quality(item)["class"] == PROSE)
+    nonterminal = [item for item in proposals if str(item.get("status") or "").upper() not in TERMINAL_PROPOSAL_STATUSES]
+    new_wip = [item for item in nonterminal if validate_experiment_contract(item)["valid"]]
+    legacy_wip = [item for item in nonterminal if not validate_experiment_contract(item)["valid"]]
+    eligible = [
+        item
+        for item in valid
+        if str(item.get("status") or "").upper() == "READY_TO_APPLY"
+        and str(item.get("proposal_type") or "").upper() == "CODE_CHANGE"
+    ]
+    active = [item for item in applied_changes if str(item.get("status") or "").upper() == "APPLIED"]
+    evaluated = [
+        item
+        for item in active
+        if str(((item.get("decision") or {}).get("impact_validation") or {}).get("status") or "").upper()
+        in {"PASSED", "FAILED", "NON_QUALIFYING"}
+    ]
+    return {
+        "definitions": {
+            "contract_compliance_rate": "contratos validos / propuestas leidas; historicos incompletos no se rellenan",
+            "prose_admission_rate": "prosa / ultimas 200 propuestas leidas",
+            "post_apply_evaluation_coverage": "applies activos evaluados / applies activos",
+        },
+        "contract_compliance_rate": round(len(valid) / len(proposals), 4) if proposals else None,
+        "prose_admission_rate": round(prose / len(sample), 4) if sample else None,
+        "rejected_before_llm_count": sum(
+            1 for item in recent_rejected if historical_contract_class(item) == "unverifiable_legacy"
+        ),
+        "admitted_evidence_experiments": classes["evidence_experiment"],
+        "operational_checks": classes["operational_check"],
+        "unverifiable_legacy": classes["unverifiable_legacy"],
+        "failed_runs": sum(1 for item in proposals if str(item.get("status") or "").upper() == "REJECTED_BY_TESTS"),
+        "wip": {"new_contract_valid": len(new_wip), "historical_debt": len(legacy_wip), "total": len(nonterminal)},
+        "eligible_for_codegen": len(eligible),
+        "post_apply_evaluation_coverage": round(len(evaluated) / len(active), 4) if active else None,
+        "post_apply_evaluated": len(evaluated),
+        "post_apply_active": len(active),
     }
 
 
@@ -736,6 +790,7 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
     attention = digest.get("requires_attention") or []
     kpis = digest.get("kpi_funnel") or {}
     quality = digest.get("proposal_quality") or {}
+    evidence_factory = digest.get("evidence_factory") or {}
     approval_requests = digest.get("approval_requests") or []
     overlay = digest.get("overlay_shadow") or {}
     codegen_nightly = digest.get("codegen_nightly") or {}
@@ -806,6 +861,22 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
             f"otros={rejected.get('otros', 0)}"
         ),
         f"- READY_TO_APPLY: {len(ready)}",
+        "",
+        "Calidad de la fabrica de evidencia",
+        f"- evidence_experiments admitidos: {evidence_factory.get('admitted_evidence_experiments', 0)}",
+        f"- operational_checks: {evidence_factory.get('operational_checks', 0)}",
+        f"- rejected_before_llm: {evidence_factory.get('rejected_before_llm_count', 0)}",
+        f"- failed_runs: {evidence_factory.get('failed_runs', 0)}",
+        f"- legacy inevaluable: {evidence_factory.get('unverifiable_legacy', 0)}",
+        f"- contract_compliance_rate: {_none_text(evidence_factory.get('contract_compliance_rate'))}",
+        f"- prose_admission_rate: {_none_text(evidence_factory.get('prose_admission_rate'))}",
+        f"- elegibles codegen: {evidence_factory.get('eligible_for_codegen', 0)}",
+        (
+            "- WIP: "
+            f"nuevo={((evidence_factory.get('wip') or {}).get('new_contract_valid', 0))}, "
+            f"deuda_historica={((evidence_factory.get('wip') or {}).get('historical_debt', 0))}"
+        ),
+        f"- cobertura evaluacion post-apply: {_none_text(evidence_factory.get('post_apply_evaluation_coverage'))}",
     ]
     for item in ready:
         marker = "diff adjunto" if item.get("has_diff") else "sin diff"

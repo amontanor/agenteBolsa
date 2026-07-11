@@ -7,6 +7,7 @@ from agente_bolsa.config import Settings
 from agente_bolsa.continuous_improvement.digest import (
     EXECUTABLE,
     PROSE,
+    build_evidence_factory_metrics,
     build_lab_digest,
     classify_proposal_quality,
     format_lab_digest_text,
@@ -146,6 +147,30 @@ def test_lab_digest_kpis_from_synthetic_database(tmp_path):
     assert current_week["proposal_to_experiment_pct"] == 50.0
     assert current_week["experiment_to_applied_pct"] == 100.0
     assert digest["kpi_funnel"]["wip_current"]["total"] >= 1
+
+
+def test_evidence_factory_metrics_separate_new_wip_from_legacy_debt():
+    contract = {
+        "change_class": "docs",
+        "hypothesis_id": "hyp_delivery",
+        "evidence_refs": ["docs/plan_mejoras_y_tareas.md"],
+        "metric_name": "delivery_verified",
+        "baseline": 0.0,
+        "target": 1.0,
+        "evaluation_window": "same delivery",
+        "min_sample": 30,
+        "target_paths": ["docs/plan_mejoras_y_tareas.md"],
+        "rollback": "git revert",
+    }
+    valid = {"proposal_type": "CODE_CHANGE", "status": "READY_TO_APPLY", "payload": {"target_files": ["docs/plan_mejoras_y_tareas.md"], "expected_impact": "verificar entrega", "experiment_contract": contract}}
+    legacy = {"proposal_type": "MONITORING_CHANGE", "status": "PENDING", "payload": {"proposed_value": "prosa"}}
+    metrics = build_evidence_factory_metrics([valid, legacy], [], [legacy])
+    assert metrics["contract_compliance_rate"] == 0.5
+    assert metrics["admitted_evidence_experiments"] == 1
+    assert metrics["unverifiable_legacy"] == 1
+    assert metrics["wip"] == {"new_contract_valid": 1, "historical_debt": 1, "total": 2}
+    assert metrics["eligible_for_codegen"] == 1
+    assert metrics["rejected_before_llm_count"] == 1
 
 
 def test_lab_digest_includes_research_agenda_and_kpis(tmp_path):

@@ -12,7 +12,8 @@ from agente_bolsa.models import new_id
 from agente_bolsa.storage import Store
 
 from .agents import proposal_fingerprint
-from .proposal_contract import validate_experiment_contract
+from .cast_governance import assess_cast_governance, load_cast_governance_config
+from .proposal_contract import EvidenceCard, historical_contract_class, validate_experiment_contract
 from .schemas import ImprovementProposalPayload
 
 FINDINGS_TO_PROPOSALS_ACTOR = "FindingsToProposals"
@@ -36,6 +37,12 @@ def measured_findings(settings: Settings, store: Store) -> list[dict[str, Any]]:
             "source": str(data_dir / "config" / "lab_book.json"),
             "metric": "lab_book_config_present",
             "value": int((data_dir / "config" / "lab_book.json").exists()),
+            "change_class": "docs",
+            "contract_metric": "delivery_verified",
+            "baseline": 0.0,
+            "target": 1.0,
+            "evaluation_window": "entrega y verificacion determinista",
+            "min_sample": 30,
             "summary": "El lab book tiene config propia, pero el digest del lab no expone su estado cuando se active.",
         },
         {
@@ -43,6 +50,12 @@ def measured_findings(settings: Settings, store: Store) -> list[dict[str, Any]]:
             "source": "tests/test_overlay_shadow.py",
             "metric": "overlay_shadow_tests_present",
             "value": int(Path("tests/test_overlay_shadow.py").exists()),
+            "change_class": "docs",
+            "contract_metric": "delivery_verified",
+            "baseline": 0.0,
+            "target": 1.0,
+            "evaluation_window": "entrega y verificacion determinista",
+            "min_sample": 30,
             "summary": "El overlay shadow tiene estados operativos que conviene fijar con tests de contrato de digest.",
         },
         {
@@ -50,6 +63,13 @@ def measured_findings(settings: Settings, store: Store) -> list[dict[str, Any]]:
             "source": "scripts/core_sleeve_parity_check.py",
             "metric": "parity_script_present",
             "value": int(Path("scripts/core_sleeve_parity_check.py").exists()),
+            "change_class": "reliability",
+            "contract_metric": "failure_recurrence",
+            "baseline": 1.0,
+            "target": 0.0,
+            "improvement_direction": "decrease",
+            "evaluation_window": "30 ejecuciones deterministas",
+            "min_sample": 30,
             "summary": "El parity check existe y debe cubrir multiples dias para evitar falsos verdes de una sola sesion.",
         },
         {
@@ -57,6 +77,12 @@ def measured_findings(settings: Settings, store: Store) -> list[dict[str, Any]]:
             "source": str(data_dir / "research" / "codegen_nightly" / "runs.jsonl"),
             "metric": "ready_not_code_change",
             "value": _latest_not_code_change_count(data_dir),
+            "change_class": "observability",
+            "contract_metric": "eligible_codegen_coverage",
+            "baseline": 0.0,
+            "target": 1.0,
+            "evaluation_window": "30 propuestas observadas",
+            "min_sample": 30,
             "summary": "El nightly encontro propuestas READY_TO_APPLY inelegibles por not_code_change.",
         },
     ]
@@ -147,12 +173,14 @@ def persist_findings_to_proposals(
         }
 
     cycle_id = _ensure_bridge_cycle(store)
+    governance = load_cast_governance_config(settings.data_dir / "config" / "cast_governance.json")
+    governance["contract_required_all"] = True
     created: list[dict[str, Any]] = []
     duplicates: list[dict[str, Any]] = []
     admission_rejections: list[dict[str, Any]] = []
     queue = [*preview, *(learning_experiment_bridge.get("proposal_candidates") or [])][:2]
     for item in queue:
-        contract = validate_experiment_contract(item)
+        contract = validate_experiment_contract(item, workspace=settings.improvement_workspace_dir)
         if not contract["valid"]:
             admission_rejections.append(
                 {
@@ -164,6 +192,32 @@ def persist_findings_to_proposals(
             continue
         proposal_model = ImprovementProposalPayload.model_validate(item)
         fingerprint = proposal_fingerprint(proposal_model)
+        existing = next(
+            (
+                proposal
+                for proposal in store.continuous_improvement_proposals(limit=50000)
+                if str(proposal.get("fingerprint") or "") == fingerprint
+            ),
+            None,
+        )
+        if existing:
+            duplicates.append({"proposal_id": existing["proposal_id"], "target": item["target_identifier"]})
+            continue
+        governance_rejection = assess_cast_governance(
+            {**item, "payload": item},
+            item,
+            store=store,
+            config=governance,
+        )
+        if governance_rejection:
+            admission_rejections.append(
+                {
+                    "target": item.get("target_identifier"),
+                    "reason": governance_rejection["reason"],
+                    "failures": (governance_rejection.get("evidence") or {}).get("failures", []),
+                }
+            )
+            continue
         proposal_id = new_id("ci_prop")
         proposal_type = str(proposal_model.proposal_type or "MONITORING_CHANGE").upper()
         status = "READY_TO_APPLY" if proposal_type == "CODE_CHANGE" else "PENDING"
@@ -288,9 +342,23 @@ def _candidate(
     evidence = []
     if finding and finding.get("value") not in (None, 0, "0", ""):
         evidence.append(f"{finding.get('source')} | {finding.get('metric')}={finding.get('value')} | {finding.get('summary')}")
-    metric = str((finding or {}).get("metric") or "delivery_verified")
-    baseline = float((finding or {}).get("value") or 0.0)
-    target_value = baseline + 1.0
+    required = {"change_class", "contract_metric", "baseline", "target", "evaluation_window", "min_sample", "source"}
+    if not finding or not evidence or not required.issubset(finding):
+        return {"evidence": [], "finding_kind": "operational_check"}
+    card = EvidenceCard(
+        change_class=str(finding.get("change_class") or ""),
+        hypothesis_id=f"finding:{finding.get('finding_id') or target}",
+        evidence_refs=(str(finding.get("source") or ""),),
+        metric_name=str(finding.get("contract_metric") or ""),
+        baseline=float(finding["baseline"]),
+        target=float(finding["target"]),
+        evaluation_window=str(finding.get("evaluation_window") or ""),
+        min_sample=int(finding.get("min_sample") or 0),
+        target_paths=(target, *tests),
+        rollback=rollback,
+        finding_source=str(finding.get("source") or ""),
+        improvement_direction=str(finding.get("improvement_direction") or "increase"),
+    )
     return {
         "proposal_type": "CODE_CHANGE",
         "target_component": "continuous_improvement",
@@ -308,23 +376,19 @@ def _candidate(
         "test_requirement": "; ".join(tests),
         "test_commands": [f"python -m pytest {' '.join(tests)} -q"],
         "source": FINDINGS_TO_PROPOSALS_ACTOR,
-        "experiment_contract": {
-            "change_class": "observability",
-            "hypothesis_id": f"finding:{(finding or {}).get('finding_id') or target}",
-            "evidence_refs": [str((finding or {}).get("source") or "measured_findings")],
-            "metric_name": metric,
-            "baseline": baseline,
-            "target": target_value,
-            "evaluation_window": "delivery plus 30 observations",
-            "min_sample": 30,
-            "target_paths": [target, *tests],
-            "rollback": rollback,
-        },
+        "finding_kind": "evidence_experiment",
+        "evidence_card": card.as_contract(),
+        "experiment_contract": card.as_contract(),
     }
 
 
 def _proposal_payload(item: dict[str, Any]) -> dict[str, Any]:
     return dict(item)
+
+
+def classify_finding_proposal(item: dict[str, Any]) -> str:
+    """Expose the same read-time classification used by admission and digest."""
+    return historical_contract_class(item)
 
 
 def _ensure_bridge_cycle(store: Store) -> str:

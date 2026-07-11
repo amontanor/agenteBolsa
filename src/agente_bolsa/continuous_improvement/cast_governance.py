@@ -222,7 +222,7 @@ def assess_cast_governance(
     require_evidence_contract = bool(config.get("contract_required_all"))
     if require_evidence_contract or proposer in set(config.get("contract_agents") or []):
         if require_evidence_contract:
-            contract_check = validate_experiment_contract(proposal)
+            contract_check = validate_experiment_contract(proposal, workspace=Path.cwd())
             failures = contract_check["failures"]
         else:
             failures = contract_violation_detail(proposal, payload)
@@ -235,17 +235,35 @@ def assess_cast_governance(
                 ),
                 "evidence": {"proposer": proposer, "failures": failures},
             }
+        if require_evidence_contract and store is not None:
+            hypothesis_id = str(contract_check["contract"].get("hypothesis_id") or "")
+            matches = [
+                item
+                for item in store.continuous_improvement_hypotheses(limit=50000)
+                if str(item.get("hypothesis_id") or "") == hypothesis_id
+            ]
+            if matches and str(matches[0].get("status") or "").upper() in {
+                "CLOSED",
+                "REJECTED",
+                "RESOLVED",
+                "KILLED",
+            }:
+                return {
+                    "reason": CONTRACT_VIOLATION_REASON,
+                    "detail": "La hipotesis del contrato ya esta resuelta.",
+                    "evidence": {"proposer": proposer, "failures": ["hypothesis_already_resolved"]},
+                }
     if require_evidence_contract and store is not None:
         caps = _admission_counts(store, now=now)
         daily_cap = int(config.get("max_admitted_per_day") or 0)
         wip_cap = int(config.get("max_wip") or 0)
-        if daily_cap and caps["today"] > daily_cap:
+        if daily_cap and caps["today"] >= daily_cap:
             return {
                 "reason": ADMISSION_CAP_REASON,
                 "detail": f"Cupo diario de {daily_cap} propuestas admitidas agotado.",
                 "evidence": caps,
             }
-        if wip_cap and caps["wip"] > wip_cap:
+        if wip_cap and caps["wip"] >= wip_cap:
             return {
                 "reason": WIP_CAP_REASON,
                 "detail": f"WIP maximo de {wip_cap} propuestas admitidas agotado.",

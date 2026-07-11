@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.151**
+- Version actual: **0.4.152**
 - Ultima actualizacion: 2026-07-10
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -49,6 +49,18 @@ amplia exposicion.
 | P-L24R | Precision y aislamiento de la instrumentacion temporal | HECHO (v0.4.149) |
 | P-L24R2 | Segmentos reales de decision, gates, persistencia e informes | HECHO (v0.4.150) |
 | P-L24R3 | Integracion real y eliminacion de duplicacion temporal | HECHO (v0.4.151) |
+| P-L26B | Contrato ejecutable desde hallazgos medidos | HECHO (v0.4.152) |
+
+### P-L26B - Contrato ejecutable desde hallazgos medidos. **HECHO (v0.4.152).**
+Los hallazgos medidos conservan una tarjeta inmutable y se convierten en
+propuestas solo cuando contienen clase, hipotesis, evidencia verificable,
+metrica coherente, baseline, target, ventana, muestra minima, rutas y rollback.
+`proposal_contract.py` sigue siendo la fuente unica de validacion. Los rechazos
+son deterministas y previos a LLM/codegen; no consumen admision ni WIP. El
+digest separa experimentos de evidencia, comprobaciones operativas, fallos,
+legacy inevaluable y deuda WIP historica. Se mantienen dos admisiones diarias,
+WIP nuevo dos, un codegen nocturno y apply exclusivamente humano. No cambia
+trading ni se completan historicos con supuestos.
 
 ### P-L24R3 - Integracion real y eliminacion de duplicacion temporal. **HECHO (v0.4.151).**
 `optional_measure` conserva una sola rama de produccion al envolver cada llamada

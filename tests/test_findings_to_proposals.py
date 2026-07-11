@@ -5,6 +5,8 @@ from agente_bolsa.config import Settings
 from agente_bolsa.continuous_improvement.codegen_nightly import eligible_codegen_proposals
 from agente_bolsa.continuous_improvement.findings_to_proposals import (
     OBSERVATION_FAMILY_REJECTION_REASON,
+    build_code_change_candidates,
+    classify_finding_proposal,
     persist_findings_to_proposals,
     settle_observation_execution_family,
 )
@@ -57,6 +59,20 @@ def test_findings_to_proposals_dedupes_existing_candidates(tmp_path):
     assert len(first["created"]) >= 1
     assert second["created"] == []
     assert second["duplicates"]
+
+
+def test_measured_finding_builds_complete_contract_and_operational_check_stays_separate(tmp_path):
+    settings = _settings(tmp_path)
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "lab_book.json").write_text('{"enabled": false}', encoding="utf-8")
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    preview = persist_findings_to_proposals(settings=settings, store=store, dry_run=True)
+    candidate = preview["candidates"][0]
+    assert classify_finding_proposal(candidate) == "evidence_experiment"
+    assert candidate["evidence_card"] == candidate["experiment_contract"]
+    assert classify_finding_proposal({"payload": {"finding_kind": "operational_check"}}) == "operational_check"
+    assert build_code_change_candidates([{"finding_id": "lab_book_digest_visibility", "value": 0}]) == []
 
 
 def test_observation_execution_family_settlement_rejects_active_family(tmp_path):

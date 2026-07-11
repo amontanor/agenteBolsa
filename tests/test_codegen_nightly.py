@@ -60,7 +60,7 @@ def _ready_codegen_proposal(store: Store, proposal_id: str, target: str = "docs/
             "baseline": 0.0,
             "target": 1.0,
             "evaluation_window": "same_delivery",
-            "min_sample": 1,
+            "min_sample": 30,
             "target_paths": [target],
             "rollback": "git revert del commit",
         },

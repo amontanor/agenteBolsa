@@ -6,6 +6,7 @@ from agente_bolsa.continuous_improvement.agents import (
     self_governance_modification_violation,
 )
 from agente_bolsa.continuous_improvement.cast_governance import (
+    ADMISSION_CAP_REASON,
     CAST_CAP_REASON,
     CONTRACT_VIOLATION_REASON,
     DEFAULT_CAST_GOVERNANCE_CONFIG,
@@ -164,3 +165,27 @@ def test_disabled_config_skips_gate(tmp_path):
     config["enabled"] = False
     retired = _proposal({"agent_name": "StrategyEvaluatorAgent", "proposed_value": "idea"})
     assert assess_cast_governance(retired, retired["payload"], store=store, config=config) is None
+
+
+def test_contract_admission_stops_at_two_without_counting_legacy_wip(tmp_path):
+    settings = _settings(tmp_path)
+    store = _store(settings)
+    config = {**DEFAULT_CAST_GOVERNANCE_CONFIG, "contract_required_all": True, "max_admitted_per_day": 2, "max_wip": 2}
+    for index in range(2):
+        payload = {
+            "target_files": ["docs/plan_mejoras_y_tareas.md"],
+            "expected_impact": "verificar entrega documental",
+            "experiment_contract": {
+                "change_class": "docs", "hypothesis_id": f"hyp_{index}",
+                "evidence_refs": ["docs/plan_mejoras_y_tareas.md"], "metric_name": "delivery_verified",
+                "baseline": 0.0, "target": 1.0, "evaluation_window": "delivery", "min_sample": 30,
+                "target_paths": ["docs/plan_mejoras_y_tareas.md"], "rollback": "git revert",
+            },
+        }
+        proposal = _proposal(payload, proposal_type="CODE_CHANGE")
+        proposal["target_identifier"] = "docs/plan_mejoras_y_tareas.md"
+        store.upsert_continuous_improvement_proposal({**proposal, "fingerprint": f"fp_{index}", "guard": {}})
+    third = _proposal({**payload, "experiment_contract": {**payload["experiment_contract"], "hypothesis_id": "hyp_3"}}, proposal_type="CODE_CHANGE")
+    third["target_identifier"] = "docs/plan_mejoras_y_tareas.md"
+    violation = assess_cast_governance(third, third["payload"], store=store, config=config)
+    assert violation["reason"] == ADMISSION_CAP_REASON
