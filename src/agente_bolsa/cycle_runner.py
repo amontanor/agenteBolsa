@@ -25,6 +25,7 @@ from .tools.adversarial_reviewer import review_recommendations_adversarial
 from .tools.backtest import build_symbol_backtest
 from .tools.broker import BrokerClientFactory
 from .tools.costs import TransactionCostModel
+from .tools.decision_context import build_decision_context_snapshot, copy_snapshot
 from .tools.decision_lineage import build_decision_lineage
 from .tools.deterministic_reviewer import recommendation_input_fingerprint, review_recommendations
 from .tools.execution import submit_paper_order_plan
@@ -572,6 +573,68 @@ def _annotate_recommendations_with_lineage(
     ]
 
 
+def _decision_context_snapshot_for_recommendation(
+    store: Store,
+    recommendation: Any,
+    *,
+    cycle_id: str,
+    source_run_id: str | None,
+    market_state: dict[str, Any] | None,
+    agent_run_id: str | None,
+    fallback_error: Any = None,
+    llm_model: str | None = None,
+    identity_key: str | None = None,
+) -> dict[str, Any]:
+    lineage = dict(getattr(recommendation, "decision_lineage", {}) or {})
+    signal_id = str(lineage.get("signal_id") or "").strip() or None
+    signal_link_status = "unavailable"
+    if signal_id:
+        signal = store.signal_outcome_by_id(signal_id)
+        if signal and (not source_run_id or signal.get("source_run_id") == source_run_id):
+            signal_link_status = "verified"
+        else:
+            signal_link_status = "broken"
+    raw = str(getattr(recommendation, "source", "") or "")
+    origin = str(getattr(recommendation, "decision_origin", "") or "")
+    capacity_code = str(getattr(recommendation, "capacity_fill_reason_code", "") or "").lower()
+    raw_lower = f"{raw} {origin}".lower()
+    llm_considered = None
+    llm_status = None
+    if raw_lower.strip() == "llm" or raw_lower.startswith("llm "):
+        llm_considered, llm_status = True, "ok"
+    elif "capacity_fill" in raw_lower:
+        if "llm_ok" in capacity_code or "tras_llm" in capacity_code:
+            llm_considered, llm_status = True, "ok"
+        elif "fallo_llm" in capacity_code:
+            llm_considered, llm_status = True, "failed"
+        else:
+            llm_status = "unavailable"
+    elif "fallback" in raw_lower:
+        llm_considered = True
+        llm_status = "failed" if fallback_error or "fallo_llm" in raw_lower else "ok"
+    elif "hold_override" in raw_lower:
+        llm_status = "unavailable"
+    elif "deterministic" in raw_lower:
+        llm_considered, llm_status = False, "unavailable"
+    snapshot = build_decision_context_snapshot(
+        recommendation,
+        cycle_id=cycle_id,
+        source_run_id=source_run_id,
+        market_state=market_state,
+        agent_run_id=agent_run_id,
+        signal_id=signal_id,
+        signal_link_status=signal_link_status,
+        llm_considered=llm_considered,
+        llm_response_status=llm_status,
+        llm_model=llm_model,
+        fallback_reason=fallback_error,
+        identity_key=identity_key,
+    )
+    if signal_id and signal_link_status == "verified":
+        store.attach_decision_context_snapshot(signal_id, snapshot)
+    return copy_snapshot(snapshot)
+
+
 def _separate_strategy_paused_plans(
     learning_mode: dict[str, Any] | None,
     plans: list[Any],
@@ -1085,6 +1148,7 @@ def _auto_paper_trade(
     technical_context: dict[str, Any] | None,
     market_snapshot: dict[str, Any] | None,
     market_state: dict[str, Any] | None,
+    agent_run_id: str | None = None,
     timing: MarketCycleTiming | None = None,
 ) -> dict[str, Any] | None:
     if not settings.auto_paper_trading:
@@ -1328,6 +1392,7 @@ def _auto_paper_trade(
         "backtest_gate_enabled": settings.backtest_gate_enabled,
         "min_llm_confidence_to_trade": settings.min_llm_confidence_to_trade,
     }
+    snapshotted_recommendations = []
     for recommendation in reviewed_recommendations:
         review_row = next(
             (item for item in deterministic_review if item["symbol"] == recommendation.symbol and item["action"] == recommendation.action),
@@ -1346,6 +1411,19 @@ def _auto_paper_trade(
             model_info=model_info,
             gate_config=gate_config,
         )
+        snapshot = _decision_context_snapshot_for_recommendation(
+            store,
+            recommendation,
+            cycle_id=run_id,
+            source_run_id=decision_context.get("run_id"),
+            market_state=market_state,
+            agent_run_id=agent_run_id,
+            fallback_error=decision.get("fallback_error"),
+            llm_model=settings.openai_model,
+            identity_key=f"{run_id}|{recommendation.symbol}|{recommendation.action}|{fingerprint}",
+        )
+        recommendation = replace(recommendation, decision_context_snapshot=snapshot)
+        snapshotted_recommendations.append(recommendation)
         with optional_measure(timing, "persistence", "recommendation_records"):
             store.save_trade_recommendation(
                 recommendation_id=new_id("rec"), cycle_id=run_id, symbol=recommendation.symbol,
@@ -1368,6 +1446,7 @@ def _auto_paper_trade(
                 "model_info": model_info,
                 },
             )
+    reviewed_recommendations = snapshotted_recommendations
 
     with optional_measure(timing, "deterministic_gates", "entry_quality_gate"):
         quality_recommendations, entry_quality_gate = _apply_entry_quality_gate(
@@ -1883,7 +1962,17 @@ def run_observable_cycle(
     auto_result = None
     if use_crew:
         try:
-            auto_result = _auto_paper_trade(settings, store, reporter, run_id, technical_context, market_snapshot, market_state, timing=timing)
+            auto_result = _auto_paper_trade(
+                settings,
+                store,
+                reporter,
+                run_id,
+                technical_context,
+                market_snapshot,
+                market_state,
+                agent_run_id=crew_run.agent_run_id,
+                timing=timing,
+            )
         except Exception as exc:
             timing.finalize("failed", error=exc)
             raise

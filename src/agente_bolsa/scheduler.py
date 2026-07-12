@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -25,7 +25,7 @@ from ._utils import log_swallow
 from .config import Settings
 from .continuous_improvement.digest import build_lab_digest, format_lab_digest_text
 from .continuous_improvement.runtime import ContinuousImprovementLabRuntime
-from .cycle_runner import run_observable_cycle
+from .cycle_runner import _decision_context_snapshot_for_recommendation, run_observable_cycle
 from .eventing import EventReporter
 from .kernel import kernel_integrity
 from .logging_utils import log_system_event
@@ -314,14 +314,29 @@ def _run_pre_earnings_trade_operation(
     if not recommendations:
         return result
 
+    snapshots: dict[str, dict[str, Any]] = {}
     for recommendation in recommendations:
+        snapshot = _decision_context_snapshot_for_recommendation(
+            store,
+            recommendation,
+            cycle_id=run_id,
+            source_run_id=str(report.get("run_id") or "") or None,
+            market_state=report.get("market_state") if isinstance(report.get("market_state"), dict) else None,
+            agent_run_id=None,
+            llm_model=settings.openai_model,
+            fallback_error=None,
+            identity_key=f"{run_id}|{recommendation.symbol}|{recommendation.action}|pre_earnings",
+        )
+        snapshots[recommendation.symbol.upper()] = snapshot
+        payload = asdict(recommendation)
+        payload["decision_context_snapshot"] = snapshot
         store.save_trade_recommendation(
             recommendation_id=new_id("rec"),
             cycle_id=run_id,
             symbol=recommendation.symbol,
             action=recommendation.action,
             confidence=recommendation.confidence,
-            payload=asdict(recommendation),
+            payload=payload,
         )
 
     try:
@@ -348,6 +363,16 @@ def _run_pre_earnings_trade_operation(
             result["blocked_pending_symbols"] = blocked_pending
             plans = [plan for plan in plans if plan.symbol.upper() not in pending_symbols]
     plans = _apply_daily_buy_limit(settings, store, reporter, run_id, plans)
+    plans = [
+        replace(
+            plan,
+            recommendation=replace(
+                plan.recommendation,
+                decision_context_snapshot=snapshots.get(plan.symbol.upper(), {}),
+            ),
+        )
+        for plan in plans
+    ]
     for plan in plans:
         store.save_order_plan(
             plan_id=new_id("plan"),

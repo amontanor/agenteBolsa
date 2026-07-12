@@ -1089,6 +1089,83 @@ class Store:
                 ),
             )
 
+    def trade_recommendations(self, *, cycle_id: str | None = None, limit: int = 50000) -> list[dict[str, Any]]:
+        query = """
+            SELECT recommendation_id, cycle_id, symbol, action, confidence,
+                   payload_json, created_at
+            FROM trade_recommendations
+            WHERE 1 = 1
+        """
+        params: list[Any] = []
+        if cycle_id:
+            query += " AND cycle_id = ?"
+            params.append(cycle_id)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(max(1, int(limit)))
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "recommendation_id": row["recommendation_id"],
+                "cycle_id": row["cycle_id"],
+                "symbol": row["symbol"],
+                "action": row["action"],
+                "confidence": row["confidence"],
+                "payload": json.loads(row["payload_json"] or "{}"),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def signal_outcome_by_id(self, signal_id: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT signal_id, source_run_id, source, symbol, signal_date,
+                       decision, features_json, gate_json, outcome_json,
+                       created_at, updated_at
+                FROM signal_outcomes WHERE signal_id = ?
+                """,
+                (signal_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "signal_id": row["signal_id"],
+            "source_run_id": row["source_run_id"],
+            "source": row["source"],
+            "symbol": row["symbol"],
+            "signal_date": row["signal_date"],
+            "decision": row["decision"],
+            "features": json.loads(row["features_json"] or "{}"),
+            "gate": json.loads(row["gate_json"] or "{}"),
+            "outcome": json.loads(row["outcome_json"] or "{}"),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def attach_decision_context_snapshot(self, signal_id: str, snapshot: dict[str, Any]) -> str:
+        """Attach only to an exact signal row; never resolve by symbol/date."""
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT features_json FROM signal_outcomes WHERE signal_id = ?",
+                (signal_id,),
+            ).fetchone()
+            if not row:
+                return "unavailable"
+            features = json.loads(row["features_json"] or "{}")
+            existing = features.get("decision_context_snapshot")
+            if existing:
+                if existing.get("content_hash") == snapshot.get("content_hash"):
+                    return "idempotent"
+                return "conflict"
+            features["decision_context_snapshot"] = json.loads(json.dumps(snapshot))
+            conn.execute(
+                "UPDATE signal_outcomes SET features_json = ?, updated_at = ? WHERE signal_id = ?",
+                (_dumps(features), _utc_iso(), signal_id),
+            )
+            return "attached"
+
     def save_order_plan(
         self,
         *,

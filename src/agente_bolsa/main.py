@@ -8,7 +8,7 @@ import logging
 import socket
 import subprocess
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +25,7 @@ from .continuous_improvement.research_agenda import (
     load_research_agenda,
 )
 from .continuous_improvement.runtime import ContinuousImprovementLabRuntime
-from .cycle_runner import run_observable_cycle
+from .cycle_runner import _decision_context_snapshot_for_recommendation, run_observable_cycle
 from .eventing import EventReporter, PrettyLogPrinter, print_raw_tail_line
 from .logging_utils import configure_logging, log_system_event
 from .market_calendar import MarketCalendar
@@ -742,7 +742,23 @@ def command_decide_once(args: argparse.Namespace) -> None:
         sentiment_context,
         rebalance_context,
     )
-    recommendations = decision["recommendations"]
+    recommendations = [
+        replace(
+            recommendation,
+            decision_context_snapshot=_decision_context_snapshot_for_recommendation(
+                store,
+                recommendation,
+                cycle_id=decision_id,
+                source_run_id=str(technical_context.get("run_id") or "") or None,
+                market_state=None,
+                agent_run_id=None,
+                llm_model=settings.openai_model,
+                fallback_error=decision.get("fallback_error"),
+                identity_key=f"{decision_id}|{recommendation.symbol}|{recommendation.action}",
+            ),
+        )
+        for recommendation in decision["recommendations"]
+    ]
     quality_recommendations, entry_quality_gate = filter_entry_quality(
         settings,
         recommendations,

@@ -13,6 +13,7 @@ from typing import Any
 from agente_bolsa.agent_run import build_agent_run_productivity
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.daily_learning import load_daily_learning_context
+from agente_bolsa.tools.decision_context import build_decision_context_quality
 from agente_bolsa.tools.learning_mode import load_learning_mode_config
 from agente_bolsa.tools.llm_decision_quality import build_llm_decision_quality
 from agente_bolsa.tools.market_cycle_timing import summarize_market_cycle_timings
@@ -177,6 +178,7 @@ def build_lab_digest(
             artifacts=store.continuous_improvement_proposal_artifacts(limit=50000),
         ),
         "agent_run_productivity": build_agent_run_productivity(store, now=now),
+        "decision_context_quality": build_decision_context_quality(store, now=now, days=days),
     }
 
 

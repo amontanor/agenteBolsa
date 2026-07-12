@@ -107,6 +107,7 @@ class TradeRecommendation:
     capacity_fill_reason_code: str | None = None
     tags: list[str] = field(default_factory=list)
     decision_lineage: dict[str, Any] = field(default_factory=dict)
+    decision_context_snapshot: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
