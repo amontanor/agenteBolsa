@@ -56,6 +56,7 @@ def build_decision_lineage(
     cycle_id: str,
     policy_version: str,
     default_cohort: str | None = None,
+    source_run_id: str | None = None,
 ) -> dict[str, Any]:
     symbol = str(getattr(recommendation, "symbol", "") or "").upper().strip()
     candidate, candidate_rank = _candidate_for_symbol(technical_context, symbol)
@@ -80,10 +81,15 @@ def build_decision_lineage(
         ]
     }
     verified = bool(candidate and strategy_name and cycle_id and signal_id)
+    candidate_id = None
+    if cycle_id and signal_id:
+        candidate_identity = "|".join((str(cycle_id), str(signal_id), str(source_run_id or "")))
+        candidate_id = f"cand_{hashlib.sha256(candidate_identity.encode('utf-8')).hexdigest()[:24]}"
     fingerprint = "|".join((cycle_id, signal_id, decision_source, policy_version))
     return {
         "lineage_id": f"lineage_{hashlib.sha256(fingerprint.encode('utf-8')).hexdigest()[:20]}",
         "signal_id": signal_id,
+        "candidate_id": candidate_id,
         "cycle_id": cycle_id,
         "policy_version": policy_version,
         "strategy_name": strategy_name or None,

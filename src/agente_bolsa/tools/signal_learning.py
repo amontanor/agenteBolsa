@@ -404,6 +404,7 @@ def update_signal_decisions(
                     == "learning_low_sample_exception"
                 ),
             },
+            "candidate_id": ((getattr(recommendation, "decision_lineage", {}) or {}).get("candidate_id")),
             "llm_response_status": "failed"
             if (
                 getattr(recommendation, "decision_origin", None) == "deterministic_fallback_llm_failed"
@@ -411,6 +412,13 @@ def update_signal_decisions(
             )
             else "ok",
         }
+        # A control set may be retained on the recommendation when its
+        # treatment is not linked to an exact signal row, but it must not be
+        # written into a signal with a broken/unavailable identity link.
+        control_set = dict(getattr(recommendation, "comparable_control_set", {}) or {})
+        snapshot = dict(getattr(recommendation, "decision_context_snapshot", {}) or {})
+        if control_set and snapshot.get("signal_link_status") == "verified":
+            feature_updates["comparable_control_set"] = control_set
         gate_updates = {
             **gate,
             "llm": {

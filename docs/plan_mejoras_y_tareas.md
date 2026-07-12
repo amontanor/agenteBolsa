@@ -58,6 +58,7 @@ amplia exposicion.
 | P-L28BR | Propagacion y pruebas extremo a extremo de Origin | HECHO (v0.4.159, embudo y watchdog cubiertos) |
 | P-L29B | Ciclo de vida central normalizado de `agent_run` | HECHO (v0.4.160) |
 | P-L30B | Snapshot prospectivo de contexto de decision y regimen | HECHO (v0.4.161) |
+| P-L31B | Captura prospectiva de controles contemporaneos comparables | HECHO (v0.4.162) |
 
 ### P-L30B - Snapshot prospectivo de contexto de decision y regimen. **HECHO (v0.4.161).**
 Las nuevas recomendaciones conservan un bloque `decision_context_snapshot`
@@ -69,6 +70,21 @@ JSON existentes a recomendaciones, planes, observaciones y outcomes solo cuando
 la identidad es exacta; los historicos permanecen legacy. El digest publica
 cobertura, enlaces rotos, fuentes desconocidas, contaminacion y conflictos sin
 interpretar rendimiento ni cambiar trading.
+
+### P-L31B - Captura prospectiva de controles contemporaneos comparables. **HECHO (v0.4.162).**
+Se captura, en memoria y antes de construir planes, un `control_set` inmutable
+por tratamiento seleccionado. El bloque usa `cycle_id`, `signal_id`,
+`candidate_id` determinista, precio teorico, horizonte forward fijo de 10d,
+hash del `market_state` exacto y un ledger ordenado de gates ya producidos. Solo
+los candidatos posteriores al tratamiento cuya unica razon verificable es
+`lower_rank` o `capacity_limit` pueden ser controles primarios; los bloqueados,
+los de otro ciclo y los de contexto/precio ausente quedan separados o
+`unavailable`. El mismo bloque viaja a recomendacion, plan y aprendizaje sin
+crear tablas ni completar historicos. El diagnostico
+`comparable-control-quality --json` mantiene denominadores, madurez por brazo,
+controles parciales y legado separado. No calcula resultados durante la
+captura, no interpreta cohortes y no modifica ranking, gates, cupos, ordenes ni
+trading.
 
 ### P-L29B - Ciclo de vida central normalizado de agent_run. **HECHO (v0.4.160).**
 Las nuevas ejecuciones que atraviesan CrewAI, el ejecutor central de mejora

@@ -58,6 +58,7 @@ from .tools.backtest import build_symbol_backtest
 from .tools.breakout_scanner import build_breakout_scan, merge_breakout_universe
 from .tools.broker import BrokerClientFactory
 from .tools.command_catalog import available_command_catalog, command_cheatsheet
+from .tools.comparable_controls import build_comparable_control_quality
 from .tools.config_audit import build_config_audit, digest_safety_summary, format_config_audit_text
 from .tools.counterfactual_analysis import (
     DEFAULT_RETROSPECTIVE_SESSIONS,
@@ -2356,6 +2357,24 @@ def command_rr_cohort_report(args: argparse.Namespace) -> None:
     print(json.dumps(report, indent=2, ensure_ascii=True, default=str))
 
 
+def command_comparable_control_quality(args: argparse.Namespace) -> None:
+    """Read-only P-L31B comparable-control coverage diagnostic."""
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    report = build_comparable_control_quality(
+        store,
+        start=args.start,
+        end=args.end,
+        status=args.status,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    print(json.dumps(report, indent=2, ensure_ascii=True, default=str))
+
+
 def command_autonomy_digest(args: argparse.Namespace) -> None:
     from .tools.autonomy_digest import build_autonomy_digest, pause_all, resume_all
 
@@ -3647,6 +3666,20 @@ def build_parser() -> argparse.ArgumentParser:
     rr_cohort.add_argument("--include-legacy-context", action="store_true")
     rr_cohort.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     rr_cohort.set_defaults(func=command_rr_cohort_report)
+
+    comparable_controls = subparsers.add_parser(
+        "comparable-control-quality",
+        help="Diagnostico read-only de controles contemporaneos comparables (P-L31B).",
+    )
+    comparable_controls.add_argument("--from", dest="start", help="Fecha inicial YYYY-MM-DD.")
+    comparable_controls.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
+    comparable_controls.add_argument(
+        "--status",
+        choices=("verified", "partially_comparable", "unavailable"),
+        help="Filtra por estado del control_set.",
+    )
+    comparable_controls.add_argument("--json", action="store_true", help="Devuelve el diagnostico en JSON.")
+    comparable_controls.set_defaults(func=command_comparable_control_quality)
 
     autonomy_digest = subparsers.add_parser(
         "autonomy-digest",

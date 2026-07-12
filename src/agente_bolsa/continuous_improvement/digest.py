@@ -12,6 +12,7 @@ from typing import Any
 
 from agente_bolsa.agent_run import build_agent_run_productivity
 from agente_bolsa.storage import Store
+from agente_bolsa.tools.comparable_controls import build_comparable_control_quality
 from agente_bolsa.tools.daily_learning import load_daily_learning_context
 from agente_bolsa.tools.decision_context import build_decision_context_quality
 from agente_bolsa.tools.learning_mode import load_learning_mode_config
@@ -179,6 +180,7 @@ def build_lab_digest(
         ),
         "agent_run_productivity": build_agent_run_productivity(store, now=now),
         "decision_context_quality": build_decision_context_quality(store, now=now, days=days),
+        "comparable_control_quality": build_comparable_control_quality(store),
     }
 
 

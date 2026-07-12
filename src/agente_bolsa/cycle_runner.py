@@ -24,6 +24,7 @@ from .storage import Store
 from .tools.adversarial_reviewer import review_recommendations_adversarial
 from .tools.backtest import build_symbol_backtest
 from .tools.broker import BrokerClientFactory
+from .tools.comparable_controls import build_comparable_control_sets, copy_comparable_control_set
 from .tools.costs import TransactionCostModel
 from .tools.decision_context import build_decision_context_snapshot, copy_snapshot
 from .tools.decision_lineage import build_decision_lineage
@@ -567,6 +568,7 @@ def _annotate_recommendations_with_lineage(
                 cycle_id=cycle_id,
                 policy_version=policy_version,
                 default_cohort=default_cohort,
+                source_run_id=(technical_context or {}).get("run_id"),
             ),
         )
         for recommendation in recommendations
@@ -1393,6 +1395,7 @@ def _auto_paper_trade(
         "min_llm_confidence_to_trade": settings.min_llm_confidence_to_trade,
     }
     snapshotted_recommendations = []
+    recommendation_records: list[tuple[str, Any, dict[str, Any]]] = []
     for recommendation in reviewed_recommendations:
         review_row = next(
             (item for item in deterministic_review if item["symbol"] == recommendation.symbol and item["action"] == recommendation.action),
@@ -1424,28 +1427,17 @@ def _auto_paper_trade(
         )
         recommendation = replace(recommendation, decision_context_snapshot=snapshot)
         snapshotted_recommendations.append(recommendation)
-        with optional_measure(timing, "persistence", "recommendation_records"):
-            store.save_trade_recommendation(
-                recommendation_id=new_id("rec"), cycle_id=run_id, symbol=recommendation.symbol,
-                action=recommendation.action, confidence=recommendation.confidence, payload={
-                **asdict(recommendation),
-                "deterministic_review": review_row,
-                "adversarial_review": adversarial_row,
-                "decision_input_fingerprint": fingerprint,
-                "market_state_quality": ((market_state or {}).get("data_quality") or {}).get("status"),
-                "prompt_version": "trade_decision.v2",
-                "model_config_hash": _payload_hash(model_info),
-                "feature_hash": _payload_hash(decision_context),
-                "data_provider_hash": _payload_hash(
-                    {
-                        "market_state_provider": (market_state or {}).get("provider"),
-                        "market_snapshot_provider": (market_snapshot or {}).get("provider"),
-                        "data_vendor_quality": ((market_state or {}).get("data_quality") or {}).get("data_vendor_quality"),
-                    }
-                ),
-                "model_info": model_info,
+        recommendation_records.append(
+            (
+                new_id("rec"),
+                recommendation,
+                {
+                    "deterministic_review": review_row,
+                    "adversarial_review": adversarial_row,
+                    "decision_input_fingerprint": fingerprint,
                 },
             )
+        )
     reviewed_recommendations = snapshotted_recommendations
 
     with optional_measure(timing, "deterministic_gates", "entry_quality_gate"):
@@ -1492,15 +1484,120 @@ def _auto_paper_trade(
             {"source_run_id": decision_context.get("run_id"), "updated": learned_decisions},
         )
     rejected_order_plans: list[dict[str, Any]] = []
+    # P-L31B captures the counterfactual immediately after ranking and the
+    # comparable gates, before order-plan construction can create side effects.
+    # The prospective capacity rows are derived from the already-ranked
+    # in-memory candidates; build_order_plans remains the sole selector.
+    buy_candidates = [item for item in gated_recommendations if str(item.action).lower() == "buy"]
+    prospective_limit = _effective_buy_plan_limit(settings, gated_recommendations)
+    ranked_buy_candidates = sorted(
+        buy_candidates,
+        key=lambda item: (
+            float((getattr(item, "decision_lineage", {}) or {}).get("candidate_rank"))
+            if (getattr(item, "decision_lineage", {}) or {}).get("candidate_rank") is not None
+            else float("inf"),
+            str(item.symbol or "").upper(),
+        ),
+    )
+    selected_for_control = ranked_buy_candidates[:prospective_limit]
+    prospective_control_rejections = [
+        {
+            "symbol": item.symbol,
+            "action": item.action,
+            "stage": "cycle_order_limit",
+            "reason": "max_orders_per_cycle_reached",
+        }
+        for item in ranked_buy_candidates[prospective_limit:]
+    ]
+    comparable_control_sets = build_comparable_control_sets(
+        cycle_id=run_id,
+        recommendations=gated_recommendations,
+        plans=[],
+        selected_recommendations=selected_for_control,
+        rejected_order_plans=prospective_control_rejections,
+        all_recommendations=reviewed_recommendations,
+        deterministic_review=deterministic_review,
+        adversarial_review=adversarial_review,
+        entry_quality_gate=entry_quality_gate,
+        backtest_gate=backtest_gate,
+    )
+
+    def _recommendation_identity(item: Any) -> tuple[str, str, str]:
+        lineage = dict(getattr(item, "decision_lineage", {}) or {})
+        return (
+            str(getattr(item, "symbol", "") or "").upper(),
+            str(getattr(item, "action", "") or "").lower(),
+            str(lineage.get("signal_id") or ""),
+        )
+
+    def _with_control_set(item: Any) -> Any:
+        lineage = dict(getattr(item, "decision_lineage", {}) or {})
+        key = str(lineage.get("signal_id") or "")
+        if not key:
+            key = f"{str(getattr(item, 'symbol', '') or '').upper()}|{str(getattr(item, 'action', '') or '').lower()}"
+        control_set = comparable_control_sets.get(key, {})
+        return replace(item, comparable_control_set=copy_comparable_control_set(control_set)) if control_set else item
+
+    reviewed_recommendations = [_with_control_set(item) for item in reviewed_recommendations]
+    gated_recommendations = [_with_control_set(item) for item in gated_recommendations]
+    with optional_measure(timing, "persistence", "signal_control_set_updates"):
+        _learned_control_decisions = update_signal_decisions(
+            store,
+            source_run_id=decision_context.get("run_id"),
+            recommendations=reviewed_recommendations,
+            entry_quality_gate=entry_quality_gate,
+            backtest_gate=backtest_gate,
+            settings=settings,
+        )
+    if comparable_control_sets:
+        reporter.emit(
+            "self_improvement_engineer",
+            "comparable_controls_captured",
+            run_id,
+            f"Control sets contemporaneos capturados: {len(comparable_control_sets)}.",
+            {
+                "sets": len(comparable_control_sets),
+                "verified": sum(item.get("status") == "verified" for item in comparable_control_sets.values()),
+                "partially_comparable": sum(item.get("status") == "partially_comparable" for item in comparable_control_sets.values()),
+                "unavailable": sum(item.get("status") == "unavailable" for item in comparable_control_sets.values()),
+            },
+        )
+    updated_reviewed_by_identity = {_recommendation_identity(item): item for item in reviewed_recommendations}
+    with optional_measure(timing, "persistence", "recommendation_records"):
+        for recommendation_id, original_recommendation, metadata in recommendation_records:
+            recommendation = updated_reviewed_by_identity.get(_recommendation_identity(original_recommendation), original_recommendation)
+            store.save_trade_recommendation(
+                recommendation_id=recommendation_id,
+                cycle_id=run_id,
+                symbol=recommendation.symbol,
+                action=recommendation.action,
+                confidence=recommendation.confidence,
+                payload={
+                    **asdict(recommendation),
+                    **metadata,
+                    "market_state_quality": ((market_state or {}).get("data_quality") or {}).get("status"),
+                    "prompt_version": "trade_decision.v2",
+                    "model_config_hash": _payload_hash(model_info),
+                    "feature_hash": _payload_hash(decision_context),
+                    "data_provider_hash": _payload_hash(
+                        {
+                            "market_state_provider": (market_state or {}).get("provider"),
+                            "market_snapshot_provider": (market_snapshot or {}).get("provider"),
+                            "data_vendor_quality": ((market_state or {}).get("data_quality") or {}).get("data_vendor_quality"),
+                        }
+                    ),
+                    "model_info": model_info,
+                },
+            )
     with optional_measure(timing, "deterministic_gates", "order_plan_build"):
         plans = build_order_plans(
-        settings,
-        portfolio,
-        gated_recommendations,
-        dry_run=True,
-        rejected=rejected_order_plans,
-        market_state=market_state,
-        ignore_operational_kill_switch=learning_shadow_only,
+            settings,
+            portfolio,
+            gated_recommendations,
+            dry_run=True,
+            rejected=rejected_order_plans,
+            market_state=market_state,
+            ignore_operational_kill_switch=learning_shadow_only,
         )
     effective_plan_limit = _effective_buy_plan_limit(settings, gated_recommendations)
     effective_daily_limit = _effective_daily_buy_limit(settings, plans)
