@@ -142,6 +142,7 @@ def build_lab_digest(
         approval_requests=approval_requests,
         research_agenda=research_agenda,
     )
+    gate_report = _load_gate_effectiveness_quality(data_dir)
     return {
         "days": days,
         "generated_at": now.isoformat(),
@@ -181,7 +182,23 @@ def build_lab_digest(
         "agent_run_productivity": build_agent_run_productivity(store, now=now),
         "decision_context_quality": build_decision_context_quality(store, now=now, days=days),
         "comparable_control_quality": build_comparable_control_quality(store),
+        "gate_effectiveness_quality": gate_report,
     }
+
+
+def _load_gate_effectiveness_quality(data_dir: Path) -> dict[str, Any]:
+    path = data_dir / "reports" / "latest_gate_effectiveness_quality.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"status": "collecting", "report_session": None, "freshness": {"status": "unavailable"}, "snapshots": 0,
+                "summary": "recogiendo evidencia; aun no existe informe postmarket de gates"}
+    return {"status": payload.get("status"), "report_session": payload.get("report_session"),
+            "freshness": payload.get("freshness"), "snapshots": (payload.get("coverage") or {}).get("snapshots"),
+            "identity_coverage": (payload.get("coverage") or {}).get("identity_coverage"),
+            "context_coverage": (payload.get("coverage") or {}).get("context_coverage"),
+            "maturity": payload.get("maturity"), "gates": payload.get("gates"), "conflicts": payload.get("conflicts", 0),
+            "unavailable_by_reason": payload.get("unavailable_by_reason"), "next_evaluable_after": payload.get("next_evaluable_after")}
 
 
 def build_evidence_factory_metrics(

@@ -38,6 +38,12 @@ def _report_summary(report: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=True, default=_json_default), encoding="utf-8")
+    temporary.replace(path)
+
+
 def write_json_report(
     report: dict[str, Any],
     output_dir: Path,
@@ -62,15 +68,9 @@ def write_json_report(
         payload["latest_path"] = str(latest_path)
 
     if output_path is not None:
-        output_path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=True, default=_json_default),
-            encoding="utf-8",
-        )
+        _write_json_atomic(output_path, payload)
     if latest_path is not None:
-        latest_path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=True, default=_json_default),
-            encoding="utf-8",
-        )
+        _write_json_atomic(latest_path, payload)
 
     if manifest_path is None:
         return payload
@@ -84,8 +84,5 @@ def write_json_report(
         "summary": _report_summary(payload),
         "inputs": manifest or {},
     }
-    manifest_path.write_text(
-        json.dumps(manifest_payload, indent=2, ensure_ascii=True, default=_json_default),
-        encoding="utf-8",
-    )
+    _write_json_atomic(manifest_path, manifest_payload)
     return payload

@@ -430,19 +430,31 @@ def _job_alerts(job_runtime: dict[str, Any]) -> list[dict[str, Any]]:
     return alerts
 
 
-def _report_health(settings: Settings, data_dir: Path, now: datetime | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _report_health(settings: Settings, data_dir: Path, store: Store, now: datetime | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     reports = {
         "technical_study": _latest_report_payload(data_dir, "latest_closed_market_technical_study.json"),
         "breakout_scan": _latest_report_payload(data_dir, "latest_breakout_scan.json"),
         "daily_learning_digest": _latest_report_payload(data_dir, "latest_daily_learning_digest.json"),
         "post_market_learning": _latest_report_payload(data_dir, "latest_post_market_learning.json"),
         "signal_learning": _latest_report_payload(data_dir, "latest_signal_learning.json"),
+        "gate_effectiveness_quality": _latest_report_payload(data_dir, "latest_gate_effectiveness_quality.json"),
     }
     alerts: list[dict[str, Any]] = []
     summary: dict[str, Any] = {}
     data_pipeline, data_pipeline_alerts = _data_pipeline_heartbeat(settings, data_dir, now)
     summary["data_pipeline"] = data_pipeline
     alerts.extend(data_pipeline_alerts)
+    gate_runtime = store.get_runtime_value("gate_effectiveness_quality_runtime") or {}
+    gate_report = reports["gate_effectiveness_quality"] or {}
+    gate_status = str(gate_runtime.get("status") or gate_report.get("status") or "collecting")
+    summary["gate_effectiveness_quality"] = {
+        "status": gate_status, "runtime": gate_runtime, "report_session": gate_report.get("report_session"),
+        "freshness": gate_report.get("freshness") or {"status": "unavailable"},
+        "degraded_observability": gate_status == "failed",
+    }
+    if gate_status == "failed":
+        alerts.append({"severity": "warning", "kind": "degraded_observability", "scope": "gate_effectiveness_quality",
+                       "detail": "El informe derivado de gates fallo; no afecta trading ni gates."})
 
     technical = reports["technical_study"] or {}
     market_data = technical.get("market_data", {}) or {}
@@ -1060,7 +1072,7 @@ def build_operational_health_report(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     job_runtime = _job_runtime(store)
-    report_health, report_alerts = _report_health(settings, settings.data_dir, now)
+    report_health, report_alerts = _report_health(settings, settings.data_dir, store, now)
     ci_backlog, ci_alerts = _ci_backlog_alerts(settings, store)
     report_health["continuous_improvement_backlog"] = ci_backlog
     job_alerts = _job_alerts(job_runtime)

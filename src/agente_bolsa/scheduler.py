@@ -38,6 +38,7 @@ from .tools.broker import BrokerClientFactory
 from .tools.broker_reconciliation import reconcile_broker_orders
 from .tools.daily_learning import build_learning_digest_report, load_daily_learning_context
 from .tools.execution import submit_paper_order_plan
+from .tools.gate_effectiveness_reporting import publish_gate_effectiveness_postmarket
 from .tools.learning_mode import active_learning_mode, learning_mode_source
 from .tools.learning_scoreboard import build_learning_scoreboard
 from .tools.market_cycle_timing import MarketCycleTiming
@@ -2214,6 +2215,19 @@ def _run_post_market_measurement_pipeline(
     reports_dir = settings.data_dir / "reports"
     timings: dict[str, float] = {}
     started = time.perf_counter()
+    try:
+        gate_effectiveness = publish_gate_effectiveness_postmarket(
+            store, reports_dir, run_id=f"{run_id}_gates", session_date=session_date
+        )
+    except Exception as exc:  # noqa: BLE001 - observability must not block post-market.
+        gate_effectiveness = {"status": "failed", "error": type(exc).__name__}
+        store.set_runtime_value("gate_effectiveness_quality_runtime", {
+            "status": "failed", "last_failure_at": datetime.now(timezone.utc).isoformat(),
+            "last_error_code": type(exc).__name__, "last_report_session": session_date,
+        })
+        log_system_event(settings.logs_dir, "gate_effectiveness_report_failed", {"error": repr(exc), "session_date": session_date})
+    timings["gate_effectiveness_seconds"] = round(time.perf_counter() - started, 3)
+    started = time.perf_counter()
     scoreboard = build_learning_scoreboard(
         settings,
         store,
@@ -2266,12 +2280,14 @@ def _run_post_market_measurement_pipeline(
             "broker_reconciliation",
             "market_forward_outcomes",
             "learning_observations_and_lineage",
+            "gate_effectiveness_quality",
             "learning_scoreboard",
             "rr_cohort",
             "autonomous_research",
             "continuous_improvement_digest",
         ],
         "timings": timings,
+        "gate_effectiveness_quality": {"path": gate_effectiveness.get("path"), "status": gate_effectiveness.get("status")},
         "scoreboard": {
             "path": scoreboard.get("path"),
             "evaluation": scoreboard.get("evaluation"),

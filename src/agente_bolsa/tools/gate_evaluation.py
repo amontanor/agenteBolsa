@@ -272,11 +272,24 @@ def derive_gate_outcomes(snapshots: list[Mapping[str, Any]], outcomes_by_signal:
     return derived
 
 
-def build_gate_effectiveness_quality(snapshots: list[Mapping[str, Any]], *, start: str | None = None, end: str | None = None, gate: str | None = None, category: str | None = None) -> dict[str, Any]:
+def build_gate_effectiveness_quality(snapshots: list[Mapping[str, Any]], *, start: str | None = None, end: str | None = None, gate: str | None = None, category: str | None = None, outcomes_by_signal: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any]:
     selected = [s for s in snapshots if (not start or str(s.get("captured_at", ""))[:10] >= start) and (not end or str(s.get("captured_at", ""))[:10] <= end)]
     rows = [r for s in selected for r in s.get("gate_path", []) if not gate or r.get("gate_name") == gate if not category or r.get("category") == category]
     counts = {"candidates_reaching_gate": len(rows), "evaluated": sum(r.get("status") in {"passed", "blocked"} for r in rows),
               "passed": sum(r.get("status") == "passed" for r in rows), "blocked": sum(r.get("status") == "blocked" for r in rows),
               "not_evaluated": sum(r.get("status") == "not_evaluated" for r in rows), "unavailable": sum(r.get("status") == "unavailable" for r in rows)}
-    status = "collecting" if not selected else "immature"
-    return {"schema_version": SCHEMA_VERSION, "status": status, "snapshots": len(selected), "identity_weak": sum(s.get("identity_status") == "weak" for s in selected), "identity_unavailable": sum(s.get("identity_status") == "unavailable" for s in selected), "conflicts": 0, "maturity": {"evaluable": 0, "immature": len(selected)}, "gates": counts, "unavailable_by_reason": {}}
+    outcomes = outcomes_by_signal or {}
+    derived = derive_gate_outcomes(selected, outcomes)
+    maturity = {state: sum(item.get("status") == state for item in derived) for state in ("evaluable", "immature", "unavailable")}
+    if not selected:
+        status = "collecting"
+    elif maturity["evaluable"] == 0:
+        status = "immature"
+    elif maturity["evaluable"] < 30:
+        status = "insufficient_sample"
+    else:
+        status = "evaluable"
+    verified = sum(s.get("identity_status") == "verified" for s in selected)
+    context = sum(bool(s.get("decision_context_snapshot_id")) for s in selected)
+    categories = {name: sum(row.get("category") == name for row in rows) for name in ("eligibility", "safety", "capacity", "operational", "portfolio")}
+    return {"schema_version": SCHEMA_VERSION, "status": status, "snapshots": len(selected), "identity_weak": sum(s.get("identity_status") == "weak" for s in selected), "identity_unavailable": sum(s.get("identity_status") == "unavailable" for s in selected), "identity_coverage": round(verified / len(selected), 6) if selected else None, "context_coverage": round(context / len(selected), 6) if selected else None, "conflicts": 0, "maturity": maturity, "gates": counts, "categories": categories, "warnings": [], "unavailable_by_reason": {}}

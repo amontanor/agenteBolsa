@@ -117,9 +117,10 @@ def test_post_market_measurement_pipeline_publishes_sequence(tmp_path, monkeypat
 
     assert report["sequence"] == [
         "broker_reconciliation",
-        "market_forward_outcomes",
-        "learning_observations_and_lineage",
-        "learning_scoreboard",
+            "market_forward_outcomes",
+            "learning_observations_and_lineage",
+            "gate_effectiveness_quality",
+            "learning_scoreboard",
         "rr_cohort",
         "autonomous_research",
         "continuous_improvement_digest",

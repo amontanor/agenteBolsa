@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.165**
+- Version actual: **0.4.166**
 - Ultima actualizacion: 2026-07-12
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -62,6 +62,13 @@ amplia exposicion.
 | P-L31BR | Tratamientos y motivos reales desde planes finales | HECHO (v0.4.163) |
 | P-L32B | Ledger prospectivo del camino real de gates por candidato | HECHO (v0.4.164) |
 | P-L33B | Snapshot prospectivo de calidad de ejecucion | HECHO (v0.4.165) |
+| P-L34B | Publicacion postmarket y health de calidad de gates | HECHO (v0.4.166) |
+
+### P-L34B - Publicacion postmarket y health de calidad de gates. **HECHO (v0.4.166).**
+
+- Reutiliza el pipeline postmarket: publica un informe derivado despues de outcomes/observaciones y antes del digest.
+- Lee exclusivamente snapshots prospectivos P-L32; no reclasifica `gate_json` historico ni reejecuta gates.
+- Estado `collecting` se conserva sin tasas ficticias; fallo de publicacion degrada solo observabilidad.
 
 ### P-L33B - Snapshot prospectivo de calidad de ejecucion. **HECHO (v0.4.165).**
 Las nuevas ordenes conservan `p-l33b.execution-quality.v1` en los JSON ya
