@@ -1212,6 +1212,32 @@ class Store:
             )
             return "attached"
 
+    def attach_execution_quality_snapshot(self, signal_id: str, snapshot: dict[str, Any]) -> str:
+        """Attach or compatibly advance execution telemetry for one exact signal."""
+
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT features_json FROM signal_outcomes WHERE signal_id = ?",
+                (signal_id,),
+            ).fetchone()
+            if not row:
+                return "unavailable"
+            features = json.loads(row["features_json"] or "{}")
+            existing = dict(features.get("execution_quality_snapshot") or {})
+            if existing:
+                if existing.get("content_hash") == snapshot.get("content_hash"):
+                    return "idempotent"
+                old_history = {item.get("content_hash") for item in existing.get("stage_history", [])}
+                new_history = {item.get("content_hash") for item in snapshot.get("stage_history", [])}
+                if existing.get("snapshot_id") != snapshot.get("snapshot_id") or not old_history.issubset(new_history):
+                    return "conflict"
+            features["execution_quality_snapshot"] = json.loads(json.dumps(snapshot))
+            conn.execute(
+                "UPDATE signal_outcomes SET features_json = ?, updated_at = ? WHERE signal_id = ?",
+                (_dumps(features), _utc_iso(), signal_id),
+            )
+            return "idempotent" if existing else "attached"
+
     def save_order_plan(
         self,
         *,
@@ -1224,8 +1250,36 @@ class Store:
         dry_run: bool,
         payload: dict[str, Any],
     ) -> None:
+        from .tools.execution_quality import build_planned_snapshot
+
+        normalized_payload = json.loads(json.dumps(payload, default=str))
+        now = _utc_iso()
+        snapshot = dict(normalized_payload.get("execution_quality_snapshot") or {})
+        if not snapshot:
+            recommendation = dict(normalized_payload.get("recommendation") or {})
+            lineage = dict(normalized_payload.get("decision_lineage") or recommendation.get("decision_lineage") or {})
+            context = dict(recommendation.get("decision_context_snapshot") or {})
+            signal_id = str(lineage.get("signal_id") or "").strip()
+            signal_price = None
+            signal_at = None
+            if signal_id and context.get("signal_link_status") == "verified":
+                signal = self.signal_outcome_by_id(signal_id)
+                if signal:
+                    features = dict(signal.get("features") or {})
+                    signal_price = features.get("entry_price") or features.get("signal_price")
+                    signal_at = signal.get("created_at")
+            snapshot = build_planned_snapshot(
+                plan_id=plan_id,
+                cycle_id=cycle_id,
+                symbol=symbol,
+                side=side,
+                payload=normalized_payload,
+                planned_at=now,
+                signal_price=signal_price,
+                signal_at=signal_at,
+            )
+            normalized_payload["execution_quality_snapshot"] = snapshot
         with self.connect() as conn:
-            now = _utc_iso()
             conn.execute(
                 """
                 INSERT OR REPLACE INTO order_plans (
@@ -1242,13 +1296,15 @@ class Store:
                     notional,
                     int(approved),
                     int(dry_run),
-                    _dumps(payload),
+                    _dumps(normalized_payload),
                     now,
                     ORDER_PLAN_STATUS_PENDING,
                     None,
                     now,
                 ),
             )
+        if snapshot.get("lineage_status") == "verified" and snapshot.get("signal_id"):
+            self.attach_execution_quality_snapshot(str(snapshot["signal_id"]), snapshot)
 
     def order_plans(
         self,
@@ -1492,6 +1548,17 @@ class Store:
         status: str,
         payload: dict[str, Any],
     ) -> None:
+        from .tools.execution_quality import submitted_snapshot
+
+        normalized_payload = json.loads(json.dumps(payload, default=str))
+        plan_payload = dict((normalized_payload.get("plan") or {}).get("payload") or {})
+        snapshot = dict(plan_payload.get("execution_quality_snapshot") or normalized_payload.get("execution_quality_snapshot") or {})
+        if snapshot:
+            normalized_payload["execution_quality_snapshot"] = submitted_snapshot(
+                snapshot,
+                broker_order=dict(normalized_payload.get("broker_order") or {}),
+                observed_at=_utc_iso(),
+            )
         with self.connect() as conn:
             conn.execute(
                 """
@@ -1508,7 +1575,7 @@ class Store:
                     symbol,
                     side,
                     status,
-                    _dumps(payload),
+                    _dumps(normalized_payload),
                     _utc_iso(),
                 ),
             )
@@ -1527,6 +1594,9 @@ class Store:
                     plan_id,
                 ),
             )
+        snapshot = dict(normalized_payload.get("execution_quality_snapshot") or {})
+        if snapshot.get("lineage_status") == "verified" and snapshot.get("signal_id"):
+            self.attach_execution_quality_snapshot(str(snapshot["signal_id"]), snapshot)
 
     def upsert_opportunity_snapshot(
         self,

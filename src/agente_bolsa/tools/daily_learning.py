@@ -13,6 +13,7 @@ from agente_bolsa.models import new_id
 from agente_bolsa.storage import Store
 
 from .counterfactual_analysis import _compare_policy_rows, _rebuild_signal_cohorts, _session_dates
+from .execution_quality import build_execution_quality_report
 from .learning_mode import LEARNING_EXPERIMENT_SOURCE, load_learning_mode_config
 from .llm_degraded_watchdog import evaluate as evaluate_llm_watchdog
 from .pre_earnings import load_pre_earnings_learning_context
@@ -45,6 +46,26 @@ def _llm_status_snapshot(store: Store) -> dict[str, Any]:
             "roles": {},
             "status_line": f"LLM: no disponible ({exc})",
         }
+
+
+def execution_quality_digest_summary(store: Store) -> dict[str, Any]:
+    """Read-only summary; historic broker rows remain legacy until instrumented."""
+
+    try:
+        with store.connect() as conn:
+            rows = conn.execute("SELECT payload_json FROM broker_orders ORDER BY created_at DESC").fetchall()
+        snapshots = []
+        legacy = 0
+        for row in rows:
+            payload = json.loads(row["payload_json"] or "{}")
+            snapshot = payload.get("execution_quality_snapshot")
+            if snapshot:
+                snapshots.append(snapshot)
+            else:
+                legacy += 1
+        return build_execution_quality_report(snapshots, legacy_orders=legacy)
+    except Exception as exc:  # noqa: BLE001 - execution diagnostics never block learning.
+        return {"schema_version": "p-l33b.execution-quality.v1", "status": "unavailable", "error": str(exc)[:160]}
 
 
 def _source_family(row: dict[str, Any]) -> str:
@@ -1444,6 +1465,7 @@ def build_learning_daily_run(
         learning_experiment_section,
     )
     digest["rr_cohort"] = rr_cohort_digest_summary(store)
+    digest["execution_quality"] = execution_quality_digest_summary(store)
     comparison = _compare_policy_rows(rows, "proposed") if rows else {}
     summary_payload = {
         "session_date": session_date,
@@ -1531,6 +1553,7 @@ def build_learning_digest_report(
         learning_experiment_section,
     )
     digest["rr_cohort"] = rr_cohort_digest_summary(store)
+    digest["execution_quality"] = execution_quality_digest_summary(store)
     report = {
         "run_id": run_id,
         "as_of": datetime.now(timezone.utc).isoformat(),

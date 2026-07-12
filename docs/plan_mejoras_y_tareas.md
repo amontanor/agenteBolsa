@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.164**
+- Version actual: **0.4.165**
 - Ultima actualizacion: 2026-07-12
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -61,6 +61,18 @@ amplia exposicion.
 | P-L31B | Captura prospectiva de controles contemporaneos comparables | HECHO (v0.4.162) |
 | P-L31BR | Tratamientos y motivos reales desde planes finales | HECHO (v0.4.163) |
 | P-L32B | Ledger prospectivo del camino real de gates por candidato | HECHO (v0.4.164) |
+| P-L33B | Snapshot prospectivo de calidad de ejecucion | HECHO (v0.4.165) |
+
+### P-L33B - Snapshot prospectivo de calidad de ejecucion. **HECHO (v0.4.165).**
+Las nuevas ordenes conservan `p-l33b.execution-quality.v1` en los JSON ya
+existentes: plan, respuesta de submit y reconciliacion. El snapshot propaga
+IDs reales, conserva un historial de etapas idempotente, calcula bps y
+latencias solo para compras con datos validos y registra outliers sin corregir
+datos. El fill es telemetria de ejecucion y nunca outcome forward. Los 40
+broker orders anteriores permanecen legacy; no se reconstruyen por simbolo ni
+se consulta al broker adicionalmente. `execution-quality-report --json` y el
+digest diario publican cobertura, estados, latencias y avisos sin interpretar
+rentabilidad ni cambiar ordenes.
 
 ### P-L32B - Ledger prospectivo del camino real de gates por candidato. **HECHO (v0.4.164).**
 Se añade un collector único que observa los resultados ya producidos por el

@@ -82,6 +82,7 @@ from .tools.daily_learning import (
 )
 from .tools.excursion_quality import build_excursion_quality_report
 from .tools.execution import submit_paper_order_plan
+from .tools.execution_quality import build_execution_quality_report
 from .tools.gate_evaluation import build_gate_effectiveness_quality
 from .tools.lab_book import run_lab_book_once
 from .tools.learning_mode import active_learning_mode, learning_mode_source
@@ -2400,6 +2401,37 @@ def command_gate_effectiveness_quality(args: argparse.Namespace) -> None:
     print(json.dumps(report, indent=2, ensure_ascii=True, default=str))
 
 
+def command_execution_quality_report(args: argparse.Namespace) -> None:
+    """Read-only P-L33B execution-quality diagnostic."""
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    snapshots = []
+    legacy = 0
+    with store.connect() as conn:
+        rows = conn.execute("SELECT payload_json FROM broker_orders ORDER BY created_at DESC").fetchall()
+    for row in rows:
+        payload = json.loads(row["payload_json"] or "{}")
+        snapshot = payload.get("execution_quality_snapshot")
+        if snapshot:
+            snapshots.append(snapshot)
+        else:
+            legacy += 1
+    report = build_execution_quality_report(
+        snapshots,
+        start=args.start,
+        end=args.end,
+        status=args.status,
+        lineage_status=args.lineage_status,
+        legacy_orders=legacy,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    print(json.dumps(report, indent=2, ensure_ascii=True, default=str))
+
+
 def command_autonomy_digest(args: argparse.Namespace) -> None:
     from .tools.autonomy_digest import build_autonomy_digest, pause_all, resume_all
 
@@ -3719,6 +3751,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     gate_effectiveness.add_argument("--json", action="store_true", help="Devuelve el diagnostico en JSON.")
     gate_effectiveness.set_defaults(func=command_gate_effectiveness_quality)
+
+    execution_quality = subparsers.add_parser(
+        "execution-quality-report",
+        help="Diagnostico read-only de calidad prospectiva de ejecucion (P-L33B).",
+    )
+    execution_quality.add_argument("--from", dest="start", help="Fecha inicial YYYY-MM-DD.")
+    execution_quality.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
+    execution_quality.add_argument("--status", choices=("planned", "submitted", "accepted", "partially_filled", "filled", "rejected", "cancelled", "expired", "error", "unavailable"))
+    execution_quality.add_argument("--lineage-status", choices=("verified", "partial", "broken", "legacy"))
+    execution_quality.add_argument("--json", action="store_true", help="Devuelve el diagnostico en JSON.")
+    execution_quality.set_defaults(func=command_execution_quality_report)
 
     autonomy_digest = subparsers.add_parser(
         "autonomy-digest",

@@ -13,6 +13,7 @@ from agente_bolsa.tools.broker import BrokerClientFactory
 from agente_bolsa.tools.signal_learning import update_signal_outcomes
 
 from .execution_linking import match_learning_observation_for_signal, match_signal_row_for_buy_order
+from .execution_quality import reconciled_snapshot
 
 TERMINAL_STATUSES = {
     "filled",
@@ -99,14 +100,23 @@ def _get_remote_order(client: Any, broker_order_id: str, payload: dict[str, Any]
         return client.get_order_by_client_id(client_order_id)
 
 
-def _merge_reconciliation_payload(payload: dict[str, Any], snapshot: dict[str, Any], *, at: str) -> dict[str, Any]:
+def _merge_reconciliation_payload(payload: dict[str, Any], snapshot: dict[str, Any], *, at: str, plan_status: str | None = None) -> dict[str, Any]:
     history = list(payload.get("reconciliation_history") or [])[-4:]
     history.append({"at": at, "status": snapshot.get("status")})
-    return {
+    merged = {
         **payload,
         "broker_order_reconciled": snapshot,
         "reconciliation_history": history,
     }
+    execution_snapshot = dict(payload.get("execution_quality_snapshot") or {})
+    if execution_snapshot:
+        merged["execution_quality_snapshot"] = reconciled_snapshot(
+            execution_snapshot,
+            broker_snapshot=snapshot,
+            observed_at=at,
+            plan_status=plan_status,
+        )
+    return merged
 
 
 def _mark_signal_execution(
@@ -275,9 +285,16 @@ def reconcile_broker_orders(
 
     signal_updates = 0
     learning_updates = 0
+    execution_quality_updates: list[dict[str, Any]] = []
     with store.connect() as conn:
         for change in changes:
-            payload = _merge_reconciliation_payload(change["payload"], change["fill"], at=now)
+            plan_row = conn.execute("SELECT status FROM order_plans WHERE plan_id = ?", (change["plan_id"],)).fetchone()
+            payload = _merge_reconciliation_payload(
+                change["payload"],
+                change["fill"],
+                at=now,
+                plan_status=str(plan_row["status"]) if plan_row else None,
+            )
             plan_created_at = str(((change["payload"].get("plan") or {}).get("created_at")) or "").strip() or None
             conn.execute(
                 """
@@ -309,6 +326,9 @@ def reconcile_broker_orders(
                 plan_created_at=plan_created_at,
                 now=now,
             )
+            execution_snapshot = dict(payload.get("execution_quality_snapshot") or {})
+            if execution_snapshot.get("lineage_status") == "verified" and execution_snapshot.get("signal_id"):
+                execution_quality_updates.append(execution_snapshot)
         conn.execute(
             "INSERT OR REPLACE INTO runtime_state (key, value_json, updated_at) VALUES (?, ?, ?)",
             (
@@ -326,6 +346,8 @@ def reconcile_broker_orders(
         )
     result["signal_execution_updates"] = signal_updates
     result["learning_execution_updates"] = learning_updates
+    for execution_snapshot in execution_quality_updates:
+        store.attach_execution_quality_snapshot(str(execution_snapshot["signal_id"]), execution_snapshot)
     if update_learning:
         result["signal_outcome_update"] = update_signal_outcomes(settings, store, since_date="2026-04-01", limit=200000)
     return result

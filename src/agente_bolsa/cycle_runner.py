@@ -1436,11 +1436,16 @@ def _auto_paper_trade(
             llm_model=settings.openai_model,
             identity_key=f"{run_id}|{recommendation.symbol}|{recommendation.action}|{fingerprint}",
         )
-        recommendation = replace(recommendation, decision_context_snapshot=snapshot)
+        recommendation_id = new_id("rec")
+        recommendation = replace(
+            recommendation,
+            decision_context_snapshot=snapshot,
+            recommendation_id=recommendation_id,
+        )
         snapshotted_recommendations.append(recommendation)
         recommendation_records.append(
             (
-                new_id("rec"),
+                recommendation_id,
                 recommendation,
                 {
                     "deterministic_review": review_row,
