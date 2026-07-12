@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.157**
+- Version actual: **0.4.159**
 - Ultima actualizacion: 2026-07-11
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -55,6 +55,7 @@ amplia exposicion.
 | P-L27D | Cohorte prospectiva observacional reward/risk | HECHO (v0.4.155; recopilando desde 2026-07-13) |
 | P-L27DR | Semantica de sesiones posteriores de cohorte RR | HECHO (v0.4.156) |
 | P-L28B | Atribucion normalizada y digest de utilidad por origen | HECHO (v0.4.157) |
+| P-L28BR | Propagacion y pruebas extremo a extremo de Origin | HECHO (v0.4.159, embudo y watchdog cubiertos) |
 
 ### P-L28B - Atribucion normalizada y digest de utilidad por origen. **HECHO (v0.4.157).**
 Los contratos nuevos exigen `origin` inmutable y validado antes de admision:

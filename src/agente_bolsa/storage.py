@@ -4061,6 +4061,32 @@ class Store:
             "updated_at": row["updated_at"],
         }
 
+    def continuous_improvement_proposal_artifacts(self, *, limit: int = 50000) -> list[dict[str, Any]]:
+        """Read artifact lineage without changing the append-only artifact log."""
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT artifact_id, proposal_id, artifact_type, content_text, payload_json,
+                       created_at, updated_at
+                FROM continuous_improvement_proposal_artifacts
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [
+            {
+                "artifact_id": row["artifact_id"],
+                "proposal_id": row["proposal_id"],
+                "artifact_type": row["artifact_type"],
+                "content_text": row["content_text"],
+                "payload": json.loads(row["payload_json"] or "{}"),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
     def upsert_continuous_improvement_runtime_state(
         self,
         *,

@@ -83,6 +83,16 @@ def validate_origin(origin: Any, *, change_class: str | None = None) -> dict[str
     return {"valid": not failures, "failures": failures, "origin": normalized}
 
 
+def origin_identity_matches(original: Any, candidate: Any) -> bool:
+    """Require exact preservation of the original provenance across stages."""
+    left = validate_origin(original)
+    right = validate_origin(candidate)
+    if not left["valid"] or not right["valid"]:
+        return False
+    fields = ("origin_role", "origin_run_id", "origin_kind", "evidence_class", "producer", "producer_version", "observed_at", "source_event_ids")
+    return all(left["origin"].get(field) == right["origin"].get(field) for field in fields)
+
+
 @dataclass(frozen=True)
 class EvidenceCard:
     """Immutable measured evidence carried unchanged into a proposal contract."""

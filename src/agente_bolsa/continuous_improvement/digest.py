@@ -169,7 +169,12 @@ def build_lab_digest(
         "kpi_funnel": build_kpi_funnel(proposals, experiments, applied_changes, decisions, now=now),
         "proposal_quality": build_proposal_quality_report(store, proposals=proposals, now=now, limit=200),
         "evidence_factory": build_evidence_factory_metrics(proposals, applied_changes, recent_rejected),
-        "origin_utility": build_origin_utility_metrics(proposals, applied_changes),
+        "origin_utility": build_origin_utility_metrics(
+            proposals,
+            applied_changes,
+            experiments=experiments,
+            artifacts=store.continuous_improvement_proposal_artifacts(limit=50000),
+        ),
     }
 
 
@@ -222,10 +227,29 @@ def build_evidence_factory_metrics(
     }
 
 
-def build_origin_utility_metrics(proposals: list[dict[str, Any]], applied_changes: list[dict[str, Any]]) -> dict[str, Any]:
+def build_origin_utility_metrics(
+    proposals: list[dict[str, Any]],
+    applied_changes: list[dict[str, Any]],
+    *,
+    experiments: list[dict[str, Any]] | None = None,
+    artifacts: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Read-only origin funnel; legacy rows remain unattributed rather than guessed."""
     origins: dict[str, dict[str, Any]] = {}
     legacy = invalid = 0
+    proposal_origins: dict[str, tuple[str, dict[str, Any]]] = {}
+
+    def empty() -> dict[str, Any]:
+        return {
+            "runs": set(), "findings": 0, "operational_checks": 0,
+            "evidence_experiments_proposed": 0, "rejected_before_llm": 0,
+            "admitted": 0, "experiments_created": 0, "codegen_attempted": 0,
+            "codegen_succeeded": 0, "ready_to_apply": 0, "applied": 0,
+            "rolled_back": 0, "post_apply_evaluated": 0,
+            "demonstrated_improvements": 0, "invalid_or_inevaluable": 0,
+            "by_evidence_class": {"trading": 0, "reliability": 0, "observability": 0, "docs": 0},
+        }
+
     for proposal in proposals:
         payload = proposal.get("payload") or {}
         contract = validate_experiment_contract(proposal).get("contract") or {}
@@ -238,36 +262,75 @@ def build_origin_utility_metrics(proposals: list[dict[str, Any]], applied_change
             invalid += 1
             continue
         role = check["origin"]["origin_role"]
-        item = origins.setdefault(role, {"runs": set(), "findings": 0, "evidence_experiments_proposed": 0, "admitted": 0, "ready_to_apply": 0, "applied": 0, "rolled_back": 0, "post_apply_evaluated": 0, "demonstrated_improvements": 0})
+        item = origins.setdefault(role, empty())
         item["runs"].add(check["origin"]["origin_run_id"])
         item["findings"] += 1
-        item["evidence_experiments_proposed"] += 1
-        if validate_experiment_contract(proposal)["valid"]:
+        classification = classify_experiment(proposal, proposal)
+        item["operational_checks"] += classification == "operational_checks"
+        item["evidence_experiments_proposed"] += classification != "operational_checks"
+        item["by_evidence_class"][check["origin"]["evidence_class"]] += 1
+        valid_contract = validate_experiment_contract(proposal)["valid"]
+        if valid_contract:
             item["admitted"] += 1
+        else:
+            item["invalid_or_inevaluable"] += 1
+        if str(proposal.get("status") or "").upper() == "REJECTED":
+            item["rejected_before_llm"] += 1
         if str(proposal.get("status") or "").upper() == "READY_TO_APPLY":
             item["ready_to_apply"] += 1
-    for change in applied_changes:
-        origin = ((change.get("decision") or {}).get("experiment_contract") or {}).get("origin")
-        check = validate_origin(origin)
-        if not check["valid"]:
+        proposal_origins[str(proposal.get("proposal_id") or "")] = (role, check["origin"])
+
+    for experiment in experiments or []:
+        resolved = proposal_origins.get(str(experiment.get("proposal_id") or ""))
+        if resolved:
+            origins[resolved[0]]["experiments_created"] += 1
+
+    for artifact in artifacts or []:
+        resolved = proposal_origins.get(str(artifact.get("proposal_id") or ""))
+        if not resolved:
             continue
-        item = origins.setdefault(check["origin"]["origin_role"], {"runs": set(), "findings": 0, "evidence_experiments_proposed": 0, "admitted": 0, "ready_to_apply": 0, "applied": 0, "rolled_back": 0, "post_apply_evaluated": 0, "demonstrated_improvements": 0})
+        item = origins[resolved[0]]
+        payload = artifact.get("payload") or {}
+        item["codegen_attempted"] += 1
+        item["codegen_succeeded"] += payload.get("status") == "READY_FOR_HUMAN_REVIEW" and payload.get("tests_ok") is True
+    for change in applied_changes:
+        resolved = proposal_origins.get(str(change.get("proposal_id") or ""))
+        if not resolved:
+            continue
+        item = origins[resolved[0]]
         status = str(change.get("status") or "").upper()
         item["applied"] += status == "APPLIED"
         item["rolled_back"] += status == "ROLLED_BACK"
         impact = ((change.get("decision") or {}).get("impact_validation") or {}).get("status", "").upper()
         item["post_apply_evaluated"] += impact in {"PASSED", "FAILED", "NON_QUALIFYING"}
-        item["demonstrated_improvements"] += impact == "PASSED"
+        item["demonstrated_improvements"] += impact == "PASSED" and resolved[1]["evidence_class"] != "docs"
     rendered = {}
     for role, item in origins.items():
         runs = len(item.pop("runs"))
         admitted = item["admitted"]
         evaluated = item["post_apply_evaluated"]
-        state = "no_data" if not item["findings"] else "collecting"
-        if admitted and evaluated:
-            state = "useful_demonstrated" if item["demonstrated_improvements"] else "no_improvement_demonstrated"
-        rendered[role] = {**item, "runs": runs, "contract_compliance_rate": round(admitted / item["findings"], 4) if item["findings"] else None, "admission_rate": round(admitted / item["findings"], 4) if item["findings"] else None, "post_apply_evaluation_coverage": round(evaluated / item["applied"], 4) if item["applied"] else None, "demonstrated_improvement_rate": round(item["demonstrated_improvements"] / evaluated, 4) if evaluated else None, "utility_status": state}
+        state = origin_utility_status(item)
+        rendered[role] = {**item, "runs": runs, "unique_runs": runs, "contract_compliance_rate": round(admitted / item["findings"], 4) if item["findings"] else None, "admission_rate": round(admitted / item["findings"], 4) if item["findings"] else None, "codegen_success_rate": round(item["codegen_succeeded"] / item["codegen_attempted"], 4) if item["codegen_attempted"] else None, "post_apply_evaluation_coverage": round(evaluated / item["applied"], 4) if item["applied"] else None, "demonstrated_improvement_rate": round(item["demonstrated_improvements"] / evaluated, 4) if evaluated else None, "utility_status": state}
     return {"attribution_coverage_new": round(sum(item["findings"] for item in rendered.values()) / len(proposals), 4) if proposals else None, "legacy_unattributed_count": legacy, "invalid_origin_count": invalid, "attributed_runs": sum(item["runs"] for item in rendered.values()), "origins": rendered}
+
+
+def origin_utility_status(metrics: dict[str, Any]) -> str:
+    """Transparent origin utility state; volume alone can never demonstrate value."""
+    findings = int(metrics.get("findings") or 0)
+    invalid = int(metrics.get("invalid_or_inevaluable") or 0)
+    evaluated = int(metrics.get("post_apply_evaluated") or 0)
+    passed = int(metrics.get("demonstrated_improvements") or 0)
+    if findings == 0:
+        return "no_data"
+    if invalid > findings / 2:
+        return "mostly_invalid"
+    if evaluated == 0:
+        return "collecting"
+    if passed:
+        return "useful_demonstrated"
+    if evaluated >= 2:
+        return "no_improvement_demonstrated"
+    return "evaluable"
 
 
 def _director_brief(

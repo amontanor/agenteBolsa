@@ -15,6 +15,7 @@ from __future__ import annotations
 import statistics
 from typing import TYPE_CHECKING, Any
 
+from ..continuous_improvement.proposal_contract import validate_origin
 from ..logging_utils import log_system_event
 
 if TYPE_CHECKING:  # pragma: no cover - solo anotaciones.
@@ -56,6 +57,23 @@ def _trades_in_window(rows: list[dict[str, Any]]) -> int:
     return total
 
 
+def origin_attribution(change: dict[str, Any]) -> dict[str, Any]:
+    """Expose contract origin without ever assigning authorship to the watchdog."""
+    contract = ((change.get("decision") or {}).get("experiment_contract") or {})
+    origin = contract.get("origin")
+    if not origin:
+        return {"attribution_status": "legacy_unattributed" if change.get("proposal_id") else "unavailable"}
+    check = validate_origin(origin, change_class=str(contract.get("change_class") or ""))
+    if not check["valid"]:
+        return {"attribution_status": "invalid_origin"}
+    return {
+        "attribution_status": "attributed",
+        "origin": check["origin"],
+        "hypothesis_id": contract.get("hypothesis_id"),
+        "evaluated_by": "change_watchdog",
+    }
+
+
 def evaluate_applied_changes(store: Store, settings: Settings) -> list[dict[str, Any]]:
     """Evalua los cambios APPLIED recientes y marca los daninos como ROLLBACK_REQUESTED.
 
@@ -93,6 +111,7 @@ def evaluate_applied_changes(store: Store, settings: Settings) -> list[dict[str,
                     "post_sessions": 0,
                     "verdict": "NON_QUALIFYING",
                     "change_class": change_class,
+                    "attribution": origin_attribution(change),
                 }
             )
             continue
@@ -111,19 +130,19 @@ def evaluate_applied_changes(store: Store, settings: Settings) -> list[dict[str,
 
         # Aun fuera de la ventana de observacion: el cambio ya "gradua".
         if antiquity > window:
-            decisions.append({**base, "verdict": "GRADUATED", "change_class": change_class})
+            decisions.append({**base, "verdict": "GRADUATED", "change_class": change_class, "attribution": origin_attribution(change)})
             continue
         # Datos insuficientes para juzgar: esperar.
         prior_window = prior[-antiquity:] if antiquity else []
         if antiquity < 2 or len(prior_window) < 2:
-            decisions.append({**base, "verdict": "WAIT"})
+            decisions.append({**base, "verdict": "WAIT", "attribution": origin_attribution(change)})
             continue
 
         # No comparar ventanas de regimenes distintos (T5.2): extender en su lugar.
         regime_post = _dominant_regime(post)
         regime_prior = _dominant_regime(prior_window)
         if regime_post and regime_prior and regime_post != regime_prior:
-            decisions.append({**base, "verdict": "WAIT", "reason": f"regime_mismatch:{regime_prior}->{regime_post}"})
+            decisions.append({**base, "verdict": "WAIT", "reason": f"regime_mismatch:{regime_prior}->{regime_post}", "attribution": origin_attribution(change)})
             continue
 
         iq_post = _mean([row.get("iq_score") for row in post])
@@ -162,7 +181,7 @@ def evaluate_applied_changes(store: Store, settings: Settings) -> list[dict[str,
                 "watchdog": {"metrics": metrics, "reasons": reasons},
             }
             store.save_continuous_improvement_applied_change(change)
-            decisions.append({**base, "verdict": "ROLLBACK_REQUESTED", "metrics": metrics, "reasons": reasons})
+            decisions.append({**base, "verdict": "ROLLBACK_REQUESTED", "metrics": metrics, "reasons": reasons, "attribution": origin_attribution(change)})
         else:
             # HOLD: registrar si la ventana post mejoro, para la calidad de
             # promociones corregida del iq_score (T5.3).
@@ -179,7 +198,7 @@ def evaluate_applied_changes(store: Store, settings: Settings) -> list[dict[str,
                 },
             }
             store.save_continuous_improvement_applied_change(change)
-            decisions.append({**base, "verdict": "HOLD", "metrics": metrics, "improved": improved})
+            decisions.append({**base, "verdict": "HOLD", "metrics": metrics, "improved": improved, "attribution": origin_attribution(change)})
 
     return decisions
 
@@ -223,6 +242,7 @@ def _evaluate_operational_change(
         "verdict": "IMPACT_CONFIRMED" if passed else "WAIT",
         "change_class": change_class,
         "metrics": impact,
+        "attribution": origin_attribution(change),
     }
 
 
