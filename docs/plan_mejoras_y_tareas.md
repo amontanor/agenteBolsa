@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.166**
+- Version actual: **0.4.167**
 - Ultima actualizacion: 2026-07-12
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -50,7 +50,7 @@ amplia exposicion.
 | P-L24R2 | Segmentos reales de decision, gates, persistencia e informes | HECHO (v0.4.150) |
 | P-L24R3 | Integracion real y eliminacion de duplicacion temporal | HECHO (v0.4.151) |
 | P-L26B | Contrato ejecutable desde hallazgos medidos | HECHO (v0.4.152) |
-| P-L27B | Auditoria MFE/MAE y geometria stop/take | CORREGIDO, pendiente de aceptacion (v0.4.154) |
+| P-L27B | Auditoria MFE/MAE y geometria stop/take | CORREGIDO Y ACEPTADO mediante P-L27BR; metricas dimensionales v1 invalidadas |
 | P-L27BR | Correccion dimensional, conteos y pruebas MFE/MAE | HECHO (v0.4.154) |
 | P-L27D | Cohorte prospectiva observacional reward/risk | HECHO (v0.4.155; recopilando desde 2026-07-13) |
 | P-L27DR | Semantica de sesiones posteriores de cohorte RR | HECHO (v0.4.156) |
@@ -63,12 +63,42 @@ amplia exposicion.
 | P-L32B | Ledger prospectivo del camino real de gates por candidato | HECHO (v0.4.164) |
 | P-L33B | Snapshot prospectivo de calidad de ejecucion | HECHO (v0.4.165) |
 | P-L34B | Publicacion postmarket y health de calidad de gates | HECHO (v0.4.166) |
+| P-L34BR | Gate de suite completa de P-L34B | HECHO (v0.4.166; 1.248 passed) |
+| P-L35A | Auditoria de cartera autonoma de investigaciones e hipotesis | HECHO, solo lectura |
+| P-L35B | Coordinador determinista de cartera de investigacion | DEFERRED; no autorizado todavia |
+| P-L35R | Consolidacion documental y pausa tecnica de observacion | HECHO (v0.4.167) |
+
+### P-L35R - Consolidacion documental y pausa tecnica de observacion. **HECHO (v0.4.167).**
+
+- P-L35B queda **DEFERRED**, no rechazado: se reconsiderara al existir una investigacion `ready_for_analysis` o tras la primera revision de madurez de P-L27D.
+- Se congela la incorporacion de instrumentos analiticos: solo se corrigen fallos reproducibles o alertas criticas.
+- La prioridad se limita a `builtin_pullback`, reward/risk prospectivo y seleccion/gates/ejecucion; el resto queda backlog sin WIP analitico ni LLM hasta disponer de dependencias.
+
+### Pausa tecnica de observacion
+
+No se anaden instrumentos analiticos nuevos ni se cambian trading, estrategias, gates, ranking, stops, exposicion o limites. Las cohortes P-L27/P-L29/P-L30/P-L31/P-L32/P-L33 permanecen `collecting`; cero registros no equivale a rendimiento cero. Durante la pausa solo proceden reparaciones reproducibles o alertas criticas.
+
+Agenda consolidada:
+
+- **13-jul-2026:** primera sesion prospectiva completa; observar, no interpretar.
+- **14-jul-2026:** revisar ciclo, snapshots, controles, gates, ejecucion, postmarket, digest y health.
+- **20-jul-2026:** P-L25 `builtin_pullback`; aplicar criterios pre-registrados sin modificarlos.
+- **27-jul-2026:** primera madurez tecnicamente posible de RR iniciado el 13-jul; no es evaluacion completa.
+- **Tras muestra suficiente:** analizar controles, gates y ejecucion.
+- **Tras 45 dias de `agent_run`:** evaluar utilidad de roles antes de fusionar, redefinir o suspender agentes.
+- **1-sep-2026:** emitir `learning_confirmed` o `learning_not_confirmed` con el criterio original.
+
+Proteccion de resultados: no promover una mejora que aumente retorno pero empeore drawdown, MAE o tail loss; tampoco con concentracion excesiva, linaje/control insuficientes o cualquier criterio `unavailable`. Ningun criterio puede cambiar despues de observar resultados.
 
 ### P-L34B - Publicacion postmarket y health de calidad de gates. **HECHO (v0.4.166).**
 
 - Reutiliza el pipeline postmarket: publica un informe derivado despues de outcomes/observaciones y antes del digest.
 - Lee exclusivamente snapshots prospectivos P-L32; no reclasifica `gate_json` historico ni reejecuta gates.
 - Estado `collecting` se conserva sin tasas ficticias; fallo de publicacion degrada solo observabilidad.
+
+### P-L34BR - Gate de suite completa. **HECHO (v0.4.166, commit `fde446d8`).**
+
+La suite canónica terminó con **1.248 passed** y un warning de dependencia en aproximadamente **215 segundos**. Las ejecuciones previas se interrumpieron antes de esperar ese tiempo; no existía bloqueo real ni fue necesaria corrección funcional.
 
 ### P-L33B - Snapshot prospectivo de calidad de ejecucion. **HECHO (v0.4.165).**
 Las nuevas ordenes conservan `p-l33b.execution-quality.v1` en los JSON ya
@@ -179,14 +209,14 @@ invalida por separado, y etiqueta toda excursion como 10d. Los retornos 1d/3d/5d
 son vistas auxiliares con horizonte no coincidente. Las metricas R de v1 son
 dimensionalmente invalidas y no comparables. No cambia trading ni historicos.
 
-### P-L27B - Auditoria MFE/MAE y geometria stop/take. **CORREGIDO, pendiente de aceptacion (v0.4.154).**
+### P-L27B - Auditoria MFE/MAE y geometria stop/take. **CORREGIDO Y ACEPTADO mediante P-L27BR (v0.4.154).**
 Se incorpora `excursion-quality-report`, una lectura observacional y
 determinista de `signal_outcomes`. Calcula MFE/MAE forward, consumo del stop,
 alcance del objetivo y reward/risk por horizonte y cohortes, con muestra minima,
 madurez, exclusiones, cobertura, concentracion y estado de linaje. No imputa
 datos ni calcula alpha, SPY, causalidad o drawdown de cartera; las excursiones
 disponibles son las fracciones decimales de 10d producidas por
-`signal_learning.py`. La vista historica se activa explicitamente con
+`signal_learning.py`. Sus metricas normalizadas v1 quedan explicitamente invalidadas por el error dimensional y no son comparables con v2. La vista historica se activa explicitamente con
 `--historical`; no reescribe registros ni cambia trading, gates, ordenes o
 cadencia operativa. La hipotesis siguiente queda fuera de este lote.
 
