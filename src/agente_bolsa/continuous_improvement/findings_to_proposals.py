@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from agente_bolsa import __version__
+from agente_bolsa.agent_run import AgentRunTracker
 from agente_bolsa.config import Settings
 from agente_bolsa.models import new_id
 from agente_bolsa.storage import Store
@@ -34,9 +36,14 @@ NONTERMINAL_STATUSES = {
 }
 
 
-def measured_findings(settings: Settings, store: Store) -> list[dict[str, Any]]:
+def measured_findings(
+    settings: Settings,
+    store: Store,
+    *,
+    origin_run_id: str,
+    source_event_ids: list[str],
+) -> list[dict[str, Any]]:
     data_dir = settings.data_dir
-    run_id = new_id("finding_run")
     findings = [
         {
             "finding_id": "lab_book_digest_visibility",
@@ -107,13 +114,13 @@ def measured_findings(settings: Settings, store: Store) -> list[dict[str, Any]]:
     for finding in findings:
         finding["origin"] = {
             "origin_role": "findings_to_proposals",
-            "origin_run_id": run_id,
+            "origin_run_id": origin_run_id,
             "origin_kind": "deterministic",
             "evidence_class": finding.get("change_class") or "observability",
             "producer": "continuous_improvement.findings_to_proposals",
-            "producer_version": "0.4.157",
+            "producer_version": __version__,
             "observed_at": observed_at,
-            "source_event_ids": [],
+            "source_event_ids": list(source_event_ids),
         }
     return findings
 
@@ -176,11 +183,26 @@ def persist_findings_to_proposals(
     limit: int = 2,
     dry_run: bool = True,
 ) -> dict[str, Any]:
-    findings = measured_findings(settings, store)
+    tracker = AgentRunTracker(
+        store,
+        role="findings_to_proposals",
+        agent_name="findings_to_proposals",
+        task_name="findings_to_proposals",
+        cycle_id=None,
+        execution_kind="deterministic",
+    )
+    findings = measured_findings(
+        settings,
+        store,
+        origin_run_id=tracker.agent_run_id,
+        source_event_ids=[tracker.start_event_id],
+    )
     learning_experiment_bridge = _learning_experiment_bridge(settings.data_dir)
     candidates = build_code_change_candidates(findings)[: max(0, min(2, int(limit)))]
     preview = [_proposal_payload(item) for item in candidates]
     if dry_run:
+        tracker.add_outputs(finding_ids=[item.get("finding_id") for item in findings])
+        tracker.succeed(reason="dry_run")
         return {
             "ok": True,
             "dry_run": True,
@@ -300,6 +322,12 @@ def persist_findings_to_proposals(
             "findings": findings,
         },
     )
+    tracker.cycle_id = cycle_id
+    tracker.add_outputs(
+        finding_ids=[item.get("finding_id") for item in findings],
+        proposal_ids=[item.get("proposal_id") for item in created],
+    )
+    tracker.succeed()
     return {
         "ok": True,
         "dry_run": False,

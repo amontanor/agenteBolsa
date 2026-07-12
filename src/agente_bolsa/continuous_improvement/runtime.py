@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from agente_bolsa._utils import log_swallow
+from agente_bolsa.agent_run import AgentRunTracker
 from agente_bolsa.config import Settings
 from agente_bolsa.logging_utils import log_system_event
 from agente_bolsa.market_calendar import MarketCalendar
@@ -1048,6 +1049,16 @@ class ContinuousImprovementLabRuntime:
                     event = self.store.continuous_improvement_event(task["event_id"])
                     if not event:
                         continue
+                    task_run = AgentRunTracker(
+                        self.store,
+                        role=str(task["agent_name"]),
+                        agent_name=str(task["agent_name"]),
+                        task_name="continuous_improvement_agent_task",
+                        cycle_id=cycle_id,
+                        execution_kind="deterministic",
+                        input_refs=[task["task_id"], event["event_id"]],
+                        retry_of=(task.get("payload") or {}).get("retry_of"),
+                    )
                     initiative_id = self._initiative_id_for_task(task)
                     if research_mode and not self._research_safe_task(task, event, research_config):
                         self.store.update_continuous_improvement_task(
@@ -1062,6 +1073,7 @@ class ContinuousImprovementLabRuntime:
                             cycle_id=cycle_id,
                             payload={"task_id": task["task_id"], "event_id": event["event_id"], "agent_name": task["agent_name"]},
                         )
+                        task_run.block(reason="research_mode_excludes_trading_paths")
                         continue
                     skip_reason = self._should_skip_task(task=task, event=event, context=context)
                     if skip_reason:
@@ -1097,6 +1109,7 @@ class ContinuousImprovementLabRuntime:
                                 "status": "CANCELLED",
                             },
                         )
+                        task_run.skip(reason=skip_reason)
                         continue
                     self.store.update_continuous_improvement_task(
                         task["task_id"],
@@ -1137,13 +1150,28 @@ class ContinuousImprovementLabRuntime:
                         )
                     agent_cls = self.orchestrator.agent_class(task["agent_name"])
                     agent = agent_cls(self.settings, self.client)
-                    result = agent.run(context, event, task.get("payload") or {})
-                    self.store.update_continuous_improvement_task(
-                        task["task_id"],
-                        status=TaskStatus.COMPLETED.value,
-                        finished_at=datetime.now(timezone.utc).isoformat(),
-                        result=result,
+                    try:
+                        result = agent.run(context, event, task.get("payload") or {})
+                        self.store.update_continuous_improvement_task(
+                            task["task_id"],
+                            status=TaskStatus.COMPLETED.value,
+                            finished_at=datetime.now(timezone.utc).isoformat(),
+                            result=result,
+                        )
+                    except TimeoutError as exc:
+                        task_run.timeout(reason=exc)
+                        raise
+                    except Exception as exc:
+                        task_run.fail(reason=exc, error_code="ci_task_failed")
+                        raise
+                    llm_payload = result.get("llm") or {}
+                    task_run.execution_kind = "llm" if llm_payload.get("ok") else "deterministic"
+                    task_run.model = llm_payload.get("model")
+                    task_run.add_outputs(
+                        output_refs=[task["task_id"]],
+                        llm_calls=1 if llm_payload.get("llm_call_id") and llm_payload.get("ok") else 0,
                     )
+                    task_run.succeed()
                     self._record_agent_event(
                         agent=task["agent_name"],
                         event_type="lab_task_completed",

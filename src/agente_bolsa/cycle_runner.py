@@ -12,6 +12,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from . import __version__
+from .agent_run import AgentRunTracker
 from .config import Settings
 from .crew import build_crew
 from .eventing import AgentPhase, EventReporter
@@ -1799,6 +1800,16 @@ def run_observable_cycle(
     crew_result: str | None = None
     if use_crew:
         endpoint, _attempts = select_preferred_endpoint(settings)
+        crew_run = AgentRunTracker(
+            store,
+            role="crew_orchestrator",
+            agent_name="orchestrator",
+            task_name="crew_cycle",
+            cycle_id=run_id,
+            execution_kind="llm",
+            model=endpoint.model,
+            input_refs=[run_id],
+        )
         reporter.emit(
             "orchestrator",
             "crew_started",
@@ -1831,6 +1842,8 @@ def run_observable_cycle(
                     finally:
                         logging.disable(logging.NOTSET)
             crew_result = str(result)
+            crew_run.add_outputs(output_refs=[f"data/logs/{crew_stdout_path.name}"])
+            crew_run.succeed()
             reporter.emit(
                 "orchestrator",
                 "crew_completed",
@@ -1839,6 +1852,8 @@ def run_observable_cycle(
                 {"result_preview": crew_result[:1000], "crew_stdout_path": str(crew_stdout_path)},
             )
         except Exception as exc:
+            crew_run.fail(reason=exc, error_code="crew_failed")
+            crew_run.fallback_started(reason="direct_llm_decision")
             reporter.emit(
                 "orchestrator",
                 "crew_failed",
@@ -1847,6 +1862,16 @@ def run_observable_cycle(
                 {"error": str(exc), "fallback": "direct_llm_decision"},
             )
     else:
+        crew_run = AgentRunTracker(
+            store,
+            role="crew_orchestrator",
+            agent_name="orchestrator",
+            task_name="crew_cycle",
+            cycle_id=run_id,
+            execution_kind="llm",
+            input_refs=[run_id],
+        )
+        crew_run.skip(reason="skip_crew_parameter")
         timing.skip_segment("llm_decision", "crew_reasoning", "CrewAI omitido por parametro --skip-crew")
         reporter.emit(
             "orchestrator",

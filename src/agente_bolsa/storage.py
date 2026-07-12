@@ -907,6 +907,42 @@ class Store:
                 ),
             )
 
+    def agent_events(
+        self,
+        *,
+        event_type_prefix: str | None = None,
+        cycle_id: str | None = None,
+        limit: int = 50000,
+    ) -> list[dict[str, Any]]:
+        """Read recent append-only events, including agent-run telemetry."""
+        query = """
+            SELECT event_id, agent, event_type, cycle_id, payload_json, created_at
+            FROM agent_events
+            WHERE 1 = 1
+        """
+        params: list[Any] = []
+        if event_type_prefix:
+            query += " AND event_type LIKE ?"
+            params.append(f"{event_type_prefix}%")
+        if cycle_id:
+            query += " AND cycle_id = ?"
+            params.append(cycle_id)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(max(1, int(limit)))
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return list(reversed([
+            {
+                "event_id": row["event_id"],
+                "agent": row["agent"],
+                "event_type": row["event_type"],
+                "cycle_id": row["cycle_id"],
+                "payload": json.loads(row["payload_json"] or "{}"),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]))
+
     def save_hypothesis(self, hypothesis: Hypothesis) -> None:
         now = _utc_iso()
         with self.connect() as conn:

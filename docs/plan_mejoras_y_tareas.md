@@ -10,8 +10,8 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.159**
-- Ultima actualizacion: 2026-07-11
+- Version actual: **0.4.160**
+- Ultima actualizacion: 2026-07-12
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
 ### P-L17 - Verdad de medicion: outcomes forward separados de ejecucion. **HECHO (v0.4.140).**
@@ -56,6 +56,18 @@ amplia exposicion.
 | P-L27DR | Semantica de sesiones posteriores de cohorte RR | HECHO (v0.4.156) |
 | P-L28B | Atribucion normalizada y digest de utilidad por origen | HECHO (v0.4.157) |
 | P-L28BR | Propagacion y pruebas extremo a extremo de Origin | HECHO (v0.4.159, embudo y watchdog cubiertos) |
+| P-L29B | Ciclo de vida central normalizado de `agent_run` | HECHO (v0.4.160) |
+
+### P-L29B - Ciclo de vida central normalizado de agent_run. **HECHO (v0.4.160).**
+Las nuevas ejecuciones que atraviesan CrewAI, el ejecutor central de mejora
+continua y `findings_to_proposals` emiten eventos append-only normalizados en
+`AgentEvent`: apertura, terminal, duracion monotona, tipo, rol, referencias y
+motivos saneados. El digest reconstruye runs, estados, percentiles, vinculos con
+hallazgos/propuestas y diagnosticos de runs abiertos, huerfanos o conflictivos,
+sin reinterpretar los 162.800 eventos historicos como ejecuciones completas.
+La retencion inicial hereda los 45 dias de `AgentEvent`; no se crea tabla ni se
+anaden llamadas LLM. La cobertura queda limitada a los puntos centrales y no
+instrumenta individualmente los 23 agentes ni mide todavia productividad real.
 
 ### P-L28B - Atribucion normalizada y digest de utilidad por origen. **HECHO (v0.4.157).**
 Los contratos nuevos exigen `origin` inmutable y validado antes de admision:
