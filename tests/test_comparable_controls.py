@@ -84,18 +84,31 @@ def _sets(*, count: int = 3) -> dict[str, dict[str, object]]:
     controls = [_recommendation(f"CTRL{index}", index + 2) for index in range(count)]
     recommendations = [treatment, *controls]
     rejected = [
-        {"symbol": item.symbol, "action": "buy", "stage": "cycle_order_limit", "reason": "max_orders_per_cycle_reached"}
+        {
+            "symbol": item.symbol,
+            "action": "buy",
+            "stage": "cycle_order_limit",
+            "reason": "max_orders_per_cycle_reached",
+            "candidate_id": item.decision_lineage.get("candidate_id"),
+            "signal_id": item.decision_lineage.get("signal_id"),
+        }
         for item in controls
     ]
     gate_rows = [
-        {"symbol": item.symbol, "action": "buy", "approved": True, "checks": {"observed_value": 1, "threshold": 0}}
+        {
+            "symbol": item.symbol,
+            "action": "buy",
+            "approved": True,
+            "candidate_id": item.decision_lineage.get("candidate_id"),
+            "signal_id": item.decision_lineage.get("signal_id"),
+            "checks": {"observed_value": 1, "threshold": 0},
+        }
         for item in recommendations
     ]
     return build_comparable_control_sets(
         cycle_id="cycle-1",
         recommendations=recommendations,
-        plans=[],
-        selected_recommendations=[treatment],
+        plans=[_plan(treatment)],
         rejected_order_plans=rejected,
         all_recommendations=recommendations,
         deterministic_review=gate_rows,
@@ -236,8 +249,7 @@ def test_missing_gate_is_partial_not_verified():
     sets = build_comparable_control_sets(
         cycle_id="cycle-1",
         recommendations=[treatment, control],
-        selected_recommendations=[treatment],
-        plans=[],
+        plans=[_plan(treatment)],
         rejected_order_plans=[{"symbol": "CTRL", "reason": "capacity_limit"}],
         all_recommendations=[treatment, control],
         deterministic_review=passed,
@@ -262,8 +274,7 @@ def test_market_hash_mismatch_is_not_a_primary_control():
     sets = build_comparable_control_sets(
         cycle_id="cycle-1",
         recommendations=[treatment, control],
-        selected_recommendations=[treatment],
-        plans=[],
+        plans=[_plan(treatment)],
         rejected_order_plans=[{"symbol": "CTRL", "reason": "capacity_limit"}],
         all_recommendations=[treatment, control],
     )
@@ -275,14 +286,19 @@ def test_control_is_not_reused_across_treatments():
     second = _recommendation("TREAT2", 2)
     shared = _recommendation("CTRL", 3)
     gates = [
-        {"symbol": item.symbol, "action": "buy", "approved": True}
+        {
+            "symbol": item.symbol,
+            "action": "buy",
+            "approved": True,
+            "candidate_id": item.decision_lineage.get("candidate_id"),
+            "signal_id": item.decision_lineage.get("signal_id"),
+        }
         for item in (first, second, shared)
     ]
     sets = build_comparable_control_sets(
         cycle_id="cycle-1",
         recommendations=[first, second, shared],
-        selected_recommendations=[first, second],
-        plans=[],
+        plans=[_plan(first), _plan(second)],
         rejected_order_plans=[{"symbol": "CTRL", "reason": "capacity_limit"}],
         all_recommendations=[first, second, shared],
         deterministic_review=gates,
@@ -301,17 +317,7 @@ def test_control_is_not_reused_across_treatments():
 
 def test_unavailable_set_does_not_invent_identity():
     rec = TradeRecommendation(symbol="TREAT", action="buy", confidence=0.8, reason="missing identity", entry_price=100.0)
-    item = next(
-        iter(
-            build_comparable_control_sets(
-                cycle_id="",
-                recommendations=[rec],
-                selected_recommendations=[rec],
-                plans=[],
-                all_recommendations=[rec],
-            ).values()
-        )
-    )
+    item = next(iter(build_comparable_control_sets(cycle_id="", recommendations=[rec], plans=[_plan(rec)], all_recommendations=[rec]).values()))
     assert item["status"] == "unavailable"
     assert item["treatment"]["signal_id"] is None
     validate_comparable_control_set(item)
@@ -333,7 +339,7 @@ def test_post_decision_payload_and_wrong_horizon_are_rejected():
     treatment = _recommendation("TREAT", 1)
     try:
         build_comparable_control_sets(
-            cycle_id="cycle-1", recommendations=[treatment], selected_recommendations=[treatment], plans=[], forward_horizon="5d"
+            cycle_id="cycle-1", recommendations=[treatment], plans=[_plan(treatment)], forward_horizon="5d"
         )
     except ValueError as exc:
         assert str(exc) == "comparable_control_horizon_invalid"

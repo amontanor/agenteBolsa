@@ -24,7 +24,11 @@ from .storage import Store
 from .tools.adversarial_reviewer import review_recommendations_adversarial
 from .tools.backtest import build_symbol_backtest
 from .tools.broker import BrokerClientFactory
-from .tools.comparable_controls import build_comparable_control_sets, copy_comparable_control_set
+from .tools.comparable_controls import (
+    build_comparable_control_sets,
+    build_unavailable_control_set,
+    copy_comparable_control_set,
+)
 from .tools.costs import TransactionCostModel
 from .tools.decision_context import build_decision_context_snapshot, copy_snapshot
 from .tools.decision_lineage import build_decision_lineage
@@ -41,7 +45,11 @@ from .tools.market_snapshot import build_market_snapshot, compact_snapshot_for_p
 from .tools.market_state import build_market_state, compact_market_state_for_prompt
 from .tools.operational_health import load_operational_block_context
 from .tools.portfolio_optimizer import build_portfolio_rebalance_context
-from .tools.signal_learning import update_signal_decisions, update_signal_execution_status
+from .tools.signal_learning import (
+    attach_comparable_control_sets,
+    update_signal_decisions,
+    update_signal_execution_status,
+)
 from .tools.trade_decision import (
     _compact_technical_context_for_prompt,
     _construct_min_reward_risk,
@@ -1484,43 +1492,6 @@ def _auto_paper_trade(
             {"source_run_id": decision_context.get("run_id"), "updated": learned_decisions},
         )
     rejected_order_plans: list[dict[str, Any]] = []
-    # P-L31B captures the counterfactual immediately after ranking and the
-    # comparable gates, before order-plan construction can create side effects.
-    # The prospective capacity rows are derived from the already-ranked
-    # in-memory candidates; build_order_plans remains the sole selector.
-    buy_candidates = [item for item in gated_recommendations if str(item.action).lower() == "buy"]
-    prospective_limit = _effective_buy_plan_limit(settings, gated_recommendations)
-    ranked_buy_candidates = sorted(
-        buy_candidates,
-        key=lambda item: (
-            float((getattr(item, "decision_lineage", {}) or {}).get("candidate_rank"))
-            if (getattr(item, "decision_lineage", {}) or {}).get("candidate_rank") is not None
-            else float("inf"),
-            str(item.symbol or "").upper(),
-        ),
-    )
-    selected_for_control = ranked_buy_candidates[:prospective_limit]
-    prospective_control_rejections = [
-        {
-            "symbol": item.symbol,
-            "action": item.action,
-            "stage": "cycle_order_limit",
-            "reason": "max_orders_per_cycle_reached",
-        }
-        for item in ranked_buy_candidates[prospective_limit:]
-    ]
-    comparable_control_sets = build_comparable_control_sets(
-        cycle_id=run_id,
-        recommendations=gated_recommendations,
-        plans=[],
-        selected_recommendations=selected_for_control,
-        rejected_order_plans=prospective_control_rejections,
-        all_recommendations=reviewed_recommendations,
-        deterministic_review=deterministic_review,
-        adversarial_review=adversarial_review,
-        entry_quality_gate=entry_quality_gate,
-        backtest_gate=backtest_gate,
-    )
 
     def _recommendation_identity(item: Any) -> tuple[str, str, str]:
         lineage = dict(getattr(item, "decision_lineage", {}) or {})
@@ -1530,65 +1501,6 @@ def _auto_paper_trade(
             str(lineage.get("signal_id") or ""),
         )
 
-    def _with_control_set(item: Any) -> Any:
-        lineage = dict(getattr(item, "decision_lineage", {}) or {})
-        key = str(lineage.get("signal_id") or "")
-        if not key:
-            key = f"{str(getattr(item, 'symbol', '') or '').upper()}|{str(getattr(item, 'action', '') or '').lower()}"
-        control_set = comparable_control_sets.get(key, {})
-        return replace(item, comparable_control_set=copy_comparable_control_set(control_set)) if control_set else item
-
-    reviewed_recommendations = [_with_control_set(item) for item in reviewed_recommendations]
-    gated_recommendations = [_with_control_set(item) for item in gated_recommendations]
-    with optional_measure(timing, "persistence", "signal_control_set_updates"):
-        _learned_control_decisions = update_signal_decisions(
-            store,
-            source_run_id=decision_context.get("run_id"),
-            recommendations=reviewed_recommendations,
-            entry_quality_gate=entry_quality_gate,
-            backtest_gate=backtest_gate,
-            settings=settings,
-        )
-    if comparable_control_sets:
-        reporter.emit(
-            "self_improvement_engineer",
-            "comparable_controls_captured",
-            run_id,
-            f"Control sets contemporaneos capturados: {len(comparable_control_sets)}.",
-            {
-                "sets": len(comparable_control_sets),
-                "verified": sum(item.get("status") == "verified" for item in comparable_control_sets.values()),
-                "partially_comparable": sum(item.get("status") == "partially_comparable" for item in comparable_control_sets.values()),
-                "unavailable": sum(item.get("status") == "unavailable" for item in comparable_control_sets.values()),
-            },
-        )
-    updated_reviewed_by_identity = {_recommendation_identity(item): item for item in reviewed_recommendations}
-    with optional_measure(timing, "persistence", "recommendation_records"):
-        for recommendation_id, original_recommendation, metadata in recommendation_records:
-            recommendation = updated_reviewed_by_identity.get(_recommendation_identity(original_recommendation), original_recommendation)
-            store.save_trade_recommendation(
-                recommendation_id=recommendation_id,
-                cycle_id=run_id,
-                symbol=recommendation.symbol,
-                action=recommendation.action,
-                confidence=recommendation.confidence,
-                payload={
-                    **asdict(recommendation),
-                    **metadata,
-                    "market_state_quality": ((market_state or {}).get("data_quality") or {}).get("status"),
-                    "prompt_version": "trade_decision.v2",
-                    "model_config_hash": _payload_hash(model_info),
-                    "feature_hash": _payload_hash(decision_context),
-                    "data_provider_hash": _payload_hash(
-                        {
-                            "market_state_provider": (market_state or {}).get("provider"),
-                            "market_snapshot_provider": (market_snapshot or {}).get("provider"),
-                            "data_vendor_quality": ((market_state or {}).get("data_quality") or {}).get("data_vendor_quality"),
-                        }
-                    ),
-                    "model_info": model_info,
-                },
-            )
     with optional_measure(timing, "deterministic_gates", "order_plan_build"):
         plans = build_order_plans(
             settings,
@@ -1637,6 +1549,112 @@ def _auto_paper_trade(
                 "symbols": [plan.symbol for plan, _ in paused_plans],
             },
         )
+
+    # P-L31BR: seal control sets only from the final in-memory plans and the
+    # rejection rows emitted by the real flow. No ranking, capacity or gate is
+    # rerun and no synthetic rejection is introduced here.
+    comparable_control_sets = build_comparable_control_sets(
+        cycle_id=run_id,
+        recommendations=gated_recommendations,
+        plans=plans,
+        rejected_order_plans=rejected_order_plans,
+        all_recommendations=reviewed_recommendations,
+        deterministic_review=deterministic_review,
+        adversarial_review=adversarial_review,
+        entry_quality_gate=entry_quality_gate,
+        backtest_gate=backtest_gate,
+    )
+
+    def _control_set_for_recommendation(item: Any) -> dict[str, Any]:
+        lineage = dict(getattr(item, "decision_lineage", {}) or {})
+        key = str(lineage.get("signal_id") or "")
+        if not key:
+            key = f"{str(getattr(item, 'symbol', '') or '').upper()}|{str(getattr(item, 'action', '') or '').lower()}"
+        return comparable_control_sets.get(key) or build_unavailable_control_set(
+            cycle_id=run_id,
+            treatment=item,
+            reason="treatment_identity_unavailable",
+        )
+
+    # The plan list is the treatment authority. Attach one set to every final
+    # buy plan, including an explicit unavailable block when identity is absent.
+    final_plan_symbols = {str(plan.symbol).upper() for plan in plans if str(plan.side).lower() == "buy"}
+    treatment_symbols = set()
+    attached_plans = []
+    for plan in plans:
+        if str(plan.side).lower() != "buy":
+            attached_plans.append(plan)
+            continue
+        recommendation = getattr(plan, "recommendation", None)
+        control_set = _control_set_for_recommendation(recommendation)
+        treatment_symbols.add(str(plan.symbol).upper())
+        copied_control_set = copy_comparable_control_set(control_set)
+        if recommendation is None:
+            attached_plans.append(plan)
+        else:
+            attached_recommendation = replace(recommendation, comparable_control_set=copied_control_set)
+            attached_plans.append(replace(plan, recommendation=attached_recommendation))
+        comparable_control_sets.setdefault(
+            str((getattr(recommendation, "decision_lineage", {}) or {}).get("signal_id") or f"{str(plan.symbol).upper()}|buy"),
+            control_set,
+        )
+    plans = attached_plans
+    if treatment_symbols != final_plan_symbols:
+        raise RuntimeError("comparable_control_treatment_plan_mismatch")
+
+    def _attach_to_recommendation(item: Any) -> Any:
+        lineage = dict(getattr(item, "decision_lineage", {}) or {})
+        key = str(lineage.get("signal_id") or "")
+        if not key:
+            key = f"{str(getattr(item, 'symbol', '') or '').upper()}|{str(getattr(item, 'action', '') or '').lower()}"
+        control_set = comparable_control_sets.get(key)
+        return replace(item, comparable_control_set=copy_comparable_control_set(control_set)) if control_set else item
+
+    reviewed_recommendations = [_attach_to_recommendation(item) for item in reviewed_recommendations]
+    gated_recommendations = [_attach_to_recommendation(item) for item in gated_recommendations]
+    attach_comparable_control_sets(store, recommendations=reviewed_recommendations)
+    updated_reviewed_by_identity = {_recommendation_identity(item): item for item in reviewed_recommendations}
+    with optional_measure(timing, "persistence", "recommendation_records"):
+        for recommendation_id, original_recommendation, metadata in recommendation_records:
+            recommendation = updated_reviewed_by_identity.get(_recommendation_identity(original_recommendation), original_recommendation)
+            store.save_trade_recommendation(
+                recommendation_id=recommendation_id,
+                cycle_id=run_id,
+                symbol=recommendation.symbol,
+                action=recommendation.action,
+                confidence=recommendation.confidence,
+                payload={
+                    **asdict(recommendation),
+                    **metadata,
+                    "market_state_quality": ((market_state or {}).get("data_quality") or {}).get("status"),
+                    "prompt_version": "trade_decision.v2",
+                    "model_config_hash": _payload_hash(model_info),
+                    "feature_hash": _payload_hash(decision_context),
+                    "data_provider_hash": _payload_hash(
+                        {
+                            "market_state_provider": (market_state or {}).get("provider"),
+                            "market_snapshot_provider": (market_snapshot or {}).get("provider"),
+                            "data_vendor_quality": ((market_state or {}).get("data_quality") or {}).get("data_vendor_quality"),
+                        }
+                    ),
+                    "model_info": model_info,
+                },
+            )
+    if comparable_control_sets:
+        reporter.emit(
+            "self_improvement_engineer",
+            "comparable_controls_captured",
+            run_id,
+            f"Control sets contemporaneos capturados desde planes finales: {len(comparable_control_sets)}.",
+            {
+                "sets": len(comparable_control_sets),
+                "treatments": len(treatment_symbols),
+                "verified": sum(item.get("status") == "verified" for item in comparable_control_sets.values()),
+                "partially_comparable": sum(item.get("status") == "partially_comparable" for item in comparable_control_sets.values()),
+                "unavailable": sum(item.get("status") == "unavailable" for item in comparable_control_sets.values()),
+            },
+        )
+
     if learning_mode and (bool(learning_mode.get("shadow_first")) or paused_plans):
         low_sample_usage = _low_sample_usage_payload(store, settings)
         shadow_plans = [*plans, *(plan for plan, _ in paused_plans)] if bool(learning_mode.get("shadow_first")) else [

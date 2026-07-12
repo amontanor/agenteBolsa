@@ -97,3 +97,29 @@ de alcance.
 La evaluación futura exige diez sesiones XNYS maduras para tratamiento y
 controles y se hará en una vista separada. Este lote solo instala la captura;
 no permite seleccionar operaciones ni declarar un tratamiento superior.
+
+## Correccion P-L31BR (supersede la captura anticipada de P-L31B)
+
+Version final P-L31BR: 0.4.163.
+
+P-L31B anticipaba el tratamiento con `ranked_buy_candidates[:limit]` y fabricaba
+rechazos de capacidad. P-L31BR elimina esa ruta. La captura corregida ocurre
+despues de `build_order_plans`, del limite diario, la cuota low-sample y la
+separacion de estrategias pausadas, pero antes de persistir planes o enviar
+ordenes.
+
+Los tratamientos se extraen exclusivamente de los planes buy finales y los
+motivos unicamente de `rejected_order_plans` reales. `daily_order_limit`,
+`low_sample_quota`, `strategy_paused`, riesgo, geometria, gates bloqueados y
+`unknown` nunca entran como controles primarios. No se replica ranking, cupos o
+gates.
+
+Los registros nuevos usan `p-l31b.comparable-control.v2` y
+`selection_source=actual_final_plans`. Cualquier bloque v1 leido se cuenta como
+`prospective_selection_legacy` y no se reescribe. Los enlaces de gates por
+`candidate_id`/`signal_id` son fuertes; el fallback por simbolo/action se marca
+`weak` y limita el conjunto a `partially_comparable`.
+
+La decision de aprendizaje se actualiza una sola vez. La propagacion del
+`control_set` usa una operacion especifica de adjuncion por `signal_id`, sin
+reaplicar decisiones, gates, eventos ni persistencias de resultados.

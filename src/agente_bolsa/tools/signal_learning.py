@@ -446,6 +446,26 @@ def update_signal_decisions(
     return updated
 
 
+def attach_comparable_control_sets(
+    store: Store,
+    *,
+    recommendations: list[Any],
+) -> dict[str, int]:
+    """Attach captured controls without reapplying a decision or gate."""
+
+    counts = {"attached": 0, "idempotent": 0, "conflict": 0, "unavailable": 0}
+    for recommendation in recommendations:
+        control_set = dict(getattr(recommendation, "comparable_control_set", {}) or {})
+        snapshot = dict(getattr(recommendation, "decision_context_snapshot", {}) or {})
+        lineage = dict(getattr(recommendation, "decision_lineage", {}) or {})
+        signal_id = str(lineage.get("signal_id") or "").strip()
+        if not control_set or snapshot.get("signal_link_status") != "verified" or not signal_id:
+            continue
+        result = store.attach_comparable_control_set(signal_id, control_set)
+        counts[result] = counts.get(result, 0) + 1
+    return counts
+
+
 _BACKTEST_NEAR_MISS_SHADOW_RULES = {
     "hit-rate 44.00% < minimo 45.00%": "hit_rate_44_vs_45",
     "trade-window alpha -0.15% < minimo 0.00%": "trade_window_alpha_minus_0_15",

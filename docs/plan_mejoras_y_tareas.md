@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.161**
+- Version actual: **0.4.163**
 - Ultima actualizacion: 2026-07-12
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -59,6 +59,7 @@ amplia exposicion.
 | P-L29B | Ciclo de vida central normalizado de `agent_run` | HECHO (v0.4.160) |
 | P-L30B | Snapshot prospectivo de contexto de decision y regimen | HECHO (v0.4.161) |
 | P-L31B | Captura prospectiva de controles contemporaneos comparables | HECHO (v0.4.162) |
+| P-L31BR | Tratamientos y motivos reales desde planes finales | HECHO (v0.4.163) |
 
 ### P-L30B - Snapshot prospectivo de contexto de decision y regimen. **HECHO (v0.4.161).**
 Las nuevas recomendaciones conservan un bloque `decision_context_snapshot`
@@ -85,6 +86,19 @@ crear tablas ni completar historicos. El diagnostico
 controles parciales y legado separado. No calcula resultados durante la
 captura, no interpreta cohortes y no modifica ranking, gates, cupos, ordenes ni
 trading.
+
+### P-L31BR - Tratamientos y motivos reales desde planes finales. **HECHO (v0.4.163).**
+La captura se corrigio para ejecutarse despues de `build_order_plans`, limite
+diario, cuota low-sample y separacion de estrategias pausadas, pero antes de
+persistir planes o enviar ordenes. El tratamiento procede solo de los planes
+buy finales; no se recrea ranking ni se fabrican rechazos de capacidad. Los
+motivos se normalizan unicamente desde codigos reales, y los textos libres
+quedan `unknown`/inelegibles. Los enlaces de gates distinguen identidad fuerte
+de fallback por simbolo debil; un enlace debil o un gate no evaluado nunca es
+`verified`. El schema v2 marca `selection_source=actual_final_plans` y los v1
+se leen como `prospective_selection_legacy` sin reescritura. La actualizacion
+del signal learning adjunta el control una sola vez sin repetir decisiones ni
+gates.
 
 ### P-L29B - Ciclo de vida central normalizado de agent_run. **HECHO (v0.4.160).**
 Las nuevas ejecuciones que atraviesan CrewAI, el ejecutor central de mejora

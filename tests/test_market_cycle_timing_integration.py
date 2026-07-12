@@ -135,3 +135,25 @@ def test_timing_none_preserves_the_observable_flow(monkeypatch, tmp_path):
     assert without_timing[0] == with_timing[0]
     assert without_timing[1] == with_timing[1]
     assert without_timing[2].calls == with_timing[2].calls
+
+
+def test_comparable_capture_uses_final_plans_after_real_filters(monkeypatch, tmp_path):
+    import agente_bolsa.cycle_runner as runner
+
+    calls = _patch_trading_flow(monkeypatch)
+    captured: dict[str, object] = {}
+
+    def capture(**kwargs):
+        calls.append("comparable_control_capture")
+        captured.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(runner, "build_comparable_control_sets", capture)
+    store = _StoreSpy()
+    settings = Settings(DATA_DIR=tmp_path, AUTO_PAPER_TRADING=True, REQUIRE_HUMAN_APPROVAL=False)
+    runner._auto_paper_trade(settings, store, _Reporter(), "cycle", {"run_id": "source"}, {}, {})
+    assert calls.index("build_order_plans") < calls.index("_apply_daily_buy_limit")
+    assert calls.index("_apply_low_sample_daily_quota") < calls.index("_separate_strategy_paused_plans")
+    assert calls.index("_separate_strategy_paused_plans") < calls.index("comparable_control_capture")
+    assert len(captured["plans"]) == 1
+    assert captured["rejected_order_plans"] == []

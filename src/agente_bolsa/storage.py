@@ -1166,6 +1166,29 @@ class Store:
             )
             return "attached"
 
+    def attach_comparable_control_set(self, signal_id: str, control_set: dict[str, Any]) -> str:
+        """Attach only a captured control set to an exact signal row."""
+
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT features_json FROM signal_outcomes WHERE signal_id = ?",
+                (signal_id,),
+            ).fetchone()
+            if not row:
+                return "unavailable"
+            features = json.loads(row["features_json"] or "{}")
+            existing = features.get("comparable_control_set")
+            if existing:
+                if existing.get("content_hash") == control_set.get("content_hash"):
+                    return "idempotent"
+                return "conflict"
+            features["comparable_control_set"] = json.loads(json.dumps(control_set))
+            conn.execute(
+                "UPDATE signal_outcomes SET features_json = ?, updated_at = ? WHERE signal_id = ?",
+                (_dumps(features), _utc_iso(), signal_id),
+            )
+            return "attached"
+
     def save_order_plan(
         self,
         *,

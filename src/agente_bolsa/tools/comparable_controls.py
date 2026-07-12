@@ -15,7 +15,8 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
-SCHEMA_VERSION = "p-l31b.comparable-control.v1"
+SCHEMA_VERSION = "p-l31b.comparable-control.v2"
+LEGACY_SCHEMA_VERSION = "p-l31b.comparable-control.v1"
 FORWARD_HORIZON = "10d"
 CONTROL_LIMIT = 3
 CONTROL_STATUSES = frozenset({"verified", "partially_comparable", "unavailable"})
@@ -37,6 +38,19 @@ NON_EXECUTION_REASONS = frozenset(
         "unknown",
     }
 )
+_EXPLICIT_REASON_CODES = {
+    "max_orders_per_cycle_reached": "capacity_limit",
+    "max_daily_buy_orders_reached": "daily_order_limit",
+    "low_sample_daily_quota_exhausted": "low_sample_quota",
+    "strategy_paused_shadow_active": "strategy_paused",
+    "symbol_already_has_buy_plan_in_cycle": "duplicate_symbol",
+    "position_adds_disabled": "already_held",
+    "symbol_has_open_order": "already_held",
+    "critical_operational_alerts_active": "unknown",
+    "below_min_order_notional_after_execution_sizing": "invalid_geometry",
+    "invalid_execution_quantity": "invalid_geometry",
+}
+BLOCKED_REASONS = frozenset(NON_EXECUTION_REASONS - PRIMARY_REASONS - {"unknown"})
 
 
 def _canonical(value: Any) -> str:
@@ -101,33 +115,16 @@ def normalize_non_execution_reason(value: Any, *, stage: str | None = None) -> s
     text = str(value or "").strip().lower()
     if text in NON_EXECUTION_REASONS:
         return text
-    if "max_orders_per_cycle" in text or "capacity" in text or "cycle_order_limit" in text:
-        return "capacity_limit"
-    if "daily_buy" in text or "daily_order" in text:
-        return "daily_order_limit"
-    if "low_sample" in text:
-        return "low_sample_quota"
-    if "strategy_pause" in text or "paused" in text:
-        return "strategy_paused"
-    if "duplicate" in text:
-        return "duplicate_symbol"
-    if "already_held" in text or "position" in text:
-        return "already_held"
-    if "risk" in text or "exposure" in text:
-        return "risk_blocked"
-    if "geometry" in text or "stop" in text or "take" in text:
-        return "invalid_geometry"
-    if "gate" in text or "entry_quality" in text or "backtest" in text:
-        return "gate_blocked"
-    if stage == "capacity":
-        return "capacity_limit"
-    return "unknown"
+    return _EXPLICIT_REASON_CODES.get(text, "unknown")
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
         return dict(value)
-    return {key: getattr(value, key, None) for key in ("symbol", "action", "entry_price", "decision_lineage", "decision_context_snapshot")}
+    return {
+        key: getattr(value, key, None)
+        for key in ("symbol", "action", "entry_price", "decision_lineage", "decision_context_snapshot", "plan_id")
+    }
 
 
 def _recommendation_key(value: Any) -> tuple[str, str]:
@@ -176,7 +173,13 @@ def _signal_price(value: Any) -> float | None:
         return None
 
 
-def _gate_row(row: Mapping[str, Any] | None, *, gate_name: str, stage: str) -> dict[str, Any]:
+def _gate_row(
+    row: Mapping[str, Any] | None,
+    *,
+    gate_name: str,
+    stage: str,
+    gate_link_status: str = "unavailable",
+) -> dict[str, Any]:
     item = dict(row or {})
     approved = item.get("approved")
     checks = item.get("checks") or item.get("metrics") or {}
@@ -193,6 +196,7 @@ def _gate_row(row: Mapping[str, Any] | None, *, gate_name: str, stage: str) -> d
         "gate_name": gate_name,
         "gate_version": item.get("gate_version"),
         "stage": stage,
+        "gate_link_status": gate_link_status if row else "unavailable",
         "status": status,
         "observed_value": checks.get("observed_value") if isinstance(checks, Mapping) else None,
         "threshold": checks.get("threshold") if isinstance(checks, Mapping) else None,
@@ -201,43 +205,61 @@ def _gate_row(row: Mapping[str, Any] | None, *, gate_name: str, stage: str) -> d
     }
 
 
-def _rows_by_symbol(rows: list[Mapping[str, Any]] | None) -> dict[tuple[str, str], dict[str, Any]]:
-    result: dict[tuple[str, str], dict[str, Any]] = {}
+def _gate_row_for(
+    candidate: Any,
+    rows: list[Mapping[str, Any]] | None,
+    *,
+    gate_name: str,
+    stage: str,
+) -> dict[str, Any]:
+    lineage = _lineage(candidate)
+    candidate_id = str(lineage.get("candidate_id") or "").strip()
+    signal_id = str(lineage.get("signal_id") or "").strip()
+    symbol, action = _recommendation_key(candidate)
+    fallback: Mapping[str, Any] | None = None
+    fallback_status = "unavailable"
     for row in rows or []:
-        key = (str(row.get("symbol") or "").upper(), str(row.get("action") or "").lower())
-        if key[0]:
-            result[key] = dict(row)
-    return result
+        row_candidate = str(row.get("candidate_id") or "").strip()
+        row_signal = str(row.get("signal_id") or "").strip()
+        if candidate_id and row_candidate and row_candidate == candidate_id:
+            return _gate_row(row, gate_name=gate_name, stage=stage, gate_link_status="strong")
+        if signal_id and row_signal and row_signal == signal_id:
+            return _gate_row(row, gate_name=gate_name, stage=stage, gate_link_status="strong")
+        row_key = (str(row.get("symbol") or "").upper(), str(row.get("action") or "").lower())
+        if row_key == (symbol, action) and fallback is None:
+            fallback = row
+            fallback_status = "weak"
+    return _gate_row(fallback, gate_name=gate_name, stage=stage, gate_link_status=fallback_status)
 
 
 def _gate_ledger(
     candidate: Any,
     *,
-    deterministic: Mapping[tuple[str, str], dict[str, Any]],
-    adversarial: Mapping[tuple[str, str], dict[str, Any]],
-    entry_quality: Mapping[tuple[str, str], dict[str, Any]],
-    backtest: Mapping[tuple[str, str], dict[str, Any]],
-    strategy_pause: Mapping[tuple[str, str], dict[str, Any]],
-    geometry: Mapping[tuple[str, str], dict[str, Any]],
-    risk_eligibility: Mapping[tuple[str, str], dict[str, Any]],
-    duplicate_symbol: Mapping[tuple[str, str], dict[str, Any]],
-    already_held: Mapping[tuple[str, str], dict[str, Any]],
-    low_sample: Mapping[tuple[str, str], dict[str, Any]],
-    daily_capacity: Mapping[tuple[str, str], dict[str, Any]],
+    deterministic: list[Mapping[str, Any]] | None,
+    adversarial: list[Mapping[str, Any]] | None,
+    entry_quality: list[Mapping[str, Any]] | None,
+    backtest: list[Mapping[str, Any]] | None,
+    strategy_pause: list[Mapping[str, Any]] | None,
+    geometry: list[Mapping[str, Any]] | None,
+    risk_eligibility: list[Mapping[str, Any]] | None,
+    duplicate_symbol: list[Mapping[str, Any]] | None,
+    already_held: list[Mapping[str, Any]] | None,
+    low_sample: list[Mapping[str, Any]] | None,
+    daily_capacity: list[Mapping[str, Any]] | None,
     capacity_reason: str | None = None,
+    capacity_link_status: str = "weak",
 ) -> list[dict[str, Any]]:
-    key = _recommendation_key(candidate)
     ledger = [
-        _gate_row(deterministic.get(key), gate_name="deterministic_review", stage="pre_rank"),
-        _gate_row(adversarial.get(key), gate_name="adversarial_review", stage="post_rank"),
-        _gate_row(entry_quality.get(key), gate_name="entry_quality", stage="post_rank"),
-        _gate_row(backtest.get(key), gate_name="backtest", stage="post_rank"),
-        _gate_row(strategy_pause.get(key), gate_name="strategy_pause", stage="post_rank"),
-        _gate_row(geometry.get(key), gate_name="geometry", stage="post_rank"),
-        _gate_row(risk_eligibility.get(key), gate_name="risk_eligibility", stage="post_rank"),
-        _gate_row(duplicate_symbol.get(key), gate_name="duplicate_symbol", stage="post_rank"),
-        _gate_row(already_held.get(key), gate_name="already_held", stage="post_rank"),
-        _gate_row(low_sample.get(key), gate_name="low_sample", stage="post_rank"),
+        _gate_row_for(candidate, deterministic, gate_name="deterministic_review", stage="pre_rank"),
+        _gate_row_for(candidate, adversarial, gate_name="adversarial_review", stage="post_rank"),
+        _gate_row_for(candidate, entry_quality, gate_name="entry_quality", stage="post_rank"),
+        _gate_row_for(candidate, backtest, gate_name="backtest", stage="post_rank"),
+        _gate_row_for(candidate, strategy_pause, gate_name="strategy_pause", stage="post_rank"),
+        _gate_row_for(candidate, geometry, gate_name="geometry", stage="post_rank"),
+        _gate_row_for(candidate, risk_eligibility, gate_name="risk_eligibility", stage="post_rank"),
+        _gate_row_for(candidate, duplicate_symbol, gate_name="duplicate_symbol", stage="post_rank"),
+        _gate_row_for(candidate, already_held, gate_name="already_held", stage="post_rank"),
+        _gate_row_for(candidate, low_sample, gate_name="low_sample", stage="post_rank"),
     ]
     if capacity_reason:
         ledger.append(
@@ -245,6 +267,7 @@ def _gate_ledger(
                 "gate_name": "daily_capacity",
                 "gate_version": None,
                 "stage": "capacity",
+                "gate_link_status": capacity_link_status,
                 "status": "blocked",
                 "observed_value": None,
                 "threshold": None,
@@ -253,7 +276,7 @@ def _gate_ledger(
             }
         )
     else:
-        ledger.append(_gate_row(daily_capacity.get(key), gate_name="daily_capacity", stage="capacity"))
+        ledger.append(_gate_row_for(candidate, daily_capacity, gate_name="daily_capacity", stage="capacity"))
     return ledger
 
 
@@ -270,6 +293,7 @@ def _identity(value: Any, *, cycle_id: str) -> dict[str, Any]:
         "signal_price": _signal_price(value),
         "signal_timestamp": _signal_timestamp(value),
         "decision_context_snapshot_id": _snapshot(value).get("snapshot_id"),
+        "plan_id": _as_dict(value).get("plan_id"),
         "strategy_name": item.get("strategy_name") or lineage.get("strategy_name"),
         "strategy_version": lineage.get("strategy_version"),
     }
@@ -293,7 +317,6 @@ def build_comparable_control_sets(
     cycle_id: str,
     recommendations: list[Any],
     plans: list[Any] | None = None,
-    selected_recommendations: list[Any] | None = None,
     rejected_order_plans: list[Mapping[str, Any]] | None = None,
     all_recommendations: list[Any] | None = None,
     deterministic_review: list[Mapping[str, Any]] | None = None,
@@ -312,8 +335,9 @@ def build_comparable_control_sets(
 ) -> dict[str, dict[str, Any]]:
     """Build one immutable set per selected buy treatment.
 
-    ``plans`` are already-created in-memory plans; persistence and order
-    submission happen later.  The function never calls a gate or ranking rule.
+    ``plans`` are the final in-memory plans after every real filter. Persistence
+    and order submission happen later. The function never calls a gate or
+    ranking rule and never fabricates a rejection reason.
     """
 
     if forward_horizon != FORWARD_HORIZON:
@@ -321,43 +345,58 @@ def build_comparable_control_sets(
     captured = (captured_at or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
     cycle = str(cycle_id or "").strip()
     all_items = list(all_recommendations or recommendations)
+    plan_by_key: dict[tuple[str, str], Any] = {}
+    plan_id_by_key: dict[tuple[str, str], Any] = {}
     for plan in plans or []:
         candidate = getattr(plan, "recommendation", None) or (plan.get("recommendation") if isinstance(plan, Mapping) else None)
         if candidate is not None:
             all_items.append(candidate)
-    all_items.extend(selected_recommendations or [])
+            plan_by_key[_recommendation_key(candidate)] = candidate
+            plan_id_by_key[_recommendation_key(candidate)] = _as_dict(plan).get("plan_id")
+        else:
+            side = str(getattr(plan, "side", plan.get("side") if isinstance(plan, Mapping) else "")).lower()
+            symbol = str(getattr(plan, "symbol", plan.get("symbol") if isinstance(plan, Mapping) else "")).upper()
+            if symbol and side:
+                plan_by_key[(symbol, side)] = None
+                plan_id_by_key[(symbol, side)] = _as_dict(plan).get("plan_id")
     rec_by_key = {_recommendation_key(item): item for item in all_items}
     gated_by_key = {_recommendation_key(item): item for item in recommendations}
     treatment_keys = {
         _recommendation_key(getattr(plan, "recommendation", None) or (plan.get("recommendation") if isinstance(plan, Mapping) else None))
         for plan in (plans or [])
         if str(getattr(plan, "side", plan.get("side") if isinstance(plan, Mapping) else "")).lower() == "buy"
+        and (getattr(plan, "recommendation", None) or (plan.get("recommendation") if isinstance(plan, Mapping) else None)) is not None
     }
-    treatment_keys.update(_recommendation_key(item) for item in (selected_recommendations or []))
+    for plan in plans or []:
+        side = str(getattr(plan, "side", plan.get("side") if isinstance(plan, Mapping) else "")).lower()
+        if side == "buy" and not (getattr(plan, "recommendation", None) or (plan.get("recommendation") if isinstance(plan, Mapping) else None)):
+            symbol = str(getattr(plan, "symbol", plan.get("symbol") if isinstance(plan, Mapping) else "")).upper()
+            if symbol:
+                treatment_keys.add((symbol, side))
     rejection_by_symbol: dict[str, list[dict[str, Any]]] = {}
     for rejected in rejected_order_plans or []:
         symbol = str(rejected.get("symbol") or "").upper()
         if symbol:
             rejection_by_symbol.setdefault(symbol, []).append(dict(rejected))
-    deterministic = _rows_by_symbol(deterministic_review)
-    adversarial = _rows_by_symbol(adversarial_review)
-    entry_quality = _rows_by_symbol(entry_quality_gate)
-    backtest = _rows_by_symbol(backtest_gate)
-    strategy_pause = _rows_by_symbol(strategy_pause_gate)
-    geometry = _rows_by_symbol(geometry_gate)
-    risk_eligibility = _rows_by_symbol(risk_eligibility_gate)
-    duplicate_symbol = _rows_by_symbol(duplicate_symbol_gate)
-    already_held = _rows_by_symbol(already_held_gate)
-    low_sample = _rows_by_symbol(low_sample_gate)
-    daily_capacity = _rows_by_symbol(daily_capacity_gate)
+    deterministic = deterministic_review or []
+    adversarial = adversarial_review or []
+    entry_quality = entry_quality_gate or []
+    backtest = backtest_gate or []
+    strategy_pause = strategy_pause_gate or []
+    geometry = geometry_gate or []
+    risk_eligibility = risk_eligibility_gate or []
+    duplicate_symbol = duplicate_symbol_gate or []
+    already_held = already_held_gate or []
+    low_sample = low_sample_gate or []
+    daily_capacity = daily_capacity_gate or []
     result: dict[str, dict[str, Any]] = {}
 
     used_control_signals: set[str] = set()
     for treatment_key in sorted(treatment_keys):
-        treatment = rec_by_key.get(treatment_key)
-        if treatment is None:
-            continue
+        treatment = rec_by_key.get(treatment_key, plan_by_key.get(treatment_key))
         treatment_identity = _identity(treatment, cycle_id=cycle)
+        if treatment_identity.get("plan_id") is None:
+            treatment_identity["plan_id"] = plan_id_by_key.get(treatment_key)
         market_hash = _market_hash(treatment)
         control_set_id = (
             f"cset_{_hash({'cycle_id': cycle, 'treatment_signal_id': treatment_identity['signal_id'], 'horizon': forward_horizon})[:24]}"
@@ -366,6 +405,7 @@ def build_comparable_control_sets(
         )
         base: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
+            "selection_source": "actual_final_plans",
             "control_set_id": control_set_id,
             "status": "unavailable",
             "cycle_id": cycle or None,
@@ -375,6 +415,7 @@ def build_comparable_control_sets(
             "treatment": treatment_identity,
             "controls": [],
             "blocked_candidates": [],
+            "ineligible_candidates": [],
             "eligible_controls_omitted": 0,
             "unavailable_reason": None,
             "captured_at": captured,
@@ -382,6 +423,8 @@ def build_comparable_control_sets(
         if not cycle:
             base["cycle_link_status"] = "unavailable"
             base["unavailable_reason"] = "cycle_id_unavailable"
+        elif treatment is None:
+            base["unavailable_reason"] = "treatment_identity_unavailable"
         elif str(_lineage(treatment).get("cycle_id") or "").strip() != cycle:
             base["cycle_link_status"] = "broken"
             base["unavailable_reason"] = "treatment_cycle_mismatch"
@@ -399,7 +442,7 @@ def build_comparable_control_sets(
             result[treatment_identity["signal_id"] or f"{treatment_key[0]}|{treatment_key[1]}"] = base
             continue
 
-        candidate_rows: list[tuple[float, Any, str]] = []
+        candidate_rows: list[tuple[float, Any, str, str]] = []
         for key, candidate in gated_by_key.items():
             if key in treatment_keys or str(key[1]).lower() != "buy":
                 continue
@@ -409,7 +452,17 @@ def build_comparable_control_sets(
             symbol = key[0]
             reasons = rejection_by_symbol.get(symbol, [])
             reason = None
+            reason_link_status = "unavailable"
             for rejected in reasons:
+                rejection_candidate = str(rejected.get("candidate_id") or "").strip()
+                rejection_signal = str(rejected.get("signal_id") or "").strip()
+                candidate_lineage = _lineage(candidate)
+                if rejection_candidate and rejection_candidate == str(candidate_lineage.get("candidate_id") or "").strip():
+                    reason_link_status = "strong"
+                elif rejection_signal and rejection_signal == str(candidate_lineage.get("signal_id") or "").strip():
+                    reason_link_status = "strong"
+                elif str(rejected.get("symbol") or "").upper() == symbol:
+                    reason_link_status = "weak"
                 normalized = normalize_non_execution_reason(rejected.get("reason"), stage=rejected.get("stage"))
                 if normalized in NON_EXECUTION_REASONS:
                     reason = normalized
@@ -420,11 +473,11 @@ def build_comparable_control_sets(
             treatment_rank = treatment_identity["rank"]
             if reason in PRIMARY_REASONS and treatment_rank is not None and candidate_rank is not None and candidate_rank <= treatment_rank:
                 continue
-            candidate_rows.append((candidate_rank if candidate_rank is not None else float("inf"), candidate, reason))
+            candidate_rows.append((candidate_rank if candidate_rank is not None else float("inf"), candidate, reason, reason_link_status))
         candidate_rows.sort(key=lambda item: (item[0], str(_identity(item[1], cycle_id=cycle).get("signal_id") or "")))
 
         eligible_count = 0
-        for _rank_value, candidate, reason in candidate_rows:
+        for _rank_value, candidate, reason, reason_link_status in candidate_rows:
             identity = _identity(candidate, cycle_id=cycle)
             ledger = _gate_ledger(
                 candidate,
@@ -440,8 +493,22 @@ def build_comparable_control_sets(
                 low_sample=low_sample,
                 daily_capacity=daily_capacity,
                 capacity_reason=reason,
+                capacity_link_status=(
+                    "strong"
+                    if any(
+                        (str(row.get("candidate_id") or "").strip() and str(row.get("candidate_id") or "").strip() == str(_lineage(candidate).get("candidate_id") or "").strip())
+                        or (str(row.get("signal_id") or "").strip() and str(row.get("signal_id") or "").strip() == str(_lineage(candidate).get("signal_id") or "").strip())
+                        for row in rejection_by_symbol.get(_recommendation_key(candidate)[0], [])
+                    )
+                    else "weak"
+                ),
             )
             if reason in PRIMARY_REASONS:
+                if any(row["status"] == "blocked" for row in ledger[:-1]):
+                    base["blocked_candidates"].append(
+                        _blocked_candidate(candidate, reason="gate_blocked", ledger=ledger)
+                    )
+                    continue
                 control_snapshot_hash = _market_hash(candidate)
                 same_market = bool(control_snapshot_hash and control_snapshot_hash == market_hash)
                 if market_hash and control_snapshot_hash and not same_market:
@@ -454,14 +521,18 @@ def build_comparable_control_sets(
                 # A primary control is verified only when every applicable
                 # pre/post-rank gate has an explicit passed result.  Missing
                 # gate rows remain auditable but make the control partial.
-                gate_required = bool(ledger[:-1]) and all(item["status"] == "passed" for item in ledger[:-1])
-                gate_eligibility = "verified" if same_market and gate_required and identity["signal_id"] and identity["candidate_id"] and identity["signal_price"] is not None else "partial"
+                gate_required = bool(ledger[:-1]) and all(
+                    item["status"] == "passed" and item.get("gate_link_status") == "strong"
+                    for item in ledger[:-1]
+                )
+                gate_eligibility = "verified" if same_market and gate_required and reason_link_status == "strong" and identity["signal_id"] and identity["candidate_id"] and identity["signal_price"] is not None else "partial"
                 if identity["signal_timestamp"] is None:
                     gate_eligibility = "partial"
                 base["controls"].append(
                     {
                         **{key: identity.get(key) for key in ("signal_id", "candidate_id", "rank", "signal_price", "signal_timestamp")},
                         "non_execution_reason": reason,
+                        "reason_link_status": reason_link_status,
                         "gate_eligibility": gate_eligibility,
                         "gate_ledger": ledger,
                         "gate_ledger_hash": _hash(ledger),
@@ -469,8 +540,19 @@ def build_comparable_control_sets(
                     }
                 )
                 used_control_signals.add(str(identity.get("signal_id") or ""))
-            elif reason not in PRIMARY_REASONS:
+            elif reason in BLOCKED_REASONS:
                 base["blocked_candidates"].append(_blocked_candidate(candidate, reason=reason, ledger=ledger))
+            else:
+                identity = _identity(candidate, cycle_id=cycle)
+                base["ineligible_candidates"].append(
+                    {
+                        "signal_id": identity["signal_id"],
+                        "candidate_id": identity["candidate_id"],
+                        "rank": identity["rank"],
+                        "reason": reason,
+                        "gate_ledger_hash": _hash(ledger),
+                    }
+                )
         base["eligible_controls_omitted"] = max(0, eligible_count - len(base["controls"]))
         valid_controls = [item for item in base["controls"] if item["gate_eligibility"] == "verified"]
         partial_controls = [item for item in base["controls"] if item["gate_eligibility"] == "partial"]
@@ -487,6 +569,36 @@ def build_comparable_control_sets(
     return result
 
 
+def build_unavailable_control_set(
+    *,
+    cycle_id: str | None,
+    treatment: Any = None,
+    reason: str = "treatment_identity_unavailable",
+) -> dict[str, Any]:
+    """Create the explicit unavailable record required for a final plan."""
+
+    identity = _identity(treatment, cycle_id=str(cycle_id or ""))
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "selection_source": "actual_final_plans",
+        "control_set_id": None,
+        "status": "unavailable",
+        "cycle_id": str(cycle_id or "") or None,
+        "forward_horizon": FORWARD_HORIZON,
+        "market_state_ref_hash": _market_hash(treatment),
+        "cycle_link_status": "verified" if cycle_id else "unavailable",
+        "treatment": identity,
+        "controls": [],
+        "blocked_candidates": [],
+        "ineligible_candidates": [],
+        "eligible_controls_omitted": 0,
+        "unavailable_reason": reason,
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+    }
+    payload["content_hash"] = _hash(payload, exclude={"captured_at", "content_hash"})
+    return payload
+
+
 def validate_comparable_control_set(control_set: Mapping[str, Any]) -> None:
     if not isinstance(control_set, Mapping):
         raise ValueError("comparable_control_set_not_object")
@@ -497,6 +609,8 @@ def validate_comparable_control_set(control_set: Mapping[str, Any]) -> None:
     if control_set.get("forward_horizon") != FORWARD_HORIZON:
         raise ValueError("comparable_control_horizon_invalid")
     unavailable = control_set.get("status") == "unavailable"
+    if control_set.get("selection_source") != "actual_final_plans":
+        raise ValueError("comparable_control_selection_source_invalid")
     if not control_set.get("cycle_id") and not unavailable:
         raise ValueError("comparable_control_cycle_missing")
     treatment = control_set.get("treatment") or {}
@@ -520,6 +634,8 @@ def validate_comparable_control_set(control_set: Mapping[str, Any]) -> None:
             raise ValueError("comparable_control_reason_invalid")
         if control.get("gate_eligibility") not in GATE_ELIGIBILITY:
             raise ValueError("comparable_control_gate_eligibility_invalid")
+        if control.get("reason_link_status") not in {"strong", "weak", "unavailable"}:
+            raise ValueError("comparable_control_reason_link_invalid")
         if control.get("signal_price") is None:
             raise ValueError("comparable_control_signal_price_missing")
     expected = _hash(control_set, exclude={"captured_at", "content_hash"})
@@ -618,6 +734,8 @@ def build_comparable_control_quality(
 
     records = []
     legacy = 0
+    legacy_v1 = 0
+    invalid_schema = 0
     for record in store.trade_recommendations(limit=50000):
         created = _iso_date(record.get("created_at"))
         if start and created and created < start:
@@ -628,6 +746,12 @@ def build_comparable_control_quality(
         control_set = payload.get("comparable_control_set")
         if not control_set:
             legacy += 1
+            continue
+        if control_set.get("schema_version") == LEGACY_SCHEMA_VERSION:
+            legacy_v1 += 1
+            continue
+        if control_set.get("schema_version") != SCHEMA_VERSION:
+            invalid_schema += 1
             continue
         if status and str(control_set.get("status") or "") != status:
             continue
@@ -684,4 +808,7 @@ def build_comparable_control_quality(
         "conflicts_status": "unavailable",
         "unavailable_by_reason": dict(Counter(str(item.get("unavailable_reason") or "") for item in records if item.get("unavailable_reason"))),
         "legacy_without_control_set": legacy,
+        "legacy_v1_prospective_selection": legacy_v1,
+        "invalid_schema_count": invalid_schema,
+        "selection_source_coverage": sum(item.get("selection_source") == "actual_final_plans" for item in records) / denominator if denominator else None,
     }
