@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.163**
+- Version actual: **0.4.164**
 - Ultima actualizacion: 2026-07-12
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -60,6 +60,18 @@ amplia exposicion.
 | P-L30B | Snapshot prospectivo de contexto de decision y regimen | HECHO (v0.4.161) |
 | P-L31B | Captura prospectiva de controles contemporaneos comparables | HECHO (v0.4.162) |
 | P-L31BR | Tratamientos y motivos reales desde planes finales | HECHO (v0.4.163) |
+| P-L32B | Ledger prospectivo del camino real de gates por candidato | HECHO (v0.4.164) |
+
+### P-L32B - Ledger prospectivo del camino real de gates por candidato. **HECHO (v0.4.164).**
+Se añade un collector único que observa los resultados ya producidos por el
+flujo real, conserva identidad, ciclo, orden, categoría, motivo, valores y
+umbrales disponibles, y sella `p-l32b.gate-evaluation.v1` sin reejecutar gates.
+El primer bloqueo es terminal y los gates posteriores quedan
+`not_evaluated`; capacidad, seguridad, operación y portfolio permanecen
+separados. Los snapshots no contienen outcomes, fills ni P&L y solo se
+adjuntan a outcomes con `signal_id` verificable. El diagnóstico
+`gate-effectiveness-quality --json` mantiene collecting/unavailable sin
+recomendar cambios de gates ni alterar trading.
 
 ### P-L30B - Snapshot prospectivo de contexto de decision y regimen. **HECHO (v0.4.161).**
 Las nuevas recomendaciones conservan un bloque `decision_context_snapshot`

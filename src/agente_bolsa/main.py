@@ -82,6 +82,7 @@ from .tools.daily_learning import (
 )
 from .tools.excursion_quality import build_excursion_quality_report
 from .tools.execution import submit_paper_order_plan
+from .tools.gate_evaluation import build_gate_effectiveness_quality
 from .tools.lab_book import run_lab_book_once
 from .tools.learning_mode import active_learning_mode, learning_mode_source
 from .tools.learning_scoreboard import build_learning_scoreboard, format_learning_scoreboard
@@ -2375,6 +2376,30 @@ def command_comparable_control_quality(args: argparse.Namespace) -> None:
     print(json.dumps(report, indent=2, ensure_ascii=True, default=str))
 
 
+def command_gate_effectiveness_quality(args: argparse.Namespace) -> None:
+    """Read-only P-L32B gate-path coverage diagnostic."""
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    snapshots = []
+    for row in store.trade_recommendations(limit=50000):
+        snapshot = (row.get("payload") or {}).get("gate_evaluation_snapshot")
+        if snapshot:
+            snapshots.append(snapshot)
+    report = build_gate_effectiveness_quality(
+        snapshots,
+        start=args.start,
+        end=args.end,
+        gate=args.gate,
+        category=args.category,
+    )
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    print(json.dumps(report, indent=2, ensure_ascii=True, default=str))
+
+
 def command_autonomy_digest(args: argparse.Namespace) -> None:
     from .tools.autonomy_digest import build_autonomy_digest, pause_all, resume_all
 
@@ -3680,6 +3705,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     comparable_controls.add_argument("--json", action="store_true", help="Devuelve el diagnostico en JSON.")
     comparable_controls.set_defaults(func=command_comparable_control_quality)
+
+    gate_effectiveness = subparsers.add_parser(
+        "gate-effectiveness-quality",
+        help="Diagnostico read-only del camino prospectivo de gates (P-L32B).",
+    )
+    gate_effectiveness.add_argument("--from", dest="start", help="Fecha inicial YYYY-MM-DD.")
+    gate_effectiveness.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
+    gate_effectiveness.add_argument("--gate", help="Filtra por nombre de gate.")
+    gate_effectiveness.add_argument(
+        "--category",
+        choices=("eligibility", "safety", "capacity", "operational", "portfolio"),
+    )
+    gate_effectiveness.add_argument("--json", action="store_true", help="Devuelve el diagnostico en JSON.")
+    gate_effectiveness.set_defaults(func=command_gate_effectiveness_quality)
 
     autonomy_digest = subparsers.add_parser(
         "autonomy-digest",

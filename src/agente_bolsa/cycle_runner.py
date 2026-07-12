@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -34,6 +35,7 @@ from .tools.decision_context import build_decision_context_snapshot, copy_snapsh
 from .tools.decision_lineage import build_decision_lineage
 from .tools.deterministic_reviewer import recommendation_input_fingerprint, review_recommendations
 from .tools.execution import submit_paper_order_plan
+from .tools.gate_evaluation import collect_gate_path
 from .tools.learning_mode import (
     LEARNING_EXPERIMENT_SOURCE,
     LOW_SAMPLE_EXPLORATION_TAG,
@@ -47,6 +49,7 @@ from .tools.operational_health import load_operational_block_context
 from .tools.portfolio_optimizer import build_portfolio_rebalance_context
 from .tools.signal_learning import (
     attach_comparable_control_sets,
+    attach_gate_evaluation_snapshots,
     update_signal_decisions,
     update_signal_execution_status,
 )
@@ -1548,6 +1551,40 @@ def _auto_paper_trade(
                 "paused_strategies": sorted({strategy for _, strategy in paused_plans}),
                 "symbols": [plan.symbol for plan, _ in paused_plans],
             },
+        )
+
+    # P-L32B: observe the real path already produced by the cycle.  This call
+    # does not run a gate or apply a threshold; it only seals immutable JSON.
+    gate_snapshots = collect_gate_path(
+        cycle_id=run_id,
+        candidates=reviewed_recommendations,
+        stage_rows={
+            "deterministic_review": deterministic_review,
+            "adversarial_review": adversarial_review,
+            "entry_quality": entry_quality_gate,
+            "backtest": backtest_gate,
+        },
+        final_plans=plans,
+        rejected_order_plans=rejected_order_plans,
+        captured_at=datetime.now(timezone.utc).isoformat(),
+    )
+    gate_by_signal = {str(item.get("signal_id")): item for item in gate_snapshots.values() if item.get("signal_id")}
+
+    def _attach_gate_snapshot(item: Any) -> Any:
+        lineage = dict(getattr(item, "decision_lineage", {}) or {})
+        snapshot = gate_by_signal.get(str(lineage.get("signal_id") or ""), {})
+        return replace(item, gate_evaluation_snapshot=copy.deepcopy(snapshot))
+
+    reviewed_recommendations = [_attach_gate_snapshot(item) for item in reviewed_recommendations]
+    gated_recommendations = [_attach_gate_snapshot(item) for item in gated_recommendations]
+    attach_gate_evaluation_snapshots(store, snapshots=list(gate_snapshots.values()))
+    if gate_snapshots:
+        reporter.emit(
+            "self_improvement_engineer",
+            "gate_evaluation_snapshots_captured",
+            run_id,
+            f"Gate paths prospectivos capturados: {len(gate_snapshots)}.",
+            {"snapshots": len(gate_snapshots), "verified": sum(x.get("identity_status") == "verified" for x in gate_snapshots.values())},
         )
 
     # P-L31BR: seal control sets only from the final in-memory plans and the

@@ -109,6 +109,7 @@ class TradeRecommendation:
     decision_lineage: dict[str, Any] = field(default_factory=dict)
     decision_context_snapshot: dict[str, Any] = field(default_factory=dict)
     comparable_control_set: dict[str, Any] = field(default_factory=dict)
+    gate_evaluation_snapshot: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

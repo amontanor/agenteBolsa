@@ -466,6 +466,23 @@ def attach_comparable_control_sets(
     return counts
 
 
+def attach_gate_evaluation_snapshots(
+    store: Store,
+    *,
+    snapshots: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Persist gate paths only for exact, verified signal identities."""
+
+    counts = {"attached": 0, "idempotent": 0, "conflict": 0, "unavailable": 0, "skipped": 0}
+    for snapshot in snapshots:
+        if snapshot.get("identity_status") != "verified" or not snapshot.get("signal_id"):
+            counts["skipped"] += 1
+            continue
+        result = store.attach_gate_evaluation_snapshot(str(snapshot["signal_id"]), snapshot)
+        counts[result] = counts.get(result, 0) + 1
+    return counts
+
+
 _BACKTEST_NEAR_MISS_SHADOW_RULES = {
     "hit-rate 44.00% < minimo 45.00%": "hit_rate_44_vs_45",
     "trade-window alpha -0.15% < minimo 0.00%": "trade_window_alpha_minus_0_15",

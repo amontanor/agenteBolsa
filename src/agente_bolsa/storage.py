@@ -1189,6 +1189,29 @@ class Store:
             )
             return "attached"
 
+    def attach_gate_evaluation_snapshot(self, signal_id: str, snapshot: dict[str, Any]) -> str:
+        """Attach an immutable gate path to an exact signal outcome."""
+
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT features_json FROM signal_outcomes WHERE signal_id = ?",
+                (signal_id,),
+            ).fetchone()
+            if not row:
+                return "unavailable"
+            features = json.loads(row["features_json"] or "{}")
+            existing = features.get("gate_evaluation_snapshot")
+            if existing:
+                if existing.get("content_hash") == snapshot.get("content_hash"):
+                    return "idempotent"
+                return "conflict"
+            features["gate_evaluation_snapshot"] = json.loads(json.dumps(snapshot))
+            conn.execute(
+                "UPDATE signal_outcomes SET features_json = ?, updated_at = ? WHERE signal_id = ?",
+                (_dumps(features), _utc_iso(), signal_id),
+            )
+            return "attached"
+
     def save_order_plan(
         self,
         *,
