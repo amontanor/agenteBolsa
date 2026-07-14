@@ -54,7 +54,7 @@ from .tools.overnight_learning import (
     mark_overnight_session_done,
     should_run_overnight_for_session,
 )
-from .tools.performance_baseline import build_daily_performance, fetch_spy_daily_return
+from .tools.performance_benchmark import build_daily_performance_item
 from .tools.post_market_review import build_post_market_review
 from .tools.pre_earnings import (
     backfill_pending_pre_earnings_estimates,
@@ -78,6 +78,7 @@ from .tools.universe import resolve_study_universe
 
 LOGGER = logging.getLogger(__name__)
 OPERATIONAL_HEALTH_REFRESH_INTERVAL_MINUTES = 45
+_PORTFOLIO_UNSET = object()
 
 
 def _scheduler_lock_path(settings: Settings) -> Any:
@@ -2026,6 +2027,7 @@ def _persist_daily_performance(
     session_date: str,
     reporter: Any,
     run_id: str,
+    portfolio: Any = _PORTFOLIO_UNSET,
 ) -> None:
     """Calcula y persiste la fila de ``performance_daily`` de la sesion (T0.2).
 
@@ -2033,29 +2035,32 @@ def _persist_daily_performance(
     fila (equity/alpha nulos) en lugar de propagar la excepcion.
     """
 
-    portfolio = None
-    try:
-        portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
-    except Exception as exc:  # noqa: BLE001 - degradacion controlada.
-        log_system_event(settings.logs_dir, "performance_baseline_portfolio_unavailable", {"error": repr(exc)})
+    if portfolio is _PORTFOLIO_UNSET:
+        try:
+            portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
+        except Exception as exc:  # noqa: BLE001 - degradacion controlada.
+            log_system_event(settings.logs_dir, "performance_baseline_portfolio_unavailable", {"error": repr(exc)})
 
-    spy_pct = fetch_spy_daily_return(settings, session_date)
     try:
-        payload = build_daily_performance(
+        item = build_daily_performance_item(
             store,
             settings,
             session_date,
-            spy_pct=spy_pct,
             portfolio=portfolio,
         )
-        # Benchmarks ingenuos para validar el edge base (T5.1).
+        # Mantener los benchmarks/regimen legacy en el payload completo sin
+        # volver a consultar mercado ni alterar el contrato nuevo.
+        payload = dict(item.get("payload") or {})
         try:
             from .tools.naive_benchmarks import compute_daily_benchmarks
 
-            payload["benchmarks"] = compute_daily_benchmarks(settings, session_date, spy_pct=spy_pct)
+            payload["benchmarks"] = compute_daily_benchmarks(
+                settings,
+                session_date,
+                spy_pct=item.get("spy_pct"),
+            )
         except Exception:  # noqa: BLE001 - los benchmarks no deben romper el baseline.
             payload["benchmarks"] = {}
-        # Regimen del dia para el guard del watchdog (T5.2).
         try:
             from .tools.market_state import load_latest_market_state
 
@@ -2063,16 +2068,28 @@ def _persist_daily_performance(
             payload["regime"] = state.get("market_regime") or state.get("regime")
         except Exception as exc:  # noqa: BLE001
             log_swallow(LOGGER, "adjuntar regimen al baseline diario", exc)
-        store.upsert_performance_daily(payload)
+        item["payload"] = payload
+        result = store.upsert_performance_benchmark(item)
+        if result.get("status") == "conflict":
+            log_system_event(settings.logs_dir, "performance_benchmark_conflict", result)
+            previous_conflicts = store.get_runtime_value("performance_benchmark_conflicts") or {}
+            store.set_runtime_value(
+                "performance_benchmark_conflicts",
+                {
+                    "count": int(previous_conflicts.get("count") or 0) + 1,
+                    "last": result,
+                    "session_date": session_date,
+                },
+            )
         reporter.emit(
             "performance_baseline_agent",
             "performance_daily_recorded",
             run_id,
             (
                 f"Baseline de rendimiento guardado para {session_date}: "
-                f"iq_score={payload.get('iq_score')}, alpha_vs_spy={payload.get('alpha_vs_spy')}."
+                f"iq_score={item.get('iq_score')}, alpha_vs_spy={item.get('alpha')}."
             ),
-            payload,
+            {**payload, "persistence": result},
         )
     except Exception as exc:  # noqa: BLE001 - el baseline no debe romper el review.
         log_system_event(settings.logs_dir, "performance_baseline_failed", {"error": repr(exc), "session_date": session_date})
@@ -2398,13 +2415,26 @@ def post_market_review_job(
             ),
             reconciliation,
         )
+        portfolio = None
+        broker_client = None
+        try:
+            broker_client = BrokerClientFactory(settings)
+            portfolio = broker_client.alpaca_portfolio_snapshot()
+        except Exception as exc:  # noqa: BLE001 - degradacion controlada.
+            log_system_event(settings.logs_dir, "post_market_portfolio_unavailable", {"error": repr(exc)})
         report = build_post_market_review(
             settings,
             settings.data_dir / "reports",
             run_id,
             session_date=session_date,
             use_llm=use_llm and settings.post_market_review_use_llm,
+            portfolio_snapshot=portfolio,
+            broker_client=broker_client,
         )
+        # La foto de cartera y performance_daily deben existir antes del
+        # digest final de medición; el productor es fail-open y no altera el
+        # resultado principal si la observabilidad no está disponible.
+        _persist_daily_performance(settings, store, session_date, reporter, run_id, portfolio=portfolio)
         measurement_pipeline = _run_post_market_measurement_pipeline(
             settings,
             store,
@@ -2413,7 +2443,6 @@ def post_market_review_job(
         )
         report["measurement_pipeline"] = measurement_pipeline
         store.set_runtime_value(state_key, session_date)
-        _persist_daily_performance(settings, store, session_date, reporter, run_id)
         _run_change_watchdog(settings, store, reporter, run_id)
         _run_macro_thesis(settings, store, reporter, run_id)
         _run_nightly_retrospective(settings, store, session_date, reporter, run_id)
