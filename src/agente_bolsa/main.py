@@ -2666,6 +2666,29 @@ def command_performance(args: argparse.Namespace) -> None:
         )
 
 
+def command_performance_benchmark(args: argparse.Namespace) -> None:
+    """Informe read-only del contrato P-L40B."""
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    from .tools.performance_benchmark import benchmark_summary
+
+    summary = benchmark_summary(store.performance_daily(limit=0))
+    if getattr(args, "json", False):
+        _print_json({"ok": True, **summary})
+        return
+    print("PERFORMANCE BENCHMARK")
+    print(f"  sesión: {summary.get('latest_session') or '-'}")
+    print(f"  estado: {summary.get('status')}")
+    print(f"  cuenta: {summary.get('account_daily_return')}")
+    print(f"  SPY: {summary.get('spy_daily_return')}")
+    print(f"  exceso total: {summary.get('excess_return_total')}")
+    print(f"  exposición EOD: {summary.get('gross_exposure_eod_pct')}")
+    print(f"  media temporal: {summary.get('session_average_gross_exposure')}")
+
+
 def command_iq_score(args: argparse.Namespace) -> None:
     from .tools.performance_baseline import system_iq_score
 
@@ -3868,6 +3891,13 @@ def build_parser() -> argparse.ArgumentParser:
     performance.add_argument("--days", type=int, default=30, help="Numero de dias a mostrar. Por defecto 30.")
     performance.add_argument("--json", action="store_true", help="Devuelve la serie en JSON.")
     performance.set_defaults(func=command_performance)
+
+    performance_benchmark = subparsers.add_parser(
+        "performance-benchmark",
+        help="Benchmark diario prospectivo de cartera frente a SPY (P-L40B).",
+    )
+    performance_benchmark.add_argument("--json", action="store_true", help="Devuelve el contrato resumido en JSON.")
+    performance_benchmark.set_defaults(func=command_performance_benchmark)
 
     iq_score = subparsers.add_parser(
         "iq-score",

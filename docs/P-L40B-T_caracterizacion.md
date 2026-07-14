@@ -147,3 +147,43 @@ P-L40B deberá corregir únicamente la observabilidad:
 
 No debe cambiar trading, ranking, gates, órdenes, exposición ni crear un
 scheduler o tabla paralelos.
+
+## P-L40B-W: candidato implementado en el worktree aislado
+
+El worktree `codex/pl40b-tests` añade una fuente única en
+`src/agente_bolsa/tools/performance_benchmark.py`. Consume el
+`PortfolioSnapshot` ya obtenido por `_persist_daily_performance` y lee la caché
+local directamente; no llama al broker, a yfinance ni a la red.
+
+El contrato persistido es `p-l40b.performance-benchmark.v1` dentro de
+`performance_daily.payload_json`. Las observaciones nuevas incluyen
+`content_hash`, `revision=1`, `price_basis`, `data_quality`,
+`exposure_observation_type=eod_snapshot` y
+`temporal_exposure_status=unavailable`.
+
+La persistencia nueva es idempotente: mismo `session_date` y hash producen
+`idempotent`; contenido distinto produce `conflict` sin sobrescritura. Una fila
+legacy existente para esa sesión también se conserva. La ruta legacy de
+`upsert_performance_daily` se mantiene para no reescribir las filas históricas.
+
+La lectura de SPY resuelve `Close` y las orientaciones MultiIndex
+`(SPY, Close)`/`(Close, SPY)`, selecciona fechas XNYS exactas y rechaza sesiones
+abiertas, barras futuras o sesiones ausentes. Si no puede probar la base de
+precios, publica `price_basis=unknown` y mantiene calidad `partial`.
+
+Se corrigen los defectos del camino nuevo: `alpha_vs_spy` se copia a la columna
+legacy `alpha` y el payload completo se persiste junto al bloque benchmark.
+`session_average_gross_exposure`, retorno SPY ajustado por exposición y cash drag
+permanecen `null` porque solo existe una observación EOD.
+
+El digest de laboratorio, health y el comando read-only `performance-benchmark`
+exponen el estado y los campos disponibles sin convertir valores ausentes en
+cero. El fallo de observabilidad se mantiene fail-open respecto al pipeline.
+
+### Integración nocturna pendiente
+
+Durante XNYS abierto solo se validan pruebas focales y fixtures temporales. La
+integración de producción queda pendiente de revisión nocturna: ejecutar la
+suite completa fuera de mercado, comprobar el orden final del digest, validar
+paridad exacta de decisiones/órdenes y confirmar que no se realiza backfill ni
+se altera el comportamiento legacy.

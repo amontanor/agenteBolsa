@@ -21,6 +21,7 @@ from agente_bolsa.tools.learning_mode import load_learning_mode_config
 from agente_bolsa.tools.llm_decision_quality import build_llm_decision_quality
 from agente_bolsa.tools.market_cycle_timing import summarize_market_cycle_timings
 from agente_bolsa.tools.operational_health import load_operational_block_context
+from agente_bolsa.tools.performance_benchmark import benchmark_summary
 
 from .artifact_provenance import validate_diff_provenance
 from .codegen_nightly import latest_codegen_nightly_run
@@ -179,6 +180,7 @@ def build_lab_digest(
         Settings(DATA_DIR=data_dir),
         blocked_promotion_attempts=(int(blocked_attempts) if blocked_attempts is not None else None),
     )
+    performance_benchmark = benchmark_summary(store.performance_daily(limit=0))
     return {
         "days": days,
         "generated_at": now.isoformat(),
@@ -221,6 +223,7 @@ def build_lab_digest(
         "gate_effectiveness_quality": gate_report,
         "post_market_attribution": post_market_attribution,
         "adaptive_config_governance": adaptive_governance,
+        "performance_benchmark": performance_benchmark,
     }
 
 

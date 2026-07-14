@@ -3228,6 +3228,12 @@ class Store:
             return cursor.rowcount
 
     def upsert_performance_daily(self, item: dict[str, Any]) -> None:
+        # Las filas nuevas del contrato P-L40B usan una ruta conflict-safe. La
+        # ruta legacy se conserva intacta para no reescribir ni reinterpretar
+        # las observaciones históricas.
+        if isinstance(item.get("performance_benchmark"), dict):
+            self.upsert_performance_benchmark(item)
+            return
         with self.connect() as conn:
             conn.execute(
                 """
@@ -3261,6 +3267,76 @@ class Store:
                     _utc_iso(),
                 ),
             )
+
+    def upsert_performance_benchmark(self, item: dict[str, Any]) -> dict[str, Any]:
+        """Persiste una observación P-L40B sin sobrescritura silenciosa.
+
+        No añade columnas ni tablas: el contrato vive dentro de ``payload_json``.
+        Una fila legacy existente para la misma sesión se conserva y se informa
+        como conflicto; la revisión explícita queda fuera de este lote.
+        """
+
+        benchmark = item.get("performance_benchmark") or (item.get("payload") or {}).get("performance_benchmark")
+        if not isinstance(benchmark, dict):
+            return {"status": "invalid", "reason": "missing_performance_benchmark"}
+        session_date = str(item.get("session_date") or benchmark.get("session_date") or "")
+        candidate_hash = str(benchmark.get("content_hash") or "")
+        if not session_date or not candidate_hash:
+            return {"status": "invalid", "reason": "missing_session_or_hash"}
+        payload = dict(item.get("payload") or {})
+        payload["performance_benchmark"] = benchmark
+        encoded_payload = _dumps(payload)
+        now = _utc_iso()
+        alpha = item.get("alpha")
+        if alpha is None:
+            alpha = item.get("alpha_vs_spy")
+        with self.connect() as conn:
+            existing = conn.execute(
+                "SELECT payload_json FROM performance_daily WHERE session_date = ?",
+                (session_date,),
+            ).fetchone()
+            if existing is not None:
+                try:
+                    existing_payload = json.loads(existing["payload_json"] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    existing_payload = {}
+                existing_benchmark = existing_payload.get("performance_benchmark") or {}
+                existing_hash = str(existing_benchmark.get("content_hash") or "")
+                if existing_hash and existing_hash == candidate_hash:
+                    return {
+                        "status": "idempotent",
+                        "session_date": session_date,
+                        "content_hash": candidate_hash,
+                    }
+                return {
+                    "status": "conflict",
+                    "session_date": session_date,
+                    "existing_hash": existing_hash or None,
+                    "candidate_hash": candidate_hash,
+                    "legacy_existing": not bool(existing_hash),
+                }
+            conn.execute(
+                """
+                INSERT INTO performance_daily (
+                    session_date, payload_json, equity, pnl_pct, spy_pct, alpha,
+                    hit_rate_20, sharpe_60, max_dd, iq_score, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_date,
+                    encoded_payload,
+                    _num(item.get("equity")),
+                    _num(item.get("pnl_pct")),
+                    _num(item.get("spy_pct")),
+                    _num(alpha),
+                    _num(item.get("hit_rate_20")),
+                    _num(item.get("sharpe_60")),
+                    _num(item.get("max_dd")),
+                    _num(item.get("iq_score")),
+                    now,
+                ),
+            )
+        return {"status": "inserted", "session_date": session_date, "content_hash": candidate_hash}
 
     def performance_daily(
         self,

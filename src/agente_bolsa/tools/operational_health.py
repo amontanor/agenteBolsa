@@ -432,6 +432,8 @@ def _job_alerts(job_runtime: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _report_health(settings: Settings, data_dir: Path, store: Store, now: datetime | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    from .performance_benchmark import benchmark_summary
+
     reports = {
         "technical_study": _latest_report_payload(data_dir, "latest_closed_market_technical_study.json"),
         "breakout_scan": _latest_report_payload(data_dir, "latest_breakout_scan.json"),
@@ -456,6 +458,15 @@ def _report_health(settings: Settings, data_dir: Path, store: Store, now: dateti
     if gate_status == "failed":
         alerts.append({"severity": "warning", "kind": "degraded_observability", "scope": "gate_effectiveness_quality",
                        "detail": "El informe derivado de gates fallo; no afecta trading ni gates."})
+
+    try:
+        summary["performance_benchmark"] = benchmark_summary(store.performance_daily(limit=0))
+    except Exception as exc:  # noqa: BLE001 - observabilidad fail-open.
+        summary["performance_benchmark"] = {
+            "status": "unavailable",
+            "reason": type(exc).__name__,
+            "legacy_rows": None,
+        }
 
     technical = reports["technical_study"] or {}
     market_data = technical.get("market_data", {}) or {}

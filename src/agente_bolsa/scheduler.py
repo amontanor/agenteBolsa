@@ -54,7 +54,7 @@ from .tools.overnight_learning import (
     mark_overnight_session_done,
     should_run_overnight_for_session,
 )
-from .tools.performance_baseline import build_daily_performance, fetch_spy_daily_return
+from .tools.performance_benchmark import build_daily_performance_item
 from .tools.post_market_review import build_post_market_review
 from .tools.pre_earnings import (
     backfill_pending_pre_earnings_estimates,
@@ -2003,23 +2003,26 @@ def _persist_daily_performance(
     except Exception as exc:  # noqa: BLE001 - degradacion controlada.
         log_system_event(settings.logs_dir, "performance_baseline_portfolio_unavailable", {"error": repr(exc)})
 
-    spy_pct = fetch_spy_daily_return(settings, session_date)
     try:
-        payload = build_daily_performance(
+        item = build_daily_performance_item(
             store,
             settings,
             session_date,
-            spy_pct=spy_pct,
             portfolio=portfolio,
         )
-        # Benchmarks ingenuos para validar el edge base (T5.1).
+        # Mantener los benchmarks/regimen legacy en el payload completo sin
+        # volver a consultar mercado ni alterar el contrato nuevo.
+        payload = dict(item.get("payload") or {})
         try:
             from .tools.naive_benchmarks import compute_daily_benchmarks
 
-            payload["benchmarks"] = compute_daily_benchmarks(settings, session_date, spy_pct=spy_pct)
+            payload["benchmarks"] = compute_daily_benchmarks(
+                settings,
+                session_date,
+                spy_pct=item.get("spy_pct"),
+            )
         except Exception:  # noqa: BLE001 - los benchmarks no deben romper el baseline.
             payload["benchmarks"] = {}
-        # Regimen del dia para el guard del watchdog (T5.2).
         try:
             from .tools.market_state import load_latest_market_state
 
@@ -2027,16 +2030,19 @@ def _persist_daily_performance(
             payload["regime"] = state.get("market_regime") or state.get("regime")
         except Exception as exc:  # noqa: BLE001
             log_swallow(LOGGER, "adjuntar regimen al baseline diario", exc)
-        store.upsert_performance_daily(payload)
+        item["payload"] = payload
+        result = store.upsert_performance_benchmark(item)
+        if result.get("status") == "conflict":
+            log_system_event(settings.logs_dir, "performance_benchmark_conflict", result)
         reporter.emit(
             "performance_baseline_agent",
             "performance_daily_recorded",
             run_id,
             (
                 f"Baseline de rendimiento guardado para {session_date}: "
-                f"iq_score={payload.get('iq_score')}, alpha_vs_spy={payload.get('alpha_vs_spy')}."
+                f"iq_score={item.get('iq_score')}, alpha_vs_spy={item.get('alpha')}."
             ),
-            payload,
+            {**payload, "persistence": result},
         )
     except Exception as exc:  # noqa: BLE001 - el baseline no debe romper el review.
         log_system_event(settings.logs_dir, "performance_baseline_failed", {"error": repr(exc), "session_date": session_date})
