@@ -117,6 +117,7 @@ from .tools.pre_earnings import (
     record_pre_earnings_predictions,
     update_pre_earnings_outcomes,
 )
+from .tools.reporting import write_json_report
 from .tools.retention import cleanup_runtime_data
 from .tools.rr_cohort import build_rr_cohort_report
 from .tools.signal_learning import (
@@ -1126,6 +1127,7 @@ def command_scan_technical(args: argparse.Namespace) -> None:
         progress_callback=_progress,
         benchmark_symbol=settings.benchmark_symbol,
         learning_mode_config=active_learning_mode(settings),
+        persist_report=False,
     )
     annotated_report = _annotate_technical_context_with_learning(
         report,
@@ -1143,6 +1145,14 @@ def command_scan_technical(args: argparse.Namespace) -> None:
         store,
         report,
         source=learning_mode_source(settings=settings, default_source="manual_scan"),
+    )
+    report = write_json_report(
+        report,
+        settings.data_dir / "reports",
+        "closed_market_technical_study",
+        run_id,
+        latest_filename="latest_closed_market_technical_study.json",
+        manifest={"market_data": report.get("market_data", {})},
     )
     elapsed_seconds = round(time.perf_counter() - started, 2)
     top_longs = [item["symbol"] for item in report["top_longs"][:5]]

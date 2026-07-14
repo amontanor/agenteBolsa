@@ -284,10 +284,12 @@ def _identity(value: Any, *, cycle_id: str) -> dict[str, Any]:
     item = _as_dict(value)
     lineage = _lineage(value)
     signal_id = str(lineage.get("signal_id") or "").strip() or None
+    signal_capture_id = str(lineage.get("signal_capture_id") or "").strip() or None
     source_run_id = lineage.get("source_run_id") or item.get("source_run_id")
     candidate_id = str(lineage.get("candidate_id") or "").strip() or candidate_id_for(cycle_id, signal_id, source_run_id)
     return {
         "signal_id": signal_id,
+        "signal_capture_id": signal_capture_id,
         "candidate_id": candidate_id,
         "rank": _rank(value),
         "signal_price": _signal_price(value),
