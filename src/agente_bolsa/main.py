@@ -2672,10 +2672,13 @@ def command_performance_benchmark(args: argparse.Namespace) -> None:
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
     store = Store(settings.database_path, settings.agent_logs_dir)
-    store.ensure_schema()
     from .tools.performance_benchmark import benchmark_summary
 
-    summary = benchmark_summary(store.performance_daily(limit=0))
+    try:
+        rows = store.performance_daily(limit=0, readonly=True)
+    except Exception:  # noqa: BLE001 - CLI diagnóstico sin datos es unavailable.
+        rows = []
+    summary = benchmark_summary(rows)
     if getattr(args, "json", False):
         _print_json({"ok": True, **summary})
         return

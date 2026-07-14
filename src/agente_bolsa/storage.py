@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import threading
 from dataclasses import asdict
@@ -776,6 +777,20 @@ def _utc_iso() -> str:
 
 def _dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=True, default=str)
+
+
+def _json_safe(value: Any) -> Any:
+    """Normaliza NaN/Infinity solo para payloads nuevos que exigen JSON válido."""
+
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    return value
 
 
 def _utc_datetime(value: str | None) -> datetime | None:
@@ -3231,9 +3246,42 @@ class Store:
         # Las filas nuevas del contrato P-L40B usan una ruta conflict-safe. La
         # ruta legacy se conserva intacta para no reescribir ni reinterpretar
         # las observaciones históricas.
-        if isinstance(item.get("performance_benchmark"), dict):
+        if isinstance(item.get("performance_benchmark"), dict) or isinstance(
+            (item.get("payload") or {}).get("performance_benchmark"), dict
+        ):
             self.upsert_performance_benchmark(item)
             return
+        # Un caller legacy no puede borrar el bloque canónico de una fila ya
+        # instrumentada. Se permite añadir/actualizar claves legacy, pero se
+        # conserva literalmente ``performance_benchmark`` y sus escalares.
+        session_date = str(item.get("session_date") or "")
+        if session_date:
+            with self.connect() as conn:
+                existing = conn.execute(
+                    "SELECT payload_json FROM performance_daily WHERE session_date = ?",
+                    (session_date,),
+                ).fetchone()
+                if existing is not None:
+                    try:
+                        existing_payload = json.loads(existing["payload_json"] or "{}")
+                    except (TypeError, json.JSONDecodeError):
+                        existing_payload = {}
+                    if isinstance(existing_payload.get("performance_benchmark"), dict):
+                        merged_payload = dict(existing_payload)
+                        incoming_payload = item.get("payload") or {}
+                        if isinstance(incoming_payload, dict):
+                            merged_payload.update(
+                                {
+                                    key: value
+                                    for key, value in incoming_payload.items()
+                                    if key != "performance_benchmark"
+                                }
+                            )
+                        conn.execute(
+                            "UPDATE performance_daily SET payload_json = ? WHERE session_date = ?",
+                            (_dumps(_json_safe(merged_payload)), session_date),
+                        )
+                        return
         with self.connect() as conn:
             conn.execute(
                 """
@@ -3283,9 +3331,16 @@ class Store:
         candidate_hash = str(benchmark.get("content_hash") or "")
         if not session_date or not candidate_hash:
             return {"status": "invalid", "reason": "missing_session_or_hash"}
+        try:
+            from .tools.performance_benchmark import _stable_hash
+
+            if _stable_hash(benchmark) != candidate_hash:
+                return {"status": "invalid", "reason": "content_hash_mismatch", "candidate_hash": candidate_hash}
+        except Exception:  # pragma: no cover - import guard for minimal environments.
+            return {"status": "invalid", "reason": "content_hash_unverifiable", "candidate_hash": candidate_hash}
         payload = dict(item.get("payload") or {})
         payload["performance_benchmark"] = benchmark
-        encoded_payload = _dumps(payload)
+        encoded_payload = _dumps(_json_safe(payload))
         now = _utc_iso()
         alpha = item.get("alpha")
         if alpha is None:
@@ -3315,27 +3370,50 @@ class Store:
                     "candidate_hash": candidate_hash,
                     "legacy_existing": not bool(existing_hash),
                 }
-            conn.execute(
-                """
-                INSERT INTO performance_daily (
-                    session_date, payload_json, equity, pnl_pct, spy_pct, alpha,
-                    hit_rate_20, sharpe_60, max_dd, iq_score, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    session_date,
-                    encoded_payload,
-                    _num(item.get("equity")),
-                    _num(item.get("pnl_pct")),
-                    _num(item.get("spy_pct")),
-                    _num(alpha),
-                    _num(item.get("hit_rate_20")),
-                    _num(item.get("sharpe_60")),
-                    _num(item.get("max_dd")),
-                    _num(item.get("iq_score")),
-                    now,
-                ),
-            )
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO performance_daily (
+                        session_date, payload_json, equity, pnl_pct, spy_pct, alpha,
+                        hit_rate_20, sharpe_60, max_dd, iq_score, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        session_date,
+                        encoded_payload,
+                        _num(item.get("equity")),
+                        _num(item.get("pnl_pct")),
+                        _num(item.get("spy_pct")),
+                        _num(alpha),
+                        _num(item.get("hit_rate_20")),
+                        _num(item.get("sharpe_60")),
+                        _num(item.get("max_dd")),
+                        _num(item.get("iq_score")),
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                # Dos escritores pueden pasar el SELECT inicial a la vez. La
+                # unicidad de session_date decide el ganador; el segundo
+                # devuelve conflicto sin tocar columnas escalares.
+                raced = conn.execute(
+                    "SELECT payload_json FROM performance_daily WHERE session_date = ?",
+                    (session_date,),
+                ).fetchone()
+                if raced is None:
+                    raise
+                try:
+                    raced_payload = json.loads(raced["payload_json"] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    raced_payload = {}
+                raced_benchmark = raced_payload.get("performance_benchmark") or {}
+                return {
+                    "status": "conflict",
+                    "session_date": session_date,
+                    "existing_hash": raced_benchmark.get("content_hash") or None,
+                    "candidate_hash": candidate_hash,
+                    "legacy_existing": not bool(raced_benchmark.get("content_hash")),
+                }
         return {"status": "inserted", "session_date": session_date, "content_hash": candidate_hash}
 
     def performance_daily(
@@ -3343,6 +3421,7 @@ class Store:
         *,
         limit: int = 90,
         since_date: str | None = None,
+        readonly: bool = False,
     ) -> list[dict[str, Any]]:
         query = "SELECT * FROM performance_daily WHERE 1 = 1"
         params: list[Any] = []
@@ -3353,8 +3432,11 @@ class Store:
         if limit:
             query += " LIMIT ?"
             params.append(limit)
-        with self.connect() as conn:
-            rows = conn.execute(query, params).fetchall()
+        if readonly:
+            rows = self.read_connection().execute(query, params).fetchall()
+        else:
+            with self.connect() as conn:
+                rows = conn.execute(query, params).fetchall()
         return [
             {
                 "session_date": row["session_date"],

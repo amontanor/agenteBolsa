@@ -78,6 +78,7 @@ from .tools.universe import resolve_study_universe
 
 LOGGER = logging.getLogger(__name__)
 OPERATIONAL_HEALTH_REFRESH_INTERVAL_MINUTES = 45
+_PORTFOLIO_UNSET = object()
 
 
 def _scheduler_lock_path(settings: Settings) -> Any:
@@ -1990,6 +1991,7 @@ def _persist_daily_performance(
     session_date: str,
     reporter: Any,
     run_id: str,
+    portfolio: Any = _PORTFOLIO_UNSET,
 ) -> None:
     """Calcula y persiste la fila de ``performance_daily`` de la sesion (T0.2).
 
@@ -1997,11 +1999,11 @@ def _persist_daily_performance(
     fila (equity/alpha nulos) en lugar de propagar la excepcion.
     """
 
-    portfolio = None
-    try:
-        portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
-    except Exception as exc:  # noqa: BLE001 - degradacion controlada.
-        log_system_event(settings.logs_dir, "performance_baseline_portfolio_unavailable", {"error": repr(exc)})
+    if portfolio is _PORTFOLIO_UNSET:
+        try:
+            portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
+        except Exception as exc:  # noqa: BLE001 - degradacion controlada.
+            log_system_event(settings.logs_dir, "performance_baseline_portfolio_unavailable", {"error": repr(exc)})
 
     try:
         item = build_daily_performance_item(
@@ -2034,6 +2036,15 @@ def _persist_daily_performance(
         result = store.upsert_performance_benchmark(item)
         if result.get("status") == "conflict":
             log_system_event(settings.logs_dir, "performance_benchmark_conflict", result)
+            previous_conflicts = store.get_runtime_value("performance_benchmark_conflicts") or {}
+            store.set_runtime_value(
+                "performance_benchmark_conflicts",
+                {
+                    "count": int(previous_conflicts.get("count") or 0) + 1,
+                    "last": result,
+                    "session_date": session_date,
+                },
+            )
         reporter.emit(
             "performance_baseline_agent",
             "performance_daily_recorded",
@@ -2368,13 +2379,26 @@ def post_market_review_job(
             ),
             reconciliation,
         )
+        portfolio = None
+        broker_client = None
+        try:
+            broker_client = BrokerClientFactory(settings)
+            portfolio = broker_client.alpaca_portfolio_snapshot()
+        except Exception as exc:  # noqa: BLE001 - degradacion controlada.
+            log_system_event(settings.logs_dir, "post_market_portfolio_unavailable", {"error": repr(exc)})
         report = build_post_market_review(
             settings,
             settings.data_dir / "reports",
             run_id,
             session_date=session_date,
             use_llm=use_llm and settings.post_market_review_use_llm,
+            portfolio_snapshot=portfolio,
+            broker_client=broker_client,
         )
+        # La foto de cartera y performance_daily deben existir antes del
+        # digest final de medición; el productor es fail-open y no altera el
+        # resultado principal si la observabilidad no está disponible.
+        _persist_daily_performance(settings, store, session_date, reporter, run_id, portfolio=portfolio)
         measurement_pipeline = _run_post_market_measurement_pipeline(
             settings,
             store,
@@ -2383,7 +2407,6 @@ def post_market_review_job(
         )
         report["measurement_pipeline"] = measurement_pipeline
         store.set_runtime_value(state_key, session_date)
-        _persist_daily_performance(settings, store, session_date, reporter, run_id)
         _run_change_watchdog(settings, store, reporter, run_id)
         _run_macro_thesis(settings, store, reporter, run_id)
         _run_nightly_retrospective(settings, store, session_date, reporter, run_id)

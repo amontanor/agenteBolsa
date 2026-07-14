@@ -839,6 +839,10 @@ def _build_learning_pipeline(
     return signal_update, signal_learning, daily_learning
 
 
+_PORTFOLIO_UNSET = object()
+_BROKER_UNSET = object()
+
+
 def build_post_market_review(
     settings: Settings,
     reports_dir: Path,
@@ -846,16 +850,28 @@ def build_post_market_review(
     *,
     session_date: str | None = None,
     use_llm: bool = True,
+    portfolio_snapshot: PortfolioSnapshot | None | object = _PORTFOLIO_UNSET,
+    broker_client: Any | object = _BROKER_UNSET,
 ) -> dict[str, Any]:
     reports_dir.mkdir(parents=True, exist_ok=True)
     timings: dict[str, float] = {}
 
     started = time.perf_counter()
-    portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
+    if portfolio_snapshot is _PORTFOLIO_UNSET:
+        broker = BrokerClientFactory(settings) if broker_client is _BROKER_UNSET else broker_client
+        broker_client = broker
+        portfolio = broker.alpaca_portfolio_snapshot()
+    else:
+        portfolio = portfolio_snapshot
     timings["portfolio_snapshot_seconds"] = round(time.perf_counter() - started, 3)
 
     started = time.perf_counter()
-    history = build_trade_history(settings, limit=100)
+    history = build_trade_history(
+        settings,
+        limit=100,
+        portfolio_snapshot=portfolio,
+        broker_client=broker_client,
+    )
     timings["trade_history_seconds"] = round(time.perf_counter() - started, 3)
     today = datetime.now(ZoneInfo(settings.local_timezone)).date().isoformat()
     target_date = session_date or today

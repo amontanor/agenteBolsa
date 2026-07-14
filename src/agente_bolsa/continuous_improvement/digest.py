@@ -180,7 +180,12 @@ def build_lab_digest(
         Settings(DATA_DIR=data_dir),
         blocked_promotion_attempts=(int(blocked_attempts) if blocked_attempts is not None else None),
     )
-    performance_benchmark = benchmark_summary(store.performance_daily(limit=0))
+    benchmark_conflicts = store.get_runtime_value("performance_benchmark_conflicts") or {}
+    performance_benchmark = benchmark_summary(
+        store.performance_daily(limit=0),
+        conflict_count=benchmark_conflicts.get("count"),
+        now=now,
+    )
     return {
         "days": days,
         "generated_at": now.isoformat(),

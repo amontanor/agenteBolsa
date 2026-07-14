@@ -460,7 +460,12 @@ def _report_health(settings: Settings, data_dir: Path, store: Store, now: dateti
                        "detail": "El informe derivado de gates fallo; no afecta trading ni gates."})
 
     try:
-        summary["performance_benchmark"] = benchmark_summary(store.performance_daily(limit=0))
+        benchmark_conflicts = store.get_runtime_value("performance_benchmark_conflicts") or {}
+        summary["performance_benchmark"] = benchmark_summary(
+            store.performance_daily(limit=0),
+            conflict_count=benchmark_conflicts.get("count"),
+            now=now,
+        )
     except Exception as exc:  # noqa: BLE001 - observabilidad fail-open.
         summary["performance_benchmark"] = {
             "status": "unavailable",

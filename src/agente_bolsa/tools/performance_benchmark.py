@@ -15,6 +15,7 @@ from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -27,7 +28,6 @@ if TYPE_CHECKING:  # pragma: no cover
 
 SCHEMA_VERSION = "p-l40b.performance-benchmark.v1"
 UNKNOWN_PRICE_BASIS = "unknown"
-_PRICE_COLUMNS = {"Close", "Adj Close"}
 
 
 def _finite(value: Any) -> float | None:
@@ -100,7 +100,12 @@ def session_status(session_date: str, *, now: datetime | None = None) -> tuple[s
         # ocurrido: el benchmark debe fallar cerrado, no asumir días hábiles.
         return "unavailable", ["xnys_close_unavailable"]
     else:
-        current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        current_value = now or datetime.now(timezone.utc)
+        current = (
+            current_value.replace(tzinfo=timezone.utc)
+            if current_value.tzinfo is None
+            else current_value.astimezone(timezone.utc)
+        )
         if close > current:
             return "unavailable", ["session_not_closed"]
     return "closed", warnings
@@ -139,9 +144,11 @@ def derive_account_snapshot(portfolio: Any) -> dict[str, Any]:
 
     long_value = 0.0
     short_value = 0.0
+    gross_value = 0.0
     valid_positions = 0
     unrealized_values: list[float] = []
     invalid_side = False
+    seen_symbols: set[str] = set()
     for position in getattr(portfolio, "positions", None) or []:
         market_value = _finite(getattr(position, "market_value", None))
         if market_value is None:
@@ -149,6 +156,12 @@ def derive_account_snapshot(portfolio: Any) -> dict[str, Any]:
             continue
         valid_positions += 1
         absolute_value = abs(market_value)
+        gross_value += absolute_value
+        symbol = str(getattr(position, "symbol", "") or "").strip().upper()
+        if symbol and symbol in seen_symbols:
+            warnings.append("duplicate_position_symbol")
+        if symbol:
+            seen_symbols.add(symbol)
         side = str(getattr(position, "side", "") or "").strip().lower()
         if side in {"long", "buy"}:
             long_value += absolute_value
@@ -161,7 +174,7 @@ def derive_account_snapshot(portfolio: Any) -> dict[str, Any]:
         if unrealized is not None:
             unrealized_values.append(unrealized)
 
-    gross = long_value + short_value
+    gross = gross_value
     net = None if invalid_side else long_value - short_value
     gross_pct = gross / equity if equity is not None else None
     net_pct = net / equity if equity is not None and net is not None else None
@@ -192,42 +205,59 @@ def _extract_close_series(frame: pd.DataFrame, symbol: str) -> tuple[pd.Series, 
     selected: pd.Series | None = None
     selected_name: str | None = None
     if not isinstance(columns, pd.MultiIndex):
-        for name in ("Adj Close", "Close"):
-            if name in columns:
-                selected = frame[name]
-                selected_name = name
+        normalized = [(index, str(name).strip().lower()) for index, name in enumerate(columns)]
+        for wanted, canonical in (("adj close", "Adj Close"), ("close", "Close")):
+            matches = [index for index, name in normalized if name == wanted]
+            if len(matches) > 1:
+                return pd.Series(dtype=float), None
+            if matches:
+                selected = frame.iloc[:, matches[0]]
+                selected_name = canonical
                 break
     else:
-        for column in columns:
+        matches_by_price: dict[str, list[int]] = {"Adj Close": [], "Close": []}
+        for index, column in enumerate(columns):
             parts = {str(part).strip() for part in (column if isinstance(column, tuple) else (column,))}
-            if symbol in parts and parts.intersection(_PRICE_COLUMNS):
-                price = "Adj Close" if "Adj Close" in parts else "Close"
-                selected = frame[column]
-                selected_name = price
-                break
+            lower_parts = {part.lower() for part in parts}
+            if symbol.lower() in lower_parts:
+                for price in matches_by_price:
+                    if price.lower() in lower_parts:
+                        matches_by_price[price].append(index)
+        selected_name = next((price for price in ("Adj Close", "Close") if len(matches_by_price[price]) == 1), None)
+        if selected_name is not None:
+            selected = frame.iloc[:, matches_by_price[selected_name][0]]
+        elif any(len(matches) > 1 for matches in matches_by_price.values()):
+            return pd.Series(dtype=float), None
         if selected is None and len(columns) == 1:
             column = columns[0]
             parts = {str(part).strip() for part in (column if isinstance(column, tuple) else (column,))}
-            if parts.intersection(_PRICE_COLUMNS):
-                selected = frame[column]
-                selected_name = "Adj Close" if "Adj Close" in parts else "Close"
+            lower_parts = {part.lower() for part in parts}
+            if lower_parts.intersection({"adj close", "close"}):
+                selected = frame.iloc[:, 0]
+                selected_name = "Adj Close" if "adj close" in lower_parts else "Close"
     if selected is None:
         return pd.Series(dtype=float), None
     return pd.to_numeric(selected, errors="coerce"), selected_name
 
 
 def _bar_by_date(series: pd.Series, wanted: str) -> tuple[float | None, str | None]:
+    matches: list[tuple[float, str]] = []
     for timestamp, raw in series.items():
-        value = _finite(raw)
-        if value is None or value <= 0:
-            continue
         try:
             parsed = pd.Timestamp(timestamp)
-            bar_date = parsed.tz_convert("UTC").date() if parsed.tzinfo is not None else parsed.date()
+            # Aware bars may be UTC timestamps for the NYSE close. Resolve
+            # their market date in America/New_York; using UTC can move a
+            # 20:00 ET close into the following calendar day.
+            bar_date = parsed.tz_convert(ZoneInfo("America/New_York")).date() if parsed.tzinfo is not None else parsed.date()
         except Exception:
             continue
         if bar_date.isoformat() == wanted:
-            return value, parsed.isoformat()
+            value = _finite(raw)
+            if value is None or value <= 0:
+                return None, None
+            matches.append((value, parsed.isoformat()))
+    if len(matches) == 1:
+        return matches[0]
     return None, None
 
 
@@ -287,6 +317,7 @@ def load_cached_spy_observation(settings: Settings, session_date: str, *, now: d
     if status != "closed":
         return {"status": "unavailable", "warnings": status_warnings}
     symbol = str(getattr(settings, "benchmark_symbol", "SPY") or "SPY").upper()
+    incomplete: dict[str, Any] | None = None
     for data_path, meta in _cache_candidates(settings, previous, session_date):
         try:
             frame = pd.read_pickle(data_path)
@@ -306,7 +337,7 @@ def load_cached_spy_observation(settings: Settings, session_date: str, *, now: d
         basis = _price_basis(meta, selected_name)
         if basis == UNKNOWN_PRICE_BASIS:
             warnings.append("price_basis_unknown")
-        return {
+        observation = {
             "status": "available" if daily_return is not None else "unavailable",
             "previous_close": previous_close,
             "close": close,
@@ -317,6 +348,11 @@ def load_cached_spy_observation(settings: Settings, session_date: str, *, now: d
             "data_quality": "available" if daily_return is not None and basis != UNKNOWN_PRICE_BASIS else "partial",
             "warnings": sorted(set(warnings)),
         }
+        if daily_return is not None:
+            return observation
+        incomplete = incomplete or observation
+    if incomplete is not None:
+        return incomplete
     return {"status": "unavailable", "warnings": ["spy_cache_unavailable"]}
 
 
@@ -359,7 +395,13 @@ def build_performance_benchmark(
 ) -> dict[str, Any]:
     """Construye la observación nueva y los campos legacy para una sesión."""
 
-    captured_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
+    captured_value = now or datetime.now(timezone.utc)
+    captured_dt = (
+        captured_value.replace(tzinfo=timezone.utc)
+        if captured_value.tzinfo is None
+        else captured_value.astimezone(timezone.utc)
+    )
+    captured_at = captured_dt.isoformat()
     status, status_warnings = session_status(session_date, now=now)
     account = derive_account_snapshot(portfolio)
     previous_session, previous_equity = _previous_equity(store, session_date)
@@ -367,14 +409,38 @@ def build_performance_benchmark(
     warnings = list(status_warnings) + list(account.pop("warnings", []))
     if previous_equity is None:
         warnings.append("missing_previous_xnys_session" if previous_session else "no_previous_xnys_session")
-    if spy_observation is None:
+    if status != "closed":
+        spy_observation = {"status": "unavailable", "warnings": list(status_warnings)}
+    elif spy_observation is None:
         spy_observation = load_cached_spy_observation(settings, session_date, now=now)
-    spy = spy_observation or {}
+    spy = dict(spy_observation or {})
+    observation_as_of = spy.get("as_of")
+    if observation_as_of:
+        try:
+            parsed_as_of = pd.Timestamp(observation_as_of)
+            parsed_as_of = (
+                parsed_as_of.tz_localize(timezone.utc)
+                if parsed_as_of.tzinfo is None
+                else parsed_as_of.tz_convert(timezone.utc)
+            )
+            if parsed_as_of.to_pydatetime() > captured_dt:
+                warnings.append("spy_observation_after_capture")
+                spy = {"status": "unavailable", "warnings": ["spy_observation_after_capture"]}
+        except Exception:
+            warnings.append("spy_observation_timestamp_invalid")
     warnings.extend(list(spy.get("warnings") or []))
     account_daily_return = None
     if _finite(account.get("equity")) is not None and previous_equity and previous_equity > 0:
         account_daily_return = account["equity"] / previous_equity - 1.0
-    spy_daily_return = _finite(spy.get("daily_return"))
+    spy_daily_return = None
+    if str(spy.get("status") or "").lower() == "available":
+        previous_close = _finite(spy.get("previous_close"))
+        close = _finite(spy.get("close"))
+        if previous_close is not None and previous_close > 0 and close is not None and close > 0:
+            spy_daily_return = close / previous_close - 1.0
+            provided_return = _finite(spy.get("daily_return"))
+            if provided_return is not None and abs(provided_return - spy_daily_return) > 1e-12:
+                warnings.append("spy_daily_return_mismatch")
     excess = account_daily_return - spy_daily_return if account_daily_return is not None and spy_daily_return is not None else None
     benchmark = {
         "symbol": str(getattr(settings, "benchmark_symbol", "SPY") or "SPY").upper(),
@@ -499,32 +565,76 @@ def build_daily_performance_item(
     }
 
 
-def benchmark_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _latest_closed_xnys_session(now: datetime | None = None) -> str | None:
+    current_value = now or datetime.now(timezone.utc)
+    current = (
+        current_value.replace(tzinfo=timezone.utc)
+        if current_value.tzinfo is None
+        else current_value.astimezone(timezone.utc)
+    )
+    market_date = current.astimezone(ZoneInfo("America/New_York")).date()
+    start = (market_date - timedelta(days=14)).isoformat()
+    end = market_date.isoformat()
+    for session_date in reversed(xnys_sessions_between(start, end)):
+        status, _warnings = session_status(session_date, now=current)
+        if status == "closed":
+            return session_date
+    return None
+
+
+def benchmark_summary(
+    rows: list[dict[str, Any]],
+    *,
+    conflict_count: int | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
     contracts = []
     legacy = 0
-    conflicts = 0
+    legacy_empty_payload = 0
+    legacy_missing_spy = 0
+    conflicts = 0 if conflict_count is None else int(conflict_count)
     for row in rows:
         payload = row.get("payload") or {}
         contract = payload.get("performance_benchmark")
         if isinstance(contract, dict):
             contracts.append(contract)
-            if contract.get("data_quality", {}).get("status") == "conflict":
+            if conflict_count is None and contract.get("data_quality", {}).get("status") == "conflict":
                 conflicts += 1
         else:
             legacy += 1
+            if not payload:
+                legacy_empty_payload += 1
+            if row.get("spy_pct") is None:
+                legacy_missing_spy += 1
     latest = contracts[-1] if contracts else {}
+    latest_session = latest.get("session_date")
+    expected_session = _latest_closed_xnys_session(now)
+    if not latest_session or not expected_session:
+        freshness_status = "unavailable"
+    elif latest_session == expected_session:
+        freshness_status = "fresh"
+    elif latest_session < expected_session:
+        freshness_status = "stale"
+    else:
+        freshness_status = "unavailable"
     return {
         "schema_version": SCHEMA_VERSION,
         "status": latest.get("data_quality", {}).get("status", "unavailable") if latest else "unavailable",
-        "latest_session": latest.get("session_date"),
+        "latest_session": latest_session,
         "rows": len(contracts),
         "legacy_rows": legacy,
         "conflicts": conflicts,
+        "legacy_empty_payload": legacy_empty_payload,
+        "legacy_missing_spy": legacy_missing_spy,
         "account_daily_return": (latest.get("account") or {}).get("daily_return"),
         "spy_daily_return": (latest.get("benchmark") or {}).get("daily_return"),
         "excess_return_total": (latest.get("comparison") or {}).get("excess_return_total"),
         "gross_exposure_eod_pct": (latest.get("account") or {}).get("gross_exposure_eod_pct"),
         "session_average_gross_exposure": (latest.get("account") or {}).get("session_average_gross_exposure"),
         "exposure_matched_status": "unavailable",
-        "freshness": latest.get("session_date"),
+        "freshness": {
+            "session_date": latest_session,
+            "expected_session": expected_session,
+            "status": freshness_status,
+        },
     }

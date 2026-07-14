@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -22,6 +23,9 @@ from agente_bolsa.models import PortfolioSnapshot, PositionSnapshot
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.performance_baseline import build_daily_performance, fetch_spy_daily_return
 from agente_bolsa.tools.performance_benchmark import (
+    _bar_by_date,
+    _extract_close_series,
+    _stable_hash,
     benchmark_summary,
     build_daily_performance_item,
     build_performance_benchmark,
@@ -606,7 +610,7 @@ def test_expected_contract_hash_is_idempotent_and_conflict_safe(tmp_path):
     assert store.upsert_performance_benchmark(item)["status"] == "idempotent"
     changed = json.loads(json.dumps(contract))
     changed["account"]["equity"] = 102.0
-    changed["content_hash"] = "changed"
+    changed["content_hash"] = _stable_hash(changed)
     conflict_item = dict(item, payload={"performance_benchmark": changed}, performance_benchmark=changed, equity=102.0)
     assert store.upsert_performance_benchmark(conflict_item)["status"] == "conflict"
     assert store.performance_daily(limit=0)[0]["equity"] == pytest.approx(101.0)
@@ -720,3 +724,340 @@ def test_expected_scheduler_persists_one_snapshot_and_fails_open(tmp_path, monke
     row = store.performance_daily(limit=0)[0]
     assert row["payload"]["performance_benchmark"]["schema_version"] == "p-l40b.performance-benchmark.v1"
     assert benchmark_summary([row])["exposure_matched_status"] == "unavailable"
+
+
+def test_qa_cache_reader_accepts_close_casing_and_rejects_duplicate_columns():
+    flat = pd.DataFrame({"close": [1.0]})
+    series, name = _extract_close_series(flat, "SPY")
+    assert series.iloc[0] == pytest.approx(1.0)
+    assert name == "Close"
+
+    duplicate = pd.DataFrame(
+        [[1.0, 2.0]],
+        columns=pd.MultiIndex.from_tuples([("SPY", "Close"), ("SPY", "Close")]),
+    )
+    series, name = _extract_close_series(duplicate, "SPY")
+    assert series.empty
+    assert name is None
+
+
+def test_qa_cache_reader_rejects_duplicate_session_bars():
+    series = pd.Series(
+        [1.0, 2.0],
+        index=pd.to_datetime(["2026-07-07", "2026-07-07"]),
+    )
+    assert _bar_by_date(series, "2026-07-07") == (None, None)
+
+
+def test_qa_cache_reader_resolves_aware_bars_in_nyse_date():
+    series = pd.Series(
+        [1.0, 2.0],
+        index=pd.to_datetime(["2026-07-07 20:00:00+00:00", "2026-07-08 20:00:00+00:00"]),
+    )
+    assert _bar_by_date(series, "2026-07-07")[0] == pytest.approx(1.0)
+    assert _bar_by_date(series, "2026-07-08")[0] == pytest.approx(2.0)
+
+
+def test_qa_invalid_side_keeps_measured_gross_but_not_net():
+    snapshot = derive_account_snapshot(_portfolio(positions=[_position("AIZ", 100.0, side=None)]))
+    assert snapshot["gross_exposure_usd"] == pytest.approx(100.0)
+    assert snapshot["net_exposure_usd"] is None
+    assert "position_side_invalid" in snapshot["warnings"]
+
+
+def test_qa_duplicate_position_symbol_is_warned():
+    snapshot = derive_account_snapshot(
+        _portfolio(positions=[_position("AIZ", 100.0), _position("AIZ", 50.0)])
+    )
+    assert snapshot["gross_exposure_usd"] == pytest.approx(150.0)
+    assert "duplicate_position_symbol" in snapshot["warnings"]
+
+
+def test_qa_benchmark_recomputes_spy_return_and_rejects_future_observation(tmp_path):
+    store = _store(tmp_path)
+    settings = _settings(tmp_path)
+    portfolio = _portfolio(equity=101.0)
+    mismatched = build_performance_benchmark(
+        store,
+        settings,
+        "2026-07-13",
+        portfolio,
+        now=datetime(2026, 7, 14, 22, 0, tzinfo=timezone.utc),
+        spy_observation={
+            "status": "available",
+            "previous_close": 500.0,
+            "close": 505.0,
+            "daily_return": 0.5,
+            "price_basis": "close_unadjusted",
+            "source": "synthetic",
+            "as_of": "2026-07-13T22:00:00+00:00",
+            "data_quality": "available",
+            "warnings": [],
+        },
+    )
+    assert mismatched["benchmark"]["daily_return"] == pytest.approx(0.01)
+    assert "spy_daily_return_mismatch" in mismatched["data_quality"]["warnings"]
+    future = build_performance_benchmark(
+        store,
+        settings,
+        "2026-07-13",
+        portfolio,
+        now=datetime(2026, 7, 13, 21, 0, tzinfo=timezone.utc),
+        spy_observation={
+            "status": "available",
+            "previous_close": 500.0,
+            "close": 505.0,
+            "daily_return": 0.01,
+            "as_of": "2026-07-13T22:00:00+00:00",
+        },
+    )
+    assert future["benchmark"]["daily_return"] is None
+    assert "spy_observation_after_capture" in future["data_quality"]["warnings"]
+
+
+def test_qa_nested_payload_routes_to_conflict_safe_upsert(tmp_path):
+    store = _store(tmp_path)
+    contract = build_performance_benchmark(
+        store,
+        _settings(tmp_path),
+        "2026-07-13",
+        _portfolio(equity=101.0),
+        now=datetime(2026, 7, 14, tzinfo=timezone.utc),
+        spy_observation={"status": "unavailable", "warnings": ["missing"]},
+    )
+    first = {"session_date": "2026-07-13", "equity": 101.0, "payload": {"performance_benchmark": contract}}
+    store.upsert_performance_daily(first)
+    second = json.loads(json.dumps(contract))
+    second["account"]["equity"] = 102.0
+    second["content_hash"] = _stable_hash(second)
+    result = store.upsert_performance_daily(
+        {"session_date": "2026-07-13", "equity": 102.0, "payload": {"performance_benchmark": second}}
+    )
+    row = store.performance_daily(limit=0)[0]
+    assert row["equity"] == pytest.approx(101.0)
+    assert row["payload"]["performance_benchmark"]["content_hash"] == contract["content_hash"]
+    # ``upsert_performance_daily`` is intentionally void for compatibility;
+    # the conflict remains observable through unchanged data and log path.
+    assert result is None
+
+
+def test_qa_legacy_writer_cannot_erase_new_contract(tmp_path):
+    store = _store(tmp_path)
+    contract = build_performance_benchmark(
+        store,
+        _settings(tmp_path),
+        "2026-07-13",
+        _portfolio(equity=101.0),
+        now=datetime(2026, 7, 14, tzinfo=timezone.utc),
+        spy_observation={"status": "unavailable", "warnings": ["missing"]},
+    )
+    store.upsert_performance_benchmark(
+        {"session_date": "2026-07-13", "equity": 101.0, "payload": {"performance_benchmark": contract}}
+    )
+    store.upsert_performance_daily({"session_date": "2026-07-13", "payload": {"legacy_note": "kept"}})
+    row = store.performance_daily(limit=0)[0]
+    assert row["payload"]["performance_benchmark"]["content_hash"] == contract["content_hash"]
+    assert row["payload"]["legacy_note"] == "kept"
+
+
+def test_qa_new_payload_sanitizes_non_finite_values(tmp_path):
+    store = _store(tmp_path)
+    contract = build_performance_benchmark(
+        store,
+        _settings(tmp_path),
+        "2026-07-13",
+        _portfolio(equity=101.0),
+        now=datetime(2026, 7, 14, tzinfo=timezone.utc),
+        spy_observation={"status": "unavailable", "warnings": ["missing"]},
+    )
+    item = {
+        "session_date": "2026-07-13",
+        "equity": 101.0,
+        "payload": {"performance_benchmark": contract, "bad_metric": float("nan")},
+        "performance_benchmark": contract,
+    }
+    store.upsert_performance_benchmark(item)
+    raw = _read_raw_performance(store)["payload_json"]
+    assert "NaN" not in raw and "Infinity" not in raw
+    assert json.loads(raw)["bad_metric"] is None
+
+
+def test_qa_digest_summary_exposes_legacy_quality_and_conflict_count(tmp_path):
+    store = _store(tmp_path)
+    store.upsert_performance_daily({"session_date": "2026-07-07", "payload": {}})
+    summary = benchmark_summary(store.performance_daily(limit=0), conflict_count=2)
+    assert summary["legacy_empty_payload"] == 1
+    assert summary["legacy_missing_spy"] == 1
+    assert summary["conflicts"] == 2
+    assert summary["freshness"]["status"] == "unavailable"
+
+
+def test_qa_digest_freshness_uses_closed_xnys_session_not_calendar_age():
+    row = {
+        "session_date": "2026-07-13",
+        "payload": {
+            "performance_benchmark": {
+                "session_date": "2026-07-13",
+                "data_quality": {"status": "available"},
+            }
+        },
+    }
+    during_next_session = benchmark_summary(
+        [row],
+        now=datetime(2026, 7, 14, 15, 0, tzinfo=timezone.utc),
+    )
+    after_next_close = benchmark_summary(
+        [row],
+        now=datetime(2026, 7, 14, 22, 0, tzinfo=timezone.utc),
+    )
+    assert during_next_session["freshness"]["status"] == "fresh"
+    assert after_next_close["freshness"]["status"] == "stale"
+
+
+def test_qa_interleaved_writers_keep_single_row(tmp_path):
+    store_a = _store(tmp_path)
+    store_b = Store(tmp_path / "db.sqlite3", tmp_path / "agents-b")
+    store_b.ensure_schema()
+    contract = build_performance_benchmark(
+        store_a,
+        _settings(tmp_path),
+        "2026-07-13",
+        _portfolio(equity=101.0),
+        now=datetime(2026, 7, 14, tzinfo=timezone.utc),
+        spy_observation={"status": "unavailable", "warnings": ["missing"]},
+    )
+    item = {"session_date": "2026-07-13", "equity": 101.0, "payload": {"performance_benchmark": contract}}
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda st: st.upsert_performance_benchmark(item), (store_a, store_b)))
+    assert {result["status"] for result in results}.issubset({"inserted", "idempotent", "conflict"})
+    assert len(store_a.performance_daily(limit=0)) == 1
+
+
+def test_qa_postmarket_orders_benchmark_before_digest(tmp_path, monkeypatch):
+    from agente_bolsa import scheduler
+    from agente_bolsa.market_calendar import MarketStatus
+
+    store = _store(tmp_path)
+    settings = _settings(tmp_path)
+    settings.post_market_review_enabled = True
+    settings.post_market_review_use_llm = False
+    settings.data_dir = tmp_path
+    settings.logs_dir = tmp_path / "logs"
+    settings.market_calendar = "XNYS"
+    settings.local_timezone = "Europe/Madrid"
+    events: list[str] = []
+    portfolio_calls: list[str] = []
+    captured_portfolios: list[object] = []
+    status = MarketStatus(
+        is_open=False,
+        now_utc="2026-07-14T22:00:00+00:00",
+        now_local="2026-07-14T22:00:00+00:00",
+        now_market="2026-07-14T18:00:00+00:00",
+        calendar="XNYS",
+        session_date="2026-07-14",
+        market_open=None,
+        market_close=None,
+        next_open=None,
+        next_close=None,
+        reason="closed",
+    )
+
+    class Calendar:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        def should_run_daily_study(self):
+            return True, status
+
+    class Reporter:
+        def emit(self, _agent, event_type, *_args, **_kwargs):
+            events.append(event_type)
+
+    class Client:
+        def alpaca_portfolio_snapshot(self):
+            portfolio_calls.append("portfolio")
+            return _portfolio(equity=101.0, positions=[_position("AIZ", 25.0)])
+
+    monkeypatch.setattr(scheduler, "MarketCalendar", Calendar)
+    monkeypatch.setattr(scheduler, "BrokerClientFactory", lambda _settings: Client())
+    monkeypatch.setattr(scheduler, "_reporter", lambda *_args, **_kwargs: Reporter())
+    monkeypatch.setattr(scheduler, "_set_job_status", lambda *args, **kwargs: None)
+    monkeypatch.setattr(scheduler, "reconcile_broker_orders", lambda *args, **kwargs: events.append("reconcile") or {})
+    def fake_review(*args, **kwargs):
+        events.append("review")
+        captured_portfolios.append(kwargs["portfolio_snapshot"])
+        return {"path": "review", "summary": {"trades_evaluated": 0}, "proposed_improvements": []}
+
+    monkeypatch.setattr(scheduler, "build_post_market_review", fake_review)
+    monkeypatch.setattr(scheduler, "_persist_daily_performance", lambda *args, **kwargs: events.append("benchmark"))
+    monkeypatch.setattr(
+        scheduler,
+        "_run_post_market_measurement_pipeline",
+        lambda *args, **kwargs: events.append("digest") or {"path": "digest"},
+    )
+    monkeypatch.setattr(scheduler, "_run_change_watchdog", lambda *args, **kwargs: events.append("watchdog"))
+    monkeypatch.setattr(scheduler, "_run_macro_thesis", lambda *args, **kwargs: events.append("macro"))
+    monkeypatch.setattr(scheduler, "_run_nightly_retrospective", lambda *args, **kwargs: events.append("retro"))
+    monkeypatch.setattr(scheduler, "_run_hypothesis_factory", lambda *args, **kwargs: events.append("factory"))
+    result = scheduler.post_market_review_job(settings, store, use_llm=False, verbose=False, force=True)
+    assert result is not None
+    assert events.index("reconcile") < events.index("review") < events.index("benchmark") < events.index("digest")
+    assert events.count("benchmark") == 1
+    assert events.count("digest") == 1
+    assert portfolio_calls == ["portfolio"]
+    assert len(captured_portfolios) == 1
+
+
+def test_qa_partial_portfolio_does_not_trigger_second_capture(tmp_path, monkeypatch):
+    from agente_bolsa import scheduler
+
+    store = _store(tmp_path)
+    settings = _settings(tmp_path)
+    settings.logs_dir = tmp_path / "logs"
+    calls: list[str] = []
+
+    class Client:
+        def alpaca_portfolio_snapshot(self):
+            calls.append("portfolio")
+            raise AssertionError("partial snapshot must not retry the broker")
+
+    class Reporter:
+        def emit(self, *_args, **_kwargs):
+            return None
+
+    monkeypatch.setattr(scheduler, "BrokerClientFactory", lambda _settings: Client())
+    monkeypatch.setattr(
+        scheduler,
+        "build_daily_performance_item",
+        lambda *args, **kwargs: {"session_date": "2026-07-13", "payload": {}, "performance_benchmark": {}},
+    )
+    scheduler._persist_daily_performance(settings, store, "2026-07-13", Reporter(), "run-test", portfolio=None)
+    assert calls == []
+
+
+def test_qa_trade_history_reuses_injected_portfolio_without_account_fetch(tmp_path, monkeypatch):
+    from agente_bolsa.tools import trade_history
+
+    settings = _settings(tmp_path)
+    settings.database_path = tmp_path / "db.sqlite3"
+    settings.agent_logs_dir = tmp_path / "agents"
+    settings.local_timezone = "Europe/Madrid"
+    _store(tmp_path)
+    portfolio = _portfolio(equity=101.0)
+
+    class Broker:
+        def alpaca_portfolio_snapshot(self):
+            raise AssertionError("account snapshot must be supplied by the caller")
+
+        def alpaca_trade_activities(self, *, limit):
+            return []
+
+    monkeypatch.setattr(trade_history, "BrokerClientFactory", lambda _settings: (_ for _ in ()).throw(AssertionError("factory duplicated")))
+    history = trade_history.build_trade_history(
+        settings,
+        limit=10,
+        start_date=None,
+        portfolio_snapshot=portfolio,
+        broker_client=Broker(),
+    )
+    assert history["summary"]["equity"] == pytest.approx(101.0)

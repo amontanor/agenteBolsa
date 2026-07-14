@@ -15,6 +15,8 @@ from agente_bolsa.models import PortfolioSnapshot
 from .broker import BrokerClientFactory
 
 DEFAULT_HISTORY_START_DATE = "2026-04-01"
+_PORTFOLIO_UNSET = object()
+_BROKER_UNSET = object()
 
 
 def _float(value: Any, default: float = 0.0) -> float:
@@ -448,9 +450,14 @@ def build_trade_history(
     limit: int = 100,
     start_date: str | None = DEFAULT_HISTORY_START_DATE,
     scope: str = "account",
+    portfolio_snapshot: PortfolioSnapshot | None | object = _PORTFOLIO_UNSET,
+    broker_client: Any | object = _BROKER_UNSET,
 ) -> dict[str, Any]:
-    broker = BrokerClientFactory(settings)
-    portfolio = broker.alpaca_portfolio_snapshot()
+    broker = BrokerClientFactory(settings) if broker_client is _BROKER_UNSET else broker_client
+    if portfolio_snapshot is _PORTFOLIO_UNSET:
+        portfolio = broker.alpaca_portfolio_snapshot()
+    else:
+        portfolio = portfolio_snapshot
     warnings = []
     fills = []
     try:
