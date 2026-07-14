@@ -222,7 +222,10 @@ def resolve_signal_capture(
     capture_id = str(signal_capture_id or "").strip()
     if not capture_id:
         return {"status": "missing", "signal_capture_id": None}
-    rows = list(store.signal_outcomes_containing_capture(capture_id))
+    direct_row = store.signal_outcome_by_id(str(signal_id)) if signal_id else None
+    # Decision-time callers already possess the logical signal ID.  Resolve
+    # that row directly and reserve the JSON scan for diagnostics without it.
+    rows = [direct_row] if direct_row else list(store.signal_outcomes_containing_capture(capture_id))
     if not rows:
         if signal_id and store.signal_outcome_by_id(str(signal_id)):
             return {"status": "legacy_without_capture_history", "signal_capture_id": capture_id, "signal_id": signal_id}
@@ -270,6 +273,8 @@ def resolve_signal_capture(
             return {"status": "conflict", "signal_capture_id": capture_id, "row": row, "capture": capture}
         matches.append({"row": row, "capture": capture})
     if not matches:
+        if signal_id and direct_row:
+            return {"status": "legacy_without_capture_history", "signal_capture_id": capture_id, "signal_id": signal_id}
         return {"status": "missing", "signal_capture_id": capture_id}
     if len({item["row"].get("signal_id") for item in matches}) != 1:
         return {"status": "ambiguous", "signal_capture_id": capture_id, "matches": matches}

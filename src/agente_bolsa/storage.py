@@ -779,6 +779,18 @@ def _dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=True, default=str)
 
 
+def _merge_json_dicts(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    """Merge JSON object branches without dropping unrelated persisted data."""
+
+    merged = json.loads(json.dumps(existing or {}, default=str))
+    for key, value in (incoming or {}).items():
+        if isinstance(merged.get(key), dict) and isinstance(value, dict):
+            merged[key] = _merge_json_dicts(merged[key], value)
+        else:
+            merged[key] = json.loads(json.dumps(value, default=str))
+    return merged
+
+
 def _utc_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -1741,16 +1753,22 @@ class Store:
     ) -> None:
         now = _utc_iso()
         with self.connect() as conn:
-            normalized_features = json.loads(json.dumps(features or {}, default=str))
+            # Serialize the read/merge/write section so concurrent captures
+            # cannot commit from the same stale features snapshot.
+            conn.execute("BEGIN IMMEDIATE")
+            incoming_features = json.loads(json.dumps(features or {}, default=str))
             existing_row = conn.execute(
                 "SELECT features_json FROM signal_outcomes WHERE signal_id = ?",
                 (signal_id,),
             ).fetchone()
+            existing_features = {}
             if existing_row:
                 existing_features = json.loads(existing_row["features_json"] or "{}")
+            normalized_features = _merge_json_dicts(existing_features, incoming_features)
+            if existing_row:
                 merged_identity, merge_status = merge_signal_identity_blocks(
                     existing_features.get("signal_identity"),
-                    normalized_features.get("signal_identity"),
+                    incoming_features.get("signal_identity"),
                 )
                 if merged_identity.get("captures"):
                     normalized_features["signal_identity"] = merged_identity
@@ -1796,6 +1814,9 @@ class Store:
             return
         now = _utc_iso()
         with self.connect() as conn:
+            # The bulk path has the same append-only merge contract as the
+            # single-row path and must not allow a stale writer to win.
+            conn.execute("BEGIN IMMEDIATE")
             signal_ids = [str(item["signal_id"]) for item in items]
             placeholders = ",".join("?" for _ in signal_ids)
             existing_rows = conn.execute(
@@ -1808,12 +1829,13 @@ class Store:
             }
             payload = []
             for item in items:
-                normalized_features = json.loads(json.dumps(item.get("features") or {}, default=str))
+                incoming_features = json.loads(json.dumps(item.get("features") or {}, default=str))
                 existing_features = existing_by_id.get(str(item["signal_id"]))
+                normalized_features = _merge_json_dicts(existing_features or {}, incoming_features)
                 if existing_features is not None:
                     merged_identity, merge_status = merge_signal_identity_blocks(
                         existing_features.get("signal_identity"),
-                        normalized_features.get("signal_identity"),
+                        incoming_features.get("signal_identity"),
                     )
                     if merged_identity.get("captures"):
                         normalized_features["signal_identity"] = merged_identity

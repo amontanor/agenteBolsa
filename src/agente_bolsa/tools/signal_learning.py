@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,6 +20,7 @@ from .market_data import download_daily_prices
 from .signal_identity import build_signal_capture, canonical_signal_id, signal_identity_block
 
 HORIZONS = (1, 3, 5, 10)
+LOGGER = logging.getLogger(__name__)
 
 
 def _num(value: Any, default: float | None = None) -> float | None:
@@ -311,11 +313,16 @@ def record_signal_candidates(store: Store, report: dict[str, Any], *, source: st
                 "outcome": {},
             }
         )
-    if hasattr(store, "save_signal_outcomes_bulk"):
-        store.save_signal_outcomes_bulk(rows)
-    else:
-        for row in rows:
-            store.save_signal_outcome(**row)
+    try:
+        if hasattr(store, "save_signal_outcomes_bulk"):
+            store.save_signal_outcomes_bulk(rows)
+        else:
+            for row in rows:
+                store.save_signal_outcome(**row)
+    except Exception as exc:  # noqa: BLE001 - identity telemetry must fail open.
+        report.setdefault("warnings", []).append("signal_identity_persistence_failed")
+        LOGGER.warning("No se pudo persistir la identidad prospectiva: %s", exc, exc_info=True)
+        return 0
     return len(rows)
 
 

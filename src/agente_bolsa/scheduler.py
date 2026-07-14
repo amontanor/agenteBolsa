@@ -1696,6 +1696,7 @@ def closed_market_technical_study_job(
         report,
         source=learning_mode_source(settings=settings, default_source="closed_market_study"),
     )
+    original_report_path = report.get("path")
     report = write_json_report(
         report,
         settings.data_dir / "reports",
@@ -1704,6 +1705,8 @@ def closed_market_technical_study_job(
         latest_filename="latest_closed_market_technical_study.json",
         manifest={"market_data": report.get("market_data", {})},
     )
+    if original_report_path:
+        report["path"] = original_report_path
     top_longs = ", ".join(item["symbol"] for item in report["top_longs"][:5]) or "sin candidatos"
     top_shorts = ", ".join(item["symbol"] for item in report["top_shorts"][:5]) or "sin candidatos"
     reporter.emit(
@@ -1898,6 +1901,7 @@ def opportunity_snapshot_job(
         report,
         source=learning_mode_source(settings=settings, default_source="opportunity_snapshot"),
     )
+    original_report_path = report.get("path")
     report = write_json_report(
         report,
         settings.data_dir / "reports",
@@ -1906,6 +1910,8 @@ def opportunity_snapshot_job(
         latest_filename="latest_closed_market_technical_study.json",
         manifest={"market_data": report.get("market_data", {})},
     )
+    if original_report_path:
+        report["path"] = original_report_path
     snapshot = build_opportunity_snapshot(
         settings,
         store,
