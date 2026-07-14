@@ -170,7 +170,12 @@ def test_exact_signal_link_is_verified_and_attached(tmp_path):
     from agente_bolsa.cycle_runner import _decision_context_snapshot_for_recommendation
 
     rec = recommendation()
-    rec = TradeRecommendation(**{**rec.__dict__, "decision_lineage": {"signal_id": signal_id}})
+    rec = TradeRecommendation(
+        **{
+            **rec.__dict__,
+            "decision_lineage": {"signal_id": signal_id, "signal_source_run_id": "source-1"},
+        }
+    )
     item = _decision_context_snapshot_for_recommendation(
         store,
         rec,

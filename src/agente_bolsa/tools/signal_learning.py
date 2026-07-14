@@ -139,12 +139,46 @@ def record_signal_candidates(store: Store, report: dict[str, Any], *, source: st
     shadow_candidates = list(report.get("shadow_candidates", []) or [])
     # Enrich the in-memory report too: later decision stages must transport this
     # concrete producer identity rather than rebuild it from partial context.
+    identity_by_key: dict[str, dict[str, Any]] = {}
+    ambiguous_keys: set[str] = set()
     for candidate in active_candidates:
         if isinstance(candidate, dict):
-            candidate.setdefault("signal_id", canonical_signal_id(source, candidate))
-            candidate.setdefault("signal_source_run_id", source_run_id)
-            candidate.setdefault("signal_strategy_name", candidate.get("strategy_name"))
-            candidate.setdefault("signal_strategy_version", candidate.get("strategy_version"))
+            key = canonical_signal_id(source, candidate)
+            if key in identity_by_key:
+                ambiguous_keys.add(key)
+                continue
+            signal_id = str(candidate.get("signal_id") or key)
+            identity = {
+                "signal_id": signal_id,
+                "signal_source_run_id": candidate.get("signal_source_run_id") or source_run_id,
+                "signal_strategy_name": candidate.get("signal_strategy_name") or candidate.get("strategy_name"),
+                "signal_strategy_version": candidate.get("signal_strategy_version") or candidate.get("strategy_version"),
+            }
+            identity_by_key[key] = identity
+    for candidate in active_candidates:
+        if not isinstance(candidate, dict):
+            continue
+        key = canonical_signal_id(source, candidate)
+        if key in ambiguous_keys:
+            for field in ("signal_id", "signal_source_run_id", "signal_strategy_name", "signal_strategy_version"):
+                candidate.pop(field, None)
+            candidate["signal_identity_status"] = "ambiguous"
+        elif key in identity_by_key:
+            candidate.update(identity_by_key[key])
+    # Selected/top buckets are independent dictionaries in production.  Match
+    # on the complete canonical key; an absent or ambiguous key stays explicit.
+    for bucket_name in ("all_candidates", "selected_candidates", "top_longs", "top_shorts"):
+        for candidate in list(report.get(bucket_name, []) or []):
+            if not isinstance(candidate, dict):
+                continue
+            key = canonical_signal_id(source, candidate)
+            identity = identity_by_key.get(key)
+            if identity and key not in ambiguous_keys:
+                candidate.update(identity)
+            elif key in ambiguous_keys:
+                for field in ("signal_id", "signal_source_run_id", "signal_strategy_name", "signal_strategy_version"):
+                    candidate.pop(field, None)
+                candidate["signal_identity_status"] = "ambiguous"
     candidates = [
         {**candidate, "shadow_candidate": False}
         for candidate in active_candidates
@@ -212,13 +246,16 @@ def record_signal_candidates(store: Store, report: dict[str, Any], *, source: st
             else None
         )
         signal_date = _date(features.get("last_date"))
-        signal_id = str(candidate.get("signal_id") or canonical_signal_id(source, candidate))
+        identity_key = canonical_signal_id(source, candidate)
+        ambiguous_identity = identity_key in ambiguous_keys
+        signal_id = str(candidate.get("signal_id") or identity_key)
         row_source_run_id = f"{source_run_id}:shadow" if is_shadow else source_run_id
         features.update({
             "signal_id": signal_id,
-            "signal_source_run_id": candidate.get("signal_source_run_id") or source_run_id,
-            "signal_strategy_name": candidate.get("signal_strategy_name") or candidate.get("strategy_name"),
-            "signal_strategy_version": candidate.get("signal_strategy_version") or candidate.get("strategy_version"),
+            "signal_source_run_id": None if ambiguous_identity else candidate.get("signal_source_run_id") or source_run_id,
+            "signal_strategy_name": None if ambiguous_identity else candidate.get("signal_strategy_name") or candidate.get("strategy_name"),
+            "signal_strategy_version": None if ambiguous_identity else candidate.get("signal_strategy_version") or candidate.get("strategy_version"),
+            "signal_identity_status": "ambiguous" if ambiguous_identity else "verified",
         })
         rows.append(
             {

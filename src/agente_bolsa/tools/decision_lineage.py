@@ -12,15 +12,36 @@ def _slug(value: Any) -> str:
     return "".join(ch if ch.isalnum() else "_" for ch in str(value or "").upper()).strip("_")
 
 
-def _candidate_for_symbol(technical_context: dict[str, Any], symbol: str) -> tuple[dict[str, Any] | None, int | None]:
+def _candidate_for_symbol(
+    technical_context: dict[str, Any],
+    symbol: str,
+    strategy_name: str | None = None,
+) -> tuple[dict[str, Any] | None, int | None]:
     normalized = str(symbol or "").upper().strip()
+    normalized_strategy = str(strategy_name or "").strip().lower()
+    matches: dict[tuple[str, str, str], tuple[dict[str, Any], int]] = {}
     for bucket in ("selected_candidates", "top_longs", "all_candidates"):
         for index, candidate in enumerate(list((technical_context or {}).get(bucket) or []), start=1):
             if not isinstance(candidate, dict):
                 continue
             if str(candidate.get("symbol") or "").upper().strip() == normalized:
+                candidate_strategy = str(
+                    candidate.get("signal_strategy_name") or candidate.get("strategy_name") or ""
+                ).strip().lower()
+                if normalized_strategy and candidate_strategy != normalized_strategy:
+                    continue
                 rank = candidate.get("selection_rank")
-                return candidate, int(rank) if isinstance(rank, (int, float)) else index
+                identity_key = (
+                    str(candidate.get("signal_id") or "").strip(),
+                    str(candidate.get("signal_source_run_id") or "").strip(),
+                    candidate_strategy,
+                )
+                matches.setdefault(
+                    identity_key,
+                    (candidate, int(rank) if isinstance(rank, (int, float)) else index),
+                )
+    if len(matches) == 1:
+        return next(iter(matches.values()))
     return None, None
 
 
@@ -45,13 +66,13 @@ def build_decision_lineage(
     source_run_id: str | None = None,
 ) -> dict[str, Any]:
     symbol = str(getattr(recommendation, "symbol", "") or "").upper().strip()
-    candidate, candidate_rank = _candidate_for_symbol(technical_context, symbol)
-    candidate = candidate or {}
     strategy_name = str(
         getattr(recommendation, "strategy_name", "")
-        or candidate.get("strategy_name")
         or ""
     ).strip()
+    candidate, candidate_rank = _candidate_for_symbol(technical_context, symbol, strategy_name or None)
+    candidate = candidate or {}
+    strategy_name = strategy_name or str(candidate.get("strategy_name") or "").strip()
     strategy_version = str(candidate.get("strategy_version") or "").strip() or None
     cohort = str(getattr(recommendation, "cohort", "") or default_cohort or "").strip() or None
     identity = canonical_identity(candidate)
@@ -63,7 +84,7 @@ def build_decision_lineage(
             *list(getattr(recommendation, "soft_override_reasons", []) or []),
         ]
     }
-    verified = bool(candidate and signal_id and cycle_id)
+    verified = bool(candidate and signal_id and identity["signal_source_run_id"] and cycle_id)
     candidate_id = None
     if cycle_id and signal_id:
         candidate_identity = "|".join((str(cycle_id), str(signal_id), str(source_run_id or "")))
@@ -83,7 +104,17 @@ def build_decision_lineage(
         "low_sample_exploration": low_sample,
         "candidate_rank": candidate_rank,
         "lineage_status": "verified" if verified else "unavailable",
-        "lineage_reason": None if verified else "missing_canonical_signal_id",
+        "lineage_reason": (
+            None
+            if verified
+            else (
+                "missing_canonical_signal_id"
+                if not signal_id
+                else "missing_signal_source_run_id"
+                if not identity["signal_source_run_id"]
+                else "missing_cycle_id"
+            )
+        ),
     }
 
 

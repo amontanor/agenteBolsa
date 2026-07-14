@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.168**
+- Version actual: **0.4.169**
 - Ultima actualizacion: 2026-07-12
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -68,6 +68,13 @@ amplia exposicion.
 | P-L35B | Coordinador determinista de cartera de investigacion | DEFERRED; no autorizado todavia |
 | P-L35R | Consolidacion documental y pausa tecnica de observacion | HECHO (v0.4.167) |
 | P-L36C | Propagacion de identidad canonica de senal | HECHO (v0.4.168) |
+| P-L36CR | Identidad canonica a traves del contexto compactado | HECHO (v0.4.169) |
+
+### P-L36CR - Identidad canonica a traves del contexto compactado. **HECHO (v0.4.169).**
+
+- Los buckets independientes del scheduler conservan literalmente el `signal_id` producido por el ledger.
+- El contexto compactado transporta identidad y procedencia sin cambiar campos de seleccion o economia.
+- Los 83 registros historicos del 13-jul permanecen intactos.
 
 ### P-L36C - Propagacion de identidad canonica de senal. **HECHO (v0.4.168).**
 

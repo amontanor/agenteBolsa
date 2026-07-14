@@ -490,6 +490,13 @@ def _compact_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         )
     return {
         "symbol": candidate.get("symbol"),
+        "signal_id": candidate.get("signal_id"),
+        "signal_source_run_id": candidate.get("signal_source_run_id"),
+        "signal_strategy_name": candidate.get("signal_strategy_name"),
+        "signal_strategy_version": candidate.get("signal_strategy_version"),
+        "strategy_name": candidate.get("strategy_name"),
+        "strategy_version": candidate.get("strategy_version"),
+        "last_date": candidate.get("last_date") or technical_state.get("last_date"),
         "direction": candidate.get("direction"),
         "score": candidate.get("score"),
         "setup_name": _setup_name(candidate),
