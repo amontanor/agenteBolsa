@@ -7,7 +7,11 @@ from agente_bolsa.tools.broker_reconciliation import reconcile_broker_orders
 
 
 def _latest_market_session(today: date | None = None) -> date:
-    today = today or date.today()
+    # Keep reconciliation fixtures independent of the wall clock.  Using
+    # date.today() made the signal date roll ahead of the temporary order's
+    # created_at around the UTC/local-midnight boundary, so the exact test
+    # linkage became unavailable even though the fixture was otherwise valid.
+    today = today or date(2026, 7, 14)
     session = today
     while session.weekday() >= 5:
         session -= timedelta(days=1)

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from agente_bolsa.config import Settings
 from agente_bolsa.continuous_improvement.digest import build_lab_digest, format_lab_digest_text
@@ -12,12 +11,20 @@ from agente_bolsa.scheduler import (
     weekly_learning_review_job,
 )
 from agente_bolsa.storage import Store
+from agente_bolsa.tools import operational_health
 from agente_bolsa.tools.autonomous_research import build_autonomous_research_report
 from agente_bolsa.tools.operational_health import build_production_health_report
 
 
 def _settings(tmp_path):
-    return Settings(DATA_DIR=tmp_path, CONTINUOUS_IMPROVEMENT_RUNTIME_INTERVAL_SECONDS=60)
+    return Settings(
+        _env_file=None,
+        DATA_DIR=tmp_path,
+        CONTINUOUS_IMPROVEMENT_RUNTIME_INTERVAL_SECONDS=60,
+        ALLOW_AUTO_APPLY_IMPROVEMENTS=False,
+        TRADING_MODE="paper",
+        ALLOW_LIVE_TRADING=False,
+    )
 
 
 def _store(settings):
@@ -217,10 +224,19 @@ def test_digest_includes_actionable_market_data_quality(tmp_path):
     assert "market-data-quality: cobertura=1.0 | bloqueos_reales=1 | anomalías_únicas=2" in text
 
 
-def test_production_health_tracks_ttl_coherence_fallback_and_overlap(tmp_path):
+def test_production_health_tracks_ttl_coherence_fallback_and_overlap(tmp_path, monkeypatch):
     settings = _settings(tmp_path)
     store = _store(settings)
-    now = datetime.now(timezone.utc)
+    now = datetime(2026, 7, 14, 22, 0, tzinfo=timezone.utc)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = now
+            return value.astimezone(tz) if tz else value.replace(tzinfo=None)
+
+    monkeypatch.setattr(operational_health, "datetime", FrozenDateTime)
+    monkeypatch.setattr(operational_health, "_pid_running", lambda pid: pid == 1234)
     reports = tmp_path / "reports"
     reports.mkdir(parents=True)
     (reports / "latest_market_data_quality.json").write_text(
@@ -228,21 +244,34 @@ def test_production_health_tracks_ttl_coherence_fallback_and_overlap(tmp_path):
     )
     settings.state_dir.mkdir(parents=True, exist_ok=True)
     (settings.state_dir / "scheduler.lock").write_text(
-        json.dumps({"pid": os.getpid(), "kind": "scheduler"}), encoding="utf-8"
+        json.dumps({"pid": 1234, "kind": "scheduler"}), encoding="utf-8"
     )
-    for job, start, end in (
-        ("post_market_review", "20:00:00", "20:10:00"),
-        ("market_cycle", "20:05:00", "20:06:00"),
+    post_start = now - timedelta(minutes=10)
+    post_end = now - timedelta(minutes=5)
+    cycle_start = now - timedelta(minutes=8)
+    cycle_end = now - timedelta(minutes=7)
+    for job, start, end, duration in (
+        ("post_market_review", post_start, post_end, 300),
+        ("market_cycle", cycle_start, cycle_end, 60),
     ):
         store.set_runtime_value(
             f"scheduler_job_status:{job}",
             {
                 "status": "completed",
-                "started_at": f"{now.date().isoformat()}T{start}+00:00",
-                "finished_at": f"{now.date().isoformat()}T{end}+00:00",
-                "duration_seconds": 600 if job == "post_market_review" else 60,
+                "started_at": start.isoformat(),
+                "finished_at": end.isoformat(),
+                "duration_seconds": duration,
             },
         )
+    (reports / "latest_post_market_learning.json").write_text(
+        json.dumps(
+            {
+                "session_date": "2026-07-14",
+                "pipeline_steps": {"learning_pipeline_seconds": 42.0},
+            }
+        ),
+        encoding="utf-8",
+    )
     store.record_llm_usage(
         usage_id="real",
         source="trade_decision",
@@ -281,11 +310,59 @@ def test_production_health_tracks_ttl_coherence_fallback_and_overlap(tmp_path):
 
     assert report["market_data_quality"]["max_age_seconds"] == 26 * 60 * 60
     assert report["scheduler_coherence"]["coherent"] is True
+    assert report["scheduler_heartbeat"]["is_fresh"] is True
     assert report["llm_quality"]["basis"] == "trade_recommendations"
     assert report["llm_quality"]["fallback_ratio"] == 0.6667
     assert report["llm_quality"]["fallback_reasons"] == {"unknown": 2}
     assert report["llm_decision_quality"]["summary"]["fallback_decisions"] == 2
     assert report["post_market_runtime"]["overlapping_jobs"] == ["market_cycle"]
+    assert report["post_market_runtime"]["reported_pipeline_duration_seconds"] == 42.0
+
+    # Un solapamiento cero debe seguir siendo medido como cero, no unavailable.
+    store.set_runtime_value(
+        "scheduler_job_status:market_cycle",
+        {
+            "status": "completed",
+            "started_at": (now - timedelta(minutes=3)).isoformat(),
+            "finished_at": (now - timedelta(minutes=2)).isoformat(),
+            "duration_seconds": 60,
+        },
+    )
+    no_overlap = build_production_health_report(settings, store, reports, "health-no-overlap")
+    assert no_overlap["post_market_runtime"]["overlap_count"] == 0
+    assert no_overlap["post_market_runtime"]["overlap_status"] == "measured"
+
+    # TTL fuera de límite y PID/lock incoherentes se diagnostican por separado.
+    store.set_runtime_value(
+        "scheduler_job_status:post_market_review",
+        {
+            "status": "completed",
+            "started_at": (now - timedelta(hours=2, minutes=10)).isoformat(),
+            "finished_at": (now - timedelta(hours=2)).isoformat(),
+            "duration_seconds": 600,
+        },
+    )
+    store.set_runtime_value(
+        "scheduler_job_status:market_cycle",
+        {
+            "status": "completed",
+            "started_at": (now - timedelta(hours=2, minutes=8)).isoformat(),
+            "finished_at": (now - timedelta(hours=2, minutes=7)).isoformat(),
+            "duration_seconds": 60,
+        },
+    )
+    (reports / "latest_market_data_quality.json").write_text(
+        json.dumps({"as_of": (now - timedelta(hours=27)).isoformat()}), encoding="utf-8"
+    )
+    (settings.state_dir / "scheduler.lock").write_text(
+        json.dumps({"pid": 9999, "kind": "scheduler"}), encoding="utf-8"
+    )
+    stale = build_production_health_report(settings, store, reports, "health-stale")
+    assert stale["market_data_quality"]["is_fresh"] is False
+    assert stale["scheduler_heartbeat"]["is_fresh"] is False
+    assert stale["scheduler_coherence"]["pid_alive"] is False
+    assert stale["scheduler_coherence"]["heartbeat_fresh"] is False
+    assert stale["scheduler_coherence"]["coherent"] is False
 
 
 def test_production_health_marks_market_data_quality_stale_after_26_hours(tmp_path):
