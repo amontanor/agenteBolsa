@@ -377,7 +377,12 @@ def _local_broker_orders(database_path: Path, limit: int, start_date: str | None
                 "stop_loss": plan.get("payload", {}).get("stop_loss"),
                 "take_profit": plan.get("payload", {}).get("take_profit"),
                 "broker_order_id": row["broker_order_id"],
+                "plan_id": row["plan_id"],
                 "cycle_id": row["cycle_id"],
+                # Preserve the exact local payload for post-market attribution.
+                # It is already persisted with the broker order; exposing it
+                # here avoids symbol/date joins and does not query the broker.
+                "payload": payload,
             }
         )
     return sorted(result, key=lambda item: item["time"])

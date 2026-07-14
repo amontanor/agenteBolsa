@@ -146,6 +146,33 @@ def build_lab_digest(
     )
     gate_report = _load_gate_effectiveness_quality(data_dir)
     latest_post_market = _load_json_file(data_dir / "reports" / "latest_post_market_learning.json") or {}
+    post_market_execution = latest_post_market.get("execution_attribution") or {}
+    post_market_candidates = latest_post_market.get("candidate_attribution") or {}
+    post_market_attribution = {
+        "status": latest_post_market.get("post_market_attribution_status") or (
+            "healthy"
+            if post_market_execution and not post_market_execution.get("llm_attribution_conflicts")
+            else "degraded_attribution"
+            if post_market_execution
+            else "collecting"
+        ),
+        "canonical_trade_evaluations": post_market_execution.get("canonical_trade_evaluations"),
+        "activity_fragments": post_market_execution.get("activity_fragments"),
+        "duplicate_fragment_count": post_market_execution.get("duplicate_fragment_count"),
+        "exit_origin_coverage": post_market_execution.get("exit_origin_coverage"),
+        "automatic_exit_count": post_market_execution.get("automatic_exit_count"),
+        "manual_exit_count": post_market_execution.get("manual_exit_count"),
+        "unknown_exit_origin_count": post_market_execution.get("unknown_exit_origin_count"),
+        "llm_attribution_conflicts": post_market_execution.get("llm_attribution_conflicts"),
+        "recommendation_coverage": {
+            "raw": post_market_candidates.get("recommendations_raw"),
+            "unique": post_market_candidates.get("recommendations_unique"),
+            "non_executed": post_market_candidates.get("non_executed_candidates"),
+        },
+        "non_executed_candidate_coverage": post_market_candidates.get("non_executed_candidates"),
+        "legacy_unverified_count": post_market_candidates.get("legacy_unverified_count"),
+        "immature_outcome_count": latest_post_market.get("immature_outcome_count"),
+    }
     auto_promotions = latest_post_market.get("auto_promotions") or {}
     blocked_attempts = auto_promotions.get("blocked_promotion_attempts")
     adaptive_governance = adaptive_governance_status(
@@ -192,6 +219,7 @@ def build_lab_digest(
         "decision_context_quality": build_decision_context_quality(store, now=now, days=days),
         "comparable_control_quality": build_comparable_control_quality(store),
         "gate_effectiveness_quality": gate_report,
+        "post_market_attribution": post_market_attribution,
         "adaptive_config_governance": adaptive_governance,
     }
 

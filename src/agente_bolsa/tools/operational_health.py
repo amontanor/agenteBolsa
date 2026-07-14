@@ -520,11 +520,47 @@ def _report_health(settings: Settings, data_dir: Path, store: Store, now: dateti
 
     post_market = reports["post_market_learning"] or {}
     pipeline_steps = post_market.get("pipeline_steps", {}) or {}
+    execution_attribution = post_market.get("execution_attribution") or {}
+    candidate_attribution = post_market.get("candidate_attribution") or {}
+    attribution_status = post_market.get("post_market_attribution_status") or (
+        "healthy"
+        if execution_attribution and not execution_attribution.get("llm_attribution_conflicts")
+        else "degraded_attribution"
+        if execution_attribution
+        else "collecting"
+    )
     summary["post_market_learning"] = {
         "available": bool(post_market),
         "session_date": post_market.get("session_date"),
         "pipeline_steps": pipeline_steps,
+        "attribution": {
+            "status": attribution_status,
+            "canonical_trade_evaluations": execution_attribution.get("canonical_trade_evaluations"),
+            "activity_fragments": execution_attribution.get("activity_fragments"),
+            "duplicate_fragment_count": execution_attribution.get("duplicate_fragment_count"),
+            "exit_origin_coverage": execution_attribution.get("exit_origin_coverage"),
+            "automatic_exit_count": execution_attribution.get("automatic_exit_count"),
+            "manual_exit_count": execution_attribution.get("manual_exit_count"),
+            "unknown_exit_origin_count": execution_attribution.get("unknown_exit_origin_count"),
+            "llm_attribution_conflicts": execution_attribution.get("llm_attribution_conflicts"),
+            "recommendation_coverage": {
+                "raw": candidate_attribution.get("recommendations_raw"),
+                "unique": candidate_attribution.get("recommendations_unique"),
+                "non_executed": candidate_attribution.get("non_executed_candidates"),
+            },
+            "legacy_unverified_count": candidate_attribution.get("legacy_unverified_count"),
+            "immature_outcome_count": post_market.get("immature_outcome_count"),
+        },
     }
+    if attribution_status == "degraded_attribution":
+        alerts.append(
+            {
+                "severity": "warning",
+                "kind": "post_market_attribution_degraded",
+                "scope": "post_market_attribution",
+                "detail": "La atribucion post-market contiene conflictos o identidad incompleta; no afecta trading.",
+            }
+        )
     calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
     market = calendar.status(now)
     now_utc = _parse_datetime(market.now_utc) or datetime.now(timezone.utc)

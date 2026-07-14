@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.170**
+- Version actual: **0.4.171**
 - Ultima actualizacion: 2026-07-14
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -70,6 +70,7 @@ amplia exposicion.
 | P-L36C | Propagacion de identidad canonica de senal | HECHO (v0.4.168) |
 | P-L36CR | Identidad canonica a traves del contexto compactado | HECHO (v0.4.169) |
 | P-L38B1 | Cierre de promocion autonoma no autorizada de configuracion adaptativa | HECHO (v0.4.170) |
+| P-L38B2 | Atribucion y agregacion canonica del analisis postmarket | HECHO (v0.4.171) |
 
 ### P-L38B1 - Cierre de promocion autonoma no autorizada de configuracion adaptativa. **HECHO (v0.4.170).**
 
@@ -86,6 +87,25 @@ amplia exposicion.
   marcados `preexisting_unauthorized` con `ALLOW_AUTO_APPLY_IMPROVEMENTS=false`.
 - El apply de codigo continua protegido por su propia frontera. P-L38B2
   (agregacion postmarket y recuperacion de candidatos) queda fuera de este lote.
+
+### P-L38B2 - Atribucion y agregacion canonica del analisis postmarket. **HECHO (v0.4.171).**
+
+- La unidad canónica de evaluación ejecutada es `broker_order_id`: los fragmentos
+  de `trade_memory` conservan su cuenta y detalle, pero no inflan el número de
+  operaciones.
+- La procedencia determinista conserva `exit_trigger` y los IDs disponibles;
+  `time_stop_v2` se publica como `automatic_time_stop`. Una pérdida nunca
+  reetiqueta una salida automática como manual. Las contradicciones del LLM se
+  registran sin sustituir la atribución estructurada.
+- La revisión obligatoria lee `trade_recommendations` y rechazos de sesión sin
+  excluir `learning_experiment`. Publica denominadores raw/unique, ciclos,
+  tratamientos ejecutados, no ejecutados, bloqueados y legacy/unavailable.
+- En la fixture del 13-jul se conservan 83 recomendaciones raw y 7 rechazos
+  únicos; la exclusión global de `learning_experiment` ya no vacía el ledger.
+- Se añaden métricas compactas al informe postmarket, digest y health. Los
+  outcomes inmaduros siguen siendo `null` y la ejecución no se usa como retorno
+  forward. La frontera de autorización de P-L38B1 y `adaptive_config.json` no
+  se modifican.
 
 ### P-L36CR - Identidad canonica a traves del contexto compactado. **HECHO (v0.4.169).**
 
