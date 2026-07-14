@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 from .logging_utils import AgentHistoryLogger
 from .models import AgentEvent, Hypothesis
 from .tools.learning_mode import excluded_signal_sources
+from .tools.signal_identity import merge_signal_identity_blocks
 
 ORDER_PLAN_STATUS_PENDING = "PENDING"
 ORDER_PLAN_STATUS_SUBMITTED = "SUBMITTED"
@@ -1144,6 +1145,40 @@ class Store:
             "updated_at": row["updated_at"],
         }
 
+    def signal_outcomes_containing_capture(self, signal_capture_id: str) -> list[dict[str, Any]]:
+        """Read rows whose canonical capture history contains an exact ID."""
+
+        capture_id = str(signal_capture_id or "").strip()
+        if not capture_id:
+            return []
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT signal_id, source_run_id, source, symbol, signal_date,
+                       decision, features_json, gate_json, outcome_json,
+                       created_at, updated_at
+                FROM signal_outcomes
+                WHERE features_json LIKE ?
+                """,
+                (f"%{capture_id}%",),
+            ).fetchall()
+        return [
+            {
+                "signal_id": row["signal_id"],
+                "source_run_id": row["source_run_id"],
+                "source": row["source"],
+                "symbol": row["symbol"],
+                "signal_date": row["signal_date"],
+                "decision": row["decision"],
+                "features": json.loads(row["features_json"] or "{}"),
+                "gate": json.loads(row["gate_json"] or "{}"),
+                "outcome": json.loads(row["outcome_json"] or "{}"),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
     def attach_decision_context_snapshot(self, signal_id: str, snapshot: dict[str, Any]) -> str:
         """Attach only to an exact signal row; never resolve by symbol/date."""
         with self.connect() as conn:
@@ -1706,6 +1741,21 @@ class Store:
     ) -> None:
         now = _utc_iso()
         with self.connect() as conn:
+            normalized_features = json.loads(json.dumps(features or {}, default=str))
+            existing_row = conn.execute(
+                "SELECT features_json FROM signal_outcomes WHERE signal_id = ?",
+                (signal_id,),
+            ).fetchone()
+            if existing_row:
+                existing_features = json.loads(existing_row["features_json"] or "{}")
+                merged_identity, merge_status = merge_signal_identity_blocks(
+                    existing_features.get("signal_identity"),
+                    normalized_features.get("signal_identity"),
+                )
+                if merged_identity.get("captures"):
+                    normalized_features["signal_identity"] = merged_identity
+                if merge_status == "conflict":
+                    normalized_features["signal_identity_status"] = "conflict"
             conn.execute(
                 """
                 INSERT INTO signal_outcomes (
@@ -1733,7 +1783,7 @@ class Store:
                     symbol.upper(),
                     signal_date,
                     decision,
-                    _dumps(features),
+                    _dumps(normalized_features),
                     _dumps(gate or {}),
                     _dumps(outcome or {}),
                     now,
@@ -1745,23 +1795,45 @@ class Store:
         if not items:
             return
         now = _utc_iso()
-        payload = [
-            (
-                item["signal_id"],
-                item["source_run_id"],
-                item["source"],
-                str(item["symbol"]).upper(),
-                item["signal_date"],
-                item["decision"],
-                _dumps(item["features"]),
-                _dumps(item.get("gate") or {}),
-                _dumps(item.get("outcome") or {}),
-                now,
-                now,
-            )
-            for item in items
-        ]
         with self.connect() as conn:
+            signal_ids = [str(item["signal_id"]) for item in items]
+            placeholders = ",".join("?" for _ in signal_ids)
+            existing_rows = conn.execute(
+                f"SELECT signal_id, features_json FROM signal_outcomes WHERE signal_id IN ({placeholders})",
+                signal_ids,
+            ).fetchall()
+            existing_by_id = {
+                row["signal_id"]: json.loads(row["features_json"] or "{}")
+                for row in existing_rows
+            }
+            payload = []
+            for item in items:
+                normalized_features = json.loads(json.dumps(item.get("features") or {}, default=str))
+                existing_features = existing_by_id.get(str(item["signal_id"]))
+                if existing_features is not None:
+                    merged_identity, merge_status = merge_signal_identity_blocks(
+                        existing_features.get("signal_identity"),
+                        normalized_features.get("signal_identity"),
+                    )
+                    if merged_identity.get("captures"):
+                        normalized_features["signal_identity"] = merged_identity
+                    if merge_status == "conflict":
+                        normalized_features["signal_identity_status"] = "conflict"
+                payload.append(
+                    (
+                        item["signal_id"],
+                        item["source_run_id"],
+                        item["source"],
+                        str(item["symbol"]).upper(),
+                        item["signal_date"],
+                        item["decision"],
+                        _dumps(normalized_features),
+                        _dumps(item.get("gate") or {}),
+                        _dumps(item.get("outcome") or {}),
+                        now,
+                        now,
+                    )
+                )
             conn.executemany(
                 """
                 INSERT INTO signal_outcomes (

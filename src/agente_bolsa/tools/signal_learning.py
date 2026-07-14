@@ -16,7 +16,7 @@ from agente_bolsa.storage import Store
 
 from .learning_mode import LOW_SAMPLE_EXPLORATION_TAG
 from .market_data import download_daily_prices
-from .signal_identity import canonical_signal_id
+from .signal_identity import build_signal_capture, canonical_signal_id, signal_identity_block
 
 HORIZONS = (1, 3, 5, 10)
 
@@ -148,11 +148,32 @@ def record_signal_candidates(store: Store, report: dict[str, Any], *, source: st
                 ambiguous_keys.add(key)
                 continue
             signal_id = str(candidate.get("signal_id") or key)
+            signal_source_run_id = candidate.get("signal_source_run_id") or source_run_id
+            raw_signal_date = (
+                candidate.get("signal_date")
+                or candidate.get("last_date")
+                or (candidate.get("technical_state") or {}).get("last_date")
+            )
+            signal_date = _date(raw_signal_date) if raw_signal_date else ""
+            capture = build_signal_capture(
+                {
+                    **candidate,
+                    "signal_id": signal_id,
+                    "signal_source_run_id": signal_source_run_id,
+                    "signal_date": signal_date,
+                },
+                source_run_id=signal_source_run_id,
+                captured_at=report.get("as_of"),
+            )
             identity = {
                 "signal_id": signal_id,
-                "signal_source_run_id": candidate.get("signal_source_run_id") or source_run_id,
+                "signal_source_run_id": signal_source_run_id,
+                "signal_capture_id": capture.get("signal_capture_id") if capture else None,
+                "signal_date": signal_date,
+                "candidate_id": candidate.get("candidate_id"),
                 "signal_strategy_name": candidate.get("signal_strategy_name") or candidate.get("strategy_name"),
                 "signal_strategy_version": candidate.get("signal_strategy_version") or candidate.get("strategy_version"),
+                "signal_capture": capture,
             }
             identity_by_key[key] = identity
     for candidate in active_candidates:
@@ -160,11 +181,18 @@ def record_signal_candidates(store: Store, report: dict[str, Any], *, source: st
             continue
         key = canonical_signal_id(source, candidate)
         if key in ambiguous_keys:
-            for field in ("signal_id", "signal_source_run_id", "signal_strategy_name", "signal_strategy_version"):
+            for field in (
+                "signal_id",
+                "signal_capture_id",
+                "signal_source_run_id",
+                "signal_date",
+                "signal_strategy_name",
+                "signal_strategy_version",
+            ):
                 candidate.pop(field, None)
             candidate["signal_identity_status"] = "ambiguous"
         elif key in identity_by_key:
-            candidate.update(identity_by_key[key])
+            candidate.update({key: value for key, value in identity_by_key[key].items() if key != "signal_capture"})
     # Selected/top buckets are independent dictionaries in production.  Match
     # on the complete canonical key; an absent or ambiguous key stays explicit.
     for bucket_name in ("all_candidates", "selected_candidates", "top_longs", "top_shorts"):
@@ -174,9 +202,16 @@ def record_signal_candidates(store: Store, report: dict[str, Any], *, source: st
             key = canonical_signal_id(source, candidate)
             identity = identity_by_key.get(key)
             if identity and key not in ambiguous_keys:
-                candidate.update(identity)
+                candidate.update({key: value for key, value in identity.items() if key != "signal_capture"})
             elif key in ambiguous_keys:
-                for field in ("signal_id", "signal_source_run_id", "signal_strategy_name", "signal_strategy_version"):
+                for field in (
+                    "signal_id",
+                    "signal_capture_id",
+                    "signal_source_run_id",
+                    "signal_date",
+                    "signal_strategy_name",
+                    "signal_strategy_version",
+                ):
                     candidate.pop(field, None)
                 candidate["signal_identity_status"] = "ambiguous"
     candidates = [
@@ -248,15 +283,21 @@ def record_signal_candidates(store: Store, report: dict[str, Any], *, source: st
         signal_date = _date(features.get("last_date"))
         identity_key = canonical_signal_id(source, candidate)
         ambiguous_identity = identity_key in ambiguous_keys
-        signal_id = str(candidate.get("signal_id") or identity_key)
+        identity = identity_by_key.get(identity_key) or {}
+        signal_id = str(candidate.get("signal_id") or identity.get("signal_id") or identity_key)
         row_source_run_id = f"{source_run_id}:shadow" if is_shadow else source_run_id
+        capture = identity.get("signal_capture") if not ambiguous_identity else None
         features.update({
             "signal_id": signal_id,
             "signal_source_run_id": None if ambiguous_identity else candidate.get("signal_source_run_id") or source_run_id,
+            "signal_capture_id": None if ambiguous_identity else candidate.get("signal_capture_id"),
+            "signal_date": signal_date,
             "signal_strategy_name": None if ambiguous_identity else candidate.get("signal_strategy_name") or candidate.get("strategy_name"),
             "signal_strategy_version": None if ambiguous_identity else candidate.get("signal_strategy_version") or candidate.get("strategy_version"),
-            "signal_identity_status": "ambiguous" if ambiguous_identity else "verified",
+            "signal_identity_status": "ambiguous" if ambiguous_identity else ("verified" if capture else "unavailable"),
         })
+        if capture and not ambiguous_identity:
+            features["signal_identity"] = signal_identity_block(capture)
         rows.append(
             {
                 "signal_id": signal_id,

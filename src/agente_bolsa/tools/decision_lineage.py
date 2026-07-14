@@ -19,7 +19,7 @@ def _candidate_for_symbol(
 ) -> tuple[dict[str, Any] | None, int | None]:
     normalized = str(symbol or "").upper().strip()
     normalized_strategy = str(strategy_name or "").strip().lower()
-    matches: dict[tuple[str, str, str], tuple[dict[str, Any], int]] = {}
+    matches: dict[tuple[str, str, str, str], tuple[dict[str, Any], int]] = {}
     for bucket in ("selected_candidates", "top_longs", "all_candidates"):
         for index, candidate in enumerate(list((technical_context or {}).get(bucket) or []), start=1):
             if not isinstance(candidate, dict):
@@ -33,6 +33,7 @@ def _candidate_for_symbol(
                 rank = candidate.get("selection_rank")
                 identity_key = (
                     str(candidate.get("signal_id") or "").strip(),
+                    str(candidate.get("signal_capture_id") or "").strip(),
                     str(candidate.get("signal_source_run_id") or "").strip(),
                     candidate_strategy,
                 )
@@ -85,15 +86,18 @@ def build_decision_lineage(
         ]
     }
     verified = bool(candidate and signal_id and identity["signal_source_run_id"] and cycle_id)
-    candidate_id = None
-    if cycle_id and signal_id:
+    candidate_id = str(candidate.get("candidate_id") or "").strip() or None
+    if not candidate_id and cycle_id and signal_id:
         candidate_identity = "|".join((str(cycle_id), str(signal_id), str(source_run_id or "")))
         candidate_id = f"cand_{hashlib.sha256(candidate_identity.encode('utf-8')).hexdigest()[:24]}"
     fingerprint = "|".join((cycle_id, str(signal_id or ""), decision_source, policy_version))
     return {
         "lineage_id": f"lineage_{hashlib.sha256(fingerprint.encode('utf-8')).hexdigest()[:20]}",
         "signal_id": signal_id,
+        "signal_capture_id": identity.get("signal_capture_id"),
         "signal_source_run_id": identity["signal_source_run_id"],
+        "signal_date": identity.get("signal_date"),
+        "symbol": symbol,
         "candidate_id": candidate_id,
         "cycle_id": cycle_id,
         "policy_version": policy_version,

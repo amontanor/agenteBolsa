@@ -162,6 +162,7 @@ def build_planned_snapshot(*, plan_id: str, cycle_id: str, symbol: str, side: st
     lineage = dict(plan.get("decision_lineage") or recommendation.get("decision_lineage") or {})
     context = dict(recommendation.get("decision_context_snapshot") or {})
     signal_id = str(lineage.get("signal_id") or "").strip() or None
+    signal_capture_id = str(lineage.get("signal_capture_id") or "").strip() or None
     candidate_id = str(lineage.get("candidate_id") or "").strip() or None
     lineage_id = str(lineage.get("lineage_id") or "").strip() or None
     recommendation_id = str(recommendation.get("recommendation_id") or plan.get("recommendation_id") or "").strip() or None
@@ -170,6 +171,7 @@ def build_planned_snapshot(*, plan_id: str, cycle_id: str, symbol: str, side: st
         "snapshot_id": f"execq_{_hash({'plan_id': plan_id})}",
         "lineage_status": _lineage_status(signal_id=signal_id, candidate_id=candidate_id, lineage_id=lineage_id, recommendation_id=recommendation_id, plan_id=plan_id),
         "signal_id": signal_id,
+        "signal_capture_id": signal_capture_id,
         "candidate_id": candidate_id,
         "lineage_id": lineage_id,
         "cycle_id": cycle_id or lineage.get("cycle_id"),

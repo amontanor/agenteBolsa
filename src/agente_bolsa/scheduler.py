@@ -491,7 +491,10 @@ def _compact_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     return {
         "symbol": candidate.get("symbol"),
         "signal_id": candidate.get("signal_id"),
+        "signal_capture_id": candidate.get("signal_capture_id"),
         "signal_source_run_id": candidate.get("signal_source_run_id"),
+        "candidate_id": candidate.get("candidate_id"),
+        "signal_date": candidate.get("signal_date") or candidate.get("last_date") or technical_state.get("last_date"),
         "signal_strategy_name": candidate.get("signal_strategy_name"),
         "signal_strategy_version": candidate.get("signal_strategy_version"),
         "strategy_name": candidate.get("strategy_name"),
@@ -1412,6 +1415,7 @@ def market_cycle_job(
             benchmark_symbol=settings.benchmark_symbol,
             store=store,
             learning_mode_config=active_learning_mode(settings),
+            persist_report=False,
         )
         selected_candidates, selected_symbols = _selected_candidates(report, settings)
         report["selected_candidates"] = selected_candidates
@@ -1427,6 +1431,14 @@ def market_cycle_job(
             store,
             report,
             source=learning_mode_source(settings=settings, default_source="intraday_scan"),
+        )
+        report = write_json_report(
+            report,
+            settings.data_dir / "reports",
+            "closed_market_technical_study",
+            run_id,
+            latest_filename="latest_closed_market_technical_study.json",
+            manifest={"market_data": report.get("market_data", {})},
         )
         top_longs = ", ".join(item["symbol"] for item in report["top_longs"][:5]) or "sin candidatos"
         top_shorts = ", ".join(item["symbol"] for item in report["top_shorts"][:5]) or "sin candidatos"
@@ -1667,6 +1679,7 @@ def closed_market_technical_study_job(
         benchmark_symbol=settings.benchmark_symbol,
         store=store,
         learning_mode_config=active_learning_mode(settings),
+        persist_report=False,
     )
     selected_candidates, selected_symbols = _selected_candidates(report, settings)
     report["selected_candidates"] = selected_candidates
@@ -1682,6 +1695,14 @@ def closed_market_technical_study_job(
         store,
         report,
         source=learning_mode_source(settings=settings, default_source="closed_market_study"),
+    )
+    report = write_json_report(
+        report,
+        settings.data_dir / "reports",
+        "closed_market_technical_study",
+        run_id,
+        latest_filename="latest_closed_market_technical_study.json",
+        manifest={"market_data": report.get("market_data", {})},
     )
     top_longs = ", ".join(item["symbol"] for item in report["top_longs"][:5]) or "sin candidatos"
     top_shorts = ", ".join(item["symbol"] for item in report["top_shorts"][:5]) or "sin candidatos"
@@ -1853,6 +1874,7 @@ def opportunity_snapshot_job(
         benchmark_symbol=settings.benchmark_symbol,
         store=store,
         learning_mode_config=active_learning_mode(settings),
+        persist_report=False,
     )
     annotated_report = _annotate_technical_context_with_learning(
         report,
@@ -1875,6 +1897,14 @@ def opportunity_snapshot_job(
         store,
         report,
         source=learning_mode_source(settings=settings, default_source="opportunity_snapshot"),
+    )
+    report = write_json_report(
+        report,
+        settings.data_dir / "reports",
+        "closed_market_technical_study",
+        run_id,
+        latest_filename="latest_closed_market_technical_study.json",
+        manifest={"market_data": report.get("market_data", {})},
     )
     snapshot = build_opportunity_snapshot(
         settings,

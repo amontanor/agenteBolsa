@@ -1,9 +1,9 @@
-"""P-L37B-T: characterization of the pre-P-L37B identity losses.
+"""P-L37B-T/W: isolated characterization and candidate contract tests.
 
-These tests intentionally document the current 0.4.171 behavior.  They do
-not add a producer or a repair.  The future P-L37B contract is kept below as
-test-only documentation so that implementation tests can be added without
-changing production code:
+The first cases preserve the pre-P-L37B failure shape in their fixtures while
+asserting that the candidate repair keeps the original capture resolvable.
+The future P-L37B contract is kept as test-only documentation so that the
+implementation remains independent of trading policy:
 
 * ``signal_id`` is a logical signal identity;
 * ``signal_capture_id`` is unique for each capture;
@@ -12,8 +12,8 @@ changing production code:
 * identity is transported literally and resolved by an exact capture ID;
 * legacy rows remain explicitly legacy/unavailable.
 
-The current-behavior assertions must remain green on the baseline branch;
-they are evidence for P-L37B, not a workaround for its implementation.
+The direct stale-report case remains a current-behavior characterization;
+the scheduler path is tested separately after identity enrichment.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ from agente_bolsa.scheduler import _compact_scan_context
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.decision_lineage import build_decision_lineage
 from agente_bolsa.tools.reporting import write_json_report
+from agente_bolsa.tools.signal_identity import resolve_signal_capture
 from agente_bolsa.tools.signal_learning import record_signal_candidates
 
 IDENTITY_FIELDS = (
@@ -96,6 +97,9 @@ def _report(run_id: str, candidate: dict, *, copies: bool = False) -> dict:
 def _exact_store_resolution(store: Store, lineage: dict) -> str:
     """Test-only exact resolver; symbol/date is deliberately not a fallback."""
 
+    capture_id = str(lineage.get("signal_capture_id") or "").strip()
+    if capture_id:
+        return str(resolve_signal_capture(store, capture_id, signal_id=lineage.get("signal_id")).get("status"))
     signal_id = str(lineage.get("signal_id") or "").strip()
     source_run_id = str(lineage.get("signal_source_run_id") or "").strip()
     if not signal_id or not source_run_id:
@@ -106,8 +110,8 @@ def _exact_store_resolution(store: Store, lineage: dict) -> str:
     return "exact_match" if row.get("source_run_id") == source_run_id else "mismatch"
 
 
-def test_current_upsert_replaces_capture_source_and_breaks_first_cycle_exact_match(tmp_path):
-    """The second capture wins the logical-ID UPSERT and erases capture-A."""
+def test_capture_history_preserves_first_cycle_exact_match_after_second_capture(tmp_path):
+    """The candidate solution keeps capture-A while top-level metadata advances."""
 
     store = _store(tmp_path)
     candidate_a = _candidate()
@@ -127,7 +131,9 @@ def test_current_upsert_replaces_capture_source_and_breaks_first_cycle_exact_mat
     assert lineage_a["signal_source_run_id"] == "source-run-A"
 
     candidate_b = _candidate()
-    assert record_signal_candidates(store, _report("source-run-B", candidate_b), source="learning_experiment") == 1
+    report_b = _report("source-run-B", candidate_b)
+    assert record_signal_candidates(store, report_b, source="learning_experiment") == 1
+    producer_candidate_b = report_b["all_candidates"][0]
     row_after_b = store.signal_outcome_by_id(signal_id)
     assert row_after_b["source_run_id"] == "source-run-B"
 
@@ -157,11 +163,15 @@ def test_current_upsert_replaces_capture_source_and_breaks_first_cycle_exact_mat
     )
     assert snapshot["signal_id"] == signal_id
     assert snapshot["cycle_id"] == "cycle-A"
-    assert snapshot["signal_link_status"] == "broken"
-    assert _exact_store_resolution(store, lineage_a) == "mismatch"
+    assert snapshot["signal_link_status"] == "verified"
+    assert _exact_store_resolution(store, lineage_a) == "exact_match"
     assert store.signal_outcome_by_id(signal_id)["source_run_id"] == "source-run-B"
     assert len(store.signal_outcomes(include_learning_experiment=True)) == 1
-    # A symbol/date lookup would incorrectly claim that the first decision is resolvable.
+    identity = store.signal_outcome_by_id(signal_id)["features"]["signal_identity"]
+    assert identity["latest_signal_capture_id"] == producer_candidate_b["signal_capture_id"]
+    assert len(identity["captures"]) == 2
+    assert lineage_a["signal_capture_id"] in identity["captures"]
+    # The weak symbol/date lookup still returns only the latest top-level row.
     latest = store.latest_signal_for_symbol("FDS")
     assert latest["signal_id"] == signal_id
     assert latest["signal_date"] == "2026-07-13"
@@ -223,8 +233,8 @@ def test_current_persisted_technical_report_precedes_identity_enrichment(tmp_pat
     assert lineage["lineage_reason"] == "missing_canonical_signal_id"
 
 
-def test_current_first_recommendation_has_symbol_date_match_but_source_mismatch(tmp_path):
-    """The defect is not visible when a resolver joins only symbol/date."""
+def test_first_recommendation_resolves_by_capture_not_latest_symbol_row(tmp_path):
+    """Capture-A remains resolvable even though the top-level row is B."""
 
     store = _store(tmp_path)
     first = _candidate()
@@ -245,7 +255,8 @@ def test_current_first_recommendation_has_symbol_date_match_but_source_mismatch(
     assert current["signal_date"] == "2026-07-13"
     assert current["features"]["signal_strategy_name"] == "builtin_breakout"
     assert current["source_run_id"] != lineage["signal_source_run_id"]
-    assert _exact_store_resolution(store, lineage) == "mismatch"
+    assert _exact_store_resolution(store, lineage) == "exact_match"
+    assert lineage["signal_capture_id"] in current["features"]["signal_identity"]["captures"]
     assert lineage["signal_id"] == "learning_experiment:2026-07-13:BUILTIN_BREAKOUT:FDS"
 
 

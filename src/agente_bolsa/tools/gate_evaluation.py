@@ -205,6 +205,7 @@ def collect_gate_path(
             "snapshot_id": f"gate_{_hash({'cycle_id': cycle_id, 'candidate_id': candidate_id, 'signal_id': signal_id, 'symbol': item.get('symbol'), 'action': item.get('action')})}",
             "candidate_id": candidate_id,
             "signal_id": signal_id,
+            "signal_capture_id": _lineage(candidate).get("signal_capture_id"),
             "cycle_id": cycle_id,
             "identity_status": identity_status,
             "decision_context_snapshot_id": (item.get("decision_context_snapshot") or {}).get("snapshot_id"),
