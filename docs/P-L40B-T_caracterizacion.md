@@ -1,8 +1,8 @@
 # P-L40B-T — caracterización de `performance_daily`
 
-Fecha: 14-jul-2026  
-Base: `0.4.171`, commit `6640ed91ed4d83f598950517e4997a82a2043e9a`  
-Rama: `codex/pl40b-tests`  
+Fecha: 14-jul-2026
+Base: `0.4.171`, commit `6640ed91ed4d83f598950517e4997a82a2043e9a`
+Rama: `codex/pl40b-tests`
 Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl40b_tests`
 
 Este documento pertenece únicamente al worktree de pruebas. No implementa
