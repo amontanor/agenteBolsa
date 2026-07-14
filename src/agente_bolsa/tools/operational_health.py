@@ -13,6 +13,7 @@ from agente_bolsa.logging_utils import log_system_event
 from agente_bolsa.market_calendar import MarketCalendar
 from agente_bolsa.storage import Store
 
+from .adaptive_tuning import adaptive_governance_status
 from .llm_decision_quality import build_llm_decision_quality, write_llm_decision_quality_report
 from .market_cycle_timing import summarize_market_cycle_timings
 from .reporting import write_json_report
@@ -1073,6 +1074,26 @@ def build_operational_health_report(
 ) -> dict[str, Any]:
     job_runtime = _job_runtime(store)
     report_health, report_alerts = _report_health(settings, settings.data_dir, store, now)
+    adaptive_governance = adaptive_governance_status(settings)
+    report_health["adaptive_config_governance"] = adaptive_governance
+    if adaptive_governance["status"] == "critical":
+        report_alerts.append(
+            {
+                "severity": "critical",
+                "kind": "adaptive_config_unauthorized_override",
+                "scope": "adaptive_config",
+                "detail": "Existe al menos un override adaptativo no autorizado que relaja una protección.",
+            }
+        )
+    elif adaptive_governance["status"] == "degraded_governance":
+        report_alerts.append(
+            {
+                "severity": "warning",
+                "kind": "adaptive_config_governance_degraded",
+                "scope": "adaptive_config",
+                "detail": "Overrides adaptativos preexistentes sin autorización vigente; no se han modificado.",
+            }
+        )
     ci_backlog, ci_alerts = _ci_backlog_alerts(settings, store)
     report_health["continuous_improvement_backlog"] = ci_backlog
     job_alerts = _job_alerts(job_runtime)

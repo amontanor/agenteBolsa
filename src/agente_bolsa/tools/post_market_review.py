@@ -238,10 +238,30 @@ def _llm_review(settings: Settings, report: dict[str, Any]) -> dict[str, Any]:
         try:
             parsed = json.loads(text[start : end + 1])
             if isinstance(parsed, dict):
-                return parsed
+                return _normalize_llm_review(parsed)
         except json.JSONDecodeError:
             pass
     return {"assessment": _short(text, 1200), "parse_warning": "LLM no devolvio JSON valido."}
+
+
+def _normalize_llm_review(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep LLM auto-apply flags as requests, never as authorization."""
+
+    normalized = dict(payload)
+    improvements = payload.get("minimal_improvements")
+    if not isinstance(improvements, list):
+        return normalized
+    rows: list[dict[str, Any]] = []
+    for raw in improvements:
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        if "auto_apply" in item:
+            item["requested_auto_apply"] = item.pop("auto_apply")
+        item["authorized_auto_apply"] = False
+        rows.append(item)
+    normalized["minimal_improvements"] = rows
+    return normalized
 
 
 def _build_trade_evaluations(

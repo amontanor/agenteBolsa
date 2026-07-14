@@ -75,6 +75,20 @@ ADAPTIVE_PARAMETERS = {
     },
 }
 
+AUTO_APPLY_BLOCKED_REASON = "adaptive_auto_apply_not_authorized"
+
+
+def _auto_apply_authorized(settings: Any) -> bool:
+    """Return True only for the literal boolean authorization value.
+
+    Configuration parsing may coerce values for normal application settings, but
+    this boundary is intentionally stricter: missing, null, strings and numbers
+    are never authorization.
+    """
+
+    value = getattr(settings, "allow_auto_apply_improvements", None)
+    return type(value) is bool and value is True
+
 
 def adaptive_config_path(settings: Settings) -> Path:
     return settings.state_dir / "adaptive_config.json"
@@ -94,12 +108,30 @@ def load_adaptive_config(path: Path) -> dict[str, Any]:
     return {"version": 1, "parameters": {}, "warnings": ["adaptive_config invalido; ignorado"]}
 
 
-def save_adaptive_config(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
+def save_adaptive_config(
+    path: Path,
+    payload: dict[str, Any],
+    *,
+    settings: Settings | Any | None = None,
+) -> dict[str, Any]:
+    """Persist adaptive configuration only behind the fail-closed policy gate."""
+
+    if not _auto_apply_authorized(settings):
+        return {
+            **payload,
+            "path": str(path),
+            "status": "blocked_by_policy",
+            "reason_code": AUTO_APPLY_BLOCKED_REASON,
+            "write_performed": False,
+            "blocked_by_policy": True,
+        }
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload["as_of"] = datetime.now(timezone.utc).isoformat()
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=True, default=str), encoding="utf-8")
-    payload["path"] = str(path)
-    return payload
+    saved = dict(payload)
+    saved["as_of"] = datetime.now(timezone.utc).isoformat()
+    path.write_text(json.dumps(saved, indent=2, ensure_ascii=True, default=str), encoding="utf-8")
+    saved["path"] = str(path)
+    saved["write_performed"] = True
+    return saved
 
 
 def active_adaptive_overrides(settings: Settings) -> dict[str, Any]:
@@ -331,6 +363,17 @@ def update_adaptive_config(
     if getattr(settings, "system_freeze_mode", False):
         return {"status": "blocked", "reason": "system_freeze", "changed": []}
     path = adaptive_config_path(settings)
+    if not _auto_apply_authorized(settings):
+        return {
+            "path": str(path),
+            "status": "blocked_by_policy",
+            "reason_code": AUTO_APPLY_BLOCKED_REASON,
+            "changed": [],
+            "generated": None,
+            "write_performed": False,
+            "blocked_by_policy": True,
+            "config": load_adaptive_config(path),
+        }
     config = load_adaptive_config(path)
     parameters = config.setdefault("parameters", {})
     generated = propose_adaptive_parameters(
@@ -357,7 +400,7 @@ def update_adaptive_config(
         "changed": changed,
         "signals": generated.get("signals", 0),
     }
-    saved = save_adaptive_config(path, config)
+    saved = save_adaptive_config(path, config, settings=settings)
     return {
         "path": str(path),
         "changed": changed,
@@ -384,7 +427,8 @@ def _active_parameter(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "expires_after_sessions": 3,
-        "auto_apply": True,
+        "requested_auto_apply": True,
+        "authorized_auto_apply": True,
     }
 
 
@@ -393,9 +437,21 @@ def promote_post_market_improvements(settings: Settings, report: dict[str, Any])
 
     path = adaptive_config_path(settings)
     config = load_adaptive_config(path)
+    improvements = report.get("proposed_improvements", []) or []
+    if not _auto_apply_authorized(settings):
+        return {
+            "path": str(path),
+            "status": "blocked_by_policy",
+            "reason_code": AUTO_APPLY_BLOCKED_REASON,
+            "promoted": [],
+            "requested_promotions": len(improvements),
+            "blocked_promotion_attempts": 1 if improvements else 0,
+            "write_performed": False,
+            "blocked_by_policy": True,
+            "config": config,
+        }
     parameters = config.setdefault("parameters", {})
     promoted: list[str] = []
-    improvements = report.get("proposed_improvements", []) or []
 
     for item in improvements:
         improvement_id = item.get("id")
@@ -450,13 +506,119 @@ def promote_post_market_improvements(settings: Settings, report: dict[str, Any])
         "promoted": promoted,
     }
     if promoted:
-        saved = save_adaptive_config(path, config)
+        saved = save_adaptive_config(path, config, settings=settings)
     else:
         saved = config
     return {
         "path": str(path),
+        "status": "promoted" if promoted else "no_changes",
         "promoted": promoted,
+        "blocked_promotion_attempts": 0,
+        "write_performed": bool(promoted),
         "config": saved,
+    }
+
+
+def _classify_override(base: Any, effective: Any, direction: str) -> str:
+    if base is None or effective is None:
+        return "unavailable"
+    try:
+        if float(base) == float(effective):
+            return "equivalent"
+        if direction == "conservative_decrease":
+            return "stricter" if float(effective) < float(base) else "looser"
+        if direction == "conservative_increase":
+            return "stricter" if float(effective) > float(base) else "looser"
+    except (TypeError, ValueError):
+        return "unavailable"
+    return "unavailable"
+
+
+def adaptive_governance_status(
+    settings: Settings,
+    *,
+    blocked_promotion_attempts: int | None = None,
+) -> dict[str, Any]:
+    """Read-only governance signal and inventory for adaptive overrides."""
+
+    path = adaptive_config_path(settings)
+    payload = load_adaptive_config(path)
+    parameters = payload.get("parameters", {}) or {}
+    try:
+        base_settings = Settings()
+    except Exception:
+        base_settings = settings
+    rows: list[dict[str, Any]] = []
+    active_count = 0
+    unauthorized_count = 0
+    critical_count = 0
+    for name, item in parameters.items():
+        if not isinstance(item, dict) or item.get("status") != "active":
+            continue
+        meta = ADAPTIVE_PARAMETERS.get(name)
+        if not meta:
+            rows.append(
+                {
+                    "name": name,
+                    "status": "active",
+                    "classification": "unavailable",
+                    "governance": "preexisting_unauthorized",
+                    "producer": item.get("producer"),
+                    "created_at": item.get("created_at"),
+                    "base": None,
+                    "effective": item.get("proposed"),
+                }
+            )
+            active_count += 1
+            unauthorized_count += 1
+            continue
+        effective = _bounded_value(name, item.get("proposed"))
+        base = getattr(base_settings, str(meta["settings_attr"]), None)
+        classification = _classify_override(base, effective, str(meta.get("direction") or ""))
+        unauthorized = not _auto_apply_authorized(settings)
+        governance = "preexisting_unauthorized" if unauthorized else "authorized"
+        evidence = item.get("evidence") or {}
+        producer = item.get("producer")
+        if not producer and isinstance(evidence.get("improvement"), dict):
+            producer = "post_market_review.promote_post_market_improvements"
+        if unauthorized:
+            unauthorized_count += 1
+        if unauthorized and classification == "looser":
+            governance = "critical_existing_unauthorized_override"
+            critical_count += 1
+        rows.append(
+            {
+                "name": name,
+                "status": "active",
+                "classification": classification,
+                "governance": governance,
+                "producer": producer or evidence.get("source"),
+                "created_at": item.get("created_at") or evidence.get("session_date"),
+                "base": base,
+                "effective": effective,
+                "settings_attr": meta["settings_attr"],
+            }
+        )
+        active_count += 1
+    if critical_count:
+        status = "critical"
+    elif unauthorized_count:
+        status = "degraded_governance"
+    elif not path.exists() and not blocked_promotion_attempts:
+        status = "collecting"
+    else:
+        status = "healthy"
+    return {
+        "adaptive_auto_apply_authorized": _auto_apply_authorized(settings),
+        "blocked_promotion_attempts": (
+            int(blocked_promotion_attempts) if blocked_promotion_attempts is not None else None
+        ),
+        "active_override_count": active_count,
+        "unauthorized_or_legacy_active_override_count": unauthorized_count,
+        "status": status,
+        "path": str(path),
+        "overrides": rows,
+        "warnings": list(payload.get("warnings", []) or []),
     }
 
 
@@ -484,4 +646,5 @@ def adaptive_status(settings: Settings) -> dict[str, Any]:
         "parameters": rows,
         "last_tuning": config.get("last_tuning", {}),
         "warnings": config.get("warnings", []),
+        "governance": adaptive_governance_status(settings),
     }

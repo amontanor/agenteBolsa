@@ -11,7 +11,9 @@ from statistics import median
 from typing import Any
 
 from agente_bolsa.agent_run import build_agent_run_productivity
+from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
+from agente_bolsa.tools.adaptive_tuning import adaptive_governance_status
 from agente_bolsa.tools.comparable_controls import build_comparable_control_quality
 from agente_bolsa.tools.daily_learning import load_daily_learning_context
 from agente_bolsa.tools.decision_context import build_decision_context_quality
@@ -143,6 +145,13 @@ def build_lab_digest(
         research_agenda=research_agenda,
     )
     gate_report = _load_gate_effectiveness_quality(data_dir)
+    latest_post_market = _load_json_file(data_dir / "reports" / "latest_post_market_learning.json") or {}
+    auto_promotions = latest_post_market.get("auto_promotions") or {}
+    blocked_attempts = auto_promotions.get("blocked_promotion_attempts")
+    adaptive_governance = adaptive_governance_status(
+        Settings(DATA_DIR=data_dir),
+        blocked_promotion_attempts=(int(blocked_attempts) if blocked_attempts is not None else None),
+    )
     return {
         "days": days,
         "generated_at": now.isoformat(),
@@ -183,6 +192,7 @@ def build_lab_digest(
         "decision_context_quality": build_decision_context_quality(store, now=now, days=days),
         "comparable_control_quality": build_comparable_control_quality(store),
         "gate_effectiveness_quality": gate_report,
+        "adaptive_config_governance": adaptive_governance,
     }
 
 
@@ -941,6 +951,7 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
     coverage = director.get("coverage") or {}
     market_quality = director.get("market_data_quality") or {}
     cycle_timing = director.get("market_cycle_timing") or {}
+    adaptive_governance = digest.get("adaptive_config_governance") or {}
 
     lines = [
         f"Digest diario del lab - ultimos {digest.get('days')} dia(s)",
@@ -978,6 +989,13 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
             f"unknown={_none_text(llm_summary.get('unknown_decisions'))}"
         ),
         f"- decision solicitada: {decision_requested.get('question', 'Sin dato')}",
+        "",
+        "Gobernanza de configuración adaptativa",
+        f"- estado: {adaptive_governance.get('status', 'unavailable')}",
+        f"- auto_apply autorizado: {_none_text(adaptive_governance.get('adaptive_auto_apply_authorized'))}",
+        f"- promociones bloqueadas: {_none_text(adaptive_governance.get('blocked_promotion_attempts'))}",
+        f"- overrides activos: {_none_text(adaptive_governance.get('active_override_count'))}",
+        f"- overrides no autorizados/legacy: {_none_text(adaptive_governance.get('unauthorized_or_legacy_active_override_count'))}",
         *_safety_lines(digest.get("safety")),
         (
             f"- low_sample: {int((digest.get('low_sample_usage') or {}).get('used') or 0)}/"

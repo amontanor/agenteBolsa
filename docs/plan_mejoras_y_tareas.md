@@ -10,8 +10,8 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.169**
-- Ultima actualizacion: 2026-07-12
+- Version actual: **0.4.170**
+- Ultima actualizacion: 2026-07-14
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
 ### P-L17 - Verdad de medicion: outcomes forward separados de ejecucion. **HECHO (v0.4.140).**
@@ -69,6 +69,23 @@ amplia exposicion.
 | P-L35R | Consolidacion documental y pausa tecnica de observacion | HECHO (v0.4.167) |
 | P-L36C | Propagacion de identidad canonica de senal | HECHO (v0.4.168) |
 | P-L36CR | Identidad canonica a traves del contexto compactado | HECHO (v0.4.169) |
+| P-L38B1 | Cierre de promocion autonoma no autorizada de configuracion adaptativa | HECHO (v0.4.170) |
+
+### P-L38B1 - Cierre de promocion autonoma no autorizada de configuracion adaptativa. **HECHO (v0.4.170).**
+
+- `save_adaptive_config` es la frontera unica y fail-closed: solo el booleano
+  literal `True` autoriza escribir o activar un override.
+- Postmarket, tuning/CLI y cualquier helper que utilice la frontera reciben
+  `blocked_by_policy` sin crear, modificar ni activar `adaptive_config.json`
+  cuando la autorizacion es falsa, nula, ausente o no booleana.
+- `minimal_improvements[*].auto_apply` del LLM se conserva como
+  `requested_auto_apply`; nunca concede autorizacion.
+- Se anade inventario de overrides y senal de gobernanza al digest y a health.
+  Los seis overrides actuales se leen sin reescritura: cinco equivalentes y
+  `MAX_ORDERS_PER_CYCLE` mas estricto (base 4, efectivo 2); todos quedan
+  marcados `preexisting_unauthorized` con `ALLOW_AUTO_APPLY_IMPROVEMENTS=false`.
+- El apply de codigo continua protegido por su propia frontera. P-L38B2
+  (agregacion postmarket y recuperacion de candidatos) queda fuera de este lote.
 
 ### P-L36CR - Identidad canonica a traves del contexto compactado. **HECHO (v0.4.169).**
 

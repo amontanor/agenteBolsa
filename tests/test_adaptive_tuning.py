@@ -45,7 +45,7 @@ def _store_with_signal(tmp_path, *, tag_case: str = "rsi_extreme"):
 
 
 def test_adaptive_tune_proposes_shadow_rsi_limit(tmp_path):
-    settings = Settings(DATA_DIR=tmp_path / "data", ENTRY_QUALITY_MAX_RSI=85)
+    settings = Settings(DATA_DIR=tmp_path / "data", ENTRY_QUALITY_MAX_RSI=85, ALLOW_AUTO_APPLY_IMPROVEMENTS=True)
     settings.ensure_runtime_dirs()
     store = _store_with_signal(tmp_path)
 
@@ -58,7 +58,7 @@ def test_adaptive_tune_proposes_shadow_rsi_limit(tmp_path):
 
 
 def test_adaptive_status_reports_configured_parameters(tmp_path):
-    settings = Settings(DATA_DIR=tmp_path / "data")
+    settings = Settings(DATA_DIR=tmp_path / "data", ALLOW_AUTO_APPLY_IMPROVEMENTS=True)
     settings.ensure_runtime_dirs()
 
     status = adaptive_status(settings)
@@ -68,7 +68,7 @@ def test_adaptive_status_reports_configured_parameters(tmp_path):
 
 
 def test_active_adaptive_overrides_reads_only_active(tmp_path):
-    settings = Settings(DATA_DIR=tmp_path / "data")
+    settings = Settings(DATA_DIR=tmp_path / "data", ALLOW_AUTO_APPLY_IMPROVEMENTS=True)
     settings.ensure_runtime_dirs()
     path = adaptive_config_path(settings)
     path.write_text(
@@ -96,7 +96,7 @@ def test_active_adaptive_overrides_reads_only_active(tmp_path):
 
 
 def test_promote_post_market_improvements_activates_conservative_overrides(tmp_path):
-    settings = Settings(DATA_DIR=tmp_path / "data")
+    settings = Settings(DATA_DIR=tmp_path / "data", ALLOW_AUTO_APPLY_IMPROVEMENTS=True)
     settings.ensure_runtime_dirs()
     report = {
         "session_date": "2026-04-28",
@@ -144,7 +144,12 @@ def test_promote_post_market_improvements_activates_conservative_overrides(tmp_p
 
 
 def test_adaptive_tune_uses_entry_quality_filter_calibration(tmp_path):
-    settings = Settings(DATA_DIR=tmp_path / "data", ENTRY_QUALITY_MAX_RSI=85, ENTRY_QUALITY_MAX_SMA20_DISTANCE=0.12)
+    settings = Settings(
+        DATA_DIR=tmp_path / "data",
+        ENTRY_QUALITY_MAX_RSI=85,
+        ENTRY_QUALITY_MAX_SMA20_DISTANCE=0.12,
+        ALLOW_AUTO_APPLY_IMPROVEMENTS=True,
+    )
     settings.ensure_runtime_dirs()
     store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
     store.ensure_schema()
