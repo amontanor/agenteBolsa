@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.167**
+- Version actual: **0.4.168**
 - Ultima actualizacion: 2026-07-12
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -67,6 +67,13 @@ amplia exposicion.
 | P-L35A | Auditoria de cartera autonoma de investigaciones e hipotesis | HECHO, solo lectura |
 | P-L35B | Coordinador determinista de cartera de investigacion | DEFERRED; no autorizado todavia |
 | P-L35R | Consolidacion documental y pausa tecnica de observacion | HECHO (v0.4.167) |
+| P-L36C | Propagacion de identidad canonica de senal | HECHO (v0.4.168) |
+
+### P-L36C - Propagacion de identidad canonica de senal. **HECHO (v0.4.168).**
+
+- La identidad concreta se crea en el productor y se transporta literalmente hasta lineage y contexto.
+- Se separan `signal_source_run_id` y el ciclo de decision; no se infieren enlaces por simbolo o fecha.
+- Los registros anteriores conservan su estado legacy/broken; no hubo backfill ni reescritura historica.
 
 ### P-L35R - Consolidacion documental y pausa tecnica de observacion. **HECHO (v0.4.167).**
 

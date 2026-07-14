@@ -16,6 +16,7 @@ from agente_bolsa.storage import Store
 
 from .learning_mode import LOW_SAMPLE_EXPLORATION_TAG
 from .market_data import download_daily_prices
+from .signal_identity import canonical_signal_id
 
 HORIZONS = (1, 3, 5, 10)
 
@@ -136,6 +137,14 @@ def record_signal_candidates(store: Store, report: dict[str, Any], *, source: st
     rows = []
     active_candidates = list(report.get("all_candidates", []) or [])
     shadow_candidates = list(report.get("shadow_candidates", []) or [])
+    # Enrich the in-memory report too: later decision stages must transport this
+    # concrete producer identity rather than rebuild it from partial context.
+    for candidate in active_candidates:
+        if isinstance(candidate, dict):
+            candidate.setdefault("signal_id", canonical_signal_id(source, candidate))
+            candidate.setdefault("signal_source_run_id", source_run_id)
+            candidate.setdefault("signal_strategy_name", candidate.get("strategy_name"))
+            candidate.setdefault("signal_strategy_version", candidate.get("strategy_version"))
     candidates = [
         {**candidate, "shadow_candidate": False}
         for candidate in active_candidates
@@ -203,9 +212,14 @@ def record_signal_candidates(store: Store, report: dict[str, Any], *, source: st
             else None
         )
         signal_date = _date(features.get("last_date"))
-        strategy_name = _slug(str(features.get("strategy_name") or "unknown"))
-        signal_id = f"{source}:{signal_date}:{strategy_name}:{_slug(symbol)}"
+        signal_id = str(candidate.get("signal_id") or canonical_signal_id(source, candidate))
         row_source_run_id = f"{source_run_id}:shadow" if is_shadow else source_run_id
+        features.update({
+            "signal_id": signal_id,
+            "signal_source_run_id": candidate.get("signal_source_run_id") or source_run_id,
+            "signal_strategy_name": candidate.get("signal_strategy_name") or candidate.get("strategy_name"),
+            "signal_strategy_version": candidate.get("signal_strategy_version") or candidate.get("strategy_version"),
+        })
         rows.append(
             {
                 "signal_id": signal_id,

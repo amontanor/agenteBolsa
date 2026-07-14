@@ -29,6 +29,8 @@ def test_verified_lineage_is_stable_and_complete():
                 "selection_rank": 2,
                 "strategy_name": "builtin_breakout",
                 "strategy_version": "1",
+                "signal_id": "learning_experiment:2026-07-10:BUILTIN_BREAKOUT:AAPL",
+                "signal_source_run_id": "signal-run-1",
             }
         ]
     }
@@ -49,6 +51,7 @@ def test_verified_lineage_is_stable_and_complete():
     assert first == second
     assert first["lineage_status"] == "verified"
     assert first["signal_id"] == "learning_experiment:2026-07-10:BUILTIN_BREAKOUT:AAPL"
+    assert first["signal_source_run_id"] == "signal-run-1"
     assert first["candidate_rank"] == 2
     assert first["decision_source"] == "llm"
 
@@ -82,3 +85,16 @@ def test_legacy_lineage_never_infers_strategy():
     assert lineage["lineage_status"] == "legacy_unverified"
     assert lineage["strategy_name"] is None
     assert lineage["policy_version"] is None
+
+
+def test_lineage_never_rebuilds_unknown_when_canonical_id_is_missing():
+    lineage = build_decision_lineage(
+        _recommendation(strategy_name=None),
+        {"selected_candidates": [{"symbol": "AAPL", "last_date": "2026-07-10"}]},
+        cycle_id="cycle-1",
+        policy_version="v",
+    )
+
+    assert lineage["signal_id"] is None
+    assert lineage["lineage_status"] == "unavailable"
+    assert lineage["lineage_reason"] == "missing_canonical_signal_id"

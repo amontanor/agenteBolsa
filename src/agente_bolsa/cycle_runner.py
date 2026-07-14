@@ -603,7 +603,10 @@ def _decision_context_snapshot_for_recommendation(
     signal_link_status = "unavailable"
     if signal_id:
         signal = store.signal_outcome_by_id(signal_id)
-        if signal and (not source_run_id or signal.get("source_run_id") == source_run_id):
+        # The signal producer and the decision cycle are distinct provenances.
+        # Exact ID plus canonical producer identity is the verification contract.
+        signal_source_run_id = str(lineage.get("signal_source_run_id") or "").strip() or None
+        if signal and (not signal_source_run_id or signal.get("source_run_id") == signal_source_run_id):
             signal_link_status = "verified"
         else:
             signal_link_status = "broken"
