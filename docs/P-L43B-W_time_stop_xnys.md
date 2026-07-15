@@ -89,3 +89,15 @@ digest y health, además de regresiones existentes. No se ejecutan broker real,
 postmarket real, reconciliación real, red, LLM, servicios ni despliegue durante
 este lote. La activación XNYS continúa requiriendo otro lote, fecha efectiva y
 autorización humana explícita.
+
+## P-L43BR3 — ensayo de integración (15-jul-2026)
+
+La rama candidata `0.4.173` se integró sobre producción `0.4.172` en un
+worktree separado mediante `merge --no-ff`, conservando los commits P-L43B,
+P-L43BR1 y P-L43BR2. La política `legacy_calendar_days` sigue activa; XNYS
+continúa `shadow_only=true`.
+
+La historia append-only usa `agent_events`; `runtime_state` es sólo `latest_view`.
+La evidencia prospectiva real sigue `collecting`, sin backfill ni interpretación
+de rentabilidad. La activación XNYS queda diferida a autorización humana y otro
+lote con guardia explícita.

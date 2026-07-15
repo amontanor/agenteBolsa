@@ -58,3 +58,10 @@ El objetivo no es producir más propuestas: es mayor expectativa neta, menor dra
 ## Operación vigente
 
 Usar `status`, `validate-agent-config --json`, `kernel-status --json`, `schedule-status`, `operational-health --json` y `scripts\check_services.ps1`. Reiniciar servicios sólo tras código/configuración cargada. El plan maestro `docs/plan_mejoras_y_tareas.md` es la fuente única de tareas; no crear un segundo plan.
+
+## P-L43B — estado del candidato shadow (15-jul-2026)
+
+- El candidato aislado está en versión `0.4.173`; producción sigue en `0.4.172` y no ha sido modificada.
+- `legacy_calendar_days` es la única ruta activa de `time_stop_v2`; XNYS es exclusivamente shadow.
+- La evidencia histórica usa eventos append-only por `position_identity` y `shadow_observation_id`; `runtime_state` es `latest_view`.
+- P-L43BR3 está ensayado en un worktree separado; los datos reales permanecen `collecting` y la activación XNYS requiere autorización humana y otro lote.

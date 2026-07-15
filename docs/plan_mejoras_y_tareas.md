@@ -1827,3 +1827,21 @@ vol-target quedan archivados como activo reutilizable, no como rumbo.
 
 **Lo que NO cambia:** paper-only sellado, suelo de kernel, constitucion,
 auto-apply OFF, apply humano, mediciones pre-registradas.
+
+## P-L43B — time-stop XNYS en observación shadow (15-jul-2026)
+
+- P-L43A confirmó un `semantic_mismatch` de severidad high: el horizonte
+  legacy se medía por días naturales.
+- P-L43B implementa `p-l43b.time-stop-xnys.v1`: cinco sesiones XNYS cerradas
+  estrictamente posteriores al fill, con comparación legacy descriptiva.
+  `legacy_calendar_days` continúa siendo la única política activa y XNYS
+  permanece `shadow_only=true`.
+- P-L43BR1 restauró explícitamente shadow/paridad. P-L43BR2 hizo histórica y
+  auditable la evidencia mediante eventos append-only por posición; `runtime_state`
+  es sólo `latest_view`.
+- P-L43BR3 ensayó la integración sobre producción en la rama aislada, con
+  candidato `0.4.173`, sin despliegue. El estado prospectivo continúa
+  `collecting` hasta observar posiciones reales. La activación XNYS requiere
+  autorización humana y otro lote separado (`guarded_active`).
+- No se interpretan los casos históricos como rentabilidad ni como autorización
+  para cambiar stops, takes, trailing, exposición, límites o trading.
