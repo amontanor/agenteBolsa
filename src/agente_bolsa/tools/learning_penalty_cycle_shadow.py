@@ -240,13 +240,17 @@ def build_learning_penalty_cycle_shadow(
             active_position[identity] = next_position
             next_position += 1
     legacy_order = sorted(valid, key=lambda row: active_position.get(str(row["identity"]), 10**9))
-    shadow_order = sorted(
-        valid,
-        key=lambda row: (
-            -(_finite(row["result"].get("single_penalty_rank_priority")) or float("-inf")),
+    def _shadow_key(row: Mapping[str, Any]) -> tuple[float, int]:
+        # ``0.0`` is a valid rank.  Do not treat it as a missing value via
+        # ``value or -inf`` because that would move a zero-ranked candidate
+        # behind every finite candidate.
+        value = _finite(row["result"].get("single_penalty_rank_priority"))
+        return (
+            -(value if value is not None else float("-inf")),
             active_position.get(str(row["identity"]), 10**9),
-        ),
-    )
+        )
+
+    shadow_order = sorted(valid, key=_shadow_key)
     legacy_rank = {str(row["identity"]): index for index, row in enumerate(legacy_order, start=1)}
     shadow_rank = {str(row["identity"]): index for index, row in enumerate(shadow_order, start=1)}
     legacy_ids = [str(row["identity"]) for row in legacy_order[:20]]
@@ -352,6 +356,28 @@ def _identity_parts(value: Any) -> tuple[str | None, str | None]:
     return candidate_id, signal_id
 
 
+def _cycle_id(value: Any) -> str | None:
+    """Read a cycle id from the value or its embedded recommendation/lineage."""
+
+    item = _as_mapping(value)
+    direct = str(item.get("cycle_id") or "").strip()
+    if direct:
+        return direct
+    lineage = item.get("decision_lineage") if isinstance(item.get("decision_lineage"), Mapping) else {}
+    lineage_cycle = str(lineage.get("cycle_id") or "").strip()
+    if lineage_cycle:
+        return lineage_cycle
+    nested = item.get("recommendation")
+    if isinstance(nested, Mapping):
+        return _cycle_id(nested)
+    return None
+
+
+def _cycle_matches(value: Any, cycle_id: str | None) -> bool:
+    expected = str(cycle_id or "").strip()
+    return bool(expected and _cycle_id(value) == expected)
+
+
 def _identity_matches(left: Any, right: Any) -> bool:
     left_candidate, left_signal = _identity_parts(left)
     right_candidate, right_signal = _identity_parts(right)
@@ -373,8 +399,29 @@ def _buy(value: Any) -> bool:
     return side == "buy"
 
 
-def _matched_detail(detail: Mapping[str, Any], values: Iterable[Any]) -> bool:
-    return any(_identity_matches(detail, value) for value in values)
+def _matched_detail(detail: Mapping[str, Any], values: Iterable[Any], *, cycle_id: str | None) -> bool:
+    return any(
+        _cycle_matches(value, cycle_id) and _identity_matches(detail, value)
+        for value in values
+    )
+
+
+def _gate_block_reason(value: Any, *, cycle_id: str | None) -> str | None:
+    """Return a blocked gate reason only when the snapshot links exactly."""
+
+    if not _cycle_matches(value, cycle_id):
+        return None
+    item = _as_mapping(value)
+    if item.get("identity_status") not in {"verified", "strong"}:
+        return None
+    path = item.get("gate_path") or []
+    for gate in path:
+        if not isinstance(gate, Mapping) or gate.get("status") != "blocked":
+            continue
+        if gate.get("identity_link_status") not in {"verified", "strong"}:
+            return None
+        return str(gate.get("reason_code") or gate.get("gate_name") or "gate_blocked")
+    return "gate_blocked" if item.get("decision") == "blocked" else None
 
 
 def finalize_learning_penalty_cycle_shadow(
@@ -384,6 +431,7 @@ def finalize_learning_penalty_cycle_shadow(
     plans: Iterable[Any] | None = None,
     comparable_control_sets: Mapping[str, Mapping[str, Any]] | None = None,
     rejected_order_plans: Iterable[Mapping[str, Any]] | None = None,
+    gate_snapshots: Mapping[str, Mapping[str, Any]] | None = None,
     cycle_id: str | None = None,
     captured_at: str | None = None,
     phase_b_available: bool = True,
@@ -396,13 +444,17 @@ def finalize_learning_penalty_cycle_shadow(
 
     snapshot = json.loads(json.dumps(dict(phase_a), ensure_ascii=False, default=str))
     candidate_pool = snapshot.pop("_candidate_pool", {})
+    cycle_mismatch = False
     if cycle_id and str(snapshot.get("cycle_id") or "") != str(cycle_id):
+        cycle_mismatch = True
         snapshot["status"] = "unavailable"
         snapshot.setdefault("warnings", []).append("cycle_id_mismatch")
         phase_b_available = False
 
-    recs = [value for value in (recommendations or []) if _buy(value)]
-    final_plans = [value for value in (plans or []) if str(_as_mapping(value).get("side") or "").lower() == "buy"]
+    raw_recs = [value for value in (recommendations or []) if _buy(value)]
+    raw_plans = [value for value in (plans or []) if str(_as_mapping(value).get("side") or "").lower() == "buy"]
+    recs = [value for value in raw_recs if _cycle_matches(value, cycle_id)]
+    final_plans = [value for value in raw_plans if _cycle_matches(value, cycle_id)]
     rejected = [dict(value) for value in (rejected_order_plans or []) if isinstance(value, Mapping)]
     controls = comparable_control_sets or {}
     control_rows: list[Mapping[str, Any]] = []
@@ -413,8 +465,18 @@ def finalize_learning_penalty_cycle_shadow(
 
     rejected_exact: list[Mapping[str, Any]] = []
     for row in rejected:
-        if _identity_parts(row)[0] or _identity_parts(row)[1]:
+        if _cycle_matches(row, cycle_id) and (_identity_parts(row)[0] or _identity_parts(row)[1]):
             rejected_exact.append(row)
+
+    identity_issues = any(
+        not _cycle_matches(value, cycle_id) or not any(_identity_parts(value))
+        for value in [*raw_recs, *raw_plans]
+    )
+    gate_rows = [
+        value
+        for value in (gate_snapshots or {}).values()
+        if isinstance(value, Mapping) and _cycle_matches(value, cycle_id)
+    ]
 
     # A final plan/control may sit outside the bounded top-20 detail.  Add
     # only those exact identities from the phase-A pool; never reconstruct by
@@ -424,7 +486,10 @@ def finalize_learning_penalty_cycle_shadow(
     for identity, detail in (candidate_pool.items() if isinstance(candidate_pool, Mapping) else []):
         if identity in existing_ids:
             continue
-        if any(_identity_matches(detail, value) for value in required_values):
+        if any(
+            _cycle_matches(value, cycle_id) and _identity_matches(detail, value)
+            for value in required_values
+        ):
             snapshot.setdefault("bounded_candidates", []).append(dict(detail))
             existing_ids.add(identity)
 
@@ -434,23 +499,45 @@ def finalize_learning_penalty_cycle_shadow(
     for detail in snapshot.get("bounded_candidates") or []:
         if not isinstance(detail, dict):
             continue
-        selected = _matched_detail(detail, recs)
-        planned = _matched_detail(detail, final_plans)
-        comparable = _matched_detail(detail, control_rows)
+        selected = _matched_detail(detail, recs, cycle_id=cycle_id)
+        planned = _matched_detail(detail, final_plans, cycle_id=cycle_id)
+        comparable = _matched_detail(detail, control_rows, cycle_id=cycle_id)
         rejection = next((row for row in rejected_exact if _identity_matches(detail, row)), None)
+        gate_reason = next(
+            (
+                reason
+                for gate in gate_rows
+                if _identity_matches(detail, gate)
+                for reason in [_gate_block_reason(gate, cycle_id=cycle_id)]
+                if reason
+            ),
+            None,
+        )
         decision_source = None
         source_status = "unavailable"
         matched_recommendation = next((value for value in recs if _identity_matches(detail, value)), None)
         if matched_recommendation is not None:
             item = _as_mapping(matched_recommendation)
             lineage = item.get("decision_lineage") if isinstance(item.get("decision_lineage"), Mapping) else {}
-            decision_source = item.get("decision_source") or lineage.get("decision_source")
+            decision_source = (
+                item.get("decision_source")
+                or lineage.get("decision_source")
+                or item.get("source")
+                or item.get("decision_origin")
+            )
             source_status = "available" if decision_source else "unavailable"
         detail["selected_by_decision"] = selected
         detail["planned_by_active_path"] = planned
-        detail["comparable_control"] = comparable
-        detail["blocked_candidate"] = bool(rejection)
-        detail["final_non_execution_reason"] = rejection.get("reason") if rejection else None
+        blocked = bool(rejection or gate_reason)
+        # A blocked treatment is not a primary comparable control, even if a
+        # malformed/legacy control payload happens to mention the same id.
+        detail["comparable_control"] = comparable and not blocked
+        detail["blocked_candidate"] = blocked
+        detail["final_non_execution_reason"] = (
+            (rejection or {}).get("reason") or gate_reason
+            if blocked
+            else None
+        )
         detail["decision_source"] = decision_source
         detail["decision_source_status"] = source_status
         # Compatibility alias is derived only from the final plan path.
@@ -477,9 +564,15 @@ def finalize_learning_penalty_cycle_shadow(
         int(snapshot["candidate_counts"].get("shadow_available") or 0)
         - int(snapshot["candidate_counts"].get("detail_persisted") or 0),
     )
-    if not phase_b_available:
+    if identity_issues:
+        snapshot.setdefault("warnings", []).append("phase_b_identity_unavailable")
+    if cycle_mismatch:
+        snapshot["status"] = "unavailable"
+    elif not phase_b_available:
         snapshot["status"] = "partial"
         snapshot.setdefault("warnings", []).append("phase_b_unavailable")
+    elif identity_issues:
+        snapshot["status"] = "partial"
     elif snapshot.get("status") not in {"partial", "unavailable"}:
         snapshot["status"] = "available"
     snapshot["captured_at"] = _captured_at(captured_at)
@@ -500,6 +593,7 @@ def persist_learning_penalty_cycle_shadow(store: Any, snapshot: Mapping[str, Any
 def learning_penalty_shadow_digest(store: Any, *, limit: int = 50000) -> dict[str, Any]:
     """Read valid cycle events; conflicts are visible but never counted valid."""
 
+    conflict_events: list[dict[str, Any]] = []
     try:
         events = store.learning_penalty_cycle_shadow_events(limit=limit)
         conflict_events = store.agent_events(event_type_prefix="learning_penalty_cycle_shadow_conflict", limit=limit)

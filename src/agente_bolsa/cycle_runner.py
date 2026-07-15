@@ -311,6 +311,19 @@ def _register_low_sample_order(
     }
 
 
+def _rejection_payload_for_plan(plan: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    """Attach exact recommendation lineage to a post-plan rejection."""
+
+    row = dict(payload)
+    recommendation = getattr(plan, "recommendation", None)
+    lineage = dict(getattr(recommendation, "decision_lineage", {}) or {})
+    for key in ("candidate_id", "signal_id", "cycle_id"):
+        value = str(lineage.get(key) or "").strip()
+        if value:
+            row[key] = value
+    return row
+
+
 def _apply_daily_buy_limit(
     settings: Settings,
     store: Store,
@@ -345,7 +358,7 @@ def _apply_daily_buy_limit(
         if rejected is not None:
             for plan in blocked:
                 rejected.append(
-                    {
+                    _rejection_payload_for_plan(plan, {
                         "symbol": plan.symbol,
                         "action": str(getattr(plan, "side", "")).lower(),
                         "stage": "daily_buy_limit",
@@ -355,7 +368,7 @@ def _apply_daily_buy_limit(
                             "max_daily_buy_orders": settings.max_daily_buy_orders,
                             "effective_max_daily_buy_orders": daily_buy_limit,
                         },
-                    }
+                    })
                 )
         reporter.emit(
             "risk_manager",
@@ -963,7 +976,7 @@ def _apply_low_sample_daily_quota(
         for plan in blocked:
             if rejected is not None:
                 rejected.append(
-                    {
+                    _rejection_payload_for_plan(plan, {
                         "symbol": plan.symbol,
                         "action": str(getattr(plan, "side", "")).lower(),
                         "stage": "low_sample_daily_quota",
@@ -972,7 +985,7 @@ def _apply_low_sample_daily_quota(
                             "used_low_sample_orders_today": usage.get("used"),
                             "low_sample_daily_quota": usage.get("quota"),
                         },
-                    }
+                    })
                 )
         reporter.emit(
             "risk_manager",
@@ -1183,6 +1196,7 @@ def _persist_learning_penalty_cycle_shadow_final(
     plans: list[Any],
     comparable_control_sets: dict[str, dict[str, Any]],
     rejected_order_plans: list[dict[str, Any]],
+    gate_snapshots: dict[str, dict[str, Any]] | None = None,
     phase_b_available: bool = True,
 ) -> dict[str, Any] | None:
     """Finalize and persist exactly one post-selection event, fail-open."""
@@ -1195,6 +1209,7 @@ def _persist_learning_penalty_cycle_shadow_final(
             plans=plans,
             comparable_control_sets=comparable_control_sets,
             rejected_order_plans=rejected_order_plans,
+            gate_snapshots=gate_snapshots,
             cycle_id=run_id,
             phase_b_available=phase_b_available,
         )
@@ -1603,7 +1618,7 @@ def _auto_paper_trade(
     if paused_plans:
         for plan, strategy_name in paused_plans:
             rejected_order_plans.append(
-                {
+                _rejection_payload_for_plan(plan, {
                     "symbol": plan.symbol,
                     "action": str(getattr(plan, "side", "")).lower(),
                     "stage": "learning_mode_strategy_pause",
@@ -1613,7 +1628,7 @@ def _auto_paper_trade(
                         "shadow_active": True,
                         "execution_blocked": True,
                     },
-                }
+                })
             )
         reporter.emit(
             "execution_agent",
@@ -1778,6 +1793,7 @@ def _auto_paper_trade(
         plans=plans,
         comparable_control_sets=comparable_control_sets,
         rejected_order_plans=rejected_order_plans,
+        gate_snapshots=gate_snapshots,
     )
 
     if learning_mode and (bool(learning_mode.get("shadow_first")) or paused_plans):

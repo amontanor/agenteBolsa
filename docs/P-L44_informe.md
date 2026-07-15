@@ -58,10 +58,10 @@ no existen:
 Autoridad de campos: `selected_by_decision` procede de recomendaciones BUY
 finales; `planned_by_active_path` procede de planes BUY finales;
 `comparable_control` procede exclusivamente de controles v2 materializados;
-`blocked_candidate` y `final_non_execution_reason` requieren un rechazo con
-`candidate_id` o `signal_id` exacto; `decision_source` solo se publica cuando
-está persistido en la recomendación/linaje. La ausencia de identidad permanece
-`unavailable` y nunca se resuelve por símbolo o fecha.
+`blocked_candidate` y `final_non_execution_reason` requieren un rechazo o
+snapshot de gate con `candidate_id`/`signal_id` exacto; `decision_source` solo
+se publica cuando está persistido en la recomendación/linaje. La ausencia de
+identidad permanece `unavailable` y nunca se resuelve por símbolo o fecha.
 
 Si el ciclo termina antes de la Fase B se conserva como máximo un evento
 `partial` con `phase_b_unavailable`; un fallo de persistencia o telemetría es
@@ -69,3 +69,14 @@ fail-open y no altera trading. Las repeticiones idénticas son no-op y los
 conflictos no sobrescriben el evento original. El detalle sigue acotado a la
 unión de top-20 legacy/shadow, seleccionados, planes y controles reales, sin
 campos post-decisión.
+
+### Corrección de auditoría P-L44BR1
+
+La fase B exige `cycle_id` exacto en recomendaciones, planes y controles; los
+registros de otro ciclo o sin identidad quedan `partial/unavailable` y no se
+atribuyen. Los snapshots de gates solo marcan `blocked_candidate` cuando el
+enlace del gate es fuerte, y un candidato bloqueado nunca se publica como
+control primario. `decision_source` se toma de la recomendación real
+(`decision_source`, `source` o `decision_origin`) y las rejections del
+productor conservan `candidate_id`, `signal_id` y `cycle_id` cuando existen.
+El orden shadow trata el rango cero como un valor válido y no como ausencia.

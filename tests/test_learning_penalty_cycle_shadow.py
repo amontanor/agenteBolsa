@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from agente_bolsa.config import Settings
+from agente_bolsa.models import PortfolioSnapshot, TradeRecommendation
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.learning_penalty_cycle_shadow import (
     SCHEMA_VERSION,
@@ -15,6 +16,7 @@ from agente_bolsa.tools.learning_penalty_cycle_shadow import (
     learning_penalty_shadow_digest,
     persist_learning_penalty_cycle_shadow,
 )
+from agente_bolsa.tools.trade_decision import build_buy_order_plans
 
 
 def _candidate(symbol: str, index: int, *, penalty: float = 0.05, expected: float = 0.01) -> dict:
@@ -206,13 +208,14 @@ def test_phase_a_preserves_active_legacy_order_and_phase_b_uses_real_outcomes(tm
         "decision_lineage": {
             "candidate_id": "candidate-2",
             "signal_id": "signal-2",
+            "cycle_id": "cycle-two-phase",
             "decision_source": "capacity_fill",
         },
     }
     plan = {"side": "buy", "recommendation": rec}
     controls = {
         "signal-2": {
-            "controls": [{"candidate_id": "candidate-3", "signal_id": "signal-3"}]
+            "controls": [{"candidate_id": "candidate-3", "signal_id": "signal-3", "cycle_id": "cycle-two-phase"}]
         }
     }
     final = finalize_learning_penalty_cycle_shadow(
@@ -221,7 +224,12 @@ def test_phase_a_preserves_active_legacy_order_and_phase_b_uses_real_outcomes(tm
         plans=[plan],
         comparable_control_sets=controls,
         rejected_order_plans=[
-            {"candidate_id": "candidate-1", "signal_id": "signal-1", "reason": "gate_blocked"}
+            {
+                "candidate_id": "candidate-1",
+                "signal_id": "signal-1",
+                "cycle_id": "cycle-two-phase",
+                "reason": "gate_blocked",
+            }
         ],
         cycle_id="cycle-two-phase",
         captured_at="2026-07-15T10:00:00+00:00",
@@ -296,3 +304,151 @@ def test_final_shadow_hash_excludes_capture_time(tmp_path: Path):
     first = finalize_learning_penalty_cycle_shadow(phase_a, cycle_id="cycle-hash", captured_at="2026-07-15T10:00:00+00:00")
     second = finalize_learning_penalty_cycle_shadow(phase_a, cycle_id="cycle-hash", captured_at="2026-07-15T11:00:00+00:00")
     assert first["content_hash"] == second["content_hash"]
+
+
+def test_zero_shadow_rank_is_not_treated_as_missing(tmp_path: Path):
+    zero = _candidate("ZERO", 1, penalty=0.0, expected=0.0)
+    zero["score"] = 0
+    zero["rank_priority_score"] = 0
+    zero["learning_prior"]["setup_edge_3d_raw"] = 0.0
+    negative = _candidate("NEG", 2, penalty=0.0, expected=-0.01)
+    negative["score"] = 0
+    negative["rank_priority_score"] = -0.01
+    snapshot = build_learning_penalty_cycle_shadow(
+        "cycle-zero-rank",
+        {"all_candidates": [zero, negative]},
+        active_candidates=[zero, negative],
+        settings=_settings(tmp_path),
+    )
+    ranks = {row["candidate_id"]: row["shadow_rank"] for row in snapshot["bounded_candidates"]}
+    assert ranks["candidate-1"] < ranks["candidate-2"]
+
+
+def test_phase_b_uses_real_source_and_gate_block_without_primary_control(tmp_path: Path):
+    candidate = _candidate("AAPL", 1)
+    phase_a = build_learning_penalty_cycle_shadow(
+        "cycle-gate",
+        {"all_candidates": [candidate]},
+        active_candidates=[candidate],
+        settings=_settings(tmp_path),
+    )
+    recommendation = {
+        "action": "buy",
+        "source": "deterministic_capacity_fill",
+        "decision_lineage": {
+            "candidate_id": "candidate-1",
+            "signal_id": "signal-1",
+            "cycle_id": "cycle-gate",
+        },
+    }
+    gate = {
+        "candidate_id": "candidate-1",
+        "signal_id": "signal-1",
+        "cycle_id": "cycle-gate",
+        "identity_status": "verified",
+        "decision": "blocked",
+        "gate_path": [
+            {
+                "status": "blocked",
+                "gate_name": "entry_quality",
+                "reason_code": "entry_quality_gate",
+                "identity_link_status": "strong",
+            }
+        ],
+    }
+    final = finalize_learning_penalty_cycle_shadow(
+        phase_a,
+        recommendations=[recommendation],
+        comparable_control_sets={
+            "signal-1": {
+                "controls": [
+                    {
+                        "candidate_id": "candidate-1",
+                        "signal_id": "signal-1",
+                        "cycle_id": "cycle-gate",
+                    }
+                ]
+            }
+        },
+        gate_snapshots={"gate-1": gate},
+        cycle_id="cycle-gate",
+    )
+    row = final["bounded_candidates"][0]
+    assert row["selected_by_decision"] is True
+    assert row["planned_by_active_path"] is False
+    assert row["blocked_candidate"] is True
+    assert row["final_non_execution_reason"] == "entry_quality_gate"
+    assert row["comparable_control"] is False
+    assert row["decision_source"] == "deterministic_capacity_fill"
+
+
+def test_phase_b_rejects_rows_from_another_cycle(tmp_path: Path):
+    candidate = _candidate("AAPL", 1)
+    phase_a = build_learning_penalty_cycle_shadow(
+        "cycle-current",
+        {"all_candidates": [candidate]},
+        active_candidates=[candidate],
+        settings=_settings(tmp_path),
+    )
+    final = finalize_learning_penalty_cycle_shadow(
+        phase_a,
+        recommendations=[
+            {
+                "action": "buy",
+                "source": "llm",
+                "decision_lineage": {
+                    "candidate_id": "candidate-1",
+                    "signal_id": "signal-1",
+                    "cycle_id": "cycle-other",
+                },
+            }
+        ],
+        cycle_id="cycle-current",
+    )
+    assert final["status"] == "partial"
+    assert "phase_b_identity_unavailable" in final["warnings"]
+    assert final["selected_candidates"] == []
+
+
+def test_real_plan_rejection_preserves_exact_lineage(tmp_path: Path):
+    portfolio = PortfolioSnapshot(
+        account_id="paper",
+        status="ACTIVE",
+        currency="USD",
+        cash=10_000,
+        portfolio_value=20_000,
+        buying_power=20_000,
+        positions=[],
+        open_orders=[],
+    )
+    recommendation = TradeRecommendation(
+        symbol="AAPL",
+        action="buy",
+        confidence=0.9,
+        reason="test",
+        entry_price=100.0,
+        stop_loss=95.0,
+        take_profit=110.0,
+        target_exposure_pct=0.05,
+        decision_lineage={
+            "candidate_id": "candidate-1",
+            "signal_id": "signal-1",
+            "cycle_id": "cycle-rejection",
+        },
+    )
+    rejected: list[dict] = []
+    plans = build_buy_order_plans(
+        Settings(
+            DATA_DIR=tmp_path,
+            _env_file=None,
+            USE_BRACKET_ORDERS=True,
+            MIN_ORDER_NOTIONAL=2_000,
+        ),
+        portfolio,
+        [recommendation],
+        rejected=rejected,
+    )
+    assert plans == []
+    assert rejected[0]["candidate_id"] == "candidate-1"
+    assert rejected[0]["signal_id"] == "signal-1"
+    assert rejected[0]["cycle_id"] == "cycle-rejection"
