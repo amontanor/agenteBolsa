@@ -127,6 +127,17 @@ class MarketCalendar:
             reason="Market closed. No upcoming session found in lookup window.",
         )
 
+    def session_schedule(self, start_date: str, end_date: str):
+        """Return the real exchange schedule, or ``None`` if unavailable.
+
+        Consumers that need safety-sensitive session semantics must not use the
+        weekday fallback from :meth:`status`.
+        """
+
+        if self._calendar is None:
+            return None
+        return self._calendar.schedule(start_date=start_date, end_date=end_date)
+
     def is_trading_day(self, day: datetime | None = None) -> bool:
         now_utc = (day or datetime.now(timezone.utc)).astimezone(timezone.utc)
         market_day = now_utc.astimezone(self.market_tz).date()

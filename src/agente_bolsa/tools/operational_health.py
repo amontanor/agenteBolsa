@@ -17,6 +17,7 @@ from .adaptive_tuning import adaptive_governance_status
 from .llm_decision_quality import build_llm_decision_quality, write_llm_decision_quality_report
 from .market_cycle_timing import summarize_market_cycle_timings
 from .reporting import write_json_report
+from .time_stop_policy import shadow_time_stop_digest_summary
 
 JOB_NAMES = [
     "portfolio_watch",
@@ -1128,6 +1129,14 @@ def build_operational_health_report(
     report_health, report_alerts = _report_health(settings, settings.data_dir, store, now)
     adaptive_governance = adaptive_governance_status(settings)
     report_health["adaptive_config_governance"] = adaptive_governance
+    try:
+        report_health["time_stop_shadow"] = shadow_time_stop_digest_summary(store)
+    except Exception:  # noqa: BLE001 - shadow health is observability only.
+        report_health["time_stop_shadow"] = {
+            "status": "unavailable",
+            "shadow_only": True,
+            "evaluations": None,
+        }
     if adaptive_governance["status"] == "critical":
         report_alerts.append(
             {
