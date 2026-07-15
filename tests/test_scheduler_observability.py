@@ -351,7 +351,7 @@ def test_daily_study_job_skips_when_session_already_processed(tmp_path, monkeypa
     assert job_state["status"] == "skipped"
 
 
-def test_exit_policy_v2_time_stop_triggers_for_stale_flat_position(tmp_path):
+def test_exit_policy_v2_time_stop_uses_legacy_calendar_days(tmp_path):
     settings = Settings(
         DATA_DIR=tmp_path,
         EXIT_POLICY_V2_ENABLED=True,
@@ -359,12 +359,12 @@ def test_exit_policy_v2_time_stop_triggers_for_stale_flat_position(tmp_path):
         EXIT_POLICY_V2_TIME_STOP_MIN_RETURN=0.0,
     )
     position = SimpleNamespace(current_price=101.0, unrealized_plpc=-0.002)
-    entry_fill_at = "2026-07-08T16:00:00+00:00"
+    source_created_at = "2026-07-08T16:00:00+00:00"
 
     trigger, level = _exit_policy_v2_time_stop_trigger(
         settings,
         position=position,
-        entry_fill_at=entry_fill_at,
+        source_created_at=source_created_at,
         evaluation_at=datetime.fromisoformat("2026-07-15T20:00:00+00:00"),
         calendar=MarketCalendar("XNYS", "Europe/Madrid"),
     )

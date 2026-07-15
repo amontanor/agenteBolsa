@@ -18,6 +18,7 @@ from agente_bolsa.tools.time_stop_policy import (
     TEMPORAL_SEMANTICS,
     evaluate_position_time_stop,
     evaluate_time_stop,
+    shadow_time_stop_digest_summary,
 )
 
 
@@ -248,7 +249,7 @@ def test_short_position_is_not_time_stop_eligible():
     assert "unsupported_side" in result["warnings"]
 
 
-def test_scheduler_uses_xnys_and_preserves_return_gate(tmp_path):
+def test_scheduler_keeps_legacy_active_and_records_xnys_shadow(tmp_path):
     settings = Settings(
         DATA_DIR=tmp_path,
         EXIT_POLICY_V2_ENABLED=True,
@@ -258,6 +259,7 @@ def test_scheduler_uses_xnys_and_preserves_return_gate(tmp_path):
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()
     source = {
+        "created_at": "2026-07-08T16:00:00Z",
         "plan": {"plan_id": "plan-1"},
         "lots": [{"broker_order_id": "buy-1", "entry_fill_at": "2026-07-08T16:00:00Z", "filled_qty": 1}],
     }
@@ -271,7 +273,7 @@ def test_scheduler_uses_xnys_and_preserves_return_gate(tmp_path):
         source=source,
         payload={"entry_price": 100.0, "stop_loss": 95.0},
         calendar=_calendar(),
-        evaluation_at=_dt("2026-07-14T20:00:00Z"),
+        evaluation_at=_dt("2026-07-12T20:00:00Z"),
     )
     after = _exit_policy_v2_runtime_trigger(
         settings,
@@ -281,13 +283,21 @@ def test_scheduler_uses_xnys_and_preserves_return_gate(tmp_path):
         source=source,
         payload={"entry_price": 100.0, "stop_loss": 95.0},
         calendar=_calendar(),
-        evaluation_at=_dt("2026-07-15T20:00:00Z"),
+        evaluation_at=_dt("2026-07-13T20:00:00Z"),
     )
 
     assert before is None
     assert after["trigger"] == "time_stop_v2"
     assert after["time_stop_evidence"]["time_stop_semantics"] == TEMPORAL_SEMANTICS
     assert after["time_stop_evidence"]["return_condition_met"] is True
+    assert after["time_stop_evidence"]["comparison_status"] == "legacy_only"
+    assert after["time_stop_evidence"]["shadow_only"] is True
+    assert after["time_stop_evidence"]["active_policy"] == "legacy_calendar_days"
+    assert after["time_stop_evidence"]["required_xnys_sessions"] == 5
+    assert after["time_stop_evidence"]["fill_authority"] == "first_fill_at"
+    assert after["time_stop_evidence"]["fill_timestamp"] == "2026-07-08T16:00:00+00:00"
+    assert after["time_stop_evidence"]["logical_eligibility_at"] == "2026-07-15T20:00:00+00:00"
+    assert after["time_stop_evidence"]["first_actionable_market_time"] == "2026-07-16T13:30:00+00:00"
 
 
 def test_positive_return_does_not_trigger_after_fifth_session(tmp_path):
@@ -311,20 +321,147 @@ def test_positive_return_does_not_trigger_after_fifth_session(tmp_path):
     assert evidence["return_condition_met"] is False
 
 
-def test_existing_time_stop_wrapper_requires_verified_fill():
+def test_existing_time_stop_wrapper_requires_legacy_source_timestamp():
     settings = Settings(DATA_DIR=".", EXIT_POLICY_V2_ENABLED=True, EXIT_POLICY_V2_TIME_STOP_DAYS=5)
     position = SimpleNamespace(current_price=101.0, unrealized_plpc=-0.002)
 
     trigger, level = _exit_policy_v2_time_stop_trigger(
         settings,
         position=position,
-        source_created_at="2026-07-01T16:00:00Z",
+        source_created_at=None,
         evaluation_at=_dt("2026-07-15T20:00:00Z"),
         calendar=_calendar(),
     )
 
     assert trigger is None
     assert level == 0.0
+
+
+def test_xnys_only_is_observation_and_cannot_trigger_order(tmp_path):
+    settings = Settings(
+        DATA_DIR=tmp_path,
+        EXIT_POLICY_V2_ENABLED=True,
+        EXIT_POLICY_V2_TIME_STOP_DAYS=5,
+        EXIT_POLICY_V2_TIME_STOP_MIN_RETURN=0.0,
+    )
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    source = {
+        "created_at": "2026-07-12T16:00:00Z",
+        "plan": {"plan_id": "plan-1"},
+        "lots": [{"entry_fill_at": "2026-07-08T16:00:00Z", "filled_qty": 1}],
+    }
+    position = SimpleNamespace(avg_entry_price=100.0, qty=1.0, current_price=99.0, unrealized_plpc=-0.01)
+
+    result = _exit_policy_v2_runtime_trigger(
+        settings,
+        store,
+        symbol="AAPL",
+        position=position,
+        source=source,
+        payload={"entry_price": 100.0, "stop_loss": 95.0},
+        calendar=_calendar(),
+        evaluation_at=_dt("2026-07-15T20:00:00Z"),
+    )
+
+    assert result is None
+    evidence = store.get_runtime_value("time_stop_v2_evidence:AAPL")
+    assert evidence["legacy_eligible"] is False
+    assert evidence["xnys_eligible"] is True
+    assert evidence["comparison_status"] == "xnys_only"
+    assert evidence["shadow_only"] is True
+
+
+def test_both_eligible_keeps_legacy_trigger_and_does_not_duplicate(tmp_path):
+    settings = Settings(
+        DATA_DIR=tmp_path,
+        EXIT_POLICY_V2_ENABLED=True,
+        EXIT_POLICY_V2_TIME_STOP_DAYS=5,
+        EXIT_POLICY_V2_TIME_STOP_MIN_RETURN=0.0,
+    )
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    source = {
+        "created_at": "2026-07-08T16:00:00Z",
+        "plan": {"plan_id": "plan-1"},
+        "lots": [{"entry_fill_at": "2026-07-08T16:00:00Z", "filled_qty": 1}],
+    }
+    position = SimpleNamespace(avg_entry_price=100.0, qty=1.0, current_price=99.0, unrealized_plpc=-0.01)
+    kwargs = dict(
+        settings=settings,
+        store=store,
+        symbol="AAPL",
+        position=position,
+        source=source,
+        payload={"entry_price": 100.0, "stop_loss": 95.0},
+        calendar=_calendar(),
+        evaluation_at=_dt("2026-07-15T20:00:00Z"),
+    )
+
+    first = _exit_policy_v2_runtime_trigger(**kwargs)
+    second = _exit_policy_v2_runtime_trigger(**kwargs)
+
+    assert first["trigger"] == second["trigger"] == "time_stop_v2"
+    assert first["time_stop_evidence"]["comparison_status"] == "both_eligible"
+    assert store.get_runtime_value("time_stop_v2_evidence:AAPL")["comparison_status"] == "both_eligible"
+
+
+def test_xnys_unavailable_does_not_change_legacy_decision(tmp_path):
+    settings = Settings(
+        DATA_DIR=tmp_path,
+        EXIT_POLICY_V2_ENABLED=True,
+        EXIT_POLICY_V2_TIME_STOP_DAYS=5,
+        EXIT_POLICY_V2_TIME_STOP_MIN_RETURN=0.0,
+    )
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    calendar = _calendar()
+    calendar._calendar = None
+    result = _exit_policy_v2_runtime_trigger(
+        settings,
+        store,
+        symbol="AAPL",
+        position=SimpleNamespace(avg_entry_price=100.0, qty=1.0, current_price=99.0, unrealized_plpc=-0.01),
+        source={
+            "created_at": "2026-07-08T16:00:00Z",
+            "plan": {"plan_id": "plan-1"},
+            "lots": [{"entry_fill_at": "2026-07-08T16:00:00Z", "filled_qty": 1}],
+        },
+        payload={"entry_price": 100.0, "stop_loss": 95.0},
+        calendar=calendar,
+        evaluation_at=_dt("2026-07-13T20:00:00Z"),
+    )
+
+    assert result["trigger"] == "time_stop_v2"
+    evidence = store.get_runtime_value("time_stop_v2_evidence:AAPL")
+    assert evidence["comparison_status"] == "xnys_unavailable"
+    assert evidence["legacy_eligible"] is True
+
+
+def test_shadow_digest_summary_is_collecting_without_sample_and_compact_with_sample(tmp_path):
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+
+    collecting = shadow_time_stop_digest_summary(store)
+    assert collecting["status"] == "collecting"
+    assert collecting["evaluations"] is None
+    assert collecting["legacy_only"] is None
+
+    store.set_runtime_value(
+        "time_stop_v2_evidence:AAPL",
+        {
+            "status": "available",
+            "comparison_status": "legacy_only",
+            "fill_authority": "first_fill_at",
+            "evaluation_at": "2026-07-13T20:00:00+00:00",
+        },
+    )
+    summary = shadow_time_stop_digest_summary(store)
+    assert summary["status"] == "available"
+    assert summary["evaluations"] == 1
+    assert summary["legacy_only"] == 1
+    assert summary["discrepancies"] == 1
+    assert summary["fill_coverage"] == {"numerator": 1, "denominator": 1}
 
 
 def test_p43a_historical_reproduction_and_current_open_positions():
@@ -511,6 +648,11 @@ def test_portfolio_watch_integration_uses_fill_and_keeps_stop_loss_operational(t
             "broker_order": {"id": "buy-aapl", "qty": 1, "filled_qty": 1, "filled_at": "2026-07-08T16:00:00Z"},
         },
     )
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE broker_orders SET created_at = ? WHERE broker_order_id = ?",
+            ("2026-07-08T16:00:00Z", "buy-aapl"),
+        )
     portfolio = SimpleNamespace(
         open_orders=[],
         positions=[SimpleNamespace(symbol="AAPL", qty=1.0, market_value=99.0, current_price=99.0, avg_entry_price=100.0, unrealized_plpc=-0.01)],
@@ -538,7 +680,7 @@ def test_portfolio_watch_integration_uses_fill_and_keeps_stop_loss_operational(t
         "watch-before",
         portfolio,
         calendar=_calendar(),
-        evaluation_at=_dt("2026-07-14T20:00:00Z"),
+        evaluation_at=_dt("2026-07-12T20:00:00Z"),
     )
     assert before == []
     assert submitted == []
@@ -550,7 +692,7 @@ def test_portfolio_watch_integration_uses_fill_and_keeps_stop_loss_operational(t
         "watch-after",
         portfolio,
         calendar=_calendar(),
-        evaluation_at=_dt("2026-07-15T20:00:00Z"),
+        evaluation_at=_dt("2026-07-13T20:00:00Z"),
     )
     assert after[0]["trigger"] == "time_stop_v2"
     assert submitted[0]["payload"]["risk_decision"]["checks"]["exit_policy_v2"]["time_stop_semantics"] == TEMPORAL_SEMANTICS

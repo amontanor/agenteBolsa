@@ -3708,8 +3708,11 @@ class Store:
                 is_partial = True
             explicit_first_fill = timestamps.get("first_fill_at")
             fill_at = explicit_first_fill
+            fill_authority = "first_fill_at" if explicit_first_fill else "unavailable"
             if not is_partial:
-                fill_at = fill_at or reconciled.get("filled_at") or broker.get("filled_at")
+                if not fill_at and (reconciled.get("filled_at") or broker.get("filled_at")):
+                    fill_at = reconciled.get("filled_at") or broker.get("filled_at")
+                    fill_authority = "aggregated_filled_at"
             remaining_qty = _number(quantities.get("remaining"))
             if remaining_qty is None and submitted_qty is not None and filled_qty is not None:
                 remaining_qty = max(0.0, submitted_qty - filled_qty)
@@ -3724,6 +3727,7 @@ class Store:
                 "status": str(row["status"] or ""),
                 "created_at": row["created_at"],
                 "entry_fill_at": fill_at,
+                "fill_authority": fill_authority,
                 "filled_qty": filled_qty,
                 "submitted_qty": submitted_qty,
                 "remaining_qty": remaining_qty,

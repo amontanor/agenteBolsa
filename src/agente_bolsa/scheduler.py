@@ -81,7 +81,6 @@ from .tools.time_stop_policy import (
 )
 from .tools.time_stop_policy import (
     evaluate_position_time_stop,
-    evaluate_time_stop,
 )
 from .tools.trade_decision import _annotate_technical_context_with_learning
 from .tools.universe import resolve_study_universe
@@ -748,27 +747,19 @@ def _exit_policy_v2_time_stop_trigger(
     *,
     position: Any,
     source_created_at: Any = None,
-    entry_fill_at: Any = None,
     evaluation_at: datetime | None = None,
+    entry_fill_at: Any = None,
     calendar: MarketCalendar | None = None,
 ) -> tuple[str | None, float]:
     if not settings.exit_policy_v2_enabled or settings.exit_policy_v2_time_stop_days <= 0:
         return None, 0.0
-    if str(getattr(position, "side", "long") or "long").lower() not in {"long", "buy"}:
+    created_at = _parse_datetime(source_created_at)
+    now = evaluation_at or datetime.now(timezone.utc)
+    if created_at is None:
         return None, 0.0
-    # ``source_created_at`` is retained for API compatibility only.  It is not
-    # a fill and therefore cannot authorise the new time-stop.
-    if entry_fill_at is None:
-        return None, 0.0
-    temporal_calendar = calendar or MarketCalendar(settings.market_calendar, settings.local_timezone)
-    temporal = evaluate_time_stop(
-        entry_fill_at=entry_fill_at,
-        evaluation_at=evaluation_at or datetime.now(timezone.utc),
-        required_completed_sessions=settings.exit_policy_v2_time_stop_days,
-        calendar=temporal_calendar,
-    )
+    held_days = (now - created_at).days
     unrealized_return = float(getattr(position, "unrealized_plpc", 0.0) or 0.0)
-    if temporal.get("xnys_eligible") is True and unrealized_return <= settings.exit_policy_v2_time_stop_min_return:
+    if held_days >= settings.exit_policy_v2_time_stop_days and unrealized_return <= settings.exit_policy_v2_time_stop_min_return:
         return "time_stop_v2", float(getattr(position, "current_price", 0.0) or 0.0)
     return None, 0.0
 
@@ -779,7 +770,7 @@ def _evaluate_time_stop_v2_position(
     position: Any,
     source: dict[str, Any],
     evaluation_at: datetime,
-    calendar: MarketCalendar,
+    calendar: MarketCalendar | None,
 ) -> dict[str, Any]:
     lots = list(source.get("lots") or [])
     if not lots and source.get("entry_fill_at"):
@@ -801,6 +792,97 @@ def _evaluate_time_stop_v2_position(
         temporal["return_condition_met"] = None
         temporal["eligible_with_existing_conditions"] = None
     return temporal
+
+
+def _legacy_time_stop_evidence(
+    settings: Settings,
+    *,
+    position: Any,
+    source_created_at: Any,
+    evaluation_at: datetime,
+) -> dict[str, Any]:
+    created_at = _parse_datetime(source_created_at)
+    unrealized_return = float(getattr(position, "unrealized_plpc", 0.0) or 0.0)
+    if created_at is None:
+        return {
+            "legacy_calendar_elapsed_days": None,
+            "legacy_calendar_eligible": None,
+            "legacy_eligible": None,
+            "legacy_return_condition_met": unrealized_return <= settings.exit_policy_v2_time_stop_min_return,
+            "legacy_unavailable_reason": "missing_source_created_at",
+        }
+    held_days = (evaluation_at - created_at).days
+    return {
+        "legacy_calendar_elapsed_days": held_days,
+        "legacy_calendar_eligible": held_days >= settings.exit_policy_v2_time_stop_days,
+        "legacy_eligible": held_days >= settings.exit_policy_v2_time_stop_days,
+        "legacy_return_condition_met": unrealized_return <= settings.exit_policy_v2_time_stop_min_return,
+        "legacy_unavailable_reason": None,
+    }
+
+
+def _time_stop_shadow_evidence(
+    settings: Settings,
+    store: Store,
+    *,
+    symbol: str,
+    position: Any,
+    source: dict[str, Any],
+    calendar: MarketCalendar | None,
+    evaluation_at: datetime,
+) -> dict[str, Any]:
+    legacy_evidence = _legacy_time_stop_evidence(
+        settings,
+        position=position,
+        source_created_at=source.get("created_at"),
+        evaluation_at=evaluation_at,
+    )
+    try:
+        temporal_calendar = calendar or MarketCalendar(settings.market_calendar, settings.local_timezone)
+        time_stop_evidence = _evaluate_time_stop_v2_position(
+            settings,
+            position=position,
+            source=source,
+            evaluation_at=evaluation_at,
+            calendar=temporal_calendar,
+        )
+    except Exception as exc:  # noqa: BLE001 - temporal telemetry must fail open.
+        LOGGER.warning("time_stop_v2 temporal evaluation unavailable for %s: %s", symbol, exc)
+        time_stop_evidence = {
+            "schema_version": "p-l43b.time-stop-xnys.v1",
+            "policy_version": TIME_STOP_POLICY_VERSION,
+            "time_stop_semantics": TIME_STOP_TEMPORAL_SEMANTICS,
+            "status": "unavailable",
+            "xnys_eligible": None,
+            "legacy_calendar_eligible": None,
+            "comparison": None,
+            "warnings": ["temporal_helper_error"],
+        }
+    time_stop_evidence.update(
+        {
+            **legacy_evidence,
+            "required_xnys_sessions": settings.exit_policy_v2_time_stop_days,
+            "shadow_only": True,
+            "active_policy": "legacy_calendar_days",
+            "shadow_policy": TIME_STOP_POLICY_VERSION,
+            "evaluation_at": evaluation_at.isoformat(),
+        }
+    )
+    if time_stop_evidence.get("status") != "available" or legacy_evidence.get("legacy_eligible") is None:
+        time_stop_evidence["comparison_status"] = "xnys_unavailable"
+    elif legacy_evidence["legacy_eligible"] and time_stop_evidence.get("xnys_eligible") is True:
+        time_stop_evidence["comparison_status"] = "both_eligible"
+    elif legacy_evidence["legacy_eligible"]:
+        time_stop_evidence["comparison_status"] = "legacy_only"
+    elif time_stop_evidence.get("xnys_eligible") is True:
+        time_stop_evidence["comparison_status"] = "xnys_only"
+    else:
+        time_stop_evidence["comparison_status"] = "both_ineligible"
+    try:
+        store.set_runtime_value(f"time_stop_v2_evidence:{symbol}", time_stop_evidence)
+    except Exception as exc:  # noqa: BLE001 - evidence is observability only.
+        LOGGER.warning("time_stop_v2 evidence persistence unavailable for %s: %s", symbol, exc)
+    return time_stop_evidence
 
 
 def _exit_policy_v2_stale_guard_trigger(
@@ -868,6 +950,17 @@ def _exit_policy_v2_runtime_trigger(
     high_water = max(float(state.get("high_water") or entry), current)
     state["high_water"] = high_water
 
+    temporal_evaluation_at = evaluation_at or datetime.now(timezone.utc)
+    time_stop_evidence = _time_stop_shadow_evidence(
+        settings,
+        store,
+        symbol=symbol,
+        position=position,
+        source=source,
+        calendar=calendar,
+        evaluation_at=temporal_evaluation_at,
+    )
+
     partial_level = entry + (settings.exit_policy_v2_partial_r * initial_risk)
     if not state.get("partial_taken") and current >= partial_level:
         store.set_runtime_value(state_key, state)
@@ -877,6 +970,7 @@ def _exit_policy_v2_runtime_trigger(
             "qty_fraction": 0.5,
             "state_key": state_key,
             "state": {**state, "partial_taken": True},
+            "time_stop_evidence": time_stop_evidence,
         }
 
     trailing_activation = entry + (settings.exit_policy_v2_trailing_r * initial_risk)
@@ -890,39 +984,19 @@ def _exit_policy_v2_runtime_trigger(
             "qty_fraction": 1.0,
             "state_key": state_key,
             "state": state,
+            "time_stop_evidence": time_stop_evidence,
         }
-
-    temporal_evaluation_at = evaluation_at or datetime.now(timezone.utc)
-    try:
-        temporal_calendar = calendar or MarketCalendar(settings.market_calendar, settings.local_timezone)
-        time_stop_evidence = _evaluate_time_stop_v2_position(
-            settings,
-            position=position,
-            source=source,
-            evaluation_at=temporal_evaluation_at,
-            calendar=temporal_calendar,
-        )
-    except Exception as exc:  # noqa: BLE001 - temporal telemetry must fail open.
-        LOGGER.warning("time_stop_v2 temporal evaluation unavailable for %s: %s", symbol, exc)
-        time_stop_evidence = {
-            "schema_version": "p-l43b.time-stop-xnys.v1",
-            "policy_version": TIME_STOP_POLICY_VERSION,
-            "time_stop_semantics": TIME_STOP_TEMPORAL_SEMANTICS,
-            "status": "unavailable",
-            "xnys_eligible": None,
-            "legacy_calendar_eligible": None,
-            "comparison": None,
-            "warnings": ["temporal_helper_error"],
-        }
-    try:
-        store.set_runtime_value(f"time_stop_v2_evidence:{symbol}", time_stop_evidence)
-    except Exception as exc:  # noqa: BLE001 - evidence is observability only.
-        LOGGER.warning("time_stop_v2 evidence persistence unavailable for %s: %s", symbol, exc)
-    if time_stop_evidence.get("eligible_with_existing_conditions") is True:
+    legacy_trigger, legacy_level = _exit_policy_v2_time_stop_trigger(
+        settings,
+        position=position,
+        source_created_at=source.get("created_at"),
+        evaluation_at=temporal_evaluation_at,
+    )
+    if legacy_trigger:
         store.set_runtime_value(state_key, state)
         return {
-            "trigger": "time_stop_v2",
-            "level": current,
+            "trigger": legacy_trigger,
+            "level": legacy_level,
             "qty_fraction": 1.0,
             "state_key": state_key,
             "state": state,
@@ -972,7 +1046,6 @@ def _execute_stop_take_exits(
     except Exception as exc:  # noqa: BLE001 - lot telemetry must not block exits.
         LOGGER.warning("time_stop_v2 lot evidence unavailable: %s", exc)
         buy_lots = {}
-    temporal_calendar = calendar or MarketCalendar(settings.market_calendar, settings.local_timezone)
     temporal_evaluation_at = evaluation_at or datetime.now(timezone.utc)
     exits = []
     for position in portfolio.positions:
@@ -1004,7 +1077,7 @@ def _execute_stop_take_exits(
                 position=position,
                 source={**source, "lots": buy_lots.get(symbol, [])},
                 payload=payload,
-                calendar=temporal_calendar,
+                calendar=calendar,
                 evaluation_at=temporal_evaluation_at,
             )
             if exit_policy_trigger:
