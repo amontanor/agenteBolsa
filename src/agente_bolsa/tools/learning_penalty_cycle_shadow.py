@@ -118,7 +118,7 @@ def _candidate_detail(
     *,
     legacy_rank: int,
     shadow_rank: int,
-    selected: bool,
+    selected: bool = False,
 ) -> dict[str, Any]:
     prior = candidate.get("learning_prior") if isinstance(candidate.get("learning_prior"), Mapping) else {}
     return {
@@ -128,6 +128,7 @@ def _candidate_detail(
         "strategy_name": candidate.get("strategy_name"),
         "strategy_version": candidate.get("strategy_version"),
         "decision_source": candidate.get("decision_source"),
+        "decision_source_status": "available" if candidate.get("decision_source") else "unavailable",
         "historical_edge_3d": result.get("historical_edge_3d"),
         "operational_penalty": result.get("operational_penalty"),
         "legacy_expected_edge_3d": result.get("legacy_expected_edge_3d"),
@@ -142,7 +143,11 @@ def _candidate_detail(
         "rank_delta": shadow_rank - legacy_rank,
         "legacy_top_5": legacy_rank <= 5,
         "shadow_top_5": shadow_rank <= 5,
-        "selected_by_active_path": selected,
+        "selected_by_decision": selected,
+        "planned_by_active_path": False,
+        "comparable_control": False,
+        "blocked_candidate": False,
+        "final_non_execution_reason": None,
         "availability_status": result.get("status"),
         "warnings": sorted(set(result.get("data_quality_warnings", []) or [])),
         "sample_size_3d": prior.get("sample_size_3d"),
@@ -166,14 +171,21 @@ def build_learning_penalty_cycle_shadow(
     *,
     selected_candidates: Iterable[Mapping[str, Any]] | None = None,
     control_candidates: Iterable[Mapping[str, Any]] | None = None,
+    active_candidates: Iterable[Mapping[str, Any]] | None = None,
     configured_capacity: int | None = None,
     settings: Settings | None = None,
     captured_at: str | None = None,
 ) -> dict[str, Any]:
-    """Build a bounded cycle snapshot without influencing the active path."""
+    """Build the phase-A snapshot without influencing the active path.
+
+    ``active_candidates`` is the exact ordered list delivered to the active
+    cycle.  It is deliberately retained as the legacy ordering authority; no
+    second ranking is performed here.  Persistence is intentionally deferred
+    to :func:`finalize_learning_penalty_cycle_shadow`.
+    """
 
     context = technical_context if isinstance(technical_context, Mapping) else {}
-    source = context.get("all_candidates") or context.get("ranked_candidates") or []
+    source = list(context.get("all_candidates") or context.get("ranked_candidates") or active_candidates or [])
     candidates = [item for item in source if isinstance(item, Mapping) and str(item.get("direction") or "long").lower() in {"long", "buy"}]
     by_identity: dict[str, Mapping[str, Any]] = {}
     duplicate_ids: set[str] = set()
@@ -212,8 +224,29 @@ def build_learning_penalty_cycle_shadow(
         value = _finite(row["result"].get(field))
         return (-(value if value is not None else float("-inf")), str(row.get("identity") or ""))
 
-    legacy_order = sorted(valid, key=lambda row: _sort_key(row, "legacy_rank_priority"))
-    shadow_order = sorted(valid, key=lambda row: _sort_key(row, "single_penalty_rank_priority"))
+    # The active list is already ranked by production.  Preserve that order
+    # exactly for legacy_rank.  Shadow order uses the same deterministic
+    # tie-break (the active position), never an invented alphabetical order.
+    active_source = list(active_candidates or source)
+    active_position = {
+        str(_identity(item)): index
+        for index, item in enumerate(active_source)
+        if isinstance(item, Mapping) and _identity(item)
+    }
+    next_position = len(active_position)
+    for row in rows:
+        identity = str(row["identity"])
+        if identity not in active_position:
+            active_position[identity] = next_position
+            next_position += 1
+    legacy_order = sorted(valid, key=lambda row: active_position.get(str(row["identity"]), 10**9))
+    shadow_order = sorted(
+        valid,
+        key=lambda row: (
+            -(_finite(row["result"].get("single_penalty_rank_priority")) or float("-inf")),
+            active_position.get(str(row["identity"]), 10**9),
+        ),
+    )
     legacy_rank = {str(row["identity"]): index for index, row in enumerate(legacy_order, start=1)}
     shadow_rank = {str(row["identity"]): index for index, row in enumerate(shadow_order, start=1)}
     legacy_ids = [str(row["identity"]) for row in legacy_order[:20]]
@@ -226,12 +259,25 @@ def build_learning_penalty_cycle_shadow(
                 row["result"],
                 legacy_rank=legacy_rank.get(str(row["identity"]), None) or 0,
                 shadow_rank=shadow_rank.get(str(row["identity"]), None) or 0,
-                selected=str(row["identity"]) in selected_ids,
+                selected=False,
             )
         )
         for row in rows
         if row.get("identity") in detail_ids
     ]
+    pool_details = {
+        str(row["identity"]): _safe_detail(
+            _candidate_detail(
+                row["candidate"],
+                row["result"],
+                legacy_rank=legacy_rank.get(str(row["identity"]), 0),
+                shadow_rank=shadow_rank.get(str(row["identity"]), 0),
+                selected=False,
+            )
+        )
+        for row in rows
+        if row.get("identity")
+    }
     rank_deltas = [abs(shadow_rank[key] - legacy_rank[key]) for key in legacy_rank if key in shadow_rank]
     legacy_top5 = set(legacy_ids[:5])
     shadow_top5 = set(shadow_ids[:5])
@@ -267,10 +313,176 @@ def build_learning_penalty_cycle_shadow(
         "rank_changed_count": sum(1 for key in legacy_rank if key in shadow_rank and legacy_rank[key] != shadow_rank[key]) if valid else None,
         "max_absolute_rank_delta": max(rank_deltas) if rank_deltas else None,
         "mean_absolute_rank_delta": round(sum(rank_deltas) / len(rank_deltas), 4) if rank_deltas else None,
-        "selected_candidates": sorted(item for item in selected_ids if item),
+        "phase": "pre_decision",
+        "selected_candidates": [],
+        "planned_candidates": [],
+        "comparable_control_candidates": [],
         "bounded_candidates": bounded,
+        "_candidate_pool": pool_details,
         "warnings": sorted({"duplicate_identity_ambiguous"} if duplicate_ids else set()),
     }
+    snapshot["content_hash"] = _canonical_hash(snapshot)
+    return snapshot
+
+
+def _as_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    try:
+        from dataclasses import asdict
+
+        return asdict(value)
+    except (TypeError, ValueError):
+        return {
+            key: getattr(value, key, None)
+            for key in ("symbol", "action", "side", "decision_lineage", "source", "decision_source")
+        }
+
+
+def _identity_parts(value: Any) -> tuple[str | None, str | None]:
+    item = _as_mapping(value)
+    lineage = item.get("decision_lineage") if isinstance(item.get("decision_lineage"), Mapping) else {}
+    candidate_id = str(item.get("candidate_id") or lineage.get("candidate_id") or "").strip() or None
+    signal_id = str(item.get("signal_id") or lineage.get("signal_id") or "").strip() or None
+    if not candidate_id and not signal_id and isinstance(item.get("recommendation"), Mapping):
+        nested = item["recommendation"]
+        nested_lineage = nested.get("decision_lineage") if isinstance(nested.get("decision_lineage"), Mapping) else {}
+        candidate_id = str(nested.get("candidate_id") or nested_lineage.get("candidate_id") or "").strip() or None
+        signal_id = str(nested.get("signal_id") or nested_lineage.get("signal_id") or "").strip() or None
+    return candidate_id, signal_id
+
+
+def _identity_matches(left: Any, right: Any) -> bool:
+    left_candidate, left_signal = _identity_parts(left)
+    right_candidate, right_signal = _identity_parts(right)
+    shared = False
+    if left_candidate and right_candidate:
+        if left_candidate != right_candidate:
+            return False
+        shared = True
+    if left_signal and right_signal:
+        if left_signal != right_signal:
+            return False
+        shared = True
+    return shared
+
+
+def _buy(value: Any) -> bool:
+    item = _as_mapping(value)
+    side = str(item.get("action") or item.get("side") or "").lower()
+    return side == "buy"
+
+
+def _matched_detail(detail: Mapping[str, Any], values: Iterable[Any]) -> bool:
+    return any(_identity_matches(detail, value) for value in values)
+
+
+def finalize_learning_penalty_cycle_shadow(
+    phase_a: Mapping[str, Any],
+    *,
+    recommendations: Iterable[Any] | None = None,
+    plans: Iterable[Any] | None = None,
+    comparable_control_sets: Mapping[str, Mapping[str, Any]] | None = None,
+    rejected_order_plans: Iterable[Mapping[str, Any]] | None = None,
+    cycle_id: str | None = None,
+    captured_at: str | None = None,
+    phase_b_available: bool = True,
+) -> dict[str, Any]:
+    """Attach only real post-selection facts to the phase-A snapshot.
+
+    Scores, ranks and shadow calculations are never recomputed.  Missing
+    identity is left unavailable rather than joined by symbol/date.
+    """
+
+    snapshot = json.loads(json.dumps(dict(phase_a), ensure_ascii=False, default=str))
+    candidate_pool = snapshot.pop("_candidate_pool", {})
+    if cycle_id and str(snapshot.get("cycle_id") or "") != str(cycle_id):
+        snapshot["status"] = "unavailable"
+        snapshot.setdefault("warnings", []).append("cycle_id_mismatch")
+        phase_b_available = False
+
+    recs = [value for value in (recommendations or []) if _buy(value)]
+    final_plans = [value for value in (plans or []) if str(_as_mapping(value).get("side") or "").lower() == "buy"]
+    rejected = [dict(value) for value in (rejected_order_plans or []) if isinstance(value, Mapping)]
+    controls = comparable_control_sets or {}
+    control_rows: list[Mapping[str, Any]] = []
+    for control_set in controls.values():
+        if not isinstance(control_set, Mapping):
+            continue
+        control_rows.extend(item for item in (control_set.get("controls") or []) if isinstance(item, Mapping))
+
+    rejected_exact: list[Mapping[str, Any]] = []
+    for row in rejected:
+        if _identity_parts(row)[0] or _identity_parts(row)[1]:
+            rejected_exact.append(row)
+
+    # A final plan/control may sit outside the bounded top-20 detail.  Add
+    # only those exact identities from the phase-A pool; never reconstruct by
+    # symbol/date and never persist the full pool.
+    required_values = [*recs, *final_plans, *control_rows, *rejected_exact]
+    existing_ids = {_identity(item) for item in snapshot.get("bounded_candidates") or []}
+    for identity, detail in (candidate_pool.items() if isinstance(candidate_pool, Mapping) else []):
+        if identity in existing_ids:
+            continue
+        if any(_identity_matches(detail, value) for value in required_values):
+            snapshot.setdefault("bounded_candidates", []).append(dict(detail))
+            existing_ids.add(identity)
+
+    selected_ids: list[str] = []
+    planned_ids: list[str] = []
+    control_ids: list[str] = []
+    for detail in snapshot.get("bounded_candidates") or []:
+        if not isinstance(detail, dict):
+            continue
+        selected = _matched_detail(detail, recs)
+        planned = _matched_detail(detail, final_plans)
+        comparable = _matched_detail(detail, control_rows)
+        rejection = next((row for row in rejected_exact if _identity_matches(detail, row)), None)
+        decision_source = None
+        source_status = "unavailable"
+        matched_recommendation = next((value for value in recs if _identity_matches(detail, value)), None)
+        if matched_recommendation is not None:
+            item = _as_mapping(matched_recommendation)
+            lineage = item.get("decision_lineage") if isinstance(item.get("decision_lineage"), Mapping) else {}
+            decision_source = item.get("decision_source") or lineage.get("decision_source")
+            source_status = "available" if decision_source else "unavailable"
+        detail["selected_by_decision"] = selected
+        detail["planned_by_active_path"] = planned
+        detail["comparable_control"] = comparable
+        detail["blocked_candidate"] = bool(rejection)
+        detail["final_non_execution_reason"] = rejection.get("reason") if rejection else None
+        detail["decision_source"] = decision_source
+        detail["decision_source_status"] = source_status
+        # Compatibility alias is derived only from the final plan path.
+        detail.pop("selected_by_active_path", None)
+        identity = _identity(detail)
+        if selected and identity:
+            selected_ids.append(identity)
+        if planned and identity:
+            planned_ids.append(identity)
+        if comparable and identity:
+            control_ids.append(identity)
+
+    snapshot["phase"] = "post_selection"
+    snapshot["selected_candidates"] = sorted(set(selected_ids))
+    snapshot["planned_candidates"] = sorted(set(planned_ids))
+    snapshot["comparable_control_candidates"] = sorted(set(control_ids))
+    snapshot.setdefault("candidate_counts", {})["selected_by_decision"] = len(set(selected_ids))
+    snapshot["candidate_counts"]["planned_by_active_path"] = len(set(planned_ids))
+    snapshot["candidate_counts"]["comparable_control"] = len(set(control_ids))
+    snapshot["candidate_counts"]["blocked_candidate"] = sum(bool(item.get("blocked_candidate")) for item in snapshot.get("bounded_candidates") or [])
+    snapshot["candidate_counts"]["detail_persisted"] = len(snapshot.get("bounded_candidates") or [])
+    snapshot["candidate_counts"]["detail_omitted"] = max(
+        0,
+        int(snapshot["candidate_counts"].get("shadow_available") or 0)
+        - int(snapshot["candidate_counts"].get("detail_persisted") or 0),
+    )
+    if not phase_b_available:
+        snapshot["status"] = "partial"
+        snapshot.setdefault("warnings", []).append("phase_b_unavailable")
+    elif snapshot.get("status") not in {"partial", "unavailable"}:
+        snapshot["status"] = "available"
+    snapshot["captured_at"] = _captured_at(captured_at)
     snapshot["content_hash"] = _canonical_hash(snapshot)
     return snapshot
 
@@ -317,8 +529,14 @@ def learning_penalty_shadow_digest(store: Any, *, limit: int = 50000) -> dict[st
         for key, value in (event.get("candidate_counts") or {}).items():
             if key in totals and isinstance(value, int):
                 totals[key] += value
+    event_statuses = {str(item.get("status") or "unavailable") for item in events}
+    digest_status = "available"
+    if event_statuses == {"unavailable"}:
+        digest_status = "unavailable"
+    elif event_statuses & {"partial", "unavailable"}:
+        digest_status = "partial"
     return {
-        "status": "available",
+        "status": digest_status,
         "shadow_only": True,
         "observations": len(events),
         "cycles": len({str(item.get("cycle_id") or "") for item in events}),

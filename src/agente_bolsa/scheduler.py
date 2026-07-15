@@ -42,6 +42,7 @@ from .tools.gate_effectiveness_reporting import publish_gate_effectiveness_postm
 from .tools.learning_mode import active_learning_mode, learning_mode_source
 from .tools.learning_penalty_cycle_shadow import (
     build_learning_penalty_cycle_shadow,
+    finalize_learning_penalty_cycle_shadow,
     persist_learning_penalty_cycle_shadow,
 )
 from .tools.learning_scoreboard import build_learning_scoreboard
@@ -477,9 +478,7 @@ def _selected_candidates(report: dict[str, Any], settings: Settings) -> tuple[li
         settings.data_dir,
         settings=settings,
     )
-    # Private hand-off for the bounded P-L44B observation.  It is consumed and
-    # removed before the technical report is written; it never reaches the
-    # prompt, gates, plans or orders.
+    # Ephemeral phase-A handoff only; it is removed before report persistence.
     report["_learning_penalty_ranked_context"] = ranked_report
     selected = list(ranked_report.get("selected_candidates", []) or [])
     top_shorts = list(ranked_report.get("top_shorts", []) or [])
@@ -494,37 +493,24 @@ def _selected_candidates(report: dict[str, Any], settings: Settings) -> tuple[li
     return candidates, symbols
 
 
-def _capture_learning_penalty_cycle_shadow(
+def _prepare_learning_penalty_cycle_shadow(
     settings: Settings,
-    store: Store,
     reporter: EventReporter,
-    report: dict[str, Any],
+    ranked_context: dict[str, Any] | None,
+    active_candidates: list[dict[str, Any]],
     run_id: str,
-) -> None:
-    ranked_context = report.pop("_learning_penalty_ranked_context", None)
+) -> dict[str, Any] | None:
+    """Phase A: calculate in memory, never persist a provisional event."""
     if not isinstance(ranked_context, dict):
-        return
+        return None
     try:
-        snapshot = build_learning_penalty_cycle_shadow(
+        return build_learning_penalty_cycle_shadow(
             run_id,
             ranked_context,
-            selected_candidates=ranked_context.get("selected_candidates", []),
-            control_candidates=ranked_context.get("comparable_control_candidates", []),
+            selected_candidates=active_candidates,
+            active_candidates=active_candidates,
             configured_capacity=getattr(settings, "max_orders_per_cycle", None),
             settings=settings,
-        )
-        persisted = persist_learning_penalty_cycle_shadow(store, snapshot)
-        reporter.emit(
-            "self_improvement_engineer",
-            "learning_penalty_cycle_shadow",
-            run_id,
-            "Shadow de penalizacion unica capturado sin autoridad sobre el ciclo activo.",
-            {
-                "status": snapshot.get("status"),
-                "candidate_counts": snapshot.get("candidate_counts"),
-                "persist_status": persisted.get("status"),
-                "policy_mode": "shadow_only",
-            },
         )
     except Exception as exc:  # noqa: BLE001 - telemetria fail-open.
         reporter.emit(
@@ -532,6 +518,43 @@ def _capture_learning_penalty_cycle_shadow(
             "learning_penalty_cycle_shadow_failed",
             run_id,
             "No se pudo capturar el shadow de penalizacion; el ciclo activo continua.",
+            {"error": repr(exc), "policy_mode": "shadow_only"},
+        )
+        return None
+
+
+def _persist_learning_penalty_cycle_shadow_partial(
+    store: Store,
+    reporter: EventReporter,
+    phase_a: dict[str, Any] | None,
+    run_id: str,
+) -> None:
+    """Persist at most one terminal partial event when phase B was skipped."""
+    if not isinstance(phase_a, dict):
+        return
+    try:
+        existing = [item for item in store.learning_penalty_cycle_shadow_events(limit=50000) if str(item.get("cycle_id") or "") == str(run_id)]
+        if existing:
+            return
+        final = finalize_learning_penalty_cycle_shadow(
+            phase_a,
+            cycle_id=run_id,
+            phase_b_available=False,
+        )
+        persisted = persist_learning_penalty_cycle_shadow(store, final)
+        reporter.emit(
+            "self_improvement_engineer",
+            "learning_penalty_cycle_shadow_partial",
+            run_id,
+            "Shadow de penalizacion finalizado como partial sin autoridad sobre el ciclo activo.",
+            {"status": final.get("status"), "persist_status": persisted.get("status"), "policy_mode": "shadow_only"},
+        )
+    except Exception as exc:  # noqa: BLE001 - observabilidad fail-open.
+        reporter.emit(
+            "self_improvement_engineer",
+            "learning_penalty_cycle_shadow_failed",
+            run_id,
+            "No se pudo persistir el estado partial del shadow; el ciclo activo continua.",
             {"error": repr(exc), "policy_mode": "shadow_only"},
         )
 
@@ -1690,6 +1713,7 @@ def market_cycle_job(
 
     cycle_settings = settings
     technical_context: dict[str, Any] | None = None
+    learning_penalty_shadow: dict[str, Any] | None = None
     if settings.intraday_technical_scan_enabled:
         timing.start("technical_analysis")
         universe_name = settings.intraday_technical_scan_universe or settings.closed_market_study_universe
@@ -1718,6 +1742,7 @@ def market_cycle_job(
         )
         selected_candidates, selected_symbols = _selected_candidates(report, settings)
         report["selected_candidates"] = selected_candidates
+        ranked_context = report.pop("_learning_penalty_ranked_context", None)
         try:
             from .tools.market_state import load_latest_market_state
 
@@ -1731,7 +1756,13 @@ def market_cycle_job(
             report,
             source=learning_mode_source(settings=settings, default_source="intraday_scan"),
         )
-        _capture_learning_penalty_cycle_shadow(settings, store, reporter, report, run_id)
+        learning_penalty_shadow = _prepare_learning_penalty_cycle_shadow(
+            settings,
+            reporter,
+            ranked_context,
+            selected_candidates,
+            run_id,
+        )
         report = write_json_report(
             report,
             settings.data_dir / "reports",
@@ -1866,6 +1897,7 @@ def market_cycle_job(
             technical_context=technical_context,
             run_id=run_id,
             timing=timing,
+            learning_penalty_shadow=learning_penalty_shadow,
         )
         _set_job_status(
             store,
@@ -1880,6 +1912,7 @@ def market_cycle_job(
             },
         )
     except Exception as exc:
+        _persist_learning_penalty_cycle_shadow_partial(store, reporter, learning_penalty_shadow, run_id)
         timing.finalize("failed", error=exc)
         _set_job_status(
             store,
@@ -1983,6 +2016,14 @@ def closed_market_technical_study_job(
     )
     selected_candidates, selected_symbols = _selected_candidates(report, settings)
     report["selected_candidates"] = selected_candidates
+    ranked_context = report.pop("_learning_penalty_ranked_context", None)
+    learning_penalty_shadow = _prepare_learning_penalty_cycle_shadow(
+        settings,
+        reporter,
+        ranked_context,
+        selected_candidates,
+        run_id,
+    )
     try:
         from .tools.market_state import load_latest_market_state
 
@@ -1996,7 +2037,6 @@ def closed_market_technical_study_job(
         report,
         source=learning_mode_source(settings=settings, default_source="closed_market_study"),
     )
-    _capture_learning_penalty_cycle_shadow(settings, store, reporter, report, run_id)
     original_report_path = report.get("path")
     report = write_json_report(
         report,
@@ -2101,8 +2141,17 @@ def closed_market_technical_study_job(
             update={"default_universe": ",".join(selected_symbols)}
         )
         try:
-            run_observable_cycle(study_settings, store, use_crew=True, verbose=verbose)
+            run_observable_cycle(
+                study_settings,
+                store,
+                use_crew=True,
+                verbose=verbose,
+                technical_context=_compact_scan_context(report, selected_candidates),
+                run_id=run_id,
+                learning_penalty_shadow=learning_penalty_shadow,
+            )
         except Exception as exc:  # noqa: BLE001 - scheduler must keep running after LLM failures.
+            _persist_learning_penalty_cycle_shadow_partial(store, reporter, learning_penalty_shadow, run_id)
             reporter.emit(
                 "orchestrator",
                 "closed_market_crew_failed",
@@ -2110,6 +2159,8 @@ def closed_market_technical_study_job(
                 f"CrewAI/LLM fallo durante el estudio cerrado: {exc}",
                 {"selected_symbols": selected_symbols, "error": repr(exc)},
             )
+    elif learning_penalty_shadow is not None:
+        _persist_learning_penalty_cycle_shadow_partial(store, reporter, learning_penalty_shadow, run_id)
 
     store.set_runtime_value(state_key, study_key)
     _set_job_status(

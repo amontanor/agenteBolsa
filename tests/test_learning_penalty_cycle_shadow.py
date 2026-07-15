@@ -11,6 +11,7 @@ from agente_bolsa.storage import Store
 from agente_bolsa.tools.learning_penalty_cycle_shadow import (
     SCHEMA_VERSION,
     build_learning_penalty_cycle_shadow,
+    finalize_learning_penalty_cycle_shadow,
     learning_penalty_shadow_digest,
     persist_learning_penalty_cycle_shadow,
 )
@@ -136,8 +137,11 @@ def test_snapshot_excludes_post_decision_fields(tmp_path: Path):
 
 
 def test_shadow_can_change_top5_and_capacity_membership_without_selecting(tmp_path: Path):
-    candidates = [_candidate("AAPL", 0, penalty=0.05, expected=0.05)]
-    candidates.extend(_candidate(f"S{index}", index, penalty=0.0) for index in range(1, 6))
+    # The first list is the exact legacy order delivered to the active path;
+    # the shadow score must be allowed to reorder it without changing that
+    # active order.
+    candidates = [_candidate(f"S{index}", index, penalty=0.0) for index in range(1, 6)]
+    candidates.append(_candidate("AAPL", 0, penalty=0.05, expected=0.05))
     snapshot = build_learning_penalty_cycle_shadow(
         "cycle-top-change",
         {"all_candidates": candidates},
@@ -149,7 +153,7 @@ def test_shadow_can_change_top5_and_capacity_membership_without_selecting(tmp_pa
     assert snapshot["legacy_top_ids"][0] != snapshot["shadow_top_ids"][0]
     assert snapshot["top_5_membership_changed"] is True
     assert snapshot["configured_capacity_membership_changed"] is True
-    assert snapshot["selected_candidates"] == ["candidate-0", "candidate-1"]
+    assert snapshot["selected_candidates"] == []
 
 
 def test_two_store_writers_are_idempotent_without_lost_original(tmp_path: Path):
@@ -170,8 +174,8 @@ def test_two_store_writers_are_idempotent_without_lost_original(tmp_path: Path):
     assert len(store_a.learning_penalty_cycle_shadow_events()) == 1
 
 
-def test_shadow_hook_failure_is_fail_open_for_active_path(tmp_path: Path):
-    from agente_bolsa.scheduler import _capture_learning_penalty_cycle_shadow
+def test_phase_a_preparation_failure_is_fail_open_for_active_path(tmp_path: Path):
+    from agente_bolsa.scheduler import _prepare_learning_penalty_cycle_shadow
 
     class Reporter:
         def __init__(self):
@@ -180,13 +184,115 @@ def test_shadow_hook_failure_is_fail_open_for_active_path(tmp_path: Path):
         def emit(self, *args, **kwargs):
             self.events.append((args, kwargs))
 
-    class FailingStore:
-        def record_learning_penalty_cycle_shadow(self, *args, **kwargs):
-            raise RuntimeError("synthetic telemetry failure")
-
-    report = {"_learning_penalty_ranked_context": {"all_candidates": [_candidate("AAPL", 1)]}}
     reporter = Reporter()
-    _capture_learning_penalty_cycle_shadow(_settings(tmp_path), FailingStore(), reporter, report, "cycle-fail-open")
+    result = _prepare_learning_penalty_cycle_shadow(_settings(tmp_path), reporter, None, [], "cycle-fail-open")
+    assert result is None
 
-    assert "_learning_penalty_ranked_context" not in report
-    assert any(item[0][1] == "learning_penalty_cycle_shadow_failed" for item in reporter.events)
+
+def test_phase_a_preserves_active_legacy_order_and_phase_b_uses_real_outcomes(tmp_path: Path):
+    candidates = [_candidate("AAPL", 1), _candidate("MSFT", 2), _candidate("GOOG", 3)]
+    phase_a = build_learning_penalty_cycle_shadow(
+        "cycle-two-phase",
+        {"all_candidates": candidates},
+        active_candidates=candidates,
+        settings=_settings(tmp_path),
+    )
+    assert phase_a["phase"] == "pre_decision"
+    assert phase_a["legacy_top_ids"][:3] == ["candidate-1", "candidate-2", "candidate-3"]
+    assert all(not row["selected_by_decision"] for row in phase_a["bounded_candidates"])
+
+    rec = {
+        "action": "buy",
+        "decision_lineage": {
+            "candidate_id": "candidate-2",
+            "signal_id": "signal-2",
+            "decision_source": "capacity_fill",
+        },
+    }
+    plan = {"side": "buy", "recommendation": rec}
+    controls = {
+        "signal-2": {
+            "controls": [{"candidate_id": "candidate-3", "signal_id": "signal-3"}]
+        }
+    }
+    final = finalize_learning_penalty_cycle_shadow(
+        phase_a,
+        recommendations=[rec],
+        plans=[plan],
+        comparable_control_sets=controls,
+        rejected_order_plans=[
+            {"candidate_id": "candidate-1", "signal_id": "signal-1", "reason": "gate_blocked"}
+        ],
+        cycle_id="cycle-two-phase",
+        captured_at="2026-07-15T10:00:00+00:00",
+    )
+    rows = {row["candidate_id"]: row for row in final["bounded_candidates"]}
+    assert rows["candidate-2"]["selected_by_decision"] is True
+    assert rows["candidate-2"]["planned_by_active_path"] is True
+    assert rows["candidate-2"]["decision_source"] == "capacity_fill"
+    assert rows["candidate-3"]["comparable_control"] is True
+    assert rows["candidate-1"]["blocked_candidate"] is True
+    assert rows["candidate-1"]["final_non_execution_reason"] == "gate_blocked"
+    assert final["phase"] == "post_selection"
+    assert final["selected_candidates"] == ["candidate-2"]
+    assert final["planned_candidates"] == ["candidate-2"]
+    assert final["comparable_control_candidates"] == ["candidate-3"]
+
+
+def test_phase_b_missing_identity_is_unavailable_and_partial_is_terminal(tmp_path: Path):
+    candidate = _candidate("AAPL", 1)
+    phase_a = build_learning_penalty_cycle_shadow(
+        "cycle-partial",
+        {"all_candidates": [candidate]},
+        active_candidates=[candidate],
+        settings=_settings(tmp_path),
+    )
+    unrelated = {"action": "buy", "symbol": "AAPL"}
+    final = finalize_learning_penalty_cycle_shadow(
+        phase_a,
+        recommendations=[unrelated],
+        cycle_id="cycle-partial",
+        phase_b_available=False,
+        captured_at="2026-07-15T10:00:00+00:00",
+    )
+    row = final["bounded_candidates"][0]
+    assert final["status"] == "partial"
+    assert row["selected_by_decision"] is False
+    assert row["decision_source_status"] == "unavailable"
+    assert "phase_b_unavailable" in final["warnings"]
+
+
+def test_phase_b_rejects_conflicting_ids_even_when_symbol_matches(tmp_path: Path):
+    candidate = _candidate("AAPL", 1)
+    phase_a = build_learning_penalty_cycle_shadow(
+        "cycle-conflicting-ids",
+        {"all_candidates": [candidate]},
+        active_candidates=[candidate],
+        settings=_settings(tmp_path),
+    )
+    recommendation = {
+        "action": "buy",
+        "symbol": "AAPL",
+        "decision_lineage": {"candidate_id": "candidate-1", "signal_id": "signal-other"},
+    }
+    final = finalize_learning_penalty_cycle_shadow(
+        phase_a,
+        recommendations=[recommendation],
+        cycle_id="cycle-conflicting-ids",
+    )
+    row = final["bounded_candidates"][0]
+    assert row["selected_by_decision"] is False
+
+
+def test_final_shadow_hash_excludes_capture_time(tmp_path: Path):
+    candidate = _candidate("AAPL", 1)
+    phase_a = build_learning_penalty_cycle_shadow(
+        "cycle-hash",
+        {"all_candidates": [candidate]},
+        active_candidates=[candidate],
+        settings=_settings(tmp_path),
+        captured_at="2026-07-15T10:00:00+00:00",
+    )
+    first = finalize_learning_penalty_cycle_shadow(phase_a, cycle_id="cycle-hash", captured_at="2026-07-15T10:00:00+00:00")
+    second = finalize_learning_penalty_cycle_shadow(phase_a, cycle_id="cycle-hash", captured_at="2026-07-15T11:00:00+00:00")
+    assert first["content_hash"] == second["content_hash"]

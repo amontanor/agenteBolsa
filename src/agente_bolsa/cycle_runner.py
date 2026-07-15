@@ -42,6 +42,10 @@ from .tools.learning_mode import (
     active_learning_mode,
     is_strategy_shadow_paused,
 )
+from .tools.learning_penalty_cycle_shadow import (
+    finalize_learning_penalty_cycle_shadow,
+    persist_learning_penalty_cycle_shadow,
+)
 from .tools.market_cycle_timing import MarketCycleTiming, optional_measure
 from .tools.market_snapshot import build_market_snapshot, compact_snapshot_for_prompt
 from .tools.market_state import build_market_state, compact_market_state_for_prompt
@@ -1169,6 +1173,57 @@ def _record_trade_summary(
     )
 
 
+def _persist_learning_penalty_cycle_shadow_final(
+    *,
+    store: Store,
+    reporter: EventReporter,
+    phase_a: dict[str, Any] | None,
+    run_id: str,
+    recommendations: list[Any],
+    plans: list[Any],
+    comparable_control_sets: dict[str, dict[str, Any]],
+    rejected_order_plans: list[dict[str, Any]],
+    phase_b_available: bool = True,
+) -> dict[str, Any] | None:
+    """Finalize and persist exactly one post-selection event, fail-open."""
+    if not isinstance(phase_a, dict):
+        return None
+    try:
+        final = finalize_learning_penalty_cycle_shadow(
+            phase_a,
+            recommendations=recommendations,
+            plans=plans,
+            comparable_control_sets=comparable_control_sets,
+            rejected_order_plans=rejected_order_plans,
+            cycle_id=run_id,
+            phase_b_available=phase_b_available,
+        )
+        persisted = persist_learning_penalty_cycle_shadow(store, final)
+        reporter.emit(
+            "self_improvement_engineer",
+            "learning_penalty_cycle_shadow",
+            run_id,
+            "Shadow de penalizacion final capturado tras selecciones, planes y controles reales.",
+            {
+                "status": final.get("status"),
+                "candidate_counts": final.get("candidate_counts"),
+                "persist_status": persisted.get("status"),
+                "policy_mode": "shadow_only",
+                "phase": final.get("phase"),
+            },
+        )
+        return final
+    except Exception as exc:  # noqa: BLE001 - observabilidad fail-open.
+        reporter.emit(
+            "self_improvement_engineer",
+            "learning_penalty_cycle_shadow_failed",
+            run_id,
+            "No se pudo persistir el shadow final; el ciclo activo continua sin cambios.",
+            {"error": repr(exc), "policy_mode": "shadow_only", "phase": "post_selection"},
+        )
+        return None
+
+
 def _auto_paper_trade(
     settings: Settings,
     store: Store,
@@ -1177,6 +1232,7 @@ def _auto_paper_trade(
     technical_context: dict[str, Any] | None,
     market_snapshot: dict[str, Any] | None,
     market_state: dict[str, Any] | None,
+    learning_penalty_shadow: dict[str, Any] | None = None,
     agent_run_id: str | None = None,
     timing: MarketCycleTiming | None = None,
 ) -> dict[str, Any] | None:
@@ -1713,6 +1769,17 @@ def _auto_paper_trade(
             },
         )
 
+    learning_penalty_shadow_final = _persist_learning_penalty_cycle_shadow_final(
+        store=store,
+        reporter=reporter,
+        phase_a=learning_penalty_shadow,
+        run_id=run_id,
+        recommendations=reviewed_recommendations,
+        plans=plans,
+        comparable_control_sets=comparable_control_sets,
+        rejected_order_plans=rejected_order_plans,
+    )
+
     if learning_mode and (bool(learning_mode.get("shadow_first")) or paused_plans):
         low_sample_usage = _low_sample_usage_payload(store, settings)
         shadow_plans = [*plans, *(plan for plan, _ in paused_plans)] if bool(learning_mode.get("shadow_first")) else [
@@ -1774,6 +1841,7 @@ def _auto_paper_trade(
                 "execution_updates": execution_updates,
                 "low_sample_usage": low_sample_usage,
                 "recommendation_augmentation": recommendation_augmentation,
+                "learning_penalty_shadow": learning_penalty_shadow_final,
             }
     planned_symbols = [plan.symbol for plan in plans if str(plan.side).lower() == "buy"]
     for plan in plans:
@@ -1841,6 +1909,7 @@ def _auto_paper_trade(
             "execution_updates": execution_updates,
             "low_sample_usage": low_sample_usage,
             "recommendation_augmentation": recommendation_augmentation,
+            "learning_penalty_shadow": learning_penalty_shadow_final,
         }
 
     submitted = []
@@ -1937,6 +2006,7 @@ def _auto_paper_trade(
         "execution_updates": execution_updates,
         "low_sample_usage": low_sample_usage,
         "recommendation_augmentation": recommendation_augmentation,
+        "learning_penalty_shadow": learning_penalty_shadow_final,
     }
 
 
@@ -1949,6 +2019,7 @@ def run_observable_cycle(
     technical_context: dict[str, Any] | None = None,
     run_id: str | None = None,
     timing: MarketCycleTiming | None = None,
+    learning_penalty_shadow: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run one cycle and make every phase visible in the console and logs."""
 
@@ -2143,14 +2214,54 @@ def run_observable_cycle(
                 technical_context,
                 market_snapshot,
                 market_state,
+                learning_penalty_shadow=learning_penalty_shadow,
                 agent_run_id=crew_run.agent_run_id,
                 timing=timing,
             )
         except Exception as exc:
             timing.finalize("failed", error=exc)
             raise
+        if learning_penalty_shadow is not None and (
+            not isinstance(auto_result, dict) or auto_result.get("learning_penalty_shadow") is None
+        ):
+            try:
+                existing = [
+                    item
+                    for item in store.learning_penalty_cycle_shadow_events(limit=50000)
+                    if str(item.get("cycle_id") or "") == str(run_id)
+                ]
+            except Exception:
+                existing = []
+            if not existing:
+                _persist_learning_penalty_cycle_shadow_final(
+                    store=store,
+                    reporter=reporter,
+                    phase_a=learning_penalty_shadow,
+                    run_id=run_id,
+                    recommendations=[],
+                    plans=[],
+                    comparable_control_sets={},
+                    rejected_order_plans=[],
+                    phase_b_available=False,
+                )
     else:
         timing.skip("deterministic_gates", "sin decision LLM al omitir CrewAI")
+        if learning_penalty_shadow is not None:
+            partial_shadow = finalize_learning_penalty_cycle_shadow(
+                learning_penalty_shadow,
+                cycle_id=run_id,
+                phase_b_available=False,
+            )
+            try:
+                persist_learning_penalty_cycle_shadow(store, partial_shadow)
+            except Exception as exc:  # noqa: BLE001 - fail-open observability.
+                reporter.emit(
+                    "self_improvement_engineer",
+                    "learning_penalty_cycle_shadow_failed",
+                    run_id,
+                    "No se pudo persistir el shadow partial; el ciclo continua.",
+                    {"error": repr(exc), "policy_mode": "shadow_only"},
+                )
     with timing.measure("persistence", "trade_summary"):
         _record_trade_summary(settings, store, reporter, run_id, auto_result)
     if not timing.is_running("technical_analysis"):
