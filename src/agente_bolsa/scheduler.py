@@ -40,6 +40,10 @@ from .tools.daily_learning import build_learning_digest_report, load_daily_learn
 from .tools.execution import submit_paper_order_plan
 from .tools.gate_effectiveness_reporting import publish_gate_effectiveness_postmarket
 from .tools.learning_mode import active_learning_mode, learning_mode_source
+from .tools.learning_penalty_cycle_shadow import (
+    build_learning_penalty_cycle_shadow,
+    persist_learning_penalty_cycle_shadow,
+)
 from .tools.learning_scoreboard import build_learning_scoreboard
 from .tools.market_cycle_timing import MarketCycleTiming
 from .tools.news_sentiment import analyze_news_sentiment_for_candidates
@@ -473,6 +477,10 @@ def _selected_candidates(report: dict[str, Any], settings: Settings) -> tuple[li
         settings.data_dir,
         settings=settings,
     )
+    # Private hand-off for the bounded P-L44B observation.  It is consumed and
+    # removed before the technical report is written; it never reaches the
+    # prompt, gates, plans or orders.
+    report["_learning_penalty_ranked_context"] = ranked_report
     selected = list(ranked_report.get("selected_candidates", []) or [])
     top_shorts = list(ranked_report.get("top_shorts", []) or [])
     if settings.allow_short_selling:
@@ -484,6 +492,48 @@ def _selected_candidates(report: dict[str, Any], settings: Settings) -> tuple[li
         candidates = selected[: _long_only_candidate_limit(settings)]
     symbols = sorted({str(item["symbol"]).upper() for item in candidates if item.get("symbol")})
     return candidates, symbols
+
+
+def _capture_learning_penalty_cycle_shadow(
+    settings: Settings,
+    store: Store,
+    reporter: EventReporter,
+    report: dict[str, Any],
+    run_id: str,
+) -> None:
+    ranked_context = report.pop("_learning_penalty_ranked_context", None)
+    if not isinstance(ranked_context, dict):
+        return
+    try:
+        snapshot = build_learning_penalty_cycle_shadow(
+            run_id,
+            ranked_context,
+            selected_candidates=ranked_context.get("selected_candidates", []),
+            control_candidates=ranked_context.get("comparable_control_candidates", []),
+            configured_capacity=getattr(settings, "max_orders_per_cycle", None),
+            settings=settings,
+        )
+        persisted = persist_learning_penalty_cycle_shadow(store, snapshot)
+        reporter.emit(
+            "self_improvement_engineer",
+            "learning_penalty_cycle_shadow",
+            run_id,
+            "Shadow de penalizacion unica capturado sin autoridad sobre el ciclo activo.",
+            {
+                "status": snapshot.get("status"),
+                "candidate_counts": snapshot.get("candidate_counts"),
+                "persist_status": persisted.get("status"),
+                "policy_mode": "shadow_only",
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - telemetria fail-open.
+        reporter.emit(
+            "self_improvement_engineer",
+            "learning_penalty_cycle_shadow_failed",
+            run_id,
+            "No se pudo capturar el shadow de penalizacion; el ciclo activo continua.",
+            {"error": repr(exc), "policy_mode": "shadow_only"},
+        )
 
 
 def _compact_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
@@ -1681,6 +1731,7 @@ def market_cycle_job(
             report,
             source=learning_mode_source(settings=settings, default_source="intraday_scan"),
         )
+        _capture_learning_penalty_cycle_shadow(settings, store, reporter, report, run_id)
         report = write_json_report(
             report,
             settings.data_dir / "reports",
@@ -1945,6 +1996,7 @@ def closed_market_technical_study_job(
         report,
         source=learning_mode_source(settings=settings, default_source="closed_market_study"),
     )
+    _capture_learning_penalty_cycle_shadow(settings, store, reporter, report, run_id)
     original_report_path = report.get("path")
     report = write_json_report(
         report,
