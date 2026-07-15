@@ -73,6 +73,16 @@ from .tools.retention import cleanup_runtime_data
 from .tools.rr_cohort import write_rr_cohort_report
 from .tools.signal_learning import record_signal_candidates
 from .tools.technical_study import build_closed_market_technical_study
+from .tools.time_stop_policy import (
+    POLICY_VERSION as TIME_STOP_POLICY_VERSION,
+)
+from .tools.time_stop_policy import (
+    TEMPORAL_SEMANTICS as TIME_STOP_TEMPORAL_SEMANTICS,
+)
+from .tools.time_stop_policy import (
+    evaluate_position_time_stop,
+    evaluate_time_stop,
+)
 from .tools.trade_decision import _annotate_technical_context_with_learning
 from .tools.universe import resolve_study_universe
 
@@ -660,7 +670,20 @@ def _risk_exit_plan(
     trigger: str,
     level: float,
     source_plan: dict[str, Any],
+    time_stop_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    exit_policy_payload: dict[str, Any] = {
+        "enabled": trigger in {"time_stop_v2", "trailing_stop_v2", "partial_take_profit_v2"},
+        "trigger": trigger,
+    }
+    if trigger == "time_stop_v2":
+        exit_policy_payload.update(
+            {
+                "exit_policy_version": TIME_STOP_POLICY_VERSION,
+                "time_stop_semantics": TIME_STOP_TEMPORAL_SEMANTICS,
+                "temporal_evidence": time_stop_evidence or {},
+            }
+        )
     return {
         "plan_id": new_id("risk_exit"),
         "cycle_id": new_id("watch_exit"),
@@ -698,10 +721,7 @@ def _risk_exit_plan(
                     "held_qty": qty,
                     "notional": round(notional, 2),
                     "source_plan_id": source_plan.get("plan_id"),
-                    "exit_policy_v2": {
-                        "enabled": trigger in {"time_stop_v2", "trailing_stop_v2", "partial_take_profit_v2"},
-                        "trigger": trigger,
-                    },
+                    "exit_policy_v2": exit_policy_payload,
                 },
             },
             "dry_run": True,
@@ -727,18 +747,60 @@ def _exit_policy_v2_time_stop_trigger(
     settings: Settings,
     *,
     position: Any,
-    source_created_at: Any,
+    source_created_at: Any = None,
+    entry_fill_at: Any = None,
+    evaluation_at: datetime | None = None,
+    calendar: MarketCalendar | None = None,
 ) -> tuple[str | None, float]:
     if not settings.exit_policy_v2_enabled or settings.exit_policy_v2_time_stop_days <= 0:
         return None, 0.0
-    created_at = _parse_datetime(source_created_at)
-    if created_at is None:
+    if str(getattr(position, "side", "long") or "long").lower() not in {"long", "buy"}:
         return None, 0.0
-    held_days = (datetime.now(timezone.utc) - created_at).days
+    # ``source_created_at`` is retained for API compatibility only.  It is not
+    # a fill and therefore cannot authorise the new time-stop.
+    if entry_fill_at is None:
+        return None, 0.0
+    temporal_calendar = calendar or MarketCalendar(settings.market_calendar, settings.local_timezone)
+    temporal = evaluate_time_stop(
+        entry_fill_at=entry_fill_at,
+        evaluation_at=evaluation_at or datetime.now(timezone.utc),
+        required_completed_sessions=settings.exit_policy_v2_time_stop_days,
+        calendar=temporal_calendar,
+    )
     unrealized_return = float(getattr(position, "unrealized_plpc", 0.0) or 0.0)
-    if held_days >= settings.exit_policy_v2_time_stop_days and unrealized_return <= settings.exit_policy_v2_time_stop_min_return:
+    if temporal.get("xnys_eligible") is True and unrealized_return <= settings.exit_policy_v2_time_stop_min_return:
         return "time_stop_v2", float(getattr(position, "current_price", 0.0) or 0.0)
     return None, 0.0
+
+
+def _evaluate_time_stop_v2_position(
+    settings: Settings,
+    *,
+    position: Any,
+    source: dict[str, Any],
+    evaluation_at: datetime,
+    calendar: MarketCalendar,
+) -> dict[str, Any]:
+    lots = list(source.get("lots") or [])
+    if not lots and source.get("entry_fill_at"):
+        lots = [source]
+    temporal = evaluate_position_time_stop(
+        lots=lots,
+        position_qty=getattr(position, "qty", None),
+        side=getattr(position, "side", "long"),
+        evaluation_at=evaluation_at,
+        required_completed_sessions=settings.exit_policy_v2_time_stop_days,
+        calendar=calendar,
+    )
+    if temporal.get("status") == "available":
+        unrealized_return = float(getattr(position, "unrealized_plpc", 0.0) or 0.0)
+        temporal["return_condition_met"] = unrealized_return <= settings.exit_policy_v2_time_stop_min_return
+        temporal["unrealized_return"] = unrealized_return
+        temporal["eligible_with_existing_conditions"] = bool(temporal.get("xnys_eligible")) and bool(temporal["return_condition_met"])
+    else:
+        temporal["return_condition_met"] = None
+        temporal["eligible_with_existing_conditions"] = None
+    return temporal
 
 
 def _exit_policy_v2_stale_guard_trigger(
@@ -777,6 +839,8 @@ def _exit_policy_v2_runtime_trigger(
     position: Any,
     source: dict[str, Any],
     payload: dict[str, Any],
+    calendar: MarketCalendar | None = None,
+    evaluation_at: datetime | None = None,
 ) -> dict[str, Any] | None:
     if not settings.exit_policy_v2_enabled:
         return None
@@ -828,19 +892,41 @@ def _exit_policy_v2_runtime_trigger(
             "state": state,
         }
 
-    time_trigger, time_level = _exit_policy_v2_time_stop_trigger(
-        settings,
-        position=position,
-        source_created_at=source.get("created_at"),
-    )
-    if time_trigger:
+    temporal_evaluation_at = evaluation_at or datetime.now(timezone.utc)
+    try:
+        temporal_calendar = calendar or MarketCalendar(settings.market_calendar, settings.local_timezone)
+        time_stop_evidence = _evaluate_time_stop_v2_position(
+            settings,
+            position=position,
+            source=source,
+            evaluation_at=temporal_evaluation_at,
+            calendar=temporal_calendar,
+        )
+    except Exception as exc:  # noqa: BLE001 - temporal telemetry must fail open.
+        LOGGER.warning("time_stop_v2 temporal evaluation unavailable for %s: %s", symbol, exc)
+        time_stop_evidence = {
+            "schema_version": "p-l43b.time-stop-xnys.v1",
+            "policy_version": TIME_STOP_POLICY_VERSION,
+            "time_stop_semantics": TIME_STOP_TEMPORAL_SEMANTICS,
+            "status": "unavailable",
+            "xnys_eligible": None,
+            "legacy_calendar_eligible": None,
+            "comparison": None,
+            "warnings": ["temporal_helper_error"],
+        }
+    try:
+        store.set_runtime_value(f"time_stop_v2_evidence:{symbol}", time_stop_evidence)
+    except Exception as exc:  # noqa: BLE001 - evidence is observability only.
+        LOGGER.warning("time_stop_v2 evidence persistence unavailable for %s: %s", symbol, exc)
+    if time_stop_evidence.get("eligible_with_existing_conditions") is True:
         store.set_runtime_value(state_key, state)
         return {
-            "trigger": time_trigger,
-            "level": time_level,
+            "trigger": "time_stop_v2",
+            "level": current,
             "qty_fraction": 1.0,
             "state_key": state_key,
             "state": state,
+            "time_stop_evidence": time_stop_evidence,
         }
 
     stale_trigger, stale_level = _exit_policy_v2_stale_guard_trigger(
@@ -870,6 +956,9 @@ def _execute_stop_take_exits(
     reporter: EventReporter,
     run_id: str,
     portfolio: Any,
+    *,
+    calendar: MarketCalendar | None = None,
+    evaluation_at: datetime | None = None,
 ) -> list[dict[str, Any]]:
     if not settings.auto_paper_trading or settings.require_human_approval:
         return []
@@ -878,6 +967,13 @@ def _execute_stop_take_exits(
 
     open_order_symbols = {order.symbol.upper() for order in portfolio.open_orders}
     buy_plans = store.latest_executed_buy_plans_by_symbol()
+    try:
+        buy_lots = store.executed_buy_lots_by_symbol()
+    except Exception as exc:  # noqa: BLE001 - lot telemetry must not block exits.
+        LOGGER.warning("time_stop_v2 lot evidence unavailable: %s", exc)
+        buy_lots = {}
+    temporal_calendar = calendar or MarketCalendar(settings.market_calendar, settings.local_timezone)
+    temporal_evaluation_at = evaluation_at or datetime.now(timezone.utc)
     exits = []
     for position in portfolio.positions:
         symbol = position.symbol.upper()
@@ -906,8 +1002,10 @@ def _execute_stop_take_exits(
                 store,
                 symbol=symbol,
                 position=position,
-                source=source,
+                source={**source, "lots": buy_lots.get(symbol, [])},
                 payload=payload,
+                calendar=temporal_calendar,
+                evaluation_at=temporal_evaluation_at,
             )
             if exit_policy_trigger:
                 trigger = exit_policy_trigger["trigger"]
@@ -927,6 +1025,7 @@ def _execute_stop_take_exits(
             trigger=trigger,
             level=level,
             source_plan=source_plan,
+            time_stop_evidence=(exit_policy_state or {}).get("time_stop_evidence"),
         )
         try:
             order = submit_paper_order_plan(
@@ -1337,7 +1436,15 @@ def portfolio_watch_job(
     )
     if portfolio and portfolio.positions:
         _run_open_position_news_guard(settings, store, reporter, run_id, portfolio)
-        _execute_stop_take_exits(settings, store, reporter, run_id, portfolio)
+        _execute_stop_take_exits(
+            settings,
+            store,
+            reporter,
+            run_id,
+            portfolio,
+            calendar=calendar,
+            evaluation_at=datetime.now(timezone.utc),
+        )
 
     reporter.emit(
         "portfolio_manager",

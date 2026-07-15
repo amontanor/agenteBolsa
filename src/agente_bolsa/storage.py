@@ -3646,6 +3646,88 @@ class Store:
             }
         return result
 
+    def executed_buy_lots_by_symbol(self) -> dict[str, list[dict[str, Any]]]:
+        """Return buy lots with fill evidence, without selecting the latest lot.
+
+        ``created_at`` is retained for lineage only.  It is deliberately never
+        exposed as an entry-fill timestamp.  The temporal policy consumes
+        ``entry_fill_at`` from reconciliation or the original broker response.
+        """
+
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT broker_order_id, plan_id, cycle_id, symbol, status, payload_json, created_at
+                FROM broker_orders
+                WHERE lower(side) = 'buy'
+                ORDER BY created_at ASC, broker_order_id ASC
+                """
+            ).fetchall()
+
+        def _number(value: Any) -> float | None:
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return None
+            return number if math.isfinite(number) else None
+
+        result: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            broker = payload.get("broker_order") or {}
+            reconciled = payload.get("broker_order_reconciled") or {}
+            execution_snapshot = payload.get("execution_quality_snapshot") or {}
+            timestamps = execution_snapshot.get("timestamps") or {}
+            quantities = execution_snapshot.get("quantities") or {}
+            filled_qty = (
+                _number(reconciled.get("filled_qty"))
+                if reconciled.get("filled_qty") is not None
+                else _number(broker.get("filled_qty"))
+            )
+            if filled_qty is None:
+                filled_qty = _number(quantities.get("filled"))
+            submitted_qty = (
+                _number(reconciled.get("qty"))
+                if reconciled.get("qty") is not None
+                else _number(broker.get("qty"))
+            )
+            if submitted_qty is None:
+                submitted_qty = _number(quantities.get("submitted"))
+            is_partial = "partial" in str(row["status"] or "").lower()
+            if submitted_qty is not None and filled_qty is not None and filled_qty < submitted_qty:
+                is_partial = True
+            explicit_first_fill = timestamps.get("first_fill_at")
+            fill_at = explicit_first_fill
+            if not is_partial:
+                fill_at = fill_at or reconciled.get("filled_at") or broker.get("filled_at")
+            remaining_qty = _number(quantities.get("remaining"))
+            if remaining_qty is None and submitted_qty is not None and filled_qty is not None:
+                remaining_qty = max(0.0, submitted_qty - filled_qty)
+            plan = payload.get("plan") or {}
+            symbol = str(row["symbol"] or "").upper()
+            lot = {
+                "broker_order_id": str(row["broker_order_id"] or ""),
+                "order_plan_id": str(row["plan_id"] or plan.get("plan_id") or ""),
+                "source_plan_id": str(plan.get("plan_id") or row["plan_id"] or ""),
+                "cycle_id": str(row["cycle_id"] or ""),
+                "symbol": symbol,
+                "status": str(row["status"] or ""),
+                "created_at": row["created_at"],
+                "entry_fill_at": fill_at,
+                "filled_qty": filled_qty,
+                "submitted_qty": submitted_qty,
+                "remaining_qty": remaining_qty,
+                "remaining_qty_scope": "order",
+                "plan": plan,
+            }
+            result.setdefault(symbol, []).append(lot)
+        return result
+
     def count_broker_orders(
         self,
         *,
