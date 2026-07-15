@@ -1,6 +1,6 @@
 # P-L44 — observación shadow de penalización de aprendizaje
 
-Estado: candidato aislado `0.4.174`, pendiente de ensayo nocturno e integración.
+Estado: ensayo aislado limpio `0.4.174`, listo para un despliegue shadow futuro.
 
 ## Alcance
 
@@ -39,6 +39,19 @@ mantiene `legacy_calendar_days` activa y XNYS exclusivamente shadow.
 La evidencia real queda `collecting` hasta observar ciclos posteriores al
 despliegue; no se interpreta como edge ni como autorización para corregir la
 fórmula legacy.
+
+## P-L44BR2 — ensayo limpio sobre P-L43B desplegado (15-jul-2026)
+
+La rama `codex/pl44b-shadow-integration` integra mediante `merge --no-ff` el
+HEAD `451d774d` sobre producción P-L43B `4dc29f05`. No se detuvieron ni
+reiniciaron servicios, no se accedió a SQLite productiva y no se activó la
+penalización única. El resultado queda `ready_for_future_shadow_deployment`.
+
+La suite combinada, el volumen sintético 600×2, la persistencia conflict-safe,
+el CLI `learning-penalty-shadow-report --json`, el smoke aislado y las
+regresiones de P-L43B pasan. La política activa continúa
+`legacy_double_application`; `single_application` es exclusivamente
+`shadow_only` y los datos reales permanecen `collecting`.
 
 ## P-L44BR1 — temporalidad del wiring shadow (15-jul-2026)
 

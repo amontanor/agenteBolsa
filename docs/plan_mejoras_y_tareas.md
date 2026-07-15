@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.174** (candidato aislado P-L44B-W2; produccion sigue 0.4.172)
+- Version actual: **0.4.174** (candidato P-L44B-W2 sobre produccion P-L43B 0.4.173)
 - Ultima actualizacion: 2026-07-14
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -1854,6 +1854,8 @@ auto-apply OFF, apply humano, mediciones pre-registradas.
 - `legacy_double_application` sigue siendo la unica politica activa; el
   resultado `single_application` es telemetria sin autoridad sobre ranking,
   gates, seleccion, sizing, planes u ordenes.
+- P-L44BR2 ensaya una integracion limpia sobre el commit productivo `4dc29f05`
+  sin modificar produccion. Dictamen: `ready_for_future_shadow_deployment`.
 - Cada ciclo captura los BUY ya rankeados en memoria y persiste un unico evento
   acotado en `agent_events`; las repeticiones son no-op y los conflictos no
   sobrescriben el original. El detalle se limita a la union de los top-20
