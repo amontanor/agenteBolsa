@@ -18,6 +18,7 @@ from agente_bolsa.tools.time_stop_policy import (
     TEMPORAL_SEMANTICS,
     evaluate_position_time_stop,
     evaluate_time_stop,
+    record_shadow_time_stop_observation,
     shadow_time_stop_digest_summary,
 )
 
@@ -447,14 +448,28 @@ def test_shadow_digest_summary_is_collecting_without_sample_and_compact_with_sam
     assert collecting["evaluations"] is None
     assert collecting["legacy_only"] is None
 
-    store.set_runtime_value(
-        "time_stop_v2_evidence:AAPL",
-        {
+    record_shadow_time_stop_observation(
+        store,
+        symbol="AAPL",
+        evidence={
             "status": "available",
             "comparison_status": "legacy_only",
             "fill_authority": "first_fill_at",
+            "legacy_eligible": True,
+            "xnys_eligible": False,
             "evaluation_at": "2026-07-13T20:00:00+00:00",
         },
+        lots=[
+            {
+                "broker_order_id": "buy-aapl",
+                "entry_fill_at": "2026-07-08T16:00:00Z",
+                "fill_authority": "first_fill_at",
+                "filled_qty": 1,
+            }
+        ],
+        position_qty=1,
+        calendar=_calendar(),
+        evaluation_at="2026-07-13T20:00:00+00:00",
     )
     summary = shadow_time_stop_digest_summary(store)
     assert summary["status"] == "available"
@@ -669,7 +684,7 @@ def test_portfolio_watch_integration_uses_fill_and_keeps_stop_loss_operational(t
 
     def fake_submit(_settings, plan, *, client_order_id):
         submitted.append(plan)
-        return {"id": "sell-aapl", "status": "accepted", "client_order_id": client_order_id}
+        return {"id": "sell-aapl", "status": "filled", "client_order_id": client_order_id}
 
     monkeypatch.setattr("agente_bolsa.scheduler.submit_paper_order_plan", fake_submit)
     reporter = Reporter()
@@ -696,6 +711,12 @@ def test_portfolio_watch_integration_uses_fill_and_keeps_stop_loss_operational(t
     )
     assert after[0]["trigger"] == "time_stop_v2"
     assert submitted[0]["payload"]["risk_decision"]["checks"]["exit_policy_v2"]["time_stop_semantics"] == TEMPORAL_SEMANTICS
+    terminal_reasons = [
+        item["payload"].get("observation_reason")
+        for item in store.agent_events(event_type_prefix="time_stop_shadow_observation")
+    ]
+    assert "legacy_time_stop_activated" in terminal_reasons
+    assert "position_closed" in terminal_reasons
 
     stop_portfolio = SimpleNamespace(
         open_orders=[],

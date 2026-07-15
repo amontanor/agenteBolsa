@@ -81,6 +81,7 @@ from .tools.time_stop_policy import (
 )
 from .tools.time_stop_policy import (
     evaluate_position_time_stop,
+    record_shadow_time_stop_observation,
 )
 from .tools.trade_decision import _annotate_technical_context_with_learning
 from .tools.universe import resolve_study_universe
@@ -878,6 +879,23 @@ def _time_stop_shadow_evidence(
         time_stop_evidence["comparison_status"] = "xnys_only"
     else:
         time_stop_evidence["comparison_status"] = "both_ineligible"
+    lots = list(source.get("lots") or [])
+    if not lots and source.get("entry_fill_at"):
+        lots = [source]
+    try:
+        history = record_shadow_time_stop_observation(
+            store,
+            symbol=symbol,
+            evidence=time_stop_evidence,
+            lots=lots,
+            position_qty=getattr(position, "qty", None),
+            calendar=calendar,
+            evaluation_at=evaluation_at,
+            cycle_id=source.get("cycle_id"),
+        )
+        time_stop_evidence.update(history)
+    except Exception as exc:  # noqa: BLE001 - history is observability only.
+        LOGGER.warning("time_stop_v2 shadow history unavailable for %s: %s", symbol, exc)
     try:
         store.set_runtime_value(f"time_stop_v2_evidence:{symbol}", time_stop_evidence)
     except Exception as exc:  # noqa: BLE001 - evidence is observability only.
@@ -993,6 +1011,27 @@ def _exit_policy_v2_runtime_trigger(
         evaluation_at=temporal_evaluation_at,
     )
     if legacy_trigger:
+        if legacy_trigger == "time_stop_v2":
+            try:
+                activation_lots = list(source.get("lots") or [])
+                if not activation_lots and source.get("entry_fill_at"):
+                    activation_lots = [source]
+                history = record_shadow_time_stop_observation(
+                    store,
+                    symbol=symbol,
+                    evidence=time_stop_evidence,
+                    lots=activation_lots,
+                    position_qty=getattr(position, "qty", None),
+                    calendar=calendar,
+                    evaluation_at=temporal_evaluation_at,
+                    observation_reason="legacy_time_stop_activated",
+                    cycle_id=source.get("cycle_id"),
+                    force_reason=True,
+                )
+                time_stop_evidence.update(history)
+                store.set_runtime_value(f"time_stop_v2_evidence:{symbol}", time_stop_evidence)
+            except Exception as exc:  # noqa: BLE001 - shadow history is fail-open.
+                LOGGER.warning("time_stop_v2 legacy activation history unavailable for %s: %s", symbol, exc)
         store.set_runtime_value(state_key, state)
         return {
             "trigger": legacy_trigger,
@@ -1115,6 +1154,35 @@ def _execute_stop_take_exits(
                 status=order["status"],
                 payload={"plan": plan, "broker_order": order},
             )
+            if (
+                trigger == "time_stop_v2"
+                and str(order.get("status") or "").lower() in {"filled", "closed", "done"}
+                and qty_fraction >= 1.0
+            ):
+                try:
+                    terminal_lots = list((source or {}).get("lots") or [])
+                    if not terminal_lots and (source or {}).get("entry_fill_at"):
+                        terminal_lots = [source]
+                    terminal_evidence = (exit_policy_state or {}).get("time_stop_evidence") or {}
+                    terminal_history = record_shadow_time_stop_observation(
+                        store,
+                        symbol=symbol,
+                        evidence=terminal_evidence,
+                        lots=terminal_lots,
+                        position_qty=getattr(position, "qty", None),
+                        calendar=calendar,
+                        evaluation_at=temporal_evaluation_at,
+                        observation_reason="position_closed",
+                        cycle_id=run_id,
+                        force_reason=True,
+                    )
+                    if exit_policy_state is not None:
+                        exit_policy_state["time_stop_evidence"] = {
+                            **terminal_evidence,
+                            **terminal_history,
+                        }
+                except Exception as exc:  # noqa: BLE001 - terminal evidence is fail-open.
+                    LOGGER.warning("time_stop_v2 terminal shadow history unavailable for %s: %s", symbol, exc)
             if exit_policy_state and exit_policy_state.get("state_key"):
                 store.set_runtime_value(exit_policy_state["state_key"], exit_policy_state.get("state") or {})
             exits.append(

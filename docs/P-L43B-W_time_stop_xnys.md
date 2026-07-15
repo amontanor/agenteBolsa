@@ -1,76 +1,91 @@
-# P-L43BR1 — observación shadow XNYS
+# P-L43BR2 — historial auditable de evidencia shadow XNYS
 
-Estado: candidato aislado, pendiente de integración y autorización posterior.
+Estado: candidato aislado, pendiente de integración y de autorización humana.
 
 Base: `821496670b5654f4dc90ca104d21f011d72f423b` · versión `0.4.172`.
 
-## Alcance restaurado
+El candidato aislado se valida como `0.4.173` porque el gate del proyecto exige
+patch bump ante cambios funcionales. Producción continúa en `0.4.172` hasta una
+integración autorizada.
+
+## Política y paridad
 
 La regla legacy de `time_stop_v2` basada en días naturales continúa siendo la
-única ruta activa que puede crear una orden. P-L43BR1 restaura el alcance
-shadow/paridad del contrato original: la semántica XNYS calcula evidencia,
-pero nunca autoriza, bloquea, retrasa ni modifica una orden.
+única ruta activa que puede crear una orden. La semántica XNYS es exclusivamente
+shadow: calcula evidencia de cinco sesiones XNYS cerradas estrictamente después
+del primer fill, pero nunca autoriza, bloquea, retrasa ni modifica una orden.
+Stop-loss, take-profit, trailing, cantidades, precios, gates, ranking y límites
+permanecen intactos. Un fallo de observabilidad es fail-open para la operación.
 
-`stale_guard_v2` permanece independiente e intacto.
+## Identidad de posición y contrato de observación
 
-## Evidencia shadow
+La identidad se deriva de un conjunto ordenado de lotes verificables, priorizando
+`broker_order_id`, cantidad abierta, autoridad del fill y `policy_version`.
+Una recompra del mismo símbolo produce otra identidad; varios lotes conservan
+sus órdenes y cantidades sin fusionar relojes. Si falta el fill o la identidad
+es ambigua, `position_identity` queda `null`, se conserva el motivo y no se
+inventa una unión por símbolo/fecha.
 
-El helper `agente_bolsa.tools.time_stop_policy` publica:
+Cada observación histórica contiene:
 
-- `legacy_eligible` y `xnys_eligible`;
-- `comparison_status` (`both_ineligible`, `both_eligible`, `legacy_only`,
-  `xnys_only`, `xnys_unavailable`);
-- sesiones XNYS completadas y requeridas;
-- autoridad y timestamp del fill;
-- `logical_eligibility_at` (cierre de la quinta sesión posterior);
-- `first_actionable_market_time` (apertura de la sesión siguiente, porque
-  `portfolio_watch` no evalúa posiciones con el mercado cerrado);
-- `shadow_only=true`, `active_policy=legacy_calendar_days` y
-  `shadow_policy=time_stop_xnys.v1`.
+- `position_identity`;
+- `shadow_observation_id` determinista;
+- `observation_session` XNYS;
+- `observation_reason`;
+- `content_hash` estable, independiente de `evaluation_at`/`generated_at`;
+- estado temporal acotado conocido en el momento de evaluación.
 
-Los fallos de calendario, fill o lotes son `unavailable`/`ambiguous` para la
-observación y fail-open para la operación legacy. Stop-loss, take-profit y
-trailing continúan funcionando.
+No se guardan retornos posteriores, P&L futuro, MFE/MAE, `first_hit`, outcomes
+maduros, prompts ni respuestas LLM.
 
-## Lotes y temporalidad
+## Historia append-only frente a vista operativa
 
-La autoridad es `first_fill_at`, seguida de `filled_at` agregado únicamente
-cuando la orden no es parcial. Las órdenes sin fill se excluyen de los lotes.
-Las compras múltiples requieren cantidades abiertas verificables; no se elige
-silenciosamente la última compra.
+La historia se almacena como eventos `time_stop_shadow_observation` en la tabla
+existente `agent_events`; no se crean tablas ni migraciones. La inserción es
+corta y segura:
 
-Una sesión XNYS cuenta solo después de su cierre. La entrada no cuenta y no se
-usan fines de semana, festivos ni el fallback lunes–viernes.
+- mismo `shadow_observation_id` y contenido: `idempotent`;
+- mismo ID con contenido distinto: se conserva la primera entrada y se añade
+  un evento `time_stop_shadow_observation_conflict` auditable;
+- nuevo estado, sesión, progreso de sesiones, cambio de disponibilidad,
+  elegibilidad lógica XNYS, activación legacy o cierre verificable: nueva
+  observación;
+- sesenta ticks idénticos y reinicios no generan flood.
 
-## Persistencia, digest y health
+`runtime_state[time_stop_v2_evidence:<symbol>]` queda documentado únicamente
+como `latest_view`: incluye `position_identity`, sirve para freshness operativa
+y nunca es autoridad de estadísticas históricas. La desaparición o recompra
+del símbolo no elimina los eventos terminales ni la evidencia de lotes
+anteriores.
 
-La evidencia se reutiliza en `runtime_state` bajo
-`time_stop_v2_evidence:<symbol>`, con actualización idempotente por clave. No
-se crean tablas ni se reescriben históricos. El digest diario y
-`operational_health` publican un resumen compacto `time_stop_shadow` con
-evaluaciones, discrepancias, cobertura de fill y freshness; sin muestra el
-estado es `collecting` y los denominadores permanecen `null`.
+## Digest y health
 
-La telemetría no contiene retornos posteriores, P&L futuro, MFE/MAE,
-`first_hit` ni outcomes maduros.
+`time_stop_shadow` lee exclusivamente el ledger append-only y publica, cuando
+hay muestra:
 
-## Evidencia histórica descriptiva
+- `unique_positions`, `unique_observations`, `current_positions`;
+- `both_eligible`, `legacy_only`, `xnys_only`, `both_ineligible`, `unavailable`,
+  `ambiguity`;
+- `comparison_transitions`, `legacy_exits_observed`,
+  `xnys_logical_eligibility_events`;
+- sesiones cubiertas, cobertura de fill y freshness.
 
-Las fixtures de AIZ, CRWD, STT, SBUX, EXPE, ALL y EBAY quedan como
+Sin historia el estado es `collecting` y los denominadores son `null`; no se
+presenta la ausencia como cero. La vista actual puede contribuir únicamente a
+`current_positions`/freshness.
+
+## Casos históricos descriptivos
+
+Las fixtures AIZ, CRWD, STT, SBUX, EXPE, ALL y EBAY continúan clasificadas
 `legacy_only` en sus fechas históricas. DDOG y ANET alcanzan la quinta sesión
-lógica al cierre del 21-jul; la primera oportunidad operativa garantizada es
-la apertura del 22-jul si no existe un tick exacto al cierre.
+lógica al cierre del 21-jul; la oportunidad operativa garantizada sería la
+apertura del 22-jul si no existe evaluación al cierre. Estos casos no activan
+XNYS ni constituyen evidencia productiva.
 
-Estos casos no seleccionan una política ni constituyen evidencia suficiente
-para cambiar `time_stop_v2`.
+## Validación y alcance
 
-## Validación aislada
-
-- Focal P-L43B/P-L43BR1 y scheduler: se ejecuta tras este cambio.
-- Regresiones de portfolio watch, stop/take/trailing, storage,
-  reconciliation y execution quality: incluidas en la suite.
-- No se ejecutan broker real, postmarket real, reconciliación real, red, LLM,
-  servicios ni despliegue.
-
-Cualquier activación futura de la política XNYS requiere un lote separado,
-fecha efectiva y autorización humana explícita.
+P-L43BR2 se valida con pruebas focales de política, scheduler, storage, eventos,
+digest y health, además de regresiones existentes. No se ejecutan broker real,
+postmarket real, reconciliación real, red, LLM, servicios ni despliegue durante
+este lote. La activación XNYS continúa requiriendo otro lote, fecha efectiva y
+autorización humana explícita.
