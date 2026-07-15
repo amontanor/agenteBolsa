@@ -3691,6 +3691,11 @@ class Store:
             )
             if filled_qty is None:
                 filled_qty = _number(quantities.get("filled"))
+            # Only orders with an actual positive fill are position lots.
+            # Rejected/cancelled or accepted-without-fill buy orders must not
+            # make a verified open lot ambiguous.
+            if filled_qty is None or filled_qty <= 0:
+                continue
             submitted_qty = (
                 _number(reconciled.get("qty"))
                 if reconciled.get("qty") is not None

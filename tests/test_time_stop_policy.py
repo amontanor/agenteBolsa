@@ -400,6 +400,39 @@ def test_store_exposes_fill_not_created_at_and_rejects_partial_without_first_fil
     assert lots["MSFT"][0]["entry_fill_at"] is None
 
 
+def test_store_excludes_unfilled_buy_orders_from_position_lots(tmp_path):
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    store.save_broker_order(
+        broker_order_id="buy-filled",
+        plan_id="plan-filled",
+        cycle_id="cycle-1",
+        symbol="AAPL",
+        side="buy",
+        status="filled",
+        payload={
+            "broker_order": {
+                "id": "buy-filled",
+                "qty": 1,
+                "filled_qty": 1,
+                "filled_at": "2026-07-08T16:00:00Z",
+            }
+        },
+    )
+    store.save_broker_order(
+        broker_order_id="buy-rejected",
+        plan_id="plan-rejected",
+        cycle_id="cycle-1",
+        symbol="AAPL",
+        side="buy",
+        status="rejected",
+        payload={"broker_order": {"id": "buy-rejected", "qty": 1, "filled_qty": 0}},
+    )
+
+    lots = store.executed_buy_lots_by_symbol()
+    assert [lot["broker_order_id"] for lot in lots["AAPL"]] == ["buy-filled"]
+
+
 def test_time_stop_evidence_is_fail_open_and_risk_plan_is_versioned(tmp_path, monkeypatch):
     settings = Settings(DATA_DIR=tmp_path, EXIT_POLICY_V2_ENABLED=True, EXIT_POLICY_V2_TIME_STOP_DAYS=5)
     store = Store(settings.database_path, settings.agent_logs_dir)
