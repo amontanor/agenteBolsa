@@ -20,6 +20,7 @@ from .pre_earnings import load_pre_earnings_learning_context
 from .reporting import write_json_report
 from .rr_cohort import rr_cohort_digest_summary, sync_rr_cohort_observations
 from .signal_learning import HORIZONS, _indicator_tags, _num, update_signal_outcomes
+from .time_stop_policy import shadow_time_stop_digest_summary
 
 DEFAULT_DAILY_LEARNING_START = "2026-04-01"
 LEDGER_LIMIT = 200000
@@ -1466,6 +1467,7 @@ def build_learning_daily_run(
     )
     digest["rr_cohort"] = rr_cohort_digest_summary(store)
     digest["execution_quality"] = execution_quality_digest_summary(store)
+    digest["time_stop_shadow"] = shadow_time_stop_digest_summary(store)
     comparison = _compare_policy_rows(rows, "proposed") if rows else {}
     summary_payload = {
         "session_date": session_date,
@@ -1554,6 +1556,7 @@ def build_learning_digest_report(
     )
     digest["rr_cohort"] = rr_cohort_digest_summary(store)
     digest["execution_quality"] = execution_quality_digest_summary(store)
+    digest["time_stop_shadow"] = shadow_time_stop_digest_summary(store)
     report = {
         "run_id": run_id,
         "as_of": datetime.now(timezone.utc).isoformat(),

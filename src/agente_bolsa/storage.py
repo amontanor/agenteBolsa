@@ -935,6 +935,197 @@ class Store:
                 ),
             )
 
+    def record_time_stop_shadow_observation(
+        self,
+        observation: dict[str, Any],
+        *,
+        event_id: str,
+        cycle_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Append one deterministic time-stop shadow observation.
+
+        ``record_agent_event`` intentionally keeps the historical, general
+        event behaviour (``INSERT OR REPLACE``).  Shadow evidence needs a
+        stricter append-only contract, so this narrow path performs an
+        insert-if-absent and records a separate conflict event on a hash
+        mismatch.  The transaction contains only the short read/insert.
+        """
+
+        payload = _json_safe(dict(observation))
+        encoded = _dumps(payload)
+        event_type = "time_stop_shadow_observation"
+        conflict_type = "time_stop_shadow_observation_conflict"
+        now = _utc_iso()
+        inserted = False
+        result: dict[str, Any]
+        with self.connect() as conn:
+            existing = conn.execute(
+                "SELECT payload_json FROM agent_events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+            if existing is not None:
+                try:
+                    existing_payload = json.loads(existing["payload_json"] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    existing_payload = {}
+                existing_hash = str(existing_payload.get("content_hash") or "")
+                candidate_hash = str(payload.get("content_hash") or "")
+                if existing_hash == candidate_hash and _dumps(_json_safe(existing_payload)) == encoded:
+                    return {"status": "idempotent", "event_id": event_id, "content_hash": candidate_hash}
+                conflict_hash = str(payload.get("content_hash") or "conflict")
+                conflict_id = f"{event_id}:conflict:{conflict_hash}"
+                conflict_payload = {
+                    "shadow_observation_id": event_id,
+                    "existing_content_hash": existing_hash or None,
+                    "candidate_content_hash": candidate_hash or None,
+                    "status": "conflict",
+                }
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO agent_events (
+                        event_id, agent, event_type, cycle_id, payload_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        conflict_id,
+                        "portfolio_manager",
+                        conflict_type,
+                        cycle_id,
+                        _dumps(conflict_payload),
+                        now,
+                    ),
+                )
+                result = {
+                    "status": "conflict",
+                    "event_id": event_id,
+                    "conflict_event_id": conflict_id,
+                    "existing_content_hash": existing_hash or None,
+                    "candidate_content_hash": candidate_hash or None,
+                }
+            else:
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO agent_events (
+                            event_id, agent, event_type, cycle_id, payload_json, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            event_id,
+                            "portfolio_manager",
+                            event_type,
+                            cycle_id,
+                            encoded,
+                            now,
+                        ),
+                    )
+                    inserted = True
+                    result = {"status": "inserted", "event_id": event_id, "content_hash": payload.get("content_hash")}
+                except sqlite3.IntegrityError:
+                    # A concurrent writer won the primary-key race.  Read it
+                    # back and report the same deterministic outcome without
+                    # replacing either payload.
+                    raced = conn.execute(
+                        "SELECT payload_json FROM agent_events WHERE event_id = ?",
+                        (event_id,),
+                    ).fetchone()
+                    raced_payload = {}
+                    if raced is not None:
+                        try:
+                            raced_payload = json.loads(raced["payload_json"] or "{}")
+                        except (TypeError, json.JSONDecodeError):
+                            raced_payload = {}
+                    if str(raced_payload.get("content_hash") or "") == str(payload.get("content_hash") or ""):
+                        result = {"status": "idempotent", "event_id": event_id, "content_hash": payload.get("content_hash")}
+                    else:
+                        conflict_hash = str(payload.get("content_hash") or "conflict")
+                        conflict_id = f"{event_id}:conflict:{conflict_hash}"
+                        conn.execute(
+                            """
+                            INSERT OR IGNORE INTO agent_events (
+                                event_id, agent, event_type, cycle_id, payload_json, created_at
+                            ) VALUES (?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                conflict_id,
+                                "portfolio_manager",
+                                conflict_type,
+                                cycle_id,
+                                _dumps(
+                                    {
+                                        "shadow_observation_id": event_id,
+                                        "existing_content_hash": raced_payload.get("content_hash"),
+                                        "candidate_content_hash": payload.get("content_hash"),
+                                        "status": "conflict",
+                                    }
+                                ),
+                                _utc_iso(),
+                            ),
+                        )
+                        result = {
+                            "status": "conflict",
+                            "event_id": event_id,
+                            "conflict_event_id": conflict_id,
+                            "existing_content_hash": raced_payload.get("content_hash"),
+                            "candidate_content_hash": payload.get("content_hash"),
+                        }
+        if inserted:
+            try:
+                self.agent_history.log(
+                    AgentEvent(
+                        agent="portfolio_manager",
+                        event_type=event_type,
+                        payload=payload,
+                        cycle_id=cycle_id,
+                        event_id=event_id,
+                    )
+                )
+            except Exception:
+                # File logging is secondary to the SQLite append-only record.
+                pass
+        return result
+
+    def time_stop_shadow_observations(
+        self,
+        *,
+        position_identity: str | None = None,
+        limit: int = 50000,
+    ) -> list[dict[str, Any]]:
+        """Read append-only shadow observations, never runtime latest_view."""
+
+        query = (
+            "SELECT event_id, cycle_id, payload_json, created_at "
+            "FROM agent_events WHERE event_type = 'time_stop_shadow_observation'"
+        )
+        params: list[Any] = []
+        query += " ORDER BY created_at ASC LIMIT ?"
+        params.append(max(1, int(limit)))
+        connection = self.read_connection()
+        try:
+            rows = connection.execute(query, params).fetchall()
+        finally:
+            close_reader = getattr(self, "close_read_connection", None)
+            if callable(close_reader):
+                close_reader()
+        observations: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(payload, dict) and (
+                position_identity is None or payload.get("position_identity") == position_identity
+            ):
+                observations.append(
+                    {
+                        **payload,
+                        "event_id": row["event_id"],
+                        "cycle_id": row["cycle_id"],
+                        "created_at": row["created_at"],
+                    }
+                )
+        return observations
+
     def agent_events(
         self,
         *,
@@ -3644,6 +3835,97 @@ class Store:
                 "plan": plan,
                 "broker_order": payload.get("broker_order", {}),
             }
+        return result
+
+    def executed_buy_lots_by_symbol(self) -> dict[str, list[dict[str, Any]]]:
+        """Return buy lots with fill evidence, without selecting the latest lot.
+
+        ``created_at`` is retained for lineage only.  It is deliberately never
+        exposed as an entry-fill timestamp.  The temporal policy consumes
+        ``entry_fill_at`` from reconciliation or the original broker response.
+        """
+
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT broker_order_id, plan_id, cycle_id, symbol, status, payload_json, created_at
+                FROM broker_orders
+                WHERE lower(side) = 'buy'
+                ORDER BY created_at ASC, broker_order_id ASC
+                """
+            ).fetchall()
+
+        def _number(value: Any) -> float | None:
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return None
+            return number if math.isfinite(number) else None
+
+        result: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            broker = payload.get("broker_order") or {}
+            reconciled = payload.get("broker_order_reconciled") or {}
+            execution_snapshot = payload.get("execution_quality_snapshot") or {}
+            timestamps = execution_snapshot.get("timestamps") or {}
+            quantities = execution_snapshot.get("quantities") or {}
+            filled_qty = (
+                _number(reconciled.get("filled_qty"))
+                if reconciled.get("filled_qty") is not None
+                else _number(broker.get("filled_qty"))
+            )
+            if filled_qty is None:
+                filled_qty = _number(quantities.get("filled"))
+            # Only orders with an actual positive fill are position lots.
+            # Rejected/cancelled or accepted-without-fill buy orders must not
+            # make a verified open lot ambiguous.
+            if filled_qty is None or filled_qty <= 0:
+                continue
+            submitted_qty = (
+                _number(reconciled.get("qty"))
+                if reconciled.get("qty") is not None
+                else _number(broker.get("qty"))
+            )
+            if submitted_qty is None:
+                submitted_qty = _number(quantities.get("submitted"))
+            is_partial = "partial" in str(row["status"] or "").lower()
+            if submitted_qty is not None and filled_qty is not None and filled_qty < submitted_qty:
+                is_partial = True
+            explicit_first_fill = timestamps.get("first_fill_at")
+            fill_at = explicit_first_fill
+            fill_authority = "first_fill_at" if explicit_first_fill else "unavailable"
+            if not is_partial:
+                if not fill_at and (reconciled.get("filled_at") or broker.get("filled_at")):
+                    fill_at = reconciled.get("filled_at") or broker.get("filled_at")
+                    fill_authority = "aggregated_filled_at"
+            remaining_qty = _number(quantities.get("remaining"))
+            if remaining_qty is None and submitted_qty is not None and filled_qty is not None:
+                remaining_qty = max(0.0, submitted_qty - filled_qty)
+            plan = payload.get("plan") or {}
+            symbol = str(row["symbol"] or "").upper()
+            lot = {
+                "broker_order_id": str(row["broker_order_id"] or ""),
+                "order_plan_id": str(row["plan_id"] or plan.get("plan_id") or ""),
+                "source_plan_id": str(plan.get("plan_id") or row["plan_id"] or ""),
+                "cycle_id": str(row["cycle_id"] or ""),
+                "symbol": symbol,
+                "status": str(row["status"] or ""),
+                "created_at": row["created_at"],
+                "entry_fill_at": fill_at,
+                "fill_authority": fill_authority,
+                "filled_qty": filled_qty,
+                "submitted_qty": submitted_qty,
+                "remaining_qty": remaining_qty,
+                "remaining_qty_scope": "order",
+                "plan": plan,
+            }
+            result.setdefault(symbol, []).append(lot)
         return result
 
     def count_broker_orders(
