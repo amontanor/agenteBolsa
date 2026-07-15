@@ -47,6 +47,7 @@ from .tools.market_snapshot import build_market_snapshot, compact_snapshot_for_p
 from .tools.market_state import build_market_state, compact_market_state_for_prompt
 from .tools.operational_health import load_operational_block_context
 from .tools.portfolio_optimizer import build_portfolio_rebalance_context
+from .tools.signal_identity import resolve_signal_capture
 from .tools.signal_learning import (
     attach_comparable_control_sets,
     attach_gate_evaluation_snapshots,
@@ -600,16 +601,27 @@ def _decision_context_snapshot_for_recommendation(
 ) -> dict[str, Any]:
     lineage = dict(getattr(recommendation, "decision_lineage", {}) or {})
     signal_id = str(lineage.get("signal_id") or "").strip() or None
+    signal_capture_id = str(lineage.get("signal_capture_id") or "").strip() or None
     signal_link_status = "unavailable"
     if signal_id:
-        signal = store.signal_outcome_by_id(signal_id)
-        # The signal producer and the decision cycle are distinct provenances.
-        # Exact ID plus canonical producer identity is the verification contract.
         signal_source_run_id = str(lineage.get("signal_source_run_id") or "").strip() or None
-        if signal and signal_source_run_id and signal.get("source_run_id") == signal_source_run_id:
-            signal_link_status = "verified"
+        if signal_capture_id:
+            resolved = resolve_signal_capture(store, signal_capture_id, signal_id=signal_id)
+            if (
+                resolved.get("status") == "exact_match"
+                and resolved.get("signal_id") == signal_id
+                and resolved.get("signal_source_run_id") == signal_source_run_id
+            ):
+                signal_link_status = "verified"
+            else:
+                signal_link_status = "broken"
         else:
-            signal_link_status = "broken"
+            signal = store.signal_outcome_by_id(signal_id)
+            # Legacy rows retain the previous exact signal/source check.
+            if signal and signal_source_run_id and signal.get("source_run_id") == signal_source_run_id:
+                signal_link_status = "verified"
+            else:
+                signal_link_status = "broken"
     raw = str(getattr(recommendation, "source", "") or "")
     origin = str(getattr(recommendation, "decision_origin", "") or "")
     capacity_code = str(getattr(recommendation, "capacity_fill_reason_code", "") or "").lower()
@@ -639,6 +651,7 @@ def _decision_context_snapshot_for_recommendation(
         market_state=market_state,
         agent_run_id=agent_run_id,
         signal_id=signal_id,
+        signal_capture_id=signal_capture_id,
         signal_link_status=signal_link_status,
         llm_considered=llm_considered,
         llm_response_status=llm_status,

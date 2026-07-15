@@ -1,17 +1,24 @@
 # Relevo de dirección técnica — agenteBolsa
 
-> Última actualización: **12-jul-2026** · Versión **0.4.167** · Último commit esperado: `fde446d8` antes de P-L35R.
+> Última actualización: **14-jul-2026** · Versión **0.4.172** · Release nocturno P-L41D.
 
 ## Estado operativo
 
 - Solo paper; live y auto-apply de mejoras permanecen desactivados.
 - El scheduler, postmarket, health, locks y digest están conectados. P-L34BR confirmó la suite completa: 1.248 passed en aproximadamente 215 segundos.
-- Los instrumentos prospectivos P-L27/P-L29/P-L30/P-L31/P-L32/P-L33 están `collecting`. No interpretar ausencia de registros como rendimiento cero.
+- Los instrumentos prospectivos P-L27/P-L29/P-L30/P-L31/P-L32/P-L33 permanecen `collecting`; P-L37B y P-L40B comienzan su captura prospectiva tras este release. No interpretar ausencia de registros como rendimiento cero.
 - P-L35B está **deferred**, no rechazado ni autorizado: reconsiderar cuando haya una investigación `ready_for_analysis` o tras la primera revisión de madurez de P-L27D.
+- P-L37A quedó `partially_verified_capture`; P-L37B está integrado con historial de capturas append-only y resolución exacta.
+- P-L40A permanece `insufficient_sample`/`lower_return_with_lower_risk`/`data_quality_blocked`: la ventana 7–13 jul fue cuenta −0,0401%, SPY +0,1953%, exceso −0,2354 pp. No se ha demostrado edge frente a SPY.
+- P-L40B publica benchmark diario como observabilidad. `exposure-matched` y `cash_drag` siguen `unavailable` hasta disponer de exposición temporal; no hay backfill.
+- P-L41R/P-L41D integra y despliega ambos lotes secuencialmente, sin cambios de trading ni de `adaptive_config.json`.
 
 ## Capacidades entregadas P-L17–P-L34B
 
 - Outcomes honestos y scoreboard, con madurez por sesiones XNYS.
+- Identidad canónica por captura (`signal_capture_id`) con historial append-only, resolución exacta y propagación hasta observaciones.
+- Benchmark diario `p-l40b.performance-benchmark.v1` con un único snapshot de cartera, SPY desde caché local, payload completo, alpha persistido y conflictos auditables.
+- Integración postmarket de identidad y benchmark fail-open, con exposición EOD separada de media temporal y compatibilidad legacy.
 - Linaje de decisión y controles contemporáneos verificables.
 - Contratos de evidencia y atribución de origen para propuestas nuevas.
 - Postmarket, timings, locks, heartbeats, digest y health operacional.

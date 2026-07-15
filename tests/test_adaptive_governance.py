@@ -1,9 +1,13 @@
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from agente_bolsa.config import Settings
+from agente_bolsa.continuous_improvement import digest as digest_module
 from agente_bolsa.continuous_improvement.digest import build_lab_digest
 from agente_bolsa.storage import Store
+from agente_bolsa.tools import adaptive_tuning as adaptive_tuning_module
+from agente_bolsa.tools import operational_health as operational_health_module
 from agente_bolsa.tools.adaptive_tuning import (
     adaptive_config_path,
     adaptive_governance_status,
@@ -21,6 +25,16 @@ def _report(items):
         "summary": {},
         "proposed_improvements": items,
     }
+
+
+def _freeze_health_clock(monkeypatch, fixed_now):
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = fixed_now
+            return value.astimezone(tz) if tz else value.replace(tzinfo=None)
+
+    monkeypatch.setattr(operational_health_module, "datetime", FrozenDateTime)
 
 
 def test_false_blocks_creation_at_the_write_boundary(tmp_path):
@@ -154,16 +168,73 @@ def test_blocked_promotion_is_structured_and_postmarket_safe(tmp_path):
     assert result["write_performed"] is False
 
 
-def test_health_and_digest_publish_governance_signal(tmp_path):
-    settings = Settings(DATA_DIR=tmp_path / "data", ALLOW_AUTO_APPLY_IMPROVEMENTS=False)
+def test_health_and_digest_publish_governance_signal(tmp_path, monkeypatch):
+    fixed_now = datetime(2026, 7, 14, 22, 0, tzinfo=timezone.utc)
+    _freeze_health_clock(monkeypatch, fixed_now)
+    settings = Settings(
+        _env_file=None,
+        DATA_DIR=tmp_path / "data",
+        ALLOW_AUTO_APPLY_IMPROVEMENTS=False,
+        TRADING_MODE="paper",
+        ALLOW_LIVE_TRADING=False,
+    )
     settings.ensure_runtime_dirs()
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()
     reports_dir = settings.data_dir / "reports"
-    health = build_operational_health_report(settings, store, reports_dir, "governance-health")
-    digest = build_lab_digest(store, data_dir=settings.data_dir)
 
-    assert health["report_health"]["adaptive_config_governance"]["status"] == "collecting"
-    assert digest["adaptive_config_governance"]["adaptive_auto_apply_authorized"] is False
-    assert digest["adaptive_config_governance"]["blocked_promotion_attempts"] is None
-    assert digest["adaptive_config_governance"]["active_override_count"] == 0
+    def isolated_digest_settings(**kwargs):
+        return Settings(
+            _env_file=None,
+            DATA_DIR=kwargs.get("DATA_DIR", settings.data_dir),
+            ALLOW_AUTO_APPLY_IMPROVEMENTS=False,
+            TRADING_MODE="paper",
+            ALLOW_LIVE_TRADING=False,
+        )
+
+    monkeypatch.setattr(digest_module, "Settings", isolated_digest_settings)
+    monkeypatch.setattr(adaptive_tuning_module, "Settings", lambda **_kwargs: settings)
+
+    for external in ({}, {
+        "ALLOW_AUTO_APPLY_IMPROVEMENTS": "true",
+        "TRADING_MODE": "live",
+        "ALLOW_LIVE_TRADING": "true",
+    }):
+        for key in ("ALLOW_AUTO_APPLY_IMPROVEMENTS", "TRADING_MODE", "ALLOW_LIVE_TRADING"):
+            monkeypatch.delenv(key, raising=False)
+        for key, value in external.items():
+            monkeypatch.setenv(key, value)
+        health = build_operational_health_report(settings, store, reports_dir, "governance-health", now=fixed_now)
+        digest = build_lab_digest(store, data_dir=settings.data_dir, now=fixed_now)
+
+        assert health["report_health"]["adaptive_config_governance"]["status"] == "collecting"
+        assert health["report_health"]["adaptive_config_governance"]["adaptive_auto_apply_authorized"] is False
+        assert digest["adaptive_config_governance"]["adaptive_auto_apply_authorized"] is False
+        assert digest["adaptive_config_governance"]["blocked_promotion_attempts"] is None
+        assert digest["adaptive_config_governance"]["active_override_count"] == 0
+
+    path = adaptive_config_path(settings)
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "parameters": {
+                    "MAX_ORDERS_PER_CYCLE": {
+                        "status": "active",
+                        "proposed": 2,
+                        "created_at": "2026-07-10T20:52:47+00:00",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    health = build_operational_health_report(settings, store, reports_dir, "governance-override", now=fixed_now)
+    digest = build_lab_digest(store, data_dir=settings.data_dir, now=fixed_now)
+    row = digest["adaptive_config_governance"]["overrides"][0]
+
+    assert health["report_health"]["adaptive_config_governance"]["status"] == "degraded_governance"
+    assert digest["adaptive_config_governance"]["active_override_count"] == 1
+    assert digest["adaptive_config_governance"]["unauthorized_or_legacy_active_override_count"] == 1
+    assert row["classification"] == "stricter"
+    assert row["governance"] == "preexisting_unauthorized"

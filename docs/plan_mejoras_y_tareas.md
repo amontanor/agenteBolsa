@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.171**
+- Version actual: **0.4.172**
 - Ultima actualizacion: 2026-07-14
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -71,6 +71,11 @@ amplia exposicion.
 | P-L36CR | Identidad canonica a traves del contexto compactado | HECHO (v0.4.169) |
 | P-L38B1 | Cierre de promocion autonoma no autorizada de configuracion adaptativa | HECHO (v0.4.170) |
 | P-L38B2 | Atribucion y agregacion canonica del analisis postmarket | HECHO (v0.4.171) |
+| P-L37A | Auditoria de la primera captura real con identidad canonica | partially_verified_capture (solo lectura) |
+| P-L37B | Sellado y propagacion de identidad por captura | HECHO (integrado y validado en P-L41R) |
+| P-L40A | Comparacion frente a SPY y auditoria de ventas | insufficient_sample; lower_return_with_lower_risk; data_quality_blocked |
+| P-L40B | Benchmark diario de cartera y SPY como observabilidad | HECHO (sin cambio de trading) |
+| P-L41R/P-L41D | Ensayo secuencial y despliegue nocturno de P-L37B + P-L40B | HECHO (integración ensayada y despliegue) |
 
 ### P-L38B1 - Cierre de promocion autonoma no autorizada de configuracion adaptativa. **HECHO (v0.4.170).**
 
@@ -106,6 +111,51 @@ amplia exposicion.
   outcomes inmaduros siguen siendo `null` y la ejecución no se usa como retorno
   forward. La frontera de autorización de P-L38B1 y `adaptive_config.json` no
   se modifican.
+
+### P-L37A - Auditoria de la primera captura real con identidad canonica. **PARTIALLY_VERIFIED_CAPTURE (solo lectura).**
+
+La primera sesión prospectiva demostró captura principal de identidad, pero no
+permitió verificar el 100% de enlaces del ciclo. Los históricos sin captura
+permanecen `legacy_without_capture_history`; no se hizo backfill ni se usaron
+uniones por símbolo/fecha.
+
+### P-L37B - Identidad sellada por captura y propagada end-to-end. **HECHO (integrado en P-L41R/P-L41D).**
+
+`signal_capture_id` es determinista para la combinación versionada de señal,
+source run, fecha y estrategia. El historial append-only conserva capturas de
+source runs distintos, los buckets independientes mantienen los IDs y la
+resolución es exacta hasta las observaciones. Los merges recursivos y
+transacciones cortas preservan ramas JSON existentes; fallos de telemetría son
+fail-open y no cambian ranking, gates, planes, órdenes ni cantidades. Legacy se
+lee explícitamente sin completar históricos.
+
+### P-L40A - Comparacion rigurosa frente a SPY. **INSUFFICIENT_SAMPLE / LOWER_RETURN_WITH_LOWER_RISK / DATA_QUALITY_BLOCKED.**
+
+En la ventana pre-registrada 7--13 jul la cuenta obtuvo `-0,0401%`, SPY
+`+0,1953%` y la diferencia fue `-0,2354 pp`; la exposición EOD media aproximada
+fue 5,17%. La muestra no demuestra edge ni autoriza cambiar política. La
+exposición temporal y el benchmark ajustado por exposición permanecen
+`unavailable` hasta contar con observaciones intradía verificables.
+
+### P-L40B - Benchmark diario de cartera y SPY. **HECHO (observabilidad; sin cambio de trading).**
+
+El contrato `p-l40b.performance-benchmark.v1` reutiliza un único
+`PortfolioSnapshot`, lee SPY solo de la caché local y persiste el payload
+completo, `alpha_vs_spy`, hash estable y conflictos sin sobrescritura. La foto
+EOD se separa de la media temporal: `session_average_gross_exposure`, retorno
+SPY ajustado por exposición y `cash_drag` permanecen `null` mientras no exista
+una serie temporal suficiente. Las filas legacy no se reescriben y el fallo de
+observabilidad es fail-open.
+
+### P-L41R/P-L41D - Integracion secuencial y despliegue nocturno. **HECHO.**
+
+La rama de ensayo integra P-L37B y P-L40B en ese orden y conserva las garantías
+de identidad, benchmark, almacenamiento y orden postmarket. La suite completa
+obtuvo 1.337 pruebas verdes y un único skip preexistente (`test_score_study_regression_current_sqlite`,
+por muestra histórica local insuficiente de pre-earnings); no pertenece a
+P-L37B/P-L40B/P-L41 y no se añadieron skips. El bump a 0.4.172 y el despliegue
+productivo se ejecutan solo fuera de mercado y con postmarket terminal. Este
+lote no altera horarios, límites, estrategias, órdenes ni `adaptive_config.json`.
 
 ### P-L36CR - Identidad canonica a traves del contexto compactado. **HECHO (v0.4.169).**
 

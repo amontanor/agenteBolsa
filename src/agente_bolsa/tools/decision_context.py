@@ -180,6 +180,7 @@ def build_decision_context_snapshot(
     market_state: Mapping[str, Any] | None,
     agent_run_id: str | None = None,
     signal_id: str | None = None,
+    signal_capture_id: str | None = None,
     signal_link_status: str = "unavailable",
     captured_at: datetime | None = None,
     llm_considered: bool | None = None,
@@ -213,6 +214,7 @@ def build_decision_context_snapshot(
         (
             str(cycle_id),
             str(signal_id or ""),
+            str(signal_capture_id or ""),
             str(rec.get("symbol") or ""),
             str(rec.get("action") or ""),
             raw,
@@ -225,6 +227,7 @@ def build_decision_context_snapshot(
         "source_run_id": source_run_id,
         "agent_run_id": agent_run_id,
         "signal_id": signal_id,
+        "signal_capture_id": signal_capture_id,
         "signal_link_status": signal_link_status,
         "strategy_name": rec.get("strategy_name") or (rec.get("decision_lineage") or {}).get("strategy_name"),
         "strategy_version": (rec.get("decision_lineage") or {}).get("strategy_version"),

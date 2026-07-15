@@ -117,6 +117,7 @@ from .tools.pre_earnings import (
     record_pre_earnings_predictions,
     update_pre_earnings_outcomes,
 )
+from .tools.reporting import write_json_report
 from .tools.retention import cleanup_runtime_data
 from .tools.rr_cohort import build_rr_cohort_report
 from .tools.signal_learning import (
@@ -1126,6 +1127,7 @@ def command_scan_technical(args: argparse.Namespace) -> None:
         progress_callback=_progress,
         benchmark_symbol=settings.benchmark_symbol,
         learning_mode_config=active_learning_mode(settings),
+        persist_report=False,
     )
     annotated_report = _annotate_technical_context_with_learning(
         report,
@@ -1143,6 +1145,14 @@ def command_scan_technical(args: argparse.Namespace) -> None:
         store,
         report,
         source=learning_mode_source(settings=settings, default_source="manual_scan"),
+    )
+    report = write_json_report(
+        report,
+        settings.data_dir / "reports",
+        "closed_market_technical_study",
+        run_id,
+        latest_filename="latest_closed_market_technical_study.json",
+        manifest={"market_data": report.get("market_data", {})},
     )
     elapsed_seconds = round(time.perf_counter() - started, 2)
     top_longs = [item["symbol"] for item in report["top_longs"][:5]]
@@ -2666,6 +2676,32 @@ def command_performance(args: argparse.Namespace) -> None:
         )
 
 
+def command_performance_benchmark(args: argparse.Namespace) -> None:
+    """Informe read-only del contrato P-L40B."""
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    from .tools.performance_benchmark import benchmark_summary
+
+    try:
+        rows = store.performance_daily(limit=0, readonly=True)
+    except Exception:  # noqa: BLE001 - CLI diagnóstico sin datos es unavailable.
+        rows = []
+    summary = benchmark_summary(rows)
+    if getattr(args, "json", False):
+        _print_json({"ok": True, **summary})
+        return
+    print("PERFORMANCE BENCHMARK")
+    print(f"  sesión: {summary.get('latest_session') or '-'}")
+    print(f"  estado: {summary.get('status')}")
+    print(f"  cuenta: {summary.get('account_daily_return')}")
+    print(f"  SPY: {summary.get('spy_daily_return')}")
+    print(f"  exceso total: {summary.get('excess_return_total')}")
+    print(f"  exposición EOD: {summary.get('gross_exposure_eod_pct')}")
+    print(f"  media temporal: {summary.get('session_average_gross_exposure')}")
+
+
 def command_iq_score(args: argparse.Namespace) -> None:
     from .tools.performance_baseline import system_iq_score
 
@@ -3868,6 +3904,13 @@ def build_parser() -> argparse.ArgumentParser:
     performance.add_argument("--days", type=int, default=30, help="Numero de dias a mostrar. Por defecto 30.")
     performance.add_argument("--json", action="store_true", help="Devuelve la serie en JSON.")
     performance.set_defaults(func=command_performance)
+
+    performance_benchmark = subparsers.add_parser(
+        "performance-benchmark",
+        help="Benchmark diario prospectivo de cartera frente a SPY (P-L40B).",
+    )
+    performance_benchmark.add_argument("--json", action="store_true", help="Devuelve el contrato resumido en JSON.")
+    performance_benchmark.set_defaults(func=command_performance_benchmark)
 
     iq_score = subparsers.add_parser(
         "iq-score",

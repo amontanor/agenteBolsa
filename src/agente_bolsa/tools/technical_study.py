@@ -37,6 +37,7 @@ def build_closed_market_technical_study(
     benchmark_symbol: str = "SPY",
     store: Any | None = None,
     learning_mode_config: dict[str, Any] | None = None,
+    persist_report: bool = True,
 ) -> dict[str, Any]:
     end = datetime.now(timezone.utc).date() + timedelta(days=1)
     start = end - timedelta(days=lookback_days)
@@ -154,6 +155,8 @@ def build_closed_market_technical_study(
         "tool_requests": tool_requests[:100],
         "warnings": warnings[:100],
     }
+    if not persist_report:
+        return report
     return write_json_report(
         report,
         output_dir,
