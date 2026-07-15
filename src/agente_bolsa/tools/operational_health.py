@@ -1137,6 +1137,16 @@ def build_operational_health_report(
             "shadow_only": True,
             "evaluations": None,
         }
+    try:
+        from .learning_penalty_cycle_shadow import learning_penalty_shadow_digest
+
+        report_health["learning_penalty_shadow"] = learning_penalty_shadow_digest(store)
+    except Exception:  # noqa: BLE001 - shadow health is observability only.
+        report_health["learning_penalty_shadow"] = {
+            "status": "degraded_observability",
+            "shadow_only": True,
+            "observations": None,
+        }
     if adaptive_governance["status"] == "critical":
         report_alerts.append(
             {

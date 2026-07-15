@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.172**
+- Version actual: **0.4.174** (candidato aislado P-L44B-W2; produccion sigue 0.4.172)
 - Ultima actualizacion: 2026-07-14
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -1846,3 +1846,19 @@ auto-apply OFF, apply humano, mediciones pre-registradas.
   autorización humana y otro lote separado (`guarded_active`).
 - No se interpretan los casos históricos como rentabilidad ni como autorización
   para cambiar stops, takes, trailing, exposición, límites o trading.
+
+## P-L44B-W2 - penalizacion de aprendizaje en shadow (15-jul-2026)
+
+- El candidato `0.4.174` integra sobre la base P-L43B el comparador
+  `p-l44b.learning-penalty-cycle-shadow.v1`.
+- `legacy_double_application` sigue siendo la unica politica activa; el
+  resultado `single_application` es telemetria sin autoridad sobre ranking,
+  gates, seleccion, sizing, planes u ordenes.
+- Cada ciclo captura los BUY ya rankeados en memoria y persiste un unico evento
+  acotado en `agent_events`; las repeticiones son no-op y los conflictos no
+  sobrescriben el original. El detalle se limita a la union de los top-20
+  legacy/shadow, seleccionados y controles.
+- Sin eventos el digest/health/CLI publican `collecting` con denominadores
+  `null`; no hay backfill. El CLI es `learning-penalty-shadow-report --json`.
+- El historial prospectivo y la influencia sobre trading permanecen sin
+  evaluar hasta la integracion y ciclos reales posteriores.
