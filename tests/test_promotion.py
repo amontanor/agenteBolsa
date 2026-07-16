@@ -1,5 +1,8 @@
 """Tests de promocion champion/challenger (T1.3)."""
 
+from datetime import datetime, timezone
+
+import agente_bolsa.continuous_improvement.promotion as promotion_module
 from agente_bolsa.config import Settings
 from agente_bolsa.continuous_improvement.promotion import (
     PromotionManager,
@@ -20,7 +23,19 @@ def _settings(tmp_path, **overrides):
         "MAX_CONCURRENT_PROMOTIONS": 10,
     }
     base.update(overrides)
-    return Settings(DATA_DIR=tmp_path, **base)
+    return Settings(_env_file=None, DATA_DIR=tmp_path, **base)
+
+
+def _freeze_promotion_clock(monkeypatch, *, year, month, day):
+    """Fija el reloj usado por PromotionManager sin tocar el código productivo."""
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(year, month, day, tzinfo=timezone.utc)
+            return value.astimezone(tz) if tz else value.replace(tzinfo=None)
+
+    monkeypatch.setattr(promotion_module, "datetime", FrozenDateTime)
 
 
 def _store(settings):
@@ -99,7 +114,8 @@ def test_challenger_worse_is_rejected(tmp_path):
     assert status["chal"] == "RETIRED"
 
 
-def test_insufficient_evidence_extends_window(tmp_path):
+def test_insufficient_evidence_extends_window(tmp_path, monkeypatch):
+    _freeze_promotion_clock(monkeypatch, year=2026, month=5, day=10)
     settings = _settings(tmp_path)
     store = _store(settings)
     for i in range(5):
@@ -110,6 +126,23 @@ def test_insufficient_evidence_extends_window(tmp_path):
     decisions = manager.evaluate_windows()
     assert decisions[0]["verdict"] == "EXTEND"
     assert store.promotion_windows(status="OPEN")  # sigue abierta
+
+
+def test_insufficient_evidence_rejects_after_grace_period(tmp_path, monkeypatch):
+    _freeze_promotion_clock(monkeypatch, year=2026, month=7, day=16)
+    settings = _settings(tmp_path)
+    store = _store(settings)
+    for i in range(5):
+        _seed_outcome(store, "chal", f"2026-05-0{i + 1}", 0.03, True, True, i)
+    manager = PromotionManager(store, settings)
+    _open_window(store, manager, "chal")
+
+    decisions = manager.evaluate_windows()
+
+    assert decisions[0]["verdict"] == "REJECTED_SHADOW"
+    assert decisions[0]["reason"] == "ventana vencida sin evidencia suficiente"
+    assert decisions[0]["elapsed_days"] == 76
+    assert store.promotion_windows(status="OPEN") == []
 
 
 def test_binomial_p_significance():
