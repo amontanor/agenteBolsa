@@ -1870,3 +1870,15 @@ auto-apply OFF, apply humano, mediciones pre-registradas.
   de APScheduler; además, `post_market_review_last_session` solo avanza de
   forma monotónica tras `completed`. No cambian horarios, `max_instances`,
   `coalesce` ni trading; P-L45B2 sigue reservado para batching.
+
+## P-L45B1-D desplegado (16-jul-2026)
+
+Merge productivo `2dbd02a8`, versión `0.4.174`, tree `a3dba615`, suite
+`1395 passed` y gates operativos verdes. El stack quedó con scheduler único,
+lock/PID y heartbeat frescos, HTTP 200, paper activo, live y auto-apply
+desactivados. El bootstrap posterior publicó un único skip durable
+`market_not_ready` sin reprocesar la sesión del `2026-07-15`, sin segunda
+actualización de outcomes ni bloqueo SQLite.
+
+P-L45B2 (batching) permanece pendiente; la mejora de duración requiere cinco
+sesiones reales posteriores. P-L44B sigue diferido para `0.4.175`.

@@ -128,3 +128,28 @@ Las pruebas de coordinación y QA cubren 25 procesos concurrentes por escenario,
 dos sesiones distintas, recuperación por token, reintento tras `failed`,
 idempotencia y eventos APScheduler. El batching de observaciones continúa fuera
 de alcance y reservado a P-L45B2.
+
+## P-L45B1-D - desplegado en producción
+
+El 16-jul-2026, con XNYS cerrado y 158 minutos hasta la apertura, se fusionó
+`codex/pl45b-integration-rehearsal` mediante merge `--no-ff` productivo
+`2dbd02a8`. El tree productivo `a3dba615` coincide con el tree validado del
+ensayo y la versión desplegada es `0.4.174`.
+
+Validación detenida: focales P-L45B1/QA y regresiones `160 passed`; suite
+completa `1395 passed` con una advertencia deprecada preexistente; Ruff,
+`check_no_nulls.py`, `git diff --check`, configuración, kernel y smoke aislado
+verdes. El stack arrancó con un único scheduler lógico, lock/PID coherente,
+heartbeat fresco y panel HTTP 200. Los avisos de salud son warnings
+preexistentes, sin alertas críticas.
+
+Tras el reinicio, el bootstrap publicó un único intento `pmr_9a31399a85c7`
+con `coordination:started` y terminal `skipped` (`market_not_ready`); no hubo
+reconciliación ni actualización adicional de outcomes, y
+`post_market_review_last_session` permaneció en `2026-07-15`. No se reprocesó
+la sesión ni aparecieron bloqueos SQLite.
+
+P-L43B conserva `legacy_calendar_days` como política activa y XNYS en
+`shadow_only=true`. P-L45B2 queda pendiente; la mejora de duración solo se
+interpretará tras cinco sesiones reales posteriores. P-L44B sigue diferido a
+`0.4.175`.
