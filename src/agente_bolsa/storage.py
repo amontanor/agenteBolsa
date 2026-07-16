@@ -6,8 +6,11 @@ import json
 import math
 import sqlite3
 import threading
+import time
+from collections.abc import Iterable
 from dataclasses import asdict
 from datetime import datetime, timezone
+from itertools import islice
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -20,6 +23,26 @@ from .tools.signal_identity import merge_signal_identity_blocks
 ORDER_PLAN_STATUS_PENDING = "PENDING"
 ORDER_PLAN_STATUS_SUBMITTED = "SUBMITTED"
 ORDER_PLAN_STATUS_EXPIRED = "EXPIRED"
+DEFAULT_LEARNING_OBSERVATION_BATCH_SIZE = 250
+
+
+class LearningObservationBatchError(RuntimeError):
+    """Fallo de un chunk de observaciones con el estado confirmado preservado."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        result: dict[str, Any],
+        failed_chunk: int,
+        cause: str,
+        retry_possible: bool,
+    ) -> None:
+        super().__init__(message)
+        self.result = result
+        self.failed_chunk = failed_chunk
+        self.cause = cause
+        self.retry_possible = retry_possible
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -778,6 +801,89 @@ def _utc_iso() -> str:
 
 def _dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=True, default=str)
+
+
+def _count_non_strict_json_values(value: Any) -> int:
+    if isinstance(value, float) and not math.isfinite(value):
+        return 1
+    if isinstance(value, dict):
+        return sum(_count_non_strict_json_values(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return sum(_count_non_strict_json_values(item) for item in value)
+    return 0
+
+
+def _upsert_learning_observation_on_cursor(cursor: sqlite3.Cursor, item: dict[str, Any], now: str) -> int:
+    """Escribe una observación sobre una conexión ya abierta.
+
+    El SQL y la normalización son compartidos por el upsert individual y por
+    la API por lotes para evitar divergencias semánticas.
+    """
+    cursor.execute(
+        """
+        INSERT INTO learning_observations (
+            observation_id, signal_date, symbol, source_family, source_run_ids_json,
+            first_seen_at, last_seen_at, best_signal_id, best_score, decision,
+            explanation, llm_considered, approved_buy, blocked_entry_quality,
+            blocked_backtest, executed_buy, duplicate_count, rank_path_json,
+            features_json, gate_json, outcome_json, execution_json, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(observation_id) DO UPDATE SET
+            signal_date=excluded.signal_date,
+            symbol=excluded.symbol,
+            source_family=excluded.source_family,
+            source_run_ids_json=excluded.source_run_ids_json,
+            first_seen_at=excluded.first_seen_at,
+            last_seen_at=excluded.last_seen_at,
+            best_signal_id=excluded.best_signal_id,
+            best_score=excluded.best_score,
+            decision=excluded.decision,
+            explanation=excluded.explanation,
+            llm_considered=excluded.llm_considered,
+            approved_buy=excluded.approved_buy,
+            blocked_entry_quality=excluded.blocked_entry_quality,
+            blocked_backtest=excluded.blocked_backtest,
+            executed_buy=excluded.executed_buy,
+            duplicate_count=excluded.duplicate_count,
+            rank_path_json=excluded.rank_path_json,
+            features_json=excluded.features_json,
+            gate_json=excluded.gate_json,
+            outcome_json=excluded.outcome_json,
+            execution_json=excluded.execution_json,
+            updated_at=excluded.updated_at
+        """,
+        (
+            item["observation_id"],
+            item["signal_date"],
+            item["symbol"].upper(),
+            item["source_family"],
+            _dumps(item.get("source_run_ids", [])),
+            item.get("first_seen_at"),
+            item.get("last_seen_at"),
+            item.get("best_signal_id"),
+            item.get("best_score"),
+            item.get("decision", "candidate"),
+            item.get("explanation", ""),
+            int(bool(item.get("llm_considered"))),
+            int(bool(item.get("approved_buy"))),
+            int(bool(item.get("blocked_entry_quality"))),
+            int(bool(item.get("blocked_backtest"))),
+            int(bool(item.get("executed_buy"))),
+            int(item.get("duplicate_count") or 0),
+            _dumps(item.get("rank_path", [])),
+            _dumps(item.get("features", {})),
+            _dumps(item.get("gate", {})),
+            _dumps(item.get("outcome", {})),
+            _dumps(item.get("execution", {})),
+            item.get("created_at") or now,
+            now,
+        ),
+    )
+    return sum(
+        _count_non_strict_json_values(item.get(key, {}))
+        for key in ("source_run_ids", "rank_path", "features", "gate", "outcome", "execution")
+    )
 
 
 def _merge_json_dicts(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
@@ -2677,67 +2783,99 @@ class Store:
     def upsert_learning_observation(self, item: dict[str, Any]) -> None:
         now = _utc_iso()
         with self.connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO learning_observations (
-                    observation_id, signal_date, symbol, source_family, source_run_ids_json,
-                    first_seen_at, last_seen_at, best_signal_id, best_score, decision,
-                    explanation, llm_considered, approved_buy, blocked_entry_quality,
-                    blocked_backtest, executed_buy, duplicate_count, rank_path_json,
-                    features_json, gate_json, outcome_json, execution_json, created_at, updated_at
+            cursor = conn.cursor()
+            try:
+                _upsert_learning_observation_on_cursor(cursor, item, now)
+            finally:
+                cursor.close()
+
+    def upsert_learning_observations_batch(
+        self,
+        items: Iterable[dict[str, Any]],
+        *,
+        chunk_size: int = DEFAULT_LEARNING_OBSERVATION_BATCH_SIZE,
+    ) -> dict[str, Any]:
+        """Persist observations in short, bounded WAL transactions.
+
+        The iterable is consumed chunk by chunk. A failure rolls back only the
+        current chunk, preserves earlier commits, and stops processing so the
+        caller can retry explicitly.
+        """
+        if isinstance(chunk_size, bool) or not isinstance(chunk_size, int) or chunk_size < 1:
+            raise ValueError("chunk_size debe ser un entero positivo")
+        started = time.perf_counter()
+        result: dict[str, Any] = {
+            "received": 0,
+            "valid": 0,
+            "written": 0,
+            "chunks_completed": 0,
+            "chunk_size": chunk_size,
+            "busy_timeout_ms": 30_000,
+            "elapsed_ms": 0.0,
+            "non_strict_json_values_detected": 0,
+            "status": "available",
+            "failed_chunk": None,
+            "rows_received": 0,
+            "rows_written": 0,
+            "connections_opened": 0,
+            "commits": 0,
+            "chunk_durations_ms": [],
+            "max_chunk_duration_ms": 0.0,
+            "error": None,
+            "retry_possible": None,
+        }
+        iterator = iter(items)
+        chunk_index = 0
+        while True:
+            chunk = list(islice(iterator, chunk_size))
+            if not chunk:
+                break
+            result["received"] += len(chunk)
+            result["rows_received"] = result["received"]
+            result["connections_opened"] += 1
+            chunk_started = time.perf_counter()
+            conn = self.connect()
+            cursor = conn.cursor()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                for item in chunk:
+                    result["non_strict_json_values_detected"] += _upsert_learning_observation_on_cursor(
+                        cursor, item, _utc_iso()
+                    )
+                    result["valid"] += 1
+                conn.commit()
+                result["commits"] += 1
+                result["written"] += len(chunk)
+                result["rows_written"] = result["written"]
+                result["chunks_completed"] += 1
+            except Exception as exc:
+                conn.rollback()
+                cause = str(exc).replace("\r", " ").replace("\n", " ")[:240]
+                result["status"] = "failed"
+                result["failed_chunk"] = chunk_index
+                result["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 3)
+                result["rows_written"] = result["written"]
+                retry_possible = isinstance(exc, sqlite3.OperationalError) and "locked" in cause.lower()
+                result["error"] = cause
+                result["retry_possible"] = retry_possible
+                error = LearningObservationBatchError(
+                    f"fallo persistiendo learning_observations en chunk {chunk_index}: {cause}",
+                    result=result,
+                    failed_chunk=chunk_index,
+                    cause=cause,
+                    retry_possible=retry_possible,
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(observation_id) DO UPDATE SET
-                    signal_date=excluded.signal_date,
-                    symbol=excluded.symbol,
-                    source_family=excluded.source_family,
-                    source_run_ids_json=excluded.source_run_ids_json,
-                    first_seen_at=excluded.first_seen_at,
-                    last_seen_at=excluded.last_seen_at,
-                    best_signal_id=excluded.best_signal_id,
-                    best_score=excluded.best_score,
-                    decision=excluded.decision,
-                    explanation=excluded.explanation,
-                    llm_considered=excluded.llm_considered,
-                    approved_buy=excluded.approved_buy,
-                    blocked_entry_quality=excluded.blocked_entry_quality,
-                    blocked_backtest=excluded.blocked_backtest,
-                    executed_buy=excluded.executed_buy,
-                    duplicate_count=excluded.duplicate_count,
-                    rank_path_json=excluded.rank_path_json,
-                    features_json=excluded.features_json,
-                    gate_json=excluded.gate_json,
-                    outcome_json=excluded.outcome_json,
-                    execution_json=excluded.execution_json,
-                    updated_at=excluded.updated_at
-                """,
-                (
-                    item["observation_id"],
-                    item["signal_date"],
-                    item["symbol"].upper(),
-                    item["source_family"],
-                    _dumps(item.get("source_run_ids", [])),
-                    item.get("first_seen_at"),
-                    item.get("last_seen_at"),
-                    item.get("best_signal_id"),
-                    item.get("best_score"),
-                    item.get("decision", "candidate"),
-                    item.get("explanation", ""),
-                    int(bool(item.get("llm_considered"))),
-                    int(bool(item.get("approved_buy"))),
-                    int(bool(item.get("blocked_entry_quality"))),
-                    int(bool(item.get("blocked_backtest"))),
-                    int(bool(item.get("executed_buy"))),
-                    int(item.get("duplicate_count") or 0),
-                    _dumps(item.get("rank_path", [])),
-                    _dumps(item.get("features", {})),
-                    _dumps(item.get("gate", {})),
-                    _dumps(item.get("outcome", {})),
-                    _dumps(item.get("execution", {})),
-                    item.get("created_at") or now,
-                    now,
-                ),
-            )
+                raise error from exc
+            finally:
+                duration_ms = round((time.perf_counter() - chunk_started) * 1000, 3)
+                result["chunk_durations_ms"].append(duration_ms)
+                result["max_chunk_duration_ms"] = max(result["max_chunk_duration_ms"], duration_ms)
+                cursor.close()
+                conn.close()
+            chunk_index += 1
+        result["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 3)
+        result["rows_written"] = result["written"]
+        return result
 
     def learning_observations(
         self,

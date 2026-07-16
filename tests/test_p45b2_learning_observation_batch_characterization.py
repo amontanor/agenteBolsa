@@ -454,20 +454,22 @@ def test_repeated_same_content_is_not_a_noop_when_timestamp_changes(tmp_path: Pa
     assert _rows(store)[0]["updated_at"] != created
 
 
-def test_daily_learning_and_rr_cohort_leave_two_row_upserts_per_observation(tmp_path: Path) -> None:
+def test_daily_learning_and_rr_cohort_use_batch_for_both_write_phases(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    original = store.upsert_learning_observation
-    calls: list[str] = []
+    original_batch = store.upsert_learning_observations_batch
+    batch_sizes: list[int] = []
 
-    def counted(item: dict[str, Any]) -> None:
-        calls.append(str(item["observation_id"]))
-        original(item)
+    def counted_batch(items: Iterable[dict[str, Any]], *, chunk_size: int = 250) -> dict[str, Any]:
+        materialized = list(items)
+        batch_sizes.append(len(materialized))
+        return original_batch(materialized, chunk_size=chunk_size)
 
-    store.upsert_learning_observation = counted  # type: ignore[method-assign]
+    store.upsert_learning_observations_batch = counted_batch  # type: ignore[method-assign]
     rows = [{**_observation(1, signal_date="2026-07-13", symbol="AAPL"), "source": "deterministic"}]
     observations = daily_learning._materialize_observations(store, rows)
-    sync_rr_cohort_observations(store, observations)
-    assert calls == ["2026-07-13:AAPL:deterministic", "2026-07-13:AAPL:deterministic"]
+    rr_result = sync_rr_cohort_observations(store, observations)
+    assert batch_sizes == [1, 1]
+    assert rr_result["batch"]["phase"] == "rr_sync"
 
 
 def test_json_null_nan_infinity_and_key_order_are_characterized_without_coercing_missing_to_zero(tmp_path: Path) -> None:

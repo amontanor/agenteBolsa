@@ -49,11 +49,12 @@ CONTRACT = {
 }
 
 
-def sync_rr_cohort_observations(store: Store, observations: list[dict[str, Any]]) -> dict[str, int]:
+def sync_rr_cohort_observations(store: Store, observations: list[dict[str, Any]]) -> dict[str, Any]:
     """Append the immutable cohort card to eligible prospective observations."""
     all_observations = store.learning_observations(since_date=COHORT_START, limit=200_000)
     controls_by_key = _control_candidates(all_observations)
     result = Counter()
+    pending: list[dict[str, Any]] = []
     for observation in observations:
         if str(observation.get("signal_date") or "") < COHORT_START:
             continue
@@ -63,8 +64,30 @@ def sync_rr_cohort_observations(store: Store, observations: list[dict[str, Any]]
         if existing and isinstance(existing, dict) and existing.get("hypothesis_id") == HYPOTHESIS_ID:
             card["observation_id"] = existing.get("observation_id") or card.get("observation_id")
         features[COHORT_FEATURE_KEY] = card
-        store.upsert_learning_observation({**observation, "features": features})
+        pending.append({**observation, "features": features})
         result["recorded" if reason is None else f"excluded_{reason}"] += 1
+    batch_method = getattr(store, "upsert_learning_observations_batch", None)
+    if pending and callable(batch_method):
+        result["batch"] = {"phase": "rr_sync", **batch_method(pending)}
+    elif pending:
+        # Compatibilidad con dobles de test/Stores legacy sin la API nueva.
+        for item in pending:
+            store.upsert_learning_observation(item)
+        result["batch"] = {
+            "phase": "rr_sync",
+            "status": "legacy_fallback",
+            "received": len(pending),
+            "written": len(pending),
+            "chunks_completed": None,
+        }
+    else:
+        result["batch"] = {
+            "phase": "rr_sync",
+            "status": "available",
+            "received": 0,
+            "written": 0,
+            "chunks_completed": 0,
+        }
     return dict(result)
 
 
