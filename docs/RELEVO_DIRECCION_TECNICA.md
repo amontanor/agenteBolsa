@@ -1,7 +1,7 @@
 # Relevo de direccion tecnica — agenteBolsa
 
-> Actualizado: **16-jul-2026**. Produccion **0.4.174** (`5c0b1ea9`).
-> Candidato secuencial validado: **0.4.176**.
+> Actualizado: **16-jul-2026**. Produccion **0.4.176** (`6e29fd6d`).
+> P-L45B2 + P-L43BR5 desplegados secuencialmente; P-L44B sigue diferido.
 
 ## Objetivo
 
@@ -23,7 +23,7 @@ promociones siguen human-gated.
 ## Secuencia validada
 
 1. **0.4.175 P-L45B2**: observations en chunks de 250; 33.336 filas, 134
-   commits, paridad exacta y sin locks normales.
+   commits, paridad exacta y sin locks normales; desplegado dentro de 0.4.176.
 2. **0.4.176 P-L43BR5**: autoridad desde buy order exacta; corrige
    `PositionSide.LONG -> unsupported_side` solo en shadow.
 3. **0.4.177 P-L44B**: penalizacion unica solo shadow; esperar evidencia real.
@@ -43,7 +43,8 @@ suite verde, hash sensible intacto y rollback por revert.
 ## Agenda
 
 - Cada sesion: ciclos, identidad, shadow, ejecucion y terminal PMR.
-- Tras P-L45B2: cinco sesiones antes de juzgar duracion/locks.
+- Tras P-L45B2: cinco sesiones antes de juzgar duracion/locks; evidencia aún
+  collecting.
 - 20-jul: relectura `builtin_pullback`.
 - 27/28-jul: primeras madureces tecnicas RR/salidas, aun no muestra suficiente.
 - Tras 45 dias agent_run: evaluar roles.

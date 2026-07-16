@@ -1,11 +1,11 @@
 # P-L45B1 — fiabilidad y terminales del postmarket
 
-## Estado del candidato
+## Estado desplegado
 
-P-L45B1 se implementa únicamente en el worktree aislado
-`codex/pl45b-postmarket-reliability`, con versión candidata `0.4.174`.
-Producción continúa sin cambios en `0.4.173`. P-L44B queda pospuesto para
-`0.4.175` y no forma parte de este candidato.
+P-L45B1, P-L45B2 y P-L43BR5 están desplegados en producción dentro de la
+versión `0.4.176`, mediante el merge `6e29fd6d` cuyo árbol funcional es
+`20d11916`. P-L44B queda pospuesto para `0.4.177` y no forma parte de este
+despliegue.
 
 La compactación de contexto 220k no está expuesta en la interfaz utilizada.
 No se modificó configuración por ese motivo.
@@ -150,8 +150,8 @@ reconciliación ni actualización adicional de outcomes, y
 la sesión ni aparecieron bloqueos SQLite.
 
 P-L43B conserva `legacy_calendar_days` como política activa y XNYS en
-`shadow_only=true`. P-L45B2 está integrado en el ensayo combinado, versión
-`0.4.175` de su candidato, y la mejora de duración solo se interpretará tras
+`shadow_only=true`. P-L45B2 está integrado en producción en `0.4.176` y la
+mejora de duración solo se interpretará tras
 cinco sesiones reales posteriores. P-L44B queda reservado para `0.4.177`.
 
 ## P-L45B2-W — escrituras batch de learning_observations
@@ -195,3 +195,13 @@ La resolución conserva el batching de 250 filas, preparación fuera de
 `BEGIN IMMEDIATE`, SQL compartido, `LearningObservationBatchError`, daily
 learning/RR por lotes y terminal `failed` del PMR ante fallo de persistencia.
 P-L44B permanece diferido y reservado para `0.4.177`.
+
+## P-L45B2 + P-L43BR5 — despliegue secuenciado (16-jul-2026)
+
+El despliegue cerrado se validó con `1463 passed`, Ruff, `check_no_nulls`,
+`git diff --check`, configuración y kernel sellado sin violaciones, y smoke
+aislado con `DATA_DIR` temporal. El PMR del 16-jul (`pmr_d70c23b38bea`)
+terminó `completed`; el bootstrap posterior publicó únicamente el skip durable
+`session_already_completed`, sin reprocesar outcomes ni reconciliación.
+La política `legacy_calendar_days` sigue activa y XNYS es solo shadow. La
+mejora de duración permanece collecting hasta cinco sesiones reales posteriores.

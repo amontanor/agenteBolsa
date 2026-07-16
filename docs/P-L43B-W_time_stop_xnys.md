@@ -1,12 +1,14 @@
 # P-L43BR2 — historial auditable de evidencia shadow XNYS
 
-Estado: candidato aislado, pendiente de integración y de autorización humana.
+Estado: desplegado en producción en modo shadow; la activación XNYS sigue
+pendiente de autorización humana.
 
-Base: `821496670b5654f4dc90ca104d21f011d72f423b` · versión `0.4.172`.
+Base histórica: `821496670b5654f4dc90ca104d21f011d72f423b` · producción actual:
+`0.4.176`.
 
-El candidato aislado se valida como `0.4.173` porque el gate del proyecto exige
-patch bump ante cambios funcionales. Producción continúa en `0.4.172` hasta una
-integración autorizada.
+La secuencia se integró sin squash mediante el merge productivo `6e29fd6d`.
+P-L45B2 y P-L43BR5 forman el árbol `0.4.176`; la política legacy continúa
+siendo la única activa.
 
 ## Política y paridad
 
@@ -109,7 +111,7 @@ destructivo. `legacy_calendar_days` continúa siendo la única política activa;
 XNYS permanece `shadow_only=true`. La evidencia real empieza en estado
 `collecting`, sin backfill ni cambios de posiciones, órdenes o históricos.
 
-## P-L43BR5-W — autoridad de fill del shadow (candidato 0.4.176)
+## P-L43BR5-W — autoridad de fill del shadow (desplegado en 0.4.176)
 
 El diagnóstico read-only de producción identificó la causa de `unsupported_side`:
 Alpaca serializa la posición como `PositionSide.LONG`, pero la autoridad de la
@@ -132,4 +134,5 @@ El siguiente estado equivalente publicará una transición append-only a
 La política activa sigue siendo `legacy_calendar_days`; XNYS permanece
 `shadow_only=true` y no puede crear, bloquear ni retrasar órdenes. Stops,
 takes, trailing, cantidades, precios, gates y cadencia de `portfolio_watch`
-no cambian. P-L45B2 y P-L44 quedan fuera de este candidato.
+no cambian. El despliegue validó `1463 passed`, Ruff, NUL, kernel y smoke
+aislado; P-L44 queda fuera y reservado para `0.4.177`.

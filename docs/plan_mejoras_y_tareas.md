@@ -9,8 +9,8 @@
 > (se muestra en la barra lateral del dashboard), y (3) dejar el sistema levantado
 > con los cambios cargados (ver seccion 7).
 
-- Rama de ensayo: `codex/pl43br5-combined-rehearsal`
-- Version actual: **0.4.176** (ensayo combinado P-L45B2 + P-L43BR5; no desplegado)
+- Rama de integracion desplegada: `codex/mejora_continua`
+- Version actual: **0.4.176** (P-L45B2 + P-L43BR5 desplegados mediante merge controlado)
 - Ultima actualizacion: 2026-07-16
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -19,7 +19,7 @@
 - `buenas-practicas` incorpora el trabajo aislado durante mercado abierto, eventos append-only, transacciones SQLite cortas y por lotes, fixtures deterministas y secuenciacion de versiones entre worktrees.
 - `start-agente-bolsa` elimina la antigua contradiccion de arranque manual y fija `stack_status.ps1`, `stack_down.ps1` y `stack_up.ps1` como procedimiento autorizado mediante tareas programadas.
 - `operating_model.md` y el relevo tecnico quedan alineados con P-L43B, P-L45B1/P-L45B2 y la reserva de versiones 0.4.175-0.4.178.
-- Esta consolidacion es exclusivamente documental dentro del candidato todavia no publicado 0.4.176; no anade otro incremento de version ni modifica trading, configuracion o servicios.
+- Esta consolidacion documenta el arbol 0.4.176 validado y desplegado; no modifica trading, configuracion sensible ni politicas economicas.
 
 ### P-L17 - Verdad de medicion: outcomes forward separados de ejecucion. **HECHO (v0.4.140).**
 Se elimina la contaminacion que convertia P/L abierto de `trade_memory` en
@@ -1858,7 +1858,7 @@ auto-apply OFF, apply humano, mediciones pre-registradas.
   para cambiar stops, takes, trailing, exposición, límites o trading.
 ## P-L45B1 — fiabilidad del postmarket (desplegado en 0.4.174)
 
-- **En curso en worktree aislado:** coordinación única por sesión, exclusión
+- **Desplegado y operativo:** coordinación única por sesión, exclusión
   entre postmarket y reconciliación, terminales duraderos
   `completed|failed|skipped` y una sola actualización de `signal_outcomes` por
   ejecución efectiva.
@@ -1867,8 +1867,8 @@ auto-apply OFF, apply humano, mediciones pre-registradas.
   vista operativa del lease.
 - `build_learning_daily_run(update_result=...)` reutiliza el resultado de
   outcomes; los llamadores sin argumento conservan compatibilidad legacy.
-- **P-L45B2 en worktree aislado:** batching y reducción de duración de los
-  upserts de observaciones; candidato `0.4.175`, sin despliegue.
+- **P-L45B2 desplegado en 0.4.176:** batching y reducción de duración de los
+  upserts de observaciones; chunk=250, sin cambio funcional de trading.
 - **P-L44B pospuesto:** deberá rebasarse y renumerarse como `0.4.177`; ningún
   worktree ni commit de P-L44 se modifica aquí.
 - La mejora de duración no se interpretará hasta disponer de cinco sesiones
@@ -1890,8 +1890,8 @@ desactivados. El bootstrap posterior publicó un único skip durable
 `market_not_ready` sin reprocesar la sesión del `2026-07-15`, sin segunda
 actualización de outcomes ni bloqueo SQLite.
 
-P-L45B2 (batching) está implementado en el worktree candidato y permanece sin
-integración; la mejora de duración requiere cinco sesiones reales posteriores.
+P-L45B2 (batching) está integrado en producción dentro de 0.4.176; la mejora de
+duración requiere cinco sesiones reales posteriores antes de interpretarse.
 P-L44B sigue diferido para `0.4.177`.
 
 ## P-L45B2-W - escrituras batch de learning_observations (candidato 0.4.175)
@@ -1913,7 +1913,7 @@ La caracterizacion de 33.336 filas reduce estructuralmente 33.336 commits a
 Quedan como deuda separada la perdida potencial de ramas JSON, JSON no estricto
 y el `updated_at` que cambia al reintentar. P-L44B queda reservado para
 `0.4.177`.
-## P-L43BR5-W - autoridad verificable del fill en time-stop shadow (candidato 0.4.176)
+## P-L43BR5-W - autoridad verificable del fill en time-stop shadow (desplegado en 0.4.176)
 
 - La auditoría read-only identificó que las posiciones reales exponen
   `PositionSide.LONG`, mientras la autoridad de la orden y del fill se conserva
@@ -1933,3 +1933,8 @@ y el `updated_at` que cambia al reintentar. P-L44B queda reservado para
   cantidades, gates, ranking, exposición, límites o historial. P-L45B2 y P-L44
   permanecen fuera de alcance. P-L44B queda reservado para la futura version
   `0.4.177`.
+
+Despliegue confirmado mediante merge productivo `6e29fd6d`, árbol funcional
+`20d11916`, suite `1463 passed` y gates de configuración/kernel verdes. La
+evidencia XNYS permanece shadow/collecting y no se interpreta como resultado de
+rentabilidad.
