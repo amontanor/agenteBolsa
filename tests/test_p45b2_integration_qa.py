@@ -151,3 +151,27 @@ def test_fifty_concurrent_repetitions_have_no_lock_error(tmp_path: Path) -> None
         assert all(not thread.is_alive() for thread in threads)
     assert not errors, errors
     assert len(_rows(left)) == 200
+
+
+def test_busy_timeout_exhaustion_is_structured_and_rolls_back_chunk(tmp_path: Path) -> None:
+    store = _store(tmp_path, "holder")
+    holder = store.connect()
+    holder.execute("BEGIN IMMEDIATE")
+
+    class ZeroTimeoutStore(Store):
+        def connect(self):  # type: ignore[override]
+            connection = super().connect()
+            connection.execute("PRAGMA busy_timeout=0")
+            return connection
+
+    contender = ZeroTimeoutStore(store.database_path, tmp_path / "contender-logs")
+    try:
+        with pytest.raises(LearningObservationBatchError, match="chunk 0") as raised:
+            contender.upsert_learning_observations_batch([_observation(1)], chunk_size=1)
+        assert raised.value.result["status"] == "failed"
+        assert "locked" in raised.value.cause.lower()
+        assert raised.value.result["written"] == 0
+        assert raised.value.result["chunks_completed"] == 0
+    finally:
+        holder.rollback()
+        holder.close()
