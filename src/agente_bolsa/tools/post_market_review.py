@@ -824,18 +824,38 @@ def _build_learning_pipeline(
     reports_dir: Path,
     run_id: str,
     target_date: str,
+    stage_recorder: Any | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    signal_update = update_signal_outcomes(settings, store, since_date="2026-04-01", limit=200000)
+    if stage_recorder:
+        stage_recorder("outcome_update", "started")
+    try:
+        signal_update = update_signal_outcomes(settings, store, since_date="2026-04-01", limit=200000)
+    except Exception as exc:
+        if stage_recorder:
+            stage_recorder("outcome_update", "failed", error=repr(exc))
+        raise
+    if stage_recorder:
+        stage_recorder("outcome_update", "completed")
     signal_learning = build_learning_status(store, since_date="2026-04-01", limit=200000)
-    daily_learning = build_learning_daily_run(
-        settings,
-        store,
-        reports_dir,
-        f"{run_id}_daily",
-        since_date="2026-04-01",
-        end_date=target_date,
-        compact=True,
-    )
+    if stage_recorder:
+        stage_recorder("daily_learning", "started")
+    try:
+        daily_learning = build_learning_daily_run(
+            settings,
+            store,
+            reports_dir,
+            f"{run_id}_daily",
+            since_date="2026-04-01",
+            end_date=target_date,
+            compact=True,
+            update_result=signal_update,
+        )
+    except Exception as exc:
+        if stage_recorder:
+            stage_recorder("daily_learning", "failed", error=repr(exc))
+        raise
+    if stage_recorder:
+        stage_recorder("daily_learning", "completed")
     return signal_update, signal_learning, daily_learning
 
 
@@ -852,6 +872,7 @@ def build_post_market_review(
     use_llm: bool = True,
     portfolio_snapshot: PortfolioSnapshot | None | object = _PORTFOLIO_UNSET,
     broker_client: Any | object = _BROKER_UNSET,
+    stage_recorder: Any | None = None,
 ) -> dict[str, Any]:
     reports_dir.mkdir(parents=True, exist_ok=True)
     timings: dict[str, float] = {}
@@ -891,6 +912,7 @@ def build_post_market_review(
         reports_dir,
         run_id,
         target_date,
+        stage_recorder=stage_recorder,
     )
     timings["learning_pipeline_seconds"] = round(time.perf_counter() - started, 3)
     summary = {
@@ -983,6 +1005,8 @@ def build_post_market_review(
             "daily_learning_path": daily_learning.get("path"),
         },
     )
+    if stage_recorder:
+        stage_recorder("postmarket_report", "completed")
     write_learning_report(
         {
             "as_of": report["as_of"],

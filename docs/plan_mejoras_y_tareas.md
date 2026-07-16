@@ -10,8 +10,8 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.172**
-- Ultima actualizacion: 2026-07-14
+- Version actual: **0.4.174** (candidato P-L45B1; no desplegado)
+- Ultima actualizacion: 2026-07-16
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
 ### P-L17 - Verdad de medicion: outcomes forward separados de ejecucion. **HECHO (v0.4.140).**
@@ -1846,3 +1846,27 @@ auto-apply OFF, apply humano, mediciones pre-registradas.
   autorización humana y otro lote separado (`guarded_active`).
 - No se interpretan los casos históricos como rentabilidad ni como autorización
   para cambiar stops, takes, trailing, exposición, límites o trading.
+## P-L45B1 — fiabilidad del postmarket (candidato 0.4.174)
+
+- **En curso en worktree aislado:** coordinación única por sesión, exclusión
+  entre postmarket y reconciliación, terminales duraderos
+  `completed|failed|skipped` y una sola actualización de `signal_outcomes` por
+  ejecución efectiva.
+- Los eventos nuevos usan `p-l45b1.postmarket-run.v1`, son append-only,
+  idempotentes y conflict-safe sobre `agent_events`; `runtime_state` queda como
+  vista operativa del lease.
+- `build_learning_daily_run(update_result=...)` reutiliza el resultado de
+  outcomes; los llamadores sin argumento conservan compatibilidad legacy.
+- **P-L45B2 pendiente:** batching y reducción de duración de los upserts de
+  observaciones. No se ejecuta en este lote.
+- **P-L44B pospuesto:** deberá rebasarse y renumerarse como `0.4.175`; ningún
+  worktree ni commit de P-L44 se modifica aquí.
+- La mejora de duración no se interpretará hasta disponer de cinco sesiones
+  reales posteriores; no se modifica trading ni la política legacy activa de
+  P-L43B.
+- **P-L45B1-QA:** el ensayo adversarial corrigió la fixture temporal de
+  `test_insufficient_evidence_extends_window`, añadió identidad de proceso al
+  lease para PID reutilizado y persistencia durable de `max_instances`/`missed`
+  de APScheduler; además, `post_market_review_last_session` solo avanza de
+  forma monotónica tras `completed`. No cambian horarios, `max_instances`,
+  `coalesce` ni trading; P-L45B2 sigue reservado para batching.
