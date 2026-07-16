@@ -108,3 +108,28 @@ El candidato `0.4.173` quedó desplegado en producción mediante merge no
 destructivo. `legacy_calendar_days` continúa siendo la única política activa;
 XNYS permanece `shadow_only=true`. La evidencia real empieza en estado
 `collecting`, sin backfill ni cambios de posiciones, órdenes o históricos.
+
+## P-L43BR5-W — autoridad de fill del shadow (candidato 0.4.176)
+
+El diagnóstico read-only de producción identificó la causa de `unsupported_side`:
+Alpaca serializa la posición como `PositionSide.LONG`, pero la autoridad de la
+orden de compra persistida es `OrderSide.BUY` (y `buy` en el snapshot de
+execution quality). El evaluador recibía `position.side` y rechazaba el lote
+antes de consumir el fill exacto.
+
+La corrección aislada normaliza únicamente `buy`, `BUY`, `OrderSide.BUY` y el
+enum equivalente verificado. `long` nunca se convierte automáticamente en
+`buy`. Cada lote shadow exige `broker_order_id`, estado filled verificable y
+`first_fill_at` prioritario; un filled agregado completo puede usar
+`filled_at`, mientras que un parcial sin primer fill queda `unavailable`.
+
+La autoridad se conserva en la identidad existente de la posición: no cambia
+el hash de identidad ni reescribe los cinco eventos históricos `unavailable`.
+El siguiente estado equivalente publicará una transición append-only a
+`available`/`both_ineligible` o `legacy_only`, actualizará `runtime_state` como
+`latest_view` y seguirá siendo idempotente. No hay backfill productivo.
+
+La política activa sigue siendo `legacy_calendar_days`; XNYS permanece
+`shadow_only=true` y no puede crear, bloquear ni retrasar órdenes. Stops,
+takes, trailing, cantidades, precios, gates y cadencia de `portfolio_watch`
+no cambian. P-L45B2 y P-L44 quedan fuera de este candidato.

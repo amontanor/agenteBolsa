@@ -4093,7 +4093,7 @@ class Store:
                 """
                 SELECT symbol, payload_json, created_at
                 FROM broker_orders
-                WHERE lower(side) = 'buy'
+                WHERE lower(side) IN ('buy', 'orderside.buy')
                 ORDER BY created_at DESC
                 """
             ).fetchall()
@@ -4123,9 +4123,9 @@ class Store:
         with self.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT broker_order_id, plan_id, cycle_id, symbol, status, payload_json, created_at
+                SELECT broker_order_id, plan_id, cycle_id, symbol, side, status, payload_json, created_at
                 FROM broker_orders
-                WHERE lower(side) = 'buy'
+                WHERE lower(side) IN ('buy', 'orderside.buy')
                 ORDER BY created_at ASC, broker_order_id ASC
                 """
             ).fetchall()
@@ -4150,6 +4150,33 @@ class Store:
             execution_snapshot = payload.get("execution_quality_snapshot") or {}
             timestamps = execution_snapshot.get("timestamps") or {}
             quantities = execution_snapshot.get("quantities") or {}
+            # The position's ``side`` is not an order authority.  Keep the
+            # exact order-side evidence on each lot so the shadow evaluator
+            # can distinguish OrderSide.BUY/buy from a position label such as
+            # long.  A conflicting representation remains unavailable.
+            from .tools.time_stop_policy import canonical_order_side
+
+            side_values = [
+                canonical_order_side(row["side"]),
+                canonical_order_side(broker.get("side")),
+                canonical_order_side(execution_snapshot.get("side")),
+            ]
+            observed_sides = [value for value in side_values if value is not None]
+            order_side = observed_sides[0] if observed_sides and all(value == observed_sides[0] for value in observed_sides) else None
+            if not observed_sides or len(set(observed_sides)) > 1:
+                order_side = None
+
+            status_values = [
+                str(row["status"] or ""),
+                str(reconciled.get("status") or ""),
+                str(execution_snapshot.get("broker_status_raw") or ""),
+            ]
+
+            def _is_filled_status(value: Any) -> bool:
+                text = str(value or "").strip().lower()
+                return text in {"filled", "orderstatus.filled"} or text.endswith(".filled")
+
+            order_status = "filled" if any(_is_filled_status(value) for value in status_values) else str(row["status"] or "")
             filled_qty = (
                 _number(reconciled.get("filled_qty"))
                 if reconciled.get("filled_qty") is not None
@@ -4169,10 +4196,14 @@ class Store:
             )
             if submitted_qty is None:
                 submitted_qty = _number(quantities.get("submitted"))
-            is_partial = "partial" in str(row["status"] or "").lower()
+            is_partial = any("partial" in str(value or "").lower() for value in status_values)
             if submitted_qty is not None and filled_qty is not None and filled_qty < submitted_qty:
                 is_partial = True
-            explicit_first_fill = timestamps.get("first_fill_at")
+            explicit_first_fill = (
+                reconciled.get("first_fill_at")
+                or broker.get("first_fill_at")
+                or timestamps.get("first_fill_at")
+            )
             fill_at = explicit_first_fill
             fill_authority = "first_fill_at" if explicit_first_fill else "unavailable"
             if not is_partial:
@@ -4191,11 +4222,15 @@ class Store:
                 "cycle_id": str(row["cycle_id"] or ""),
                 "symbol": symbol,
                 "status": str(row["status"] or ""),
+                "order_side": order_side,
+                "order_status": order_status,
+                "order_status_verified": any(_is_filled_status(value) for value in status_values),
                 "created_at": row["created_at"],
                 "entry_fill_at": fill_at,
                 "fill_authority": fill_authority,
                 "filled_qty": filled_qty,
                 "submitted_qty": submitted_qty,
+                "is_partial": is_partial,
                 "remaining_qty": remaining_qty,
                 "remaining_qty_scope": "order",
                 "plan": plan,

@@ -48,6 +48,25 @@ def _number(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def canonical_order_side(value: Any) -> str | None:
+    """Normalise only verified order-side representations.
+
+    Alpaca serialises its enum as ``OrderSide.BUY`` while the execution
+    snapshot stores ``buy``.  ``long`` is deliberately not accepted here:
+    position direction is not proof that the authoritative order was a buy.
+    """
+
+    if value is None:
+        return None
+    raw = getattr(value, "value", value)
+    text = str(raw).strip().lower()
+    if text in {"buy", "orderside.buy"}:
+        return "buy"
+    if text in {"sell", "orderside.sell"}:
+        return "sell"
+    return None
+
+
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
@@ -267,13 +286,56 @@ def evaluate_position_time_stop(
         "lots": [],
         "warnings": [],
     }
-    if str(side or "long").lower() not in {"long", "buy"}:
+    lot_side_values = [
+        canonical_order_side(lot.get("order_side"))
+        for lot in raw_lots
+        if "order_side" in lot
+    ]
+    if lot_side_values:
+        if any(value is None for value in lot_side_values):
+            result["warnings"].append("unsupported_order_side")
+            result["unavailable_reason"] = "unsupported_order_side"
+            return result
+        if any(value != "buy" for value in lot_side_values):
+            result["warnings"].append("unsupported_order_side")
+            result["unavailable_reason"] = "unsupported_order_side"
+            return result
+        effective_side = "buy"
+    else:
+        # Direct callers predating verified order authority retain their
+        # helper compatibility.  The production shadow path always supplies
+        # ``order_side`` from the exact broker order via Store.
+        effective_side = side
+    if str(effective_side or "long").lower() not in {"long", "buy"}:
         result["warnings"].append("unsupported_side")
         result["unavailable_reason"] = "unsupported_side"
         return result
     if not raw_lots:
         result["warnings"].append("missing_verified_buy_lot")
         result["unavailable_reason"] = "missing_verified_buy_lot"
+        return result
+    strict_order_authority = any(
+        "order_side" in lot or "order_status_verified" in lot for lot in raw_lots
+    )
+    if strict_order_authority:
+        if any(not str(lot.get("broker_order_id") or "").strip() for lot in raw_lots):
+            result["warnings"].append("missing_broker_order_id")
+            result["unavailable_reason"] = "missing_broker_order_id"
+            return result
+        for lot in raw_lots:
+            if "filled_qty" in lot:
+                filled_qty = _number(lot.get("filled_qty"))
+                if filled_qty is None or filled_qty <= 0:
+                    result["warnings"].append("invalid_filled_qty")
+                    result["unavailable_reason"] = "invalid_filled_qty"
+                    return result
+            if lot.get("is_partial") and lot.get("fill_authority") != "first_fill_at":
+                result["warnings"].append("fill_authority_unavailable")
+                result["unavailable_reason"] = "fill_authority_unavailable"
+                return result
+    if any("order_status_verified" in lot and lot.get("order_status_verified") is not True for lot in raw_lots):
+        result["warnings"].append("order_not_filled")
+        result["unavailable_reason"] = "order_not_filled"
         return result
     target_qty = _number(position_qty)
     if len(raw_lots) > 1:
@@ -370,6 +432,10 @@ def build_position_identity(
         if order_id in seen_order_ids:
             return None, "duplicate_broker_order_id"
         seen_order_ids.add(order_id)
+        if "order_side" in lot and canonical_order_side(lot.get("order_side")) != "buy":
+            return None, "unsupported_order_side"
+        if "order_status_verified" in lot and lot.get("order_status_verified") is not True:
+            return None, "order_not_filled"
         fill_at = lot.get("entry_fill_at") or lot.get("filled_at")
         fill_dt, _warnings = _parse_timestamp(fill_at)
         authority = str(lot.get("fill_authority") or "").strip()
@@ -721,6 +787,7 @@ __all__ = [
     "POLICY_VERSION",
     "SCHEMA_VERSION",
     "TEMPORAL_SEMANTICS",
+    "canonical_order_side",
     "evaluate_position_time_stop",
     "evaluate_time_stop",
     "build_position_identity",

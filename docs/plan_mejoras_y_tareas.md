@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
- - Version actual: **0.4.175** (candidato P-L45B2; no desplegado)
+ - Version actual: **0.4.176** (ensayo combinado P-L45B2 + P-L43BR5; no desplegado)
 - Ultima actualizacion: 2026-07-16
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -1859,7 +1859,7 @@ auto-apply OFF, apply humano, mediciones pre-registradas.
   outcomes; los llamadores sin argumento conservan compatibilidad legacy.
 - **P-L45B2 en worktree aislado:** batching y reducción de duración de los
   upserts de observaciones; candidato `0.4.175`, sin despliegue.
-- **P-L44B pospuesto:** deberá rebasarse y renumerarse como `0.4.176`; ningún
+- **P-L44B pospuesto:** deberá rebasarse y renumerarse como `0.4.177`; ningún
   worktree ni commit de P-L44 se modifica aquí.
 - La mejora de duración no se interpretará hasta disponer de cinco sesiones
   reales posteriores; no se modifica trading ni la política legacy activa de
@@ -1882,7 +1882,7 @@ actualización de outcomes ni bloqueo SQLite.
 
 P-L45B2 (batching) está implementado en el worktree candidato y permanece sin
 integración; la mejora de duración requiere cinco sesiones reales posteriores.
-P-L44B sigue diferido para `0.4.176`.
+P-L44B sigue diferido para `0.4.177`.
 
 ## P-L45B2-W - escrituras batch de learning_observations (candidato 0.4.175)
 
@@ -1902,4 +1902,24 @@ La caracterizacion de 33.336 filas reduce estructuralmente 33.336 commits a
 134 con chunk=250. Se recomienda validar 250 como tamano inicial conservador.
 Quedan como deuda separada la perdida potencial de ramas JSON, JSON no estricto
 y el `updated_at` que cambia al reintentar. P-L44B queda reservado para
-`0.4.176`.
+`0.4.177`.
+## P-L43BR5-W - autoridad verificable del fill en time-stop shadow (candidato 0.4.176)
+
+- La auditoría read-only identificó que las posiciones reales exponen
+  `PositionSide.LONG`, mientras la autoridad de la orden y del fill se conserva
+  en `broker_order_id`, `OrderSide.BUY`, estado `filled` y
+  `execution_quality_snapshot.timestamps.first_fill_at`.
+- El candidato normaliza únicamente variantes deterministas de compra
+  (`buy`, `BUY`, `OrderSide.BUY` y enums con valor `buy`); no trata `long` como
+  lado de orden. Exige orden rellenada, cantidad válida, identidad de broker y
+  `first_fill_at` para parciales; `filled_at` agregado sólo es válido cuando no
+  hay evidencia de parcialidad.
+- La identidad canónica de lote no cambia: el hash sigue dependiendo de las
+  referencias de orden/plan, cantidad y fill. Las cinco observaciones históricas
+  `unavailable` no se reescriben; una evaluación verificable futura sólo añade
+  una transición append-only idempotente.
+- `legacy_calendar_days` continúa siendo la única política activa y XNYS sigue
+  `shadow_only=true`; no se generan órdenes ni se alteran stops, takes, trailing,
+  cantidades, gates, ranking, exposición, límites o historial. P-L45B2 y P-L44
+  permanecen fuera de alcance. P-L44B queda reservado para la futura version
+  `0.4.177`.
