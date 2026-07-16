@@ -4669,6 +4669,19 @@ def build_buy_order_plans(
 ) -> list[OrderPlan]:
     """Build risk-checked buy plans. Sell/reduce/exit are kept as recommendations for now."""
 
+    def _record_rejection(payload: dict[str, Any], recommendation: TradeRecommendation) -> None:
+        """Attach exact lineage to real rejections without inferring identity."""
+
+        if rejected is None:
+            return
+        row = dict(payload)
+        lineage = dict(recommendation.decision_lineage or {})
+        for key in ("candidate_id", "signal_id", "cycle_id"):
+            value = str(lineage.get(key) or "").strip()
+            if value:
+                row[key] = value
+        rejected.append(row)
+
     plans: list[OrderPlan] = []
     buy_plan_limit = _effective_buy_plan_limit(settings, recommendations)
     learning_mode = active_learning_mode(settings)
@@ -4709,7 +4722,7 @@ def build_buy_order_plans(
     for recommendation in recommendations:
         if len(plans) >= buy_plan_limit:
             if rejected is not None and recommendation.action == "buy":
-                rejected.append(
+                _record_rejection(
                     {
                         "symbol": recommendation.symbol,
                         "action": recommendation.action,
@@ -4719,7 +4732,8 @@ def build_buy_order_plans(
                             "max_orders_per_cycle": settings.max_orders_per_cycle,
                             "effective_max_orders_per_cycle": buy_plan_limit,
                         },
-                    }
+                    },
+                    recommendation,
                 )
             # Seguir recorriendo para dejar trazados todos los candidatos que
             # pasaron los gates pero quedaron fuera por cupo. Son el control
@@ -4729,7 +4743,7 @@ def build_buy_order_plans(
             continue
         if market_state_block_reason:
             if rejected is not None:
-                rejected.append(
+                _record_rejection(
                     {
                         "symbol": recommendation.symbol,
                         "action": recommendation.action,
@@ -4740,13 +4754,14 @@ def build_buy_order_plans(
                             "data_quality_notes": list(((market_state or {}).get("data_quality") or {}).get("notes") or []),
                             "data_vendor_quality": ((market_state or {}).get("data_quality") or {}).get("data_vendor_quality"),
                         },
-                    }
+                    },
+                    recommendation,
                 )
             continue
         research_reason = _effective_research_block_reason(settings, research_context, symbol=recommendation.symbol)
         if research_reason:
             if rejected is not None:
-                rejected.append(
+                _record_rejection(
                     {
                         "symbol": recommendation.symbol,
                         "action": recommendation.action,
@@ -4756,7 +4771,8 @@ def build_buy_order_plans(
                             "research_as_of": research_context.get("as_of"),
                             "research_summary": (research_context.get("summary") or {}),
                         },
-                    }
+                    },
+                    recommendation,
                 )
             continue
         if (
@@ -4765,7 +4781,7 @@ def build_buy_order_plans(
             and not ignore_operational_kill_switch
         ):
             if rejected is not None:
-                rejected.append(
+                _record_rejection(
                     {
                         "symbol": recommendation.symbol,
                         "action": recommendation.action,
@@ -4776,12 +4792,13 @@ def build_buy_order_plans(
                             "blocking_alerts": operational_block_context.get("blocking_alerts", []),
                             "reasons": operational_block_context.get("reasons", []),
                         },
-                    }
+                    },
+                    recommendation,
                 )
             continue
         if recommendation.confidence < settings.min_llm_confidence_to_trade:
             if rejected is not None:
-                rejected.append(
+                _record_rejection(
                     {
                         "symbol": recommendation.symbol,
                         "action": recommendation.action,
@@ -4791,24 +4808,26 @@ def build_buy_order_plans(
                             "confidence": recommendation.confidence,
                             "min_llm_confidence_to_trade": settings.min_llm_confidence_to_trade,
                         },
-                    }
+                    },
+                    recommendation,
                 )
             continue
         if recommendation.symbol in open_order_symbols:
             if rejected is not None:
-                rejected.append(
+                _record_rejection(
                     {
                         "symbol": recommendation.symbol,
                         "action": recommendation.action,
                         "stage": "open_order_guard",
                         "reason": "symbol_has_open_order",
                         "checks": {"open_order_symbols": sorted(open_order_symbols)},
-                    }
+                    },
+                    recommendation,
                 )
             continue
         if recommendation.symbol in existing_position_symbols and not settings.allow_position_adds:
             if rejected is not None:
-                rejected.append(
+                _record_rejection(
                     {
                         "symbol": recommendation.symbol,
                         "action": recommendation.action,
@@ -4818,19 +4837,21 @@ def build_buy_order_plans(
                             "allow_position_adds": settings.allow_position_adds,
                             "existing_position_symbols": sorted(existing_position_symbols),
                         },
-                    }
+                    },
+                    recommendation,
                 )
             continue
         if recommendation.symbol in planned_buy_symbols:
             if rejected is not None:
-                rejected.append(
+                _record_rejection(
                     {
                         "symbol": recommendation.symbol,
                         "action": recommendation.action,
                         "stage": "duplicate_symbol_cycle_guard",
                         "reason": "symbol_already_has_buy_plan_in_cycle",
                         "checks": {"planned_buy_symbols": sorted(planned_buy_symbols)},
-                    }
+                    },
+                    recommendation,
                 )
             continue
 
@@ -4870,14 +4891,15 @@ def build_buy_order_plans(
             notional = capped_notional
         if notional <= 0:
             if rejected is not None:
-                rejected.append(
+                _record_rejection(
                     {
                         "symbol": recommendation.symbol,
                         "action": recommendation.action,
                         "stage": "position_sizing",
                         "reason": sizing_checks.get("reason") or "non_positive_notional",
                         "checks": sizing_checks,
-                    }
+                    },
+                    recommendation,
                 )
             continue
 
@@ -4913,14 +4935,15 @@ def build_buy_order_plans(
         decision.checks["soft_override_reasons"] = list(recommendation.soft_override_reasons or [])
         if not decision.approved:
             if rejected is not None:
-                rejected.append(
+                _record_rejection(
                     {
                         "symbol": recommendation.symbol,
                         "action": recommendation.action,
                         "stage": "risk_manager",
                         "reason": decision.reason,
                         "checks": decision.checks,
-                    }
+                    },
+                    recommendation,
                 )
             continue
 
@@ -4937,7 +4960,7 @@ def build_buy_order_plans(
             )
             if resulting_exposure > learning_exposure_cap:
                 if rejected is not None:
-                    rejected.append(
+                    _record_rejection(
                         {
                             "symbol": recommendation.symbol,
                             "action": recommendation.action,
@@ -4947,12 +4970,13 @@ def build_buy_order_plans(
                                 "resulting_exposure": round(resulting_exposure, 4),
                                 "learning_mode_max_portfolio_exposure_pct": round(learning_exposure_cap * 100.0, 2),
                             },
-                        }
+                        },
+                        recommendation,
                     )
                 continue
         if qty is None or execution_notional < settings.min_order_notional:
             if rejected is not None:
-                rejected.append(
+                _record_rejection(
                     {
                         "symbol": recommendation.symbol,
                         "action": recommendation.action,
@@ -4965,7 +4989,8 @@ def build_buy_order_plans(
                             "execution_notional": execution_notional,
                             "min_order_notional": settings.min_order_notional,
                         },
-                    }
+                    },
+                    recommendation,
                 )
             continue
         decision.checks["execution_sizing"] = execution_checks

@@ -2283,6 +2283,32 @@ def command_learning_digest(args: argparse.Namespace) -> None:
         print(f"  - {item}")
 
 
+def command_learning_penalty_shadow_report(args: argparse.Namespace) -> None:
+    """Read-only report of the P-L44B cycle shadow ledger."""
+
+    settings = get_settings()
+    try:
+        from .tools.learning_penalty_cycle_shadow import learning_penalty_shadow_digest
+
+        store = Store(settings.database_path, settings.agent_logs_dir)
+        report = learning_penalty_shadow_digest(store)
+    except Exception as exc:  # noqa: BLE001 - a missing ledger is collecting.
+        report = {
+            "status": "collecting",
+            "shadow_only": True,
+            "observations": None,
+            "candidate_counts": None,
+            "error": str(exc),
+        }
+    if args.json:
+        _print_json({"ok": report.get("status") != "degraded_observability", **report})
+        return
+    print("LEARNING PENALTY SHADOW")
+    print(f"status={report.get('status')} | shadow_only={report.get('shadow_only')}")
+    print(f"observations={report.get('observations')} | cycles={report.get('cycles')}")
+    print(f"candidate_counts={report.get('candidate_counts')}")
+
+
 def command_policy_candidates(args: argparse.Namespace) -> None:
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
@@ -3706,6 +3732,13 @@ def build_parser() -> argparse.ArgumentParser:
     learning_digest.add_argument("--to", dest="end", help="Fecha final YYYY-MM-DD.")
     learning_digest.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     learning_digest.set_defaults(func=command_learning_digest)
+
+    learning_penalty_shadow = subparsers.add_parser(
+        "learning-penalty-shadow-report",
+        help="Lee el ledger shadow P-L44B sin recalcular ciclos ni modificar trading.",
+    )
+    learning_penalty_shadow.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    learning_penalty_shadow.set_defaults(func=command_learning_penalty_shadow_report)
 
     policy_candidates = subparsers.add_parser(
         "policy-candidates",

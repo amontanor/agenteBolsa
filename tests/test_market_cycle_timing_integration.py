@@ -149,11 +149,28 @@ def test_comparable_capture_uses_final_plans_after_real_filters(monkeypatch, tmp
         return {}
 
     monkeypatch.setattr(runner, "build_comparable_control_sets", capture)
+    def shadow_final(**kwargs):
+        calls.append("shadow_final")
+        captured["shadow_final"] = kwargs
+        return {"status": "available"}
+
+    monkeypatch.setattr(runner, "_persist_learning_penalty_cycle_shadow_final", shadow_final)
     store = _StoreSpy()
     settings = Settings(DATA_DIR=tmp_path, AUTO_PAPER_TRADING=True, REQUIRE_HUMAN_APPROVAL=False)
-    runner._auto_paper_trade(settings, store, _Reporter(), "cycle", {"run_id": "source"}, {}, {})
+    runner._auto_paper_trade(
+        settings,
+        store,
+        _Reporter(),
+        "cycle",
+        {"run_id": "source"},
+        {},
+        {},
+        learning_penalty_shadow={"phase": "pre_decision"},
+    )
     assert calls.index("build_order_plans") < calls.index("_apply_daily_buy_limit")
     assert calls.index("_apply_low_sample_daily_quota") < calls.index("_separate_strategy_paused_plans")
     assert calls.index("_separate_strategy_paused_plans") < calls.index("comparable_control_capture")
+    assert calls.index("comparable_control_capture") < calls.index("shadow_final")
+    assert store.calls == ["save_trade_recommendation", "save_order_plan", "save_broker_order"]
     assert len(captured["plans"]) == 1
     assert captured["rejected_order_plans"] == []
