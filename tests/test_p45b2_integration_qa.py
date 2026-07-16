@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 from pathlib import Path
 
@@ -7,13 +8,28 @@ import pytest
 from test_p45b2_batch_writes import _observation, _rows
 
 import agente_bolsa.storage as storage_module
+from agente_bolsa import scheduler
+from agente_bolsa.config import Settings
 from agente_bolsa.storage import LearningObservationBatchError, Store
+from agente_bolsa.tools.postmarket_coordination import PostmarketCoordinator
 
 
 def _store(tmp_path: Path, name: str) -> Store:
     store = Store(tmp_path / f"{name}.sqlite3", tmp_path / f"{name}-logs")
     store.ensure_schema()
     return store
+
+
+def _pmr_settings(tmp_path: Path) -> Settings:
+    return Settings(
+        _env_file=None,
+        DATA_DIR=tmp_path / "data",
+        DATABASE_PATH=tmp_path / "data" / "state.sqlite3",
+        AGENT_LOGS_DIR=tmp_path / "data" / "logs",
+        TRADING_MODE="paper",
+        ALLOW_LIVE_TRADING=False,
+        ALLOW_AUTO_APPLY_IMPROVEMENTS=False,
+    )
 
 
 def test_chunk_is_prepared_before_connection_and_begin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -175,3 +191,77 @@ def test_busy_timeout_exhaustion_is_structured_and_rolls_back_chunk(tmp_path: Pa
     finally:
         holder.rollback()
         holder.close()
+
+
+def test_batch_failure_publishes_pmr_failed_and_releases_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _pmr_settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+
+    class Status:
+        now_market = "2026-07-15T23:00:00+00:00"
+
+        def as_dict(self):
+            return {"now_market": self.now_market}
+
+    class Calendar:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def should_run_daily_study(self):
+            return True, Status()
+
+    class Reporter:
+        def emit(self, *args, **kwargs):
+            return None
+
+    class BrokerFactory:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def alpaca_portfolio_snapshot(self):
+            return None
+
+    batch_error = LearningObservationBatchError(
+        "synthetic batch failure",
+        result={"status": "failed", "failed_chunk": 0, "written": 0},
+        failed_chunk=0,
+        cause="synthetic batch failure",
+        retry_possible=True,
+    )
+    monkeypatch.setattr(scheduler, "MarketCalendar", Calendar)
+    monkeypatch.setattr(scheduler, "_reporter", lambda *args, **kwargs: Reporter())
+    monkeypatch.setattr(scheduler, "BrokerClientFactory", BrokerFactory)
+    monkeypatch.setattr(
+        scheduler,
+        "reconcile_broker_orders",
+        lambda *args, **kwargs: {"changes": [], "signal_execution_updates": 0, "learning_execution_updates": 0},
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "build_post_market_review",
+        lambda *args, **kwargs: {
+            "path": "report.json",
+            "summary": {"trades_evaluated": 0},
+            "proposed_improvements": [],
+            "next_session_guidance": [],
+        },
+    )
+    monkeypatch.setattr(scheduler, "_persist_daily_performance", lambda *args, **kwargs: (_ for _ in ()).throw(batch_error))
+    monkeypatch.setattr(scheduler, "_set_job_status", lambda *args, **kwargs: None)
+
+    assert scheduler.post_market_review_job(settings, store, use_llm=False, verbose=False, force=True) is None
+    with store.connect() as conn:
+        payloads = [
+            json.loads(row["payload_json"])
+            for row in conn.execute("SELECT payload_json FROM agent_events WHERE event_type = 'postmarket_run'")
+        ]
+    assert any(item["stage"] == "terminal" and item["status"] == "failed" for item in payloads)
+    assert store.get_runtime_value("post_market_coordination:active") is None
+    retry = PostmarketCoordinator(settings, store).acquire(
+        session_date="2026-07-15", run_id="pmr-retry-after-batch", trigger="scheduled"
+    )
+    assert retry.effective is True
+    PostmarketCoordinator(settings, store).terminal(retry, "failed", reason="test_cleanup")
