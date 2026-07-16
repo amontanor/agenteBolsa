@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.174** (candidato P-L45B1; no desplegado)
+ - Version actual: **0.4.175** (candidato P-L45B2; no desplegado)
 - Ultima actualizacion: 2026-07-16
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -1846,7 +1846,7 @@ auto-apply OFF, apply humano, mediciones pre-registradas.
   autorización humana y otro lote separado (`guarded_active`).
 - No se interpretan los casos históricos como rentabilidad ni como autorización
   para cambiar stops, takes, trailing, exposición, límites o trading.
-## P-L45B1 — fiabilidad del postmarket (candidato 0.4.174)
+## P-L45B1 — fiabilidad del postmarket (desplegado en 0.4.174)
 
 - **En curso en worktree aislado:** coordinación única por sesión, exclusión
   entre postmarket y reconciliación, terminales duraderos
@@ -1857,9 +1857,9 @@ auto-apply OFF, apply humano, mediciones pre-registradas.
   vista operativa del lease.
 - `build_learning_daily_run(update_result=...)` reutiliza el resultado de
   outcomes; los llamadores sin argumento conservan compatibilidad legacy.
-- **P-L45B2 pendiente:** batching y reducción de duración de los upserts de
-  observaciones. No se ejecuta en este lote.
-- **P-L44B pospuesto:** deberá rebasarse y renumerarse como `0.4.175`; ningún
+- **P-L45B2 en worktree aislado:** batching y reducción de duración de los
+  upserts de observaciones; candidato `0.4.175`, sin despliegue.
+- **P-L44B pospuesto:** deberá rebasarse y renumerarse como `0.4.176`; ningún
   worktree ni commit de P-L44 se modifica aquí.
 - La mejora de duración no se interpretará hasta disponer de cinco sesiones
   reales posteriores; no se modifica trading ni la política legacy activa de
@@ -1880,5 +1880,26 @@ desactivados. El bootstrap posterior publicó un único skip durable
 `market_not_ready` sin reprocesar la sesión del `2026-07-15`, sin segunda
 actualización de outcomes ni bloqueo SQLite.
 
-P-L45B2 (batching) permanece pendiente; la mejora de duración requiere cinco
-sesiones reales posteriores. P-L44B sigue diferido para `0.4.175`.
+P-L45B2 (batching) está implementado en el worktree candidato y permanece sin
+integración; la mejora de duración requiere cinco sesiones reales posteriores.
+P-L44B sigue diferido para `0.4.176`.
+
+## P-L45B2-W - escrituras batch de learning_observations (candidato 0.4.175)
+
+En `codex/pl45b2-batch-impl` se implementa una API de `Store` con chunks de
+250 filas por defecto, `BEGIN IMMEDIATE` y un commit por chunk. El upsert
+individual y el batch comparten el mismo SQL y normalizacion: se conservan
+`ON CONFLICT(observation_id) DO UPDATE`, overwrite de JSON, `updated_at`,
+conflictos por indice natural y la serializacion legacy de `NaN`/`Infinity`.
+
+`daily_learning` y la sincronizacion RR reutilizan la API sin cambiar
+observaciones, orden, payloads, cohortes ni decisiones. El resultado expone
+filas recibidas/escritas, chunks, duracion y valores JSON no estrictos; un
+fallo hace rollback del chunk actual, conserva commits anteriores y detiene la
+fase para retry explicito. No se crean tablas ni migraciones.
+
+La caracterizacion de 33.336 filas reduce estructuralmente 33.336 commits a
+134 con chunk=250. Se recomienda validar 250 como tamano inicial conservador.
+Quedan como deuda separada la perdida potencial de ramas JSON, JSON no estricto
+y el `updated_at` que cambia al reintentar. P-L44B queda reservado para
+`0.4.176`.

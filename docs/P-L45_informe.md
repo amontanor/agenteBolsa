@@ -150,6 +150,28 @@ reconciliación ni actualización adicional de outcomes, y
 la sesión ni aparecieron bloqueos SQLite.
 
 P-L43B conserva `legacy_calendar_days` como política activa y XNYS en
-`shadow_only=true`. P-L45B2 queda pendiente; la mejora de duración solo se
-interpretará tras cinco sesiones reales posteriores. P-L44B sigue diferido a
-`0.4.175`.
+`shadow_only=true`. P-L45B2 está implementado en el worktree candidato y queda
+pendiente de integración; la mejora de duración solo se interpretará tras
+cinco sesiones reales posteriores. P-L44B sigue diferido a `0.4.176`.
+
+## P-L45B2-W — escrituras batch de learning_observations
+
+El candidato `0.4.175` añade `Store.upsert_learning_observations_batch()` con
+chunks de 250 filas por defecto. Cada chunk abre una conexión, ejecuta
+`BEGIN IMMEDIATE`, confirma una sola vez y cierra conexión/cursor. Usa el
+`busy_timeout` existente de 30.000 ms. El upsert
+individual y el batch comparten SQL y normalización, preservando el contrato
+legacy (`ON CONFLICT(observation_id) DO UPDATE`, overwrite de JSON,
+`updated_at`, conflictos por índice natural y `NaN`/`Infinity` no estrictos).
+
+`daily_learning` y `rr_cohort` usan la API batch sin cambiar observaciones,
+payloads, orden, cohortes ni decisiones. El resultado expone filas recibidas y
+escritas, chunks, duración y valores JSON no estrictos. Un fallo revierte el
+chunk actual, conserva commits previos y detiene la fase para retry explícito;
+no se crean tablas ni migraciones.
+
+La caracterización temporal de 33.336 observaciones reduce estructuralmente
+33.336 commits a 134 con chunk=250, sin `database is locked` en el escenario
+normal y con paridad exacta frente al upsert secuencial. Quedan como deuda
+separada la pérdida potencial de ramas JSON por overwrite, el JSON no estricto
+y el cambio de `updated_at` en un retry. P-L44B queda reservado para `0.4.176`.
