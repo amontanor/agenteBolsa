@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama: `codex/mejora_continua`
-- Version actual: **0.4.174** (candidato P-L45B1; no desplegado)
+- Version actual: **0.4.178** (candidato UI P-L46B; no desplegado)
 - Ultima actualizacion: 2026-07-16
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -1881,4 +1881,17 @@ desactivados. El bootstrap posterior publicó un único skip durable
 actualización de outcomes ni bloqueo SQLite.
 
 P-L45B2 (batching) permanece pendiente; la mejora de duración requiere cinco
-sesiones reales posteriores. P-L44B sigue diferido para `0.4.175`.
+sesiones reales posteriores. P-L44B pasa a la version futura `0.4.177`.
+
+## P-L46B - orden cronologico de Cartera abierta (candidato 0.4.178)
+
+- El orden anterior mostraba primero las posiciones con mayor valor absoluto de
+  P/L en dolares, mezclando ganadoras y perdedoras.
+- El candidato ordena por el ultimo fill de compra verificable, de mas reciente
+  a mas antiguo, y muestra su fecha y hora en la zona local configurada.
+- Las posiciones sin un fill de compra verificable quedan al final como
+  `No disponible`; no se usa la fecha de creacion de una orden como sustituto.
+- Es un cambio exclusivamente visual. No altera posiciones, trading, ranking,
+  gates, stops, takes, cantidades ni ordenes.
+- Secuencia prevista: P-L45B2 `0.4.175`, P-L43BR5 `0.4.176`, P-L44B
+  `0.4.177` y este cambio UI `0.4.178`.
