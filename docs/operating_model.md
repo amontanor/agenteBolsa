@@ -1,273 +1,111 @@
 # Modelo operativo
 
-## Rutina continua
+## Principios
 
-El comando recomendado para funcionamiento continuo es `schedule`. Lanza tres ritmos:
+- Produccion opera en paper. Live y auto-apply requieren autorizacion humana.
+- XNYS es la autoridad temporal.
+- `unavailable` no significa cero; `collecting` no se interpreta.
+- Telemetria observa y puede fallar abierta; kernel, riesgo, gates y kill switch
+  fallan cerrados.
+- Un LLM no aprueba su propia hipotesis ni concede permisos.
 
-```powershell
-python -m agente_bolsa.main schedule
-```
+## Servicios gestionados
 
-Ritmos:
-
-- Cada minuto: `portfolio_watch_job`.
-- Cada 15 minutos: `market_cycle_job`.
-- Cada dia: `daily_study_job`.
-
-Cada job consulta el calendario `XNYS` de bolsa americana en zona `America/New_York` y registra las horas en `Europe/Madrid`. Asi el sistema no depende de la hora espanola para decidir si puede operar.
-
-Comprobacion del calendario:
+Las tareas `AgenteBolsaScheduler` y `AgenteBolsaWeb` usan el Python de `.venv`.
+No se mantienen servicios iniciados manualmente.
 
 ```powershell
-python -m agente_bolsa.main schedule-status
+powershell -ExecutionPolicy Bypass -File scripts\stack_status.ps1
+powershell -ExecutionPolicy Bypass -File scripts\stack_down.ps1 -IncludeScheduled
+powershell -ExecutionPolicy Bypass -File scripts\stack_up.ps1
 ```
 
-Pruebas manuales:
+Un stack sano tiene un scheduler logico, PID/lock vivo, heartbeat fresco y HTTP
+200. `schedule-status` por si solo no demuestra vida.
+
+## Ciclo de mercado
+
+1. Preflight de modo, kernel, calendario y datos.
+2. Candidatos con identidad canonica.
+3. Ranking y contexto pre-decision.
+4. Decision y gates deterministas.
+5. Controles desde planes/rechazos reales.
+6. Planes finales y, si procede, ordenes paper.
+7. Telemetria sin reejecutar decisiones.
+
+Decision context, gate path, comparable controls y execution quality no cambian
+ranking, gates, cantidades ni ordenes.
+
+## Portfolio watch y salidas
+
+`portfolio_watch` revisa posiciones durante XNYS abierto. Stop-loss, take-profit
+y trailing preceden al time-stop.
+
+- Activa: `legacy_calendar_days`.
+- Shadow: cinco sesiones XNYS posteriores al fill.
+- Autoridad: buy order exacta y `first_fill_at`; parcial sin primer fill queda
+  `unavailable`.
+- Historia append-only por lote; runtime state es latest view.
+
+Shadow nunca crea, bloquea o retrasa ordenes.
+
+## Postmarket
+
+1. Lease/coordinacion por sesion.
+2. Reconciliacion interna unica.
+3. Una actualizacion de outcomes.
+4. Aprendizaje reutilizando ese resultado.
+5. Informe y performance benchmark.
+6. Gates, scoreboard, cohortes e investigacion.
+7. Digest, watchdog y tesis.
+8. Terminal `completed|failed|skipped`.
+
+P-L45B1 coordina bootstrap/scheduler/reconciliacion y evita terminales huerfanos.
+P-L45B2 prepara fuera de SQLite y escribe observations en chunks de 250, una
+transaccion corta por chunk.
+
+No ejecutar postmarket/reconciliacion manual para reparar una sesion.
+
+## Evidencia y promocion
+
+- Outcomes maduran por sesiones posteriores; fills/P&L no sustituyen forward.
+- Hipotesis y criterios se pre-registran.
+- Linaje, control, cobertura, muestra, concentracion y madurez bloquean readiness
+  si son insuficientes.
+- Orden: `shadow -> guarded_active -> active`.
+- Mejor retorno con peor drawdown/MAE/tail loss no se promociona.
+- Apply y configuracion sensible siguen human-gated.
+
+## Desarrollo con XNYS abierto
+
+Solo worktrees aislados, DATA_DIR temporal, `_env_file=None`, reloj congelado y
+sin broker/red/LLM/servicios. No merge, reinicio ni despliegue.
+
+Usar `.venv` productiva con `PYTHONPATH=<worktree>/src`; el interprete global
+puede validar dependencias o codigo incorrectos.
+
+## Integracion y despliegue
+
+1. Caracterizacion.
+2. Implementacion separada.
+3. QA adversarial y merge `--no-ff`.
+4. Suite/Ruff/NUL/diff/config/kernel/smoke aislado.
+5. Despliegue cerrado, sin jobs activos y con rollback por revert.
+6. Arranque por tareas y dos comprobaciones de salud.
+7. Varias sesiones de observacion antes de interpretar.
+
+Candidatos paralelos reservan versiones diferentes; no squash/rebase/amend
+commits validados.
+
+## Comandos de lectura
 
 ```powershell
-python -m agente_bolsa.main job-once portfolio
-python -m agente_bolsa.main job-once market --skip-crew
-python -m agente_bolsa.main job-once daily --skip-crew
+.\.venv\Scripts\python.exe -m agente_bolsa.main status
+.\.venv\Scripts\python.exe -m agente_bolsa.main validate-agent-config --json
+.\.venv\Scripts\python.exe -m agente_bolsa.main kernel-status --json
+.\.venv\Scripts\python.exe -m agente_bolsa.main schedule-status
+.\.venv\Scripts\python.exe -m agente_bolsa.main production-health --json
+.\.venv\Scripts\python.exe -m agente_bolsa.main operational-health --json
 ```
 
-## Comportamiento por ritmo
-
-### Cada minuto
-
-Agentes implicados:
-
-- `portfolio_manager`
-- `risk_manager`
-- `compliance_guardian`
-
-Objetivo:
-
-- Saber si NYSE esta abierto.
-- Revisar estado de cartera, PnL, ordenes abiertas y limites si NYSE esta abierto.
-- Si el mercado esta cerrado, avisar una sola vez y quedar en espera.
-- Si el mercado esta abierto, preparar control intradia.
-
-No tiene sentido repetir el mismo aviso cada minuto con mercado cerrado. Por eso el sistema guarda una marca de estado y no vuelve a imprimir hasta que cambie la proxima apertura.
-
-### Cada 15 minutos
-
-Agentes implicados:
-
-- `orchestrator`
-- `market_data_researcher`
-- `technical_analyst`
-- `hypothesis_generator`
-- `quant_backtester`
-- `risk_manager`
-- `portfolio_manager`
-- `execution_agent`
-
-Objetivo:
-
-- Solo corre si NYSE esta abierto.
-- Descargar snapshot real con el proveedor configurado.
-- Construir `market_state` obligatorio con regimen, calidad de datos y postura de riesgo.
-- Recalcular variables tecnicas.
-- Generar o revisar hipotesis.
-- Bloquear cualquier decision sin backtest, stop loss, take profit y riesgo definido.
-
-### Mercado cerrado: estudio tecnico amplio
-
-Ademas del ciclo intradia, hay un job `closed_market_technical_study`.
-
-Objetivo:
-
-- Solo corre si NYSE esta cerrado.
-- Se ejecuta una sola vez por proxima apertura.
-- Escanea el universo configurado (`sp500` por defecto: cobertura completa del S&P 500).
-- Genera candidatos largos y cortos.
-- Calcula entrada teorica, stop loss, take profit, ATR, momentum, volumen, tendencia y patrones de velas.
-- Para los finalistas tecnicos, descarga noticias recientes y valida sentimiento con el LLM local.
-- Guarda el informe en `data/reports/closed_market_technical_study_<run_id>.json`.
-- Guarda el sentimiento en `data/reports/news_sentiment_<run_id>.json`.
-- Si CrewAI esta activo, pasa los mejores candidatos al grupo de agentes para una revision mas profunda.
-
-La validacion por simbolo usa la herramienta `technical_state_validator`. Esta herramienta decide que analisis tecnicos aplicar segun el estado del simbolo:
-
-- `trend_stack`
-- `momentum_profile`
-- `volatility_atr`
-- `volume_confirmation`
-- `candlestick_patterns`
-- `chart_patterns`
-- `breakout_continuation`
-- `breakdown_or_reversal`
-- `overextension_check`
-- `mean_reversion_check`
-- `high_volatility_risk`
-- `volume_event`
-- `candle_confirmation`
-- `candle_indecision`
-- `risk_plan`
-
-Si durante el analisis detecta que falta una herramienta, genera una solicitud asignada a `self_improvement_engineer`, por ejemplo:
-
-- `premarket_volume_validator`
-- `sector_relative_strength_validator`
-
-### Cada dia
-
-Agentes implicados:
-
-- `post_trade_analyst`
-- `self_improvement_engineer`
-- `quant_backtester`
-- `risk_manager`
-
-Objetivo:
-
-- Solo corre si fue dia de mercado y la sesion ya cerro.
-- Revisar resultados del dia.
-- Comparar hipotesis contra mercado real.
-- Actualizar backlog de mejoras.
-- Proponer nuevos experimentos, no activar live trading.
-
-## Fases del ciclo base
-
-Fases por ciclo:
-
-1. `preflight`: valida configuracion, modo paper/live, claves y carpetas.
-2. `data_update`: actualiza precios y contexto.
-3. `research`: los agentes generan observaciones.
-4. `hypothesis`: se crean hipotesis nuevas o se revisan antiguas.
-5. `validation`: backtest, walk-forward y pruebas de robustez.
-6. `risk_review`: bloqueo o aprobacion de propuestas.
-7. `execution`: paper/live segun configuracion.
-8. `post_mortem`: aprendizaje y resumen del ciclo.
-
-## Decision operativa LLM
-
-La operativa por defecto usa `TRADE_AGGRESSIVENESS_PROFILE=opportunistic` en `paper`. Esto amplia el numero de candidatos y permite micro-experimentos cuando hay alta conviccion, pero no activa live trading ni aumenta el limite por posicion.
-
-1. `portfolio-status` lee cuenta, posiciones y ordenes abiertas desde Alpaca paper.
-2. `decide-once` carga los mejores candidatos del ultimo estudio tecnico cerrado y el ultimo sentimiento disponible.
-3. El LLM devuelve JSON estricto con `buy`, `sell`, `hold`, `reduce` o `exit`.
-4. El codigo normaliza la respuesta y ejecuta revision determinista y adversarial no-LLM.
-5. `risk_manager` valida entrada, stop, take profit, exposicion maxima, ratio beneficio/riesgo, calidad de datos y politica de regimen.
-6. Se guardan recomendaciones y planes en SQLite; las entradas `micro_experiment` se dimensionan con `MICRO_EXPERIMENT_SIZE_MULTIPLIER`.
-7. `execute-approved` envia planes aprobados a Alpaca paper solo con confirmacion explicita o `AUTO_PAPER_TRADING=true`.
-8. Si NYSE esta cerrado, `execute-approved` bloquea el envio salvo `--queue-closed-market`.
-
-El LLM decide intencion y tesis. El codigo decide limites, tamano maximo y aprobacion de riesgo.
-En paper, `BACKTEST_GATE_PAPER_SOFT_OVERRIDE_ENABLED=true` permite que una senal de alta conviccion con backtest fallido pase como micro-operacion trazada. En live, el backtest fallido sigue siendo veto duro.
-
-En la consola se imprime cada fase con agente, ciclo y accion. Para validar la maquinaria sin consumir LLM se puede ejecutar:
-
-```powershell
-python -m agente_bolsa.main run-once --skip-crew
-```
-
-Para seguir el sistema mientras trabaja:
-
-```powershell
-python -m agente_bolsa.main log --follow
-```
-
-## Auto-mejora
-
-El sistema se auto-mejora por evidencia acumulada, no por intuicion del LLM.
-
-1. Memoria operativa: todos los agentes guardan eventos en SQLite y JSONL.
-2. Medicion: cada hipotesis debe tener entrada, salida, invalidacion, stop, take profit y costes.
-3. Validacion: el backtester debe calcular rendimiento neto, drawdown, Sharpe, numero de operaciones, slippage y robustez fuera de muestra.
-4. Post-mortem: el sistema clasifica fallos como mala tesis, mala ejecucion, mala calidad de datos o mala suerte.
-5. Backlog: `self_improvement_engineer` propone cambios concretos.
-6. Promocion: una mejora solo pasa a uso si supera tests, backtest y paper trading.
-
-La auto-mejora puede proponer codigo, indicadores o prompts, pero no puede saltarse al `risk_manager`, cambiar a live trading ni ejecutar una estrategia no validada.
-
-El protocolo actual usa estados `champion`, `challenger`, `shadow`, `micro_experiment`, `rejected` y `retired`. Los parametros quedan congelados durante la ventana de evaluacion; cambios repetidos de thresholds o conflictos con una ventana congelada bloquean la promocion.
-
-Comandos de auditoria:
-
-```powershell
-python -m agente_bolsa.main strategy-registry --json
-python -m agente_bolsa.main market-data-reconciliation --json
-python -m agente_bolsa.main live-readiness --json
-```
-
-## Estudios tecnicos
-
-Los estudios tecnicos iniciales se hacen como variables medibles:
-
-- Tendencia: SMA 20, 50 y 200; pendiente; precio sobre o bajo media larga.
-- Momentum: retorno 20 dias, maximos/minimos de N dias, rupturas y aceleracion.
-- Volatilidad: ATR 14, rango, gaps, expansion/contraccion de volatilidad.
-- Volumen: media 20 dias, desviacion, z-score de volumen y confirmacion de ruptura.
-- Velas: doji, hammer, shooting star, envolvente alcista y envolvente bajista como confirmacion o advertencia.
-- Figuras chartistas: hombro-cabeza-hombro, hombro-cabeza-hombro invertido, doble techo, doble suelo y triangulos mediante pivotes locales, neckline/soporte/resistencia, estado confirmado o en formacion y confianza.
-- Sentimiento: noticias recientes de los finalistas tecnicos, validadas por LLM como apoyo, contradiccion o contexto neutro.
-- Fuerza relativa: comparacion contra `SPY` y, mas adelante, contra sector.
-- Regimen: mercado abierto/cerrado, sesion, tendencia del benchmark, volatilidad del indice.
-- Riesgo tecnico: stop basado en ATR, take profit, ratio beneficio/riesgo y time stop.
-
-Ninguna lectura tecnica vale por si sola. Debe convertirse en regla testeable y pasar costes, slippage y fuera de muestra.
-
-## Criterios de promocion iniciales
-
-Una estrategia candidata solo pasa de investigacion a paper si cumple:
-
-- Al menos `MIN_BACKTEST_TRADES` operaciones.
-- Sin look-ahead bias conocido.
-- Costes y slippage incluidos.
-- Sharpe fuera de muestra superior a `MIN_OUT_OF_SAMPLE_SHARPE`.
-- Drawdown inferior a `MAX_STRATEGY_DRAWDOWN`.
-- Resultado no dependiente de un unico simbolo o periodo corto.
-
-Para pasar de paper a live:
-
-- Minimo 30 dias naturales en paper.
-- Max drawdown en paper dentro del limite.
-- Diferencia razonable entre backtest y paper.
-- Revision humana del reporte.
-- `ALLOW_LIVE_TRADING=true`.
-
-## Historial por agente
-
-Cada agente escribe eventos JSONL:
-
-```json
-{
-  "timestamp": "2026-04-26T12:00:00Z",
-  "agent": "technical_analyst",
-  "event_type": "observation",
-  "cycle_id": "20260426-120000",
-  "payload": {
-    "symbol": "AAPL",
-    "signal": "trend_positive",
-    "confidence": 0.62
-  }
-}
-```
-
-Esto permite apagar y reiniciar sin perder contexto. La base SQLite guarda una version consultable y los JSONL mantienen una auditoria sencilla.
-
-## Modo de mejora
-
-El agente `self_improvement_engineer` puede:
-
-- Proponer nuevos indicadores.
-- Crear nuevas hipotesis.
-- Sugerir cambios de prompts.
-- Generar modulos de estrategia en sandbox.
-- Crear tests y backtests asociados.
-
-No puede:
-
-- Activar live trading.
-- Saltarse al gestor de riesgo.
-- Modificar claves, limites o ejecutor de ordenes sin revision.
-- Promover una estrategia solo por una explicacion convincente.
-
-## Fallos y recuperacion
-
-- Si un ciclo falla, se registra en `data/logs/system.jsonl`.
-- Los agentes conservan historial individual.
-- CrewAI puede usar checkpoints en `data/checkpoints`.
-- SQLite conserva hipotesis y resultados.
-- Al reiniciar, `status` muestra estado basico y la proxima ejecucion continua el ciclo.
+Auditorias SQLite usan URI `mode=ro` y no reconstruyen IDs por simbolo/fecha.

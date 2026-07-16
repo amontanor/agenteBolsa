@@ -304,16 +304,22 @@ def _observation_payload(group: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _materialize_observations(store: Store, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _materialize_observations(
+    store: Store,
+    rows: list[dict[str, Any]],
+    *,
+    return_batch_result: bool = False,
+) -> list[dict[str, Any]] | tuple[list[dict[str, Any]], dict[str, Any]]:
     grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         grouped[(row["signal_date"], row["symbol"], _source_family(row))].append(row)
     observations = []
     for group in grouped.values():
         observation = _observation_payload(group)
-        store.upsert_learning_observation(observation)
         observations.append(observation)
-    return sorted(observations, key=lambda item: (item["signal_date"], item["symbol"], item["source_family"]))
+    batch_result = store.upsert_learning_observations_batch(observations)
+    ordered = sorted(observations, key=lambda item: (item["signal_date"], item["symbol"], item["source_family"]))
+    return (ordered, batch_result) if return_batch_result else ordered
 
 
 def _build_health(observations: list[dict[str, Any]], raw_rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1443,7 +1449,19 @@ def build_learning_daily_run(
     if update_result is None:
         update_result = update_signal_outcomes(settings, store, since_date=since_date, limit=LEDGER_LIMIT)
     rows = _rebuild_signal_cohorts(store, since_date=since_date, end_date=end_date)
-    observations = _materialize_observations(store, rows)
+    materialized = _materialize_observations(store, rows, return_batch_result=True)
+    if isinstance(materialized, tuple):
+        observations, materialization_batch = materialized
+    else:
+        # Compatibilidad con dobles legacy que sustituyen el helper en tests.
+        observations = materialized
+        materialization_batch = {
+            "phase": "materialization",
+            "status": "legacy_fallback",
+            "received": len(observations),
+            "written": len(observations),
+            "chunks_completed": None,
+        }
     rr_cohort_sync = sync_rr_cohort_observations(store, observations)
     session_dates = _session_dates(rows)
     session_date = end_date or (session_dates[-1] if session_dates else since_date)
@@ -1477,6 +1495,7 @@ def build_learning_daily_run(
         "digest": digest,
         "policy_comparison": comparison,
         "rr_cohort_sync": rr_cohort_sync,
+        "batch": {"phase": "materialization", **materialization_batch},
     }
     store.upsert_learning_daily_summary(
         summary_id=f"daily:{session_date}",
@@ -1500,6 +1519,11 @@ def build_learning_daily_run(
         "observations_summary": {
             "observations": len(observations),
             "duplicates_removed": health.get("duplicate_signals", 0),
+        },
+        "batch": {
+            "phase": "materialization",
+            **materialization_batch,
+            "rr_sync": rr_cohort_sync.get("batch") if isinstance(rr_cohort_sync, dict) else None,
         },
     }
     if not compact:

@@ -9,10 +9,17 @@
 > (se muestra en la barra lateral del dashboard), y (3) dejar el sistema levantado
 > con los cambios cargados (ver seccion 7).
 
-- Rama: `codex/mejora_continua`
-- Version actual: **0.4.174** (candidato P-L45B1; no desplegado)
+- Rama de ensayo: `codex/pl43br5-combined-rehearsal`
+- Version actual: **0.4.176** (ensayo combinado P-L45B2 + P-L43BR5; no desplegado)
 - Ultima actualizacion: 2026-07-16
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
+
+## Consolidacion operativa - 16-jul-2026
+
+- `buenas-practicas` incorpora el trabajo aislado durante mercado abierto, eventos append-only, transacciones SQLite cortas y por lotes, fixtures deterministas y secuenciacion de versiones entre worktrees.
+- `start-agente-bolsa` elimina la antigua contradiccion de arranque manual y fija `stack_status.ps1`, `stack_down.ps1` y `stack_up.ps1` como procedimiento autorizado mediante tareas programadas.
+- `operating_model.md` y el relevo tecnico quedan alineados con P-L43B, P-L45B1/P-L45B2 y la reserva de versiones 0.4.175-0.4.178.
+- Esta consolidacion es exclusivamente documental dentro del candidato todavia no publicado 0.4.176; no anade otro incremento de version ni modifica trading, configuracion o servicios.
 
 ### P-L17 - Verdad de medicion: outcomes forward separados de ejecucion. **HECHO (v0.4.140).**
 Se elimina la contaminacion que convertia P/L abierto de `trade_memory` en
@@ -837,15 +844,18 @@ Estado: PENDIENTE salvo indicacion. Marcar aqui al completarlas.
 - **Tras aplicar cambios de codigo, el sistema debe seguir levantado pero con los
   cambios cargados.** Un proceso Python ya en marcha NO recoge cambios en caliente:
   hay que **reiniciar** el scheduler y el panel web para que carguen el codigo nuevo.
-  Secuencia recomendada (PowerShell, tras parar los procesos previos):
+  Secuencia autorizada (PowerShell, solo con XNYS cerrado y sin jobs activos):
 
   ```powershell
   cd C:\Antonio\Bref\agenteBolsa
-  # parar panel y scheduler previos (ver startup_runbook seccion 7), luego:
-  Start-Process -FilePath ".\.venv\Scripts\python.exe" -ArgumentList @("-m","agente_bolsa.main","web","--host","127.0.0.1","--port","8501") -WorkingDirectory "C:\Antonio\Bref\agenteBolsa" -WindowStyle Hidden
-  Start-Process -FilePath ".\.venv\Scripts\python.exe" -ArgumentList @("-m","agente_bolsa.main","schedule","--quiet") -WorkingDirectory "C:\Antonio\Bref\agenteBolsa" -WindowStyle Hidden
-  .\.venv\Scripts\python.exe -m agente_bolsa.main schedule-status
+  powershell -ExecutionPolicy Bypass -File scripts\stack_down.ps1 -IncludeScheduled
+  powershell -ExecutionPolicy Bypass -File scripts\stack_up.ps1
+  powershell -ExecutionPolicy Bypass -File scripts\stack_status.ps1
   ```
+
+  No iniciar servicios persistentes con `Start-Process` ni borrar el lock a
+  ciegas. Tras el arranque se exigen HTTP 200, scheduler logico unico, PID/lock
+  vivo y heartbeat fresco en dos comprobaciones separadas.
 
 - **Versionado:** en cada entrega se sube `__version__` en
   `src/agente_bolsa/__init__.py` (fuente unica; `pyproject.toml` y el sidebar la
@@ -1846,7 +1856,7 @@ auto-apply OFF, apply humano, mediciones pre-registradas.
   autorización humana y otro lote separado (`guarded_active`).
 - No se interpretan los casos históricos como rentabilidad ni como autorización
   para cambiar stops, takes, trailing, exposición, límites o trading.
-## P-L45B1 — fiabilidad del postmarket (candidato 0.4.174)
+## P-L45B1 — fiabilidad del postmarket (desplegado en 0.4.174)
 
 - **En curso en worktree aislado:** coordinación única por sesión, exclusión
   entre postmarket y reconciliación, terminales duraderos
@@ -1857,9 +1867,9 @@ auto-apply OFF, apply humano, mediciones pre-registradas.
   vista operativa del lease.
 - `build_learning_daily_run(update_result=...)` reutiliza el resultado de
   outcomes; los llamadores sin argumento conservan compatibilidad legacy.
-- **P-L45B2 pendiente:** batching y reducción de duración de los upserts de
-  observaciones. No se ejecuta en este lote.
-- **P-L44B pospuesto:** deberá rebasarse y renumerarse como `0.4.175`; ningún
+- **P-L45B2 en worktree aislado:** batching y reducción de duración de los
+  upserts de observaciones; candidato `0.4.175`, sin despliegue.
+- **P-L44B pospuesto:** deberá rebasarse y renumerarse como `0.4.177`; ningún
   worktree ni commit de P-L44 se modifica aquí.
 - La mejora de duración no se interpretará hasta disponer de cinco sesiones
   reales posteriores; no se modifica trading ni la política legacy activa de
@@ -1880,5 +1890,46 @@ desactivados. El bootstrap posterior publicó un único skip durable
 `market_not_ready` sin reprocesar la sesión del `2026-07-15`, sin segunda
 actualización de outcomes ni bloqueo SQLite.
 
-P-L45B2 (batching) permanece pendiente; la mejora de duración requiere cinco
-sesiones reales posteriores. P-L44B sigue diferido para `0.4.175`.
+P-L45B2 (batching) está implementado en el worktree candidato y permanece sin
+integración; la mejora de duración requiere cinco sesiones reales posteriores.
+P-L44B sigue diferido para `0.4.177`.
+
+## P-L45B2-W - escrituras batch de learning_observations (candidato 0.4.175)
+
+En `codex/pl45b2-batch-impl` se implementa una API de `Store` con chunks de
+250 filas por defecto, `BEGIN IMMEDIATE` y un commit por chunk. El upsert
+individual y el batch comparten el mismo SQL y normalizacion: se conservan
+`ON CONFLICT(observation_id) DO UPDATE`, overwrite de JSON, `updated_at`,
+conflictos por indice natural y la serializacion legacy de `NaN`/`Infinity`.
+
+`daily_learning` y la sincronizacion RR reutilizan la API sin cambiar
+observaciones, orden, payloads, cohortes ni decisiones. El resultado expone
+filas recibidas/escritas, chunks, duracion y valores JSON no estrictos; un
+fallo hace rollback del chunk actual, conserva commits anteriores y detiene la
+fase para retry explicito. No se crean tablas ni migraciones.
+
+La caracterizacion de 33.336 filas reduce estructuralmente 33.336 commits a
+134 con chunk=250. Se recomienda validar 250 como tamano inicial conservador.
+Quedan como deuda separada la perdida potencial de ramas JSON, JSON no estricto
+y el `updated_at` que cambia al reintentar. P-L44B queda reservado para
+`0.4.177`.
+## P-L43BR5-W - autoridad verificable del fill en time-stop shadow (candidato 0.4.176)
+
+- La auditoría read-only identificó que las posiciones reales exponen
+  `PositionSide.LONG`, mientras la autoridad de la orden y del fill se conserva
+  en `broker_order_id`, `OrderSide.BUY`, estado `filled` y
+  `execution_quality_snapshot.timestamps.first_fill_at`.
+- El candidato normaliza únicamente variantes deterministas de compra
+  (`buy`, `BUY`, `OrderSide.BUY` y enums con valor `buy`); no trata `long` como
+  lado de orden. Exige orden rellenada, cantidad válida, identidad de broker y
+  `first_fill_at` para parciales; `filled_at` agregado sólo es válido cuando no
+  hay evidencia de parcialidad.
+- La identidad canónica de lote no cambia: el hash sigue dependiendo de las
+  referencias de orden/plan, cantidad y fill. Las cinco observaciones históricas
+  `unavailable` no se reescriben; una evaluación verificable futura sólo añade
+  una transición append-only idempotente.
+- `legacy_calendar_days` continúa siendo la única política activa y XNYS sigue
+  `shadow_only=true`; no se generan órdenes ni se alteran stops, takes, trailing,
+  cantidades, gates, ranking, exposición, límites o historial. P-L45B2 y P-L44
+  permanecen fuera de alcance. P-L44B queda reservado para la futura version
+  `0.4.177`.
