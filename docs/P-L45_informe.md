@@ -150,9 +150,9 @@ reconciliación ni actualización adicional de outcomes, y
 la sesión ni aparecieron bloqueos SQLite.
 
 P-L43B conserva `legacy_calendar_days` como política activa y XNYS en
-`shadow_only=true`. P-L45B2 está implementado en el worktree candidato y queda
-pendiente de integración; la mejora de duración solo se interpretará tras
-cinco sesiones reales posteriores. P-L44B sigue diferido a `0.4.176`.
+`shadow_only=true`. P-L45B2 está integrado en el ensayo combinado, versión
+`0.4.175` de su candidato, y la mejora de duración solo se interpretará tras
+cinco sesiones reales posteriores. P-L44B queda reservado para `0.4.177`.
 
 ## P-L45B2-W — escrituras batch de learning_observations
 
@@ -174,7 +174,7 @@ La caracterización temporal de 33.336 observaciones reduce estructuralmente
 33.336 commits a 134 con chunk=250, sin `database is locked` en el escenario
 normal y con paridad exacta frente al upsert secuencial. Quedan como deuda
 separada la pérdida potencial de ramas JSON por overwrite, el JSON no estricto
-y el cambio de `updated_at` en un retry. P-L44B queda reservado para `0.4.176`.
+y el cambio de `updated_at` en un retry. P-L44B queda reservado para `0.4.177`.
 
 Durante el ensayo P-L45B2-QA se detectó que la normalización de cada fila se
 realizaba dentro de `BEGIN IMMEDIATE`. La corrección aislada del ensayo separa
@@ -182,3 +182,16 @@ la preparación/serialización del chunk de la transacción: ahora la conexión 
 abre y el lease SQLite comienza solo después de construir el chunk completo.
 La transacción contiene únicamente los upserts; la semántica legacy de SQL,
 JSON, `updated_at` y valores no estrictos permanece sin cambios.
+
+## P-L43BR5-QA — ensayo combinado con P-L45B2
+
+El ensayo `codex/pl43br5-combined-rehearsal` integra mediante merge no-ff el
+árbol P-L45B2 y la corrección de autoridad de fill P-L43BR5. La versión del
+árbol combinado es `0.4.176`; `PositionSide.LONG` se resuelve mediante la orden
+exacta `OrderSide.BUY`, su estado `filled` y `first_fill_at` autorizado, sin
+alterar la política `legacy_calendar_days` ni generar órdenes XNYS.
+
+La resolución conserva el batching de 250 filas, preparación fuera de
+`BEGIN IMMEDIATE`, SQL compartido, `LearningObservationBatchError`, daily
+learning/RR por lotes y terminal `failed` del PMR ante fallo de persistencia.
+P-L44B permanece diferido y reservado para `0.4.177`.
