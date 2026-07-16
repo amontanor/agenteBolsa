@@ -1,6 +1,6 @@
 # P-L44 — observación shadow de penalización de aprendizaje
 
-Estado: ensayo aislado limpio `0.4.174`, listo para un despliegue shadow futuro.
+Estado: ensayo integrado limpio `0.4.177`, listo para un despliegue shadow futuro.
 
 ## Alcance
 
@@ -93,3 +93,24 @@ control primario. `decision_source` se toma de la recomendación real
 (`decision_source`, `source` o `decision_origin`) y las rejections del
 productor conservan `candidate_id`, `signal_id` y `cycle_id` cuando existen.
 El orden shadow trata el rango cero como un valor válido y no como ausencia.
+
+## P-L44BR3 - ensayo sobre producción 0.4.176 (16-jul-2026)
+
+El worktree `codex/pl44b-integration-rehearsal` parte de `f303d351` y fusiona
+`codex/pl44b-shadow-integration` mediante `--no-ff` en `06bf52f9`. La versión
+candidata es `0.4.177`; P-L45B1/P-L45B2 y P-L43BR5 permanecen desplegados, y
+P-L46B UI queda reservado para `0.4.178`.
+
+La fase A calcula el comparador sólo en memoria sobre BUY ya rankeados; la fase
+B se materializa después de recomendaciones, gates, límites, cuotas, pausas,
+planes y controles reales, antes de persistir/enviar órdenes. La identidad
+requiere `candidate_id`/`signal_id` y `cycle_id` exactos. El evento es append-only
+por ciclo, idempotente y conflict-safe; `runtime_state` sigue siendo únicamente
+`latest_view`. El snapshot no contiene P/L, fills, slippage, retornos forward,
+MFE/MAE, outcomes maduros ni prompts/LLM.
+
+La suite completa del ensayo pasa con un único skip preexistente; las focales
+P-L44, P-L43 y P-L45, Ruff, NUL y `git diff --check` también pasan. No se
+ejecutaron servicios productivos ni se modificaron órdenes. La evidencia real
+continúa `collecting`; `legacy_double_application` sigue siendo la política
+activa y `single_application` permanece exclusivamente shadow.
