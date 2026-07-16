@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -13,11 +14,14 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 try:
+    from apscheduler.events import EVENT_JOB_MAX_INSTANCES, EVENT_JOB_MISSED
     from apscheduler.schedulers.background import BackgroundScheduler
     from apscheduler.triggers.cron import CronTrigger
     from apscheduler.triggers.interval import IntervalTrigger
 except ModuleNotFoundError:  # pragma: no cover - exercised by import-only test environments.
     BackgroundScheduler = None  # type: ignore[assignment]
+    EVENT_JOB_MAX_INSTANCES = 0
+    EVENT_JOB_MISSED = 0
     CronTrigger = None  # type: ignore[assignment]
     IntervalTrigger = None  # type: ignore[assignment]
 
@@ -252,6 +256,53 @@ def _release_scheduler_lock(settings: Settings) -> None:
 
 def _reporter(settings: Settings, store: Store, verbose: bool) -> EventReporter:
     return EventReporter(store, verbose=verbose)
+
+
+def _persist_scheduler_control_event(settings: Settings, store: Store, event: Any) -> None:
+    """Hace duraderos los skips que APScheduler emite antes de ejecutar el job."""
+
+    code = int(getattr(event, "code", 0) or 0)
+    if code & EVENT_JOB_MAX_INSTANCES:
+        reason = "max_instances"
+    elif code & EVENT_JOB_MISSED:
+        reason = "missed"
+    else:
+        return
+    scheduled_values = getattr(event, "scheduled_run_times", None)
+    if scheduled_values is None:
+        scheduled_values = [getattr(event, "scheduled_run_time", None)]
+    job_id = str(getattr(event, "job_id", "unknown") or "unknown")
+    for scheduled in scheduled_values:
+        if scheduled is None:
+            continue
+        scheduled_text = scheduled.isoformat() if hasattr(scheduled, "isoformat") else str(scheduled)
+        payload = {
+            "schema_version": "p-l45b1.scheduler-event.v1",
+            "job_id": job_id,
+            "status": "skipped",
+            "reason": reason,
+            "scheduled_run_time": scheduled_text,
+            "timestamp": scheduled_text,
+        }
+        canonical = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        payload["content_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        event_id = f"apscheduler:{job_id}:{scheduled_text}:{reason}"
+        try:
+            store.record_append_only_event(
+                event_id=event_id,
+                event_type="scheduler_job_skipped",
+                cycle_id=job_id,
+                payload=payload,
+            )
+        except Exception as exc:  # noqa: BLE001 - observabilidad fail-open.
+            try:
+                log_system_event(
+                    settings.logs_dir,
+                    "scheduler_control_event_persist_failed",
+                    {"event_id": event_id, "error": repr(exc)},
+                )
+            except Exception:
+                pass
 
 
 def _session_start_utc_iso(settings: Settings) -> str:
@@ -2646,8 +2697,6 @@ def post_market_review_job(
         return None
 
     session_date = datetime.fromisoformat(status.now_market).date().isoformat()
-    state_key = "post_market_review_last_session"
-
     coordinator = PostmarketCoordinator(settings, store)
     effective_trigger = "manual_test" if force and trigger == "scheduled" else trigger
     lease = coordinator.acquire(session_date=session_date, run_id=run_id, trigger=effective_trigger)
@@ -2748,7 +2797,7 @@ def post_market_review_job(
         # El último día solo avanza después de que exista el evento terminal
         # completed; un fallo nunca convierte la sesión en procesada.
         try:
-            store.set_runtime_value(state_key, session_date)
+            coordinator.advance_last_session(session_date)
         except Exception as exc:  # noqa: BLE001 - vista operativa fail-open.
             log_system_event(settings.logs_dir, "post_market_last_session_update_failed", {"error": repr(exc), "session_date": session_date})
         try:
@@ -3426,6 +3475,10 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         raise RuntimeError("APScheduler no esta instalado. Instala las dependencias del proyecto para usar schedule.")
     local_tz = ZoneInfo(settings.local_timezone)
     scheduler = BackgroundScheduler(timezone=local_tz)
+    scheduler.add_listener(
+        lambda event: _persist_scheduler_control_event(settings, store, event),
+        EVENT_JOB_MAX_INSTANCES | EVENT_JOB_MISSED,
+    )
     scheduler.add_job(
         portfolio_watch_job,
         trigger=IntervalTrigger(seconds=settings.portfolio_watch_interval_seconds),

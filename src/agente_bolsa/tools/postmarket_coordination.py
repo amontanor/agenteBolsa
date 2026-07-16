@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -22,6 +23,8 @@ SCHEMA_VERSION = "p-l45b1.postmarket-run.v1"
 ACTIVE_KEY = "post_market_coordination:active"
 RECONCILIATION_KEY = "post_market_coordination:reconciliation"
 SESSION_KEY_PREFIX = "post_market_coordination:session:"
+LAST_SESSION_KEY = "post_market_review_last_session"
+_PROCESS_OWNER_TOKEN = uuid.uuid4().hex
 
 
 def _utc_now() -> datetime:
@@ -63,6 +66,20 @@ def _reason(value: str | None) -> str:
     return normalized[:120] or "unknown"
 
 
+def _owner_is_live(owner: dict[str, Any] | None, *, current_pid: int, current_token: str) -> bool:
+    """Comprueba vida y evita aceptar un PID reutilizado con otro token."""
+
+    if not isinstance(owner, dict):
+        return False
+    owner_pid = int(owner.get("owner_pid") or 0)
+    if not _pid_alive(owner_pid):
+        return False
+    owner_token = str(owner.get("owner_token") or "").strip()
+    # Los estados legacy pueden carecer de token: un PID vivo no se roba. Si el
+    # PID coincide pero el token no, el proceso que lo reclama es distinto.
+    return not (owner_pid == current_pid and owner_token and owner_token != current_token)
+
+
 @dataclass(frozen=True)
 class CoordinationLease:
     run_id: str
@@ -90,7 +107,7 @@ class PostmarketCoordinator:
 
     @property
     def owner_token(self) -> str:
-        return f"pid:{self.owner_pid}"
+        return f"pid:{self.owner_pid}:process:{_PROCESS_OWNER_TOKEN}"
 
     def _event(self, *, run_id: str, session_date: str, trigger: str, stage: str, status: str, reason: str | None = None, started_at: str | None = None, finished_at: str | None = None, error: str | None = None, owner_pid: int | None = None, owner_token: str | None = None) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -155,16 +172,19 @@ class PostmarketCoordinator:
             active = json.loads(active_row[0]) if active_row else None
             session_state = json.loads(session_row[0]) if session_row else None
             last_session = json.loads(last_row[0]) if last_row else None
-            if last_session == session_date or (isinstance(session_state, dict) and session_state.get("status") == "completed"):
+            if isinstance(last_session, str) and last_session >= session_date:
+                reason = "session_already_completed" if last_session == session_date else "session_behind_latest"
+            elif isinstance(session_state, dict) and session_state.get("status") == "completed":
                 reason = "session_already_completed"
             elif isinstance(active, dict) and active.get("status") == "active":
                 active_pid = int(active.get("owner_pid") or 0)
-                if _pid_alive(active_pid):
+                active_token = str(active.get("owner_token") or "").strip()
+                if _owner_is_live(active, current_pid=pid, current_token=token):
                     reason = "postmarket_already_running"
                 else:
                     # Lease muerto: se recupera de forma determinista y se
                     # deja constancia del propietario sustituido.
-                    reason = "dead_owner_recovered"
+                    reason = "owner_token_mismatch_recovered" if active_pid == pid and active_token and active_token != token else "dead_owner_recovered"
                     recovered_run_id = str(active.get("run_id") or "") or None
                     recovered_started_at = str(active.get("started_at") or "") or None
                     effective = True
@@ -338,10 +358,11 @@ class PostmarketCoordinator:
                 reason = "postmarket_already_running"
             elif isinstance(recon, dict) and recon.get("status") == "active":
                 recon_pid = int(recon.get("owner_pid") or 0)
-                if _pid_alive(recon_pid):
+                recon_token = str(recon.get("owner_token") or "").strip()
+                if _owner_is_live(recon, current_pid=pid, current_token=token):
                     reason = "reconciliation_already_running"
                 else:
-                    reason = "dead_reconciliation_recovered"
+                    reason = "owner_token_mismatch_recovered" if recon_pid == pid and recon_token and recon_token != token else "dead_reconciliation_recovered"
                     recovered_run_id = str(recon.get("run_id") or "") or None
                     recovered_owner = recon
                     effective = True
@@ -409,6 +430,26 @@ class PostmarketCoordinator:
             )
             self._persist_event(terminal, event_id=f"recon:{run_id}:terminal:skipped")
         return CoordinationLease(run_id, session_date, _reason(trigger), pid, token, effective, status, reason)
+
+    def advance_last_session(self, session_date: str) -> bool:
+        """Avanza el marcador únicamente hacia una sesión más reciente."""
+
+        now = _iso()
+        with self.store.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT value_json FROM runtime_state WHERE key = ?",
+                (LAST_SESSION_KEY,),
+            ).fetchone()
+            current = json.loads(row[0]) if row else None
+            if isinstance(current, str) and current >= session_date:
+                return False
+            conn.execute(
+                "INSERT INTO runtime_state (key, value_json, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at",
+                (LAST_SESSION_KEY, json.dumps(session_date), now),
+            )
+        return True
 
     def finish_reconciliation(self, lease: CoordinationLease, status: str, *, reason: str | None = None, error: str | None = None) -> None:
         if not lease.effective:

@@ -1864,3 +1864,9 @@ auto-apply OFF, apply humano, mediciones pre-registradas.
 - La mejora de duración no se interpretará hasta disponer de cinco sesiones
   reales posteriores; no se modifica trading ni la política legacy activa de
   P-L43B.
+- **P-L45B1-QA:** el ensayo adversarial corrigió la fixture temporal de
+  `test_insufficient_evidence_extends_window`, añadió identidad de proceso al
+  lease para PID reutilizado y persistencia durable de `max_instances`/`missed`
+  de APScheduler; además, `post_market_review_last_session` solo avanza de
+  forma monotónica tras `completed`. No cambian horarios, `max_instances`,
+  `coalesce` ni trading; P-L45B2 sigue reservado para batching.

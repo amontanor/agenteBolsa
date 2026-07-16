@@ -105,3 +105,26 @@ obtiene `REJECTED_SHADOW` donde la prueba espera `EXTEND`. El mismo fallo se
 reproduce contra la rama de integración sin los cambios P-L45B1 y no afecta a
 los archivos modificados por este lote. No se corrigió por quedar fuera de
 alcance.
+
+## P-L45B1-QA — correcciones del ensayo de integración
+
+La reconciliación del fallo preexistente se resolvió en `b11db6e1`: la fixture
+usa `DATA_DIR` temporal, `_env_file=None` y reloj congelado. Se conserva un caso
+independiente que demuestra `REJECTED_SHADOW` cuando la ventana supera la gracia
+de calendario. La versión candidata permanece en `0.4.174`.
+
+La revisión adversarial encontró además dos huecos reales del candidato. El
+`owner_token` era solamente `pid:<pid>` y no distinguía un PID reutilizado;
+APScheduler no tenía listener durable para `EVENT_JOB_MAX_INSTANCES` ni
+`EVENT_JOB_MISSED`; y el marcador `post_market_review_last_session` podía
+retroceder si una sesión antigua terminaba después. Los tres huecos se
+corrigieron mínimamente en el worktree de ensayo:
+el token ahora identifica el proceso y los skips externos se registran como
+`p-l45b1.scheduler-event.v1` mediante `agent_events`, sin cambiar horarios,
+`max_instances`, `coalesce` ni la ruta de trading; el marcador solo avanza de
+forma monotónica tras un terminal `completed`.
+
+Las pruebas de coordinación y QA cubren 25 procesos concurrentes por escenario,
+dos sesiones distintas, recuperación por token, reintento tras `failed`,
+idempotencia y eventos APScheduler. El batching de observaciones continúa fuera
+de alcance y reservado a P-L45B2.
