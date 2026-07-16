@@ -2921,8 +2921,12 @@ class Store:
                 result["chunk_durations_ms"].append(duration_ms)
                 result["max_chunk_duration_ms"] = max(result["max_chunk_duration_ms"], duration_ms)
                 if cursor is not None:
-                    cursor.close()
-                if conn is not None:
+                    try:
+                        cursor.close()
+                    finally:
+                        if conn is not None:
+                            conn.close()
+                elif conn is not None:
                     conn.close()
             chunk_index += 1
         result["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 3)
