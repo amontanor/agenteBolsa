@@ -20,6 +20,7 @@
 - `start-agente-bolsa` elimina la antigua contradiccion de arranque manual y fija `stack_status.ps1`, `stack_down.ps1` y `stack_up.ps1` como procedimiento autorizado mediante tareas programadas.
 - `operating_model.md` y el relevo tecnico quedan alineados con P-L43B, P-L45B1/P-L45B2 y la reserva de versiones 0.4.175-0.4.178.
 - Esta consolidacion documenta el arbol 0.4.177 ensayado; no modifica trading, configuracion sensible ni politicas economicas.
+- P-L46B UI queda reservado para la version 0.4.178; P-L44B no se activa en este ensayo.
 
 ### P-L17 - Verdad de medicion: outcomes forward separados de ejecucion. **HECHO (v0.4.140).**
 Se elimina la contaminacion que convertia P/L abierto de `trade_memory` en
