@@ -175,3 +175,10 @@ La caracterización temporal de 33.336 observaciones reduce estructuralmente
 normal y con paridad exacta frente al upsert secuencial. Quedan como deuda
 separada la pérdida potencial de ramas JSON por overwrite, el JSON no estricto
 y el cambio de `updated_at` en un retry. P-L44B queda reservado para `0.4.176`.
+
+Durante el ensayo P-L45B2-QA se detectó que la normalización de cada fila se
+realizaba dentro de `BEGIN IMMEDIATE`. La corrección aislada del ensayo separa
+la preparación/serialización del chunk de la transacción: ahora la conexión se
+abre y el lease SQLite comienza solo después de construir el chunk completo.
+La transacción contiene únicamente los upserts; la semántica legacy de SQL,
+JSON, `updated_at` y valores no estrictos permanece sin cambios.

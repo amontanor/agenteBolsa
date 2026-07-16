@@ -813,12 +813,47 @@ def _count_non_strict_json_values(value: Any) -> int:
     return 0
 
 
-def _upsert_learning_observation_on_cursor(cursor: sqlite3.Cursor, item: dict[str, Any], now: str) -> int:
-    """Escribe una observación sobre una conexión ya abierta.
+def _prepare_learning_observation_parameters(
+    item: dict[str, Any],
+    now: str,
+) -> tuple[tuple[Any, ...], int]:
+    """Normaliza una observación antes de abrir la transacción de escritura."""
 
-    El SQL y la normalización son compartidos por el upsert individual y por
-    la API por lotes para evitar divergencias semánticas.
-    """
+    parameters = (
+        item["observation_id"],
+        item["signal_date"],
+        item["symbol"].upper(),
+        item["source_family"],
+        _dumps(item.get("source_run_ids", [])),
+        item.get("first_seen_at"),
+        item.get("last_seen_at"),
+        item.get("best_signal_id"),
+        item.get("best_score"),
+        item.get("decision", "candidate"),
+        item.get("explanation", ""),
+        int(bool(item.get("llm_considered"))),
+        int(bool(item.get("approved_buy"))),
+        int(bool(item.get("blocked_entry_quality"))),
+        int(bool(item.get("blocked_backtest"))),
+        int(bool(item.get("executed_buy"))),
+        int(item.get("duplicate_count") or 0),
+        _dumps(item.get("rank_path", [])),
+        _dumps(item.get("features", {})),
+        _dumps(item.get("gate", {})),
+        _dumps(item.get("outcome", {})),
+        _dumps(item.get("execution", {})),
+        item.get("created_at") or now,
+        now,
+    )
+    non_strict_values = sum(
+        _count_non_strict_json_values(item.get(key, {}))
+        for key in ("source_run_ids", "rank_path", "features", "gate", "outcome", "execution")
+    )
+    return parameters, non_strict_values
+
+
+def _execute_learning_observation_upsert(cursor: sqlite3.Cursor, parameters: tuple[Any, ...]) -> None:
+    """Ejecuta solo el SQL sobre una conexión ya abierta."""
     cursor.execute(
         """
         INSERT INTO learning_observations (
@@ -853,36 +888,7 @@ def _upsert_learning_observation_on_cursor(cursor: sqlite3.Cursor, item: dict[st
             execution_json=excluded.execution_json,
             updated_at=excluded.updated_at
         """,
-        (
-            item["observation_id"],
-            item["signal_date"],
-            item["symbol"].upper(),
-            item["source_family"],
-            _dumps(item.get("source_run_ids", [])),
-            item.get("first_seen_at"),
-            item.get("last_seen_at"),
-            item.get("best_signal_id"),
-            item.get("best_score"),
-            item.get("decision", "candidate"),
-            item.get("explanation", ""),
-            int(bool(item.get("llm_considered"))),
-            int(bool(item.get("approved_buy"))),
-            int(bool(item.get("blocked_entry_quality"))),
-            int(bool(item.get("blocked_backtest"))),
-            int(bool(item.get("executed_buy"))),
-            int(item.get("duplicate_count") or 0),
-            _dumps(item.get("rank_path", [])),
-            _dumps(item.get("features", {})),
-            _dumps(item.get("gate", {})),
-            _dumps(item.get("outcome", {})),
-            _dumps(item.get("execution", {})),
-            item.get("created_at") or now,
-            now,
-        ),
-    )
-    return sum(
-        _count_non_strict_json_values(item.get(key, {}))
-        for key in ("source_run_ids", "rank_path", "features", "gate", "outcome", "execution")
+        parameters,
     )
 
 
@@ -2782,10 +2788,11 @@ class Store:
 
     def upsert_learning_observation(self, item: dict[str, Any]) -> None:
         now = _utc_iso()
+        parameters, _ = _prepare_learning_observation_parameters(item, now)
         with self.connect() as conn:
             cursor = conn.cursor()
             try:
-                _upsert_learning_observation_on_cursor(cursor, item, now)
+                _execute_learning_observation_upsert(cursor, parameters)
             finally:
                 cursor.close()
 
@@ -2827,29 +2834,72 @@ class Store:
         iterator = iter(items)
         chunk_index = 0
         while True:
-            chunk = list(islice(iterator, chunk_size))
+            try:
+                chunk = list(islice(iterator, chunk_size))
+            except Exception as exc:
+                cause = str(exc).replace("\r", " ").replace("\n", " ")[:240]
+                result["status"] = "failed"
+                result["failed_chunk"] = chunk_index
+                result["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 3)
+                result["error"] = cause
+                result["retry_possible"] = False
+                error = LearningObservationBatchError(
+                    f"fallo leyendo learning_observations en chunk {chunk_index}: {cause}",
+                    result=result,
+                    failed_chunk=chunk_index,
+                    cause=cause,
+                    retry_possible=False,
+                )
+                raise error from exc
             if not chunk:
                 break
             result["received"] += len(chunk)
             result["rows_received"] = result["received"]
-            result["connections_opened"] += 1
-            chunk_started = time.perf_counter()
-            conn = self.connect()
-            cursor = conn.cursor()
             try:
+                # La construcciÃ³n y normalizaciÃ³n completa del chunk ocurre
+                # antes de abrir conexiÃ³n o iniciar BEGIN IMMEDIATE.
+                prepared_chunk = [
+                    _prepare_learning_observation_parameters(item, _utc_iso())
+                    for item in chunk
+                ]
+            except Exception as exc:
+                cause = str(exc).replace("\r", " ").replace("\n", " ")[:240]
+                result["status"] = "failed"
+                result["failed_chunk"] = chunk_index
+                result["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 3)
+                result["rows_written"] = result["written"]
+                result["error"] = cause
+                result["retry_possible"] = False
+                error = LearningObservationBatchError(
+                    f"fallo preparando learning_observations en chunk {chunk_index}: {cause}",
+                    result=result,
+                    failed_chunk=chunk_index,
+                    cause=cause,
+                    retry_possible=False,
+                )
+                raise error from exc
+            result["valid"] += len(prepared_chunk)
+            result["non_strict_json_values_detected"] += sum(
+                non_strict_values for _, non_strict_values in prepared_chunk
+            )
+            chunk_started = time.perf_counter()
+            conn: sqlite3.Connection | None = None
+            cursor: sqlite3.Cursor | None = None
+            try:
+                conn = self.connect()
+                result["connections_opened"] += 1
+                cursor = conn.cursor()
                 conn.execute("BEGIN IMMEDIATE")
-                for item in chunk:
-                    result["non_strict_json_values_detected"] += _upsert_learning_observation_on_cursor(
-                        cursor, item, _utc_iso()
-                    )
-                    result["valid"] += 1
+                for parameters, _ in prepared_chunk:
+                    _execute_learning_observation_upsert(cursor, parameters)
                 conn.commit()
                 result["commits"] += 1
                 result["written"] += len(chunk)
                 result["rows_written"] = result["written"]
                 result["chunks_completed"] += 1
             except Exception as exc:
-                conn.rollback()
+                if conn is not None:
+                    conn.rollback()
                 cause = str(exc).replace("\r", " ").replace("\n", " ")[:240]
                 result["status"] = "failed"
                 result["failed_chunk"] = chunk_index
@@ -2870,8 +2920,10 @@ class Store:
                 duration_ms = round((time.perf_counter() - chunk_started) * 1000, 3)
                 result["chunk_durations_ms"].append(duration_ms)
                 result["max_chunk_duration_ms"] = max(result["max_chunk_duration_ms"], duration_ms)
-                cursor.close()
-                conn.close()
+                if cursor is not None:
+                    cursor.close()
+                if conn is not None:
+                    conn.close()
             chunk_index += 1
         result["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 3)
         result["rows_written"] = result["written"]
