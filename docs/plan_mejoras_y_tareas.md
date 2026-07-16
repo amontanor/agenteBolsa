@@ -12,9 +12,6 @@
 - Rama de integracion desplegada: `codex/mejora_continua`
 - Version actual: **0.4.177** (P-L45B2 + P-L43BR5 desplegados; P-L44B en ensayo shadow)
 - Ultima actualizacion: 2026-07-16
-- Rama: `codex/mejora_continua`
-- Version candidata: **0.4.177** (P-L44B en ensayo shadow sobre P-L43BR5)
-- Ultima actualizacion: 2026-07-14
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
 ## Consolidacion operativa - 16-jul-2026
