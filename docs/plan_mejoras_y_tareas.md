@@ -1882,3 +1882,23 @@ actualización de outcomes ni bloqueo SQLite.
 
 P-L45B2 (batching) permanece pendiente; la mejora de duración requiere cinco
 sesiones reales posteriores. P-L44B sigue diferido para `0.4.175`.
+
+## P-L43BR5-W - autoridad verificable del fill en time-stop shadow (candidato 0.4.176)
+
+- La auditoría read-only identificó que las posiciones reales exponen
+  `PositionSide.LONG`, mientras la autoridad de la orden y del fill se conserva
+  en `broker_order_id`, `OrderSide.BUY`, estado `filled` y
+  `execution_quality_snapshot.timestamps.first_fill_at`.
+- El candidato normaliza únicamente variantes deterministas de compra
+  (`buy`, `BUY`, `OrderSide.BUY` y enums con valor `buy`); no trata `long` como
+  lado de orden. Exige orden rellenada, cantidad válida, identidad de broker y
+  `first_fill_at` para parciales; `filled_at` agregado sólo es válido cuando no
+  hay evidencia de parcialidad.
+- La identidad canónica de lote no cambia: el hash sigue dependiendo de las
+  referencias de orden/plan, cantidad y fill. Las cinco observaciones históricas
+  `unavailable` no se reescriben; una evaluación verificable futura sólo añade
+  una transición append-only idempotente.
+- `legacy_calendar_days` continúa siendo la única política activa y XNYS sigue
+  `shadow_only=true`; no se generan órdenes ni se alteran stops, takes, trailing,
+  cantidades, gates, ranking, exposición, límites o historial. P-L45B2 y P-L44
+  permanecen fuera de alcance.
