@@ -935,6 +935,87 @@ class Store:
                 ),
             )
 
+    def record_append_only_event(
+        self,
+        *,
+        event_id: str,
+        event_type: str,
+        cycle_id: str | None,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Persiste un evento sin reemplazo silencioso.
+
+        Es la ruta para contratos nuevos que requieren historial durable. La
+        escritura es corta, idempotente para el mismo payload y publica un
+        evento de conflicto si el mismo ``event_id`` llega con otro contenido.
+        """
+        encoded = _dumps(payload)
+        candidate_hash = str(payload.get("content_hash") or "")
+        now = _utc_iso()
+        with self.connect() as conn:
+            existing = conn.execute(
+                "SELECT payload_json FROM agent_events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+            if existing is not None:
+                existing_json = str(existing["payload_json"] or "{}")
+                try:
+                    existing_payload = json.loads(existing_json)
+                except (TypeError, json.JSONDecodeError):
+                    existing_payload = {}
+                if _dumps(existing_payload) == encoded:
+                    return {"status": "idempotent", "event_id": event_id, "content_hash": candidate_hash}
+                existing_hash = str(existing_payload.get("content_hash") or "")
+                conflict_id = f"{event_id}:conflict:{candidate_hash or 'unknown'}"
+                conflict_payload = {
+                    "schema_version": payload.get("schema_version"),
+                    "event_id": event_id,
+                    "existing_content_hash": existing_hash or None,
+                    "candidate_content_hash": candidate_hash or None,
+                    "status": "conflict",
+                }
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO agent_events (
+                        event_id, agent, event_type, cycle_id, payload_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (conflict_id, "postmarket_coordinator", f"{event_type}_conflict", cycle_id, _dumps(conflict_payload), now),
+                )
+                return {
+                    "status": "conflict",
+                    "event_id": event_id,
+                    "conflict_event_id": conflict_id,
+                    "existing_content_hash": existing_hash or None,
+                    "candidate_content_hash": candidate_hash or None,
+                }
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO agent_events (
+                        event_id, agent, event_type, cycle_id, payload_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (event_id, "postmarket_coordinator", event_type, cycle_id, encoded, now),
+                )
+            except sqlite3.IntegrityError:
+                raced = conn.execute("SELECT payload_json FROM agent_events WHERE event_id = ?", (event_id,)).fetchone()
+                raced_json = str(raced["payload_json"] or "{}") if raced else "{}"
+                try:
+                    raced_payload = json.loads(raced_json)
+                except (TypeError, json.JSONDecodeError):
+                    raced_payload = {}
+                if _dumps(raced_payload) == encoded:
+                    return {"status": "idempotent", "event_id": event_id, "content_hash": candidate_hash}
+                raced_hash = str(raced_payload.get("content_hash") or "")
+                conflict_id = f"{event_id}:conflict:{candidate_hash or 'unknown'}"
+                conn.execute(
+                    "INSERT OR IGNORE INTO agent_events (event_id, agent, event_type, cycle_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (conflict_id, "postmarket_coordinator", f"{event_type}_conflict", cycle_id, _dumps({"event_id": event_id, "existing_content_hash": raced_hash, "candidate_content_hash": candidate_hash, "status": "conflict"}), now),
+                )
+                return {"status": "conflict", "event_id": event_id, "conflict_event_id": conflict_id, "existing_content_hash": raced_hash, "candidate_content_hash": candidate_hash}
+        return {"status": "inserted", "event_id": event_id, "content_hash": candidate_hash}
+
     def record_time_stop_shadow_observation(
         self,
         observation: dict[str, Any],

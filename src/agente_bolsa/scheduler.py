@@ -56,6 +56,7 @@ from .tools.overnight_learning import (
 )
 from .tools.performance_benchmark import build_daily_performance_item
 from .tools.post_market_review import build_post_market_review
+from .tools.postmarket_coordination import PostmarketCoordinator
 from .tools.pre_earnings import (
     backfill_pending_pre_earnings_estimates,
     build_pre_earnings_learning_digest,
@@ -2625,6 +2626,7 @@ def post_market_review_job(
     use_llm: bool,
     verbose: bool = True,
     force: bool = False,
+    trigger: str = "scheduled",
 ) -> dict[str, Any] | None:
     if not settings.post_market_review_enabled and not force:
         return None
@@ -2635,34 +2637,63 @@ def post_market_review_job(
     should_run, status = calendar.should_run_daily_study()
     reporter = _reporter(settings, store, verbose)
     if not should_run and not force:
+        session_date = datetime.fromisoformat(status.now_market).date().isoformat()
+        coordinator = PostmarketCoordinator(settings, store)
+        lease = coordinator.acquire(session_date=session_date, run_id=run_id, trigger=trigger)
+        if lease.effective:
+            coordinator.terminal(lease, "skipped", reason="market_not_ready")
         _set_job_status(store, "post_market_review", status="skipped", run_id=run_id, started_at=started_at, detail="mercado aun no apto para review")
         return None
 
     session_date = datetime.fromisoformat(status.now_market).date().isoformat()
     state_key = "post_market_review_last_session"
-    if not force and store.get_runtime_value(state_key) == session_date:
-        _set_job_status(store, "post_market_review", status="skipped", run_id=run_id, started_at=started_at, detail="review ya ejecutado para la sesion")
-        return None
 
-    reporter.emit(
-        "post_market_review_agent",
-        "post_market_review_started",
-        run_id,
-        f"Revision post-mercado iniciada para {session_date}: operaciones, aciertos, errores y mejoras minimas.",
-        status.as_dict(),
-    )
-    try:
-        reconciliation = reconcile_broker_orders(settings, store, apply=True, limit=500)
-        reporter.emit(
-            "execution_reconciliation_agent",
-            "broker_orders_reconciled",
-            run_id,
-            (
-                f"Reconciliacion broker: {len(reconciliation.get('changes', []))} cambios; "
-                f"executed_signals={reconciliation.get('signal_execution_updates', 0)}."
-            ),
-            reconciliation,
+    coordinator = PostmarketCoordinator(settings, store)
+    effective_trigger = "manual_test" if force and trigger == "scheduled" else trigger
+    lease = coordinator.acquire(session_date=session_date, run_id=run_id, trigger=effective_trigger)
+    if not lease.effective:
+        _set_job_status(
+            store,
+            "post_market_review",
+            status="skipped",
+            run_id=run_id,
+            started_at=started_at,
+            detail=lease.reason or "coordinacion no adquirida",
         )
+        return None
+    current_stage = "coordination"
+    coordinator.stage(lease, "coordination", "completed")
+    try:
+        reporter.emit(
+            "post_market_review_agent",
+            "post_market_review_started",
+            run_id,
+            f"Revision post-mercado iniciada para {session_date}: operaciones, aciertos, errores y mejoras minimas.",
+            status.as_dict(),
+        )
+    except Exception:
+        pass
+    try:
+        current_stage = "reconciliation"
+        coordinator.stage(lease, current_stage, "started")
+        # La reconciliación interna pertenece al propietario del PMR y no
+        # ejecuta la actualización de outcomes; el resultado único se calcula
+        # en el pipeline de aprendizaje.
+        reconciliation = reconcile_broker_orders(settings, store, apply=True, limit=500, update_learning=False)
+        coordinator.stage(lease, current_stage, "completed")
+        try:
+            reporter.emit(
+                "execution_reconciliation_agent",
+                "broker_orders_reconciled",
+                run_id,
+                (
+                    f"Reconciliacion broker: {len(reconciliation.get('changes', []))} cambios; "
+                    f"executed_signals={reconciliation.get('signal_execution_updates', 0)}."
+                ),
+                reconciliation,
+            )
+        except Exception:
+            pass
         portfolio = None
         broker_client = None
         try:
@@ -2670,6 +2701,8 @@ def post_market_review_job(
             portfolio = broker_client.alpaca_portfolio_snapshot()
         except Exception as exc:  # noqa: BLE001 - degradacion controlada.
             log_system_event(settings.logs_dir, "post_market_portfolio_unavailable", {"error": repr(exc)})
+        current_stage = "postmarket_report"
+        coordinator.stage(lease, current_stage, "started")
         report = build_post_market_review(
             settings,
             settings.data_dir / "reports",
@@ -2678,21 +2711,30 @@ def post_market_review_job(
             use_llm=use_llm and settings.post_market_review_use_llm,
             portfolio_snapshot=portfolio,
             broker_client=broker_client,
+            stage_recorder=lambda stage, status, error=None: coordinator.stage(lease, stage, status, error=error),
         )
         # La foto de cartera y performance_daily deben existir antes del
         # digest final de medición; el productor es fail-open y no altera el
         # resultado principal si la observabilidad no está disponible.
+        current_stage = "performance"
+        coordinator.stage(lease, current_stage, "started")
         _persist_daily_performance(settings, store, session_date, reporter, run_id, portfolio=portfolio)
+        coordinator.stage(lease, current_stage, "completed")
+        current_stage = "measurement_pipeline"
+        coordinator.stage(lease, current_stage, "started")
         measurement_pipeline = _run_post_market_measurement_pipeline(
             settings,
             store,
             session_date=session_date,
             run_id=f"{run_id}_measure",
         )
+        coordinator.stage(lease, current_stage, "completed")
         report["measurement_pipeline"] = measurement_pipeline
-        store.set_runtime_value(state_key, session_date)
         _run_change_watchdog(settings, store, reporter, run_id)
+        current_stage = "thesis"
+        coordinator.stage(lease, current_stage, "started")
         _run_macro_thesis(settings, store, reporter, run_id)
+        coordinator.stage(lease, current_stage, "completed")
         _run_nightly_retrospective(settings, store, session_date, reporter, run_id)
         _run_hypothesis_factory(settings, store, reporter, run_id)
         try:
@@ -2702,24 +2744,34 @@ def post_market_review_job(
         except Exception as exc:  # noqa: BLE001 - el scorecard no debe tumbar el review.
             log_system_event(settings.logs_dir, "pattern_scorecard_failed", {"error": repr(exc)})
         improvements = report.get("proposed_improvements", [])
-        reporter.emit(
-            "post_market_review_agent",
-            "post_market_review_completed",
-            run_id,
-            (
-                f"Revision post-mercado guardada. Trades evaluados: "
-                f"{report['summary']['trades_evaluated']}. Mejoras propuestas: {len(improvements)}."
-            ),
-            {
-                "path": report["path"],
-                "session_date": session_date,
-                "summary": report["summary"],
-                "broker_reconciliation": reconciliation,
-                "measurement_pipeline": measurement_pipeline,
-                "proposed_improvements": improvements[:5],
-                "next_session_guidance": report.get("next_session_guidance", [])[:8],
-            },
-        )
+        coordinator.terminal(lease, "completed", reason="pipeline_completed")
+        # El último día solo avanza después de que exista el evento terminal
+        # completed; un fallo nunca convierte la sesión en procesada.
+        try:
+            store.set_runtime_value(state_key, session_date)
+        except Exception as exc:  # noqa: BLE001 - vista operativa fail-open.
+            log_system_event(settings.logs_dir, "post_market_last_session_update_failed", {"error": repr(exc), "session_date": session_date})
+        try:
+            reporter.emit(
+                "post_market_review_agent",
+                "post_market_review_completed",
+                run_id,
+                (
+                    f"Revision post-mercado guardada. Trades evaluados: "
+                    f"{report['summary']['trades_evaluated']}. Mejoras propuestas: {len(improvements)}."
+                ),
+                {
+                    "path": report["path"],
+                    "session_date": session_date,
+                    "summary": report["summary"],
+                    "broker_reconciliation": reconciliation,
+                    "measurement_pipeline": measurement_pipeline,
+                    "proposed_improvements": improvements[:5],
+                    "next_session_guidance": report.get("next_session_guidance", [])[:8],
+                },
+            )
+        except Exception:
+            pass
         _set_job_status(
             store,
             "post_market_review",
@@ -2739,14 +2791,22 @@ def post_market_review_job(
         )
         return report
     except Exception as exc:  # noqa: BLE001 - scheduler must keep running.
-        reporter.emit(
-            "post_market_review_agent",
-            "post_market_review_failed",
-            run_id,
-            f"Revision post-mercado fallida: {exc}",
-            {"error": repr(exc), "session_date": session_date},
-        )
-        _set_job_status(store, "post_market_review", status="failed", run_id=run_id, started_at=started_at, detail=str(exc), extra={"error_type": type(exc).__name__})
+        coordinator.stage(lease, current_stage, "failed", error=repr(exc))
+        coordinator.terminal(lease, "failed", reason=f"stage_{current_stage}_failed", error=repr(exc))
+        try:
+            reporter.emit(
+                "post_market_review_agent",
+                "post_market_review_failed",
+                run_id,
+                f"Revision post-mercado fallida: {exc}",
+                {"error": repr(exc), "session_date": session_date},
+            )
+        except Exception:
+            pass
+        try:
+            _set_job_status(store, "post_market_review", status="failed", run_id=run_id, started_at=started_at, detail=str(exc), extra={"error_type": type(exc).__name__})
+        except Exception:
+            pass
         return None
 
 
@@ -3191,44 +3251,73 @@ def broker_reconciliation_job(
             detail="mercado aun no apto para reconciliacion",
         )
         return None
-    try:
-        result = reconcile_broker_orders(settings, store, apply=True, limit=500)
-        reporter.emit(
-            "execution_reconciliation_agent",
-            "broker_orders_reconciled",
-            run_id,
-            (
-                f"Reconciliacion broker: {len(result.get('changes', []))} cambios; "
-                f"executed_signals={result.get('signal_execution_updates', 0)}."
-            ),
-            result,
-        )
+    session_date = datetime.fromisoformat(status.now_market).date().isoformat()
+    coordinator = PostmarketCoordinator(settings, store)
+    lease = coordinator.acquire_reconciliation(run_id=run_id, session_date=session_date, trigger="scheduled")
+    if not lease.effective:
         _set_job_status(
             store,
             "broker_reconciliation",
-            status="completed",
+            status="skipped",
             run_id=run_id,
             started_at=started_at,
-            detail="broker orders reconciliadas",
-            extra={
-                "changes": len(result.get("changes", [])),
-                "signal_execution_updates": result.get("signal_execution_updates", 0),
-                "learning_execution_updates": result.get("learning_execution_updates", 0),
-                "errors": len(result.get("errors", [])),
-            },
-        )
-        return result
-    except Exception as exc:  # noqa: BLE001 - no debe tumbar el scheduler.
-        _set_job_status(
-            store,
-            "broker_reconciliation",
-            status="failed",
-            run_id=run_id,
-            started_at=started_at,
-            detail=str(exc),
-            extra={"error_type": type(exc).__name__},
+            detail=lease.reason or "coordinacion no adquirida",
         )
         return None
+    try:
+        coordinator.stage(lease, "reconciliation", "started")
+        result = reconcile_broker_orders(settings, store, apply=True, limit=500)
+        coordinator.stage(lease, "reconciliation", "completed")
+        try:
+            reporter.emit(
+                "execution_reconciliation_agent",
+                "broker_orders_reconciled",
+                run_id,
+                (
+                    f"Reconciliacion broker: {len(result.get('changes', []))} cambios; "
+                    f"executed_signals={result.get('signal_execution_updates', 0)}."
+                ),
+                result,
+            )
+        except Exception:
+            pass
+        try:
+            _set_job_status(
+                store,
+                "broker_reconciliation",
+                status="completed",
+                run_id=run_id,
+                started_at=started_at,
+                detail="broker orders reconciliadas",
+                extra={
+                    "changes": len(result.get("changes", [])),
+                    "signal_execution_updates": result.get("signal_execution_updates", 0),
+                    "learning_execution_updates": result.get("learning_execution_updates", 0),
+                    "errors": len(result.get("errors", [])),
+                },
+            )
+        except Exception:
+            pass
+        return result
+    except Exception as exc:  # noqa: BLE001 - no debe tumbar el scheduler.
+        coordinator.stage(lease, "reconciliation", "failed", error=repr(exc))
+        try:
+            _set_job_status(
+                store,
+                "broker_reconciliation",
+                status="failed",
+                run_id=run_id,
+                started_at=started_at,
+                detail=str(exc),
+                extra={"error_type": type(exc).__name__},
+            )
+        except Exception:
+            pass
+        return None
+    finally:
+        # El evento terminal ya fue emitido por éxito o fallo; liberar solo la
+        # vista operativa de reconciliación no altera el historial.
+        coordinator.finish_reconciliation(lease, "completed" if 'result' in locals() else "failed")
 
 
 def operational_health_refresh_job(
@@ -3520,7 +3609,7 @@ def run_scheduler_forever(settings: Settings, store: Store, *, use_crew: bool, v
         else:
             closed_market_technical_study_job(settings, store, use_crew=use_crew, verbose=verbose)
             daily_study_job(settings, store, use_crew=use_crew, verbose=verbose)
-            post_market_review_job(settings, store, use_llm=use_crew, verbose=verbose)
+            post_market_review_job(settings, store, use_llm=use_crew, verbose=verbose, trigger="bootstrap")
             overnight_learning_heartbeat_job(settings, store, verbose=verbose)
     except Exception as exc:  # noqa: BLE001 - keep scheduler alive and visible.
         EventReporter(store, verbose=verbose).emit(

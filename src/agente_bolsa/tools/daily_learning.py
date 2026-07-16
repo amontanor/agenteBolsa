@@ -1438,8 +1438,10 @@ def build_learning_daily_run(
     since_date: str = DEFAULT_DAILY_LEARNING_START,
     end_date: str | None = None,
     compact: bool = True,
+    update_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    update_result = update_signal_outcomes(settings, store, since_date=since_date, limit=LEDGER_LIMIT)
+    if update_result is None:
+        update_result = update_signal_outcomes(settings, store, since_date=since_date, limit=LEDGER_LIMIT)
     rows = _rebuild_signal_cohorts(store, since_date=since_date, end_date=end_date)
     observations = _materialize_observations(store, rows)
     rr_cohort_sync = sync_rr_cohort_observations(store, observations)
