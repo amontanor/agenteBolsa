@@ -1,67 +1,72 @@
-# Relevo de dirección técnica — agenteBolsa
+# Relevo de direccion tecnica — agenteBolsa
 
-> Última actualización: **14-jul-2026** · Versión **0.4.172** · Release nocturno P-L41D.
+> Actualizado: **16-jul-2026**. Produccion **0.4.174** (`5c0b1ea9`).
+> Candidato secuencial validado: **0.4.176**.
 
-## Estado operativo
+## Objetivo
 
-- Solo paper; live y auto-apply de mejoras permanecen desactivados.
-- El scheduler, postmarket, health, locks y digest están conectados. P-L34BR confirmó la suite completa: 1.248 passed en aproximadamente 215 segundos.
-- Los instrumentos prospectivos P-L27/P-L29/P-L30/P-L31/P-L32/P-L33 permanecen `collecting`; P-L37B y P-L40B comienzan su captura prospectiva tras este release. No interpretar ausencia de registros como rendimiento cero.
-- P-L35B está **deferred**, no rechazado ni autorizado: reconsiderar cuando haya una investigación `ready_for_analysis` o tras la primera revisión de madurez de P-L27D.
-- P-L37A quedó `partially_verified_capture`; P-L37B está integrado con historial de capturas append-only y resolución exacta.
-- P-L40A permanece `insufficient_sample`/`lower_return_with_lower_risk`/`data_quality_blocked`: la ventana 7–13 jul fue cuenta −0,0401%, SPY +0,1953%, exceso −0,2354 pp. No se ha demostrado edge frente a SPY.
-- P-L40B publica benchmark diario como observabilidad. `exposure-matched` y `cash_drag` siguen `unavailable` hasta disponer de exposición temporal; no hay backfill.
-- P-L41R/P-L41D integra y despliega ambos lotes secuencialmente, sin cambios de trading ni de `adaptive_config.json`.
+Mejorar beneficio neto sin aceptar grandes caidas y construir expertos
+autonomos que aprendan con evidencia. Live, apply, configuracion sensible y
+promociones siguen human-gated.
 
-## Capacidades entregadas P-L17–P-L34B
+## Produccion
 
-- Outcomes honestos y scoreboard, con madurez por sesiones XNYS.
-- Identidad canónica por captura (`signal_capture_id`) con historial append-only, resolución exacta y propagación hasta observaciones.
-- Benchmark diario `p-l40b.performance-benchmark.v1` con un único snapshot de cartera, SPY desde caché local, payload completo, alpha persistido y conflictos auditables.
-- Integración postmarket de identidad y benchmark fail-open, con exposición EOD separada de media temporal y compatibilidad legacy.
-- Linaje de decisión y controles contemporáneos verificables.
-- Contratos de evidencia y atribución de origen para propuestas nuevas.
-- Postmarket, timings, locks, heartbeats, digest y health operacional.
-- Corrección MFE/MAE: las métricas R v1 son dimensionalmente inválidas; usar sólo esquema v2.
-- Cohorte RR prospectiva, con primera madurez posible el 27-jul-2026, no evaluación completa.
-- Telemetría `agent_run`, contexto de decisión, controles comparables, ledger de gates y calidad de ejecución prospectiva.
-- Publicación postmarket de calidad de gates, tolerante a fallos y separada de trading.
+- Paper activo; live y auto-apply desactivados.
+- Kernel sellado sin violaciones. `unsealed` temporal no describe produccion.
+- P-L45B1 desplegado: un postmarket efectivo, reconciliacion coordinada, una
+  actualizacion de outcomes y terminales duraderos.
+- P-L43: legacy gobierna time-stop; XNYS es exclusivamente shadow.
+- Cohortes P-L27/P-L29/P-L30/P-L31/P-L32/P-L33 siguen collecting.
+- Overrides adaptativos historicos permanecen; la frontera actual impide nuevas
+  promociones con auto-apply false.
 
-## Agenda y pausa técnica
+## Secuencia validada
 
-No añadir instrumentos analíticos ni cambios funcionales salvo fallos reproducibles o alertas críticas. No modificar estrategias, gates, ranking, stops, exposición, límites ni trading.
+1. **0.4.175 P-L45B2**: observations en chunks de 250; 33.336 filas, 134
+   commits, paridad exacta y sin locks normales.
+2. **0.4.176 P-L43BR5**: autoridad desde buy order exacta; corrige
+   `PositionSide.LONG -> unsupported_side` solo en shadow.
+3. **0.4.177 P-L44B**: penalizacion unica solo shadow; esperar evidencia real.
+4. **0.4.178 P-L46B UI**: Cartera abierta por ultima compra y fecha/hora.
 
-- 13-jul-2026: primera sesión prospectiva completa; observar.
-- 14-jul-2026: revisar ciclo, snapshots, controles, gates, ejecución, postmarket, digest y health.
-- 20-jul-2026: P-L25 `builtin_pullback` con criterios pre-registrados e inmutables.
-- 27-jul-2026: primera madurez RR técnicamente posible; no equivale a evaluación completa.
-- Tras muestra suficiente: análisis de controles, gates y ejecución.
-- Tras 45 días de `agent_run`: evaluar roles antes de reorganizar agentes.
-- 1-sep-2026: `learning_confirmed` o `learning_not_confirmed` con criterio original.
+No combinar releases sin ensayo conjunto. Despliegue: XNYS cerrado, sin jobs,
+suite verde, hash sensible intacto y rollback por revert.
 
-Prioridades activas: `builtin_pullback`, reward/risk prospectivo y selección/gates/ejecución. El resto permanece backlog, no consume WIP de análisis ni activa LLM.
+## Evidencia reciente
 
-## Equipo autónomo objetivo
+- P-L43C: 69 portfolio watches, cinco eventos idempotentes, cero ordenes XNYS.
+- P-L45A: postmarket p50 ~23 min, maximo ~41 min; P-L45B1 coordina y P-L45B2
+  reduce commits.
+- 7–13 jul: cuenta -0,0401%, SPY +0,1953%; muestra/exposicion insuficientes.
+- Salidas time-stop: muestra pequena/mixta; no cambiar politica aun.
 
-Las funciones objetivo son DataQualityObserver, MarketOutcomeAnalyst, ResearchPortfolioManager, HypothesisDesigner, EvidenceValidator, AdversarialReviewer y SafetyGuardian. No crean 16 agentes nuevos: las tareas deterministas no usan LLM; ningún rol formula, valida, aprueba y evalúa por sí solo. Apply y cambios sensibles continúan siendo humanos.
+## Agenda
 
-El objetivo no es producir más propuestas: es mayor expectativa neta, menor drawdown y pérdidas extremas, decisiones demostrablemente mejores y autonomía con evidencia y seguridad.
+- Cada sesion: ciclos, identidad, shadow, ejecucion y terminal PMR.
+- Tras P-L45B2: cinco sesiones antes de juzgar duracion/locks.
+- 20-jul: relectura `builtin_pullback`.
+- 27/28-jul: primeras madureces tecnicas RR/salidas, aun no muestra suficiente.
+- Tras 45 dias agent_run: evaluar roles.
+- 1-sep: dictamen de aprendizaje con criterio original.
 
-## Reglas de seguridad y promoción
+## Reglas
 
-- Mantener paper, archivos protegidos y apply humano.
-- Mantener dos admisiones nuevas/día, WIP nuevo dos y un codegen nocturno.
-- `unavailable`, linaje/control insuficiente o concentración excesiva impiden promoción.
-- No promover mejoras que empeoren drawdown, MAE o tail loss aunque aumenten retorno.
-- Los criterios se congelan antes de observar resultados.
+- No rellenar legacy ni IDs por simbolo/fecha.
+- No usar fills/P&L como forward.
+- No promover collecting/unavailable.
+- No tocar archivos protegidos sin revision humana.
+- No desplegar/reiniciar con XNYS abierto salvo emergencia expresa.
+- No servicios manuales: tareas y `scripts/stack_*.ps1`.
+- No ocultar suite roja con skip/xfail.
 
-## Operación vigente
+## Comandos
 
-Usar `status`, `validate-agent-config --json`, `kernel-status --json`, `schedule-status`, `operational-health --json` y `scripts\check_services.ps1`. Reiniciar servicios sólo tras código/configuración cargada. El plan maestro `docs/plan_mejoras_y_tareas.md` es la fuente única de tareas; no crear un segundo plan.
+```powershell
+.\.venv\Scripts\python.exe -m agente_bolsa.main status
+.\.venv\Scripts\python.exe -m agente_bolsa.main validate-agent-config --json
+.\.venv\Scripts\python.exe -m agente_bolsa.main kernel-status --json
+.\.venv\Scripts\python.exe -m agente_bolsa.main schedule-status
+powershell -ExecutionPolicy Bypass -File scripts\stack_status.ps1
+```
 
-## P-L43B — estado del candidato shadow (15-jul-2026)
-
-- P-L43BR4 desplegó en producción la versión `0.4.173` mediante merge no destructivo.
-- `legacy_calendar_days` es la única ruta activa de `time_stop_v2`; XNYS es exclusivamente shadow.
-- La evidencia histórica usa eventos append-only por `position_identity` y `shadow_observation_id`; `runtime_state` es `latest_view`.
-- Los datos prospectivos reales permanecen `collecting`; la activación XNYS requiere autorización humana y otro lote.
+`docs/plan_mejoras_y_tareas.md` es la unica fuente de tareas.

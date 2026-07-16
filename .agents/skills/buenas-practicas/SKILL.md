@@ -1,70 +1,77 @@
 ---
 name: buenas-practicas
 description: >
-  Guía de convenciones y buenas prácticas del proyecto agenteBolsa. Úsala
-  siempre que vayas a añadir código, modificar configuración, crear una
-  estrategia, proponer mejoras, subir versión o tocar la documentación.
-  También útil para auditar cambios antes de aplicarlos o revisar si una
-  propuesta sigue el proceso correcto.
+  Convenciones, seguridad y Definition of Done de agenteBolsa. Usar al crear o
+  revisar codigo, tests, configuracion, estrategias, documentacion, versiones,
+  worktrees, integraciones y despliegues.
 ---
 
-# Buenas prácticas — agenteBolsa
+# Buenas practicas — agenteBolsa
 
-## 1. Convenciones de código
+## 1. Codigo y configuracion
 
-**Estructura de paquete**
-- Todo el código fuente vive en `src/agente_bolsa/`.
-- El paquete es instalable con `pip install -e .`.
+- El codigo fuente vive en `src/agente_bolsa/`; los tests en `tests/`.
+- Identificadores en ingles; mensajes y logs para el operador en espanol.
+- Parametros operables pertenecen a `Settings`, con alias en mayusculas y
+  ejemplo documentado. No hardcodear thresholds de trading.
+- No modificar `.env` para hacer pasar una prueba o gate.
+- Todo subsistema consultable expone CLI `--json` cuando aporta valor operativo.
 
-**Configuración**
-- Cada parámetro nuevo va en la clase `Settings` (pydantic) de `config.py`,
-  con un `alias` en MAYÚSCULAS que se lee de `.env`.
-- El mismo parámetro va también en `.env.example` con comentario explicativo.
-- Nunca hardcodear valores que el operador pueda querer cambiar.
+## 2. Persistencia SQLite
 
-**Persistencia**
-- SQLite a través de `storage.py` (`Store`).
-- Tablas con `CREATE TABLE IF NOT EXISTS` — idempotentes, sin migraciones
-  destructivas. Toda tabla nueva sigue ese mismo patrón.
+- Acceder mediante `Store` en `storage.py`.
+- Reutilizar tablas/bloques JSON antes de crear otro esquema. No hacer backfill
+  ni reescritura historica sin autorizacion expresa.
+- Evidencias historicas son append-only: repeticion identica es no-op; contenido
+  distinto conserva el original y crea conflicto. No usar `INSERT OR REPLACE`.
+- Preparar, validar y serializar fuera de SQLite.
+- Mantener `BEGIN IMMEDIATE` y transacciones durante el minimo imprescindible.
+- Para volumen, usar chunks cortos y memoria acotada. Nunca una conexion por fila
+  ni una transaccion global que incluya calculo externo.
+- Auditorias: URI `mode=ro`, `query_only=ON`, sin reparaciones implicitas.
 
-**Eventos y logging**
-- Nada importante sucede sin un evento. Usar `log_system_event` de
-  `logging_utils.py` y `AgentEvent` de `models.py`.
-- IDs con `new_id(prefix)` de `models.py`.
+## 3. Identidad, eventos y temporalidad
 
-**CLI**
-- Todo subsistema nuevo expone comandos en `main.py` (patrón
-  `subparsers.add_parser`), siempre con opción `--json`.
+- Nada importante sucede sin evento durable.
+- Runs efimeros pueden usar `new_id(prefix)`; snapshots idempotentes usan IDs y
+  hashes deterministas derivados de identidad canonica y version de contrato.
+- Todo `started` termina en `completed`, `failed` o `skipped`.
+- `runtime_state` es vista operativa/latest; `agent_events` conserva historia.
+- No unir por simbolo/fecha si puede existir ambiguedad. Missing permanece
+  `unavailable`; nunca se inventa `UNKNOWN` ni se convierte en cero.
+- Separar pre-decision, decision-time y post-decision. Fills/P&L no sustituyen
+  retornos forward y no entran en features pre-decision.
+- Calendario XNYS y sesiones estrictamente posteriores son la autoridad cuando
+  el contrato habla de sesiones.
 
-**Tests**
-- Pytest en `tests/`, un archivo `test_<modulo>.py` por módulo nuevo.
-- Los tests **no llaman a red ni a LLM**: usar fixtures y monkeypatch.
-  Ver `tests/test_continuous_improvement.py` como referencia.
+## 4. Tests aislados
 
-**Lint**
-- `ruff check src tests` sin errores (configuración en `pyproject.toml`).
+- Sin red, broker real, LLM, yfinance ni servicios productivos.
+- Usar el Python del proyecto y `PYTHONPATH=<worktree>/src`; nunca el interprete
+  global ni el editable de otra rama.
+- Usar `DATA_DIR` temporal, `_env_file=None`, configuracion explicita y reloj
+  congelado. No leer `.env`, SQLite o informes productivos.
+- Concurrencia mediante barreras deterministas, no sleeps arbitrarios.
+- Cubrir idempotencia, conflictos, legacy, fallos intermedios, retry y paridad.
+- No ocultar fallos con skip/xfail. Un fallo preexistente se reproduce contra la
+  base y se clasifica antes de tocar codigo.
 
-**Idioma**
-- Mensajes de usuario y logs: **español**.
-- Identificadores de código: **inglés**.
+## 5. Definition of Done
 
----
+1. `python -m pytest tests/ -x -q` verde.
+2. `ruff check src tests` verde.
+3. `scripts/check_no_nulls.py` y `git diff --check` verdes.
+4. `status`, `validate-agent-config --json` y `kernel-status --json` coherentes.
+5. Smoke `run-once --skip-crew` con DATA_DIR/proveedores temporales.
+6. Paridad de trading si se toca una ruta compartida.
+7. Plan maestro e informe unico del lote actualizados.
 
-## 2. Definition of Done — cualquier tarea
+Con XNYS abierto no ejecutar smoke, job-once, postmarket, reconciliacion o broker
+contra produccion.
 
-Antes de declarar un cambio terminado, estos cuatro checks deben pasar:
+## 6. Archivos protegidos
 
-1. `python -m pytest tests/ -x -q` — suite completa verde.
-2. `ruff check src tests` — sin errores.
-3. `python -m agente_bolsa.main status` y `validate-agent-config --json` — funcionan.
-4. Smoke: `python -m agente_bolsa.main run-once --skip-crew` — termina sin traceback.
-
----
-
-## 3. Archivos bloqueados (nunca tocar sin revisión humana explícita)
-
-Estos archivos están protegidos por `AutoApplyCodeAgent.BLOCKED_PREFIXES`
-y por el kernel inmutable. **Ningún agente autónomo puede modificarlos**:
+Sin revision humana explicita no tocar:
 
 - `src/agente_bolsa/kernel.py`
 - `src/agente_bolsa/tools/broker.py`
@@ -73,135 +80,46 @@ y por el kernel inmutable. **Ningún agente autónomo puede modificarlos**:
 - `src/agente_bolsa/config.py`
 - `.env`
 
-Si un cambio necesita tocar alguno de estos, debe pasar por revisión humana,
-documentarse en `plan_mejoras_y_tareas.md` y ejecutarse de forma manual.
+`kernel-status=unsealed` en un DATA_DIR temporal no describe produccion. Repetir
+desde raiz, `.venv` y DATA_DIR productivos; nunca copiar/re-sellar el manifest
+para ocultar una diferencia.
 
----
+## 7. Worktrees, Git y versiones
 
-## 4. Versionado
+- Produccion permanece limpia. Trabajar en worktree `codex/<lote>` basado en un
+  commit exacto.
+- Caracterizacion, implementacion, QA y documentacion usan commits separados.
+- Integrar con `merge --no-ff`; no squash/rebase/amend commits ya validados.
+- Candidatos paralelos reservan patches distintos y se renumeran si cambia el
+  orden. No puede haber dos releases con la misma version.
+- Rollback productivo mediante revert auditable, nunca reset destructivo.
+- Preservar cambios ajenos y detenerse ante un arbol inesperadamente sucio.
 
-- **Fuente única**: `src/agente_bolsa/__init__.py` (`__version__`).
-- `pyproject.toml` y el sidebar del panel leen la versión de ahí.
-- Formato semántico `MAJOR.MINOR.PATCH`.
-- Cada entrega que añade o cambia algo **sube la versión**.
-- Tras aplicar cambios de código hay que **reiniciar** el scheduler y el panel;
-  un proceso ya en marcha no recoge cambios en caliente.
+## 8. Mercado abierto y despliegue
 
----
+- Con XNYS abierto se permite trabajo aislado, sin acceso operativo, merge,
+  reinicio, despliegue ni mutacion de datos/servicios.
+- Desplegar solo con XNYS cerrado, sin jobs/pytest activos y con margen operativo.
+- Parar/arrancar mediante tareas y `scripts/stack_*.ps1`, no procesos manuales.
+- Tras arrancar: HTTP 200, scheduler unico, PID/lock vivo y heartbeat fresco en
+  dos comprobaciones separadas.
+- Telemetria puede fallar abierta; gates, riesgo, kernel y kill switch fallan
+  cerrados. Shadow nunca crea, bloquea o retrasa ordenes.
 
-## 5. Gestión de mejoras (fuente única de verdad)
+## 9. Promocion de mejoras
 
-`docs/plan_mejoras_y_tareas.md` es el registro vivo de todo lo terminado y
-pendiente. Proceso obligatorio:
+- Orden: `shadow -> guarded_active -> active`.
+- Exigir evidencia pre-registrada, costes, OOS/walk-forward, paper, muestra,
+  clusters, concentracion, linaje y control.
+- No promover `collecting`, `unavailable` ni resultados legacy no verificados.
+- Mejor retorno con peor drawdown, MAE o tail loss no se promociona.
+- Un LLM no decide readiness ni autoriza apply/configuracion.
 
-1. Añadir la mejora como fila en la sección de backlog (estado: PENDIENTE).
-2. Al ejecutarla: mover la fila a la sección de entregadas con artefacto, estado
-   y cómo se verificó.
-3. Subir versión (punto 4) y reiniciar el sistema.
-4. Si toca decisión, ejecución o gates: validar primero en SHADOW o dry-run y
-   documentar el resultado antes de activarla.
+## 10. Documentacion activa
 
-**No abrir hilos sueltos ni crear otros documentos de seguimiento.**
-
----
-
-## 6. Hipótesis — estructura obligatoria
-
-Una hipótesis sin estos campos no es válida:
-
-| Campo | Descripción |
-|---|---|
-| `entry` | Condición objetiva y medible |
-| `exit` | Take profit, stop o time stop |
-| `invalidation` | Cuándo se descarta |
-| `stop_loss` | Precio de stop (por ATR u otro criterio definido) |
-| `take_profit` | Precio objetivo |
-| `costs` | Comisión + slippage estimados en bps |
-| `min_trades` | Mínimo de operaciones para evaluar |
-| `metrics` | Sharpe OOS, drawdown, profit factor, hit rate |
-
----
-
-## 7. Checklist de promoción de cambios
-
-Antes de promover cualquier regla, threshold, prompt o estrategia a producción:
-
-- ¿Hay tests que cubren la lógica nueva?
-- ¿Hay backtest reproducible con costes y slippage?
-- ¿Hay walk-forward o retrospectiva sin fuga temporal?
-- ¿Hay evidencia en paper trading (si afecta a decisión, riesgo o ejecución)?
-- ¿El cambio no degrada trazabilidad, kill switch, gates ni validaciones de riesgo?
-
-Ver checklist completo en `docs/promotion_checklist.md`.
-
-**Bloqueos automáticos:**
-- Muestra pequeña o concentrada en pocas sesiones → no promover.
-- Mejora retorno pero empeora drawdown → no promover.
-- Depende de datos no auditados → no promover.
-
-**Orden recomendado:** shadow → guarded_active → active. Nunca saltar pasos.
-
----
-
-## 8. Estrategias
-
-- Implementar la interfaz `Strategy` de `strategies/base.py`.
-- Una estrategia nueva entra en estado SHADOW; no toca `trade_decision` hasta
-  que `promotion.py` la promocione por métricas.
-- Los candidatos de una estrategia SHADOW van a `shadow_candidates` del informe,
-  nunca a ejecución directa.
-- El registro se consulta con `strategy-registry --json`.
-
----
-
-## 9. Seguridad operacional
-
-- Paper trading por defecto. Live requiere:
-  `TRADING_MODE=live` **y** `ALLOW_LIVE_TRADING=true` **y** revisión humana.
-- El kernel (`kernel.py`) fija límites absolutos: drawdown 20%, pérdida diaria 5%,
-  exposición por posición 15%. Ningún agente puede superar estos límites.
-- `risk.py` es el límite operativo ajustable; el kernel es el suelo que nunca cede.
-- Verificar integridad con `kernel-status --json` tras cambios en archivos protegidos.
-
----
-
-## 10. Comandos de referencia rápida
-
-```powershell
-# Verificación básica
-python -m agente_bolsa.main status
-python -m agente_bolsa.main validate-agent-config --json
-python -m agente_bolsa.main kernel-status --json
-python -m agente_bolsa.main schedule-status
-
-# Smoke sin LLM
-python -m agente_bolsa.main run-once --skip-crew
-
-# Diagnóstico LLM
-python scripts/llm_health_check.py
-
-# Tests + lint
-python -m pytest tests/ -x -q
-ruff check src tests
-
-# Logs en vivo
-python -m agente_bolsa.main log --follow
-```
-
----
-
-## 11. Documentación activa
-
-Solo estos documentos se mantienen. El resto es generado automáticamente o está archivado:
-
-| Archivo | Propósito |
-|---|---|
-| `README.md` | Referencia principal del proyecto |
-| `docs/architecture.md` | Diseño técnico del sistema |
-| `docs/operating_model.md` | Modelo operativo y rutinas |
-| `docs/plan_mejoras_y_tareas.md` | **Fuente única de verdad** de mejoras y backlog |
-| `docs/startup_runbook.md` | Arranque y verificación operativa |
-| `docs/promotion_checklist.md` | Checklist de promoción de cambios |
-| `docs/estudio_semanal.md` | Metodología de revisión semanal (plantilla) |
-| `docs/tutorial_arranque_diario.md` | Arranque diario paso a paso |
-| `docs/versioning.md` | Reglas de versionado |
+- `docs/plan_mejoras_y_tareas.md`: unica fuente de backlog/estado.
+- `docs/RELEVO_DIRECCION_TECNICA.md`: estado y secuencia del siguiente turno.
+- `docs/operating_model.md`: modelo operativo.
+- `docs/tutorial_arranque_diario.md` y `docs/startup_runbook.md`: operacion.
+- `docs/promotion_checklist.md`: promocion.
+- Un unico informe por lote; no crear planes paralelos.

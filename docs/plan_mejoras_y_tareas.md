@@ -9,10 +9,17 @@
 > (se muestra en la barra lateral del dashboard), y (3) dejar el sistema levantado
 > con los cambios cargados (ver seccion 7).
 
-- Rama: `codex/mejora_continua`
- - Version actual: **0.4.176** (ensayo combinado P-L45B2 + P-L43BR5; no desplegado)
+- Rama de ensayo: `codex/pl43br5-combined-rehearsal`
+- Version actual: **0.4.176** (ensayo combinado P-L45B2 + P-L43BR5; no desplegado)
 - Ultima actualizacion: 2026-07-16
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
+
+## Consolidacion operativa - 16-jul-2026
+
+- `buenas-practicas` incorpora el trabajo aislado durante mercado abierto, eventos append-only, transacciones SQLite cortas y por lotes, fixtures deterministas y secuenciacion de versiones entre worktrees.
+- `start-agente-bolsa` elimina la antigua contradiccion de arranque manual y fija `stack_status.ps1`, `stack_down.ps1` y `stack_up.ps1` como procedimiento autorizado mediante tareas programadas.
+- `operating_model.md` y el relevo tecnico quedan alineados con P-L43B, P-L45B1/P-L45B2 y la reserva de versiones 0.4.175-0.4.178.
+- Esta consolidacion es exclusivamente documental dentro del candidato todavia no publicado 0.4.176; no anade otro incremento de version ni modifica trading, configuracion o servicios.
 
 ### P-L17 - Verdad de medicion: outcomes forward separados de ejecucion. **HECHO (v0.4.140).**
 Se elimina la contaminacion que convertia P/L abierto de `trade_memory` en
@@ -837,15 +844,18 @@ Estado: PENDIENTE salvo indicacion. Marcar aqui al completarlas.
 - **Tras aplicar cambios de codigo, el sistema debe seguir levantado pero con los
   cambios cargados.** Un proceso Python ya en marcha NO recoge cambios en caliente:
   hay que **reiniciar** el scheduler y el panel web para que carguen el codigo nuevo.
-  Secuencia recomendada (PowerShell, tras parar los procesos previos):
+  Secuencia autorizada (PowerShell, solo con XNYS cerrado y sin jobs activos):
 
   ```powershell
   cd C:\Antonio\Bref\agenteBolsa
-  # parar panel y scheduler previos (ver startup_runbook seccion 7), luego:
-  Start-Process -FilePath ".\.venv\Scripts\python.exe" -ArgumentList @("-m","agente_bolsa.main","web","--host","127.0.0.1","--port","8501") -WorkingDirectory "C:\Antonio\Bref\agenteBolsa" -WindowStyle Hidden
-  Start-Process -FilePath ".\.venv\Scripts\python.exe" -ArgumentList @("-m","agente_bolsa.main","schedule","--quiet") -WorkingDirectory "C:\Antonio\Bref\agenteBolsa" -WindowStyle Hidden
-  .\.venv\Scripts\python.exe -m agente_bolsa.main schedule-status
+  powershell -ExecutionPolicy Bypass -File scripts\stack_down.ps1 -IncludeScheduled
+  powershell -ExecutionPolicy Bypass -File scripts\stack_up.ps1
+  powershell -ExecutionPolicy Bypass -File scripts\stack_status.ps1
   ```
+
+  No iniciar servicios persistentes con `Start-Process` ni borrar el lock a
+  ciegas. Tras el arranque se exigen HTTP 200, scheduler logico unico, PID/lock
+  vivo y heartbeat fresco en dos comprobaciones separadas.
 
 - **Versionado:** en cada entrega se sube `__version__` en
   `src/agente_bolsa/__init__.py` (fuente unica; `pyproject.toml` y el sidebar la
