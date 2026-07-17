@@ -130,6 +130,11 @@ def test_multiple_pending_orders_or_quantity_mismatch_are_unavailable():
     mismatch = _history(local_broker_orders=[_pending("one", qty=2)])
     assert resolve_position_purchase(mismatch, "AAPL", 1)["purchase_timestamp_status"] == "unavailable"
 
+    mixed = _history(
+        local_broker_orders=[_pending("one", qty=1), _pending("other", qty=2)]
+    )
+    assert resolve_position_purchase(mixed, "AAPL", 1)["warning"] == "ambiguous_pending_buy_orders"
+
 
 def test_pending_without_position_or_invalid_timestamp_is_unavailable():
     history = {"local_broker_orders": [_pending("one", created_at="not-a-time")]}
