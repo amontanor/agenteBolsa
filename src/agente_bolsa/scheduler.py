@@ -1206,7 +1206,12 @@ def _execute_stop_take_exits(
     open_order_symbols = {order.symbol.upper() for order in portfolio.open_orders}
     buy_plans = store.latest_executed_buy_plans_by_symbol()
     try:
-        buy_lots = store.executed_buy_lots_by_symbol()
+        buy_lots = store.executed_open_buy_lots_by_symbol(
+            position_quantities={
+                str(position.symbol).upper(): getattr(position, "qty", None)
+                for position in portfolio.positions
+            }
+        )
     except Exception as exc:  # noqa: BLE001 - lot telemetry must not block exits.
         LOGGER.warning("time_stop_v2 lot evidence unavailable: %s", exc)
         buy_lots = {}
