@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama de integracion desplegada: `codex/mejora_continua`
-- Version actual: **0.4.177** (P-L45B2 + P-L43BR5 desplegados; P-L44B desplegado en shadow)
+- Version actual: **0.4.178** (ensayo integrado P-L46B; producción sigue en 0.4.177)
 - Ultima actualizacion: 2026-07-17
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
@@ -1958,3 +1958,16 @@ rentabilidad.
   `null`; no hay backfill. El CLI es `learning-penalty-shadow-report --json`.
 - El historial prospectivo permanece `collecting`; no hay evidencia suficiente
   para activar la penalización única ni influencia sobre trading.
+## P-L46B - orden cronologico de Cartera abierta (ensayo integrado 0.4.178)
+
+- El orden anterior mostraba primero las posiciones con mayor valor absoluto de
+  P/L en dolares, mezclando ganadoras y perdedoras.
+- El candidato ordena por el ultimo fill de compra verificable, de mas reciente
+  a mas antiguo, y muestra su fecha y hora en la zona local configurada.
+- Las posiciones sin un fill de compra verificable quedan al final como
+  `Fecha de compra no disponible`; no se usa la fecha de creacion de una orden como sustituto.
+- Es un cambio exclusivamente visual. No altera posiciones, trading, ranking,
+  gates, stops, takes, cantidades ni ordenes.
+- Secuencia prevista: P-L45B2 `0.4.175`, P-L43BR5 `0.4.176`, P-L44B
+  `0.4.177` y este cambio UI `0.4.178`. Producción permanece en `0.4.177`
+  hasta una autorización de despliegue posterior.

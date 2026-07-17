@@ -43,6 +43,8 @@ from agente_bolsa.web_app import (
     _position_chart_start_date,
     _position_entry_date,
     _position_evolution_summary,
+    _position_purchase_sort_key,
+    _position_rows,
     _sidebar_version_label,
     _single_symbol_price_frame,
     _start_schedule,
@@ -394,6 +396,170 @@ def test_position_entry_date_falls_back_to_first_buy_trade():
     }
 
     assert _position_entry_date(history, "AAPL") == "2026-05-19"
+
+
+def test_position_rows_use_latest_buy_fill_and_local_time():
+    history = {
+        "risk_levels": {},
+        "open_positions": [
+            {"symbol": "AAPL", "qty": 1, "unrealized_pl": -50.0},
+            {"symbol": "MSFT", "qty": 2, "unrealized_pl": 5.0},
+        ],
+        "executed_buy_lots_by_symbol": {
+            "AAPL": [
+                {
+                    "broker_order_id": "buy-aapl-old",
+                    "symbol": "AAPL",
+                    "order_side": "buy",
+                    "order_status_verified": True,
+                    "filled_qty": 1,
+                    "is_partial": False,
+                    "fill_authority": "first_fill_at",
+                    "entry_fill_at": "2026-07-14T13:30:00Z",
+                },
+                {
+                    "broker_order_id": "buy-aapl-new",
+                    "symbol": "AAPL",
+                    "order_side": "buy",
+                    "order_status_verified": True,
+                    "filled_qty": 1,
+                    "is_partial": False,
+                    "fill_authority": "first_fill_at",
+                    "entry_fill_at": "2026-07-16T14:05:00Z",
+                },
+            ],
+            "MSFT": [
+                {
+                    "broker_order_id": "buy-msft",
+                    "symbol": "MSFT",
+                    "order_side": "buy",
+                    "order_status_verified": True,
+                    "filled_qty": 2,
+                    "is_partial": False,
+                    "fill_authority": "aggregated_filled_at",
+                    "entry_fill_at": "2026-07-15T15:00:00Z",
+                }
+            ],
+        },
+    }
+
+    rows = _position_rows(history, local_timezone="Europe/Madrid")
+    by_symbol = {row["Simbolo"]: row for row in rows}
+
+    assert by_symbol["AAPL"]["Compra ISO"] == "2026-07-16T14:05:00Z"
+    assert by_symbol["AAPL"]["Compra fecha"] == "16/07/2026"
+    assert by_symbol["AAPL"]["Compra hora"] == "16:05"
+    assert [row["Simbolo"] for row in sorted(rows, key=_position_purchase_sort_key)] == ["AAPL", "MSFT"]
+
+
+def test_position_purchase_sort_places_unknown_last_and_does_not_use_pl():
+    rows = [
+        {"Simbolo": "BIGLOSS", "Compra ISO": "2026-07-14T10:00:00Z", "P/L $": -500.0},
+        {"Simbolo": "UNKNOWN", "Compra ISO": None, "P/L $": 900.0},
+        {"Simbolo": "RECENT", "Compra ISO": "2026-07-16T10:00:00Z", "P/L $": 1.0},
+    ]
+
+    assert [row["Simbolo"] for row in sorted(rows, key=_position_purchase_sort_key)] == [
+        "RECENT",
+        "BIGLOSS",
+        "UNKNOWN",
+    ]
+
+
+def test_position_rows_do_not_invent_purchase_time_from_order_creation():
+    history = {
+        "risk_levels": {"AAPL": {"source_order_time": "2026-07-16T14:00:00Z"}},
+        "open_positions": [{"symbol": "AAPL", "qty": 1}],
+        "trades": [{"symbol": "AAPL", "side": "buy", "time": "2026-07-16T14:05:00Z"}],
+    }
+
+    [row] = _position_rows(history)
+
+    assert row["Compra ISO"] is None
+    assert row["Compra fecha"] == "Fecha de compra no disponible"
+
+
+def _lot(
+    order_id: str,
+    *,
+    symbol: str = "AAPL",
+    fill: str | None = "2026-07-16T14:05:00Z",
+    side: str = "buy",
+    verified: bool = True,
+    partial: bool = False,
+    authority: str = "first_fill_at",
+    qty: float = 1.0,
+) -> dict[str, Any]:
+    return {
+        "broker_order_id": order_id,
+        "symbol": symbol,
+        "order_side": side,
+        "order_status_verified": verified,
+        "filled_qty": qty,
+        "is_partial": partial,
+        "fill_authority": authority,
+        "entry_fill_at": fill,
+    }
+
+
+def test_position_rows_require_exact_filled_buy_lot_and_ignore_pending_or_sell():
+    history = {
+        "open_positions": [{"symbol": "AAPL", "qty": 1}],
+        "risk_levels": {},
+        "trades": [{"symbol": "AAPL", "side": "buy", "time": "2026-07-17T14:00:00Z"}],
+        "executed_buy_lots_by_symbol": {
+            "AAPL": [
+                _lot("buy-filled", fill="2026-07-16T14:00:00Z"),
+                _lot("buy-pending", fill="2026-07-17T14:00:00Z", verified=False),
+                _lot("sell-order", fill="2026-07-18T14:00:00Z", side="sell"),
+            ]
+        },
+    }
+
+    [row] = _position_rows(history, local_timezone="Europe/Madrid")
+
+    assert row["Compra ISO"] == "2026-07-16T14:00:00Z"
+    assert row["Compra fecha"] == "16/07/2026"
+
+
+def test_position_rows_accept_partial_only_with_first_fill_and_aggregate_full_fill():
+    history = {
+        "open_positions": [
+            {"symbol": "AAPL", "qty": 1},
+            {"symbol": "MSFT", "qty": 1},
+            {"symbol": "DDOG", "qty": 1},
+        ],
+        "risk_levels": {},
+        "executed_buy_lots_by_symbol": {
+            "AAPL": [_lot("partial-with-first", partial=True, authority="first_fill_at")],
+            "MSFT": [_lot("full-aggregate", symbol="MSFT", authority="aggregated_filled_at")],
+            "DDOG": [_lot("partial-no-first", symbol="DDOG", partial=True, authority="unavailable")],
+        },
+    }
+
+    rows = {row["Simbolo"]: row for row in _position_rows(history)}
+
+    assert rows["AAPL"]["Compra ISO"] is not None
+    assert rows["MSFT"]["Compra ISO"] is not None
+    assert rows["DDOG"]["Compra ISO"] is None
+    assert rows["DDOG"]["Compra fecha"] == "Fecha de compra no disponible"
+
+
+def test_position_rows_choose_latest_filled_lot_and_stable_tie_break():
+    history = {
+        "open_positions": [{"symbol": "AAPL", "qty": 2}],
+        "risk_levels": {},
+        "executed_buy_lots_by_symbol": {
+            "AAPL": [
+                _lot("buy-z", fill="2026-07-16T14:00:00Z"),
+                _lot("buy-a", fill="2026-07-16T14:00:00Z"),
+                _lot("buy-old", fill="2026-07-15T14:00:00Z"),
+            ]
+        },
+    }
+
+    [row] = _position_rows(history)
+    assert row["Compra ISO"] == "2026-07-16T14:00:00Z"
 
 
 def test_single_symbol_price_frame_extracts_multiindex_close_volume():

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from .market_data import download_daily_prices_with_metadata
+from .time_stop_policy import canonical_order_side
 
 
 def _num(value: Any) -> float | None:
@@ -102,6 +103,64 @@ def position_first_buy_time(history: dict[str, Any], symbol: str) -> str | None:
         if str(trade.get("symbol") or "").upper() == target and str(trade.get("side") or "").lower() == "buy"
     ]
     return min((item for item in buy_times if item), default=None)
+
+
+def position_latest_buy_time(history: dict[str, Any], symbol: str) -> str | None:
+    """Return the latest locally verified filled BUY time for a position.
+
+    The dashboard deliberately consumes the same lot evidence used by the
+    temporal exit policy.  Account-level fill activity is not an authority for
+    an agent position: it can contain another strategy, a sell, or an order
+    that is only pending locally.  Missing or ambiguous local evidence remains
+    unavailable rather than falling back to a signal, plan, or current time.
+    """
+    target = str(symbol or "").upper()
+    lots_by_symbol = history.get("executed_buy_lots_by_symbol")
+    if not isinstance(lots_by_symbol, dict):
+        return None
+    lots = lots_by_symbol.get(target)
+    if not isinstance(lots, list):
+        return None
+
+    candidates: list[tuple[datetime, str, str]] = []
+    for lot in lots:
+        if not isinstance(lot, dict):
+            continue
+        if str(lot.get("symbol") or "").upper() != target:
+            continue
+        if not lot.get("broker_order_id"):
+            continue
+        if canonical_order_side(lot.get("order_side")) != "buy":
+            continue
+        if lot.get("order_status_verified") is False:
+            continue
+        try:
+            filled_qty = float(lot.get("filled_qty"))
+        except (TypeError, ValueError):
+            continue
+        if not filled_qty > 0:
+            continue
+        authority = str(lot.get("fill_authority") or "").strip()
+        if lot.get("is_partial") and authority != "first_fill_at":
+            continue
+        if authority not in {"first_fill_at", "aggregated_filled_at"}:
+            continue
+        raw_time = str(lot.get("entry_fill_at") or "").strip()
+        if not raw_time:
+            continue
+        try:
+            parsed = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        candidates.append(
+            (parsed.astimezone(timezone.utc), raw_time, str(lot.get("broker_order_id")))
+        )
+    if not candidates:
+        return None
+    # Order id is a stable tie-break when two verified lots share a timestamp.
+    return max(candidates, key=lambda item: (item[0], item[2]))[1]
 
 
 def position_entry_date(history: dict[str, Any], symbol: str) -> str | None:
