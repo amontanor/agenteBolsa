@@ -1263,7 +1263,7 @@ def _position_purchase_display(value: Any, local_timezone: str) -> tuple[str, st
     raw = str(value or "").strip()
     parsed = _local_dt(raw, local_timezone)
     if parsed is None:
-        return "No disponible", ""
+        return "Fecha de compra no disponible", ""
     has_time = ":" in raw and ("T" in raw or " " in raw)
     return parsed.strftime("%d/%m/%Y"), parsed.strftime("%H:%M") if has_time else "Hora no disponible"
 
@@ -1358,7 +1358,7 @@ def _portfolio_action_table(rows: list[dict[str, Any]], *, key_prefix: str = "po
         with c1:
             if st.button(symbol, key=f"{key_prefix}_{symbol}", width="stretch"):
                 clicked_symbol = symbol
-        purchase_date = escape(str(item.get("Compra fecha") or "No disponible"))
+        purchase_date = escape(str(item.get("Compra fecha") or "Fecha de compra no disponible"))
         purchase_clock = escape(str(item.get("Compra hora") or ""))
         c2.markdown(
             f"<div class='portfolio-native-cell'>{purchase_date}<span>{purchase_clock}</span></div>",
@@ -3683,6 +3683,9 @@ def page_dashboard() -> None:
     portfolio_history: dict[str, Any] = {}
     try:
         history = build_trade_history(settings, limit=1000, start_date=DEFAULT_START_DATE)
+        # The UI uses local, filled BUY lots as its only purchase-date source.
+        # This is a read-only Store lookup and does not add a broker request.
+        history["executed_buy_lots_by_symbol"] = store.executed_buy_lots_by_symbol()
         stats = history.get("current_statistics", {})
         position_rows = _position_rows(history, local_timezone=settings.local_timezone)
     except Exception as exc:  # noqa: BLE001
@@ -3788,7 +3791,7 @@ def page_dashboard() -> None:
         with st.container(border=True):
             _section_title(
                 "Cartera abierta",
-                "Compras mas recientes primero; fecha y hora corresponden al ultimo fill de compra registrado.",
+                "Ordenada por compra más reciente; fecha y hora corresponden al último fill de compra local verificable.",
             )
             selected_position = _portfolio_action_table(position_rows, key_prefix="dashboard_position")
             if selected_position:
@@ -3949,6 +3952,7 @@ def page_portfolio() -> None:
         _metric_card("Ordenes abiertas", len(portfolio.open_orders))
 
     history = build_trade_history(settings, limit=300, start_date=DEFAULT_START_DATE)
+    history["executed_buy_lots_by_symbol"] = _store().executed_buy_lots_by_symbol()
     risk_levels = history.get("risk_levels", {})
     position_rows = _position_rows(history, local_timezone=settings.local_timezone)
     positions = []
