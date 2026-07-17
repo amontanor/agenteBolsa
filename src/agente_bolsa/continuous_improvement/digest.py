@@ -18,6 +18,7 @@ from agente_bolsa.tools.comparable_controls import build_comparable_control_qual
 from agente_bolsa.tools.daily_learning import load_daily_learning_context
 from agente_bolsa.tools.decision_context import build_decision_context_quality
 from agente_bolsa.tools.learning_mode import load_learning_mode_config
+from agente_bolsa.tools.learning_penalty_cycle_shadow import learning_penalty_shadow_digest
 from agente_bolsa.tools.llm_decision_quality import build_llm_decision_quality
 from agente_bolsa.tools.market_cycle_timing import summarize_market_cycle_timings
 from agente_bolsa.tools.operational_health import load_operational_block_context
@@ -229,6 +230,7 @@ def build_lab_digest(
         "post_market_attribution": post_market_attribution,
         "adaptive_config_governance": adaptive_governance,
         "performance_benchmark": performance_benchmark,
+        "learning_penalty_shadow": learning_penalty_shadow_digest(store),
     }
 
 

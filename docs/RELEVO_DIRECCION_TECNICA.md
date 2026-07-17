@@ -1,7 +1,7 @@
 # Relevo de direccion tecnica — agenteBolsa
 
-> Actualizado: **16-jul-2026**. Produccion **0.4.176** (`6e29fd6d`).
-> P-L45B2 + P-L43BR5 desplegados secuencialmente; P-L44B sigue diferido.
+> Actualizado: **16-jul-2026**. Produccion **0.4.176** (`f303d351`).
+> P-L45B2 + P-L43BR5 desplegados secuencialmente; P-L44B en ensayo shadow `0.4.177`.
 
 ## Objetivo
 
@@ -71,3 +71,18 @@ powershell -ExecutionPolicy Bypass -File scripts\stack_status.ps1
 ```
 
 `docs/plan_mejoras_y_tareas.md` es la unica fuente de tareas.
+## P-L43B — estado del candidato shadow (15-jul-2026)
+
+- P-L43BR4 desplegó en producción la versión `0.4.173` mediante merge no destructivo.
+- `legacy_calendar_days` es la única ruta activa de `time_stop_v2`; XNYS es exclusivamente shadow.
+- La evidencia histórica usa eventos append-only por `position_identity` y `shadow_observation_id`; `runtime_state` es `latest_view`.
+- Los datos prospectivos reales permanecen `collecting`; la activación XNYS requiere autorización humana y otro lote.
+
+## P-L44BR2 — ensayo de integración shadow (15-jul-2026)
+
+- El candidato `0.4.177` integra P-L44B sobre P-L43BR5 desplegado mediante un
+  merge no destructivo en un worktree aislado.
+- `legacy_double_application` sigue activa; `single_application` es sólo
+  shadow y los datos reales permanecen `collecting`.
+- Dictamen del ensayo: `ready_for_future_shadow_deployment`; producción no se
+  modificó ni reinició.

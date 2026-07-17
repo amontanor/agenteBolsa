@@ -1319,6 +1319,136 @@ class Store:
                 )
         return observations
 
+    def record_learning_penalty_cycle_shadow(
+        self,
+        snapshot: dict[str, Any],
+        *,
+        event_id: str,
+        cycle_id: str,
+    ) -> dict[str, Any]:
+        """Append one bounded P-L44B cycle snapshot without replacing history."""
+
+        payload = _json_safe(dict(snapshot))
+        encoded = _dumps(payload)
+        event_type = "learning_penalty_cycle_shadow"
+        conflict_type = "learning_penalty_cycle_shadow_conflict"
+        with self.connect() as conn:
+            existing = conn.execute(
+                "SELECT payload_json FROM agent_events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+            if existing is not None:
+                try:
+                    existing_payload = json.loads(existing["payload_json"] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    existing_payload = {}
+                existing_hash = str(existing_payload.get("content_hash") or "")
+                candidate_hash = str(payload.get("content_hash") or "")
+                # captured_at is excluded from content_hash, so a new capture
+                # timestamp with identical canonical content is a no-op.
+                if existing_hash and existing_hash == candidate_hash:
+                    return {"status": "idempotent", "event_id": event_id, "content_hash": candidate_hash}
+                conflict_id = f"{event_id}:conflict:{candidate_hash or 'unknown'}"
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO agent_events (
+                        event_id, agent, event_type, cycle_id, payload_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        conflict_id,
+                        "self_improvement_engineer",
+                        conflict_type,
+                        cycle_id,
+                        _dumps(
+                            {
+                                "cycle_id": cycle_id,
+                                "existing_content_hash": existing_hash or None,
+                                "candidate_content_hash": candidate_hash or None,
+                                "status": "conflict",
+                            }
+                        ),
+                        _utc_iso(),
+                    ),
+                )
+                return {
+                    "status": "conflict",
+                    "event_id": event_id,
+                    "conflict_event_id": conflict_id,
+                    "existing_content_hash": existing_hash or None,
+                    "candidate_content_hash": candidate_hash or None,
+                }
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO agent_events (
+                        event_id, agent, event_type, cycle_id, payload_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (event_id, "self_improvement_engineer", event_type, cycle_id, encoded, _utc_iso()),
+                )
+            except sqlite3.IntegrityError:
+                # Another writer won the primary-key race.  Read the winner
+                # and return the same idempotent/conflict result without
+                # replacing its payload or leaking the exception upstream.
+                raced = conn.execute(
+                    "SELECT payload_json FROM agent_events WHERE event_id = ?",
+                    (event_id,),
+                ).fetchone()
+                raced_payload = {}
+                if raced is not None:
+                    try:
+                        raced_payload = json.loads(raced["payload_json"] or "{}")
+                    except (TypeError, json.JSONDecodeError):
+                        raced_payload = {}
+                if str(raced_payload.get("content_hash") or "") == str(payload.get("content_hash") or ""):
+                    return {"status": "idempotent", "event_id": event_id, "content_hash": payload.get("content_hash")}
+                conflict_id = f"{event_id}:conflict:{str(payload.get('content_hash') or 'unknown')}"
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO agent_events (
+                        event_id, agent, event_type, cycle_id, payload_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        conflict_id,
+                        "self_improvement_engineer",
+                        conflict_type,
+                        cycle_id,
+                        _dumps(
+                            {
+                                "cycle_id": cycle_id,
+                                "existing_content_hash": raced_payload.get("content_hash"),
+                                "candidate_content_hash": payload.get("content_hash"),
+                                "status": "conflict",
+                            }
+                        ),
+                        _utc_iso(),
+                    ),
+                )
+                return {
+                    "status": "conflict",
+                    "event_id": event_id,
+                    "conflict_event_id": conflict_id,
+                    "existing_content_hash": raced_payload.get("content_hash"),
+                    "candidate_content_hash": payload.get("content_hash"),
+                }
+        return {"status": "inserted", "event_id": event_id, "content_hash": payload.get("content_hash")}
+
+    def learning_penalty_cycle_shadow_events(self, *, limit: int = 50000) -> list[dict[str, Any]]:
+        """Read only valid P-L44B cycle snapshots; conflicts remain separate."""
+
+        rows = self.agent_events(event_type_prefix="learning_penalty_cycle_shadow", limit=limit)
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            if row.get("event_type") != "learning_penalty_cycle_shadow":
+                continue
+            payload = row.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            events.append(payload | {"event_id": row.get("event_id"), "cycle_id": row.get("cycle_id")})
+        return events
+
     def agent_events(
         self,
         *,
