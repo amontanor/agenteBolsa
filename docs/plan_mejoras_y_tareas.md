@@ -1958,7 +1958,7 @@ rentabilidad.
   `null`; no hay backfill. El CLI es `learning-penalty-shadow-report --json`.
 - El historial prospectivo permanece `collecting`; no hay evidencia suficiente
   para activar la penalización única ni influencia sobre trading.
-## P-L46B - orden cronologico de Cartera abierta (ensayo integrado 0.4.178)
+## P-L46B - orden cronologico de Cartera abierta (desplegado 0.4.178)
 
 - El orden anterior mostraba primero las posiciones con mayor valor absoluto de
   P/L en dolares, mezclando ganadoras y perdedoras.
@@ -1968,6 +1968,6 @@ rentabilidad.
   `Fecha de compra no disponible`; no se usa la fecha de creacion de una orden como sustituto.
 - Es un cambio exclusivamente visual. No altera posiciones, trading, ranking,
   gates, stops, takes, cantidades ni ordenes.
-- Secuencia prevista: P-L45B2 `0.4.175`, P-L43BR5 `0.4.176`, P-L44B
-  `0.4.177` y este cambio UI `0.4.178`. Producción permanece en `0.4.177`
-  hasta una autorización de despliegue posterior.
+- Secuencia desplegada: P-L45B2 `0.4.175`, P-L43BR5 `0.4.176`, P-L44B
+  `0.4.177` y este cambio UI `0.4.178`. El merge productivo es `4158ac5f`;
+  la verificación visual confirmó la versión y el orden descendente.

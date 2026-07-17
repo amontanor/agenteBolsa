@@ -1,6 +1,6 @@
 # Relevo de direccion tecnica — agenteBolsa
 
-> Actualizado: **17-jul-2026**. Produccion **0.4.177** (`23e4bf4d`).
+> Actualizado: **17-jul-2026**. Produccion **0.4.178** (`4158ac5f`).
 > P-L45B2 + P-L43BR5 + P-L44B desplegados secuencialmente; P-L44B sigue en shadow.
 
 ## Objetivo
@@ -28,6 +28,10 @@ promociones siguen human-gated.
    `PositionSide.LONG -> unsupported_side` solo en shadow.
 3. **0.4.177 P-L44B**: penalizacion unica solo shadow; esperar evidencia real.
 4. **0.4.178 P-L46B UI**: Cartera abierta por ultima compra y fecha/hora.
+
+P-L46B queda desplegado como cambio exclusivamente visual; la fecha procede
+de lotes BUY filled locales verificables y las posiciones sin autoridad quedan
+al final como `Fecha de compra no disponible`.
 
 No combinar releases sin ensayo conjunto. Despliegue: XNYS cerrado, sin jobs,
 suite verde, hash sensible intacto y rollback por revert.
