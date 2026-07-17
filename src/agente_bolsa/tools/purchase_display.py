@@ -226,7 +226,7 @@ def resolve_position_purchase(
         unavailable["warning"] = "no_local_buy_order_evidence"
         return unavailable
 
-    candidates: dict[str, tuple[dict[str, Any], tuple[datetime, str, str]]] = {}
+    pending_orders: dict[str, list[dict[str, Any]]] = {}
     for order in orders:
         if not isinstance(order, dict):
             continue
@@ -237,26 +237,29 @@ def resolve_position_purchase(
         order_id = str(order.get("broker_order_id") or "").strip()
         if not order_id:
             continue
-        order_qty = _order_quantity(order)
-        if order_qty is None or not isfinite(order_qty) or not abs(order_qty - qty) <= 1e-6:
-            continue
-        timestamp = _order_timestamp(order)
-        if timestamp is None:
-            continue
-        existing = candidates.get(order_id)
-        if existing is not None and existing[1] != timestamp:
-            unavailable["warning"] = "conflicting_pending_order_evidence"
-            return unavailable
-        candidates[order_id] = (order, timestamp)
+        pending_orders.setdefault(order_id, []).append(order)
 
-    if not candidates:
+    if not pending_orders:
         unavailable["warning"] = "no_unique_compatible_pending_buy"
         return unavailable
-    if len(candidates) != 1:
+    if len(pending_orders) != 1:
         unavailable["warning"] = "ambiguous_pending_buy_orders"
         return unavailable
 
-    order_id, (_, (parsed, source, raw_time)) = next(iter(candidates.items()))
+    order_id, matching_rows = next(iter(pending_orders.items()))
+    if len(matching_rows) != 1:
+        unavailable["warning"] = "conflicting_pending_order_evidence"
+        return unavailable
+    order = matching_rows[0]
+    order_qty = _order_quantity(order)
+    if order_qty is None or not isfinite(order_qty) or not abs(order_qty - qty) <= 1e-6:
+        unavailable["warning"] = "pending_buy_quantity_incompatible"
+        return unavailable
+    timestamp = _order_timestamp(order)
+    if timestamp is None:
+        unavailable["warning"] = "pending_buy_timestamp_invalid"
+        return unavailable
+    _, source, raw_time = timestamp
     return {
         "purchase_timestamp": raw_time,
         "purchase_timestamp_status": "provisional_order",
