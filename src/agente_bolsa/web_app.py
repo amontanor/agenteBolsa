@@ -3799,7 +3799,7 @@ def page_dashboard() -> None:
         with st.container(border=True):
             _section_title(
                 "Cartera abierta",
-                "Ordenada por compra más reciente; fecha y hora corresponden al último fill de compra local verificable.",
+                "Ordenada por compra más reciente; los fills verificados prevalecen y las órdenes pendientes se muestran como hora provisional.",
             )
             selected_position = _portfolio_action_table(position_rows, key_prefix="dashboard_position")
             if selected_position:
