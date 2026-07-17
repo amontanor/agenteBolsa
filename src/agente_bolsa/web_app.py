@@ -68,9 +68,6 @@ from agente_bolsa.tools.portfolio_insights import (
     position_first_buy_time as build_position_first_buy_time,
 )
 from agente_bolsa.tools.portfolio_insights import (
-    position_latest_buy_time as build_position_latest_buy_time,
-)
-from agente_bolsa.tools.portfolio_insights import (
     position_price_series as build_position_price_series,
 )
 from agente_bolsa.tools.portfolio_insights import (
@@ -80,6 +77,7 @@ from agente_bolsa.tools.pre_earnings import (
     build_pre_earnings_resolved_history,
 )
 from agente_bolsa.tools.profitability_scoreboard import build_profitability_scoreboard
+from agente_bolsa.tools.purchase_display import resolve_position_purchase
 from agente_bolsa.tools.retention import cleanup_runtime_data
 from agente_bolsa.tools.signal_learning import build_learning_status, update_signal_outcomes
 from agente_bolsa.tools.system_status import build_status, to_html
@@ -1268,12 +1266,13 @@ def _position_purchase_display(value: Any, local_timezone: str) -> tuple[str, st
     return parsed.strftime("%d/%m/%Y"), parsed.strftime("%H:%M") if has_time else "Hora no disponible"
 
 
-def _position_purchase_sort_key(item: dict[str, Any]) -> tuple[int, float, str]:
+def _position_purchase_sort_key(item: dict[str, Any]) -> tuple[int, float, str, str]:
     parsed = _local_dt(item.get("Compra ISO"), "UTC")
     symbol = str(item.get("Simbolo") or "")
+    broker_order_id = str(item.get("Compra broker_order_id") or "")
     if parsed is None:
-        return (1, 0.0, symbol)
-    return (0, -parsed.timestamp(), symbol)
+        return (1, 0.0, broker_order_id, symbol)
+    return (0, -parsed.timestamp(), broker_order_id, symbol)
 
 
 def _position_rows(history: dict[str, Any], *, local_timezone: str = "Europe/Madrid") -> list[dict[str, Any]]:
@@ -1282,7 +1281,8 @@ def _position_rows(history: dict[str, Any], *, local_timezone: str = "Europe/Mad
     for item in history.get("open_positions", []):
         symbol = str(item.get("symbol", "")).upper()
         risk = risk_levels.get(symbol, {})
-        purchase_time = build_position_latest_buy_time(history, symbol)
+        purchase = resolve_position_purchase(history, symbol, item.get("qty"))
+        purchase_time = purchase.get("purchase_timestamp")
         purchase_date, purchase_clock = _position_purchase_display(purchase_time, local_timezone)
         rows.append(
             {
@@ -1290,6 +1290,11 @@ def _position_rows(history: dict[str, Any], *, local_timezone: str = "Europe/Mad
                 "Compra ISO": purchase_time,
                 "Compra fecha": purchase_date,
                 "Compra hora": purchase_clock,
+                "Compra estado": purchase.get("purchase_timestamp_status"),
+                "Compra fuente": purchase.get("purchase_timestamp_source"),
+                "Compra etiqueta": purchase.get("purchase_label"),
+                "Compra aviso": purchase.get("warning"),
+                "Compra broker_order_id": purchase.get("broker_order_id"),
                 "Valor": item.get("market_value"),
                 "Qty": item.get("qty"),
                 "Entrada": item.get("avg_entry_price"),
@@ -1342,6 +1347,7 @@ def _portfolio_action_table(rows: list[dict[str, Any]], *, key_prefix: str = "po
         return None
     clicked_symbol = None
     sorted_rows = sorted(rows, key=_position_purchase_sort_key)
+    st.caption("Ordenada por compra más reciente")
     header = st.columns([0.9, 1.25, 1.1, 1.1, 1.2, 0.9, 0.9])
     for column, label in zip(
         header,
@@ -1360,8 +1366,10 @@ def _portfolio_action_table(rows: list[dict[str, Any]], *, key_prefix: str = "po
                 clicked_symbol = symbol
         purchase_date = escape(str(item.get("Compra fecha") or "Fecha de compra no disponible"))
         purchase_clock = escape(str(item.get("Compra hora") or ""))
+        purchase_label = escape(str(item.get("Compra etiqueta") or ""))
+        authority_html = f"<small>{purchase_label}</small>" if purchase_label else ""
         c2.markdown(
-            f"<div class='portfolio-native-cell'>{purchase_date}<span>{purchase_clock}</span></div>",
+            f"<div class='portfolio-native-cell'>{purchase_date}<span>{purchase_clock}</span>{authority_html}</div>",
             unsafe_allow_html=True,
         )
         c3.markdown(
