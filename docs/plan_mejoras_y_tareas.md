@@ -10,8 +10,8 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama de integracion desplegada: `codex/mejora_continua`
-- Version actual: **0.4.177** (P-L45B2 + P-L43BR5 desplegados; P-L44B en ensayo shadow)
-- Ultima actualizacion: 2026-07-16
+- Version actual: **0.4.177** (P-L45B2 + P-L43BR5 desplegados; P-L44B desplegado en shadow)
+- Ultima actualizacion: 2026-07-17
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
 ## Consolidacion operativa - 16-jul-2026
@@ -19,8 +19,8 @@
 - `buenas-practicas` incorpora el trabajo aislado durante mercado abierto, eventos append-only, transacciones SQLite cortas y por lotes, fixtures deterministas y secuenciacion de versiones entre worktrees.
 - `start-agente-bolsa` elimina la antigua contradiccion de arranque manual y fija `stack_status.ps1`, `stack_down.ps1` y `stack_up.ps1` como procedimiento autorizado mediante tareas programadas.
 - `operating_model.md` y el relevo tecnico quedan alineados con P-L43B, P-L45B1/P-L45B2 y la reserva de versiones 0.4.175-0.4.178.
-- Esta consolidacion documenta el arbol 0.4.177 ensayado; no modifica trading, configuracion sensible ni politicas economicas.
-- P-L46B UI queda reservado para la version 0.4.178; P-L44B no se activa en este ensayo.
+- Esta consolidacion documenta el arbol 0.4.177 desplegado; no modifica trading, configuracion sensible ni politicas economicas.
+- P-L46B UI queda reservado para la version 0.4.178; P-L44B se mantiene en shadow sin autoridad sobre trading.
 
 ### P-L17 - Verdad de medicion: outcomes forward separados de ejecucion. **HECHO (v0.4.140).**
 Se elimina la contaminacion que convertia P/L abierto de `trade_memory` en
@@ -1947,13 +1947,14 @@ rentabilidad.
 - `legacy_double_application` sigue siendo la unica politica activa; el
   resultado `single_application` es telemetria sin autoridad sobre ranking,
   gates, seleccion, sizing, planes u ordenes.
-- P-L44BR3 ensaya una integracion limpia sobre el commit productivo `f303d351`
-  sin modificar produccion. Dictamen: `ready_for_future_shadow_deployment`.
+- P-L44BR3 desplegó en producción mediante merge `23e4bf4d` sobre el commit
+  `f303d351`. La versión final es `0.4.177`; `legacy_double_application` sigue
+  activa y `single_application` es exclusivamente shadow.
 - Cada ciclo captura los BUY ya rankeados en memoria y persiste un unico evento
   acotado en `agent_events`; las repeticiones son no-op y los conflictos no
   sobrescriben el original. El detalle se limita a la union de los top-20
   legacy/shadow, seleccionados y controles.
 - Sin eventos el digest/health/CLI publican `collecting` con denominadores
   `null`; no hay backfill. El CLI es `learning-penalty-shadow-report --json`.
-- El historial prospectivo y la influencia sobre trading permanecen sin
-  evaluar hasta la integracion y ciclos reales posteriores.
+- El historial prospectivo permanece `collecting`; no hay evidencia suficiente
+  para activar la penalización única ni influencia sobre trading.

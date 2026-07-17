@@ -1,7 +1,7 @@
 # Relevo de direccion tecnica — agenteBolsa
 
-> Actualizado: **16-jul-2026**. Produccion **0.4.176** (`f303d351`).
-> P-L45B2 + P-L43BR5 desplegados secuencialmente; P-L44B en ensayo shadow `0.4.177`.
+> Actualizado: **17-jul-2026**. Produccion **0.4.177** (`23e4bf4d`).
+> P-L45B2 + P-L43BR5 + P-L44B desplegados secuencialmente; P-L44B sigue en shadow.
 
 ## Objetivo
 
@@ -86,3 +86,11 @@ powershell -ExecutionPolicy Bypass -File scripts\stack_status.ps1
   shadow y los datos reales permanecen `collecting`.
 - Dictamen del ensayo: `ready_for_future_shadow_deployment`; producción no se
   modificó ni reinició.
+
+## P-L44BR3 — despliegue cerrado (17-jul-2026)
+
+- Producción quedó en `0.4.177` mediante el merge `23e4bf4d`, con el tree
+  validado del ensayo y sin incluir P-L46B.
+- `legacy_double_application` conserva la autoridad; `single_application` es
+  exclusivamente shadow y la captura real permanece `collecting`.
+- Suite, kernel, configuración y stack pasan; no se generaron órdenes por P-L44B.

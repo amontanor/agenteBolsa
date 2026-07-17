@@ -1,6 +1,6 @@
 # P-L44 — observación shadow de penalización de aprendizaje
 
-Estado: ensayo integrado limpio `0.4.177`, listo para un despliegue shadow futuro.
+Estado: desplegado en producción `0.4.177` en modo shadow (17-jul-2026).
 
 ## Alcance
 
@@ -94,12 +94,13 @@ control primario. `decision_source` se toma de la recomendación real
 productor conservan `candidate_id`, `signal_id` y `cycle_id` cuando existen.
 El orden shadow trata el rango cero como un valor válido y no como ausencia.
 
-## P-L44BR3 - ensayo sobre producción 0.4.176 (16-jul-2026)
+## P-L44BR3 - despliegue cerrado sobre producción 0.4.176 (17-jul-2026)
 
-El worktree `codex/pl44b-integration-rehearsal` parte de `f303d351` y fusiona
-`codex/pl44b-shadow-integration` mediante `--no-ff` en `06bf52f9`. La versión
-candidata es `0.4.177`; P-L45B1/P-L45B2 y P-L43BR5 permanecen desplegados, y
-P-L46B UI queda reservado para `0.4.178`.
+El ensayo `codex/pl44b-integration-rehearsal` (`4aebb7e53fb291f6a58c660a1d64cd4564cb6d09`,
+tree `730e929a9b159ed6154bd8106e80398eadc37472`) se fusionó en producción
+mediante `--no-ff` en `23e4bf4df07292a6f42a2dec566e1be55b769ef9`. La versión
+final es `0.4.177`; P-L45B1/P-L45B2 y P-L43BR5 permanecen desplegados, y P-L46B
+UI queda reservado para `0.4.178`.
 
 La fase A calcula el comparador sólo en memoria sobre BUY ya rankeados; la fase
 B se materializa después de recomendaciones, gates, límites, cuotas, pausas,
@@ -109,8 +110,10 @@ por ciclo, idempotente y conflict-safe; `runtime_state` sigue siendo únicamente
 `latest_view`. El snapshot no contiene P/L, fills, slippage, retornos forward,
 MFE/MAE, outcomes maduros ni prompts/LLM.
 
-La suite completa del ensayo pasa con un único skip preexistente; las focales
-P-L44, P-L43 y P-L45, Ruff, NUL y `git diff --check` también pasan. No se
-ejecutaron servicios productivos ni se modificaron órdenes. La evidencia real
-continúa `collecting`; `legacy_double_application` sigue siendo la política
-activa y `single_application` permanece exclusivamente shadow.
+La suite completa del árbol fusionado pasa con `1535 passed` (sin skips nuevos);
+las focales P-L44, P-L43 y P-L45, Ruff, NUL, `git diff --check`, kernel y
+configuración también pasan. El stack reiniciado responde HTTP 200 con un único
+scheduler y heartbeat fresco. La evidencia real continúa `collecting`;
+`legacy_double_application` sigue siendo la política activa y
+`single_application` permanece exclusivamente shadow, sin decisiones ni órdenes
+atribuibles al comparador.
