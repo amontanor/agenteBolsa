@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -102,6 +102,30 @@ def position_first_buy_time(history: dict[str, Any], symbol: str) -> str | None:
         if str(trade.get("symbol") or "").upper() == target and str(trade.get("side") or "").lower() == "buy"
     ]
     return min((item for item in buy_times if item), default=None)
+
+
+def position_latest_buy_time(history: dict[str, Any], symbol: str) -> str | None:
+    """Return the latest verifiable buy fill time for an open-position symbol."""
+    target = str(symbol or "").upper()
+    candidates: list[tuple[datetime, str]] = []
+    for trade in history.get("trades", []):
+        if str(trade.get("symbol") or "").upper() != target:
+            continue
+        if str(trade.get("side") or "").lower() != "buy":
+            continue
+        raw_time = str(trade.get("time") or "").strip()
+        if not raw_time:
+            continue
+        try:
+            parsed = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        candidates.append((parsed.astimezone(timezone.utc), raw_time))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
 
 
 def position_entry_date(history: dict[str, Any], symbol: str) -> str | None:

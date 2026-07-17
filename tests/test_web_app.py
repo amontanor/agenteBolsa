@@ -43,6 +43,8 @@ from agente_bolsa.web_app import (
     _position_chart_start_date,
     _position_entry_date,
     _position_evolution_summary,
+    _position_purchase_sort_key,
+    _position_rows,
     _sidebar_version_label,
     _single_symbol_price_frame,
     _start_schedule,
@@ -394,6 +396,57 @@ def test_position_entry_date_falls_back_to_first_buy_trade():
     }
 
     assert _position_entry_date(history, "AAPL") == "2026-05-19"
+
+
+def test_position_rows_use_latest_buy_fill_and_local_time():
+    history = {
+        "risk_levels": {},
+        "open_positions": [
+            {"symbol": "AAPL", "qty": 1, "unrealized_pl": -50.0},
+            {"symbol": "MSFT", "qty": 2, "unrealized_pl": 5.0},
+        ],
+        "trades": [
+            {"symbol": "AAPL", "side": "buy", "time": "2026-07-14T13:30:00Z"},
+            {"symbol": "AAPL", "side": "buy", "time": "2026-07-16T14:05:00Z"},
+            {"symbol": "AAPL", "side": "sell", "time": "2026-07-16T14:20:00Z"},
+            {"symbol": "MSFT", "side": "buy", "time": "2026-07-15T15:00:00Z"},
+        ],
+    }
+
+    rows = _position_rows(history, local_timezone="Europe/Madrid")
+    by_symbol = {row["Simbolo"]: row for row in rows}
+
+    assert by_symbol["AAPL"]["Compra ISO"] == "2026-07-16T14:05:00Z"
+    assert by_symbol["AAPL"]["Compra fecha"] == "16/07/2026"
+    assert by_symbol["AAPL"]["Compra hora"] == "16:05"
+    assert [row["Simbolo"] for row in sorted(rows, key=_position_purchase_sort_key)] == ["AAPL", "MSFT"]
+
+
+def test_position_purchase_sort_places_unknown_last_and_does_not_use_pl():
+    rows = [
+        {"Simbolo": "BIGLOSS", "Compra ISO": "2026-07-14T10:00:00Z", "P/L $": -500.0},
+        {"Simbolo": "UNKNOWN", "Compra ISO": None, "P/L $": 900.0},
+        {"Simbolo": "RECENT", "Compra ISO": "2026-07-16T10:00:00Z", "P/L $": 1.0},
+    ]
+
+    assert [row["Simbolo"] for row in sorted(rows, key=_position_purchase_sort_key)] == [
+        "RECENT",
+        "BIGLOSS",
+        "UNKNOWN",
+    ]
+
+
+def test_position_rows_do_not_invent_purchase_time_from_order_creation():
+    history = {
+        "risk_levels": {"AAPL": {"source_order_time": "2026-07-16T14:00:00Z"}},
+        "open_positions": [{"symbol": "AAPL", "qty": 1}],
+        "trades": [],
+    }
+
+    [row] = _position_rows(history)
+
+    assert row["Compra ISO"] is None
+    assert row["Compra fecha"] == "No disponible"
 
 
 def test_single_symbol_price_frame_extracts_multiindex_close_volume():

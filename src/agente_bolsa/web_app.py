@@ -68,6 +68,9 @@ from agente_bolsa.tools.portfolio_insights import (
     position_first_buy_time as build_position_first_buy_time,
 )
 from agente_bolsa.tools.portfolio_insights import (
+    position_latest_buy_time as build_position_latest_buy_time,
+)
+from agente_bolsa.tools.portfolio_insights import (
     position_price_series as build_position_price_series,
 )
 from agente_bolsa.tools.portfolio_insights import (
@@ -1256,15 +1259,37 @@ def _dashboard_header(
     )
 
 
-def _position_rows(history: dict[str, Any]) -> list[dict[str, Any]]:
+def _position_purchase_display(value: Any, local_timezone: str) -> tuple[str, str]:
+    raw = str(value or "").strip()
+    parsed = _local_dt(raw, local_timezone)
+    if parsed is None:
+        return "No disponible", ""
+    has_time = ":" in raw and ("T" in raw or " " in raw)
+    return parsed.strftime("%d/%m/%Y"), parsed.strftime("%H:%M") if has_time else "Hora no disponible"
+
+
+def _position_purchase_sort_key(item: dict[str, Any]) -> tuple[int, float, str]:
+    parsed = _local_dt(item.get("Compra ISO"), "UTC")
+    symbol = str(item.get("Simbolo") or "")
+    if parsed is None:
+        return (1, 0.0, symbol)
+    return (0, -parsed.timestamp(), symbol)
+
+
+def _position_rows(history: dict[str, Any], *, local_timezone: str = "Europe/Madrid") -> list[dict[str, Any]]:
     risk_levels = history.get("risk_levels", {})
     rows = []
     for item in history.get("open_positions", []):
         symbol = str(item.get("symbol", "")).upper()
         risk = risk_levels.get(symbol, {})
+        purchase_time = build_position_latest_buy_time(history, symbol)
+        purchase_date, purchase_clock = _position_purchase_display(purchase_time, local_timezone)
         rows.append(
             {
                 "Simbolo": symbol,
+                "Compra ISO": purchase_time,
+                "Compra fecha": purchase_date,
+                "Compra hora": purchase_clock,
                 "Valor": item.get("market_value"),
                 "Qty": item.get("qty"),
                 "Entrada": item.get("avg_entry_price"),
@@ -1316,11 +1341,11 @@ def _portfolio_action_table(rows: list[dict[str, Any]], *, key_prefix: str = "po
         st.markdown("<div class='empty-box'>No hay posiciones abiertas.</div>", unsafe_allow_html=True)
         return None
     clicked_symbol = None
-    sorted_rows = sorted(rows, key=lambda item: abs(_num(item.get("P/L $")) or 0), reverse=True)
-    header = st.columns([1.0, 1.25, 1.25, 1.25, 1.0, 1.0])
+    sorted_rows = sorted(rows, key=_position_purchase_sort_key)
+    header = st.columns([0.9, 1.25, 1.1, 1.1, 1.2, 0.9, 0.9])
     for column, label in zip(
         header,
-        ["Accion", "Valor", "Precio", "P/L", "Stop", "Take"],
+        ["Accion", "Compra", "Valor", "Precio", "P/L", "Stop", "Take"],
         strict=False,
     ):
         column.markdown(f"<div class='portfolio-native-header'>{escape(label)}</div>", unsafe_allow_html=True)
@@ -1329,24 +1354,30 @@ def _portfolio_action_table(rows: list[dict[str, Any]], *, key_prefix: str = "po
         plpc = item.get("P/L %")
         tone = "gain" if pl > 0 else "loss" if pl < 0 else "flat"
         symbol = str(item.get("Simbolo") or "-").upper()
-        c1, c2, c3, c4, c5, c6 = st.columns([1.0, 1.25, 1.25, 1.25, 1.0, 1.0])
+        c1, c2, c3, c4, c5, c6, c7 = st.columns([0.9, 1.25, 1.1, 1.1, 1.2, 0.9, 0.9])
         with c1:
             if st.button(symbol, key=f"{key_prefix}_{symbol}", width="stretch"):
                 clicked_symbol = symbol
+        purchase_date = escape(str(item.get("Compra fecha") or "No disponible"))
+        purchase_clock = escape(str(item.get("Compra hora") or ""))
         c2.markdown(
-            f"<div class='portfolio-native-cell'>{_money(item.get('Valor'))}<span>qty {_num(item.get('Qty')) or 0:g}</span></div>",
+            f"<div class='portfolio-native-cell'>{purchase_date}<span>{purchase_clock}</span></div>",
             unsafe_allow_html=True,
         )
         c3.markdown(
-            f"<div class='portfolio-native-cell'>{_money(item.get('Actual'))}<span>entrada {_money(item.get('Entrada'))}</span></div>",
+            f"<div class='portfolio-native-cell'>{_money(item.get('Valor'))}<span>qty {_num(item.get('Qty')) or 0:g}</span></div>",
             unsafe_allow_html=True,
         )
         c4.markdown(
+            f"<div class='portfolio-native-cell'>{_money(item.get('Actual'))}<span>entrada {_money(item.get('Entrada'))}</span></div>",
+            unsafe_allow_html=True,
+        )
+        c5.markdown(
             f"<div class='portfolio-native-cell'><b class='pl-chip {tone}'>{_money(pl)} <em>{_pct(plpc)}</em></b></div>",
             unsafe_allow_html=True,
         )
-        c5.markdown(f"<div class='portfolio-native-cell'>{_money(item.get('Stop'))}</div>", unsafe_allow_html=True)
-        c6.markdown(f"<div class='portfolio-native-cell'>{_money(item.get('Take'))}</div>", unsafe_allow_html=True)
+        c6.markdown(f"<div class='portfolio-native-cell'>{_money(item.get('Stop'))}</div>", unsafe_allow_html=True)
+        c7.markdown(f"<div class='portfolio-native-cell'>{_money(item.get('Take'))}</div>", unsafe_allow_html=True)
     return clicked_symbol
 
 
@@ -3653,7 +3684,7 @@ def page_dashboard() -> None:
     try:
         history = build_trade_history(settings, limit=1000, start_date=DEFAULT_START_DATE)
         stats = history.get("current_statistics", {})
-        position_rows = _position_rows(history)
+        position_rows = _position_rows(history, local_timezone=settings.local_timezone)
     except Exception as exc:  # noqa: BLE001
         st.warning(f"No se pudo leer historico/P/L: {exc}")
     try:
@@ -3755,7 +3786,10 @@ def page_dashboard() -> None:
 
         st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
         with st.container(border=True):
-            _section_title("Cartera abierta", "Posiciones activas y su P/L no realizado.")
+            _section_title(
+                "Cartera abierta",
+                "Compras mas recientes primero; fecha y hora corresponden al ultimo fill de compra registrado.",
+            )
             selected_position = _portfolio_action_table(position_rows, key_prefix="dashboard_position")
             if selected_position:
                 _position_detail_dialog(settings, history, position_rows, selected_position)
@@ -3916,7 +3950,7 @@ def page_portfolio() -> None:
 
     history = build_trade_history(settings, limit=300, start_date=DEFAULT_START_DATE)
     risk_levels = history.get("risk_levels", {})
-    position_rows = _position_rows(history)
+    position_rows = _position_rows(history, local_timezone=settings.local_timezone)
     positions = []
     for item in history.get("open_positions", []):
         risk = risk_levels.get(str(item.get("symbol")).upper(), {})
