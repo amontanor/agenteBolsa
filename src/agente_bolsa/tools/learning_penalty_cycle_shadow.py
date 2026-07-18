@@ -52,9 +52,46 @@ def _finite(value: Any) -> float | None:
 
 
 def _identity(candidate: Mapping[str, Any]) -> str | None:
+    """Return the stable display/link identity used by phase B.
+
+    The raw shadow admission decision is made by :func:`_identity_evidence`
+    below.  Keeping this compatibility order (candidate then signal) lets
+    already persisted phase-B lineage continue to link without changing its
+    identifiers, while the capture/signal authority is recorded separately.
+    """
     candidate_id = str(candidate.get("candidate_id") or "").strip()
     signal_id = str(candidate.get("signal_id") or "").strip()
     return candidate_id or signal_id or None
+
+
+def _identity_evidence(candidate: Mapping[str, Any]) -> tuple[str | None, str | None, str | None]:
+    """Return ``(canonical_key, status, source)`` for raw shadow admission.
+
+    ``signal_capture_id`` is the strongest available identity, followed by
+    the canonical ``signal_id``.  A candidate id alone is intentionally not
+    sufficient: it may be minted after the raw capture and cannot be used to
+    reconstruct identity by symbol/date.
+    """
+
+    capture_id = str(candidate.get("signal_capture_id") or "").strip()
+    signal_id = str(candidate.get("signal_id") or "").strip()
+    if capture_id:
+        return capture_id, "identity_verified", "signal_capture_id"
+    if signal_id:
+        return signal_id, "identity_verified", "signal_id"
+    return None, "identity_unavailable", None
+
+
+def _candidate_cycle_id(candidate: Mapping[str, Any]) -> str | None:
+    direct = str(candidate.get("cycle_id") or "").strip()
+    if direct:
+        return direct
+    lineage = candidate.get("decision_lineage")
+    if isinstance(lineage, Mapping):
+        value = str(lineage.get("cycle_id") or "").strip()
+        if value:
+            return value
+    return None
 
 
 def _identity_kind(candidate: Mapping[str, Any]) -> str | None:
@@ -119,11 +156,18 @@ def _candidate_detail(
     legacy_rank: int,
     shadow_rank: int,
     selected: bool = False,
+    identity_status: str | None = None,
+    identity_source: str | None = None,
+    identity_key: str | None = None,
 ) -> dict[str, Any]:
     prior = candidate.get("learning_prior") if isinstance(candidate.get("learning_prior"), Mapping) else {}
     return {
         "candidate_id": candidate.get("candidate_id"),
         "signal_id": candidate.get("signal_id"),
+        "signal_capture_id": candidate.get("signal_capture_id"),
+        "identity_status": identity_status or result.get("identity_status"),
+        "identity_source": identity_source or result.get("identity_source"),
+        "identity_key": identity_key or result.get("identity_key"),
         "symbol": candidate.get("symbol"),
         "strategy_name": candidate.get("strategy_name"),
         "strategy_version": candidate.get("strategy_version"),
@@ -175,6 +219,7 @@ def build_learning_penalty_cycle_shadow(
     configured_capacity: int | None = None,
     settings: Settings | None = None,
     captured_at: str | None = None,
+    input_wiring: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the phase-A snapshot without influencing the active path.
 
@@ -187,37 +232,160 @@ def build_learning_penalty_cycle_shadow(
     context = technical_context if isinstance(technical_context, Mapping) else {}
     source = list(context.get("all_candidates") or context.get("ranked_candidates") or active_candidates or [])
     candidates = [item for item in source if isinstance(item, Mapping) and str(item.get("direction") or "long").lower() in {"long", "buy"}]
-    by_identity: dict[str, Mapping[str, Any]] = {}
-    duplicate_ids: set[str] = set()
-    for item in candidates:
-        if _finite(item.get("rank_priority_score")) is None and not isinstance(item.get("learning_prior"), Mapping):
-            continue
-        identity = _identity(item)
-        if identity is None:
-            continue
-        if identity in by_identity:
-            duplicate_ids.add(identity)
-        else:
-            by_identity[identity] = item
-    unique_candidates = [item for identity, item in by_identity.items() if identity not in duplicate_ids]
     ranked_total = len(candidates)
     selected_ids = {_identity(item) for item in (selected_candidates or []) if isinstance(item, Mapping)}
     control_ids = {_identity(item) for item in (control_candidates or []) if isinstance(item, Mapping)}
     settings = settings or Settings(_env_file=None)
 
+    canonical_groups: dict[str, list[Mapping[str, Any]]] = {}
+    signal_groups: dict[str, list[Mapping[str, Any]]] = {}
+    candidate_meta: list[dict[str, Any]] = []
+    for item in candidates:
+        canonical_key, identity_status, identity_source = _identity_evidence(item)
+        internal_cycle = _candidate_cycle_id(item)
+        cycle_warning = bool(internal_cycle and internal_cycle != str(cycle_id))
+        if cycle_warning:
+            identity_status = "identity_ambiguous"
+            canonical_key = canonical_key or _identity(item)
+        if canonical_key and not cycle_warning:
+            canonical_groups.setdefault(canonical_key, []).append(item)
+        signal_id = str(item.get("signal_id") or "").strip()
+        if signal_id:
+            signal_groups.setdefault(signal_id, []).append(item)
+        candidate_meta.append(
+            {
+                "candidate": item,
+                "identity": _identity(item) or canonical_key,
+                "identity_key": canonical_key,
+                "identity_status": identity_status,
+                "identity_source": identity_source,
+                "cycle_warning": cycle_warning,
+            }
+        )
+    duplicate_keys = {key for key, values in canonical_groups.items() if len(values) > 1}
+    duplicate_signals = {key for key, values in signal_groups.items() if len(values) > 1}
+
     rows: list[dict[str, Any]] = []
-    unavailable_identity = max(0, ranked_total - len(by_identity))
     invalid = 0
-    for item in unique_candidates:
+    shadow_inputs_unavailable = 0
+    shadow_inputs_invalid = 0
+    identity_unavailable = 0
+    identity_ambiguous = 0
+    for meta in candidate_meta:
+        item = meta["candidate"]
+        identity = meta["identity"]
+        identity_key = meta["identity_key"]
+        identity_status = meta["identity_status"]
+        identity_source = meta["identity_source"]
+        warnings: list[str] = []
+        if meta["cycle_warning"]:
+            warnings.append("cycle_id_mismatch")
+        signal_id = str(item.get("signal_id") or "").strip()
+        if identity_key in duplicate_keys or signal_id in duplicate_signals:
+            identity_status = "identity_ambiguous"
+            warnings.append("duplicate_identity_ambiguous")
+        if identity_status == "identity_unavailable":
+            identity_unavailable += 1
+            rows.append(
+                {
+                    "candidate": item,
+                    "identity": identity,
+                    "identity_key": identity_key,
+                    "identity_status": identity_status,
+                    "identity_source": identity_source,
+                    "result": {
+                        "status": "unavailable",
+                        "identity_status": identity_status,
+                        "identity_source": identity_source,
+                        "identity_key": identity_key,
+                        "data_quality_warnings": ["identity_unavailable"],
+                    },
+                }
+            )
+            continue
+        if identity_status == "identity_ambiguous":
+            identity_ambiguous += 1
+            rows.append(
+                {
+                    "candidate": item,
+                    "identity": identity,
+                    "identity_key": identity_key,
+                    "identity_status": identity_status,
+                    "identity_source": identity_source,
+                    "result": {
+                        "status": "unavailable",
+                        "identity_status": identity_status,
+                        "identity_source": identity_source,
+                        "identity_key": identity_key,
+                        "data_quality_warnings": sorted(set(warnings + ["identity_ambiguous"])),
+                    },
+                }
+            )
+            continue
+        has_prior_mapping = isinstance(item.get("learning_prior"), Mapping)
+        if not has_prior_mapping:
+            shadow_inputs_unavailable += 1
+            rows.append(
+                {
+                    "candidate": item,
+                    "identity": identity,
+                    "identity_key": identity_key,
+                    "identity_status": identity_status,
+                    "identity_source": identity_source,
+                    "result": {
+                        "status": "unavailable",
+                        "identity_status": identity_status,
+                        "identity_source": identity_source,
+                        "identity_key": identity_key,
+                        "data_quality_warnings": ["shadow_inputs_unavailable"],
+                    },
+                }
+            )
+            continue
         inputs, input_warnings = _prior_inputs(item)
         if inputs is None:
             invalid += 1
-            rows.append({"candidate": item, "identity": _identity(item), "result": {"status": "unavailable", "data_quality_warnings": input_warnings}})
+            shadow_inputs_invalid += 1
+            rows.append(
+                {
+                    "candidate": item,
+                    "identity": identity,
+                    "identity_key": identity_key,
+                    "identity_status": identity_status,
+                    "identity_source": identity_source,
+                    "result": {
+                        "status": "unavailable",
+                        "identity_status": identity_status,
+                        "identity_source": identity_source,
+                        "identity_key": identity_key,
+                        "data_quality_warnings": sorted(set(input_warnings + warnings)),
+                    },
+                }
+            )
             continue
         result = build_learning_penalty_shadow(item, settings=settings, **inputs)
         if result.get("status") != "available":
             invalid += 1
-        rows.append({"candidate": item, "identity": _identity(item), "result": result})
+            shadow_inputs_invalid += 1
+        result = dict(result)
+        result.update(
+            {
+                "identity_status": identity_status,
+                "identity_source": identity_source,
+                "identity_key": identity_key,
+                "data_quality_warnings": sorted(set((result.get("data_quality_warnings") or []) + warnings)),
+            }
+        )
+        rows.append(
+            {
+                "candidate": item,
+                "identity": identity,
+                "identity_key": identity_key,
+                "identity_status": identity_status,
+                "identity_source": identity_source,
+                "result": result,
+            }
+        )
 
     valid = [row for row in rows if row["result"].get("status") == "available"]
     def _sort_key(row: Mapping[str, Any], field: str) -> tuple[float, str]:
@@ -235,7 +403,9 @@ def build_learning_penalty_cycle_shadow(
     }
     next_position = len(active_position)
     for row in rows:
-        identity = str(row["identity"])
+        identity = str(row["identity"] or row.get("identity_key") or "")
+        if not identity:
+            continue
         if identity not in active_position:
             active_position[identity] = next_position
             next_position += 1
@@ -264,6 +434,9 @@ def build_learning_penalty_cycle_shadow(
                 legacy_rank=legacy_rank.get(str(row["identity"]), None) or 0,
                 shadow_rank=shadow_rank.get(str(row["identity"]), None) or 0,
                 selected=False,
+                identity_status=row.get("identity_status"),
+                identity_source=row.get("identity_source"),
+                identity_key=row.get("identity_key"),
             )
         )
         for row in rows
@@ -277,6 +450,9 @@ def build_learning_penalty_cycle_shadow(
                 legacy_rank=legacy_rank.get(str(row["identity"]), 0),
                 shadow_rank=shadow_rank.get(str(row["identity"]), 0),
                 selected=False,
+                identity_status=row.get("identity_status"),
+                identity_source=row.get("identity_source"),
+                identity_key=row.get("identity_key"),
             )
         )
         for row in rows
@@ -289,14 +465,22 @@ def build_learning_penalty_cycle_shadow(
     capacity_changed = None
     if capacity is not None:
         capacity_changed = set(legacy_ids[:capacity]) != set(shadow_ids[:capacity])
+    identity_verified = sum(1 for row in rows if row.get("identity_status") == "identity_verified")
     status = "unavailable" if not candidates else "available" if len(valid) == len(candidates) else "partial"
-    if duplicate_ids:
+    if identity_unavailable == ranked_total or identity_ambiguous == ranked_total:
+        status = "unavailable"
+    elif identity_unavailable or identity_ambiguous or shadow_inputs_unavailable or shadow_inputs_invalid:
         status = "partial"
     counts = {
         "ranked_buy_total": ranked_total,
         "shadow_available": len(valid),
         "shadow_invalid": invalid,
-        "identity_unavailable": unavailable_identity + len(duplicate_ids),
+        "identity_verified": identity_verified,
+        "identity_unavailable": identity_unavailable,
+        "identity_ambiguous": identity_ambiguous,
+        "shadow_inputs_available": len(valid),
+        "shadow_inputs_unavailable": shadow_inputs_unavailable,
+        "shadow_inputs_invalid": shadow_inputs_invalid,
         "detail_persisted": len(bounded),
         "detail_omitted": max(0, len(valid) - len(bounded)),
     }
@@ -323,7 +507,14 @@ def build_learning_penalty_cycle_shadow(
         "comparable_control_candidates": [],
         "bounded_candidates": bounded,
         "_candidate_pool": pool_details,
-        "warnings": sorted({"duplicate_identity_ambiguous"} if duplicate_ids else set()),
+        "input_wiring": dict(input_wiring or {}),
+        "warnings": sorted(
+            set(
+                (["duplicate_identity_ambiguous"] if duplicate_keys or duplicate_signals else [])
+                + (["cycle_id_mismatch"] if any(meta["cycle_warning"] for meta in candidate_meta) else [])
+                + (["identity_contract_gap"] if identity_unavailable or identity_ambiguous else [])
+            )
+        ),
     }
     snapshot["content_hash"] = _canonical_hash(snapshot)
     return snapshot
@@ -590,13 +781,30 @@ def persist_learning_penalty_cycle_shadow(store: Any, snapshot: Mapping[str, Any
     return store.record_learning_penalty_cycle_shadow(dict(snapshot), event_id=event_id, cycle_id=cycle_id)
 
 
-def learning_penalty_shadow_digest(store: Any, *, limit: int = 50000) -> dict[str, Any]:
-    """Read valid cycle events; conflicts are visible but never counted valid."""
+def learning_penalty_shadow_digest(
+    store: Any,
+    *,
+    limit: int = 50000,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Publish one denominator set per canonical cycle.
 
-    conflict_events: list[dict[str, Any]] = []
+    ``now`` is injectable for deterministic health tests.  It is used only to
+    describe freshness and never participates in the snapshot content hash.
+    """
+
     try:
+        readout = store.learning_penalty_cycle_shadow_read(limit=limit)
+        events = list(readout.get("events") or [])
+    except AttributeError:
         events = store.learning_penalty_cycle_shadow_events(limit=limit)
-        conflict_events = store.agent_events(event_type_prefix="learning_penalty_cycle_shadow_conflict", limit=limit)
+        readout = {
+            "events": events,
+            "canonical_cycles": len({str(item.get("cycle_id") or "") for item in events}),
+            "canonical_events": len(events),
+            "generic_reporter_rows_ignored": 0,
+            "conflicts": len(store.agent_events(event_type_prefix="learning_penalty_cycle_shadow_conflict", limit=limit)),
+        }
     except Exception as exc:  # pragma: no cover - defensive observability path
         if "no such table" in str(exc).lower():
             return {
@@ -605,23 +813,58 @@ def learning_penalty_shadow_digest(store: Any, *, limit: int = 50000) -> dict[st
                 "observations": None,
                 "cycles": None,
                 "candidate_counts": None,
-                "conflicts": len(conflict_events),
+                "canonical_cycles": None,
+                "canonical_events": None,
+                "generic_reporter_rows_ignored": None,
+                "invalid_canonical_rows": None,
+                "idempotent_duplicates": None,
+                "conflicts": None,
+                "freshness": {"status": "unavailable", "latest_event_created_at": None},
                 "legacy_unavailable": True,
             }
         return {"status": "degraded_observability", "shadow_only": True, "error": str(exc), "observations": None}
+
+    canonical_cycles = int(readout.get("canonical_cycles") or 0)
+    generic_ignored = int(readout.get("generic_reporter_rows_ignored") or 0)
+    conflicts = int(readout.get("conflicts") or 0)
     if not events:
         return {
-            "status": "degraded_observability" if conflict_events else "collecting",
+            "status": "collecting",
             "shadow_only": True,
             "observations": None,
             "cycles": None,
+            "canonical_cycles": None,
+            "canonical_events": None,
+            "generic_reporter_rows_ignored": generic_ignored,
+            "invalid_canonical_rows": int(readout.get("invalid_canonical_rows") or 0),
+            "idempotent_duplicates": int(readout.get("idempotent_duplicates") or 0),
             "candidate_counts": None,
-            "conflicts": len(conflict_events) if conflict_events else None,
+            "conflicts": None if not conflicts else conflicts,
+            "freshness": {"status": "unavailable", "latest_event_created_at": None, "latest_captured_at": None},
         }
-    totals = {key: 0 for key in ("ranked_buy_total", "shadow_available", "shadow_invalid", "identity_unavailable", "detail_persisted", "detail_omitted")}
+
+    count_keys = (
+        "ranked_buy_total",
+        "shadow_available",
+        "shadow_invalid",
+        "identity_verified",
+        "identity_unavailable",
+        "identity_ambiguous",
+        "shadow_inputs_available",
+        "shadow_inputs_unavailable",
+        "shadow_inputs_invalid",
+        "detail_persisted",
+        "detail_omitted",
+        "selected_by_decision",
+        "planned_by_active_path",
+        "comparable_control",
+        "blocked_candidate",
+    )
+    totals = {key: 0 for key in count_keys}
     for event in events:
-        for key, value in (event.get("candidate_counts") or {}).items():
-            if key in totals and isinstance(value, int):
+        for key in count_keys:
+            value = (event.get("candidate_counts") or {}).get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
                 totals[key] += value
     event_statuses = {str(item.get("status") or "unavailable") for item in events}
     digest_status = "available"
@@ -629,15 +872,55 @@ def learning_penalty_shadow_digest(store: Any, *, limit: int = 50000) -> dict[st
         digest_status = "unavailable"
     elif event_statuses & {"partial", "unavailable"}:
         digest_status = "partial"
+    latest = events[-1]
+    latest_created = latest.get("created_at")
+    latest_captured = latest.get("captured_at")
+    freshness_status = "unknown"
+    age_seconds: float | None = None
+    try:
+        created_dt = datetime.fromisoformat(str(latest_created).replace("Z", "+00:00"))
+        reference = now or datetime.now(timezone.utc)
+        if reference.tzinfo is None:
+            reference = reference.replace(tzinfo=timezone.utc)
+        age_seconds = max(0.0, (reference - created_dt).total_seconds())
+        freshness_status = "fresh" if age_seconds <= 24 * 60 * 60 else "stale"
+    except (TypeError, ValueError):
+        freshness_status = "unavailable"
     return {
         "status": digest_status,
         "shadow_only": True,
         "observations": len(events),
-        "cycles": len({str(item.get("cycle_id") or "") for item in events}),
+        "cycles": canonical_cycles,
+        "canonical_cycles": canonical_cycles,
+        "canonical_events": int(readout.get("canonical_events") or len(events)),
+        "generic_reporter_rows_ignored": generic_ignored,
+        "invalid_canonical_rows": int(readout.get("invalid_canonical_rows") or 0),
+        "idempotent_duplicates": int(readout.get("idempotent_duplicates") or 0),
         "candidate_counts": totals,
-        "latest_cycle_id": events[-1].get("cycle_id"),
-        "latest_captured_at": events[-1].get("captured_at"),
-        "conflicts": len(conflict_events),
+        "identity_coverage": {
+            "verified": totals["identity_verified"],
+            "unavailable": totals["identity_unavailable"],
+            "ambiguous": totals["identity_ambiguous"],
+        },
+        "shadow_input_coverage": {
+            "available": totals["shadow_inputs_available"],
+            "unavailable": totals["shadow_inputs_unavailable"],
+            "invalid": totals["shadow_inputs_invalid"],
+        },
+        "decision_coverage": {
+            "selected": totals["selected_by_decision"],
+            "planned": totals["planned_by_active_path"],
+            "control": totals["comparable_control"],
+        },
+        "latest_cycle_id": latest.get("cycle_id"),
+        "latest_captured_at": latest_captured,
+        "conflicts": conflicts,
+        "freshness": {
+            "status": freshness_status,
+            "latest_event_created_at": latest_created,
+            "latest_captured_at": latest_captured,
+            "age_seconds": age_seconds,
+        },
     }
 
 

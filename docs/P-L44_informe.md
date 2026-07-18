@@ -14,8 +14,9 @@ telemetría.
 
 El hook está en el scheduler inmediatamente después de obtener el contexto
 ranked y registrar señales, antes de persistir el informe técnico y antes de
-construir planes. La observación exige `candidate_id` o `signal_id` exacto. El
-denominador conserva todos los BUY rankeados; el detalle persistido es la unión
+construir planes. La observación exige `signal_capture_id` o `signal_id` exacto;
+`candidate_id` puede enriquecer el linaje posterior, pero no sustituye la
+identidad canónica. El denominador conserva todos los BUY rankeados; el detalle persistido es la unión
 de top-20 legacy, top-20 shadow, seleccionados y controles comparables. No se
 guardan P/L, fills, slippage, retornos forward, MFE/MAE, outcomes maduros ni
 prompts.
@@ -93,6 +94,35 @@ control primario. `decision_source` se toma de la recomendación real
 (`decision_source`, `source` o `decision_origin`) y las rejections del
 productor conservan `candidate_id`, `signal_id` y `cycle_id` cuando existen.
 El orden shadow trata el rango cero como un valor válido y no como ausencia.
+
+## P-L44BR3 - corrección del contrato lector (candidato 0.4.181, 18-jul-2026)
+
+La auditoría del ledger confirmó un `reader_contract_gap`: el consumidor
+descartaba candidatos antes de evaluar su identidad cuando faltaban
+`rank_priority_score` y `learning_prior`; además, el reporter genérico añadía
+una segunda fila con el mismo `event_type` y duplicaba los denominadores.
+
+La corrección evalúa primero `signal_capture_id` y después `signal_id` exactos.
+Un `candidate_id` aislado no crea identidad. Un candidato identificado sin
+inputs de scoring conserva `identity_verified` y se clasifica como
+`shadow_inputs_unavailable`; ausentes o ambiguos quedan separados, sin unión
+por símbolo/fecha. El `cycle_id` interno, si existe, debe coincidir con el
+ciclo exterior.
+
+El lector acepta únicamente eventos canónicos con schema, id y
+`content_hash` válidos, deduplica por `cycle_id` y conserva conflictos sin
+escoger silenciosamente el último. Las filas genéricas se mantienen por
+compatibilidad, pero se publican como `generic_reporter_rows_ignored` y no
+entran en digest/health/CLI. Los denominadores separan `identity_verified`,
+`identity_unavailable`, `identity_ambiguous`, `shadow_inputs_available`,
+`shadow_inputs_unavailable` y `shadow_inputs_invalid`; sin eventos el estado
+es `collecting` con denominadores `null`, y con identidad sin inputs es
+`partial`.
+
+Los denominadores anteriores quedan invalidados para interpretación histórica;
+no se hace backfill. `legacy_double_application` sigue activa y
+`single_application` continúa exclusivamente shadow, sin evidencia para
+activarla. P-L43BR6 permanece pendiente y prioritario como `0.4.180`.
 
 ## P-L44BR3 - despliegue cerrado sobre producción 0.4.176 (17-jul-2026)
 

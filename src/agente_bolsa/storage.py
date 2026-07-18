@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import sqlite3
@@ -24,6 +25,16 @@ ORDER_PLAN_STATUS_PENDING = "PENDING"
 ORDER_PLAN_STATUS_SUBMITTED = "SUBMITTED"
 ORDER_PLAN_STATUS_EXPIRED = "EXPIRED"
 DEFAULT_LEARNING_OBSERVATION_BATCH_SIZE = 250
+LEARNING_PENALTY_CYCLE_SCHEMA = "p-l44b.learning-penalty-cycle-shadow.v1"
+LEARNING_PENALTY_CYCLE_EVENT_TYPE = "learning_penalty_cycle_shadow"
+
+
+def _learning_penalty_cycle_hash(payload: dict[str, Any]) -> str:
+    """Reproduce the shadow contract hash without importing its builder."""
+
+    body = {key: value for key, value in payload.items() if key not in {"captured_at", "content_hash"}}
+    encoded = json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 class LearningObservationBatchError(RuntimeError):
@@ -1435,19 +1446,76 @@ class Store:
                 }
         return {"status": "inserted", "event_id": event_id, "content_hash": payload.get("content_hash")}
 
-    def learning_penalty_cycle_shadow_events(self, *, limit: int = 50000) -> list[dict[str, Any]]:
-        """Read only valid P-L44B cycle snapshots; conflicts remain separate."""
+    def learning_penalty_cycle_shadow_read(self, *, limit: int = 50000) -> dict[str, Any]:
+        """Read the canonical P-L44 ledger without counting reporter rows.
 
-        rows = self.agent_events(event_type_prefix="learning_penalty_cycle_shadow", limit=limit)
-        events: list[dict[str, Any]] = []
+        The generic :class:`EventReporter` historically emitted a second row
+        with the same event type.  Those rows remain in ``agent_events`` for
+        compatibility, but they are not canonical snapshots: a canonical
+        event id, schema, cycle id and deterministic content hash are all
+        required.  A duplicate canonical payload is idempotent; a different
+        payload for the same cycle is reported as a conflict and the first
+        canonical event remains authoritative.
+        """
+
+        rows = self.agent_events(event_type_prefix=LEARNING_PENALTY_CYCLE_EVENT_TYPE, limit=limit)
+        by_cycle: dict[str, dict[str, Any]] = {}
+        generic_ignored = 0
+        invalid_canonical = 0
+        idempotent_duplicates = 0
+        conflicts = 0
         for row in rows:
-            if row.get("event_type") != "learning_penalty_cycle_shadow":
+            event_type = str(row.get("event_type") or "")
+            if event_type == f"{LEARNING_PENALTY_CYCLE_EVENT_TYPE}_conflict":
+                conflicts += 1
                 continue
+            if event_type != LEARNING_PENALTY_CYCLE_EVENT_TYPE:
+                continue
+            event_id = str(row.get("event_id") or "")
             payload = row.get("payload")
-            if not isinstance(payload, dict):
+            cycle_id = str(row.get("cycle_id") or "").strip()
+            expected_event_id = f"{LEARNING_PENALTY_CYCLE_EVENT_TYPE}:{cycle_id}" if cycle_id else ""
+            if not event_id or event_id != expected_event_id or not isinstance(payload, dict):
+                generic_ignored += 1
                 continue
-            events.append(payload | {"event_id": row.get("event_id"), "cycle_id": row.get("cycle_id")})
-        return events
+            if payload.get("schema_version") != LEARNING_PENALTY_CYCLE_SCHEMA or str(payload.get("cycle_id") or "") != cycle_id:
+                invalid_canonical += 1
+                continue
+            supplied_hash = str(payload.get("content_hash") or "")
+            try:
+                valid_hash = bool(supplied_hash) and supplied_hash == _learning_penalty_cycle_hash(payload)
+            except (TypeError, ValueError):
+                valid_hash = False
+            if not valid_hash:
+                invalid_canonical += 1
+                continue
+            enriched = payload | {
+                "event_id": event_id,
+                "cycle_id": cycle_id,
+                "created_at": row.get("created_at"),
+            }
+            existing = by_cycle.get(cycle_id)
+            if existing is None:
+                by_cycle[cycle_id] = enriched
+            elif str(existing.get("content_hash") or "") == supplied_hash:
+                idempotent_duplicates += 1
+            else:
+                conflicts += 1
+        events = sorted(by_cycle.values(), key=lambda item: str(item.get("created_at") or ""))
+        return {
+            "events": events,
+            "canonical_cycles": len({str(item.get("cycle_id") or "") for item in events}),
+            "canonical_events": len(events),
+            "generic_reporter_rows_ignored": generic_ignored,
+            "invalid_canonical_rows": invalid_canonical,
+            "idempotent_duplicates": idempotent_duplicates,
+            "conflicts": conflicts,
+        }
+
+    def learning_penalty_cycle_shadow_events(self, *, limit: int = 50000) -> list[dict[str, Any]]:
+        """Return only valid, deduplicated canonical P-L44 snapshots."""
+
+        return list(self.learning_penalty_cycle_shadow_read(limit=limit).get("events") or [])
 
     def agent_events(
         self,
