@@ -56,3 +56,12 @@ con datos temporales y sin servicios productivos.
 han limpiado leases, locks ni datos productivos, no se han reiniciado servicios
 y no se ha hecho push. P-L43BR6 y P-L44BR3 conservan sus slots posteriores
 (0.4.181 y 0.4.182 respectivamente) y no se modifican en este lote.
+
+## Corrección QA del ensayo
+
+Durante la matriz aislada de helpers se detectó que `Get-StackSchedulerLockInfo`
+interpretaba un lock legacy numérico como JSON escalar y lo clasificaba como
+`malformed_lock`. El ensayo añade únicamente el tratamiento compatible para
+locks numéricos: un PID muerto se clasifica `stale_dead_owner`; JSON legacy,
+malformed, Python gestionado vivo y wrapper vivo quedan diferenciados. No se
+modificó el candidato original ni producción.

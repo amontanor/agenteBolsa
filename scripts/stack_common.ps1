@@ -258,6 +258,9 @@ function Get-StackSchedulerLockInfo {
         }
         $payload = [pscustomobject]@{ pid = $legacyPid; token = $null; kind = "legacy" }
     }
+    if ($payload -is [int] -or $payload -is [long]) {
+        $payload = [pscustomobject]@{ pid = [int]$payload; token = $null; kind = "legacy" }
+    }
     $pidValue = 0
     if (-not [int]::TryParse([string]$payload.pid, [ref]$pidValue) -or $pidValue -le 0) {
         return @{ path = $path; pid = $null; alive = $false; compatible = $false; orphan = $true; status = "malformed_lock"; token_match = $false }
