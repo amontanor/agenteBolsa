@@ -91,6 +91,19 @@ powershell -ExecutionPolicy Bypass -File scripts\stack_status.ps1
 - Dictamen del ensayo: `ready_for_future_shadow_deployment`; producción no se
   modificó ni reinició.
 
+## P-L44BR3 — corrección del contrato lector (candidato 0.4.181, 18-jul-2026)
+
+- Se corrigió la frontera de lectura del shadow: primero se valida
+  `signal_capture_id`/`signal_id` y después la disponibilidad de scoring.
+- Los candidatos identificados sin inputs quedan `shadow_inputs_unavailable`;
+  no se convierten en `identity_unavailable` ni reciben score inventado.
+- Digest, health y CLI cuentan un único evento canónico por `cycle_id`, ignoran
+  filas genéricas del reporter y dejan los conflictos visibles.
+- P-L44 conserva `legacy_double_application` activa y
+  `single_application` exclusivamente shadow. La evidencia previa queda
+  invalidada para interpretación y no se hace backfill; P-L43BR6 sigue como
+  prioridad `0.4.180`.
+
 ## P-L44BR3 — despliegue cerrado (17-jul-2026)
 
 - Producción quedó en `0.4.177` mediante el merge `23e4bf4d`, con el tree

@@ -556,6 +556,35 @@ def _prepare_learning_penalty_cycle_shadow(
     if not isinstance(ranked_context, dict):
         return None
     try:
+        source = ranked_context.get("all_candidates") or ranked_context.get("ranked_candidates") or []
+        buy_items = [
+            item
+            for item in source
+            if isinstance(item, dict) and str(item.get("direction") or "long").lower() in {"long", "buy"}
+        ]
+        if not buy_items:
+            input_set = "unavailable"
+        else:
+            has_prior = any(isinstance(item.get("learning_prior"), dict) for item in buy_items)
+            has_rank = any(isinstance(item.get("rank_priority_score"), (int, float)) for item in buy_items)
+            input_set = "ranked" if has_prior and has_rank else "annotated" if has_prior else "raw"
+        internal_cycle_present = 0
+        for item in buy_items:
+            lineage = item.get("decision_lineage")
+            if str(item.get("cycle_id") or "").strip() or (
+                isinstance(lineage, dict) and str(lineage.get("cycle_id") or "").strip()
+            ):
+                internal_cycle_present += 1
+        input_wiring = {
+            "input_set": input_set,
+            "source_candidate_total": len(buy_items),
+            "signal_id_present": sum(bool(str(item.get("signal_id") or "").strip()) for item in buy_items),
+            "signal_capture_id_present": sum(bool(str(item.get("signal_capture_id") or "").strip()) for item in buy_items),
+            "candidate_id_present": sum(bool(str(item.get("candidate_id") or "").strip()) for item in buy_items),
+            "internal_cycle_id_present": internal_cycle_present,
+            "rank_priority_score_present": sum(isinstance(item.get("rank_priority_score"), (int, float)) and not isinstance(item.get("rank_priority_score"), bool) for item in buy_items),
+            "learning_prior_present": sum(isinstance(item.get("learning_prior"), dict) for item in buy_items),
+        }
         return build_learning_penalty_cycle_shadow(
             run_id,
             ranked_context,
@@ -563,6 +592,7 @@ def _prepare_learning_penalty_cycle_shadow(
             active_candidates=active_candidates,
             configured_capacity=getattr(settings, "max_orders_per_cycle", None),
             settings=settings,
+            input_wiring=input_wiring,
         )
     except Exception as exc:  # noqa: BLE001 - telemetria fail-open.
         reporter.emit(

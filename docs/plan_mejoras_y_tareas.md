@@ -1958,6 +1958,27 @@ rentabilidad.
   `null`; no hay backfill. El CLI es `learning-penalty-shadow-report --json`.
 - El historial prospectivo permanece `collecting`; no hay evidencia suficiente
   para activar la penalización única ni influencia sobre trading.
+
+## P-L44BR3 - contrato lector y denominadores shadow (candidato 0.4.181)
+
+- La auditoría confirmó un `reader_contract_gap`: la identidad se evaluaba
+  después de exigir inputs de scoring y los candidatos raw quedaban contados
+  erróneamente como `identity_unavailable`.
+- El lector corregido evalúa primero `signal_capture_id` y `signal_id`; los
+  identificados sin prior/rank permanecen en el denominador como
+  `shadow_inputs_unavailable`, sin score inventado. `candidate_id` aislado no
+  sustituye identidad canónica y no se usa símbolo/fecha como fallback.
+- Digest, health y CLI aceptan sólo eventos canónicos con schema, ciclo, id y
+  hash válidos; deduplican por `cycle_id`, ignoran filas genéricas del
+  reporter y exponen conflictos sin reemplazar el original.
+- Los denominadores anteriores quedan invalidados para interpretación; no hay
+  backfill. Sin eventos el estado es `collecting` con denominadores `null`;
+  con identidad válida pero inputs ausentes es `partial`.
+- `legacy_double_application` sigue siendo la política activa y
+  `single_application` exclusivamente shadow. No existe evidencia para
+  activarla. P-L43BR6 conserva prioridad de integración como `0.4.180` y
+  P-L44BR3 queda reservado como candidato `0.4.181`.
+
 ## P-L46B - orden cronologico de Cartera abierta (desplegado 0.4.178)
 
 - El orden anterior mostraba primero las posiciones con mayor valor absoluto de

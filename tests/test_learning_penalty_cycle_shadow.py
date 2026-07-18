@@ -80,7 +80,8 @@ def test_missing_or_ambiguous_identity_is_unavailable_without_symbol_fallback(tm
     )
 
     assert snapshot["candidate_counts"]["ranked_buy_total"] == 3
-    assert snapshot["candidate_counts"]["identity_unavailable"] == 3
+    assert snapshot["candidate_counts"]["identity_unavailable"] == 1
+    assert snapshot["candidate_counts"]["identity_ambiguous"] == 2
     assert all(item.get("symbol") != "AAPL" for item in snapshot["bounded_candidates"])
     assert "UNKNOWN" not in json.dumps(snapshot)
 
