@@ -20,6 +20,7 @@ from ..config import Settings
 from ..storage import Store
 
 SCHEMA_VERSION = "p-l45b1.postmarket-run.v1"
+LEASE_SCHEMA_VERSION = "p-l47b1.lease.v1"
 ACTIVE_KEY = "post_market_coordination:active"
 RECONCILIATION_KEY = "post_market_coordination:reconciliation"
 SESSION_KEY_PREFIX = "post_market_coordination:session:"
@@ -71,13 +72,79 @@ def _owner_is_live(owner: dict[str, Any] | None, *, current_pid: int, current_to
 
     if not isinstance(owner, dict):
         return False
-    owner_pid = int(owner.get("owner_pid") or 0)
+    try:
+        owner_pid = int(owner.get("owner_pid") or 0)
+    except (TypeError, ValueError):
+        return False
     if not _pid_alive(owner_pid):
         return False
-    owner_token = str(owner.get("owner_token") or "").strip()
+    owner_token = str(owner.get("owner_process_token") or owner.get("owner_token") or "").strip()
     # Los estados legacy pueden carecer de token: un PID vivo no se roba. Si el
     # PID coincide pero el token no, el proceso que lo reclama es distinto.
     return not (owner_pid == current_pid and owner_token and owner_token != current_token)
+
+
+def _terminal_status_for_run(conn: Any, run_id: str) -> str | None:
+    """Return a durable terminal status for ``run_id`` when one exists.
+
+    Runtime state is only a mutable view.  A terminal event is authoritative
+    when an old process left an ``active`` view behind, including the case
+    where the terminal event was written just before a process was killed.
+    """
+
+    if not run_id:
+        return None
+    rows = conn.execute(
+        "SELECT event_id, payload_json FROM agent_events "
+        "WHERE event_id LIKE ? ORDER BY created_at DESC",
+        (f"%:{run_id}:terminal:%",),
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] if hasattr(row, "keys") else row[1])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        status = str(payload.get("status") or "").strip().lower()
+        if status in {"completed", "failed", "skipped"}:
+            return status
+    return None
+
+
+def _lease_payload(
+    *,
+    status: str,
+    session_date: str,
+    run_id: str,
+    trigger: str,
+    owner_pid: int,
+    owner_token: str,
+    stage: str,
+    started_at: str | None = None,
+    updated_at: str | None = None,
+    finished_at: str | None = None,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "lease_schema_version": LEASE_SCHEMA_VERSION,
+        "status": status,
+        "session_date": session_date,
+        "run_id": run_id,
+        "trigger": trigger,
+        "owner_pid": owner_pid,
+        "owner_process_token": owner_token,
+        # Keep the old key readable for existing consumers and fixtures.
+        "owner_token": owner_token,
+        "stage": stage,
+    }
+    if started_at is not None:
+        payload["started_at"] = started_at
+    if updated_at is not None:
+        payload["updated_at"] = updated_at
+    if finished_at is not None:
+        payload["finished_at"] = finished_at
+    if reason is not None:
+        payload["reason"] = _reason(reason)
+    return payload
 
 
 @dataclass(frozen=True)
@@ -117,6 +184,7 @@ class PostmarketCoordinator:
             "trigger": trigger,
             "owner_pid": owner_pid if owner_pid is not None else self.owner_pid,
             "owner_token": owner_token or self.owner_token,
+            "owner_process_token": owner_token or self.owner_token,
             "stage": stage,
             "status": status,
             "reason": _reason(reason) if reason else None,
@@ -148,6 +216,98 @@ class PostmarketCoordinator:
             # La telemetría nunca debe ocultar el resultado del pipeline.
             return
 
+    def _persist_marker(
+        self,
+        event_type: str,
+        *,
+        event_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        """Persist a small coordination marker without affecting the lease."""
+
+        marker = {
+            "schema_version": LEASE_SCHEMA_VERSION,
+            "event_type": event_type,
+            **payload,
+        }
+        marker["content_hash"] = _stable_hash({k: v for k, v in marker.items() if k != "content_hash"})
+        try:
+            self.store.record_append_only_event(
+                event_id=event_id,
+                event_type=event_type,
+                cycle_id=str(payload.get("run_id") or payload.get("owner_pid") or ""),
+                payload=marker,
+            )
+        except Exception:
+            return
+
+    @staticmethod
+    def _same_owner(state: dict[str, Any] | None, lease: CoordinationLease) -> bool:
+        if not isinstance(state, dict):
+            return False
+        try:
+            pid = int(state.get("owner_pid") or 0)
+        except (TypeError, ValueError):
+            return False
+        token = str(state.get("owner_process_token") or state.get("owner_token") or "").strip()
+        return pid == lease.owner_pid and token == lease.owner_token and str(state.get("run_id") or "") == lease.run_id
+
+    def _release_runtime_lease(
+        self,
+        lease: CoordinationLease,
+        *,
+        finished: str,
+        status: str,
+        reason: str | None,
+    ) -> tuple[bool, str]:
+        """Release only keys owned by this exact PID/token/run identity."""
+
+        released_keys: list[str] = []
+        try:
+            with self.store.connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                for key in (ACTIVE_KEY, RECONCILIATION_KEY):
+                    row = conn.execute("SELECT value_json FROM runtime_state WHERE key = ?", (key,)).fetchone()
+                    if not row:
+                        continue
+                    try:
+                        state = json.loads(row["value_json"] if hasattr(row, "keys") else row[0])
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        continue
+                    if self._same_owner(state, lease):
+                        conn.execute("DELETE FROM runtime_state WHERE key = ?", (key,))
+                        released_keys.append(key)
+        except Exception as exc:  # noqa: BLE001 - release failure must be visible.
+            self._persist_marker(
+                "lease_release_failed",
+                event_id=f"lease_release_failed:{lease.run_id}:{status}",
+                payload={
+                    "run_id": lease.run_id,
+                    "session_date": lease.session_date,
+                    "owner_pid": lease.owner_pid,
+                    "owner_process_token": lease.owner_token,
+                    "status": status,
+                    "reason": _reason(reason) if reason else None,
+                    "error": str(exc)[:500],
+                },
+            )
+            return False, str(exc)
+        self._persist_marker(
+            "lease_released",
+            event_id=f"lease_released:{lease.run_id}:{status}",
+            payload={
+                "run_id": lease.run_id,
+                "session_date": lease.session_date,
+                "owner_pid": lease.owner_pid,
+                "owner_process_token": lease.owner_token,
+                "status": status,
+                "reason": _reason(reason) if reason else None,
+                "released_keys": released_keys,
+                "finished_at": finished,
+            },
+        )
+        return True, ""
+
     def _runtime(self, key: str) -> dict[str, Any] | None:
         value = self.store.get_runtime_value(key)
         return value if isinstance(value, dict) else None
@@ -163,6 +323,9 @@ class PostmarketCoordinator:
         reason: str | None = None
         recovered_run_id: str | None = None
         recovered_started_at: str | None = None
+        recovered_owner: dict[str, Any] | None = None
+        recovery_event_type: str | None = None
+        recovered_terminal_status: str | None = None
         effective = False
         with self.store.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -177,29 +340,48 @@ class PostmarketCoordinator:
             elif isinstance(session_state, dict) and session_state.get("status") == "completed":
                 reason = "session_already_completed"
             elif isinstance(active, dict) and active.get("status") == "active":
-                active_pid = int(active.get("owner_pid") or 0)
-                active_token = str(active.get("owner_token") or "").strip()
+                try:
+                    active_pid = int(active.get("owner_pid") or 0)
+                except (TypeError, ValueError):
+                    active_pid = 0
+                active_token = str(active.get("owner_process_token") or active.get("owner_token") or "").strip()
+                active_run_id = str(active.get("run_id") or "")
+                terminal_status = _terminal_status_for_run(conn, active_run_id)
                 if _owner_is_live(active, current_pid=pid, current_token=token):
+                    # A live owner may be between its terminal event and the
+                    # final runtime-state release.  Do not steal that lease.
                     reason = "postmarket_already_running"
+                elif terminal_status in {"completed", "failed", "skipped"}:
+                    reason = "terminal_lease_recovered"
+                    recovered_run_id = active_run_id or None
+                    recovered_started_at = str(active.get("started_at") or "") or None
+                    recovered_owner = dict(active)
+                    recovery_event_type = "terminal_lease_recovered"
+                    recovered_terminal_status = terminal_status
+                    effective = True
                 else:
                     # Lease muerto: se recupera de forma determinista y se
                     # deja constancia del propietario sustituido.
                     reason = "owner_token_mismatch_recovered" if active_pid == pid and active_token and active_token != token else "dead_owner_recovered"
                     recovered_run_id = str(active.get("run_id") or "") or None
                     recovered_started_at = str(active.get("started_at") or "") or None
+                    recovered_owner = dict(active)
+                    recovery_event_type = "stale_lease_recovered"
                     effective = True
             else:
                 effective = True
             if effective:
                 state = {
-                    "status": "active",
-                    "session_date": session_date,
-                    "run_id": run_id,
-                    "trigger": trigger,
-                    "owner_pid": pid,
-                    "owner_token": token,
-                    "stage": "coordination",
-                    "started_at": started,
+                    **_lease_payload(
+                        status="active",
+                        session_date=session_date,
+                        run_id=run_id,
+                        trigger=trigger,
+                        owner_pid=pid,
+                        owner_token=token,
+                        stage="coordination",
+                        started_at=started,
+                    ),
                 }
                 encoded = json.dumps(state, ensure_ascii=True, sort_keys=True)
                 conn.execute(
@@ -215,21 +397,37 @@ class PostmarketCoordinator:
                 status = "started"
             else:
                 status = "skipped"
-        if recovered_run_id:
-            recovered = self._event(
-                run_id=recovered_run_id,
-                session_date=session_date,
-                trigger=str(active.get("trigger") or "scheduled"),
-                stage="terminal",
-                status="failed",
-                reason="owner_dead_recovered",
-                error="owner_pid_not_alive",
-                started_at=recovered_started_at,
-                finished_at=started,
-                owner_pid=int(active.get("owner_pid") or 0),
-                owner_token=str(active.get("owner_token") or ""),
+        if recovered_run_id and recovered_owner:
+            if recovery_event_type != "terminal_lease_recovered":
+                recovered = self._event(
+                    run_id=recovered_run_id,
+                    session_date=session_date,
+                    trigger=str(recovered_owner.get("trigger") or "scheduled"),
+                    stage="terminal",
+                    status="failed",
+                    reason="owner_dead_recovered",
+                    error="owner_pid_not_alive",
+                    started_at=recovered_started_at,
+                    finished_at=started,
+                    owner_pid=int(recovered_owner.get("owner_pid") or 0),
+                    owner_token=str(recovered_owner.get("owner_process_token") or recovered_owner.get("owner_token") or ""),
+                )
+                self._persist_event(recovered, event_id=f"pmr:{recovered_run_id}:terminal:failed")
+            # A terminal residual already has its canonical event; only emit a
+            # recovery marker.  Never overwrite or conflict with that event.
+            self._persist_marker(
+                recovery_event_type or "stale_lease_recovered",
+                event_id=f"{recovery_event_type or 'stale_lease_recovered'}:{recovered_run_id}:{run_id}",
+                payload={
+                    "run_id": recovered_run_id,
+                    "replacement_run_id": run_id,
+                    "session_date": session_date,
+                    "owner_pid": int(recovered_owner.get("owner_pid") or 0),
+                    "owner_process_token": str(recovered_owner.get("owner_process_token") or recovered_owner.get("owner_token") or ""),
+                    "reason": reason,
+                    "terminal_status": recovered_terminal_status,
+                },
             )
-            self._persist_event(recovered, event_id=f"pmr:{recovered_run_id}:terminal:failed")
         payload = self._event(
             run_id=run_id,
             session_date=session_date,
@@ -244,6 +442,31 @@ class PostmarketCoordinator:
         )
         self._stage_starts[(run_id, "coordination")] = started
         self._persist_event(payload, event_id=f"pmr:{run_id}:coordination:{status}")
+        if effective:
+            self._persist_marker(
+                "lease_acquired",
+                event_id=f"lease_acquired:{run_id}",
+                payload={
+                    "run_id": run_id,
+                    "session_date": session_date,
+                    "trigger": trigger,
+                    "owner_pid": pid,
+                    "owner_process_token": token,
+                    "reason": reason,
+                },
+            )
+        elif reason == "postmarket_already_running":
+            self._persist_marker(
+                "ownership_conflict",
+                event_id=f"ownership_conflict:{run_id}",
+                payload={
+                    "run_id": run_id,
+                    "session_date": session_date,
+                    "owner_pid": pid,
+                    "owner_process_token": token,
+                    "reason": reason,
+                },
+            )
         if not effective:
             terminal = self._event(
                 run_id=run_id,
@@ -282,21 +505,23 @@ class PostmarketCoordinator:
             try:
                 self.store.set_runtime_value(
                     ACTIVE_KEY,
-                    {
-                        "status": "active",
-                        "session_date": lease.session_date,
-                        "run_id": lease.run_id,
-                        "trigger": lease.trigger,
-                        "owner_pid": lease.owner_pid,
-                        "owner_token": lease.owner_token,
-                        "stage": stage,
-                        "updated_at": now,
-                    },
+                    _lease_payload(
+                        status="active",
+                        session_date=lease.session_date,
+                        run_id=lease.run_id,
+                        trigger=lease.trigger,
+                        owner_pid=lease.owner_pid,
+                        owner_token=lease.owner_token,
+                        stage=stage,
+                        updated_at=now,
+                    ),
                 )
             except Exception:
                 pass
 
     def terminal(self, lease: CoordinationLease, status: str, *, reason: str | None = None, error: str | None = None) -> None:
+        if status not in {"completed", "failed", "skipped"}:
+            raise ValueError(f"Unsupported coordination terminal status: {status}")
         finished = _iso()
         payload = self._event(
             run_id=lease.run_id,
@@ -317,27 +542,38 @@ class PostmarketCoordinator:
         try:
             with self.store.connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
-                state = {
-                    "status": status,
-                    "session_date": lease.session_date,
-                    "run_id": lease.run_id,
-                    "trigger": lease.trigger,
-                    "owner_pid": lease.owner_pid,
-                    "owner_token": lease.owner_token,
-                    "finished_at": finished,
-                    "reason": _reason(reason) if reason else None,
-                }
+                state = _lease_payload(
+                    status=status,
+                    session_date=lease.session_date,
+                    run_id=lease.run_id,
+                    trigger=lease.trigger,
+                    owner_pid=lease.owner_pid,
+                    owner_token=lease.owner_token,
+                    stage="terminal",
+                    finished_at=finished,
+                    reason=reason,
+                )
                 encoded = json.dumps(state, ensure_ascii=True, sort_keys=True)
                 conn.execute(
                     "UPDATE runtime_state SET value_json = ?, updated_at = ? WHERE key = ?",
                     (encoded, finished, f"{SESSION_KEY_PREFIX}{lease.session_date}"),
                 )
-                conn.execute(
-                    "DELETE FROM runtime_state WHERE key = ? AND value_json LIKE ?",
-                    (ACTIVE_KEY, f'%"run_id": "{lease.run_id}"%'),
-                )
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - release failure must be visible.
+            self._persist_marker(
+                "lease_release_failed",
+                event_id=f"lease_release_failed:{lease.run_id}:{status}",
+                payload={
+                    "run_id": lease.run_id,
+                    "session_date": lease.session_date,
+                    "owner_pid": lease.owner_pid,
+                    "owner_process_token": lease.owner_token,
+                    "status": status,
+                    "reason": _reason(reason) if reason else None,
+                    "error": str(exc)[:500],
+                },
+            )
+            return
+        self._release_runtime_lease(lease, finished=finished, status=status, reason=reason)
 
     def acquire_reconciliation(self, *, run_id: str, session_date: str, trigger: str = "scheduled") -> CoordinationLease:
         started = _iso()
@@ -347,6 +583,8 @@ class PostmarketCoordinator:
         reason: str | None = None
         recovered_run_id: str | None = None
         recovered_owner: dict[str, Any] | None = None
+        recovery_event_type: str | None = None
+        recovered_terminal_status: str | None = None
         effective = False
         with self.store.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -355,29 +593,56 @@ class PostmarketCoordinator:
             pmr = json.loads(pmr_row[0]) if pmr_row else None
             recon = json.loads(recon_row[0]) if recon_row else None
             if isinstance(pmr, dict) and pmr.get("status") == "active":
-                reason = "postmarket_already_running"
+                pmr_run_id = str(pmr.get("run_id") or "")
+                pmr_terminal = _terminal_status_for_run(conn, pmr_run_id)
+                if _owner_is_live(pmr, current_pid=pid, current_token=token):
+                    reason = "postmarket_already_running"
+                elif pmr_terminal in {"completed", "failed", "skipped"}:
+                    conn.execute("DELETE FROM runtime_state WHERE key = ? AND value_json = ?", (ACTIVE_KEY, pmr_row[0]))
+                    recovered_run_id = pmr_run_id or None
+                    recovered_owner = dict(pmr)
+                    recovery_event_type = "terminal_lease_recovered"
+                    recovered_terminal_status = pmr_terminal
+                    effective = True
+                else:
+                    reason = "postmarket_already_running"
             elif isinstance(recon, dict) and recon.get("status") == "active":
-                recon_pid = int(recon.get("owner_pid") or 0)
-                recon_token = str(recon.get("owner_token") or "").strip()
+                try:
+                    recon_pid = int(recon.get("owner_pid") or 0)
+                except (TypeError, ValueError):
+                    recon_pid = 0
+                recon_token = str(recon.get("owner_process_token") or recon.get("owner_token") or "").strip()
+                recon_run_id = str(recon.get("run_id") or "")
+                recon_terminal = _terminal_status_for_run(conn, recon_run_id)
                 if _owner_is_live(recon, current_pid=pid, current_token=token):
                     reason = "reconciliation_already_running"
+                elif recon_terminal in {"completed", "failed", "skipped"}:
+                    conn.execute("DELETE FROM runtime_state WHERE key = ? AND value_json = ?", (RECONCILIATION_KEY, recon_row[0]))
+                    recovered_run_id = recon_run_id or None
+                    recovered_owner = dict(recon)
+                    recovery_event_type = "terminal_lease_recovered"
+                    recovered_terminal_status = recon_terminal
+                    effective = True
                 else:
                     reason = "owner_token_mismatch_recovered" if recon_pid == pid and recon_token and recon_token != token else "dead_reconciliation_recovered"
                     recovered_run_id = str(recon.get("run_id") or "") or None
                     recovered_owner = recon
+                    recovery_event_type = "stale_lease_recovered"
                     effective = True
             else:
                 effective = True
             if effective:
                 state = {
-                    "status": "active",
-                    "session_date": session_date,
-                    "run_id": run_id,
-                    "trigger": _reason(trigger),
-                    "owner_pid": pid,
-                    "owner_token": token,
-                    "stage": "reconciliation",
-                    "started_at": started,
+                    **_lease_payload(
+                        status="active",
+                        session_date=session_date,
+                        run_id=run_id,
+                        trigger=_reason(trigger),
+                        owner_pid=pid,
+                        owner_token=token,
+                        stage="reconciliation",
+                        started_at=started,
+                    ),
                 }
                 encoded = json.dumps(state, ensure_ascii=True, sort_keys=True)
                 conn.execute(
@@ -386,20 +651,34 @@ class PostmarketCoordinator:
                     (RECONCILIATION_KEY, encoded, started),
                 )
         if recovered_run_id and recovered_owner:
-            recovered = self._event(
-                run_id=recovered_run_id,
-                session_date=session_date,
-                trigger=str(recovered_owner.get("trigger") or "scheduled"),
-                stage="terminal",
-                status="failed",
-                reason="owner_dead_recovered",
-                error="owner_pid_not_alive",
-                started_at=str(recovered_owner.get("started_at") or "") or None,
-                finished_at=started,
-                owner_pid=int(recovered_owner.get("owner_pid") or 0),
-                owner_token=str(recovered_owner.get("owner_token") or ""),
+            if recovery_event_type != "terminal_lease_recovered":
+                recovered = self._event(
+                    run_id=recovered_run_id,
+                    session_date=session_date,
+                    trigger=str(recovered_owner.get("trigger") or "scheduled"),
+                    stage="terminal",
+                    status="failed",
+                    reason="owner_dead_recovered",
+                    error="owner_pid_not_alive",
+                    started_at=str(recovered_owner.get("started_at") or "") or None,
+                    finished_at=started,
+                    owner_pid=int(recovered_owner.get("owner_pid") or 0),
+                    owner_token=str(recovered_owner.get("owner_process_token") or recovered_owner.get("owner_token") or ""),
+                )
+                self._persist_event(recovered, event_id=f"recon:{recovered_run_id}:terminal:failed")
+            self._persist_marker(
+                recovery_event_type or "stale_lease_recovered",
+                event_id=f"{recovery_event_type or 'stale_lease_recovered'}:{recovered_run_id}:{run_id}",
+                payload={
+                    "run_id": recovered_run_id,
+                    "replacement_run_id": run_id,
+                    "session_date": session_date,
+                    "owner_pid": int(recovered_owner.get("owner_pid") or 0),
+                    "owner_process_token": str(recovered_owner.get("owner_process_token") or recovered_owner.get("owner_token") or ""),
+                    "reason": reason or recovery_event_type,
+                    "terminal_status": recovered_terminal_status,
+                },
             )
-            self._persist_event(recovered, event_id=f"recon:{recovered_run_id}:terminal:failed")
         status = "started" if effective else "skipped"
         payload = self._event(
             run_id=run_id,
@@ -415,6 +694,31 @@ class PostmarketCoordinator:
         )
         self._stage_starts[(run_id, "coordination")] = started
         self._persist_event(payload, event_id=f"recon:{run_id}:coordination:{status}")
+        if effective:
+            self._persist_marker(
+                "lease_acquired",
+                event_id=f"lease_acquired:reconciliation:{run_id}",
+                payload={
+                    "run_id": run_id,
+                    "session_date": session_date,
+                    "trigger": _reason(trigger),
+                    "owner_pid": pid,
+                    "owner_process_token": token,
+                    "reason": reason,
+                },
+            )
+        elif reason in {"postmarket_already_running", "reconciliation_already_running"}:
+            self._persist_marker(
+                "ownership_conflict",
+                event_id=f"ownership_conflict:reconciliation:{run_id}",
+                payload={
+                    "run_id": run_id,
+                    "session_date": session_date,
+                    "owner_pid": pid,
+                    "owner_process_token": token,
+                    "reason": reason,
+                },
+            )
         if not effective:
             terminal = self._event(
                 run_id=run_id,
@@ -452,6 +756,8 @@ class PostmarketCoordinator:
         return True
 
     def finish_reconciliation(self, lease: CoordinationLease, status: str, *, reason: str | None = None, error: str | None = None) -> None:
+        if status not in {"completed", "failed", "skipped"}:
+            raise ValueError(f"Unsupported reconciliation terminal status: {status}")
         if not lease.effective:
             return
         finished = _iso()
@@ -469,9 +775,4 @@ class PostmarketCoordinator:
             owner_token=lease.owner_token,
         )
         self._persist_event(payload, event_id=f"recon:{lease.run_id}:terminal:{status}")
-        try:
-            with self.store.connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                conn.execute("DELETE FROM runtime_state WHERE key = ?", (RECONCILIATION_KEY,))
-        except Exception:
-            pass
+        self._release_runtime_lease(lease, finished=finished, status=status, reason=reason)

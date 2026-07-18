@@ -91,6 +91,21 @@ powershell -ExecutionPolicy Bypass -File scripts\stack_status.ps1
 - Dictamen del ensayo: `ready_for_future_shadow_deployment`; producción no se
   modificó ni reinició.
 
+## P-L47B1 — candidato de recuperación de leases (0.4.180)
+
+El diagnóstico de producción encontró una vista residual de coordinación de
+reconciliación con terminal durable y un `scheduler.lock` con PID obsoleto;
+no se limpió ni escribió producción. El candidato aislado versiona leases y
+locks con token estable de proceso, impide robar propietarios vivos, recupera
+propietarios muertos o terminales residuales con eventos append-only y deja
+`runtime_state` como `latest_view`. Los helpers de stack/health diagnostican
+el Python APScheduler real, no su wrapper.
+
+P-L47B1 reserva la versión `0.4.180` y queda pendiente de ensayo de integración
+y autorización humana. No cambia stops, takes, time-stop, ranking, gates,
+órdenes, exposición ni límites. P-L43BR6 y P-L44BR3 conservan sus slots
+posteriores (`0.4.181` y `0.4.182`) y no se integran en este lote.
+
 ## P-L44BR3 — despliegue cerrado (17-jul-2026)
 
 - Producción quedó en `0.4.177` mediante el merge `23e4bf4d`, con el tree

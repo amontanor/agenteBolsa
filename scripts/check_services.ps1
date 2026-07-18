@@ -18,14 +18,11 @@ $status = Get-StackStatus
 $services = @($status.services)
 $foreign = @($status.foreign_processes)
 
-# Lock del scheduler: la fuente de verdad de "quien esta activo".
-$lockPath = Join-Path $Repo "data\state\scheduler.lock"
-$lockPid = $null
-if (Test-Path $lockPath) {
-    try { $lockPid = [int]((Get-Content $lockPath -Raw | ConvertFrom-Json).pid) } catch { $lockPid = $null }
-}
-$lockAlive = $false
-if ($lockPid) { $lockAlive = [bool](Get-Process -Id $lockPid -ErrorAction SilentlyContinue) }
+# Lock del scheduler: la fuente de verdad es el proceso Python APScheduler,
+# no el wrapper/supervisor que lo lanza.
+$schedulerStatus = $services | Where-Object { $_.service -eq "scheduler" } | Select-Object -First 1
+$lockPid = $schedulerStatus.lock_pid
+$lockAlive = [bool]$schedulerStatus.lock_ok
 
 # Panel.
 $http = $null
@@ -51,7 +48,7 @@ if ($lockAlive) {
 
 $problemas = @()
 if ($foreign.Count -gt 0) { $problemas += ("Hay {0} proceso(s) ajenos al .venv." -f $foreign.Count) }
-if (-not $lockAlive)    { $problemas += "No hay un scheduler activo con lock vivo." }
+if (-not $lockAlive)    { $problemas += ("No hay un scheduler activo con lock coherente (estado={0})." -f $schedulerStatus.lock_status) }
 if (($services | Where-Object { $_.service -eq "scheduler" -and $_.state -eq "DUPLICADO" }).Count -gt 0) { $problemas += "Mas de un scheduler logico." }
 if (($services | Where-Object { $_.service -eq "web" -and $_.state -eq "DUPLICADO" }).Count -gt 0) { $problemas += "Mas de un web logico." }
 if ($http -ne 200)      { $problemas += ("El panel no responde HTTP 200 en :{0}." -f $WebPort) }
