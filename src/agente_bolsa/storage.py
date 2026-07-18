@@ -4368,6 +4368,165 @@ class Store:
             result.setdefault(symbol, []).append(lot)
         return result
 
+    def executed_open_buy_lots_by_symbol(
+        self,
+        *,
+        position_quantities: dict[str, Any] | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Return open BUY lots reconciled by exact filled SELL provenance.
+
+        ``executed_buy_lots_by_symbol`` intentionally exposes every filled BUY
+        for lineage.  A time-stop, however, needs the currently open inventory.
+        This method subtracts only filled SELL quantities whose payload carries
+        the exact source ``plan_id`` of a BUY.  Missing or ambiguous provenance
+        is surfaced on the lot and left for the temporal evaluator to reject;
+        it is never guessed from symbol or date.
+        """
+
+        buys_by_symbol = self.executed_buy_lots_by_symbol()
+        if not buys_by_symbol:
+            return {}
+
+        def _number(value: Any) -> float | None:
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return None
+            return number if math.isfinite(number) else None
+
+        def _filled_status(value: Any) -> bool:
+            text = str(value or "").strip().lower()
+            return text in {"filled", "orderstatus.filled"} or text.endswith(".filled")
+
+        def _filled_qty(payload: dict[str, Any]) -> float | None:
+            reconciled = payload.get("broker_order_reconciled") or {}
+            broker = payload.get("broker_order") or {}
+            snapshot = payload.get("execution_quality_snapshot") or {}
+            quantities = snapshot.get("quantities") or {}
+            for value in (
+                reconciled.get("filled_qty"),
+                broker.get("filled_qty"),
+                quantities.get("filled"),
+            ):
+                number = _number(value)
+                if number is not None:
+                    return number
+            return None
+
+        def _source_plan_id(payload: dict[str, Any]) -> str | None:
+            plan = payload.get("plan") or {}
+            plan_payload = plan.get("payload") or {}
+            risk = plan_payload.get("risk_decision") or {}
+            checks = risk.get("checks") or {}
+            for value in (
+                checks.get("source_plan_id"),
+                plan_payload.get("source_plan_id"),
+                plan.get("source_plan_id"),
+            ):
+                text = str(value or "").strip()
+                if text:
+                    return text
+            return None
+
+        with self.connect() as conn:
+            sell_rows = conn.execute(
+                """
+                SELECT broker_order_id, symbol, side, status, payload_json
+                FROM broker_orders
+                WHERE lower(side) IN ('sell', 'orderside.sell')
+                ORDER BY created_at ASC, broker_order_id ASC
+                """
+            ).fetchall()
+
+        lots_by_plan: dict[str, list[dict[str, Any]]] = {}
+        for lots in buys_by_symbol.values():
+            for lot in lots:
+                plan_id = str(lot.get("order_plan_id") or lot.get("source_plan_id") or "").strip()
+                if plan_id:
+                    lots_by_plan.setdefault(plan_id, []).append(lot)
+        sold_by_plan: dict[str, float] = {}
+        ambiguous_symbols: set[str] = set()
+        for row in sell_rows:
+            if not _filled_status(row["status"]):
+                continue
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            quantity = _filled_qty(payload)
+            if quantity is None or quantity <= 0:
+                continue
+            source_plan_id = _source_plan_id(payload)
+            matches = lots_by_plan.get(source_plan_id or "", [])
+            if source_plan_id is None or len(matches) != 1:
+                # A filled sell without exact BUY provenance cannot be safely
+                # allocated to a lot, even when the symbol happens to match.
+                for match in matches:
+                    ambiguous_symbols.add(str(match.get("symbol") or row["symbol"] or "").upper())
+                ambiguous_symbols.add(str(row["symbol"] or "").upper())
+                continue
+            sold_by_plan[source_plan_id] = sold_by_plan.get(source_plan_id, 0.0) + quantity
+
+        quantities = {str(key).upper(): _number(value) for key, value in (position_quantities or {}).items()}
+        result: dict[str, list[dict[str, Any]]] = {}
+        for symbol, lots in buys_by_symbol.items():
+            symbol = str(symbol).upper()
+            candidates: list[dict[str, Any]] = []
+            for lot in lots:
+                plan_id = str(lot.get("order_plan_id") or lot.get("source_plan_id") or "")
+                filled_qty = _number(lot.get("filled_qty"))
+                sold_qty = sold_by_plan.get(plan_id, 0.0)
+                if filled_qty is None or sold_qty > filled_qty + 1e-8:
+                    ambiguous_symbols.add(symbol)
+                    continue
+                remaining = filled_qty - sold_qty
+                if remaining <= 1e-8:
+                    continue
+                candidate = dict(lot)
+                candidate.update(
+                    {
+                        "open_qty": remaining,
+                        "remaining_qty": remaining,
+                        "remaining_qty_scope": "position",
+                        "open_qty_authority": "exact_source_plan_sell_reconciliation",
+                    }
+                )
+                candidates.append(candidate)
+
+            if symbol in ambiguous_symbols:
+                # Preserve references for audit, but explicitly mark the open
+                # quantity as unavailable so the evaluator cannot fall back to
+                # filled_qty and invent an identity.
+                result[symbol] = [
+                    {
+                        **lot,
+                        "open_qty": None,
+                        "remaining_qty": None,
+                        "remaining_qty_scope": "position",
+                        "open_qty_authority": "unavailable",
+                    }
+                    for lot in lots
+                ]
+                continue
+            target = quantities.get(symbol)
+            if target is None or abs(sum(float(item["open_qty"]) for item in candidates) - target) > 1e-8:
+                if candidates:
+                    result[symbol] = [
+                        {
+                            **lot,
+                            "open_qty": None,
+                            "remaining_qty": None,
+                            "remaining_qty_scope": "position",
+                            "open_qty_authority": "unavailable",
+                        }
+                        for lot in candidates
+                    ]
+                continue
+            result[symbol] = candidates
+        return result
+
     def count_broker_orders(
         self,
         *,
