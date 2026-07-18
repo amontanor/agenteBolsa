@@ -2005,6 +2005,19 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
 - 0.4.182: P-L44BR3 integrado después; versión final del ensayo.
 - Ambos lotes continúan exclusivamente shadow y no modifican trading.
 
+## Despliegue secuenciado P-L43BR6 + P-L44BR3 (18-jul-2026)
+
+- Merge productivo: `7cc432aee3f594d946f5a65d1f86f3e49fa82e4`.
+- Tree funcional: `bc2d15ffd0d43f10359761b61efc07b0384c5072`.
+- Versión final: `0.4.182`.
+- Secuencia: P-L47B1 `0.4.180` desplegado; P-L43BR6 `0.4.181` desplegado;
+  P-L44BR3 `0.4.182` desplegado.
+- P-L43BR6 conserva `legacy_calendar_days` activa y XNYS `shadow_only=true`.
+- P-L44BR3 conserva `legacy_double_application` activa y
+  `single_application` exclusivamente shadow.
+- Ambos shadows siguen `collecting`/`partial`; no hay backfill ni autoridad
+  sobre trading.
+
 ## P-L46B - orden cronologico de Cartera abierta (desplegado 0.4.178)
 
 - El orden anterior mostraba primero las posiciones con mayor valor absoluto de

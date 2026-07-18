@@ -147,3 +147,15 @@ scheduler y heartbeat fresco. La evidencia real continúa `collecting`;
 `legacy_double_application` sigue siendo la política activa y
 `single_application` permanece exclusivamente shadow, sin decisiones ni órdenes
 atribuibles al comparador.
+
+## Despliegue secuenciado P-L44BR3 (0.4.182)
+
+El lector corregido se desplegó junto con P-L43BR6 sobre P-L47B1 mediante el
+merge productivo `7cc432aee3f594d946f5a65d1f86f3e49fa82e4`, tree funcional
+`bc2d15ffd0d43f10359761b61efc07b0384c5072` y versión `0.4.182`.
+
+La secuencia es inequívoca: P-L47B1 `0.4.180`, P-L43BR6 `0.4.181` y P-L44BR3
+`0.4.182`. `legacy_double_application` sigue siendo la política activa y
+`single_application` continúa exclusivamente shadow. La lectura histórica
+canónica permanece `partial` con 26 ciclos y 26 eventos; no se hace backfill,
+no se reescriben eventos y no se atribuyen decisiones u órdenes al shadow.

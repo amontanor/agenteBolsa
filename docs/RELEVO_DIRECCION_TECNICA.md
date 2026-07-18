@@ -104,6 +104,16 @@ P-L43BR6 y P-L44BR3 permanecen fuera y conservan los slots `0.4.181` y
 
 ## Secuencia post-P-L47B1 del ensayo
 
+## Estado actual tras el despliegue P-L43BR6 + P-L44BR3 (18-jul-2026)
+
+- Producción: versión `0.4.182`, merge `7cc432aee3f594d946f5a65d1f86f3e49fa82e4`.
+- Secuencia: P-L47B1 `0.4.180`, P-L43BR6 `0.4.181`, P-L44BR3 `0.4.182`.
+- El stack quedó con un scheduler lógico wrapper → launcher venv → runtime,
+  lock v1 propiedad del runtime y heartbeat fresco.
+- `legacy_calendar_days` y `legacy_double_application` siguen siendo las
+  políticas activas; XNYS y `single_application` continúan exclusivamente
+  shadow. La evidencia sigue `collecting`/`partial`, sin backfill.
+
 - 0.4.180: P-L47B1 desplegado.
 - 0.4.181: P-L43BR6 integrado primero en este ensayo.
 - 0.4.182: P-L44BR3 integrado después; versión final del ensayo.
