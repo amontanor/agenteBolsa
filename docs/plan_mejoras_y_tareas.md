@@ -1958,6 +1958,24 @@ rentabilidad.
   `null`; no hay backfill. El CLI es `learning-penalty-shadow-report --json`.
 - El historial prospectivo permanece `collecting`; no hay evidencia suficiente
   para activar la penalización única ni influencia sobre trading.
+## P-L47B1 — leases terminales y ownership del scheduler (candidato 0.4.180)
+
+En un worktree aislado se corrige la recuperación durable de leases de
+postmarket/reconciliación y la propiedad del lock del scheduler. `runtime_state`
+continúa siendo una vista mutable; `agent_events` conserva adquisiciones,
+liberaciones, recuperaciones, conflictos y fallos de liberación append-only.
+La autoridad del scheduler es el proceso Python real de APScheduler, con PID,
+token estable de creación y payload versionado; wrappers, locks legacy,
+propietarios muertos y PID reutilizado se diagnostican sin robar un proceso
+vivo. No se crean tablas, migraciones, procesos ni schedulers nuevos y no se
+tocan decisiones de trading.
+
+La base productiva observada queda intacta: se identificó un lease residual de
+reconciliación con terminal durable y un `scheduler.lock` cuyo PID ya no era
+el Python activo, pero no se hizo limpieza manual. P-L47B1 queda pendiente de
+ensayo de integración; candidato `0.4.180`. P-L43BR6 conserva el slot futuro
+`0.4.181` y P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
+
 ## P-L46B - orden cronologico de Cartera abierta (desplegado 0.4.178)
 
 - El orden anterior mostraba primero las posiciones con mayor valor absoluto de

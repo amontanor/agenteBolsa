@@ -758,18 +758,48 @@ def _scheduler_coherence(settings: Settings, heartbeat: dict[str, Any]) -> dict[
             payload = {"pid": int(path.read_text(encoding="utf-8").strip()), "kind": "legacy"}
         except (OSError, ValueError):
             payload = {}
-    pid = int(payload.get("pid") or 0)
+    try:
+        pid = int(payload.get("pid") or 0)
+    except (TypeError, ValueError):
+        pid = 0
     pid_alive = _pid_running(pid)
     lock_valid = bool(payload) and str(payload.get("kind") or "scheduler") in {"scheduler", "legacy"}
+    raw_expected_token = payload.get("owner_process_token") or payload.get("token")
+    expected_token = str(raw_expected_token).strip() if raw_expected_token is not None else None
+    expected_token = expected_token or None
+    actual_token = None
+    if pid_alive:
+        try:
+            from agente_bolsa.scheduler import _process_start_token
+
+            actual_token = _process_start_token(pid)
+        except Exception:  # noqa: BLE001 - health must remain read-only.
+            actual_token = None
+    token_match = bool(expected_token and actual_token and expected_token == actual_token)
+    if not path.exists():
+        status = "missing_lock"
+    elif not payload:
+        status = "malformed_lock"
+    elif not pid_alive:
+        status = "stale_dead_owner"
+    elif expected_token and actual_token and expected_token != actual_token:
+        status = "pid_reused"
+    elif expected_token and actual_token and expected_token == actual_token:
+        status = "owner_alive"
+    else:
+        status = "owner_alive"
     heartbeat_fresh = bool(heartbeat.get("is_fresh"))
-    coherent = lock_valid and pid_alive and heartbeat_fresh
+    coherent = lock_valid and pid_alive and heartbeat_fresh and status == "owner_alive"
     return {
-        "status": "coherent" if coherent else "incoherent",
+        "status": "healthy_owned" if coherent else status,
         "lock_path": str(path),
         "lock_exists": path.exists(),
         "lock_kind": payload.get("kind"),
         "pid": pid or None,
         "pid_alive": pid_alive,
+        "expected_token": expected_token,
+        "actual_token": actual_token,
+        "token_match": token_match,
         "heartbeat_fresh": heartbeat_fresh,
         "coherent": coherent,
     }

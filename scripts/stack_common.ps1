@@ -240,6 +240,58 @@ function Get-StackLockInfo {
     return @{ path = $path; pid = $pidValue; alive = $null -ne $proc; compatible = $compatible; orphan = -not $compatible }
 }
 
+function Get-StackSchedulerLockInfo {
+    $repo = Get-StackRepoRoot
+    $path = Join-Path $repo "data\state\scheduler.lock"
+    if (-not (Test-Path $path)) {
+        return @{ path = $path; pid = $null; alive = $false; compatible = $false; orphan = $false; status = "missing_lock"; token_match = $false }
+    }
+    $raw = ""
+    try { $raw = (Get-Content $path -Raw).Trim() } catch {
+        return @{ path = $path; pid = $null; alive = $false; compatible = $false; orphan = $true; status = "malformed_lock"; token_match = $false }
+    }
+    $payload = $null
+    try { $payload = $raw | ConvertFrom-Json } catch {
+        $legacyPid = 0
+        if (-not [int]::TryParse($raw, [ref]$legacyPid)) {
+            return @{ path = $path; pid = $null; alive = $false; compatible = $false; orphan = $true; status = "malformed_lock"; token_match = $false }
+        }
+        $payload = [pscustomobject]@{ pid = $legacyPid; token = $null; kind = "legacy" }
+    }
+    $pidValue = 0
+    if (-not [int]::TryParse([string]$payload.pid, [ref]$pidValue) -or $pidValue -le 0) {
+        return @{ path = $path; pid = $null; alive = $false; compatible = $false; orphan = $true; status = "malformed_lock"; token_match = $false }
+    }
+    $proc = Get-StackProcessByPid -ProcessId $pidValue
+    $alive = $null -ne $proc
+    $managedPython = Get-StackManagedPythonPath
+    $compatible = $alive -and ([string]$proc.CommandLine -match "agente_bolsa.main schedule(s|$)") -and ([string]$proc.ExecutablePath -eq $managedPython)
+    $expected = [string]($payload.owner_process_token)
+    if ([string]::IsNullOrWhiteSpace($expected)) { $expected = [string]($payload.token) }
+    $actual = $null
+    if ($alive -and $proc.CreationDate) {
+        try {
+            $start = [Management.ManagementDateTimeConverter]::ToDateTime($proc.CreationDate)
+            $actual = ([DateTimeOffset]$start.ToUniversalTime()).ToFileTime()
+        } catch { $actual = $null }
+    }
+    $tokenMatch = (-not [string]::IsNullOrWhiteSpace($expected)) -and ($null -ne $actual) -and ([string]$actual -eq $expected)
+    if (-not $alive) { $status = "stale_dead_owner" }
+    elseif ($expected -and $actual -and -not $tokenMatch) { $status = "pid_reused" }
+    elseif (-not $compatible) { $status = "owner_alive" }
+    else { $status = "owner_alive" }
+    return @{
+        path = $path
+        pid = $pidValue
+        alive = $alive
+        compatible = ($compatible -and ($tokenMatch -or [string]::IsNullOrWhiteSpace($expected)))
+        orphan = (-not $alive) -or (-not $compatible)
+        status = $status
+        token = $expected
+        token_match = $tokenMatch
+    }
+}
+
 function Test-StackPort {
     param([int]$Port)
     try {
@@ -254,7 +306,11 @@ function Get-StackServiceStatus {
     param([hashtable]$Service)
     $processes = @(Get-StackMatchingProcesses -Pattern $Service.pattern)
     $rootProcesses = @(Get-StackRootProcesses -Processes $processes)
-    $lockInfo = Get-StackLockInfo -ServiceName $Service.lock -Pattern $Service.pattern
+    $lockInfo = if ($Service.name -eq "scheduler") {
+        Get-StackSchedulerLockInfo
+    } else {
+        Get-StackLockInfo -ServiceName $Service.lock -Pattern $Service.pattern
+    }
     $portInfo = $null
     if ($Service.kind -eq "web") {
         $portInfo = Test-StackPort -Port ([int]$Service.port)
@@ -278,6 +334,7 @@ function Get-StackServiceStatus {
         lock_pid = $lockInfo.pid
         lock_ok = [bool]$lockInfo.compatible
         lock_orphan = [bool]$lockInfo.orphan
+        lock_status = $lockInfo.status
         port = $Service.port
         http_ok = if ($null -eq $portInfo) { $null } else { [bool]$portInfo.ok }
         command_lines = @($rootProcesses | ForEach-Object { $_.CommandLine })

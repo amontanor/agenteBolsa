@@ -99,6 +99,7 @@ from .tools.universe import resolve_study_universe
 LOGGER = logging.getLogger(__name__)
 OPERATIONAL_HEALTH_REFRESH_INTERVAL_MINUTES = 45
 _PORTFOLIO_UNSET = object()
+SCHEDULER_LOCK_SCHEMA_VERSION = "p-l47b1.scheduler-lock.v1"
 
 
 def _scheduler_lock_path(settings: Settings) -> Any:
@@ -167,7 +168,10 @@ def _pid_is_running(pid: int) -> bool:
 def _read_scheduler_lock(lock_path: Any) -> dict[str, Any] | None:
     if not lock_path.exists():
         return None
-    raw = lock_path.read_text(encoding="utf-8").strip()
+    try:
+        raw = lock_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
     if not raw:
         return None
     try:
@@ -177,26 +181,50 @@ def _read_scheduler_lock(lock_path: Any) -> dict[str, Any] | None:
             return {"pid": int(raw), "token": None, "kind": "legacy"}
         except ValueError:
             return None
+    if isinstance(data, int) and data > 0:
+        return {"pid": data, "token": None, "kind": "legacy"}
     if isinstance(data, dict):
+        if "owner_process_token" not in data and "token" in data:
+            data["owner_process_token"] = data.get("token")
         return data
     return None
 
 
-def _write_scheduler_lock(lock_path: Any, *, pid: int) -> None:
-    payload = {
+def _scheduler_lock_payload(*, pid: int) -> dict[str, Any]:
+    token = _process_start_token(pid)
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "schema_version": SCHEDULER_LOCK_SCHEMA_VERSION,
         "pid": pid,
-        "token": _process_start_token(pid),
+        "token": token,
+        "owner_process_token": token,
         "kind": "scheduler",
-        "written_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": now,
+        "written_at": now,
     }
-    lock_path.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
 
 
-def _lock_matches_running_process(payload: dict[str, Any], *, current_pid: int) -> bool:
+def _write_scheduler_lock(lock_path: Any, *, pid: int) -> None:
+    payload = _scheduler_lock_payload(pid=pid)
+    temporary = lock_path.with_name(f"{lock_path.name}.{pid}.tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=True, sort_keys=True), encoding="utf-8")
+    os.replace(temporary, lock_path)
+
+
+def _lock_matches_running_process(
+    payload: dict[str, Any],
+    *,
+    current_pid: int,
+    current_token: str | None = None,
+) -> bool:
     pid = int(payload.get("pid") or 0)
-    if pid <= 0 or pid == current_pid or not _pid_is_running(pid):
+    if pid <= 0 or not _pid_is_running(pid):
         return False
-    expected_token = str(payload.get("token") or "").strip() or None
+    expected_token = str(payload.get("owner_process_token") or payload.get("token") or "").strip() or None
+    if pid == current_pid and current_token and expected_token:
+        return expected_token == current_token
+    if pid == current_pid and not expected_token:
+        return True
     if expected_token is None:
         return True
     return _process_start_token(pid) == expected_token
@@ -208,24 +236,19 @@ def _try_create_lock_exclusive(lock_path: Any, *, pid: int) -> bool:
     patron 'comprobar-y-luego-escribir', que permitia que dos schedulers
     arrancados a la vez (p.ej. la tarea programada y una copia de codex-runtime)
     se creyeran ambos duenos del lock y operaran en paralelo."""
-    payload = {
-        "pid": pid,
-        "token": _process_start_token(pid),
-        "kind": "scheduler",
-        "written_at": datetime.now(timezone.utc).isoformat(),
-    }
+    payload = _scheduler_lock_payload(pid=pid)
     try:
         fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except FileExistsError:
         return False
     try:
-        os.write(fd, json.dumps(payload, ensure_ascii=True).encode("utf-8"))
+        os.write(fd, json.dumps(payload, ensure_ascii=True, sort_keys=True).encode("utf-8"))
     finally:
         os.close(fd)
     return True
 
 
-def _acquire_scheduler_lock(settings: Settings) -> tuple[bool, str]:
+def _acquire_scheduler_lock_legacy(settings: Settings) -> tuple[bool, str]:
     lock_path = _scheduler_lock_path(settings)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     current_pid = os.getpid()
@@ -249,7 +272,7 @@ def _acquire_scheduler_lock(settings: Settings) -> tuple[bool, str]:
     return False, "No se pudo adquirir el lock del scheduler (otro arranque gano la carrera)"
 
 
-def _release_scheduler_lock(settings: Settings) -> None:
+def _release_scheduler_lock_legacy(settings: Settings) -> None:
     lock_path = _scheduler_lock_path(settings)
     try:
         payload = _read_scheduler_lock(lock_path) or {}
@@ -257,6 +280,170 @@ def _release_scheduler_lock(settings: Settings) -> None:
             lock_path.unlink()
     except OSError:
         LOGGER.warning("No se pudo liberar scheduler.lock")
+
+
+def _persist_scheduler_lock_marker(
+    store: Store | None,
+    event_type: str,
+    *,
+    payload: dict[str, Any],
+    event_id: str,
+) -> None:
+    if store is None:
+        return
+    marker = {"schema_version": SCHEDULER_LOCK_SCHEMA_VERSION, "event_type": event_type, **payload}
+    marker["content_hash"] = hashlib.sha256(
+        json.dumps(
+            {k: v for k, v in marker.items() if k != "content_hash"},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    try:
+        store.record_append_only_event(
+            event_id=event_id,
+            event_type=event_type,
+            cycle_id=str(payload.get("pid") or payload.get("new_pid") or ""),
+            payload=marker,
+        )
+    except Exception:
+        return
+
+
+def _scheduler_lock_diagnosis(lock_path: Any) -> dict[str, Any]:
+    payload = _read_scheduler_lock(lock_path) or {}
+    if not lock_path.exists():
+        return {"status": "missing_lock", "payload": payload, "pid": None, "pid_alive": False, "token_match": False}
+    if not payload:
+        return {"status": "malformed_lock", "payload": {}, "pid": None, "pid_alive": False, "token_match": False}
+    try:
+        pid = int(payload.get("pid") or 0)
+    except (TypeError, ValueError):
+        return {"status": "malformed_lock", "payload": payload, "pid": None, "pid_alive": False, "token_match": False}
+    alive = _pid_is_running(pid)
+    raw_expected = payload.get("owner_process_token") or payload.get("token")
+    expected = str(raw_expected).strip() if raw_expected is not None else None
+    expected = expected or None
+    actual = _process_start_token(pid) if alive else None
+    if not alive:
+        status = "stale_dead_owner"
+    elif expected and actual and expected != actual:
+        status = "pid_reused"
+    else:
+        status = "owner_alive"
+    return {
+        "status": status,
+        "payload": payload,
+        "pid": pid,
+        "pid_alive": alive,
+        "expected_token": expected,
+        "actual_token": actual,
+        "token_match": bool(expected and actual and expected == actual),
+    }
+
+
+def _acquire_scheduler_lock(settings: Settings, store: Store | None = None) -> tuple[bool, str]:
+    lock_path = _scheduler_lock_path(settings)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    current_pid = os.getpid()
+    current_token = _process_start_token(current_pid)
+    for _attempt in range(2):
+        if _try_create_lock_exclusive(lock_path, pid=current_pid):
+            _persist_scheduler_lock_marker(
+                store,
+                "scheduler_lock_acquired",
+                payload={"pid": current_pid, "owner_process_token": current_token},
+                event_id=f"scheduler_lock_acquired:{current_pid}:{current_token or 'unknown'}",
+            )
+            return True, ""
+        payload = _read_scheduler_lock(lock_path) or {}
+        diagnosis = _scheduler_lock_diagnosis(lock_path)
+        try:
+            existing_pid = int(payload.get("pid") or 0)
+        except (TypeError, ValueError):
+            existing_pid = 0
+        if diagnosis["status"] == "malformed_lock":
+            _persist_scheduler_lock_marker(
+                store,
+                "ownership_conflict",
+                payload={"reason": "malformed_lock", "new_pid": current_pid},
+                event_id=f"scheduler_lock_conflict:malformed:{current_pid}",
+            )
+            return False, "Scheduler lock malformado; no se puede recuperar con seguridad"
+        if diagnosis["status"] == "owner_alive" and not (
+            existing_pid == current_pid and diagnosis.get("token_match") and current_token
+        ):
+            _persist_scheduler_lock_marker(
+                store,
+                "ownership_conflict",
+                payload={
+                    "pid": existing_pid,
+                    "owner_process_token": diagnosis.get("expected_token"),
+                    "reason": "owner_alive",
+                },
+                event_id=f"scheduler_lock_conflict:{existing_pid}:{diagnosis.get('expected_token') or 'legacy'}",
+            )
+            return False, f"Scheduler ya activo en PID {existing_pid}"
+        recovery_reason = str(diagnosis.get("status") or "malformed_lock")
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return False, "No se pudo limpiar un lock antiguo del scheduler"
+        _persist_scheduler_lock_marker(
+            store,
+            "scheduler_lock_recovered",
+            payload={
+                "previous_pid": existing_pid or None,
+                "previous_owner_process_token": diagnosis.get("expected_token"),
+                "new_pid": current_pid,
+                "new_owner_process_token": current_token,
+                "reason": recovery_reason,
+            },
+            event_id=f"scheduler_lock_recovered:{existing_pid}:{current_pid}:{recovery_reason}",
+        )
+    return False, "No se pudo adquirir el lock del scheduler (otro arranque gano la carrera)"
+
+
+def _release_scheduler_lock(settings: Settings, store: Store | None = None) -> None:
+    lock_path = _scheduler_lock_path(settings)
+    try:
+        payload = _read_scheduler_lock(lock_path) or {}
+        try:
+            pid = int(payload.get("pid") or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        expected = str(payload.get("owner_process_token") or payload.get("token") or "").strip() or None
+        current = _process_start_token(os.getpid())
+        if lock_path.exists() and pid == os.getpid() and (not expected or expected == current):
+            lock_path.unlink()
+            _persist_scheduler_lock_marker(
+                store,
+                "scheduler_lock_released",
+                payload={"pid": pid, "owner_process_token": expected},
+                event_id=f"scheduler_lock_released:{pid}:{expected or 'legacy'}",
+            )
+        else:
+            _persist_scheduler_lock_marker(
+                store,
+                "scheduler_lock_release_failed",
+                payload={"pid": pid, "owner_process_token": expected, "reason": "ownership_mismatch"},
+                event_id=f"scheduler_lock_release_failed:{pid}:{expected or 'legacy'}",
+            )
+    except OSError as exc:
+        LOGGER.warning("No se pudo liberar scheduler.lock")
+        _persist_scheduler_lock_marker(
+            store,
+            "scheduler_lock_release_failed",
+            payload={
+                "pid": os.getpid(),
+                "owner_process_token": _process_start_token(os.getpid()),
+                "reason": "filesystem_error",
+                "error": str(exc)[:500],
+            },
+            event_id=f"scheduler_lock_release_failed:{os.getpid()}:filesystem",
+        )
 
 
 def _reporter(settings: Settings, store: Store, verbose: bool) -> EventReporter:
@@ -3734,7 +3921,7 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
 def run_scheduler_forever(settings: Settings, store: Store, *, use_crew: bool, verbose: bool) -> None:
     store.ensure_schema()
     cleanup_runtime_data(settings)
-    acquired, reason = _acquire_scheduler_lock(settings)
+    acquired, reason = _acquire_scheduler_lock(settings, store)
     if not acquired:
         EventReporter(store, verbose=verbose).emit(
             "orchestrator",
@@ -3783,7 +3970,7 @@ def run_scheduler_forever(settings: Settings, store: Store, *, use_crew: bool, v
         scheduler.shutdown(wait=False)
         log_system_event(settings.logs_dir, "scheduler_stopped", {})
     finally:
-        _release_scheduler_lock(settings)
+        _release_scheduler_lock(settings, store)
 
 
 def scheduler_status(settings: Settings) -> dict[str, object]:
@@ -3813,6 +4000,7 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
     }
     return {
         "market": market_status.as_dict(),
+        "scheduler_lock": _scheduler_lock_diagnosis(_scheduler_lock_path(settings)),
         "jobs": [
             {
                 "id": "portfolio_watch_1m",
