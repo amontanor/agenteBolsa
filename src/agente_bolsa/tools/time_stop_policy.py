@@ -314,6 +314,11 @@ def evaluate_position_time_stop(
         result["warnings"].append("missing_verified_buy_lot")
         result["unavailable_reason"] = "missing_verified_buy_lot"
         return result
+    if any(lot.get("open_qty_authority") == "unavailable" for lot in raw_lots):
+        result["status"] = "ambiguous"
+        result["warnings"].append("ambiguous_lots")
+        result["ambiguity_reason"] = "open_lot_quantities_not_verifiable"
+        return result
     strict_order_authority = any(
         "order_side" in lot or "order_status_verified" in lot for lot in raw_lots
     )
@@ -354,7 +359,7 @@ def evaluate_position_time_stop(
         lot_qty = _number(raw_lots[0].get("open_qty"))
         if lot_qty is None and raw_lots[0].get("remaining_qty_scope") == "position":
             lot_qty = _number(raw_lots[0].get("remaining_qty"))
-        if lot_qty is None:
+        if lot_qty is None and raw_lots[0].get("remaining_qty_scope") != "position":
             lot_qty = _number(raw_lots[0].get("filled_qty"))
         if lot_qty is not None and abs(lot_qty - target_qty) > 1e-8:
             result["status"] = "ambiguous"
@@ -446,10 +451,12 @@ def build_position_identity(
         if fill_dt is None or authority in {"", "unavailable", "unknown"}:
             return None, "fill_authority_unavailable"
         filled_qty = _number(lot.get("filled_qty"))
+        if lot.get("open_qty_authority") == "unavailable":
+            return None, "open_quantity_unavailable"
         open_qty = _number(lot.get("open_qty"))
         if open_qty is None and lot.get("remaining_qty_scope") == "position":
             open_qty = _number(lot.get("remaining_qty"))
-        if open_qty is None and len(raw_lots) == 1:
+        if open_qty is None and len(raw_lots) == 1 and lot.get("remaining_qty_scope") != "position":
             open_qty = _number(position_qty) or filled_qty
         if open_qty is None or open_qty <= 0:
             return None, "open_quantity_unavailable"

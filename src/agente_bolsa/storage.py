@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import sqlite3
@@ -24,6 +25,16 @@ ORDER_PLAN_STATUS_PENDING = "PENDING"
 ORDER_PLAN_STATUS_SUBMITTED = "SUBMITTED"
 ORDER_PLAN_STATUS_EXPIRED = "EXPIRED"
 DEFAULT_LEARNING_OBSERVATION_BATCH_SIZE = 250
+LEARNING_PENALTY_CYCLE_SCHEMA = "p-l44b.learning-penalty-cycle-shadow.v1"
+LEARNING_PENALTY_CYCLE_EVENT_TYPE = "learning_penalty_cycle_shadow"
+
+
+def _learning_penalty_cycle_hash(payload: dict[str, Any]) -> str:
+    """Reproduce the shadow contract hash without importing its builder."""
+
+    body = {key: value for key, value in payload.items() if key not in {"captured_at", "content_hash"}}
+    encoded = json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 class LearningObservationBatchError(RuntimeError):
@@ -1435,19 +1446,76 @@ class Store:
                 }
         return {"status": "inserted", "event_id": event_id, "content_hash": payload.get("content_hash")}
 
-    def learning_penalty_cycle_shadow_events(self, *, limit: int = 50000) -> list[dict[str, Any]]:
-        """Read only valid P-L44B cycle snapshots; conflicts remain separate."""
+    def learning_penalty_cycle_shadow_read(self, *, limit: int = 50000) -> dict[str, Any]:
+        """Read the canonical P-L44 ledger without counting reporter rows.
 
-        rows = self.agent_events(event_type_prefix="learning_penalty_cycle_shadow", limit=limit)
-        events: list[dict[str, Any]] = []
+        The generic :class:`EventReporter` historically emitted a second row
+        with the same event type.  Those rows remain in ``agent_events`` for
+        compatibility, but they are not canonical snapshots: a canonical
+        event id, schema, cycle id and deterministic content hash are all
+        required.  A duplicate canonical payload is idempotent; a different
+        payload for the same cycle is reported as a conflict and the first
+        canonical event remains authoritative.
+        """
+
+        rows = self.agent_events(event_type_prefix=LEARNING_PENALTY_CYCLE_EVENT_TYPE, limit=limit)
+        by_cycle: dict[str, dict[str, Any]] = {}
+        generic_ignored = 0
+        invalid_canonical = 0
+        idempotent_duplicates = 0
+        conflicts = 0
         for row in rows:
-            if row.get("event_type") != "learning_penalty_cycle_shadow":
+            event_type = str(row.get("event_type") or "")
+            if event_type == f"{LEARNING_PENALTY_CYCLE_EVENT_TYPE}_conflict":
+                conflicts += 1
                 continue
+            if event_type != LEARNING_PENALTY_CYCLE_EVENT_TYPE:
+                continue
+            event_id = str(row.get("event_id") or "")
             payload = row.get("payload")
-            if not isinstance(payload, dict):
+            cycle_id = str(row.get("cycle_id") or "").strip()
+            expected_event_id = f"{LEARNING_PENALTY_CYCLE_EVENT_TYPE}:{cycle_id}" if cycle_id else ""
+            if not event_id or event_id != expected_event_id or not isinstance(payload, dict):
+                generic_ignored += 1
                 continue
-            events.append(payload | {"event_id": row.get("event_id"), "cycle_id": row.get("cycle_id")})
-        return events
+            if payload.get("schema_version") != LEARNING_PENALTY_CYCLE_SCHEMA or str(payload.get("cycle_id") or "") != cycle_id:
+                invalid_canonical += 1
+                continue
+            supplied_hash = str(payload.get("content_hash") or "")
+            try:
+                valid_hash = bool(supplied_hash) and supplied_hash == _learning_penalty_cycle_hash(payload)
+            except (TypeError, ValueError):
+                valid_hash = False
+            if not valid_hash:
+                invalid_canonical += 1
+                continue
+            enriched = payload | {
+                "event_id": event_id,
+                "cycle_id": cycle_id,
+                "created_at": row.get("created_at"),
+            }
+            existing = by_cycle.get(cycle_id)
+            if existing is None:
+                by_cycle[cycle_id] = enriched
+            elif str(existing.get("content_hash") or "") == supplied_hash:
+                idempotent_duplicates += 1
+            else:
+                conflicts += 1
+        events = sorted(by_cycle.values(), key=lambda item: str(item.get("created_at") or ""))
+        return {
+            "events": events,
+            "canonical_cycles": len({str(item.get("cycle_id") or "") for item in events}),
+            "canonical_events": len(events),
+            "generic_reporter_rows_ignored": generic_ignored,
+            "invalid_canonical_rows": invalid_canonical,
+            "idempotent_duplicates": idempotent_duplicates,
+            "conflicts": conflicts,
+        }
+
+    def learning_penalty_cycle_shadow_events(self, *, limit: int = 50000) -> list[dict[str, Any]]:
+        """Return only valid, deduplicated canonical P-L44 snapshots."""
+
+        return list(self.learning_penalty_cycle_shadow_read(limit=limit).get("events") or [])
 
     def agent_events(
         self,
@@ -4366,6 +4434,165 @@ class Store:
                 "plan": plan,
             }
             result.setdefault(symbol, []).append(lot)
+        return result
+
+    def executed_open_buy_lots_by_symbol(
+        self,
+        *,
+        position_quantities: dict[str, Any] | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Return open BUY lots reconciled by exact filled SELL provenance.
+
+        ``executed_buy_lots_by_symbol`` intentionally exposes every filled BUY
+        for lineage.  A time-stop, however, needs the currently open inventory.
+        This method subtracts only filled SELL quantities whose payload carries
+        the exact source ``plan_id`` of a BUY.  Missing or ambiguous provenance
+        is surfaced on the lot and left for the temporal evaluator to reject;
+        it is never guessed from symbol or date.
+        """
+
+        buys_by_symbol = self.executed_buy_lots_by_symbol()
+        if not buys_by_symbol:
+            return {}
+
+        def _number(value: Any) -> float | None:
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return None
+            return number if math.isfinite(number) else None
+
+        def _filled_status(value: Any) -> bool:
+            text = str(value or "").strip().lower()
+            return text in {"filled", "orderstatus.filled"} or text.endswith(".filled")
+
+        def _filled_qty(payload: dict[str, Any]) -> float | None:
+            reconciled = payload.get("broker_order_reconciled") or {}
+            broker = payload.get("broker_order") or {}
+            snapshot = payload.get("execution_quality_snapshot") or {}
+            quantities = snapshot.get("quantities") or {}
+            for value in (
+                reconciled.get("filled_qty"),
+                broker.get("filled_qty"),
+                quantities.get("filled"),
+            ):
+                number = _number(value)
+                if number is not None:
+                    return number
+            return None
+
+        def _source_plan_id(payload: dict[str, Any]) -> str | None:
+            plan = payload.get("plan") or {}
+            plan_payload = plan.get("payload") or {}
+            risk = plan_payload.get("risk_decision") or {}
+            checks = risk.get("checks") or {}
+            for value in (
+                checks.get("source_plan_id"),
+                plan_payload.get("source_plan_id"),
+                plan.get("source_plan_id"),
+            ):
+                text = str(value or "").strip()
+                if text:
+                    return text
+            return None
+
+        with self.connect() as conn:
+            sell_rows = conn.execute(
+                """
+                SELECT broker_order_id, symbol, side, status, payload_json
+                FROM broker_orders
+                WHERE lower(side) IN ('sell', 'orderside.sell')
+                ORDER BY created_at ASC, broker_order_id ASC
+                """
+            ).fetchall()
+
+        lots_by_plan: dict[str, list[dict[str, Any]]] = {}
+        for lots in buys_by_symbol.values():
+            for lot in lots:
+                plan_id = str(lot.get("order_plan_id") or lot.get("source_plan_id") or "").strip()
+                if plan_id:
+                    lots_by_plan.setdefault(plan_id, []).append(lot)
+        sold_by_plan: dict[str, float] = {}
+        ambiguous_symbols: set[str] = set()
+        for row in sell_rows:
+            if not _filled_status(row["status"]):
+                continue
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            quantity = _filled_qty(payload)
+            if quantity is None or quantity <= 0:
+                continue
+            source_plan_id = _source_plan_id(payload)
+            matches = lots_by_plan.get(source_plan_id or "", [])
+            if source_plan_id is None or len(matches) != 1:
+                # A filled sell without exact BUY provenance cannot be safely
+                # allocated to a lot, even when the symbol happens to match.
+                for match in matches:
+                    ambiguous_symbols.add(str(match.get("symbol") or row["symbol"] or "").upper())
+                ambiguous_symbols.add(str(row["symbol"] or "").upper())
+                continue
+            sold_by_plan[source_plan_id] = sold_by_plan.get(source_plan_id, 0.0) + quantity
+
+        quantities = {str(key).upper(): _number(value) for key, value in (position_quantities or {}).items()}
+        result: dict[str, list[dict[str, Any]]] = {}
+        for symbol, lots in buys_by_symbol.items():
+            symbol = str(symbol).upper()
+            candidates: list[dict[str, Any]] = []
+            for lot in lots:
+                plan_id = str(lot.get("order_plan_id") or lot.get("source_plan_id") or "")
+                filled_qty = _number(lot.get("filled_qty"))
+                sold_qty = sold_by_plan.get(plan_id, 0.0)
+                if filled_qty is None or sold_qty > filled_qty + 1e-8:
+                    ambiguous_symbols.add(symbol)
+                    continue
+                remaining = filled_qty - sold_qty
+                if remaining <= 1e-8:
+                    continue
+                candidate = dict(lot)
+                candidate.update(
+                    {
+                        "open_qty": remaining,
+                        "remaining_qty": remaining,
+                        "remaining_qty_scope": "position",
+                        "open_qty_authority": "exact_source_plan_sell_reconciliation",
+                    }
+                )
+                candidates.append(candidate)
+
+            if symbol in ambiguous_symbols:
+                # Preserve references for audit, but explicitly mark the open
+                # quantity as unavailable so the evaluator cannot fall back to
+                # filled_qty and invent an identity.
+                result[symbol] = [
+                    {
+                        **lot,
+                        "open_qty": None,
+                        "remaining_qty": None,
+                        "remaining_qty_scope": "position",
+                        "open_qty_authority": "unavailable",
+                    }
+                    for lot in lots
+                ]
+                continue
+            target = quantities.get(symbol)
+            if target is None or abs(sum(float(item["open_qty"]) for item in candidates) - target) > 1e-8:
+                if candidates:
+                    result[symbol] = [
+                        {
+                            **lot,
+                            "open_qty": None,
+                            "remaining_qty": None,
+                            "remaining_qty_scope": "position",
+                            "open_qty_authority": "unavailable",
+                        }
+                        for lot in candidates
+                    ]
+                continue
+            result[symbol] = candidates
         return result
 
     def count_broker_orders(
