@@ -1,7 +1,7 @@
 # P-L47B1 — leases terminales y ownership del scheduler
 
-> Candidato aislado `0.4.180`; base productiva `39da7c8c`. Este informe no
-> representa un despliegue ni autoriza cambios en producción.
+> Desplegado en producción como `0.4.180` el 18-jul-2026 mediante el merge
+> `f60a3d82`; base previa `39da7c8c`. No autoriza cambios de trading.
 
 ## Causa raíz
 
@@ -50,12 +50,17 @@ reconciliación interna/externa, locks legacy/malformed y ausencia de tablas
 nuevas. La suite completa y los gates se ejecutan únicamente en este worktree,
 con datos temporales y sin servicios productivos.
 
-## Estado
+## Estado de despliegue
 
-`P-L47B1` queda pendiente de ensayo de integración y revisión humana. No se
-han limpiado leases, locks ni datos productivos, no se han reiniciado servicios
-y no se ha hecho push. P-L43BR6 y P-L44BR3 conservan sus slots posteriores
-(0.4.181 y 0.4.182 respectivamente) y no se modifican en este lote.
+P-L47B1 está desplegado como `0.4.180`. La topología Windows verificada es un
+único scheduler lógico: wrapper PowerShell → launcher `.venv` → runtime Python
+real. El nuevo lock `p-l47b1.scheduler-lock.v1` pertenece al runtime, no al
+launcher. En el primer bootstrap normal se recuperó de forma append-only el
+lease terminal residual `brkrec_eb45e5acbd6b`; su terminal `completed` original
+se conserva y `post_market_coordination:active` quedó vacío. El bootstrap quedó
+`skipped/market_not_ready`, sin reprocesar postmarket, reconciliación ni
+outcomes. P-L43BR6 y P-L44BR3 conservan los slots futuros `0.4.181` y
+`0.4.182`; no se integraron. No hubo limpieza manual ni push.
 
 ## Corrección QA del ensayo
 

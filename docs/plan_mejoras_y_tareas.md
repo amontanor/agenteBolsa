@@ -1958,7 +1958,7 @@ rentabilidad.
   `null`; no hay backfill. El CLI es `learning-penalty-shadow-report --json`.
 - El historial prospectivo permanece `collecting`; no hay evidencia suficiente
   para activar la penalización única ni influencia sobre trading.
-## P-L47B1 — leases terminales y ownership del scheduler (candidato 0.4.180)
+## P-L47B1 — leases terminales y ownership del scheduler (desplegado 0.4.180)
 
 En un worktree aislado se corrige la recuperación durable de leases de
 postmarket/reconciliación y la propiedad del lock del scheduler. `runtime_state`
@@ -1970,11 +1970,13 @@ propietarios muertos y PID reutilizado se diagnostican sin robar un proceso
 vivo. No se crean tablas, migraciones, procesos ni schedulers nuevos y no se
 tocan decisiones de trading.
 
-La base productiva observada queda intacta: se identificó un lease residual de
-reconciliación con terminal durable y un `scheduler.lock` cuyo PID ya no era
-el Python activo, pero no se hizo limpieza manual. P-L47B1 queda pendiente de
-ensayo de integración; candidato `0.4.180`. P-L43BR6 conserva el slot futuro
-`0.4.181` y P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
+El despliegue cerrado del 18-jul-2026 integra el merge `f60a3d82` desde la base
+`39da7c8c`. La topología Windows se confirmó como un scheduler lógico
+wrapper → launcher `.venv` → runtime Python. El lock v1 quedó asociado al
+runtime y el bootstrap recuperó `brkrec_eb45e5acbd6b` como lease terminal
+residual, conservando su terminal durable y sin reprocesar postmarket,
+reconciliación ni outcomes. P-L43BR6 conserva el slot futuro `0.4.181` y
+P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
 
 ## P-L46B - orden cronologico de Cartera abierta (desplegado 0.4.178)
 
