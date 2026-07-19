@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 import statistics
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - solo anotaciones.
@@ -133,6 +134,7 @@ def build_daily_performance(
     equity: float | None = None,
     spy_pct: float | None = None,
     portfolio: Any = None,
+    canonical_telemetry: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Serie diaria de rendimiento del sistema completo para ``session_date``."""
 
@@ -157,7 +159,33 @@ def build_daily_performance(
     elif equity is not None and prev_equity is None:
         pnl_pct = 0.0
 
-    counts = _count_signals(store, session_date)
+    if canonical_telemetry is None:
+        counts = _count_signals(store, session_date)
+        legacy_counts = counts
+        explicit_counts: dict[str, int | None] = {
+            "signal_count": counts["signals"],
+            "candidate_count": None,
+            "canonical_buy_order_count": counts["buys"],
+            "canonical_sell_order_count": counts["sells"],
+            "fill_fragment_count": None,
+        }
+    else:
+        denominators = dict(canonical_telemetry.get("denominators") or {})
+        legacy_counts = _count_signals(store, session_date)
+        explicit_counts = {
+            "signal_count": denominators.get("signal_count"),
+            "candidate_count": denominators.get("candidate_count"),
+            "canonical_buy_order_count": denominators.get("buy_order_count"),
+            "canonical_sell_order_count": denominators.get("sell_order_count"),
+            "fill_fragment_count": denominators.get("fill_fragment_count"),
+        }
+        # Consumers historically read these names as executed operations.  A
+        # canonical snapshot is authoritative for them; missing remains null.
+        counts = {
+            "signals": explicit_counts["signal_count"],
+            "buys": explicit_counts["canonical_buy_order_count"],
+            "sells": explicit_counts["canonical_sell_order_count"],
+        }
     matured = _matured_window(store, window_sessions=HIT_RATE_WINDOW_SESSIONS)
     hit_rate_20 = _hit_rate(matured)
     profit_factor = _profit_factor(matured)
@@ -184,6 +212,11 @@ def build_daily_performance(
         "signals": counts["signals"],
         "buys": counts["buys"],
         "sells": counts["sells"],
+        "signal_count": explicit_counts["signal_count"],
+        "candidate_count": explicit_counts["candidate_count"],
+        "canonical_buy_order_count": explicit_counts["canonical_buy_order_count"],
+        "canonical_sell_order_count": explicit_counts["canonical_sell_order_count"],
+        "fill_fragment_count": explicit_counts["fill_fragment_count"],
         "hit_rate_20": hit_rate_20,
         "profit_factor": profit_factor if profit_factor != float("inf") else None,
         "sharpe_60": sharpe_60,
@@ -205,6 +238,12 @@ def build_daily_performance(
         "signals": counts["signals"],
         "buys": counts["buys"],
         "sells": counts["sells"],
+        "signal_count": explicit_counts["signal_count"],
+        "candidate_count": explicit_counts["candidate_count"],
+        "canonical_buy_order_count": explicit_counts["canonical_buy_order_count"],
+        "canonical_sell_order_count": explicit_counts["canonical_sell_order_count"],
+        "fill_fragment_count": explicit_counts["fill_fragment_count"],
+        "legacy_actionable_signal_count": legacy_counts["buys"] + legacy_counts["sells"],
     }
     payload["iq_score"] = system_iq_score(store, window_days=20, extra_today=payload)
     return payload

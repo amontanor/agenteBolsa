@@ -135,6 +135,15 @@ P-L43BR6 y P-L44BR3 permanecen fuera y conservan los slots `0.4.181` y
 
 - Producción quedó en `0.4.177` mediante el merge `23e4bf4d`, con el tree
   validado del ensayo y sin incluir P-L46B.
+
+## P-L48B-W - telemetria canonica de operaciones (candidato 0.4.184)
+
+- Productor shadow unico `p-l48b.canonical-operation-telemetry.v1` con unidad
+  `broker_order_id`, denominadores separados y freshness descriptiva.
+- Evento append-only por sesion, hash estable excluyendo `captured_at`,
+  idempotencia y conflictos auditables. Consumidores read-only.
+- No altera trading ni activa ninguna politica shadow; P-L43/P-L44/P-L45/P-L47
+  permanecen con sus invariantes.
 - `legacy_double_application` conserva la autoridad; `single_application` es
   exclusivamente shadow y la captura real permanece `collecting`.
 - Suite, kernel, configuración y stack pasan; no se generaron órdenes por P-L44B.

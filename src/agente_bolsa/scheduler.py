@@ -40,6 +40,10 @@ from .tools.autonomous_research import build_autonomous_research_report
 from .tools.breakout_scanner import build_breakout_scan, merge_breakout_universe
 from .tools.broker import BrokerClientFactory
 from .tools.broker_reconciliation import reconcile_broker_orders
+from .tools.canonical_operation_telemetry import (
+    build_canonical_operation_telemetry,
+    persist_canonical_operation_telemetry,
+)
 from .tools.daily_learning import build_learning_digest_report, load_daily_learning_context
 from .tools.execution import submit_paper_order_plan
 from .tools.gate_effectiveness_reporting import publish_gate_effectiveness_postmarket
@@ -2653,6 +2657,7 @@ def _persist_daily_performance(
     reporter: Any,
     run_id: str,
     portfolio: Any = _PORTFOLIO_UNSET,
+    canonical_telemetry: dict[str, Any] | None = None,
 ) -> None:
     """Calcula y persiste la fila de ``performance_daily`` de la sesion (T0.2).
 
@@ -2672,6 +2677,7 @@ def _persist_daily_performance(
             settings,
             session_date,
             portfolio=portfolio,
+            canonical_telemetry=canonical_telemetry,
         )
         # Mantener los benchmarks/regimen legacy en el payload completo sin
         # volver a consultar mercado ni alterar el contrato nuevo.
@@ -3087,12 +3093,37 @@ def post_market_review_job(
             broker_client=broker_client,
             stage_recorder=lambda stage, status, error=None: coordinator.stage(lease, stage, status, error=error),
         )
+        # Build once from local, already reconciled sources.  This is
+        # observational and intentionally precedes performance/digest while
+        # never re-running reconciliation, outcomes, ranking or broker reads.
+        current_stage = "canonical_operation_telemetry"
+        coordinator.stage(lease, current_stage, "started")
+        canonical_telemetry = build_canonical_operation_telemetry(store, session_date)
+        try:
+            persistence = persist_canonical_operation_telemetry(store, canonical_telemetry)
+            canonical_telemetry["persistence"] = persistence
+        except Exception as exc:  # noqa: BLE001 - telemetry is fail-open.
+            canonical_telemetry.setdefault("data_quality_warnings", []).append(
+                f"persistence_failed:{type(exc).__name__}"
+            )
+            log_system_event(settings.logs_dir, "canonical_operation_telemetry_persistence_failed", {"error": repr(exc), "session_date": session_date})
+        if isinstance(report, dict):
+            report["canonical_operation_telemetry"] = canonical_telemetry
+        coordinator.stage(lease, current_stage, "completed")
         # La foto de cartera y performance_daily deben existir antes del
         # digest final de medición; el productor es fail-open y no altera el
         # resultado principal si la observabilidad no está disponible.
         current_stage = "performance"
         coordinator.stage(lease, current_stage, "started")
-        _persist_daily_performance(settings, store, session_date, reporter, run_id, portfolio=portfolio)
+        _persist_daily_performance(
+            settings,
+            store,
+            session_date,
+            reporter,
+            run_id,
+            portfolio=portfolio,
+            canonical_telemetry=canonical_telemetry,
+        )
         coordinator.stage(lease, current_stage, "completed")
         current_stage = "measurement_pipeline"
         coordinator.stage(lease, current_stage, "started")

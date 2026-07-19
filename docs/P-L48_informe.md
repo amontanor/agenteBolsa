@@ -184,5 +184,32 @@ modifican órdenes.
 
 Pruebas nuevas: **28 passed**.
 
+## P-L48B-W - productor shadow implementado (0.4.184)
+
+El worktree `pl48b_telemetry_impl` implementa el contrato
+`p-l48b.canonical-operation-telemetry.v1` sin autoridad sobre trading. La
+unidad es exclusivamente `broker_order_id`; los fragmentos se conservan en
+`fill_fragment_count` y los dominios de señal, candidato, recomendación y plan
+se publican por separado. No se hacen uniones por símbolo/fecha ni backfill.
+
+La secuencia postmarket construye y persiste una sola foto local después de
+reconciliación/outcomes/revisión y antes de `performance_daily`, digest y
+health. La escritura usa `canonical_operation_telemetry:<session_date>`,
+`BEGIN IMMEDIATE` únicamente durante la inserción corta, es append-only,
+idempotente y publica conflictos sin reemplazar el original. Los consumidores
+son read-only y el CLI devuelve `collecting` con denominadores `null` cuando
+no existe evento.
+
+`performance_daily` recibe el snapshot ya construido y expone
+`signal_count`, `candidate_count`, `canonical_buy_order_count`,
+`canonical_sell_order_count` y `fill_fragment_count`, manteniendo los campos
+legacy y `legacy_actionable_signal_count` separados. La normalización de
+salidas y freshness viven solo en esta telemetría shadow.
+
+No se alteran señales, scores, ranks, recomendaciones, gates, entry quality,
+sizing, microexperimentos, planes, stops, takes, cantidades, órdenes,
+exposición, límites ni las políticas P-L43/P-L44/P-L45/P-L47. No se crean
+tablas ni migraciones. El batching P-L45 permanece en 250.
+
 No se ejecutaron jobs productivos, servicios, broker, red, LLM, scheduler,
 postmarket, reconciliación ni run-once. No se accedió a SQLite productiva.

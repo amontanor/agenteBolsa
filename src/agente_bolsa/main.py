@@ -2309,6 +2309,33 @@ def command_learning_penalty_shadow_report(args: argparse.Namespace) -> None:
     print(f"candidate_counts={report.get('candidate_counts')}")
 
 
+def command_canonical_operation_telemetry(args: argparse.Namespace) -> None:
+    """Read one persisted P-L48B snapshot; never recalculates history."""
+
+    settings = get_settings()
+    try:
+        from .tools.canonical_operation_telemetry import read_canonical_operation_telemetry
+
+        store = Store(settings.database_path, settings.agent_logs_dir)
+        report = read_canonical_operation_telemetry(store, args.session)
+        ok = report.get("status") not in {"unavailable", "legacy_without_canonical_telemetry"}
+    except Exception as exc:  # noqa: BLE001 - read-only CLI must remain informative.
+        report = {
+            "status": "collecting",
+            "session_date": args.session,
+            "denominators": None,
+            "operations": [],
+            "data_quality_warnings": [f"read_failed:{type(exc).__name__}"],
+        }
+        ok = False
+    if args.json:
+        _print_json({"ok": ok, **report})
+        return
+    print("CANONICAL OPERATION TELEMETRY")
+    print(f"session={args.session} | status={report.get('status')}")
+    print(f"denominators={report.get('denominators')}")
+
+
 def command_policy_candidates(args: argparse.Namespace) -> None:
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
@@ -3739,6 +3766,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     learning_penalty_shadow.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     learning_penalty_shadow.set_defaults(func=command_learning_penalty_shadow_report)
+
+    canonical_operation_telemetry = subparsers.add_parser(
+        "canonical-operation-telemetry",
+        help="Lee el snapshot canónico P-L48B de una sesión sin recalcularlo.",
+    )
+    canonical_operation_telemetry.add_argument("--session", required=True, help="Sesión YYYY-MM-DD.")
+    canonical_operation_telemetry.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    canonical_operation_telemetry.set_defaults(func=command_canonical_operation_telemetry)
 
     policy_candidates = subparsers.add_parser(
         "policy-candidates",

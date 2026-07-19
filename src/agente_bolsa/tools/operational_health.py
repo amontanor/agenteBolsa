@@ -1177,6 +1177,18 @@ def build_operational_health_report(
             "shadow_only": True,
             "observations": None,
         }
+    try:
+        from .canonical_operation_telemetry import canonical_operation_telemetry_digest
+
+        report_health["canonical_operation_telemetry"] = canonical_operation_telemetry_digest(store)
+    except Exception:  # noqa: BLE001 - canonical telemetry is observability only.
+        report_health["canonical_operation_telemetry"] = {
+            "status": "degraded_observability",
+            "denominators": None,
+            "execution": None,
+            "exits": None,
+            "freshness": None,
+        }
     if adaptive_governance["status"] == "critical":
         report_alerts.append(
             {
