@@ -2018,6 +2018,17 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
 - Ambos shadows siguen `collecting`/`partial`; no hay backfill ni autoridad
   sobre trading.
 
+## P-L48B-W - telemetria canonica de operaciones (candidato 0.4.184)
+
+- Implementado en shadow un productor unico `p-l48b.canonical-operation-telemetry.v1`.
+- La unidad canonica es `broker_order_id`; fragmentos, senales, candidatos,
+  recomendaciones y planes conservan denominadores separados.
+- Persistencia append-only por sesion, hash estable fuera de `captured_at`,
+  idempotencia y conflictos auditables. No hay tablas, migraciones ni backfill.
+- `performance_daily`, digest, health y CLI consumen exclusivamente el evento
+  canonico ya construido. La ruta activa de trading, P-L43, P-L44, P-L45 y
+  P-L47 no cambia.
+
 ## P-L46B - orden cronologico de Cartera abierta (desplegado 0.4.178)
 
 - El orden anterior mostraba primero las posiciones con mayor valor absoluto de
