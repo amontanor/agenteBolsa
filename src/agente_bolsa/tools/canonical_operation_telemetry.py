@@ -97,7 +97,7 @@ def _find_value(value: Any, names: Sequence[str]) -> Any:
 
 
 def _text(value: Any) -> str | None:
-    if value is None:
+    if value is None or value is _MISSING:
         return None
     text = str(value).strip()
     return text or None
@@ -105,8 +105,26 @@ def _text(value: Any) -> str | None:
 
 def _first_present(*values: Any) -> Any:
     for value in values:
+        if value is _MISSING:
+            continue
         if value is not None and value != "":
             return value
+    return None
+
+
+def _or_missing(*values: Any) -> Any:
+    """Return the first concrete value; the ``_MISSING`` sentinel is falsy here.
+
+    ``_find_value`` returns a truthy sentinel when a field is absent, so plain
+    ``a or b`` chains would never reach their fallback and ``_text`` would leak
+    the sentinel's repr into identity fields.  Every producer fallback must go
+    through this helper.
+    """
+
+    for value in values:
+        if value is _MISSING or value is None or value == "":
+            continue
+        return value
     return None
 
 
@@ -322,7 +340,7 @@ def _operation_for_order(
     payload = _mapping(order.get("payload")) | {key: value for key, value in order.items() if key not in {"payload"}}
     broker = _mapping(order.get("broker_order"))
     execution = _mapping(order.get("execution_quality_snapshot")) or _mapping(payload.get("execution_quality_snapshot"))
-    plan_id = _text(order.get("plan_id") or _find_value(payload, ("plan_id",)))
+    plan_id = _text(_or_missing(order.get("plan_id"), _find_value(payload, ("plan_id",))))
     plan = plans.get(plan_id or "")
     recommendation_id = _text(_find_value(payload, ("recommendation_id",)))
     plan_payload = _mapping((plan or {}).get("payload"))
@@ -333,11 +351,11 @@ def _operation_for_order(
     # Exact plan/recommendation payloads enrich the operation; the order row
     # remains authoritative when it contains an explicit field.
     payload = plan_payload | recommendation_payload | payload
-    signal_id = _text(_find_value(execution, ("signal_id",)) or _find_value(payload, ("signal_id",)))
+    signal_id = _text(_or_missing(_find_value(execution, ("signal_id",)), _find_value(payload, ("signal_id",))))
     signal = signals.get(signal_id or "")
-    candidate_id = _text(_find_value(execution, ("candidate_id",)) or _find_value(payload, ("candidate_id",)))
+    candidate_id = _text(_or_missing(_find_value(execution, ("candidate_id",)), _find_value(payload, ("candidate_id",))))
     source_plan_id = _text(_find_value(payload, ("source_plan_id",)))
-    cycle_id = _text(order.get("cycle_id") or _find_value(payload, ("cycle_id",)))
+    cycle_id = _text(_or_missing(order.get("cycle_id"), _find_value(payload, ("cycle_id",))))
     raw_trigger = _find_value(payload, ("raw_exit_trigger", "exit_trigger", "trigger"))
     if raw_trigger is _MISSING:
         raw_trigger = None
@@ -370,15 +388,15 @@ def _operation_for_order(
     warnings.extend(freshness.get("warnings") or [])
     operation = {
         "broker_order_id": _text(order.get("broker_order_id")),
-        "client_order_id": _text(order.get("client_order_id") or broker.get("client_order_id") or _find_value(payload, ("client_order_id",))),
+        "client_order_id": _text(_or_missing(order.get("client_order_id"), broker.get("client_order_id"), _find_value(payload, ("client_order_id",)))),
         "side": side,
         "symbol": _text(order.get("symbol") or broker.get("symbol")),
         "submitted_qty": _number(_find_value(payload, ("submitted_qty", "qty"))),
-        "filled_qty": _number(_find_value(reconciliation, ("filled_qty",)) or _find_value(execution, ("filled", "filled_qty"))),
-        "average_fill_price": _number(_find_value(payload, ("average_fill_price", "fill_price")) or _find_value(execution, ("average_fill_price",))),
+        "filled_qty": _number(_or_missing(_find_value(reconciliation, ("filled_qty",)), _find_value(execution, ("filled", "filled_qty")))),
+        "average_fill_price": _number(_or_missing(_find_value(payload, ("average_fill_price", "fill_price")), _find_value(execution, ("average_fill_price",)))),
         "status": status,
         "cycle_id": cycle_id,
-        "signal_capture_id": _text(_find_value(execution, ("signal_capture_id",)) or _find_value(payload, ("signal_capture_id",))),
+        "signal_capture_id": _text(_or_missing(_find_value(execution, ("signal_capture_id",)), _find_value(payload, ("signal_capture_id",)))),
         "signal_id": signal_id,
         "candidate_id": candidate_id,
         "recommendation_id": recommendation_id,
@@ -470,14 +488,17 @@ def build_canonical_operation_telemetry(
             warnings.append("duplicate_client_order_id:" + ",".join(duplicate_clients))
         signal_ids = [str(item.get("signal_id")) for item in signals_rows if _text(item.get("signal_id"))]
         candidate_ids = [_text(_find_value(item, ("candidate_id",))) for item in signals_rows + recommendations_rows + plans_rows]
-        candidate_available = all(item is not None for item in candidate_ids) if candidate_ids else False
+        # Count the distinct candidates actually observed; rows from other
+        # domains (e.g. an automatic sell plan without a candidate) must not
+        # veto the denominator, and a fully absent domain stays unavailable.
+        present_candidates = {item for item in candidate_ids if item}
         denominator = {
             "broker_order_count": len(operations),
             "buy_order_count": sum(1 for item in operations if item.get("side") == "buy"),
             "sell_order_count": sum(1 for item in operations if item.get("side") == "sell"),
             "fill_fragment_count": len(fragments_rows) if fragments_rows else (0 if operations and all(item.get("fill_fragment_count") == 0 for item in operations) else None),
             "signal_count": len(set(signal_ids)) if signals_rows else None,
-            "candidate_count": len({item for item in candidate_ids if item}) if candidate_available else None,
+            "candidate_count": len(present_candidates) if present_candidates else None,
             "recommendation_count": len({str(item["recommendation_id"]) for item in recommendations_rows if _text(item.get("recommendation_id"))}) if recommendations_rows else None,
             "plan_count": len({str(item["plan_id"]) for item in plans_rows if _text(item.get("plan_id"))}) if plans_rows else None,
         }
@@ -553,13 +574,29 @@ def read_canonical_operation_telemetry(store: Store, session_date: str) -> dict[
 def canonical_operation_telemetry_digest(store: Store, session_date: str | None = None) -> dict[str, Any]:
     if session_date:
         payload = read_canonical_operation_telemetry(store, session_date)
-        return {"status": payload.get("status", "collecting"), "session_date": session_date, "denominators": payload.get("denominators"), "execution": payload.get("execution"), "exits": payload.get("exits"), "freshness": payload.get("freshness"), "content_hash": payload.get("content_hash")}
+        conflicts = _conflict_events(store, f"{EVENT_ID_PREFIX}{session_date}:conflict:")
+        return {"status": payload.get("status", "collecting"), "session_date": session_date, "denominators": payload.get("denominators"), "execution": payload.get("execution"), "exits": payload.get("exits"), "freshness": payload.get("freshness"), "content_hash": payload.get("content_hash"), "conflict_events": len(conflicts)}
     try:
         events = [item for item in store.agent_events(event_type_prefix=EVENT_TYPE, limit=50000) if item.get("event_id", "").startswith(EVENT_ID_PREFIX)]
     finally:
         store.close_read_connection()
-    if not events:
-        return {"status": "collecting", "session_date": None, "denominators": None, "execution": None, "exits": None, "freshness": None, "canonical_events": 0}
-    latest = sorted(events, key=lambda item: str(item.get("created_at") or ""))[-1]
+    # Conflict events are audit trails, never valid snapshots: they neither
+    # count as canonical events nor decide which snapshot is the latest one.
+    snapshots = [item for item in events if item.get("event_type") == EVENT_TYPE]
+    conflicts = [item for item in events if item.get("event_type") == f"{EVENT_TYPE}_conflict"]
+    if not snapshots:
+        return {"status": "conflict" if conflicts else "collecting", "session_date": None, "denominators": None, "execution": None, "exits": None, "freshness": None, "canonical_events": 0, "conflict_events": len(conflicts)}
+    latest = sorted(snapshots, key=lambda item: str(item.get("created_at") or ""))[-1]
     payload = read_canonical_operation_telemetry(store, str((latest.get("payload") or {}).get("session_date") or ""))
-    return {"status": payload.get("status", "collecting"), "session_date": payload.get("session_date"), "denominators": payload.get("denominators"), "execution": payload.get("execution"), "exits": payload.get("exits"), "freshness": payload.get("freshness"), "canonical_events": len(events), "content_hash": payload.get("content_hash")}
+    return {"status": payload.get("status", "collecting"), "session_date": payload.get("session_date"), "denominators": payload.get("denominators"), "execution": payload.get("execution"), "exits": payload.get("exits"), "freshness": payload.get("freshness"), "canonical_events": len(snapshots), "conflict_events": len(conflicts), "content_hash": payload.get("content_hash")}
+
+
+def _conflict_events(store: Store, event_id_prefix: str) -> list[dict[str, Any]]:
+    try:
+        return [
+            item
+            for item in store.agent_events(event_type_prefix=f"{EVENT_TYPE}_conflict", limit=50000)
+            if item.get("event_id", "").startswith(event_id_prefix)
+        ]
+    finally:
+        store.close_read_connection()
