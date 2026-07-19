@@ -1,7 +1,7 @@
 # Relevo de direccion tecnica — agenteBolsa
 
-> Actualizado: **17-jul-2026**. Produccion **0.4.178** (`4158ac5f`).
-> P-L45B2 + P-L43BR5 + P-L44B desplegados secuencialmente; P-L44B sigue en shadow.
+> Actualizado: **19-jul-2026**. Produccion **0.4.185** (`8cfa0db3`, tree
+> `4c3636be`). P-L48B desplegado en mercado cerrado; P-L44B sigue en shadow.
 
 ## Objetivo
 
@@ -15,6 +15,9 @@ promociones siguen human-gated.
 - Kernel sellado sin violaciones. `unsealed` temporal no describe produccion.
 - P-L45B1 desplegado: un postmarket efectivo, reconciliacion coordinada, una
   actualizacion de outcomes y terminales duraderos.
+- P-L48B desplegado (19-jul): telemetria canonica shadow `p-l48b.canonical-operation-telemetry.v1`
+  unidad `broker_order_id`; consumo read-only en digest/health/CLI/performance_daily.
+  Sin backfill, sin tablas/migraciones, sin autoridad sobre trading.
 - P-L43: legacy gobierna time-stop; XNYS es exclusivamente shadow.
 - Cohortes P-L27/P-L29/P-L30/P-L31/P-L32/P-L33 siguen collecting.
 - Overrides adaptativos historicos permanecen; la frontera actual impide nuevas
@@ -163,3 +166,29 @@ P-L43BR6 y P-L44BR3 permanecen fuera y conservan los slots `0.4.181` y
 - `legacy_double_application` conserva la autoridad; `single_application` es
   exclusivamente shadow y la captura real permanece `collecting`.
 - Suite, kernel, configuración y stack pasan; no se generaron órdenes por P-L44B.
+
+## P-L48BD - despliegue cerrado de P-L48B (0.4.185). DEPLOYED
+
+- Auditoria P-L48BD-P: `single_logical_stack_launcher_runtime_chains`,
+  `ready_to_resume_p48bd`. Una sola cadena logica por servicio
+  (launcher venv → runtime Python base); el `scheduler.lock` v1 pertenece al
+  runtime APScheduler hijo del launcher `.venv`, no al launcher. No se
+  "normalizo" la topologia.
+- Stack down con `scripts\stack_down.ps1 -IncludeScheduled`; merge `--no-ff`
+  de `266950a0` a produccion: commit `8cfa0db3`, tree funcional
+  `4c3636be` identico al ensayo, sin conflictos, sin squash/rebase/amend.
+- Validacion con stack detenido: baterias P-L48BR1 + P-L48B-T/W (111 passed),
+  focales scheduler/storage/postmarket/performance/reconciliation/execution/
+  digest/health/CLI y P-L43/P-L44/P-L45/P-L47 (verdes), suite completa ≈1693
+  passed/0 fallos, Ruff limpio, `check_no_nulls.py` OK, `git diff --check` OK,
+  `validate-agent-config` `ok=true`, `kernel-status` sellado sin violaciones.
+- `scripts\stack_up.ps1`: dos comprobaciones con HTTP 200/200, unico listener
+  8501, lock v1 PID 49096 token `134289557074352030` coincide con el runtime
+  real, `post_market_coordination:active = None`, 0 ordenes desde el reinicio,
+  0 `database is locked`, health `warning` con 0 alertas criticas.
+- Bootstrap: `terminal:skipped` reason `market_not_ready` unico; sin reprocesar
+  17-jul, sin repetir reconciliacion/outcomes, sin crear telemetria/ordenes ni
+  lease residual. Estado P-L48B inicial: CLI/digest/health `collecting`,
+  denominadores null, 0 eventos canonicos, sin backfill.
+- Deuda `profitability_scoreboard` (`pnl_pct=NULL` sin `max_dd`) NO corregida
+  (backlog). Sin push. Produccion `8cfa0db3` / tree `4c3636be` limpia.

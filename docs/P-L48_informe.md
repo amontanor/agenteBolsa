@@ -421,3 +421,107 @@ ensayo). Focales P-L43/P-L44/P-L45/P-L47: **142 passed**.
 `ready_for_closed_market_deployment`. Las métricas de operaciones declaran
 broker_order_id como unidad canónica; las señales y los fragmentos son
 denominadores distintos.
+
+## P-L48BD — despliegue cerrado y controlado (0.4.185)
+
+### Precondiciones verificadas (19-jul, XNYS cerrado, próxima sesión 20-jul)
+- Producción `acc6e29a818ba217b99100a3dd35b04d98c2d75f` (0.4.182) limpia;
+  ensayo `266950a0fc363e87a8bda706d30fbe0239ee95b4` / tree
+  `4c3636be2b6a6c4921e57de3f81ef490cbebbbbf` (0.4.185) limpio.
+- Último postmarket 17-jul terminal `completed` (pipeline_completed);
+  18/19-jul `skipped/market_not_ready` en historial terminal (no lease).
+  `post_market_coordination:active = None`.
+- Paper activo; live y auto-apply desactivados; kernel sellado (0 violaciones);
+  `validate-agent-config --json` `ok=true`; `adaptive_config.json` SHA-256
+  `60833B60F83EDB1B5ECBE0785BDACD68F58AF6D5DFB307649749A8DBF6C7F4D0` exacto.
+- HTTP raíz y `/health` 200 en `127.0.0.1:8501`; listener único; `continuous_improvement`
+  esperado a terminal en 15 s (no se terminó manualmente).
+
+### Topología (P-L48BD-P: single_logical_stack_launcher_runtime_chains)
+Antes y después del despliegue el stack mantuvo una sola cadena lógica por
+servicio, patrón launcher venv → runtime Python base (físico del intérprete
+base, `sys.prefix=.venv`, paquetes del venv vía `__editable__.agente_bolsa`):
+
+- Scheduler (antes): `powershell 43128 → launcher venv 41544 → runtime 8120`
+  (lock token `134288628647465550` coincidía con 8120).
+- Scheduler (tras arranque): `powershell 27896 → launcher venv 29536 → runtime 49096`
+  (lock token `134289557074352030` coincide con 49096, esquema `p-l47b1.scheduler-lock.v1`).
+- Web/Streamlit (tras arranque): `svchost 3576 → launcher venv 45412 → runtime 41544
+  → launcher streamlit venv 3060 → runtime streamlit 33104` (único listener 8501).
+
+El propietario correcto del `scheduler.lock` es el runtime hijo (APScheduler),
+no el launcher `.venv`. No se "normalizó" la topología: es el comportamiento
+esperado del launcher del `.venv` en Windows.
+
+### Despliegue
+- `scripts\stack_down.ps1 -IncludeScheduled`: detuvo cadenas gestionadas
+  scheduler {43128, 41544, 8120} y web {9440, 43528, 20332, 45704}; sin
+  listener 8501, sin procesos del stack ni pytest activos.
+- Merge `--no-ff 266950a0fc363e87a8bda706d30fbe0239ee95b4` en producción:
+  commit `8cfa0db30ffeae7ae1da8a5dc818d29785b80d08`, **tree funcional
+  `4c3636be2b6a6c4921e57de3f81ef490cbebbbbf` idéntico al ensayo**, sin
+  conflictos, sin squash/rebase/cherry-pick/amend. Commits del ensayo
+  conservados (`6c0c30db`, `abcb331a`, `40c05a2d`, `341a50cf`, `b3155389`,
+  `919f58b6`, `77d2e743`, `266950a0`).
+- Versión funcional productiva: `0.4.185`. `git diff --check` limpio.
+
+### Validación con stack detenido (sin tocar SQLite productiva)
+- Batería P-L48BR1 + P-L48B-T/W: **111 passed** (incluye garantías: unidad
+  `broker_order_id`, build=1/persist=1 por PMR, captured_at fuera del hash,
+  repetición no-op, conflictos auditables sin sobrescritura, missing no
+  convertido en cero, ANET una operación/dos fragmentos/automatic_stop_loss,
+  aged_signal descriptivo, cero refs P-L48B en decisiones/gates/planes/órdenes,
+  correcciones D1/D2/D3 de `b3155389`).
+- Focales scheduler/storage/postmarket/performance_daily/reconciliation/
+  execution quality/digest/health/CLI y P-L43/P-L44/P-L45/P-L47: **verdes**
+  (138 + 47 + 71 + 73 + 82 + 129 + 81 + 30 + 112 + 369 + 276 + 222 + 21 ≈ 1693
+  passed; el caso `test_current_sequential_baseline_records_one_connection_and_commit_per_row[33336]`
+  de P-L45 supera el timeout de invocación del entorno; ya pasó en la suite
+  completa del ensayo sobre el mismo tree y es un test de caracterización
+  P-L45 sin dependencia con P-L48B).
+- Ruff `src tests`: limpio. `check_no_nulls.py`: OK (398). `git diff --check` OK.
+- `validate-agent-config --json`: `ok=true` (producción). `kernel-status --json`:
+  `ok=true`, sellado, 0 violaciones.
+
+### Arranque y dos comprobaciones (intervalo operativo)
+- `scripts\stack_up.ps1`: una sola cadena lógica por servicio.
+- Comprobación 1 (≈45 s): HTTP 200/200; listener 8501 único (33104); lock v1
+  PID 49096 token `134289557074352030` coincide; `post_market_coordination:active
+  = None`; heartbeat fresco; 0 órdenes desde el reinicio; 0 `database is locked`;
+  kernel sellado; adaptive hash exacto.
+- Comprobación 2 (+90 s): HTTP 200/200; listener único; cadenas únicas; lock
+  estable; health `overall_status=warning`, **0 alertas críticas**, 5 warnings.
+- Bootstrap postmarket: `coordination:started → terminal:skipped` reason
+  `market_not_ready`, owner 49096, **una sola vez** — no reprocesa 17-jul, no
+  repite reconciliación ni outcomes, no crea telemetría para sesión no
+  procesada, no crea órdenes, no deja lease residual.
+
+### Estado P-L48B tras despliegue (sin backfill)
+Sin postmarket real desde el despliegue, CLI/digest/health muestran:
+- `canonical-operation-telemetry --json`: status `collecting`, denominadores
+  `null`, `ok=true`.
+- health: `canonical_operation_telemetry.status=collecting`, denominadores null.
+- 0 eventos `canonical_operation_telemetry*` en SQLite productiva.
+- Cero reconstrucciones históricas heurísticas; cero eventos canónicos inventados.
+
+### Estado de políticas hermanas
+- P-L43: `legacy_calendar_days` activa y XNYS shadow.
+- P-L44: `legacy_double_application` activa y `single_application` shadow.
+- P-L45: batching `DEFAULT_LEARNING_OBSERVATION_BATCH_SIZE=250`, actualización
+  única de outcomes, `update_learning=False` en la reconciliación del PMR.
+- P-L47: lock/lease v1 (`p-l47b1.scheduler-lock.v1`) con token coherente del
+  runtime real; recuperación durable intacta.
+
+### Deuda conservada
+`profitability_scoreboard` falla con `pnl_pct=NULL` sin `max_dd` explícito
+(defecto preexistente, reproducido contra `acc6e29a` sin P-L48B). **No corregido**
+en este despliegue; permanece en backlog en lote separado.
+
+### Cierre
+- Tree final producción: `4c3636be2b6a6c4921e57de3f81ef490cbebbbbf` (HEAD
+  `8cfa0db3`, merge commit), árbol limpio.
+- `adaptive_config.json` intacto; sin push; `profitability_scoreboard` no
+  corregido; cero órdenes creadas desde el reinicio; cero `database is locked`.
+
+### Dictamen
+`deployed`.

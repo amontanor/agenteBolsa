@@ -10,8 +10,8 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama de integracion desplegada: `codex/mejora_continua`
-- Version actual: **0.4.178** (ensayo integrado P-L46B; producción sigue en 0.4.177)
-- Ultima actualizacion: 2026-07-17
+- Version actual: **0.4.185** (P-L48B desplegado en producción el 19-jul; ensayo P-L48BR1)
+- Ultima actualizacion: 2026-07-19
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
 ## Consolidacion operativa - 16-jul-2026
@@ -2053,6 +2053,41 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
 - Backlog: corregir `_max_drawdown_from_returns` para ignorar valores NULL
   (defecto preexistente de scoreboard); valorar en otro lote si
   `reconciliation_terminal_at` entra en el contrato v2 de telemetria.
+
+## P-L48BD - despliegue cerrado de P-L48B en produccion (0.4.185). **HECHO**
+
+- Auditoria previa P-L48BD-P (`single_logical_stack_launcher_runtime_chains`):
+  una unica cadena logica por servicio, launcher venv → runtime Python base;
+  el `scheduler.lock` v1 pertenece al runtime APScheduler hijo del launcher
+  `.venv`, no al launcher. No se "normalizo" la topologia.
+- Precondiciones verificadas con XNYS cerrado: 17-jul terminal `completed`;
+  18/19-jul `skipped/market_not_ready` (historial); `post_market_coordination:active
+  = None`; paper/live-off/auto-apply-off; kernel sellado; `validate-agent-config`
+  `ok=true`; `adaptive_config.json` SHA-256 exacto; HTTP 200/200.
+- `scripts\stack_down.ps1 -IncludeScheduled`; merge `--no-ff` de
+  `266950a0fc363e87a8bda706d30fbe0239ee95b4` en produccion, commit
+  `8cfa0db30ffeae7ae1da8a5dc818d29785b80d08`, tree funcional
+  `4c3636be2b6a6c4921e57de3f81ef490cbebbbbf` identico al ensayo, sin conflictos,
+  sin squash/rebase/amend. Commits del ensayo conservados.
+- Validacion con stack detenido (sin tocar SQLite productiva): baterias
+  P-L48BR1 + P-L48B-T/W (111 passed), focales scheduler/storage/postmarket/
+  performance/reconciliation/execution/digest/health/CLI y P-L43/P-L44/P-L45/
+  P-L47 (verdes), suite completa ≈1693 passed/0 fallos, Ruff limpio,
+  `check_no_nulls.py` OK, `git diff --check` limpio, `validate-agent-config`
+  `ok=true`, `kernel-status` sellado sin violaciones.
+- `scripts\stack_up.ps1`; dos comprobaciones: HTTP 200/200, unico listener 8501,
+  lock v1 PID 49096 token `134289557074352030` coincide con el runtime real,
+  `post_market_coordination:active = None`, 0 ordenes desde el reinicio,
+  0 `database is locked`, health `warning` con 0 alertas criticas.
+- Bootstrap: `terminal:skipped` reason `market_not_ready` unico; no reprocesa
+  17-jul, no repite reconciliacion/outcomes, no crea telemetria/ordenes ni lease.
+- Estado P-L48B inicial sin backfill: CLI/digest/health `collecting`,
+  denominadores `null`, 0 eventos canonico en SQLite, sin reconstruccion
+  heuristica.
+- P-L43 `legacy_calendar_days` activa; P-L44 `legacy_double_application` activa
+  (`single_application` shadow); P-L45 batching 250 y outcomes unicos; P-L47
+  lock/lease v1 con token coherente. Deuda `profitability_scoreboard` no
+  corregida (backlog). Detalle en `docs/P-L48_informe.md`. Dictamen: `deployed`.
 
 ## P-L46B - orden cronologico de Cartera abierta (desplegado 0.4.178)
 
