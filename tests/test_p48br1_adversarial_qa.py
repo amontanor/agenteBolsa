@@ -26,8 +26,6 @@ from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
 from agente_bolsa.tools import canonical_operation_telemetry as telemetry_mod
 from agente_bolsa.tools.canonical_operation_telemetry import (
-    EVENT_ID_PREFIX,
-    SCHEMA_VERSION,
     _stable_hash,
     build_canonical_operation_telemetry,
     canonical_operation_telemetry_digest,
