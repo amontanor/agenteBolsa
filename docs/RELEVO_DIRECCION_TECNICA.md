@@ -135,6 +135,31 @@ P-L43BR6 y P-L44BR3 permanecen fuera y conservan los slots `0.4.181` y
 
 - Producción quedó en `0.4.177` mediante el merge `23e4bf4d`, con el tree
   validado del ensayo y sin incluir P-L46B.
+
+## P-L48B-W - telemetria canonica de operaciones (candidato 0.4.184)
+
+- Productor shadow unico `p-l48b.canonical-operation-telemetry.v1` con unidad
+  `broker_order_id`, denominadores separados y freshness descriptiva.
+- Evento append-only por sesion, hash estable excluyendo `captured_at`,
+  idempotencia y conflictos auditables. Consumidores read-only.
+- No altera trading ni activa ninguna politica shadow; P-L43/P-L44/P-L45/P-L47
+  permanecen con sus invariantes.
+
+## P-L48BR1 - ensayo de integracion superado (0.4.185)
+
+- Worktree `pl48br1_integration_rehearsal`, rama
+  `codex/pl48br1-integration-rehearsal`: merge `--no-ff` del candidato exacto
+  mas tres commits QA (`b3155389`, `919f58b6`, `77d2e743`).
+- QA adversarial completo (65 pruebas nuevas): fuente unica, orden postmarket,
+  fail-open, idempotencia, fragmentacion, ANET, performance_daily,
+  reconciliacion, freshness, volumen, lectores y paridad
+  P-L43/P-L44/P-L45/P-L47. Suite 1689 passed y gates en verde.
+- Tres defectos del candidato corregidos en el ensayo (D1 centinela
+  `_MISSING`, D2 digest tras conflicto, D3 `candidate_count`); un defecto
+  preexistente de `profitability_scoreboard` documentado para el backlog.
+- Dictamen: `ready_for_closed_market_deployment`. Siguiente paso: despliegue
+  con XNYS cerrado mediante merge `--no-ff` del tree validado del ensayo a
+  produccion, conservando los commits QA.
 - `legacy_double_application` conserva la autoridad; `single_application` es
   exclusivamente shadow y la captura real permanece `collecting`.
 - Suite, kernel, configuración y stack pasan; no se generaron órdenes por P-L44B.

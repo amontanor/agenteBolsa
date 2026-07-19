@@ -1139,6 +1139,102 @@ class Store:
                 return {"status": "conflict", "event_id": event_id, "conflict_event_id": conflict_id, "existing_content_hash": raced_hash, "candidate_content_hash": candidate_hash}
         return {"status": "inserted", "event_id": event_id, "content_hash": candidate_hash}
 
+    def record_canonical_operation_telemetry(
+        self,
+        payload: dict[str, Any],
+        *,
+        event_id: str,
+    ) -> dict[str, Any]:
+        """Persist the P-L48B snapshot in one short, conflict-safe write.
+
+        This deliberately does not reuse ``record_agent_event`` (which keeps
+        its historical replace semantics).  The only transaction is the
+        read/compare/insert below and it is explicitly protected by
+        ``BEGIN IMMEDIATE``.  No producer or broker work can run while it is
+        held.
+        """
+
+        encoded = _dumps(payload)
+        candidate_hash = str(payload.get("content_hash") or "")
+        event_type = "canonical_operation_telemetry"
+        cycle_id = None
+        now = _utc_iso()
+        conn = self.connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT payload_json FROM agent_events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+            if existing is not None:
+                try:
+                    existing_payload = json.loads(existing["payload_json"] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    existing_payload = {}
+                existing_hash = str(existing_payload.get("content_hash") or "")
+                # ``captured_at`` is intentionally outside the canonical
+                # hash, so a repeated snapshot at a later read time remains
+                # idempotent even though its observation timestamp differs.
+                if candidate_hash and existing_hash == candidate_hash:
+                    conn.commit()
+                    return {"status": "idempotent", "event_id": event_id, "content_hash": candidate_hash}
+                conflict_id = f"{event_id}:conflict:{candidate_hash or 'unknown'}"
+                conflict_payload = {
+                    "schema_version": payload.get("schema_version"),
+                    "event_id": event_id,
+                    "existing_content_hash": existing_hash or None,
+                    "candidate_content_hash": candidate_hash or None,
+                    "status": "conflict",
+                }
+                conn.execute(
+                    "INSERT OR IGNORE INTO agent_events (event_id, agent, event_type, cycle_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (conflict_id, "postmarket_telemetry", f"{event_type}_conflict", cycle_id, _dumps(conflict_payload), now),
+                )
+                conn.commit()
+                return {
+                    "status": "conflict",
+                    "event_id": event_id,
+                    "conflict_event_id": conflict_id,
+                    "existing_content_hash": existing_hash or None,
+                    "candidate_content_hash": candidate_hash or None,
+                }
+            conn.execute(
+                "INSERT INTO agent_events (event_id, agent, event_type, cycle_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (event_id, "postmarket_telemetry", event_type, cycle_id, encoded, now),
+            )
+            conn.commit()
+            return {"status": "inserted", "event_id": event_id, "content_hash": candidate_hash}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def canonical_operation_telemetry_event(self, session_date: str) -> dict[str, Any] | None:
+        """Read one canonical event without recalculating or backfilling."""
+
+        event_id = f"canonical_operation_telemetry:{session_date}"
+        try:
+            with self.read_connection() as conn:
+                row = conn.execute(
+                    "SELECT event_id, event_type, payload_json, created_at FROM agent_events WHERE event_id = ?",
+                    (event_id,),
+                ).fetchone()
+        finally:
+            self.close_read_connection()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        return {
+            "event_id": row["event_id"],
+            "event_type": row["event_type"],
+            "payload": payload,
+            "created_at": row["created_at"],
+        }
+
     def record_time_stop_shadow_observation(
         self,
         observation: dict[str, Any],

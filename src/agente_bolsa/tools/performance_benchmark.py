@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Mapping
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -519,6 +520,7 @@ def build_daily_performance_item(
     *,
     now: datetime | None = None,
     spy_observation: dict[str, Any] | None = None,
+    canonical_telemetry: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Combina el payload legacy con el bloque P-L40B sin llamadas externas."""
 
@@ -541,6 +543,7 @@ def build_daily_performance_item(
         equity=account.get("equity"),
         spy_pct=benchmark.get("daily_return"),
         portfolio=portfolio,
+        canonical_telemetry=canonical_telemetry,
     )
     legacy["pnl_pct"] = account.get("daily_return")
     legacy["spy_pct"] = benchmark.get("daily_return")

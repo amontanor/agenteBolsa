@@ -2018,6 +2018,42 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
 - Ambos shadows siguen `collecting`/`partial`; no hay backfill ni autoridad
   sobre trading.
 
+## P-L48B-W - telemetria canonica de operaciones (candidato 0.4.184)
+
+- Implementado en shadow un productor unico `p-l48b.canonical-operation-telemetry.v1`.
+- La unidad canonica es `broker_order_id`; fragmentos, senales, candidatos,
+  recomendaciones y planes conservan denominadores separados.
+- Persistencia append-only por sesion, hash estable fuera de `captured_at`,
+  idempotencia y conflictos auditables. No hay tablas, migraciones ni backfill.
+- `performance_daily`, digest, health y CLI consumen exclusivamente el evento
+  canonico ya construido. La ruta activa de trading, P-L43, P-L44, P-L45 y
+  P-L47 no cambia.
+
+## P-L48BR1 - QA adversarial y ensayo de integracion de P-L48B (0.4.185)
+
+- Ensayo en worktree dedicado desde `acc6e29a` con merge `--no-ff` del
+  candidato exacto `40c05a2d`; commits QA separados (`b3155389`, `919f58b6`,
+  `77d2e743`); produccion intacta y sin despliegue.
+- Verificados con contadores: fuente unica (1 construccion/1 persistencia por
+  PMR), orden postmarket P-L47, fail-open completo, idempotencia append-only,
+  unidad canonica adversarial, atribucion ANET y matriz de salidas,
+  denominadores separados en `performance_daily`, reconciliacion, freshness
+  en segundos (8604,54 s ≈ 143,4 min) sin gates, volumen (1.000 senales /
+  100 operaciones / 2 sesiones), lectores y estados, y paridad
+  P-L43/P-L44/P-L45/P-L47.
+- Defectos del candidato corregidos en el ensayo con commit QA separado:
+  centinela `_MISSING` truthy en identidad/fallbacks (D1), digest global que
+  ocultaba el snapshot valido tras conflicto (D2) y `candidate_count`
+  excesivamente estricto (D3). Defecto preexistente de
+  `profitability_scoreboard` con `pnl_pct` NULL documentado para el backlog
+  (reproducido contra `acc6e29a`; no lo causa P-L48B).
+- Suite 1689 passed; Ruff, `check_no_nulls.py`, `git diff --check` y
+  `validate-agent-config` en verde. Dictamen:
+  `ready_for_closed_market_deployment`. Detalle en `docs/P-L48_informe.md`.
+- Backlog: corregir `_max_drawdown_from_returns` para ignorar valores NULL
+  (defecto preexistente de scoreboard); valorar en otro lote si
+  `reconciliation_terminal_at` entra en el contrato v2 de telemetria.
+
 ## P-L46B - orden cronologico de Cartera abierta (desplegado 0.4.178)
 
 - El orden anterior mostraba primero las posiciones con mayor valor absoluto de
