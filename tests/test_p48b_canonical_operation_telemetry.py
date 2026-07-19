@@ -85,6 +85,15 @@ def test_append_only_persistence_is_idempotent_and_conflict_safe(tmp_path: Path)
     store.close_read_connection()
 
 
+def test_capture_timestamp_is_outside_idempotency_hash(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    first = build_canonical_operation_telemetry(None, "2026-07-17", source_data=_raw_fixture(), captured_at=CAPTURED_AT)
+    second = build_canonical_operation_telemetry(None, "2026-07-17", source_data=_raw_fixture(), captured_at=CAPTURED_AT.replace(hour=12))
+    assert first["content_hash"] == second["content_hash"]
+    assert persist_canonical_operation_telemetry(store, first)["status"] == "inserted"
+    assert persist_canonical_operation_telemetry(store, second)["status"] == "idempotent"
+
+
 def test_missing_event_is_collecting_with_null_denominators(tmp_path: Path) -> None:
     store = _store(tmp_path)
     report = read_canonical_operation_telemetry(store, "2026-07-18")

@@ -1171,10 +1171,13 @@ class Store:
                     existing_payload = json.loads(existing["payload_json"] or "{}")
                 except (TypeError, json.JSONDecodeError):
                     existing_payload = {}
-                if _dumps(existing_payload) == encoded:
+                existing_hash = str(existing_payload.get("content_hash") or "")
+                # ``captured_at`` is intentionally outside the canonical
+                # hash, so a repeated snapshot at a later read time remains
+                # idempotent even though its observation timestamp differs.
+                if candidate_hash and existing_hash == candidate_hash:
                     conn.commit()
                     return {"status": "idempotent", "event_id": event_id, "content_hash": candidate_hash}
-                existing_hash = str(existing_payload.get("content_hash") or "")
                 conflict_id = f"{event_id}:conflict:{candidate_hash or 'unknown'}"
                 conflict_payload = {
                     "schema_version": payload.get("schema_version"),
