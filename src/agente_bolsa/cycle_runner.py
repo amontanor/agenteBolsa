@@ -31,6 +31,11 @@ from .tools.comparable_controls import (
     copy_comparable_control_set,
 )
 from .tools.costs import TransactionCostModel
+from .tools.data_quality_decision_shadow import (
+    capture_data_quality_phase_a,
+    finalize_data_quality_phase_b,
+    persist_data_quality_decision_shadow,
+)
 from .tools.decision_context import build_decision_context_snapshot, copy_snapshot
 from .tools.decision_lineage import build_decision_lineage
 from .tools.deterministic_reviewer import recommendation_input_fingerprint, review_recommendations
@@ -1239,6 +1244,100 @@ def _persist_learning_penalty_cycle_shadow_final(
         return None
 
 
+def _capture_data_quality_decision_shadow(
+    *,
+    run_id: str,
+    market_snapshot: dict[str, Any] | None,
+    market_state: dict[str, Any] | None,
+    technical_context: dict[str, Any] | None,
+    reporter: EventReporter,
+) -> dict[str, Any] | None:
+    """Capture Phase A without becoming an argument to active decisions."""
+
+    try:
+        phase_a = capture_data_quality_phase_a(
+            cycle_id=run_id,
+            market_snapshot=market_snapshot,
+            market_state=market_state,
+            technical_context=technical_context,
+            candidates=(technical_context or {}).get("all_candidates") if isinstance(technical_context, dict) else None,
+        )
+        reporter.emit(
+            "market_data_researcher",
+            "data_quality_decision_shadow_phase_a",
+            run_id,
+            "Captura shadow de calidad realizada en memoria antes de la decision activa.",
+            {
+                "status": phase_a.get("status"),
+                "denominators": phase_a.get("denominators"),
+                "details_included": phase_a.get("details_included"),
+                "details_omitted": phase_a.get("details_omitted"),
+                "policy_mode": "shadow_only",
+            },
+        )
+        return phase_a
+    except Exception as exc:  # noqa: BLE001 - quality telemetry is fail-open.
+        reporter.emit(
+            "market_data_researcher",
+            "data_quality_decision_shadow_unavailable",
+            run_id,
+            "No se pudo capturar el shadow de calidad; el ciclo activo continua.",
+            {"error": repr(exc), "policy_mode": "shadow_only"},
+        )
+        return None
+
+
+def _persist_data_quality_decision_shadow_final(
+    *,
+    store: Store,
+    reporter: EventReporter,
+    phase_a: dict[str, Any] | None,
+    run_id: str,
+    recommendations: list[Any] | None = None,
+    plans: list[Any] | None = None,
+    rejected_order_plans: list[dict[str, Any]] | None = None,
+    orders: list[dict[str, Any]] | None = None,
+    phase_b_available: bool = True,
+) -> dict[str, Any] | None:
+    """Seal/persist Phase B without retrying any active stage."""
+
+    if not isinstance(phase_a, dict):
+        return None
+    try:
+        final = finalize_data_quality_phase_b(
+            phase_a,
+            recommendations=recommendations or [],
+            plans=plans or [],
+            rejected_order_plans=rejected_order_plans or [],
+            orders=orders or [],
+            cycle_id=run_id,
+            phase_b_available=phase_b_available,
+        )
+        persisted = persist_data_quality_decision_shadow(store, final)
+        reporter.emit(
+            "market_data_researcher",
+            "data_quality_decision_shadow_final",
+            run_id,
+            "Shadow de calidad finalizado tras la ruta activa; sin autoridad sobre trading.",
+            {
+                "status": final.get("status"),
+                "denominators": final.get("denominators"),
+                "persist_status": persisted.get("status"),
+                "policy_mode": "shadow_only",
+            },
+        )
+        return final
+    except Exception as exc:  # noqa: BLE001 - observability must not block the cycle.
+        reporter.emit(
+            "market_data_researcher",
+            "data_quality_decision_shadow_failed",
+            run_id,
+            "No se pudo persistir el shadow final; el ciclo activo continua sin cambios.",
+            {"error": repr(exc), "policy_mode": "shadow_only"},
+        )
+        return None
+
+
 def _auto_paper_trade(
     settings: Settings,
     store: Store,
@@ -1248,6 +1347,7 @@ def _auto_paper_trade(
     market_snapshot: dict[str, Any] | None,
     market_state: dict[str, Any] | None,
     learning_penalty_shadow: dict[str, Any] | None = None,
+    data_quality_shadow: dict[str, Any] | None = None,
     agent_run_id: str | None = None,
     timing: MarketCycleTiming | None = None,
 ) -> dict[str, Any] | None:
@@ -1858,8 +1958,31 @@ def _auto_paper_trade(
                 "low_sample_usage": low_sample_usage,
                 "recommendation_augmentation": recommendation_augmentation,
                 "learning_penalty_shadow": learning_penalty_shadow_final,
+                "data_quality_decision_shadow": _persist_data_quality_decision_shadow_final(
+                    store=store,
+                    reporter=reporter,
+                    phase_a=data_quality_shadow,
+                    run_id=run_id,
+                    recommendations=reviewed_recommendations,
+                    plans=plans,
+                    rejected_order_plans=rejected_order_plans,
+                    phase_b_available=True,
+                ),
             }
     planned_symbols = [plan.symbol for plan in plans if str(plan.side).lower() == "buy"]
+    # P-L49B Phase B is sealed before any order-plan row or broker payload is
+    # registered.  It observes the active results but is never passed into
+    # ranking, gates, sizing, plans, or execution.
+    _data_quality_shadow_final = _persist_data_quality_decision_shadow_final(
+        store=store,
+        reporter=reporter,
+        phase_a=data_quality_shadow,
+        run_id=run_id,
+        recommendations=reviewed_recommendations,
+        plans=plans,
+        rejected_order_plans=rejected_order_plans,
+        phase_b_available=True,
+    )
     for plan in plans:
         plan_id = new_id("plan")
         with optional_measure(timing, "persistence", "order_plan_records"):
@@ -1926,6 +2049,7 @@ def _auto_paper_trade(
             "low_sample_usage": low_sample_usage,
             "recommendation_augmentation": recommendation_augmentation,
             "learning_penalty_shadow": learning_penalty_shadow_final,
+            "data_quality_decision_shadow": _data_quality_shadow_final,
         }
 
     submitted = []
@@ -2023,6 +2147,7 @@ def _auto_paper_trade(
         "low_sample_usage": low_sample_usage,
         "recommendation_augmentation": recommendation_augmentation,
         "learning_penalty_shadow": learning_penalty_shadow_final,
+        "data_quality_decision_shadow": _data_quality_shadow_final,
     }
 
 
@@ -2136,6 +2261,17 @@ def run_observable_cycle(
             {"error": str(exc)},
         )
 
+    # P-L49B Phase A is strictly in-memory and receives only the market
+    # objects already constructed for this cycle.  It is not supplied to any
+    # active decision function.
+    data_quality_shadow = _capture_data_quality_decision_shadow(
+        run_id=run_id,
+        market_snapshot=market_snapshot,
+        market_state=market_state,
+        technical_context=technical_context,
+        reporter=reporter,
+    )
+
     crew_result: str | None = None
     if use_crew:
         endpoint, _attempts = select_preferred_endpoint(settings)
@@ -2231,6 +2367,7 @@ def run_observable_cycle(
                 market_snapshot,
                 market_state,
                 learning_penalty_shadow=learning_penalty_shadow,
+                data_quality_shadow=data_quality_shadow,
                 agent_run_id=crew_run.agent_run_id,
                 timing=timing,
             )
@@ -2278,6 +2415,25 @@ def run_observable_cycle(
                     "No se pudo persistir el shadow partial; el ciclo continua.",
                     {"error": repr(exc), "policy_mode": "shadow_only"},
                 )
+    # Blocked/skip paths may not enter the active plan boundary.  Persist one
+    # partial snapshot only when Phase B was not already sealed; this never
+    # retries market data, reconciliation, outcomes, ranking, or execution.
+    if data_quality_shadow is not None:
+        try:
+            existing_quality_event = store.data_quality_decision_shadow_event(run_id)
+        except Exception:
+            existing_quality_event = None
+        if existing_quality_event is None:
+            _persist_data_quality_decision_shadow_final(
+                store=store,
+                reporter=reporter,
+                phase_a=data_quality_shadow,
+                run_id=run_id,
+                recommendations=(auto_result or {}).get("recommendations", []) if isinstance(auto_result, dict) else [],
+                plans=[],
+                rejected_order_plans=(auto_result or {}).get("rejected_order_plans", []) if isinstance(auto_result, dict) else [],
+                phase_b_available=False,
+            )
     with timing.measure("persistence", "trade_summary"):
         _record_trade_summary(settings, store, reporter, run_id, auto_result)
     if not timing.is_running("technical_analysis"):
