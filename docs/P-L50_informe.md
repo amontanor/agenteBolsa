@@ -199,6 +199,21 @@ La suite completa y el smoke no se ejecutaron por la restricción operativa.
 Dictamen del candidato: `ready_for_integration_rehearsal`; no autoriza despliegue
 ni activación de `single_application`.
 
+## P-L50BR1 - convivencia con P-L49B y P-L46BR3
+
+El worktree combinado integra P-L49B (0.4.186) y P-L46BR3 (0.4.187) antes de
+este lote (0.4.188). P-L49 conserva su identidad de observación OHLCV exacta;
+P-L50 conserva `signal_capture_id -> signal_id`, `cycle_id` y la identidad de
+decisión por acción/recomendación. Ningún shadow usa la identidad del otro ni
+se unen por símbolo/fecha. La batería combinada cubre 500 símbolos, 37
+anomalías, 443 candidatos, BUY/EXIT, planes, controles y rechazos; obtuvo 607
+pruebas focales y 3 pruebas específicas de interacción.
+
+Fallos aislados de cualquiera de los dos shadows son fail-open para el camino
+activo. La persistencia es append-only y no colisionan los event IDs. P-L46BR3
+permanece lectura/presentación únicamente. Suite completa, smoke y despliegue
+quedan pendientes para XNYS cerrado.
+
 ## Validación ejecutada
 
 - Pruebas nuevas P-L50T: **9 passed**.

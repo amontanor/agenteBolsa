@@ -139,4 +139,16 @@ ni iniciar P-L48C; queda pendiente el ensayo de integración y cualquier desplie
 - La suite completa y el smoke quedan pendientes por XNYS abierto; la prueba
   histórica P-L45B2 de 33.336 filas se excluye únicamente en esta ventana,
   conforme al encargo, sin skip/xfail nuevo. Dictamen: pendiente de validación
-  completa con mercado cerrado (`ready_for_closed_market_full_validation`).
+completa con mercado cerrado (`ready_for_closed_market_full_validation`).
+
+## P-L50BR1 - ensayo combinado P-L49B + P-L46BR3 + P-L50B
+
+El ensayo secuenciado integra P-L49B en 0.4.186, P-L46BR3 en 0.4.187 y
+P-L50B en 0.4.188 mediante tres merges `--no-ff`. La prueba combinada usa 500
+observaciones, 37 anomalías y 443 candidatos; mantiene separadas la identidad
+OHLCV de P-L49 y la identidad signal/candidate/action de P-L50. BUY y EXIT de
+VTRS no colisionan. Los eventos canónicos de ambos shadows coexisten por
+`cycle_id`, con idempotencia y sin backfill.
+
+QA focal combinada: 607 pruebas verdes; interacción nueva: 3 pruebas verdes.
+Suite completa, smoke y despliegue quedan pendientes por XNYS abierto.

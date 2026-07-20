@@ -222,6 +222,13 @@ P-L43BR6 y P-L44BR3 permanecen fuera y conservan los slots `0.4.181` y
   externo quedan alineados con la misma serie de equity.
 - Solo UI/lectura; no cambia rutas de trading ni persistencia. P-L49 mantiene
   el slot `0.4.186`; P-L46BR3 usa `0.4.187`.
+## P-L50BR1 - ensayo combinado pendiente de validacion cerrada
+
+Secuencia del worktree: P-L49B `0.4.186`, P-L46BR3 `0.4.187`, P-L50B `0.4.188`.
+Los shadows conservan identidades y eventos independientes; la UI sigue siendo
+solo lectura. QA focal: 607 passed; interacción: 3 passed. XNYS estaba abierto,
+por lo que no se ejecutaron suite completa, smoke ni despliegue.
+
 ## P-L50B - candidato shadow de linaje (0.4.188)
 
 - Corrige el wiring P-L44 preparando `signal_capture_id`/`signal_id` antes de

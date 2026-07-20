@@ -2100,6 +2100,13 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
   lock/lease v1 con token coherente. Deuda `profitability_scoreboard` no
   corregida (backlog). Detalle en `docs/P-L48_informe.md`. Dictamen: `deployed`.
 
+## P-L50BR1 - ensayo combinado secuenciado (pendiente de validacion cerrada)
+
+Secuencia del worktree: P-L49B `0.4.186`, P-L46BR3 `0.4.187`, P-L50B
+`0.4.188`. QA focal: 607 passed; interacción nueva: 3 passed. Ambos shadows
+son fail-open, append-only e independientes. Suite completa, smoke y validación
+de despliegue quedan pendientes con XNYS cerrado.
+
 ## P-L46B - orden cronologico de Cartera abierta (desplegado 0.4.178)
 
 - El orden anterior mostraba primero las posiciones con mayor valor absoluto de

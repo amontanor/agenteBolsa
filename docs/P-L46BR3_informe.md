@@ -28,3 +28,11 @@ rentabilidad neutral a flujos sin reinterpretar retrospectivamente esta serie.
 El cambio no escribe datos ni realiza una llamada adicional al broker. No toca
 senales, ranking, gates, sizing, planes, ordenes, stops, takes, exposicion,
 SQLite, scheduler ni politicas P-L43/P-L44/P-L48/P-L49.
+
+## P-L50BR1 - convivencia secuenciada
+
+La integración con P-L49B y P-L50B conserva el cambio exclusivamente visual:
+la serie completa de equity y el filtro `Desde inicio` no añaden llamadas al
+broker ni escrituras. La batería combinada pasó 607 pruebas focales y no alteró
+trading, posiciones, planes, órdenes, exposición ni límites. La validación
+completa queda reservada a una ventana con XNYS cerrado.
