@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -161,3 +162,35 @@ def test_nan_and_infinity_never_create_market_identity():
     row = observation("EIX")
     row["ohlcv"]["high"] = float("nan")
     assert market_data_observation_id(row) is None
+
+
+def test_sqlite_lock_is_fail_open_at_cycle_boundary(tmp_path: Path, monkeypatch):
+    from agente_bolsa import cycle_runner
+
+    row = observation("EIX", quality="blocking")
+    phase = capture_data_quality_phase_a(
+        cycle_id="cycle_1", market_snapshot={"observations": [row]}, candidates=[candidate("EIX", row)], decision_at=DECISION, captured_at=DECISION
+    )
+
+    class Reporter:
+        def __init__(self):
+            self.events = []
+
+        def emit(self, *args, **kwargs):
+            self.events.append((args, kwargs))
+
+    store = Store(tmp_path / "state.sqlite", tmp_path / "logs")
+    store.ensure_schema()
+
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "record_data_quality_decision_shadow", locked)
+    result = cycle_runner._persist_data_quality_decision_shadow_final(
+        store=store,
+        reporter=Reporter(),
+        phase_a=phase,
+        run_id="cycle_1",
+        phase_b_available=True,
+    )
+    assert result is None
