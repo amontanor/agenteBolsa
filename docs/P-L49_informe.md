@@ -1,12 +1,40 @@
-# P-L49B-T — caracterización del contrato de calidad por candidato
+# P-L49B-W — implementación shadow del contrato de calidad por candidato
 
-Estado: `ready_for_p49b_shadow_implementation` como caracterización aislada.
-Versión del worktree: `0.4.185`; no se requiere bump para pruebas y documentación.
+Estado: `ready_for_integration_rehearsal` en worktree aislado, versión `0.4.186`.
+
+P-L49B-W implementa `p-l49b.data-quality-decision-shadow.v1` como telemetría
+`shadow_only`, sin autoridad sobre decisiones, gates, riesgo, planes u órdenes.
+La Fase A captura en memoria las observaciones exactas ya presentes en el ciclo;
+la Fase B reutiliza esa captura después de la ruta activa y antes de registrar o
+enviar planes. Los fallos de captura, hash, lectura o persistencia son fail-open
+para el ciclo y producen `unavailable`/`partial` con warning, sin repetir ciclos
+ni bloquear salidas SELL.
+
+El evento canónico es `data_quality_decision_shadow:<cycle_id>` en
+`agent_events`. La inserción usa `BEGIN IMMEDIATE` solo para la comparación e
+inserción corta, sin tablas ni migraciones nuevas. Repeticiones con el mismo
+hash son idempotentes y el contenido distinto queda como conflicto auditable.
+La identidad de mercado combina proveedor, símbolo, intervalo, timestamp de
+barra, price basis y OHLCV normalizado; no se reconstruye por símbolo/fecha.
+
+El CLI `data-quality-decision-shadow-report --json` y operational health son
+read-only. Sin eventos se informa `collecting` con denominadores `null`; una
+base legacy no se reconstruye. `captured_at` queda fuera del hash y la frescura
+expone `report_id`, `generated_at`, `as_of`, `consumer_read_at`, `age_seconds`,
+`source_path`, `session_date` y `freshness_status`.
+
+Las salidas `time_stop_v2` sanitizadas (DDOG, BNY, JPM y BAC) quedan
+`not_applicable_exit`; P-L43, P-L44, P-L45, P-L47 y P-L48 no reciben cambios de
+política.
+
+La caracterización anterior queda conservada como antecedente; el candidato
+actual es `0.4.186` y este lote sí contiene wiring shadow aislado.
 
 ## Alcance
 
-Este lote solo define fixtures y pruebas para `p-l49b.data-quality-decision-shadow.v1`.
-No conecta el contrato con `cycle_runner`, scheduler, health, digest, gates ni órdenes.
+La caracterización anterior definía fixtures y pruebas; P-L49B-W añade ahora el
+wiring fail-open en `cycle_runner` y consumidores read-only de health, digest y
+CLI. No conecta el contrato con gates ni órdenes como autoridad.
 Las pruebas usan `Settings(_env_file=None)`, `DATA_DIR` temporal, reloj congelado y
 proveedores locales. No acceden a la SQLite productiva ni a red, broker, yfinance o LLM.
 
@@ -33,7 +61,8 @@ price basis y OHLCV normalizado. Distingue proveedores, adjusted/unadjusted, rev
 barras intradía y timestamps distintos; no une solo por símbolo/fecha.
 
 `captured_at` queda fuera del hash. Repeticiones idénticas son no-op y contenido distinto
-es conflicto auditable. No se propone persistencia ni `INSERT OR REPLACE` en este lote.
+es conflicto auditable. La persistencia se limita al evento canónico append-only;
+no se usa `INSERT OR REPLACE`.
 
 ## Semántica shadow preregistrada
 
@@ -72,6 +101,6 @@ fichero latest. No se modifica health productivo.
 ## Conclusión
 
 La caracterización confirma el hueco observado en P-L49A: `affects_operational_scan`
-puede ser telemetría sin autoridad de decisión y `PARTIAL` permite continuar. El lote
-queda listo para una futura implementación shadow, sin activar ningún gate y sin iniciar
-P-L48C.
+puede ser telemetría sin autoridad de decisión y `PARTIAL` permite continuar. El
+candidato implementa ahora la observación shadow aislada, sin activar ningún gate
+ni iniciar P-L48C; queda pendiente el ensayo de integración y cualquier despliegue.

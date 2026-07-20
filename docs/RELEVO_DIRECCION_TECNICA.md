@@ -1,6 +1,6 @@
 # Relevo de direccion tecnica — agenteBolsa
 
-> Actualizado: **19-jul-2026**. Produccion **0.4.185** (`8cfa0db3`, tree
+> Actualizado: **20-jul-2026**. Produccion **0.4.185** (`8cfa0db3`, tree
 > `4c3636be`). P-L48B desplegado en mercado cerrado; P-L44B sigue en shadow.
 
 ## Objetivo
@@ -22,6 +22,10 @@ promociones siguen human-gated.
 - Cohortes P-L27/P-L29/P-L30/P-L31/P-L32/P-L33 siguen collecting.
 - Overrides adaptativos historicos permanecen; la frontera actual impide nuevas
   promociones con auto-apply false.
+- P-L49B-W queda en ensayo aislado como `0.4.186`: captura/finalización shadow
+  de calidad por candidato, evento append-only y consumidores read-only. No
+  concede autoridad sobre entradas, gates ni salidas y requiere identidad de
+  observación y temporalidad verificables.
 
 ## Secuencia validada
 
