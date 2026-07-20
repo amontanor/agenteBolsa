@@ -154,7 +154,7 @@ def test_health_freshness_does_not_accept_future_or_wrong_session():
     read_at = datetime(2026, 7, 20, 14, 0, tzinfo=timezone.utc)
     latest = {"report_id": "quality", "generated_at": "2026-07-20T13:59:00+00:00", "as_of": "2026-07-20T13:58:00+00:00", "session_date": "2026-07-20"}
     assert quality_report_freshness(latest, consumer_read_at=read_at, expected_session="2026-07-20", source_path="latest.json")["freshness_status"] == "fresh"
-    assert quality_report_freshness({**latest, "session_date": "2026-07-19"}, consumer_read_at=read_at, expected_session="2026-07-20", source_path="latest.json")["freshness_status"] == "stale_session"
+    assert quality_report_freshness({**latest, "session_date": "2026-07-19"}, consumer_read_at=read_at, expected_session="2026-07-20", source_path="latest.json")["freshness_status"] == "stale"
 
 
 def test_nan_and_infinity_never_create_market_identity():

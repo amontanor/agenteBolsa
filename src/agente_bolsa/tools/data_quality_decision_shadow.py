@@ -656,7 +656,8 @@ def quality_report_freshness(
         return result
     result.update({key: report.get(key) for key in ("report_id", "generated_at", "as_of", "session_date")})
     if expected_session and report.get("session_date") not in (None, expected_session):
-        result["freshness_status"] = "stale_session"
+        result["freshness_status"] = "stale"
+        result["freshness_reason"] = "session_mismatch"
         return result
     if expected_content_hash is not None and report.get("content_hash") != expected_content_hash:
         result["freshness_status"] = "invalid_hash"
@@ -666,7 +667,9 @@ def quality_report_freshness(
         return result
     age = (consumer_read_at.astimezone(timezone.utc) - generated).total_seconds()
     result["age_seconds"] = round(age, 6)
-    result["freshness_status"] = "fresh" if age >= 0 else "future"
+    result["freshness_status"] = "fresh" if age >= 0 else "stale"
+    if age < 0:
+        result["freshness_reason"] = "generated_in_future"
     return result
 
 
