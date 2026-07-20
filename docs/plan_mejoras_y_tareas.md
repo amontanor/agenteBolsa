@@ -2117,7 +2117,7 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
 ## P-L49BR1 — estado del ensayo (0.4.186)
 
 - Ensayo aislado fusionado desde `24537e81` con candidato `938580b7`:
-  merge `2ea57983`; QA adicional `b8aee78a`.
+  merge `2ea57983`; QA adicional `b8aee78a` y `db6577b2`.
 - La captura de calidad sigue siendo observabilidad shadow. Sin provenance OHLC
   exacta en el objeto que alimentó features, los candidatos identificados se
   clasifican `unavailable_temporal`/`partial`; no se aplican informes

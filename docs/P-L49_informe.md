@@ -109,7 +109,8 @@ ni iniciar P-L48C; queda pendiente el ensayo de integración y cualquier desplie
 
 - Ensayo `pl49br1_shadow_rehearsal`, rama `codex/pl49b1-shadow-rehearsal`, basado
   en producción `24537e81`; merge `--no-ff` del candidato exacto `938580b7` en
-  `2ea57983`. La versión permanece `0.4.186`.
+  `2ea57983`. QA adicional `b8aee78a` y métrica de persistencia `db6577b2`;
+  la versión permanece `0.4.186`.
 - La ruta real ejecuta Fase A después de construir `market_snapshot`/`market_state`
   y antes del ranking. El snapshot productivo actual expone calidad agregada y
   no la observación OHLC que alimentó cada feature; por contrato, la candidatura
