@@ -161,4 +161,3 @@ def test_nan_and_infinity_never_create_market_identity():
     row = observation("EIX")
     row["ohlcv"]["high"] = float("nan")
     assert market_data_observation_id(row) is None
-
