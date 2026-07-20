@@ -13,7 +13,6 @@ from typing import Any
 
 import pytest
 
-
 IDENTITY_FIELDS = (
     "cycle_id",
     "signal_capture_id",
@@ -210,7 +209,10 @@ def test_mass_fixture_separates_identity_and_learning_inputs():
     assert len(rows) == 443
     seen: set[tuple[str, str]] = set()
     identities = [classify_identity(row, "cycle-1", seen) for row in rows]
-    inputs = [classify_shadow_inputs(row, identity) for row, identity in zip(rows, identities)]
+    inputs = [
+        classify_shadow_inputs(row, identity)
+        for row, identity in zip(rows, identities, strict=True)
+    ]
     assert identities.count("identity_verified") == 425
     assert identities.count("identity_unavailable") == 8
     assert identities.count("identity_ambiguous") == 10
@@ -361,7 +363,8 @@ def test_source_inventory_matches_observed_phase_boundary():
     )
 
     assert "report[\"_learning_penalty_ranked_context\"] = ranked_report" in scheduler
-    assert "ranked_context.get(\"all_candidates\")" in scheduler
+    assert "project_learning_penalty_phase_a_context(ranked_context)" in scheduler
+    assert "phase_a_context.get(\"all_candidates\")" in scheduler
     assert "ranked_context = report.pop(\"_learning_penalty_ranked_context\", None)" in scheduler
     assert "signal_capture_id" in shadow and "signal_id" in shadow
     assert "build_decision_lineage" in lineage
