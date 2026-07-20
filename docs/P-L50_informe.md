@@ -214,6 +214,10 @@ activo. La persistencia es append-only y no colisionan los event IDs. P-L46BR3
 permanece lectura/presentación únicamente. Suite completa, smoke y despliegue
 quedan pendientes para XNYS cerrado.
 
+QA detectó y corrigió el orden de finalización: P-L49 Fase B se sella antes de
+P-L50/P-L44 Fase B, ambas antes de persistir planes o enviar órdenes. La
+corrección está aislada en `9ae542d2`; no cambia decisiones ni payloads.
+
 ## Validación ejecutada
 
 - Pruebas nuevas P-L50T: **9 passed**.

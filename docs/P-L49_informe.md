@@ -152,3 +152,7 @@ VTRS no colisionan. Los eventos canónicos de ambos shadows coexisten por
 
 QA focal combinada: 607 pruebas verdes; interacción nueva: 3 pruebas verdes.
 Suite completa, smoke y despliegue quedan pendientes por XNYS abierto.
+
+El único defecto de integración encontrado fue el orden inicial de las fases B;
+se corrigió en `9ae542d2` para dejar P-L49 antes de P-L50/P-L44 y ambos antes
+de la persistencia/envío activo.
