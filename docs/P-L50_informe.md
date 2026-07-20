@@ -159,6 +159,46 @@ selección, gates, sizing, planes, órdenes ni activar políticas.
 No se cambió la versión: P-L50T no requiere bump; P-L50B queda reservado como
 mínimo para 0.4.188.
 
+## P-L50B - propagación shadow de linaje e inputs (candidato 0.4.188)
+
+P-L50B corrige la causa determinista observada por P-L50T: el scheduler copiaba
+el contexto rankeado antes de que `record_signal_candidates` incorporase la
+identidad canónica, por lo que la fase A de P-L44 recibía el objeto anterior al
+enriquecimiento. La identidad se prepara ahora una sola vez en la frontera del
+productor, antes de la anotación y el ranking, y se reutiliza al persistir la
+captura. La fase A recibe una proyección profunda, acotada e independiente; no
+recalcula aprendizaje ni muta los objetos del camino activo.
+
+El evento pasa a `p-l44b.learning-penalty-cycle-shadow.v2`. El lector conserva
+compatibilidad explícita con v1 para identidad e inputs, mientras decisiones,
+controles, rechazos y freshness se publican solo cuando el contrato v2 los
+demuestra. La identidad de señal mantiene `signal_capture_id -> signal_id`;
+`candidate_id` es auxiliar. La identidad de decisión añade `action` y
+`recommendation_id`, por lo que BUY y EXIT de VTRS permanecen separados y
+auditables.
+
+La fixture masiva de 443 candidatos produce exactamente: 425
+`identity_verified`, 8 `identity_unavailable`, 10 `identity_ambiguous`, 420
+`shadow_inputs_available` y 23 `shadow_inputs_unavailable`. Doce filas raw de
+rechazo se reducen a seis eventos canónicos; seis filas genéricas se ignoran en
+denominadores. Los controles distinguen `comparable`, `unavailable`,
+`not_generated`, `identity_unavailable` y `persistence_missing`. Freshness es
+descriptiva: 8603.999671 segundos produce `stale_signal=true` y
+`price_refresh_status=unverified`, sin gate ni efecto operativo.
+
+La persistencia sigue append-only en `agent_events`, prepara y serializa fuera
+de SQLite y usa `BEGIN IMMEDIATE` solo para la inserción/conflicto corto. Una
+repetición idéntica es idempotente y un contenido distinto conserva el original
+y registra conflicto. No hay tablas, migraciones, backfill ni uso de
+`runtime_state` como historia.
+
+Validación durante XNYS abierto: 28 pruebas dedicadas P-L50/P-L44 y una batería
+focal amplia de 451 pruebas pasaron; Ruff completo, `check_no_nulls.py` (400
+archivos), `git diff --check` y `validate-agent-config` aislado quedaron verdes.
+La suite completa y el smoke no se ejecutaron por la restricción operativa.
+Dictamen del candidato: `ready_for_integration_rehearsal`; no autoriza despliegue
+ni activación de `single_application`.
+
 ## Validación ejecutada
 
 - Pruebas nuevas P-L50T: **9 passed**.

@@ -192,3 +192,17 @@ P-L43BR6 y P-L44BR3 permanecen fuera y conservan los slots `0.4.181` y
   denominadores null, 0 eventos canonicos, sin backfill.
 - Deuda `profitability_scoreboard` (`pnl_pct=NULL` sin `max_dd`) NO corregida
   (backlog). Sin push. Produccion `8cfa0db3` / tree `4c3636be` limpia.
+
+## P-L50B - candidato shadow de linaje (0.4.188)
+
+- Corrige el wiring P-L44 preparando `signal_capture_id`/`signal_id` antes de
+  anotación y ranking y proyectando una copia profunda acotada hacia fase A.
+- El schema v2 separa identidad, inputs, decisiones (`action` +
+  `recommendation_id`), controles, rechazos canónicos y freshness descriptiva;
+  el lector mantiene compatibilidad v1 declarada.
+- No parsea texto, no inventa IDs, no convierte missing en cero y no enlaza por
+  símbolo/fecha. No altera ranking, selección, gates, sizing, planes ni órdenes.
+- Fixture 443: 425 identidades verificadas, 8 unavailable, 10 ambiguous, 420
+  inputs disponibles y 23 unavailable. Estado `ready_for_integration_rehearsal`.
+- P-L49B conserva el slot 0.4.186 y P-L46BR3 el 0.4.187. No hubo despliegue ni
+  push; la suite completa queda para mercado cerrado.
