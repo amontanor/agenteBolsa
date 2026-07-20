@@ -4,5 +4,5 @@ __all__ = ["__version__"]
 
 # Semantic versioning (major.minor.patch).
 # Bump this on every functional, UI, behavior, or shipped product change.
-# P-L46BR3: align portfolio-period metrics with the visible equity curve (0.4.187).
-__version__ = "0.4.187"
+# P-L50B: immutable lineage/input propagation into the P-L44 shadow (0.4.188).
+__version__ = "0.4.188"

@@ -2110,6 +2110,19 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
   `Fecha de compra no disponible`; no se usa la fecha de creacion de una orden como sustituto.
 - Es un cambio exclusivamente visual. No altera posiciones, trading, ranking,
   gates, stops, takes, cantidades ni ordenes.
+- P-L50T (20-jul, caracterizacion aislada): worktree sobre produccion 0.4.185,
+  solo fixtures/pruebas e informe, sin cambios en `src/` ni politicas activas.
+- Dictamen tecnico: `mixed_contract_gap`; P-L44 fase A recibe un contexto sin
+  IDs mientras la ruta de recomendacion los completa despues, con scores/prior
+  y controles no uniformes.
+- P-L50B queda reservado como shadow-only, minimo 0.4.188; P-L50T no cambia
+  version ni autoriza activacion de aprendizaje.
+- P-L50B implementado en candidato `0.4.188`: la identidad se prepara antes de
+  ranking y la fase A consume una proyección inmutable del mismo contexto
+  enriquecido. El contrato P-L44 v2 separa identidad, inputs, decisiones,
+  controles, rechazos y freshness sin modificar el camino activo. Estado:
+  `ready_for_integration_rehearsal`; queda pendiente la validación completa fuera
+  de mercado. P-L49B conserva `0.4.186` y P-L46BR3 conserva `0.4.187`.
 - Secuencia desplegada: P-L45B2 `0.4.175`, P-L43BR5 `0.4.176`, P-L44B
   `0.4.177` y este cambio UI `0.4.178`. El merge productivo es `4158ac5f`;
   la verificación visual confirmó la versión y el orden descendente.

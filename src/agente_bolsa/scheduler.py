@@ -52,6 +52,7 @@ from .tools.learning_penalty_cycle_shadow import (
     build_learning_penalty_cycle_shadow,
     finalize_learning_penalty_cycle_shadow,
     persist_learning_penalty_cycle_shadow,
+    project_learning_penalty_phase_a_context,
 )
 from .tools.learning_scoreboard import build_learning_scoreboard
 from .tools.market_cycle_timing import MarketCycleTiming
@@ -85,7 +86,7 @@ from .tools.pre_earnings import (
 from .tools.reporting import write_json_report
 from .tools.retention import cleanup_runtime_data
 from .tools.rr_cohort import write_rr_cohort_report
-from .tools.signal_learning import record_signal_candidates
+from .tools.signal_learning import prepare_signal_candidate_identities, record_signal_candidates
 from .tools.technical_study import build_closed_market_technical_study
 from .tools.time_stop_policy import (
     POLICY_VERSION as TIME_STOP_POLICY_VERSION,
@@ -747,7 +748,8 @@ def _prepare_learning_penalty_cycle_shadow(
     if not isinstance(ranked_context, dict):
         return None
     try:
-        source = ranked_context.get("all_candidates") or ranked_context.get("ranked_candidates") or []
+        phase_a_context = project_learning_penalty_phase_a_context(ranked_context)
+        source = phase_a_context.get("all_candidates") or phase_a_context.get("ranked_candidates") or []
         buy_items = [
             item
             for item in source
@@ -778,7 +780,7 @@ def _prepare_learning_penalty_cycle_shadow(
         }
         return build_learning_penalty_cycle_shadow(
             run_id,
-            ranked_context,
+            phase_a_context,
             selected_candidates=active_candidates,
             active_candidates=active_candidates,
             configured_capacity=getattr(settings, "max_orders_per_cycle", None),
@@ -2018,6 +2020,11 @@ def market_cycle_job(
             learning_mode_config=active_learning_mode(settings),
             persist_report=False,
         )
+        signal_source = learning_mode_source(settings=settings, default_source="intraday_scan")
+        prepared_signal_identity = prepare_signal_candidate_identities(
+            report,
+            source=signal_source,
+        )
         selected_candidates, selected_symbols = _selected_candidates(report, settings)
         report["selected_candidates"] = selected_candidates
         ranked_context = report.pop("_learning_penalty_ranked_context", None)
@@ -2032,7 +2039,8 @@ def market_cycle_job(
         signals_saved = record_signal_candidates(
             store,
             report,
-            source=learning_mode_source(settings=settings, default_source="intraday_scan"),
+            source=signal_source,
+            prepared_identity=prepared_signal_identity,
         )
         learning_penalty_shadow = _prepare_learning_penalty_cycle_shadow(
             settings,
@@ -2292,6 +2300,11 @@ def closed_market_technical_study_job(
         learning_mode_config=active_learning_mode(settings),
         persist_report=False,
     )
+    signal_source = learning_mode_source(settings=settings, default_source="closed_market_study")
+    prepared_signal_identity = prepare_signal_candidate_identities(
+        report,
+        source=signal_source,
+    )
     selected_candidates, selected_symbols = _selected_candidates(report, settings)
     report["selected_candidates"] = selected_candidates
     ranked_context = report.pop("_learning_penalty_ranked_context", None)
@@ -2313,7 +2326,8 @@ def closed_market_technical_study_job(
     signals_saved = record_signal_candidates(
         store,
         report,
-        source=learning_mode_source(settings=settings, default_source="closed_market_study"),
+        source=signal_source,
+        prepared_identity=prepared_signal_identity,
     )
     original_report_path = report.get("path")
     report = write_json_report(

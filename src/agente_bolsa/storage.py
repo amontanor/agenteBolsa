@@ -25,7 +25,11 @@ ORDER_PLAN_STATUS_PENDING = "PENDING"
 ORDER_PLAN_STATUS_SUBMITTED = "SUBMITTED"
 ORDER_PLAN_STATUS_EXPIRED = "EXPIRED"
 DEFAULT_LEARNING_OBSERVATION_BATCH_SIZE = 250
-LEARNING_PENALTY_CYCLE_SCHEMA = "p-l44b.learning-penalty-cycle-shadow.v1"
+LEARNING_PENALTY_CYCLE_SCHEMA = "p-l44b.learning-penalty-cycle-shadow.v2"
+LEARNING_PENALTY_CYCLE_SCHEMAS = {
+    "p-l44b.learning-penalty-cycle-shadow.v1",
+    LEARNING_PENALTY_CYCLE_SCHEMA,
+}
 LEARNING_PENALTY_CYCLE_EVENT_TYPE = "learning_penalty_cycle_shadow"
 
 
@@ -1567,6 +1571,7 @@ class Store:
         event_type = "learning_penalty_cycle_shadow"
         conflict_type = "learning_penalty_cycle_shadow_conflict"
         with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             existing = conn.execute(
                 "SELECT payload_json FROM agent_events WHERE event_id = ?",
                 (event_id,),
@@ -1683,6 +1688,7 @@ class Store:
 
         rows = self.agent_events(event_type_prefix=LEARNING_PENALTY_CYCLE_EVENT_TYPE, limit=limit)
         by_cycle: dict[str, dict[str, Any]] = {}
+        schema_versions: dict[str, int] = {}
         generic_ignored = 0
         invalid_canonical = 0
         idempotent_duplicates = 0
@@ -1701,7 +1707,8 @@ class Store:
             if not event_id or event_id != expected_event_id or not isinstance(payload, dict):
                 generic_ignored += 1
                 continue
-            if payload.get("schema_version") != LEARNING_PENALTY_CYCLE_SCHEMA or str(payload.get("cycle_id") or "") != cycle_id:
+            schema_version = str(payload.get("schema_version") or "")
+            if schema_version not in LEARNING_PENALTY_CYCLE_SCHEMAS or str(payload.get("cycle_id") or "") != cycle_id:
                 invalid_canonical += 1
                 continue
             supplied_hash = str(payload.get("content_hash") or "")
@@ -1720,6 +1727,7 @@ class Store:
             existing = by_cycle.get(cycle_id)
             if existing is None:
                 by_cycle[cycle_id] = enriched
+                schema_versions[schema_version] = schema_versions.get(schema_version, 0) + 1
             elif str(existing.get("content_hash") or "") == supplied_hash:
                 idempotent_duplicates += 1
             else:
@@ -1733,6 +1741,7 @@ class Store:
             "invalid_canonical_rows": invalid_canonical,
             "idempotent_duplicates": idempotent_duplicates,
             "conflicts": conflicts,
+            "schema_versions": schema_versions,
         }
 
     def learning_penalty_cycle_shadow_events(self, *, limit: int = 50000) -> list[dict[str, Any]]:
