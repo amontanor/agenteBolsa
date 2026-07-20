@@ -33,6 +33,6 @@ SQLite, scheduler ni politicas P-L43/P-L44/P-L48/P-L49.
 
 La integración con P-L49B y P-L50B conserva el cambio exclusivamente visual:
 la serie completa de equity y el filtro `Desde inicio` no añaden llamadas al
-broker ni escrituras. La batería combinada pasó 607 pruebas focales y no alteró
+broker ni escrituras. La batería combinada pasó 611 pruebas focales y no alteró
 trading, posiciones, planes, órdenes, exposición ni límites. La validación
 completa queda reservada a una ventana con XNYS cerrado.

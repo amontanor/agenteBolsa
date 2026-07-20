@@ -206,8 +206,8 @@ este lote (0.4.188). P-L49 conserva su identidad de observación OHLCV exacta;
 P-L50 conserva `signal_capture_id -> signal_id`, `cycle_id` y la identidad de
 decisión por acción/recomendación. Ningún shadow usa la identidad del otro ni
 se unen por símbolo/fecha. La batería combinada cubre 500 símbolos, 37
-anomalías, 443 candidatos, BUY/EXIT, planes, controles y rechazos; obtuvo 607
-pruebas focales y 3 pruebas específicas de interacción.
+anomalías, 443 candidatos, BUY/EXIT, planes, controles y rechazos; obtuvo 611
+pruebas focales y 7 pruebas específicas de interacción.
 
 Fallos aislados de cualquiera de los dos shadows son fail-open para el camino
 activo. La persistencia es append-only y no colisionan los event IDs. P-L46BR3

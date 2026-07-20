@@ -230,7 +230,7 @@ P-L43BR6 y P-L44BR3 permanecen fuera y conservan los slots `0.4.181` y
 
 Secuencia del worktree: P-L49B `0.4.186`, P-L46BR3 `0.4.187`, P-L50B `0.4.188`.
 Los shadows conservan identidades y eventos independientes; la UI sigue siendo
-solo lectura. QA focal: 607 passed; interacción: 3 passed. XNYS estaba abierto,
+solo lectura. QA focal: 611 passed; interacción: 7 passed. XNYS estaba abierto,
 por lo que no se ejecutaron suite completa, smoke ni despliegue.
 
 ## P-L50B - candidato shadow de linaje (0.4.188)

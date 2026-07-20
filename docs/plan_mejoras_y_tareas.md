@@ -2106,7 +2106,7 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
 ## P-L50BR1 - ensayo combinado secuenciado (pendiente de validacion cerrada)
 
 Secuencia del worktree: P-L49B `0.4.186`, P-L46BR3 `0.4.187`, P-L50B
-`0.4.188`. QA focal: 607 passed; interacción nueva: 3 passed. Ambos shadows
+`0.4.188`. QA focal: 611 passed; interacción nueva: 7 passed. Ambos shadows
 son fail-open, append-only e independientes. Suite completa, smoke y validación
 de despliegue quedan pendientes con XNYS cerrado.
 

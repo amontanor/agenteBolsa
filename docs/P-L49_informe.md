@@ -150,7 +150,7 @@ OHLCV de P-L49 y la identidad signal/candidate/action de P-L50. BUY y EXIT de
 VTRS no colisionan. Los eventos canónicos de ambos shadows coexisten por
 `cycle_id`, con idempotencia y sin backfill.
 
-QA focal combinada: 607 pruebas verdes; interacción nueva: 3 pruebas verdes.
+QA focal combinada: 611 pruebas verdes; interacción nueva: 7 pruebas verdes.
 Suite completa, smoke y despliegue quedan pendientes por XNYS abierto.
 
 El único defecto de integración encontrado fue el orden inicial de las fases B;
