@@ -2102,3 +2102,22 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
 - Secuencia desplegada: P-L45B2 `0.4.175`, P-L43BR5 `0.4.176`, P-L44B
   `0.4.177` y este cambio UI `0.4.178`. El merge productivo es `4158ac5f`;
   la verificación visual confirmó la versión y el orden descendente.
+
+## P-L46BR3 - resultado de cartera coherente con el rango visible (candidato 0.4.187)
+
+- Causa: la tarjeta `P/L desde abril` procedia del historial de operaciones,
+  mientras la grafica representa equity de cuenta. La mezcla podia publicar
+  una ganancia positiva sobre una curva descendente.
+- La tarjeta pasa a llamarse `Resultado del periodo` y se calcula como ultimo
+  equity menos primer equity del rango seleccionado; muestra porcentaje y
+  fechas de ambos extremos. `Desde inicio` solicita todo el historial
+  disponible y conserva el corte operativo del 28-abr-2026.
+- Se elimina de este bloque el duplicado `P/L hoy`; permanece en la cabecera.
+  El segundo y unico KPI del bloque es `P/L abierto`, sumado desde las
+  posiciones actuales ya cargadas, sin otra consulta al broker.
+- La cabecera `Cuenta · desde inicio` y el control externo usan la misma
+  variacion de equity completa. Sin datos suficientes se muestra `-`, nunca
+  un cero inventado.
+- Cambio exclusivamente de presentacion y lectura. No altera trading,
+  ranking, gates, sizing, planes, ordenes, stops, takes, exposicion, SQLite ni
+  runtime state. P-L49 conserva `0.4.186`; este lote reserva `0.4.187`.

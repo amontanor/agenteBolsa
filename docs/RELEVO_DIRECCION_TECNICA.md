@@ -192,3 +192,17 @@ P-L43BR6 y P-L44BR3 permanecen fuera y conservan los slots `0.4.181` y
   denominadores null, 0 eventos canonicos, sin backfill.
 - Deuda `profitability_scoreboard` (`pnl_pct=NULL` sin `max_dd`) NO corregida
   (backlog). Sin push. Produccion `8cfa0db3` / tree `4c3636be` limpia.
+
+## P-L46BR3 - metricas del periodo de cartera (candidato 0.4.187)
+
+- Corrige una contradiccion visual: la grafica mostraba equity descendente,
+  pero `P/L desde abril` usaba el P/L del historial de operaciones y podia ser
+  positivo. Ahora `Resultado del periodo` usa exactamente los extremos de la
+  curva visible y sigue el filtro de rango.
+- El bloque queda reducido a `Resultado del periodo` y `P/L abierto`; `P/L
+  hoy` se mantiene solo en la cabecera. El abierto procede de las posiciones
+  actuales ya obtenidas.
+- `Desde inicio` solicita todo el historial disponible. Cabecera y control
+  externo quedan alineados con la misma serie de equity.
+- Solo UI/lectura; no cambia rutas de trading ni persistencia. P-L49 mantiene
+  el slot `0.4.186`; P-L46BR3 usa `0.4.187`.
