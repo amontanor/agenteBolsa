@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Barrier
 from typing import Any
 
 from agente_bolsa.config import Settings
@@ -111,6 +113,194 @@ def test_combined_cycle_keeps_p49_and_p50_identity_independent(tmp_path: Path):
     assert quality_final["denominators"]["recommended_affected"] == 1
     assert candidates == active_before
     assert all("market_data_observation_id" not in row.get("decision_lineage", {}) for row in recommendations)
+
+
+def test_combined_adversarial_cycle_covers_finals_controls_rejections_and_freshness(tmp_path: Path):
+    cycle_id = "combined-adversarial-cycle"
+    observations = [_observation(f"SYM{index:03d}", blocking=index < 37) for index in range(500)]
+    candidates = [_candidate(index, observations[index]) for index in range(443)]
+    for candidate in candidates:
+        candidate["cycle_id"] = cycle_id
+    # P-L49 must stay unavailable when the exact observation is absent; P-L50
+    # still has a verified signal identity and only its inputs are unavailable.
+    candidates[-1]["market_data_observation_id"] = None
+    candidates[-1].pop("learning_prior")
+    active_before = copy.deepcopy(candidates)
+
+    quality_phase = capture_data_quality_phase_a(
+        cycle_id=cycle_id,
+        market_snapshot={
+            "snapshot_id": "market-snapshot-adversarial",
+            "provider": "fixture",
+            "symbols": {row["symbol"]: {} for row in observations},
+            "observations": observations,
+        },
+        candidates=candidates,
+        decision_at=DECISION_AT,
+        captured_at=DECISION_AT,
+    )
+    lineage_phase = build_learning_penalty_cycle_shadow(
+        cycle_id,
+        {"all_candidates": candidates},
+        active_candidates=candidates,
+        settings=_settings(tmp_path),
+        captured_at="2026-07-20T14:00:00+00:00",
+    )
+
+    finalists = candidates[:20]
+    recommendations = []
+    for index, candidate in enumerate(finalists):
+        recommendation = {
+            "action": "buy" if index % 2 == 0 else "exit",
+            "recommendation_id": f"rec-finalist-{index}",
+            "cycle_id": cycle_id,
+            "symbol": candidate["symbol"],
+            "signal_capture_id": candidate["signal_capture_id"],
+            "signal_id": candidate["signal_id"],
+            "candidate_id": candidate["candidate_id"],
+            "decision_lineage": {
+                "cycle_id": cycle_id,
+                "signal_capture_id": candidate["signal_capture_id"],
+                "signal_id": candidate["signal_id"],
+                "candidate_id": candidate["candidate_id"],
+            },
+            "signal_at": "2026-07-20T13:45:21.140341+00:00",
+            "recommendation_at": "2026-07-20T16:08:27.168281+00:00",
+            "submitted_at": "2026-07-20T16:08:45.140012+00:00",
+            "signal_price": 100.0,
+            "recommendation_price": 100.0,
+            "plan_price": 100.0,
+        }
+        if index == 7:
+            recommendation["comparable_control_set"] = {"status": "verified", "controls": []}
+        recommendations.append(recommendation)
+
+    plans = [
+        {
+            "plan_id": f"plan-finalist-{index}",
+            "side": "buy",
+            "cycle_id": cycle_id,
+            "signal_capture_id": candidate["signal_capture_id"],
+            "signal_id": candidate["signal_id"],
+            "candidate_id": candidate["candidate_id"],
+            "action": "buy",
+        }
+        for index, candidate in enumerate(finalists[:10])
+    ]
+    controls = {
+        recommendations[4]["signal_id"]: {"status": "verified", "controls": []},
+        recommendations[5]["signal_id"]: {"status": "unavailable", "reason": "no_alternative", "controls": []},
+        recommendations[8]["signal_id"]: {"status": "unavailable", "reason": "treatment_identity_unavailable", "controls": []},
+    }
+    canonical_rejections = [
+        {
+            "event_id": f"rejection:combined:{index}",
+            "cycle_id": cycle_id,
+            "candidate_id": finalists[index]["candidate_id"],
+            "signal_id": finalists[index]["signal_id"],
+            "action": "buy",
+            "reason_code": "position_sizing",
+            "stage": "position_sizing",
+        }
+        for index in range(4)
+    ]
+    rejected = canonical_rejections + [
+        {**row, "event_id": f"evt_combined:{index}"}
+        for index, row in enumerate(canonical_rejections)
+    ]
+    gate_snapshots = {
+        "gate-finalist-14": {
+            "cycle_id": cycle_id,
+            "signal_capture_id": finalists[14]["signal_capture_id"],
+            "signal_id": finalists[14]["signal_id"],
+            "candidate_id": finalists[14]["candidate_id"],
+            "identity_status": "verified",
+            "gate_path": [{"status": "blocked", "identity_link_status": "verified", "reason_code": "risk_limit"}],
+        }
+    }
+
+    quality_final = finalize_quality(
+        quality_phase,
+        recommendations=recommendations,
+        plans=plans,
+        rejected_order_plans=rejected,
+        cycle_id=cycle_id,
+    )
+    lineage_final = finalize_learning_penalty_cycle_shadow(
+        lineage_phase,
+        recommendations=recommendations,
+        plans=plans,
+        comparable_control_sets=controls,
+        rejected_order_plans=rejected,
+        gate_snapshots=gate_snapshots,
+        cycle_id=cycle_id,
+    )
+
+    assert quality_final["denominators"]["blocking_observations"] == 37
+    assert quality_final["denominators"]["shadow_blocked_count"] == 37
+    assert any(row.get("shadow_reason") in {"unavailable_identity", "unavailable_temporal"} for row in quality_final["details"])
+    assert lineage_phase["candidate_counts"]["identity_verified"] == 443
+    assert lineage_phase["candidate_counts"]["shadow_inputs_unavailable"] == 1
+    assert len(lineage_final["decision_observations"]) == 20
+    assert {row["action"] for row in lineage_final["decision_observations"]} == {"buy", "exit"}
+    assert lineage_final["candidate_counts"]["planned_by_active_path"] == 10
+    assert lineage_final["control_counts"]["comparable_control"] >= 1
+    assert lineage_final["control_counts"]["control_unavailable"] >= 1
+    assert lineage_final["control_counts"]["control_not_generated"] >= 1
+    assert lineage_final["control_counts"]["control_persistence_missing"] >= 1
+    assert lineage_final["control_counts"]["control_identity_unavailable"] >= 1
+    assert lineage_final["rejection_counts"] == {
+        "raw": 8,
+        "canonical": 4,
+        "generic_rows_ignored": 4,
+        "duplicates": 0,
+        "identity_unavailable": 0,
+    }
+    freshness = lineage_final["decision_observations"][0]["freshness"]
+    assert freshness["stale_signal"] is True
+    assert freshness["price_refresh_status"] == "unverified"
+    assert candidates == active_before
+
+
+def test_phase_a_failure_keeps_other_shadow_and_trading_active(tmp_path: Path, monkeypatch):
+    row = _observation("INDEPENDENT", blocking=True)
+    candidate = _candidate(0, row)
+    active = {"candidates": [candidate], "recommendations": [{"signal_id": "active-signal"}], "plans": [{"plan_id": "active-plan"}], "orders": []}
+    active_before = copy.deepcopy(active)
+
+    def fail_p49(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("p49_phase_a_fixture_failure")
+
+    monkeypatch.setattr(p49_shadow, "capture_data_quality_phase_a", fail_p49)
+    try:
+        p49_shadow.capture_data_quality_phase_a(cycle_id="combined-cycle", market_snapshot={}, candidates=[])
+    except RuntimeError as exc:
+        assert "p49_phase_a" in str(exc)
+    p50_phase = build_learning_penalty_cycle_shadow(
+        "combined-cycle", {"all_candidates": [candidate]}, active_candidates=[candidate], settings=_settings(tmp_path)
+    )
+    assert p50_phase["candidate_counts"]["identity_verified"] == 1
+    assert active == active_before
+
+    monkeypatch.undo()
+
+    def fail_p50(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("p50_phase_a_fixture_failure")
+
+    monkeypatch.setattr(p50_shadow, "build_learning_penalty_cycle_shadow", fail_p50)
+    p49_phase = p49_shadow.capture_data_quality_phase_a(
+        cycle_id="combined-cycle",
+        market_snapshot={"observations": [row]},
+        candidates=[candidate],
+        decision_at=DECISION_AT,
+        captured_at=DECISION_AT,
+    )
+    try:
+        p50_shadow.build_learning_penalty_cycle_shadow("combined-cycle", {"all_candidates": [candidate]})
+    except RuntimeError as exc:
+        assert "p50_phase_a" in str(exc)
+    assert p49_phase["denominators"]["blocking_observations"] == 1
+    assert active == active_before
 
 
 def test_independent_shadow_failure_is_fail_open(tmp_path: Path):
@@ -253,6 +443,62 @@ def test_both_canonical_events_are_append_only_and_non_colliding(tmp_path: Path)
     assert len(events) == 2
     assert persist_data_quality_decision_shadow(store, copy.deepcopy(quality))["status"] == "idempotent"
     assert persist_learning_penalty_cycle_shadow(store, copy.deepcopy(lineage))["status"] == "idempotent"
+
+
+def test_combined_persistence_is_concurrent_idempotent_and_conflict_separate(tmp_path: Path):
+    cycle_id = "combined-persistence-cycle"
+    store = Store(tmp_path / "state.sqlite", tmp_path / "logs")
+    store.ensure_schema()
+    row = _observation("PERSIST", blocking=True)
+    candidate = _candidate(0, row)
+    quality = finalize_quality(
+        capture_data_quality_phase_a(
+            cycle_id=cycle_id,
+            market_snapshot={"observations": [row]},
+            candidates=[candidate],
+            decision_at=DECISION_AT,
+            captured_at=DECISION_AT,
+        ),
+        cycle_id=cycle_id,
+    )
+    lineage = build_learning_penalty_cycle_shadow(
+        cycle_id,
+        {"all_candidates": [candidate]},
+        active_candidates=[candidate],
+        settings=_settings(tmp_path),
+        captured_at="2026-07-20T14:00:00+00:00",
+    )
+    barrier = Barrier(2)
+
+    def persist_pair() -> tuple[str, str]:
+        barrier.wait()
+        return (
+            persist_data_quality_decision_shadow(store, quality)["status"],
+            persist_learning_penalty_cycle_shadow(store, lineage)["status"],
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = [future.result() for future in [executor.submit(persist_pair), executor.submit(persist_pair)]]
+
+    assert [result for pair in results for result in pair].count("inserted") == 2
+    assert [result for pair in results for result in pair].count("idempotent") == 2
+    events = store.agent_events(cycle_id=cycle_id)
+    canonical_ids = {event["event_id"] for event in events if not event["event_type"].endswith("_conflict")}
+    assert canonical_ids == {
+        f"data_quality_decision_shadow:{cycle_id}",
+        f"learning_penalty_cycle_shadow:{cycle_id}",
+    }
+
+    quality_conflict = copy.deepcopy(quality)
+    quality_conflict["warnings"] = ["different-content"]
+    quality_conflict["content_hash"] = p49_shadow.canonical_content_hash(quality_conflict)
+    lineage_conflict = copy.deepcopy(lineage)
+    lineage_conflict["candidate_counts"]["ranked_buy_total"] = 2
+    lineage_conflict["content_hash"] = "different-lineage-content"
+    assert persist_data_quality_decision_shadow(store, quality_conflict)["status"] == "conflict"
+    assert persist_learning_penalty_cycle_shadow(store, lineage_conflict)["status"] == "conflict"
+    conflict_types = {event["event_type"] for event in store.agent_events(cycle_id=cycle_id) if event["event_type"].endswith("_conflict")}
+    assert conflict_types == {"data_quality_decision_shadow_conflict", "learning_penalty_cycle_shadow_conflict"}
 
 
 def test_phase_b_order_is_p49_then_p50_before_active_plan_persistence():
