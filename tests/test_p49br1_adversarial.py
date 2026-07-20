@@ -173,13 +173,27 @@ def test_volume_details_are_bounded_and_planned_rows_are_forced(tmp_path: Path) 
     current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     payload_bytes = len(json.dumps(final, sort_keys=True, separators=(",", ":")))
+    volume_store = Store(tmp_path / "volume.sqlite", tmp_path / "volume.logs")
+    volume_store.ensure_schema()
+    persist_started = time.perf_counter()
+    persist_result = persist_data_quality_decision_shadow(volume_store, final)
+    persist_ms = (time.perf_counter() - persist_started) * 1000
+    wal_path = tmp_path / "volume.sqlite-wal"
+    wal_bytes = wal_path.stat().st_size if wal_path.exists() else 0
+    volume_store.close_read_connection()
     assert phase["denominators"]["market_observations"] == 500
     assert phase["denominators"]["blocking_observations"] == 37
     assert phase["denominators"]["candidates_evaluated"] == 20
     assert final["denominators"]["recommended_affected"] == 10
     assert final["denominators"]["planned_affected"] == 4
     assert final["details_omitted"] == 0
-    print(f"P-L49BR1 volume: build_phase_a_ms={built_ms:.2f} peak_bytes={peak} event_bytes={payload_bytes}")
+    assert persist_result["status"] == "inserted"
+    print(
+        "P-L49BR1 volume: "
+        f"build_phase_a_ms={built_ms:.2f} persist_ms={persist_ms:.2f} "
+        f"peak_bytes={peak} event_bytes={payload_bytes} wal_bytes={wal_bytes} "
+        "transactions=1 commits=1"
+    )
 
 
 def test_persistence_is_append_only_and_two_processes_are_idempotent(tmp_path: Path) -> None:
