@@ -11,6 +11,7 @@ from agente_bolsa.llm_usage import usage_tokens
 from agente_bolsa.models import OrderSnapshot, PortfolioSnapshot, PositionSnapshot
 from agente_bolsa.storage import ORDER_PLAN_STATUS_PENDING, Store
 from agente_bolsa.web_app import (
+    PORTFOLIO_HISTORY_PERIOD,
     _ci_conversation_groups,
     _ci_global_export_payload,
     _ci_runtime_alert,
@@ -39,6 +40,8 @@ from agente_bolsa.web_app import (
     _opportunity_risk_plan,
     _opportunity_status,
     _portfolio_chart_visible_summary,
+    _portfolio_open_pl,
+    _portfolio_period_metric_payload,
     _portfolio_value_series_from_alpaca,
     _position_chart_start_date,
     _position_entry_date,
@@ -55,6 +58,10 @@ from agente_bolsa.web_app import (
     _web_search_status,
     update_env_file,
 )
+
+
+def test_portfolio_history_period_keeps_all_available_data():
+    assert PORTFOLIO_HISTORY_PERIOD == "all"
 
 
 class _FakeHttpResponse:
@@ -337,6 +344,40 @@ def test_trim_portfolio_chart_range_keeps_latest_window():
     assert list(trimmed["valor_cartera"]) == [1002.0, 1003.0]
 
 
+def test_trim_portfolio_chart_range_none_keeps_full_history():
+    df = _portfolio_value_series_from_alpaca(
+        {
+            "timestamp": [
+                "2026-05-06T00:00:00Z",
+                "2026-05-07T00:00:00Z",
+                "2026-05-08T00:00:00Z",
+                "2026-05-09T00:00:00Z",
+            ],
+            "equity": [1000.0, 1001.0, 1002.0, 1003.0],
+        },
+        current_equity=None,
+        start_date="2026-05-01",
+    )
+
+    full_history = _trim_portfolio_chart_range(df, days=None)
+
+    assert list(full_history["fecha"]) == ["2026-05-06", "2026-05-07", "2026-05-08", "2026-05-09"]
+
+
+def test_estimated_portfolio_value_series_none_uses_all_available_history():
+    history = {
+        "days": [
+            {"date": "2026-05-11", "realized_pl": 10.0, "open_unrealized_pl": 0.0},
+            {"date": "2026-05-12", "realized_pl": -5.0, "open_unrealized_pl": 0.0},
+        ]
+    }
+
+    df = _estimated_portfolio_value_series(history, current_equity=1005.0, days=None)
+
+    assert list(df["fecha"]) == ["2026-05-11", "2026-05-12"]
+    assert list(df["valor_cartera"]) == [1010.0, 1005.0]
+
+
 def test_estimated_portfolio_value_series_still_available_as_fallback():
     history = {
         "days": [
@@ -373,6 +414,51 @@ def test_portfolio_chart_visible_summary_uses_visible_window_change():
     assert summary["days"] == 3
     assert summary["pl"] == 15.0
     assert summary["pl_pct"] == 0.014706
+    assert summary["start_date"] == "2026-05-07"
+    assert summary["end_date"] == "2026-05-09"
+    assert summary["start_value"] == 1020.0
+    assert summary["end_value"] == 1035.0
+
+
+def test_portfolio_period_metric_uses_same_negative_change_as_chart():
+    summary = {
+        "pl": -1080.0,
+        "pl_pct": -0.015102,
+        "start_date": "2026-04-28",
+        "end_date": "2026-07-20",
+        "source": "Alpaca",
+    }
+
+    metric = _portfolio_period_metric_payload(summary)
+
+    assert metric == {
+        "amount": "$-1,080.00",
+        "detail": "-1.51% · 28/04/2026 → 20/07/2026",
+        "tone": "bad",
+    }
+
+
+def test_portfolio_period_metric_reports_unavailable_instead_of_zero():
+    assert _portfolio_period_metric_payload({"pl": None, "pl_pct": None}) == {
+        "amount": "-",
+        "detail": "Sin datos suficientes en el periodo",
+        "tone": "neutral",
+    }
+
+
+def test_portfolio_open_pl_prefers_current_portfolio_positions():
+    portfolio = SimpleNamespace(
+        positions=[
+            SimpleNamespace(unrealized_pl=-50.0),
+            SimpleNamespace(unrealized_pl=12.5),
+        ]
+    )
+
+    assert _portfolio_open_pl(portfolio, fallback=999.0) == -37.5
+
+
+def test_portfolio_open_pl_uses_fallback_only_without_portfolio():
+    assert _portfolio_open_pl(None, fallback=12.25) == 12.25
 
 
 def test_position_entry_date_prefers_saved_risk_order_time():
