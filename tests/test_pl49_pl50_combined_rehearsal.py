@@ -13,6 +13,8 @@ from agente_bolsa.tools.data_quality_decision_shadow import (
     capture_data_quality_phase_a,
     market_data_observation_id,
     persist_data_quality_decision_shadow,
+)
+from agente_bolsa.tools.data_quality_decision_shadow import (
     finalize_data_quality_phase_b as finalize_quality,
 )
 from agente_bolsa.tools.learning_penalty_cycle_shadow import (
@@ -20,7 +22,6 @@ from agente_bolsa.tools.learning_penalty_cycle_shadow import (
     finalize_learning_penalty_cycle_shadow,
     persist_learning_penalty_cycle_shadow,
 )
-
 
 DECISION_AT = datetime(2026, 7, 20, 14, 0, tzinfo=timezone.utc)
 
