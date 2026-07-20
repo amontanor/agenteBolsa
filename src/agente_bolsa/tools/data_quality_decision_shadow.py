@@ -81,7 +81,12 @@ def _number(value: Any) -> float | None:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    return number if math.isfinite(number) else None
+    if not math.isfinite(number):
+        return None
+    # JSON has a distinct textual representation for -0.0 although it is the
+    # same economic value as 0.0.  Canonical observation identity must not
+    # split equivalent numeric observations on that representation detail.
+    return 0.0 if number == 0.0 else number
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -139,7 +144,7 @@ def market_data_observation_id(observation: Mapping[str, Any]) -> str | None:
     provider = _text(observation.get("provider"))
     symbol = _text(observation.get("symbol"))
     interval = _text(observation.get("interval"))
-    bar_timestamp = _text(observation.get("bar_timestamp") or observation.get("timestamp"))
+    bar_timestamp = _iso(observation.get("bar_timestamp") or observation.get("timestamp"))
     price_basis = _text(observation.get("price_basis"))
     if not all((provider, symbol, interval, bar_timestamp, price_basis)):
         return None
@@ -218,6 +223,7 @@ def _detail_from_candidate(
     *,
     cycle_id: str,
     decision_at: datetime,
+    market_observations_available: bool = False,
 ) -> dict[str, Any]:
     side = str(candidate.get("side") or candidate.get("direction") or candidate.get("action") or "buy").lower()
     identity = _identity_quality(candidate, cycle_id)
@@ -231,7 +237,16 @@ def _detail_from_candidate(
         # Without the exact market observation used by the features there is
         # no safe temporal/quality attribution; symbol-only matching is not an
         # alternative.
-        reason = "unavailable_identity"
+        # A verified candidate without the exact observation used by its
+        # features has lineage identity, but no decision-time market
+        # provenance.  Keep that distinction explicit: it is temporal
+        # unavailability, not an invented identity failure.
+        expected_id = _text(candidate.get("market_data_observation_id") or candidate.get("market_observation_id"))
+        reason = (
+            "unavailable_identity"
+            if expected_id and market_observations_available
+            else ("unavailable_temporal" if identity == "verified" else "unavailable_identity")
+        )
         temporal = "unavailable"
         eligible = None
         warnings.append("market_observation_not_linked")
@@ -340,7 +355,13 @@ def capture_data_quality_phase_a(
     for candidate in candidate_rows:
         expected_id = _text(candidate.get("market_data_observation_id") or candidate.get("market_observation_id"))
         observation = by_id.get(expected_id or "")
-        detail = _detail_from_candidate(candidate, observation, cycle_id=cycle_id, decision_at=decision)
+        detail = _detail_from_candidate(
+            candidate,
+            observation,
+            cycle_id=cycle_id,
+            decision_at=decision,
+            market_observations_available=bool(observations),
+        )
         if expected_id in duplicate_ids:
             detail["shadow_reason"] = "conflict"
             detail["shadow_entry_eligible"] = None
@@ -404,7 +425,10 @@ def capture_data_quality_phase_a(
         "source": _text((market_snapshot or {}).get("provider") or (market_state or {}).get("provider")) or "cycle_memory",
         "as_of": _text((market_snapshot or {}).get("as_of") or (market_state or {}).get("as_of")),
         "session_date": session_date or capture.date().isoformat(),
-        "status": "available" if observations else "collecting",
+        # A cycle with candidates but no observation provenance is not an
+        # empty/collecting report: it is partial and each candidate detail
+        # carries unavailable_temporal or unavailable_identity explicitly.
+        "status": "available" if observations else ("partial" if candidate_rows else "collecting"),
         "denominators": denom,
         "details": included,
         "warnings": sorted(set(warnings)),
