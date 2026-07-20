@@ -10,9 +10,20 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama de integracion desplegada: `codex/mejora_continua`
-- Version actual: **0.4.185** (P-L48B desplegado en producción el 19-jul; ensayo P-L48BR1)
-- Ultima actualizacion: 2026-07-19
+- Version actual del candidato: **0.4.186** (P-L49B-W en ensayo; producción permanece 0.4.185)
+- Ultima actualizacion: 2026-07-20
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
+
+### P-L49B — shadow de calidad de datos por candidato (**ENSAYO 0.4.186**)
+
+Fase A captura en memoria la observación de mercado exacta disponible en el
+ciclo y Fase B la sella tras la ruta activa, antes de registrar/enviar planes.
+El evento `data_quality_decision_shadow:<cycle_id>` es append-only, idempotente,
+conflict-safe y fail-open. `blocked_exact_quality` exige identidad de observación,
+identidad de candidato y temporalidad verificables; una anomalía posterior o no
+enlazada no gobierna retroactivamente una decisión. SELL y salidas protectoras
+permanecen fuera del shadow. Estado: `ready_for_integration_rehearsal`; no hay
+activación de gate ni despliegue en este lote.
 
 ## Consolidacion operativa - 16-jul-2026
 
@@ -2102,3 +2113,14 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
 - Secuencia desplegada: P-L45B2 `0.4.175`, P-L43BR5 `0.4.176`, P-L44B
   `0.4.177` y este cambio UI `0.4.178`. El merge productivo es `4158ac5f`;
   la verificación visual confirmó la versión y el orden descendente.
+
+## P-L49BR1 — estado del ensayo (0.4.186)
+
+- Ensayo aislado fusionado desde `24537e81` con candidato `938580b7`:
+  merge `2ea57983`; QA adicional `b8aee78a` y `db6577b2`.
+- La captura de calidad sigue siendo observabilidad shadow. Sin provenance OHLC
+  exacta en el objeto que alimentó features, los candidatos identificados se
+  clasifican `unavailable_temporal`/`partial`; no se aplican informes
+  posteriores ni bloqueos retroactivos.
+- Pendiente: suite completa, smoke y validación de 33.336 observaciones con
+  XNYS cerrado. No habilitar gates ni iniciar P-L48C.

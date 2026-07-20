@@ -1189,6 +1189,19 @@ def build_operational_health_report(
             "exits": None,
             "freshness": None,
         }
+    try:
+        from .data_quality_decision_shadow import data_quality_decision_shadow_digest
+
+        # Read-only consumer: it never evaluates a gate and never derives
+        # missing denominators from symbols or reports generated later.
+        report_health["data_quality_decision_shadow"] = data_quality_decision_shadow_digest(store)
+    except Exception:  # noqa: BLE001 - a telemetry failure is fail-open.
+        report_health["data_quality_decision_shadow"] = {
+            "status": "unavailable",
+            "shadow_only": True,
+            "denominators": None,
+            "warnings": ["read_failed"],
+        }
     if adaptive_governance["status"] == "critical":
         report_alerts.append(
             {
