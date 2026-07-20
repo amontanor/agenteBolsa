@@ -230,8 +230,26 @@ P-L43BR6 y P-L44BR3 permanecen fuera y conservan los slots `0.4.181` y
 
 Secuencia del worktree: P-L49B `0.4.186`, P-L46BR3 `0.4.187`, P-L50B `0.4.188`.
 Los shadows conservan identidades y eventos independientes; la UI sigue siendo
-solo lectura. QA focal: 611 passed; interacción: 7 passed. XNYS estaba abierto,
+solo lectura. QA focal: 675 passed; interacción: 10 passed. XNYS estaba abierto,
 por lo que no se ejecutaron suite completa, smoke ni despliegue.
+
+## P-L50BR1 - cierre del relevo QA (20-jul-2026)
+
+- Worktree/rama: `C:\Antonio\Bref\agenteBolsa_worktrees\pl49_pl46_pl50_combined_rehearsal`,
+  `codex/pl49-pl46-pl50-combined-rehearsal`; versión final `0.4.188`.
+- Orden de merges: `0f5a26a0` P-L49B (`753136fc`), `17b5fbc7` P-L46BR3
+  (`a0ab7ce4`), `045288dd` P-L50B (`8ebac5f2`). QA adicional: `c99cd318`.
+- Secuencia temporal y separación de identidades verificadas; los shadows son
+  fail-open y la UI es read-only. No se modificaron kernel, broker, execution,
+  risk, config ni `.env`.
+- QA: 90 + 84 + 211 + 290 = **675 passed**; Ruff, nulls, diff y
+  `validate-agent-config --json` temporal (`ok=true`) verdes.
+- Producción permanece en `24537e81`/0.4.185 con solo su suciedad UI previa;
+  candidatos originales permanecen en sus HEAD/tree indicados. No hubo
+  despliegue, reinicio, detención de servicios ni push.
+- Pendiente con XNYS cerrado: suite completa, smoke, jobs reales y validación
+  histórica de 33.336 filas. Dictamen:
+  `ready_for_closed_market_full_validation`.
 
 ## P-L50B - candidato shadow de linaje (0.4.188)
 

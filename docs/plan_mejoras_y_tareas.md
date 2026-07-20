@@ -10,7 +10,7 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama de integracion desplegada: `codex/mejora_continua`
-- Version actual del candidato: **0.4.186** (P-L49B-W en ensayo; producción permanece 0.4.185)
+- Version actual del candidato: **0.4.188** (P-L50BR1 en ensayo; producción permanece 0.4.185)
 - Ultima actualizacion: 2026-07-20
 - Estado P-L50BR1: worktree combinado candidato **0.4.188**; secuencia
   P-L49B 0.4.186 -> P-L46BR3 0.4.187 -> P-L50B 0.4.188. La linea anterior
@@ -2106,9 +2106,25 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
 ## P-L50BR1 - ensayo combinado secuenciado (pendiente de validacion cerrada)
 
 Secuencia del worktree: P-L49B `0.4.186`, P-L46BR3 `0.4.187`, P-L50B
-`0.4.188`. QA focal: 611 passed; interacción nueva: 7 passed. Ambos shadows
+`0.4.188`. QA focal: 675 passed; interacción nueva: 10 passed. Ambos shadows
 son fail-open, append-only e independientes. Suite completa, smoke y validación
 de despliegue quedan pendientes con XNYS cerrado.
+
+### Cierre QA P-L50BR1 (20-jul-2026)
+
+- Base y aislamiento: `24537e81`; worktree `pl49_pl46_pl50_combined_rehearsal`;
+  rama `codex/pl49-pl46-pl50-combined-rehearsal`.
+- Merges `--no-ff`: `0f5a26a0` <- `753136fc`, `17b5fbc7` <- `a0ab7ce4`,
+  `045288dd` <- `8ebac5f2`, en ese orden. QA: `c99cd318`.
+- Baterías permitidas: 90 + 84 + 211 + 290 = **675 passed**. Ruff completo,
+  `check_no_nulls.py` (405 archivos), `git diff --check` y
+  `validate-agent-config --json` aislado (`ok=true`) verdes.
+- P-L49/P-L50 no comparten identidad ni autoridad; los planes, controles,
+  gates, cantidades, precios, stops/takes, órdenes, exposición y límites del
+  camino activo permanecen sin mutación. P-L46BR3 es solo lectura.
+- Suite completa, smoke, jobs reales, prueba histórica de 33.336 filas y
+  despliegue quedan pendientes para mercado cerrado. Dictamen:
+  `ready_for_closed_market_full_validation`.
 
 ## P-L46B - orden cronologico de Cartera abierta (desplegado 0.4.178)
 

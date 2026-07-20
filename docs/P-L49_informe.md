@@ -150,9 +150,34 @@ OHLCV de P-L49 y la identidad signal/candidate/action de P-L50. BUY y EXIT de
 VTRS no colisionan. Los eventos canónicos de ambos shadows coexisten por
 `cycle_id`, con idempotencia y sin backfill.
 
-QA focal combinada: 611 pruebas verdes; interacción nueva: 7 pruebas verdes.
+QA focal combinada: 675 pruebas verdes; interacción nueva: 10 pruebas verdes.
 Suite completa, smoke y despliegue quedan pendientes por XNYS abierto.
 
 El único defecto de integración encontrado fue el orden inicial de las fases B;
 se corrigió en `9ae542d2` para dejar P-L49 antes de P-L50/P-L44 y ambos antes
 de la persistencia/envío activo.
+
+## P-L50BR1 - cierre QA del ensayo (20-jul-2026, XNYS abierto)
+
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl49_pl46_pl50_combined_rehearsal`;
+  rama `codex/pl49-pl46-pl50-combined-rehearsal`.
+- Secuencia exacta desde `24537e81`: merge `0f5a26a0` de `753136fc` (P-L49B,
+  0.4.186), merge `17b5fbc7` de `a0ab7ce4` (P-L46BR3, 0.4.187) y merge
+  `045288dd` de `8ebac5f2` (P-L50B, 0.4.188). No se usó squash, rebase,
+  cherry-pick ni amend.
+- QA adicional: `c99cd318` añade la fixture adversarial combinada de 500
+  símbolos, 37 anomalías, 443 candidatos, 20 finalistas, BUY/EXIT, planes,
+  controles, gates, rechazos, freshness y persistencia concurrente.
+- Resultados: bloque P-L49/P-L49BR1 + P-L50T/P-L50B + lector P-L44, **90
+  passed**; UI P-L46BR3, **84 passed**; regresiones P-L43/P-L44/P-L45/P-L47/
+  P-L48, **211 passed**; focales de ciclo/scheduler/storage/trade decision/
+  lineage/gates/controles/health/digest, **290 passed**; total **675 passed**.
+- Ruff completo: OK. `check_no_nulls.py`: OK (405 archivos). `git diff --check`:
+  OK. `validate-agent-config --json` con `DATA_DIR` temporal: `ok=true`, sin
+  errores ni warnings.
+- Ambos shadows permanecen fail-open, append-only e independientes; no hay
+  backfill, tablas, migraciones ni uso de `runtime_state` como historia.
+  La suite completa, smoke, validación histórica de 33.336 filas y despliegue
+  quedan pendientes para XNYS cerrado.
+
+Dictamen P-L50BR1: `ready_for_closed_market_full_validation`.

@@ -33,6 +33,21 @@ SQLite, scheduler ni politicas P-L43/P-L44/P-L48/P-L49.
 
 La integración con P-L49B y P-L50B conserva el cambio exclusivamente visual:
 la serie completa de equity y el filtro `Desde inicio` no añaden llamadas al
-broker ni escrituras. La batería combinada pasó 611 pruebas focales y no alteró
+broker ni escrituras. La batería combinada pasó 675 pruebas focales y no alteró
 trading, posiciones, planes, órdenes, exposición ni límites. La validación
 completa queda reservada a una ventana con XNYS cerrado.
+
+## P-L50BR1 - verificación final de la UI
+
+`Resultado del periodo` usa el último equity visible menos el primero y calcula
+el porcentaje sobre el primer equity del rango; publica las fechas inicial y
+final. `Desde inicio` pide todo el histórico disponible desde el corte
+configurado. El bloque contiene solo `Resultado del periodo` y `P/L abierto`;
+`P/L hoy` queda fuera, en la cabecera. El abierto usa las posiciones ya
+cargadas, sin llamada adicional al broker ni escrituras. La cabecera y el
+control externo reutilizan la misma serie completa de equity. La prueba
+descendente confirma una pérdida aunque `trade_history.total_pl` sea positivo.
+
+QA UI final: **84 passed** (`test_web_app.py` + compra/fecha); la UI no cambia
+trading, ranking, gates, sizing, planes, órdenes, stops, takes, exposición ni
+límites.

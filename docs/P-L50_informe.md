@@ -206,8 +206,8 @@ este lote (0.4.188). P-L49 conserva su identidad de observación OHLCV exacta;
 P-L50 conserva `signal_capture_id -> signal_id`, `cycle_id` y la identidad de
 decisión por acción/recomendación. Ningún shadow usa la identidad del otro ni
 se unen por símbolo/fecha. La batería combinada cubre 500 símbolos, 37
-anomalías, 443 candidatos, BUY/EXIT, planes, controles y rechazos; obtuvo 611
-pruebas focales y 7 pruebas específicas de interacción.
+anomalías, 443 candidatos, BUY/EXIT, planes, controles y rechazos; obtuvo 675
+pruebas focales y 10 pruebas específicas de interacción.
 
 Fallos aislados de cualquiera de los dos shadows son fail-open para el camino
 activo. La persistencia es append-only y no colisionan los event IDs. P-L46BR3
@@ -230,3 +230,30 @@ corrección está aislada en `9ae542d2`; no cambia decisiones ni payloads.
   `ruff`); no se sustituyó por una descarga durante mercado abierto.
 - Suite completa, smoke y jobs reales: no ejecutados por la restricción de
   XNYS abierto.
+
+## P-L50BR1 - cierre combinado secuenciado (20-jul-2026)
+
+El worktree combinado termina en la versión **0.4.188** con P-L49B 0.4.186,
+P-L46BR3 0.4.187 y P-L50B 0.4.188. P-L49 conserva proveedor, intervalo,
+timestamp de barra, price basis, OHLCV y linaje exactos; P-L50 conserva
+`signal_capture_id -> signal_id`, `candidate_id` auxiliar, `cycle_id` validado y
+la identidad de decisión `signal + action + recommendation_id`. BUY y EXIT de
+VTRS permanecen separados; un shadow no vuelve `unavailable` al otro.
+
+La secuencia verificada es: market data/observaciones -> `market_state` ->
+P-L49 Fase A -> anotación de aprendizaje -> ranking -> P-L50/P-L44 Fase A ->
+recomendaciones -> gates/límites/cuotas/pausas -> planes/controles -> P-L49
+Fase B -> P-L50/P-L44 Fase B -> persistencia/envío. No se recalculan ranking o
+aprendizaje, no se repite LLM/gates/RiskManager y no se persisten eventos
+provisionales.
+
+La fixture combinada valida 500 símbolos, 37 anomalías P-L49, 443 candidatos
+P-L50, 20 finalistas, BUY/EXIT, planes, controles ausentes, gates y rechazos.
+Comprueba freshness `stale`/`unverified`, cero mutación del conjunto activo,
+fallos independientes fail-open, un evento canónico por shadow y ciclo,
+idempotencia concurrente, conflictos separados y cero `database is locked`.
+
+Resultados finales: **675 passed** en baterías permitidas; Ruff, nulls, diff y
+`validate-agent-config --json` aislado verdes. No hubo despliegue, reinicio,
+detención de servicios, acceso a SQLite productiva ni push. Suite completa,
+smoke y validación histórica de 33.336 filas quedan para mercado cerrado.
