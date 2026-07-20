@@ -123,10 +123,11 @@ ni iniciar P-L48C; queda pendiente el ensayo de integración y cualquier desplie
 - QA adversarial: 52 pruebas P-L49B/P-L49BR1 y 431 regresiones focales verdes;
   Ruff, `check_no_nulls.py` y `git diff --check` verdes. La fixture de volumen
   (500 símbolos, 37 anomalías, 20 finalistas, 10 recomendaciones y 4 planes)
-  produjo un evento de 35.908 bytes y preparación de Fase A de 77,62 ms en el
-  entorno de ensayo; los candidatos planificados quedaron forzados dentro del
-  detalle. Dos procesos SQLite dieron `inserted` + `idempotent`, sin conflicto
-  ni lock residual.
+  produjo un evento de 35.908 bytes, preparación de Fase A de 79,90 ms y
+  persistencia de 10,65 ms en el entorno de ensayo; la transacción fue única,
+  con un commit y WAL temporal de 1.367.872 bytes. Los candidatos planificados
+  quedaron forzados dentro del detalle. Dos procesos SQLite dieron `inserted` +
+  `idempotent`, sin conflicto ni lock residual.
 - La identidad de observación normaliza timestamps equivalentes por zona y
   `-0.0`; duplicados exactos son no-op y revisiones económicas distintas no
   comparten identidad. Los SELL DDOG/BNY/JPM/BAC y los demás risk exits son
