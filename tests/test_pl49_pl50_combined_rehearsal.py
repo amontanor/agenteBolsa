@@ -9,6 +9,8 @@ from typing import Any
 
 from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
+from agente_bolsa.tools import data_quality_decision_shadow as p49_shadow
+from agente_bolsa.tools import learning_penalty_cycle_shadow as p50_shadow
 from agente_bolsa.tools.data_quality_decision_shadow import (
     capture_data_quality_phase_a,
     market_data_observation_id,
@@ -128,6 +130,97 @@ def test_independent_shadow_failure_is_fail_open(tmp_path: Path):
     assert quality_phase is None
     assert lineage_phase["candidate_counts"]["identity_verified"] == 1
     assert candidate == before
+
+
+def test_p50_phase_a_failure_does_not_change_p49(tmp_path: Path, monkeypatch):
+    row = _observation("MPC", blocking=True)
+    candidate = _candidate(0, row)
+
+    def fail_p50(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("p50_phase_a_fixture_failure")
+
+    monkeypatch.setattr(p50_shadow, "build_learning_penalty_cycle_shadow", fail_p50)
+    quality = p49_shadow.capture_data_quality_phase_a(
+        cycle_id="combined-cycle",
+        market_snapshot={"observations": [row]},
+        candidates=[candidate],
+        decision_at=DECISION_AT,
+        captured_at=DECISION_AT,
+    )
+    assert quality["denominators"]["blocking_observations"] == 1
+    try:
+        p50_shadow.build_learning_penalty_cycle_shadow("combined-cycle", {"all_candidates": [candidate]})
+    except RuntimeError as exc:
+        assert "p50_phase_a" in str(exc)
+
+
+def test_persistence_failures_are_independent_and_active_objects_unchanged(tmp_path: Path):
+    row = _observation("PSX", blocking=True)
+    candidate = _candidate(0, row)
+    quality = finalize_quality(
+        capture_data_quality_phase_a(
+            cycle_id="combined-cycle",
+            market_snapshot={"observations": [row]},
+            candidates=[candidate],
+            decision_at=DECISION_AT,
+            captured_at=DECISION_AT,
+        ),
+        cycle_id="combined-cycle",
+    )
+    lineage = build_learning_penalty_cycle_shadow(
+        "combined-cycle", {"all_candidates": [candidate]}, active_candidates=[candidate], settings=_settings(tmp_path)
+    )
+    before = copy.deepcopy(candidate)
+
+    class QualityFailP50Ok:
+        def record_data_quality_decision_shadow(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            raise RuntimeError("p49_persist_fixture_failure")
+
+        def record_learning_penalty_cycle_shadow(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            return {"status": "inserted"}
+
+    class P50FailQualityOk:
+        def record_data_quality_decision_shadow(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            return {"status": "inserted"}
+
+        def record_learning_penalty_cycle_shadow(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            raise RuntimeError("p50_persist_fixture_failure")
+
+    try:
+        persist_data_quality_decision_shadow(QualityFailP50Ok(), quality)
+    except RuntimeError as exc:
+        assert "p49_persist" in str(exc)
+    assert persist_learning_penalty_cycle_shadow(QualityFailP50Ok(), lineage)["status"] == "inserted"
+    assert persist_data_quality_decision_shadow(P50FailQualityOk(), quality)["status"] == "inserted"
+    try:
+        persist_learning_penalty_cycle_shadow(P50FailQualityOk(), lineage)
+    except RuntimeError as exc:
+        assert "p50_persist" in str(exc)
+    assert candidate == before
+
+
+def test_both_shadow_failures_leave_active_fixture_unchanged(tmp_path: Path):
+    row = _observation("EIX", blocking=True)
+    candidate = _candidate(0, row)
+    active = {"candidates": [candidate], "recommendations": [], "plans": [], "orders": []}
+    before = copy.deepcopy(active)
+
+    class BothFail:
+        def record_data_quality_decision_shadow(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            raise RuntimeError("p49_persist_failure")
+
+        def record_learning_penalty_cycle_shadow(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            raise RuntimeError("p50_persist_failure")
+
+    for operation in (
+        lambda: persist_data_quality_decision_shadow(BothFail(), {"cycle_id": "combined-cycle"}),
+        lambda: persist_learning_penalty_cycle_shadow(BothFail(), {"cycle_id": "combined-cycle"}),
+    ):
+        try:
+            operation()
+        except RuntimeError:
+            pass
+    assert active == before
 
 
 def test_both_canonical_events_are_append_only_and_non_colliding(tmp_path: Path):
