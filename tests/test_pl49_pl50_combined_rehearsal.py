@@ -160,3 +160,12 @@ def test_both_canonical_events_are_append_only_and_non_colliding(tmp_path: Path)
     assert len(events) == 2
     assert persist_data_quality_decision_shadow(store, copy.deepcopy(quality))["status"] == "idempotent"
     assert persist_learning_penalty_cycle_shadow(store, copy.deepcopy(lineage))["status"] == "idempotent"
+
+
+def test_phase_b_order_is_p49_then_p50_before_active_plan_persistence():
+    source = (Path(__file__).parents[1] / "src" / "agente_bolsa" / "cycle_runner.py").read_text(encoding="utf-8")
+    p49 = source.index("_data_quality_shadow_final = _persist_data_quality_decision_shadow_final")
+    p50 = source.index("learning_penalty_shadow_final = _persist_learning_penalty_cycle_shadow_final")
+    plans = source.index('optional_measure(timing, "persistence", "order_plan_records")')
+    orders = source.index("submit_paper_order_plan", plans)
+    assert p49 < p50 < plans < orders

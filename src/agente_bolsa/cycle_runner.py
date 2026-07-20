@@ -1884,6 +1884,20 @@ def _auto_paper_trade(
             },
         )
 
+    # P-L49B Phase B is sealed before P-L50/P-L44 Phase B and before any
+    # order-plan row or broker payload is registered. Both shadows observe the
+    # active results but are never passed into ranking, gates, sizing, plans,
+    # or execution.
+    _data_quality_shadow_final = _persist_data_quality_decision_shadow_final(
+        store=store,
+        reporter=reporter,
+        phase_a=data_quality_shadow,
+        run_id=run_id,
+        recommendations=reviewed_recommendations,
+        plans=plans,
+        rejected_order_plans=rejected_order_plans,
+        phase_b_available=True,
+    )
     learning_penalty_shadow_final = _persist_learning_penalty_cycle_shadow_final(
         store=store,
         reporter=reporter,
@@ -1970,19 +1984,6 @@ def _auto_paper_trade(
                 ),
             }
     planned_symbols = [plan.symbol for plan in plans if str(plan.side).lower() == "buy"]
-    # P-L49B Phase B is sealed before any order-plan row or broker payload is
-    # registered.  It observes the active results but is never passed into
-    # ranking, gates, sizing, plans, or execution.
-    _data_quality_shadow_final = _persist_data_quality_decision_shadow_final(
-        store=store,
-        reporter=reporter,
-        phase_a=data_quality_shadow,
-        run_id=run_id,
-        recommendations=reviewed_recommendations,
-        plans=plans,
-        rejected_order_plans=rejected_order_plans,
-        phase_b_available=True,
-    )
     for plan in plans:
         plan_id = new_id("plan")
         with optional_measure(timing, "persistence", "order_plan_records"):
