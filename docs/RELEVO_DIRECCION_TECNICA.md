@@ -196,3 +196,16 @@ P-L43BR6 y P-L44BR3 permanecen fuera y conservan los slots `0.4.181` y
   denominadores null, 0 eventos canonicos, sin backfill.
 - Deuda `profitability_scoreboard` (`pnl_pct=NULL` sin `max_dd`) NO corregida
   (backlog). Sin push. Produccion `8cfa0db3` / tree `4c3636be` limpia.
+
+## P-L49BR1 — relevo de QA
+
+- Worktree de ensayo: `pl49br1_shadow_rehearsal`, merge `2ea57983`, QA
+  `b8aee78a`, versión `0.4.186`; producción no modificada.
+- Hallazgo operativo: `market_snapshot`/`market_state` no transportan hoy la
+  observación OHLC exacta por feature. El shadow lo hace visible como
+  `unavailable_temporal` y conserva `PARTIAL`; nunca convierte calidad global
+  en bloqueo ni usa un informe posterior.
+- La corrección de identidad canónica (zona horaria equivalente y `-0.0`) y la
+  clasificación temporal están solo en el ensayo. Suite completa y smoke
+  requieren ventana con XNYS cerrado; P-L48C permanece prohibido hasta
+  postmarket terminal.

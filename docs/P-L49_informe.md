@@ -104,3 +104,37 @@ La caracterización confirma el hueco observado en P-L49A: `affects_operational_
 puede ser telemetría sin autoridad de decisión y `PARTIAL` permite continuar. El
 candidato implementa ahora la observación shadow aislada, sin activar ningún gate
 ni iniciar P-L48C; queda pendiente el ensayo de integración y cualquier despliegue.
+
+## P-L49BR1 — ensayo aislado y QA adversarial (XNYS abierto)
+
+- Ensayo `pl49br1_shadow_rehearsal`, rama `codex/pl49b1-shadow-rehearsal`, basado
+  en producción `24537e81`; merge `--no-ff` del candidato exacto `938580b7` en
+  `2ea57983`. La versión permanece `0.4.186`.
+- La ruta real ejecuta Fase A después de construir `market_snapshot`/`market_state`
+  y antes del ranking. El snapshot productivo actual expone calidad agregada y
+  no la observación OHLC que alimentó cada feature; por contrato, la candidatura
+  queda `unavailable_temporal`/`partial`, nunca `blocked_exact_quality`
+  retroactivo. Las fixtures con observación exacta, hash y autoridad temporal
+  válidos sí producen `blocked_exact_quality`.
+- Fase B se sella después de recomendaciones, gates, controles y planes, y antes
+  de persistir el plan/orden. Reutiliza la captura de Fase A, no relee informes
+  posteriores, no muta objetos activos y es fail-open.
+- QA adversarial: 52 pruebas P-L49B/P-L49BR1 y 431 regresiones focales verdes;
+  Ruff, `check_no_nulls.py` y `git diff --check` verdes. La fixture de volumen
+  (500 símbolos, 37 anomalías, 20 finalistas, 10 recomendaciones y 4 planes)
+  produjo un evento de 35.908 bytes y preparación de Fase A de 77,62 ms en el
+  entorno de ensayo; los candidatos planificados quedaron forzados dentro del
+  detalle. Dos procesos SQLite dieron `inserted` + `idempotent`, sin conflicto
+  ni lock residual.
+- La identidad de observación normaliza timestamps equivalentes por zona y
+  `-0.0`; duplicados exactos son no-op y revisiones económicas distintas no
+  comparten identidad. Los SELL DDOG/BNY/JPM/BAC y los demás risk exits son
+  `not_applicable_exit` y no sufren bloqueo ni retraso.
+- `daily_learning` solo consume el digest read-only; no usa el shadow como
+  feature, prior ni autoridad. Broker, execution y risk no contienen
+  referencias P-L49. No se añadieron tablas, migraciones, threads, schedulers,
+  órdenes ni backfill.
+- La suite completa y el smoke quedan pendientes por XNYS abierto; la prueba
+  histórica P-L45B2 de 33.336 filas se excluye únicamente en esta ventana,
+  conforme al encargo, sin skip/xfail nuevo. Dictamen: pendiente de validación
+  completa con mercado cerrado (`ready_for_closed_market_full_validation`).
