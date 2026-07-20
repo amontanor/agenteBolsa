@@ -2336,6 +2336,35 @@ def command_canonical_operation_telemetry(args: argparse.Namespace) -> None:
     print(f"denominators={report.get('denominators')}")
 
 
+def command_data_quality_decision_shadow_report(args: argparse.Namespace) -> None:
+    """Read the P-L49B ledger; never reconstruct or apply a quality gate."""
+
+    settings = get_settings()
+    try:
+        from .tools.data_quality_decision_shadow import data_quality_decision_shadow_digest
+
+        store = Store(settings.database_path, settings.agent_logs_dir)
+        report = data_quality_decision_shadow_digest(store, getattr(args, "cycle_id", None))
+        ok = report.get("status") not in {"legacy_without_shadow", "unavailable"}
+    except Exception as exc:  # noqa: BLE001 - telemetry CLI is fail-open.
+        report = {
+            "status": "collecting",
+            "cycle_id": getattr(args, "cycle_id", None),
+            "denominators": None,
+            "details_included": None,
+            "details_omitted": None,
+            "warnings": [f"read_failed:{type(exc).__name__}"],
+        }
+        ok = False
+    if args.json:
+        _print_json({"ok": ok, **report})
+        return
+    print("DATA QUALITY DECISION SHADOW")
+    print(f"status={report.get('status')} | cycle_id={report.get('cycle_id')}")
+    print(f"denominators={report.get('denominators')}")
+    print(f"details={report.get('details_included')} included / {report.get('details_omitted')} omitted")
+
+
 def command_policy_candidates(args: argparse.Namespace) -> None:
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
@@ -3774,6 +3803,14 @@ def build_parser() -> argparse.ArgumentParser:
     canonical_operation_telemetry.add_argument("--session", required=True, help="Sesión YYYY-MM-DD.")
     canonical_operation_telemetry.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     canonical_operation_telemetry.set_defaults(func=command_canonical_operation_telemetry)
+
+    data_quality_shadow = subparsers.add_parser(
+        "data-quality-decision-shadow-report",
+        help="Lee el shadow P-L49B sin activar gates ni reconstruir decisiones.",
+    )
+    data_quality_shadow.add_argument("--cycle-id", help="Ciclo exacto a consultar.")
+    data_quality_shadow.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    data_quality_shadow.set_defaults(func=command_data_quality_decision_shadow_report)
 
     policy_candidates = subparsers.add_parser(
         "policy-candidates",
