@@ -12,6 +12,9 @@
 - Rama de integracion desplegada: `codex/mejora_continua`
 - Version actual del candidato: **0.4.186** (P-L49B-W en ensayo; producción permanece 0.4.185)
 - Ultima actualizacion: 2026-07-20
+- Estado P-L50BR1: worktree combinado candidato **0.4.188**; secuencia
+  P-L49B 0.4.186 -> P-L46BR3 0.4.187 -> P-L50B 0.4.188. La linea anterior
+  conserva el estado historico del ensayo individual P-L49B.
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
 ### P-L49B — shadow de calidad de datos por candidato (**ENSAYO 0.4.186**)

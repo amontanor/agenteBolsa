@@ -3,6 +3,10 @@
 > Actualizado: **20-jul-2026**. Produccion **0.4.185** (`8cfa0db3`, tree
 > `4c3636be`). P-L48B desplegado en mercado cerrado; P-L44B sigue en shadow.
 
+> P-L50BR1: el worktree combinado queda en candidato **0.4.188**, con la
+> secuencia P-L49B 0.4.186 -> P-L46BR3 0.4.187 -> P-L50B 0.4.188. No es un
+> despliegue productivo.
+
 ## Objetivo
 
 Mejorar beneficio neto sin aceptar grandes caidas y construir expertos
