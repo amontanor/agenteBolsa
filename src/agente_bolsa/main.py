@@ -2353,6 +2353,16 @@ def command_data_quality_decision_shadow_report(args: argparse.Namespace) -> Non
             "denominators": None,
             "details_included": None,
             "details_omitted": None,
+            "warnings": [f"read_failed:{type(exc).__name__}"],
+        }
+        ok = False
+    if args.json:
+        _print_json({"ok": ok, **report})
+        return
+    print("DATA QUALITY DECISION SHADOW")
+    print(f"status={report.get('status')} | cycle_id={report.get('cycle_id')}")
+    print(f"denominators={report.get('denominators')}")
+    print(f"details={report.get('details_included')} included / {report.get('details_omitted')} omitted")
 
 
 def command_canonical_trade_attribution(args: argparse.Namespace) -> None:
@@ -2383,12 +2393,6 @@ def command_canonical_trade_attribution(args: argparse.Namespace) -> None:
     if args.json:
         _print_json({"ok": ok, **report})
         return
-    print("DATA QUALITY DECISION SHADOW")
-    print(f"status={report.get('status')} | cycle_id={report.get('cycle_id')}")
-    print(f"denominators={report.get('denominators')}")
-    print(f"details={report.get('details_included')} included / {report.get('details_omitted')} omitted")
-
-
     print("CANONICAL TRADE ATTRIBUTION")
     print(f"session={args.session} | status={report.get('status')}")
     print(f"denominators={report.get('denominators')}")
