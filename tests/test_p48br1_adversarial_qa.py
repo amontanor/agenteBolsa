@@ -365,6 +365,8 @@ def test_qa1_qa2_single_snapshot_and_postmarket_order(monkeypatch: pytest.Monkey
         ("canonical_operation_telemetry", "completed"),
         ("canonical_trade_attribution", "started"),
         ("canonical_trade_attribution", "completed"),
+        ("canonical_eod_account_snapshot", "started"),
+        ("canonical_eod_account_snapshot", "completed"),
         ("performance", "started"),
         ("performance", "completed"),
         ("measurement_pipeline", "started"),
