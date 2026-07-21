@@ -2232,3 +2232,16 @@ de despliegue quedan pendientes con XNYS cerrado.
   aislado paso 8 pruebas. No se anadio skip/xfail.
 - Dictamen: `ready_for_closed_market_deployment`. No hubo despliegue ni push;
   la promocion requiere una tarea separada y autorizacion operativa.
+## P-L52B-T — snapshot EOD contable y benchmark comparable (21-jul-2026)
+
+- Worktree de tests: `C:\Antonio\Bref\agenteBolsa_worktrees\pl52b_eod_snapshot_tests`,
+  rama `codex/pl52b-eod-snapshot-tests`, base P-L51CV2
+  `7638149610060153dfe8a8edf2037ad9dab028a3`.
+- Contrato caracterizado: `p-l52b.canonical-eod-account-snapshot.v1`.
+  Separa equity, flujos, realized neto, open P/L, costes, exposición, cash,
+  benchmark SPY comparable y residual; missing permanece null/unavailable.
+- Tests P-L52B-T `21 passed`; focales `248 passed`; Ruff/NUL/diff/configuración
+  verdes. Sin cambios en `src` ni bump de versión.
+- Dictamen: `ready_for_p52b_implementation`. Siguiente lote mínimo: productor
+  shadow fail-open del snapshot con ledger de flujos y benchmark autorizados;
+  no cambiar trading, política, UI ni producción.

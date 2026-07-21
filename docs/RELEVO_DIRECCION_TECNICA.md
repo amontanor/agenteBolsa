@@ -310,3 +310,17 @@ por lo que no se ejecutaron suite completa, smoke ni despliegue.
 - Dictamen: `ready_for_closed_market_deployment`, sin despliegue. La siguiente
   tarea decide/promueve separadamente y conserva el control humano; no tocar
   produccion, SQLite productiva, servicios, archivos protegidos ni hacer push.
+## P-L52B-T — snapshot EOD contable y benchmark comparable (21-jul-2026)
+
+- Se caracterizó en worktree aislado el contrato
+  `p-l52b.canonical-eod-account-snapshot.v1`, sin cambios en `src` ni en
+  producción. La ecuación probada es `delta_equity = flows + net_realized_pl
+  + delta_open_pl + residual`.
+- El contrato exige ledger exacto de flujos, costes completos para neto,
+  posiciones/lot IDs exactos y SPY con misma ventana, timestamps, `price_basis`
+  y calidad. P-L52A queda reproducible como pérdida absoluta verificada, cash
+  opportunity descriptiva y residual/atribución unavailable.
+- Resultado: `21 passed` P-L52B-T, `248 passed` focales, Ruff/NUL/diff/config
+  verdes. Dictamen: `ready_for_p52b_implementation`.
+- Próximo lote: implementación shadow mínima, fail-open y append-only, sin
+  tablas/migraciones ni consumo en trading hasta demostrar paridad.
