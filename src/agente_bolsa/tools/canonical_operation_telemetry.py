@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:  # pragma: no cover
     from ..storage import Store
 
+from .exit_lot_provenance import CARRIER_FIELD, carrier_to_trade_attribution
 
 SCHEMA_VERSION = "p-l48b.canonical-operation-telemetry.v1"
 EVENT_TYPE = "canonical_operation_telemetry"
@@ -94,6 +95,22 @@ def _find_value(value: Any, names: Sequence[str]) -> Any:
             if found is not _MISSING:
                 return found
     return _MISSING
+
+
+def _explicit_fill_fragments(value: Any) -> list[dict[str, Any]]:
+    """Collect only explicitly declared canonical fill fragments."""
+
+    result: list[dict[str, Any]] = []
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if str(key) in {"canonical_fill_fragments", "fill_fragments"} and isinstance(item, list):
+                result.extend(dict(row) for row in item if isinstance(row, Mapping))
+            else:
+                result.extend(_explicit_fill_fragments(item))
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            result.extend(_explicit_fill_fragments(item))
+    return result
 
 
 def _text(value: Any) -> str | None:
@@ -268,6 +285,30 @@ def _load_source_data(store: Store, session_date: str) -> dict[str, Any]:
                 })
         memories = store.trade_memory(limit=50000, since_date=session_date)
         fragments: list[dict[str, Any]] = []
+        explicit_seen: set[tuple[str, str]] = set()
+        for order in broker_orders:
+            order_id = _text(order.get("broker_order_id"))
+            for fragment in _explicit_fill_fragments(order):
+                fragment_id = _text(fragment.get("fill_fragment_id") or fragment.get("fill_id"))
+                fragment_order_id = _text(fragment.get("broker_order_id"))
+                quantity = _number(fragment.get("qty"))
+                if not order_id or not fragment_id or fragment_order_id != order_id or quantity is None or quantity <= 0:
+                    continue
+                key = (order_id, fragment_id)
+                if key in explicit_seen:
+                    continue
+                explicit_seen.add(key)
+                fragments.append(
+                    {
+                        "broker_order_id": order_id,
+                        "fragment_id": fragment_id,
+                        "fill_fragment_id": fragment_id,
+                        "qty": quantity,
+                        "lot_id": _text(fragment.get("lot_id")),
+                        "side": str(fragment.get("side") or order.get("side") or "").upper(),
+                        "source": "canonical_payload",
+                    }
+                )
         for memory in memories:
             broker_order_id = _find_value(memory, ("broker_order_id",))
             if broker_order_id is _MISSING or not _text(broker_order_id):
@@ -430,6 +471,16 @@ def _operation_for_order(
         # payload explicitly declaring canonical fill fragments can satisfy
         # the P-L51B exact-quantity contract.
         operation["fill_fragments"] = _safe(explicit_fills)
+    carrier = _find_value(payload, (CARRIER_FIELD,))
+    if isinstance(carrier, Mapping):
+        operation[CARRIER_FIELD] = _safe(carrier)
+        if not isinstance(trade_attribution, (Mapping, list)):
+            projected = carrier_to_trade_attribution(carrier)
+            if projected is not None:
+                operation["trade_attribution"] = _safe(projected)
+    execution_costs = _find_value(payload, ("execution_costs",))
+    if isinstance(execution_costs, Mapping):
+        operation["execution_costs"] = _safe(execution_costs)
     return operation
 
 

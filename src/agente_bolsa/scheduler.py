@@ -51,6 +51,11 @@ from .tools.canonical_trade_attribution import (
 )
 from .tools.daily_learning import build_learning_digest_report, load_daily_learning_context
 from .tools.execution import submit_paper_order_plan
+from .tools.exit_lot_provenance import (
+    CARRIER_FIELD,
+    build_exit_lot_provenance,
+    unavailable_exit_lot_provenance,
+)
 from .tools.gate_effectiveness_reporting import publish_gate_effectiveness_postmarket
 from .tools.learning_mode import active_learning_mode, learning_mode_source
 from .tools.learning_penalty_cycle_shadow import (
@@ -1024,6 +1029,8 @@ def _risk_exit_plan(
     level: float,
     source_plan: dict[str, Any],
     time_stop_evidence: dict[str, Any] | None = None,
+    open_buy_lots: list[dict[str, Any]] | None = None,
+    exit_lot_allocations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     exit_policy_payload: dict[str, Any] = {
         "enabled": trigger in {"time_stop_v2", "trailing_stop_v2", "partial_take_profit_v2"},
@@ -1037,7 +1044,7 @@ def _risk_exit_plan(
                 "temporal_evidence": time_stop_evidence or {},
             }
         )
-    return {
+    plan = {
         "plan_id": new_id("risk_exit"),
         "cycle_id": new_id("watch_exit"),
         "symbol": symbol,
@@ -1081,6 +1088,20 @@ def _risk_exit_plan(
         },
         "created_at": "",
     }
+    if open_buy_lots is not None:
+        try:
+            plan["payload"][CARRIER_FIELD] = build_exit_lot_provenance(
+                plan,
+                open_buy_lots,
+                explicit_allocations=exit_lot_allocations,
+            )
+        except Exception as exc:  # noqa: BLE001 - provenance is observational.
+            plan["payload"][CARRIER_FIELD] = unavailable_exit_lot_provenance(
+                plan,
+                f"carrier_build_failed:{type(exc).__name__}",
+                captured_at=datetime.now(timezone.utc),
+            )
+    return plan
 
 
 def _parse_datetime(value: Any) -> datetime | None:
@@ -1496,8 +1517,31 @@ def _execute_stop_take_exits(
             level=level,
             source_plan=source_plan,
             time_stop_evidence=(exit_policy_state or {}).get("time_stop_evidence"),
+            open_buy_lots=buy_lots.get(symbol, []),
         )
         try:
+            carrier = (plan.get("payload") or {}).get(CARRIER_FIELD)
+            if isinstance(carrier, dict):
+                try:
+                    store.record_exit_lot_provenance(
+                        carrier,
+                        event_id=f"exit_lot_provenance:{plan['plan_id']}",
+                    )
+                except Exception as exc:  # noqa: BLE001 - carrier is fail-open.
+                    LOGGER.warning("exit lot provenance persistence unavailable for %s: %s", symbol, exc)
+            try:
+                store.save_order_plan(
+                    plan_id=plan["plan_id"],
+                    cycle_id=plan["cycle_id"],
+                    symbol=symbol,
+                    side="sell",
+                    notional=plan["notional"],
+                    approved=bool(plan["approved"]),
+                    dry_run=bool(plan["dry_run"]),
+                    payload=plan,
+                )
+            except Exception as exc:  # noqa: BLE001 - local shadow must not block exit.
+                LOGGER.warning("risk exit plan provenance save unavailable for %s: %s", symbol, exc)
             order = submit_paper_order_plan(
                 settings,
                 plan,

@@ -1214,6 +1214,75 @@ class Store:
         finally:
             conn.close()
 
+    def record_exit_lot_provenance(
+        self,
+        payload: dict[str, Any],
+        *,
+        event_id: str,
+    ) -> dict[str, Any]:
+        """Persist one exact exit carrier without replacing its original."""
+
+        from .tools.exit_lot_provenance import carrier_content_hash
+
+        encoded = _dumps(payload)
+        candidate_hash = carrier_content_hash(payload)
+        now = _utc_iso()
+        conn = self.connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT payload_json FROM agent_events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+            if existing is not None:
+                try:
+                    existing_payload = json.loads(existing["payload_json"] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    existing_payload = {}
+                existing_hash = carrier_content_hash(existing_payload)
+                if existing_hash == candidate_hash:
+                    conn.commit()
+                    return {"status": "idempotent", "event_id": event_id, "content_hash": candidate_hash}
+                conflict_id = f"{event_id}:conflict:{candidate_hash}"
+                conn.execute(
+                    "INSERT OR IGNORE INTO agent_events (event_id, agent, event_type, cycle_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        conflict_id,
+                        "p51c_provenance",
+                        "exit_lot_provenance_conflict",
+                        None,
+                        _dumps(
+                            {
+                                "schema_version": payload.get("schema_version"),
+                                "event_id": event_id,
+                                "existing_content_hash": existing_hash,
+                                "candidate_content_hash": candidate_hash,
+                                "status": "conflict",
+                            }
+                        ),
+                        now,
+                    ),
+                )
+                conn.commit()
+                return {
+                    "status": "conflict",
+                    "event_id": event_id,
+                    "conflict_event_id": conflict_id,
+                    "existing_content_hash": existing_hash,
+                    "candidate_content_hash": candidate_hash,
+                }
+            conn.execute(
+                "INSERT INTO agent_events (event_id, agent, event_type, cycle_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (event_id, "p51c_provenance", "exit_lot_provenance", None, encoded, now),
+            )
+            conn.commit()
+            return {"status": "inserted", "event_id": event_id, "content_hash": candidate_hash}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def record_data_quality_decision_shadow(
         self,
         payload: dict[str, Any],
@@ -4734,6 +4803,32 @@ class Store:
                 remaining_qty = max(0.0, submitted_qty - filled_qty)
             plan = payload.get("plan") or {}
             symbol = str(row["symbol"] or "").upper()
+            explicit_fill_rows: list[dict[str, Any]] = []
+            explicit_seen: set[tuple[str, float]] = set()
+            fill_sources = [
+                payload.get("canonical_fill_fragments"),
+                broker.get("canonical_fill_fragments"),
+                (plan.get("payload") or {}).get("canonical_fill_fragments"),
+                execution_snapshot.get("canonical_fill_fragments"),
+            ]
+            for fill_source in fill_sources:
+                if not isinstance(fill_source, list):
+                    continue
+                for fill in fill_source:
+                    if not isinstance(fill, dict):
+                        continue
+                    fill_id = str(fill.get("fill_fragment_id") or fill.get("fill_id") or "").strip()
+                    fill_order_id = str(fill.get("broker_order_id") or "").strip()
+                    fill_side = str(fill.get("side") or "BUY").upper()
+                    fill_qty = _number(fill.get("qty"))
+                    if not fill_id or (fill_order_id and fill_order_id != str(row["broker_order_id"])) or fill_side != "BUY" or fill_qty is None or fill_qty <= 0:
+                        continue
+                    fill_key = (fill_id, fill_qty)
+                    if fill_key in explicit_seen:
+                        continue
+                    explicit_seen.add(fill_key)
+                    explicit_fill_rows.append({"fill_id": fill_id, "qty": fill_qty})
+            plan_payload = plan.get("payload") or {}
             lot = {
                 "broker_order_id": str(row["broker_order_id"] or ""),
                 "order_plan_id": str(row["plan_id"] or plan.get("plan_id") or ""),
@@ -4752,6 +4847,21 @@ class Store:
                 "is_partial": is_partial,
                 "remaining_qty": remaining_qty,
                 "remaining_qty_scope": "order",
+                "canonical_buy_fill_ids": sorted(explicit_fill_rows, key=lambda item: item["fill_id"]) or None,
+                "position_identity": str(
+                    payload.get("position_identity")
+                    or plan_payload.get("position_identity")
+                    or execution_snapshot.get("position_identity")
+                    or ""
+                ).strip()
+                or None,
+                "lot_identity": str(
+                    payload.get("lot_identity")
+                    or plan_payload.get("lot_identity")
+                    or execution_snapshot.get("lot_identity")
+                    or ""
+                ).strip()
+                or None,
                 "plan": plan,
             }
             result.setdefault(symbol, []).append(lot)
