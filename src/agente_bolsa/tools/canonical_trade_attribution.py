@@ -206,6 +206,14 @@ def _empty_snapshot(session_date: str, captured_at: datetime, *, status: str = "
         "revision": 1,
         "status": status,
         "content_hash": None,
+        "received": None,
+        "valid": None,
+        "attributed": None,
+        "unavailable": None,
+        "ambiguous": None,
+        "conflict": None,
+        "broker_order_count": None,
+        "operation_count": None,
         "denominators": {
             "buy_order_count": None,
             "sell_order_count": None,
@@ -238,6 +246,8 @@ def _empty_snapshot(session_date: str, captured_at: datetime, *, status: str = "
             "mae": None,
             "mfe": None,
         },
+        "gross_attributed_pl": None,
+        "net_attributable_pl": None,
         "operations": [],
         "warnings": [],
         "reason_codes": [],
@@ -527,6 +537,20 @@ def build_canonical_trade_attribution(
             for name in COST_FIELDS:
                 result["metrics"][name] = sum(float(output.get("costs", {}).get(name) or 0.0) for output in output_operations if output["status"] == "attributed")
         result["operations"] = output_operations
+        result.update(
+            {
+                "received": len(sell_operations),
+                "valid": attributed,
+                "attributed": attributed,
+                "unavailable": unavailable,
+                "ambiguous": ambiguous,
+                "conflict": result["denominators"]["conflict_count"],
+                "broker_order_count": len(operations),
+                "operation_count": len(operations),
+                "gross_attributed_pl": result["metrics"]["gross_realized_pl"],
+                "net_attributable_pl": result["metrics"]["net_realized_pl"],
+            }
+        )
         result["status"] = "available" if attributed and attributed == len(sell_operations) else "partial" if attributed else "unavailable"
         if not sell_operations:
             result["status"] = "unavailable"

@@ -149,6 +149,9 @@ def test_product_api_accepts_exact_mapping_and_keeps_denominators_separate() -> 
     }
     assert result["metrics"]["gross_realized_pl"] == 100.0
     assert result["metrics"]["net_realized_pl"] == pytest.approx(94.75)
+    assert result["received"] == result["valid"] == result["attributed"] == 1
+    assert result["gross_attributed_pl"] == 100.0
+    assert result["net_attributable_pl"] == pytest.approx(94.75)
     assert fixture == before
 
 
