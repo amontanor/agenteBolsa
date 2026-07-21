@@ -1210,6 +1210,101 @@ class Store:
         finally:
             conn.close()
 
+    def record_canonical_trade_attribution(
+        self,
+        payload: dict[str, Any],
+        *,
+        event_id: str,
+    ) -> dict[str, Any]:
+        """Persist P-L51B attribution in one short append-only transaction."""
+
+        encoded = _dumps(payload)
+        candidate_hash = str(payload.get("content_hash") or "")
+        event_type = "canonical_trade_attribution"
+        cycle_id = payload.get("cycle_id")
+        now = _utc_iso()
+        conn = self.connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT payload_json FROM agent_events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+            if existing is not None:
+                try:
+                    existing_payload = json.loads(existing["payload_json"] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    existing_payload = {}
+                existing_hash = str(existing_payload.get("content_hash") or "")
+                if candidate_hash and candidate_hash == existing_hash:
+                    conn.commit()
+                    return {"status": "idempotent", "event_id": event_id, "content_hash": candidate_hash}
+                conflict_id = f"{event_id}:conflict:{candidate_hash or 'unknown'}"
+                conflict_payload = {
+                    "schema_version": payload.get("schema_version"),
+                    "event_id": event_id,
+                    "existing_content_hash": existing_hash or None,
+                    "candidate_content_hash": candidate_hash or None,
+                    "status": "conflict",
+                }
+                conn.execute(
+                    "INSERT OR IGNORE INTO agent_events (event_id, agent, event_type, cycle_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (conflict_id, "p51b_trade_attribution", f"{event_type}_conflict", cycle_id, _dumps(conflict_payload), now),
+                )
+                conn.commit()
+                return {
+                    "status": "conflict",
+                    "event_id": event_id,
+                    "conflict_event_id": conflict_id,
+                    "existing_content_hash": existing_hash or None,
+                    "candidate_content_hash": candidate_hash or None,
+                }
+            conn.execute(
+                "INSERT INTO agent_events (event_id, agent, event_type, cycle_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (event_id, "p51b_trade_attribution", event_type, cycle_id, encoded, now),
+            )
+            conn.commit()
+            return {"status": "inserted", "event_id": event_id, "content_hash": candidate_hash}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def canonical_trade_attribution_event(self, session_date: str) -> dict[str, Any] | None:
+        """Read one P-L51B event without rebuilding attribution."""
+
+        event_id = f"canonical_trade_attribution:{session_date}"
+        row = None
+        try:
+            with self.read_connection() as conn:
+                row = conn.execute(
+                    "SELECT event_id, event_type, payload_json, created_at FROM agent_events WHERE event_id = ?",
+                    (event_id,),
+                ).fetchone()
+        finally:
+            self.close_read_connection()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        return {
+            "event_id": row["event_id"],
+            "event_type": row["event_type"],
+            "payload": payload,
+            "created_at": row["created_at"],
+        }
+
+    def canonical_trade_attribution_conflicts(self, session_date: str) -> list[dict[str, Any]]:
+        prefix = f"canonical_trade_attribution:{session_date}:conflict:"
+        return [
+            item
+            for item in self.agent_events(event_type_prefix="canonical_trade_attribution_conflict", limit=50000)
+            if str(item.get("event_id") or "").startswith(prefix)
+        ]
+
     def canonical_operation_telemetry_event(self, session_date: str) -> dict[str, Any] | None:
         """Read one canonical event without recalculating or backfilling."""
 

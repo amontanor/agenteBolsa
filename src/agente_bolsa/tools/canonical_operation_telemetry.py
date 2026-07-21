@@ -419,6 +419,17 @@ def _operation_for_order(
         "lineage_quality": "verified" if signal_id or _text(_find_value(execution, ("signal_capture_id",))) else "partial",
         "warnings": sorted(set(warnings)),
     }
+    trade_attribution = _find_value(payload, ("trade_attribution", "canonical_trade_attribution"))
+    if isinstance(trade_attribution, (Mapping, list)):
+        # Preserve only explicit structured provenance.  Missing metadata is
+        # intentionally omitted so legacy snapshots remain byte-compatible.
+        operation["trade_attribution"] = _safe(trade_attribution)
+    explicit_fills = _find_value(payload, ("canonical_fill_fragments", "fill_fragments"))
+    if isinstance(explicit_fills, list):
+        # Trade-memory rows are deliberately not copied here.  Only a future
+        # payload explicitly declaring canonical fill fragments can satisfy
+        # the P-L51B exact-quantity contract.
+        operation["fill_fragments"] = _safe(explicit_fills)
     return operation
 
 

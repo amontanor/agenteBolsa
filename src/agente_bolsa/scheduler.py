@@ -44,6 +44,11 @@ from .tools.canonical_operation_telemetry import (
     build_canonical_operation_telemetry,
     persist_canonical_operation_telemetry,
 )
+from .tools.canonical_trade_attribution import (
+    build_canonical_trade_attribution,
+    persist_canonical_trade_attribution,
+    unavailable_canonical_trade_attribution,
+)
 from .tools.daily_learning import build_learning_digest_report, load_daily_learning_context
 from .tools.execution import submit_paper_order_plan
 from .tools.gate_effectiveness_reporting import publish_gate_effectiveness_postmarket
@@ -3109,6 +3114,42 @@ def post_market_review_job(
             log_system_event(settings.logs_dir, "canonical_operation_telemetry_persistence_failed", {"error": repr(exc), "session_date": session_date})
         if isinstance(report, dict):
             report["canonical_operation_telemetry"] = canonical_telemetry
+        coordinator.stage(lease, current_stage, "completed")
+        current_stage = "canonical_trade_attribution"
+        coordinator.stage(lease, current_stage, "started")
+        attribution_persistence: dict[str, Any] | None = None
+        try:
+            canonical_trade_attribution = build_canonical_trade_attribution(
+                canonical_telemetry,
+                session_date,
+            )
+        except Exception as exc:  # noqa: BLE001 - shadow producer is fail-open.
+            canonical_trade_attribution = unavailable_canonical_trade_attribution(
+                session_date,
+                warning=f"producer_failed:{type(exc).__name__}",
+            )
+            log_system_event(
+                settings.logs_dir,
+                "canonical_trade_attribution_build_failed",
+                {"error": repr(exc), "session_date": session_date},
+            )
+        try:
+            attribution_persistence = persist_canonical_trade_attribution(
+                store,
+                canonical_trade_attribution,
+            )
+        except Exception as exc:  # noqa: BLE001 - attribution is observational and fail-open.
+            canonical_trade_attribution.setdefault("warnings", []).append(
+                f"persistence_failed:{type(exc).__name__}"
+            )
+            log_system_event(
+                settings.logs_dir,
+                "canonical_trade_attribution_persistence_failed",
+                {"error": repr(exc), "session_date": session_date},
+            )
+        if isinstance(report, dict):
+            report["canonical_trade_attribution"] = canonical_trade_attribution
+            report["canonical_trade_attribution_persistence"] = attribution_persistence
         coordinator.stage(lease, current_stage, "completed")
         # La foto de cartera y performance_daily deben existir antes del
         # digest final de medición; el productor es fail-open y no altera el

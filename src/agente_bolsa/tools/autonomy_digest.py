@@ -43,6 +43,12 @@ def collect_autonomy_state(store: Store, settings: Settings) -> dict[str, Any]:
         level = active_autonomy_level(store, settings)
     except Exception:  # noqa: BLE001
         level = 1
+    try:
+        from .canonical_trade_attribution import canonical_trade_attribution_digest
+
+        attribution = canonical_trade_attribution_digest(store)
+    except Exception:  # noqa: BLE001 - attribution is observability only.
+        attribution = {"status": "degraded_observability", "denominators": None}
     return {
         "autonomy_level": level,
         "applied": sum(1 for c in applied if c.get("status") == "APPLIED"),
@@ -59,6 +65,7 @@ def collect_autonomy_state(store: Store, settings: Settings) -> dict[str, Any]:
         "process_metrics": (latest_perf.get("payload") or {}).get("process_metrics", {}),
         "llm_cost_today_usd": _safe(lambda: _llm_cost_today(settings), 0.0),
         "pnl_pct_today": latest_perf.get("pnl_pct"),
+        "canonical_trade_attribution": attribution,
         "lab_enabled": _safe(lambda: store.get_runtime_value(LAB_ENABLED_KEY), None),
         # Flujo del laboratorio (Etapa 7): WIP, edades y throughput. Si
         # oldest_open_days crece sin parar, el lab acumula en vez de terminar.
