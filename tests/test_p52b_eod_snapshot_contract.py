@@ -534,6 +534,45 @@ def build_eod_snapshot(
         "reason_codes": _unique_sorted(reasons),
         "valid": not structural_invalid,
     }
+    primary_statuses = [
+        snapshot["coverage"][name]["status"]
+        for name in (
+            "equity_coverage",
+            "flow_coverage",
+            "realized_gross_coverage",
+            "net_realized_coverage",
+            "cost_coverage",
+            "open_pl_coverage",
+            "exposure_coverage",
+            "contribution_coverage",
+            "benchmark_coverage",
+            "residual_coverage",
+        )
+    ]
+    unavailable_count = sum(status in {"unavailable", "degraded"} for status in primary_statuses)
+    snapshot["received"] = 1
+    snapshot["unavailable"] = unavailable_count
+    snapshot["conflict"] = 0
+    snapshot["result"] = {
+        "received": 1,
+        "valid": int(not structural_invalid),
+        "unavailable": unavailable_count,
+        "conflict": 0,
+        "session_count": session_count,
+        "comparable_session_count": comparable_session_count,
+        "equity_coverage": snapshot["coverage"]["equity_coverage"],
+        "flow_coverage": snapshot["coverage"]["flow_coverage"],
+        "realized_gross_coverage": snapshot["coverage"]["realized_gross_coverage"],
+        "net_realized_coverage": snapshot["coverage"]["net_realized_coverage"],
+        "cost_coverage": snapshot["coverage"]["cost_coverage"],
+        "open_pl_coverage": snapshot["coverage"]["open_pl_coverage"],
+        "exposure_coverage": snapshot["coverage"]["exposure_coverage"],
+        "contribution_coverage": snapshot["coverage"]["contribution_coverage"],
+        "benchmark_coverage": snapshot["coverage"]["benchmark_coverage"],
+        "residual_coverage": snapshot["coverage"]["residual_coverage"],
+        "warnings": snapshot["warnings"],
+        "reason_codes": snapshot["reason_codes"],
+    }
     snapshot["content_hash"] = _stable_hash(snapshot)
     return snapshot
 
@@ -900,6 +939,10 @@ def test_result_has_required_coverage_fields_and_missing_values_are_null() -> No
     }
     assert required <= set(snapshot)
     assert {"session_count", "comparable_session_count"} <= set(snapshot)
+    assert {"received", "valid", "unavailable", "conflict", "result"} <= set(snapshot)
+    assert {"received", "valid", "unavailable", "conflict"} <= set(snapshot["result"])
+    assert snapshot["result"]["received"] == 1
+    assert snapshot["result"]["conflict"] == 0
     missing = _fully_reconciled(external_flow_ledger=None, costs=None, positions=None, contributions=None, benchmark=None)
     for field in ("external_cash_flows", "flow_adjusted_return", "net_realized_pl", "residual_amount", "gross_exposure_start"):
         assert missing[field] is None
