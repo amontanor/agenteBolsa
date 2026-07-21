@@ -331,7 +331,7 @@ def _persisted_buy(store: Store) -> list[dict[str, Any]]:
     return store.executed_open_buy_lots_by_symbol(position_quantities={"ACME": 10})["ACME"]
 
 
-def test_selected_order_plan_metadata_survives_store_and_reconciliation_but_current_p48_drops_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_selected_order_plan_metadata_survives_store_reconciliation_and_p48_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = Settings(DATA_DIR=tmp_path)
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()
@@ -392,7 +392,8 @@ def test_selected_order_plan_metadata_survives_store_and_reconciliation_but_curr
 
     telemetry = build_canonical_operation_telemetry(store, "2026-07-21", captured_at=datetime(2026, 7, 21, 16, 5, tzinfo=timezone.utc))
     sell_operation = next(item for item in telemetry["operations"] if item["broker_order_id"] == "sell-1")
-    assert "exit_lot_provenance" not in sell_operation
+    assert sell_operation["exit_lot_provenance"] == carrier
+    assert "trade_attribution" not in sell_operation
     attribution = build_canonical_trade_attribution(telemetry, "2026-07-21", captured_at=datetime(2026, 7, 21, 16, 5, tzinfo=timezone.utc))
     assert attribution["denominators"]["attributed_sell_count"] == 0
     assert attribution["metrics"]["net_realized_pl"] is None
