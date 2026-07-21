@@ -2222,3 +2222,13 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Commits separados: `c86917ee` funcional y `5c0077d9` pruebas. La
   documentacion de este estado queda en `docs/P-L51_informe.md` y en este
   plan; la validacion completa, suite, smoke y despliegue esperan XNYS cerrado.
+## P-L51CV2 - validacion completa nocturna del candidato 0.4.189 (21-jul-2026)
+
+- Con XNYS cerrado, PMR `pmr_7a4f5b7f8f4b` terminal y lease vacio, la suite
+  completa paso `1864 passed, 1 skipped` y las focales/regresiones pasaron
+  `364 passed`. P-L45B2 de 33.336 filas paso `1 passed`.
+- Ruff, NUL, diff y `validate-agent-config --json` temporal quedaron verdes.
+  El smoke real `run-once` queda `smoke_unavailable_by_safety`; el sustituto
+  aislado paso 8 pruebas. No se anadio skip/xfail.
+- Dictamen: `ready_for_closed_market_deployment`. No hubo despliegue ni push;
+  la promocion requiere una tarea separada y autorizacion operativa.

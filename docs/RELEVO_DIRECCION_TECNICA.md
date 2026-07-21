@@ -298,3 +298,15 @@ por lo que no se ejecutaron suite completa, smoke ni despliegue.
   posteriormente, con XNYS cerrado y PMR terminal, suite completa, smoke y
   validacion de mercado cerrado. Sin cambios en archivos protegidos, produccion,
   SQLite productiva, servicios, reinicios o push.
+## P-L51CV2 - validacion completa nocturna (21-jul-2026)
+
+- Candidato `codex/pl51c-provenance-carrier-impl`, HEAD
+  `a889dd976af11435bbcaf2d9a8e8cd59981e546b`, tree
+  `7f04dbb5f528388cc01b060839378d141b39cdb6`, version `0.4.189`, limpio.
+- PMR terminal y lease vacio; suite `1864 passed, 1 skipped`, focales y
+  regresiones `364 passed`, P-L45B2 `1 passed`, Ruff/NUL/diff/configuracion
+  verdes. El smoke real queda `smoke_unavailable_by_safety`; el sustituto
+  seguro paso 8 pruebas.
+- Dictamen: `ready_for_closed_market_deployment`, sin despliegue. La siguiente
+  tarea decide/promueve separadamente y conserva el control humano; no tocar
+  produccion, SQLite productiva, servicios, archivos protegidos ni hacer push.

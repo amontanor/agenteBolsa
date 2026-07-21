@@ -548,3 +548,74 @@ No se modificaron `kernel.py`, `broker.py`, `execution.py`, `risk.py`,
 `config.py` ni `.env`. Produccion, el ensayo combinado 0.4.188 y los worktrees
 de candidatos originales permanecen intactos. No hubo SQLite productiva,
 merge, reinicio, despliegue ni push.
+## P-L51CV2 - validacion completa nocturna (21-jul-2026)
+
+### Dictamen
+
+`ready_for_closed_market_deployment`.
+
+La validacion cerrada del candidato 0.4.189 no encontro defectos reproducibles.
+El resultado habilita una futura decision de despliegue en una tarea separada;
+no constituye despliegue ni promocion automatica. El smoke real `run-once`
+queda `smoke_unavailable_by_safety` porque no se pudo garantizar desde un
+entrypoint CLI que todas sus rutas broker/red/LLM quedaran aisladas. El
+sustituto focal aislado paso 8 pruebas, incluida la asercion de no red/LLM.
+
+### Referencias, precondiciones y seguridad
+
+- Candidato: `codex/pl51c-provenance-carrier-impl`, HEAD
+  `a889dd976af11435bbcaf2d9a8e8cd59981e546b`, tree
+  `7f04dbb5f528388cc01b060839378d141b39cdb6`, version `0.4.189`, arbol limpio.
+- Produccion: HEAD `24537e813ff0905696cda0b3925a212045ee7b09`, tree
+  `4747f27f3d5dc152410203bf089baee500440897`, version `0.4.185`; se conserva
+  su suciedad conocida en `web_app.py`, `tests/test_web_app.py`, `AGENTS.md`,
+  `.agents/skills/*` y `skills-lock.json`.
+- XNYS cerrado; siguiente apertura 22-jul-2026 15:30 CEST. El PMR efectivo
+  `pmr_7a4f5b7f8f4b` termino `completed/pipeline_completed` a las
+  `20:28:12.189598Z`; lease vacio y reintentos posteriores
+  `session_already_completed`. No habia market_cycle, portfolio_watch,
+  reconciliacion, postmarket, pytest ni despliegue activos.
+- Produccion sigue en paper, live y auto-apply desactivados. `kernel-status`
+  productivo: `ok=true`, `violations=[]`, sello `2026-07-07T20:43:32.224751Z`.
+  El `kernel-status` temporal del candidato fue `unsealed` solo por ausencia
+  de manifiesto temporal; no describe produccion.
+
+### Validacion ejecutada
+
+- Focales P-L51B/C/W/BR1: `84 passed`, 1 warning.
+- Regresiones P-L43/P-L44/P-L45/P-L47/P-L48, P-L49/P-L50, UI P-L46,
+  scheduler/storage/reconciliation/postmarket/performance/digest/health/CLI:
+  `364 passed` en 90.80 s.
+- P-L45B2 historico de 33.336 filas: `1 passed` en 2.25 s.
+- Suite canonica `python -m pytest tests/ -x -q`: `1864 passed, 1 skipped,
+  1 warning` en 622.54 s. El unico skip es preexistente en
+  `test_score_study_regression_current_sqlite`, por falta del historico local
+  requerido en el `DATA_DIR` temporal; no se anadio skip/xfail.
+- Sustituto seguro de smoke: `8 passed`; smoke CLI `run-once` no ejecutado por
+  seguridad.
+- Ruff completo: `All checks passed!`; `check_no_nulls.py`: `OK (412 archivos)`;
+  `git diff --check`: OK; `validate-agent-config --json` temporal: `ok=true`,
+  sin errores ni warnings.
+
+### QA adversarial y paridad
+
+La prueba Store temporal end-to-end BUY -> SELL -> reconciliacion -> P-L48 ->
+P-L51 produjo `attributed_sell_count=1`, un lote cerrado, dos fill fragments,
+gross `100.0` y net `98.5` con costes completos. Parcialidad, multi-lote,
+recompras, ausencia de provenance sin FIFO, costes parciales con net `null`,
+conflictos, idempotencia/concurrencia y fail-open pasaron. El carrier sobrevivio
+order_plan -> broker_order local -> reconciliacion y no entro en el request del
+broker: la comparacion byte-a-byte/normalizada fue identica. El orden P-L48 ->
+P-L51 y las construcciones/persistencias unicas quedaron cubiertos.
+
+No cambiaron triggers, cantidades, precios, tipos, stops, takes, trailing,
+risk checks, candidatos, ranking, gates, sizing, planes, ordenes, exposicion,
+limites ni frecuencia de jobs. Los objetos Git de `kernel.py`, `broker.py`,
+`execution.py`, `risk.py` y `config.py` coinciden exactamente con produccion;
+`.env` no esta versionado en el candidato y el sello productivo coincide.
+No hubo correccion QA, cambio de version, SQLite productiva, servicios,
+broker/red/LLM, postmarket o reconciliacion manual, merge, despliegue o push.
+
+La suite completa, smoke real, benchmark largo y despliegue quedan registrados
+como pendientes operativos de la siguiente tarea de promocion cerrada; la
+ausencia de smoke real no se oculta y requiere conservar el control humano.
