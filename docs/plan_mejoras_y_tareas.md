@@ -10,12 +10,27 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama de integracion desplegada: `codex/mejora_continua`
-- Version actual del candidato: **0.4.188** (P-L50BR1 en ensayo; producción permanece 0.4.185)
-- Ultima actualizacion: 2026-07-20
+- Version actual del candidato: **0.4.189** (P-L51BR1 en ensayo; producción permanece 0.4.185)
+- Ultima actualizacion: 2026-07-21
 - Estado P-L50BR1: worktree combinado candidato **0.4.188**; secuencia
   P-L49B 0.4.186 -> P-L46BR3 0.4.187 -> P-L50B 0.4.188. La linea anterior
   conserva el estado historico del ensayo individual P-L49B.
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
+
+## P-L51BR1 - ensayo combinado (21-jul-2026)
+
+- Worktree candidato: `C:\Antonio\Bref\agenteBolsa_worktrees\pl49_pl46_pl50_pl51_combined_rehearsal`,
+  rama `codex/pl49-pl46-pl50-pl51-combined-rehearsal`, version `0.4.189`.
+- Merge `--no-ff` P-L51B-W: `5e3d2887aaa4f65ad67cda26885de9c09148af6d`.
+- QA focal: `991cd95d`; 219 pruebas pasaron. Ruff, NUL, diff y
+  `validate-agent-config --json` temporal pasaron.
+- Dictamen: `needs_redesign`. Los objetos persistidos reales no contienen aun
+  provenance BUY->SELL suficiente (`buy_broker_order_id`, allocations y fill
+  fragments canonicos); el contrato responde unavailable/ambiguous y net null.
+- No se toca produccion ni se ejecutan suite completa, smoke, servicios, broker,
+  red, postmarket, reconciliacion ni validacion de mercado cerrado. El siguiente
+  lote minimo debe rediseñar esa frontera y volver a demostrar captura futura
+  real antes de cualquier integracion.
 
 ### P-L49B — shadow de calidad de datos por candidato (**ENSAYO 0.4.186**)
 

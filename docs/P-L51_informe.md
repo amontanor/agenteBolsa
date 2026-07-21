@@ -250,3 +250,106 @@ Commits separados:
 La commit documental de esta sección es el tercer commit del lote. Producción,
 el ensayo combinado 0.4.188 y P-L51B-T no se modifican; no hubo merge,
 despliegue, reinicio ni push.
+
+## P-L51BR1 - ensayo combinado y frontera real de captura (21-jul-2026)
+
+### Dictamen
+
+`needs_redesign`.
+
+La QA combinada confirma que la sombra P-L51B-W es segura y fail-open, pero la
+frontera de persistencia que usa hoy el sistema no conserva suficiente identidad
+para producir una atribucion BUY->SELL exacta en futuras capturas. El flujo real
+persiste `source_plan_id` en el plan SELL, pero no persiste de forma canonica
+`buy_broker_order_id`, allocations por cantidad ni `fill_fragment_id`/fragmentos
+de fill que permitan demostrar el lote consumido. Por tanto, el contrato devuelve
+`unavailable`/`ambiguous`, `attributed_sell_count=0` y `net_realized_pl=null`.
+La API sintetica y sus fixtures prueban el contrato, pero no prueban captura futura
+real hasta corregir esa frontera. No se hace backfill ni se infiere FIFO, simbolo,
+fecha o signal aproximado.
+
+### Integracion y conflictos
+
+- Base: `7a62c881ed73039678bd8e09de1905a6ea3881df`, tree
+  `f334f2bf7bb94785b3016a114b47e69828224101`.
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl49_pl46_pl50_pl51_combined_rehearsal`.
+- Rama: `codex/pl49-pl46-pl50-pl51-combined-rehearsal`.
+- Merge `--no-ff` de P-L51B-W: `5e3d2887aaa4f65ad67cda26885de9c09148af6d`.
+- QA: `991cd95d test: verify P-L51 combined integration boundary`.
+- Version candidata: `0.4.189`.
+
+Los conflictos se produjeron en `__init__.py`, `main.py`, `storage.py` y
+`tools/operational_health.py`. Se resolvieron campo a campo: se conservaron los
+comandos y lectores P-L49, la persistencia/eventos P-L49 y P-L51, y ambos bloques
+de health. La salida humana de los comandos de ambos shadows quedo corregida en
+el commit QA. No se uso ours/theirs global.
+
+### Prueba de captura futura contra persistencia real
+
+La prueba `tests/test_p51br1_combined_integration.py` guarda planes y ordenes con
+`Store.save_order_plan`/`Store.save_broker_order`, usando la forma que producen
+`cycle_runner`/`scheduler`, y luego ejecuta los builders reales P-L48 y P-L51.
+Con un BUY `buy-real-001` y un SELL `sell-real-001`, el snapshot produce:
+
+```text
+buy_order_count=1
+sell_order_count=1
+fill_fragment_count=0
+attributed_sell_count=0
+net_realized_pl=null
+status=ambiguous|unavailable
+```
+
+El SELL conserva `source_plan_id=plan-real-buy`, pero carece de
+`trade_attribution` y `fill_fragments`. Esto demuestra el limite de productor,
+evento y consumidor, no un fallo de la API. La remediacion minima futura es
+persistir provenance estructurada y fills canonicos exactos en una frontera no
+protegida, con allocations BUY/SELL y cantidades reconciliadas, y demostrar
+paridad byte-a-byte del payload enviado al broker. Esa remediacion no forma parte
+de este ensayo.
+
+La fixture de P-L51A mantiene 18 SELL descriptivas y el total historico
+`+75,62`, pero `attributed_sell_count=0`, `closed_lot_count=0` y
+`net_realized_pl=null`; nunca se publica como beneficio neto atribuible.
+
+### Secuencias, separacion y seguridad
+
+El camino de mercado mantiene P-L49 Fase A -> ranking/aprendizaje -> P-L50/P-L44
+Fase A -> decisiones/gates/planes -> P-L49 Fase B -> P-L50/P-L44 Fase B ->
+ordenes. P-L51 no aparece en ese camino y no cambia candidatos, scores, ranks,
+recomendaciones, gates, sizing, microexperimentos, planes, cantidades, precios,
+stops, takes, ordenes, exposicion, limites ni politicas P-L43/P-L44/P-L45/P-L47.
+
+El camino PMR verificado por las pruebas es:
+
+```text
+coordination -> reconciliation(update_learning=False) -> outcome_update
+-> daily_learning -> postmarket_report -> canonical_operation_telemetry
+-> canonical_trade_attribution -> performance -> measurement_pipeline
+-> thesis -> terminal
+```
+
+P-L48 y P-L51 se construyen/persisten una vez por PMR efectivo, reutilizan el
+snapshot P-L48 y no reconstruyen broker, cartera, outcomes ni reconciliacion.
+Sus eventos permanecen independientes de los eventos P-L49/P-L50 por identidad.
+P-L46BR3 sigue siendo UI read-only con equity coherente y sin llamada adicional
+al broker.
+
+### QA y limites
+
+- `219 passed`, 1 warning deprecacion de `websockets.legacy`, 0 fallos. Incluye
+  P-L51B-T/W, P-L48, P-L49/P-L50, interaccion combinada, UI P-L46BR3 y
+  captura contra objetos persistidos reales.
+- Ruff completo: OK.
+- `scripts/check_no_nulls.py`: OK, 409 archivos.
+- `git diff --check`: OK.
+- `validate-agent-config --json` con `DATA_DIR=C:\Windows\Temp`: `ok=true`,
+  23 agentes, 6 tareas, 0 warnings.
+- Omitidos por XNYS abierto: suite completa, smoke, benchmark largo, prueba de
+  33.336 filas, servicios/jobs reales, broker, red, yfinance, LLM,
+  reconciliacion/postmarket productivos y validacion completa de mercado cerrado.
+
+No se modificaron `kernel.py`, `broker.py`, `execution.py`, `risk.py`,
+`config.py`, `.env` ni la produccion. Produccion y los candidatos originales
+permanecen fuera del worktree; no hubo SQLite productiva, despliegue, reinicio,
+detencion de servicios ni push.

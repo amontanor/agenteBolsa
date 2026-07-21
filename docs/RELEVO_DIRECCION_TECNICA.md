@@ -7,6 +7,11 @@
 > secuencia P-L49B 0.4.186 -> P-L46BR3 0.4.187 -> P-L50B 0.4.188. No es un
 > despliegue productivo.
 
+> P-L51BR1 (21-jul-2026): el worktree combinado queda en candidato **0.4.189**.
+> P-L51B-W esta integrado como shadow fail-open, pero la captura futura real
+> queda bloqueada por falta de provenance BUY->SELL y fill fragments canonicos
+> en los objetos persistidos. Dictamen: `needs_redesign`; produccion intacta.
+
 ## Objetivo
 
 Mejorar beneficio neto sin aceptar grandes caidas y construir expertos
