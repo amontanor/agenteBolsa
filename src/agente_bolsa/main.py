@@ -2398,6 +2398,33 @@ def command_canonical_trade_attribution(args: argparse.Namespace) -> None:
     print(f"denominators={report.get('denominators')}")
 
 
+def command_canonical_eod_account_snapshot(args: argparse.Namespace) -> None:
+    """Lee el snapshot contable P-L52B; nunca reconstruye ni consulta fuentes."""
+
+    settings = get_settings()
+    try:
+        from .tools.canonical_eod_account_snapshot import read_canonical_eod_account_snapshot
+
+        store = Store(settings.database_path, settings.agent_logs_dir)
+        report = read_canonical_eod_account_snapshot(store, args.session)
+        ok = report.get("status") not in {"collecting", "unavailable", "legacy_without_canonical_eod_account_snapshot"}
+    except Exception as exc:  # noqa: BLE001 - CLI de observabilidad fail-open.
+        report = {
+            "status": "collecting",
+            "session_date": args.session,
+            "coverage": None,
+            "result": None,
+            "warnings": [f"read_failed:{type(exc).__name__}"],
+        }
+        ok = False
+    if args.json:
+        _print_json({"ok": ok, **report})
+        return
+    print("CANONICAL EOD ACCOUNT SNAPSHOT")
+    print(f"session={args.session} | status={report.get('status')}")
+    print(f"coverage={report.get('coverage')}")
+
+
 def command_policy_candidates(args: argparse.Namespace) -> None:
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
@@ -3851,6 +3878,14 @@ def build_parser() -> argparse.ArgumentParser:
     canonical_trade_attribution.add_argument("--session", required=True, help="Sesión YYYY-MM-DD.")
     canonical_trade_attribution.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     canonical_trade_attribution.set_defaults(func=command_canonical_trade_attribution)
+
+    canonical_eod_account_snapshot = subparsers.add_parser(
+        "canonical-eod-account-snapshot",
+        help="Lee el snapshot contable canónico P-L52B de una sesión sin reconstruirlo.",
+    )
+    canonical_eod_account_snapshot.add_argument("--session", required=True, help="Sesión YYYY-MM-DD.")
+    canonical_eod_account_snapshot.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    canonical_eod_account_snapshot.set_defaults(func=command_canonical_eod_account_snapshot)
 
     policy_candidates = subparsers.add_parser(
         "policy-candidates",
