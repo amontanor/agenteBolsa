@@ -324,3 +324,16 @@ por lo que no se ejecutaron suite completa, smoke ni despliegue.
   verdes. Dictamen: `ready_for_p52b_implementation`.
 - Próximo lote: implementación shadow mínima, fail-open y append-only, sin
   tablas/migraciones ni consumo en trading hasta demostrar paridad.
+
+## P-L52B-W — implementación shadow EOD contable (candidato 0.4.190)
+
+- Worktree/rama: `C:\Antonio\Bref\agenteBolsa_worktrees\pl52b_eod_snapshot_impl`,
+  `codex/pl52b-eod-snapshot-impl`, base `609183e1`.
+- Secuencia PMR verificada en tests: P-L48 → P-L51 → P-L52 → performance.
+  P-L52 reutiliza los objetos ya construidos, publica el contrato
+  `p-l52b.canonical-eod-account-snapshot.v1`, conserva missing/unavailable y
+  falla abierto. No aparece en la ruta de trading ni toca archivos protegidos.
+- Commits: `57ec7b7f` feature, `eb17d582` tests, `4e868109` QA freshness.
+  Focales del lote: `31 passed`; Ruff y diff verdes.
+- Estado: `ready_for_integration_rehearsal`, no desplegado. Suite completa,
+  P-L45B2, smoke y promoción quedan pendientes con XNYS cerrado y PMR terminal.

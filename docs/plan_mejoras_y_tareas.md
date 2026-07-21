@@ -2245,3 +2245,18 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Dictamen: `ready_for_p52b_implementation`. Siguiente lote mínimo: productor
   shadow fail-open del snapshot con ledger de flujos y benchmark autorizados;
   no cambiar trading, política, UI ni producción.
+
+## P-L52B-W — implementación shadow EOD contable (candidato 0.4.190)
+
+- Worktree aislado: `C:\Antonio\Bref\agenteBolsa_worktrees\pl52b_eod_snapshot_impl`;
+  rama `codex/pl52b-eod-snapshot-impl`; base P-L52B-T `609183e1`.
+- Implementados el módulo `canonical_eod_account_snapshot`, evento
+  `canonical_eod_account_snapshot:<session_date>`, persistencia append-only,
+  lector/digest/health/CLI y stage PMR después de P-L48/P-L51 y antes de
+  performance. La ruta activa y los archivos protegidos permanecen intactos.
+- Commits: `57ec7b7f` feature, `eb17d582` tests, `4e868109` QA de freshness.
+  Las 31 pruebas del lote pasan y Ruff/diff también.
+- Dictamen: `ready_for_integration_rehearsal`. Antes de cualquier promoción
+  deben verificarse con XNYS cerrado el PMR terminal, suite completa, P-L45B2,
+  smoke aislado seguro, configuración/kernel y paridad final. No cambiar
+  thresholds, sizing, ranking, gates, stops, política ni producción.

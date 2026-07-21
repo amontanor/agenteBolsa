@@ -206,3 +206,74 @@ benchmark y un ledger de flujos exacto si dirección confirma su autoridad.
 Debe quedar fail-open, append-only, sin tabla ni migración, y demostrar paridad
 de trading antes de consumirlo en `performance_daily` o UI. No cambiar
 thresholds, sizing, ranking, gates, stops, política ni producción.
+
+## P-L52B-W — implementación shadow (candidato 0.4.190)
+
+### Dictamen
+
+`ready_for_integration_rehearsal`.
+
+La implementación productiva queda limitada a observabilidad: recibe la foto
+de cartera, el objeto P-L48 y el objeto P-L51 ya construidos por el PMR; no
+consulta broker, SPY, cartera, outcomes, reconciliación ni red. El evento
+canónico productivo es exactamente
+`canonical_eod_account_snapshot:<session_date>`. La cuenta, ventana, costes,
+flujos, benchmark y contribuciones conservan `null`/`unavailable` cuando no
+existe una fuente autorizada; no se reconstruyen por símbolo, fecha,
+`trade_history.total_pl` ni fragments.
+
+### Frontera y secuencia
+
+```text
+coordination → reconciliation → outcome_update → daily_learning
+→ postmarket_report → canonical_operation_telemetry (P-L48)
+→ canonical_trade_attribution (P-L51)
+→ canonical_eod_account_snapshot (P-L52)
+→ performance → measurement_pipeline → thesis → terminal
+```
+
+P-L52 construye y persiste una vez por PMR efectivo, reutiliza el mismo objeto
+en `performance_daily` y no aparece en `cycle_runner`, trade decision, gates,
+risk, broker, execution, kernel ni config. El lector de CLI, digest y health
+solo lee `agent_events`; `runtime_state` no es historia.
+
+Persistencia: `agent_events` append-only, transacción corta, hash determinista
+con `captured_at` fuera del hash, repetición idéntica `idempotent`, contenido
+distinto `conflict` con original intacto. No se añadieron tablas, migraciones,
+backfill ni `INSERT OR REPLACE`.
+
+### Cobertura y límites observados
+
+| Campo | Fixture completa | PMR real sin fuente adicional |
+|---|---:|---:|
+| equity/delta | exact | EOD disponible; apertura unavailable |
+| flujos y retorno neutral | exact con ledger | unavailable |
+| realized bruto/neto | exact con costes completos | unavailable si P-L51 no aporta cobertura |
+| open P/L delta | exact con ambos extremos | unavailable sin apertura |
+| exposición EOD/promedio | exact con posiciones/muestras | parcial/unavailable sin extremos intraventana |
+| contribuciones | exact con IDs de lote | unavailable sin carrier P-L51C |
+| benchmark SPY | comparable solo con ventana/timestamps/basis/calidad exactos | unavailable si no viene persistido |
+| residual | balanced/nonzero con todos los términos | unavailable |
+| freshness | edades en segundos por fuente autorizada | explícita; no actúa como gate |
+
+El caso P-L52A conserva `delta_equity=-9,87`, `delta_open_pl=-18,97`,
+`descriptive_realized_pl=+9,12`, cash `89,15%`, neto/residual null y benchmark
+degradado; no convierte el valor descriptivo en beneficio neto.
+
+### Commits y validación
+
+- `57ec7b7f` — `feat: add canonical EOD account snapshot shadow`.
+- `eb17d582` — `test: verify canonical EOD snapshot wiring`.
+- `4e868109` — `fix: include canonical EOD freshness ages`.
+- Validación focal P-L52B-W + contrato T: `31 passed`.
+- Ruff completo `src tests`: `All checks passed`; `git diff --check`: OK.
+- Se mantuvieron las 21 fixtures T y se añadieron persistencia temporal,
+  idempotencia/conflicto, concurrencia sin `database is locked`, consumidores
+  collecting, stage order, reutilización, fail-open y protección de rutas.
+- Suite completa, benchmark P-L45 de 33.336 filas, smoke y despliegue no se
+  ejecutan en este lote de implementación; quedan para XNYS cerrado y
+  preflight terminal, sin skips/xfails añadidos.
+
+No se modificó producción, SQLite productiva, servicios, broker, red, LLM,
+archivos protegidos ni candidatos originales; no hubo merge, despliegue ni
+push.
