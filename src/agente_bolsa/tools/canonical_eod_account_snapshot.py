@@ -396,6 +396,54 @@ def _portfolio_value(portfolio: Any, name: str) -> Any:
     return getattr(portfolio, name, None) if portfolio is not None else None
 
 
+def _contributions_from_trade_attribution(
+    attribution: Mapping[str, Any] | None,
+) -> list[dict[str, Any]] | None:
+    """Project only exact P-L51 allocations into the EOD contribution list.
+
+    A sell-level realized amount is attributable to one lot only when the
+    canonical operation has exactly one allocation.  For multi-lot exits the
+    exact identities are still carried, but an amount is deliberately left
+    null unless P-L51 supplied an allocation-level amount.  This prevents an
+    invented split from becoming accounting evidence.
+    """
+
+    if not isinstance(attribution, Mapping):
+        return None
+    operations = attribution.get("operations")
+    if not isinstance(operations, list):
+        return None
+    contributions: list[dict[str, Any]] = []
+    for operation in operations:
+        if not isinstance(operation, Mapping) or operation.get("status") != "attributed":
+            continue
+        allocations = operation.get("allocations")
+        if not isinstance(allocations, list) or not allocations:
+            continue
+        operation_net = _number(operation.get("net_realized_pl"))
+        single_allocation = len(allocations) == 1
+        for allocation in allocations:
+            if not isinstance(allocation, Mapping):
+                continue
+            buy_order_id = allocation.get("buy_broker_order_id")
+            lot_identity = allocation.get("lot_identity") or allocation.get("lot_id")
+            if not buy_order_id or not lot_identity:
+                continue
+            allocation_amount = _number(allocation.get("net_realized_pl"))
+            if allocation_amount is None and single_allocation:
+                allocation_amount = operation_net
+            contributions.append(
+                {
+                    "broker_order_id": buy_order_id,
+                    "lot_identity": lot_identity,
+                    "amount": allocation_amount,
+                    "currency": "USD",
+                    "origin": "canonical_trade_attribution",
+                }
+            )
+    return contributions or None
+
+
 def build_from_postmarket_inputs(
     session_date: str,
     *,
@@ -427,6 +475,7 @@ def build_from_postmarket_inputs(
     if isinstance(metrics, Mapping):
         gross = metrics.get("gross_realized_pl")
         costs = {name: metrics.get(name) for name in COST_FIELDS} if all(name in metrics for name in COST_FIELDS) else None
+    contributions = _contributions_from_trade_attribution(canonical_trade_attribution)
     as_of = report.get("as_of") if isinstance(report, Mapping) else None
     as_of = _timestamp(as_of) or capture.isoformat().replace("+00:00", "Z")
     window_start = report.get("window_start_at") if isinstance(report, Mapping) else None
@@ -451,7 +500,7 @@ def build_from_postmarket_inputs(
         costs=costs,
         external_flow_ledger=None,
         positions=None if not positions or any(item["market_value_end"] is None for item in positions) else positions,
-        contributions=None,
+        contributions=contributions,
         open_orders=[{ "broker_order_id": getattr(item, "order_id", None) } for item in (_portfolio_value(portfolio, "open_orders") or [])],
         benchmark=(report or {}).get("benchmark") if isinstance(report, Mapping) else None,
         source_timestamps={"portfolio": as_of, "canonical_operation_telemetry": (canonical_telemetry or {}).get("captured_at") if isinstance(canonical_telemetry, Mapping) else None, "canonical_trade_attribution": (canonical_trade_attribution or {}).get("captured_at") if isinstance(canonical_trade_attribution, Mapping) else None},
