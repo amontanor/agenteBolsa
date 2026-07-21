@@ -8,6 +8,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from agente_bolsa import main
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.canonical_eod_account_snapshot import (
     COST_FIELDS,
@@ -173,3 +176,17 @@ def test_collecting_reader_has_null_denominators_and_no_reconstruction(tmp_path:
     assert report["coverage"] is None
     assert digest["status"] == "collecting"
     assert digest["conflict_events"] == 0
+
+
+def test_cli_json_reads_the_persisted_event_only(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    store = _store(tmp_path)
+    snapshot = _snapshot()
+    persist_canonical_eod_account_snapshot(store, snapshot)
+    settings = type("Settings", (), {"database_path": store.database_path, "agent_logs_dir": tmp_path / "logs"})()
+    monkeypatch.setattr(main, "get_settings", lambda: settings)
+    args = type("Args", (), {"session": "2026-07-21", "json": True})()
+    main.command_canonical_eod_account_snapshot(args)
+    report = json.loads(capsys.readouterr().out)
+    assert report["ok"] is True
+    assert report["event_id"] == "canonical_eod_account_snapshot:2026-07-21"
+    assert report["content_hash"] == snapshot["content_hash"]
