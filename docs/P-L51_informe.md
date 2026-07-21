@@ -145,3 +145,108 @@ El siguiente commit de este lote es exclusivamente documental. El siguiente
 lote funcional mínimo podrá implementar el contrato en la frontera autorizada,
 manteniendo el contrato de tests como requisito previo y sin cambiar thresholds,
 tamaños, strategy policy, stops o time-stop.
+
+## P-L51B-W — implementación shadow (21-jul-2026)
+
+### Dictamen
+
+`ready_for_integration_rehearsal`.
+
+La implementación está limitada a una sombra fail-open. Consume el snapshot
+P-L48 ya construido, exige provenance estructurada y cantidades de fills
+exactas, y publica `unavailable`, `ambiguous` o `conflict` cuando no puede
+demostrar una atribución. No reconstruye lotes, no hace backfill y no usa
+`trade_memory`, señales, outcomes ni posiciones observadas como sustitutos de
+un `broker_order_id`.
+
+### Frontera lograda y límite actual
+
+Se añadió `src/agente_bolsa/tools/canonical_trade_attribution.py` con el
+schema `p-l51b.canonical-trade-attribution.v1`. La unidad de salida es
+`sell_broker_order_id`; cada allocation debe declarar BUY, lote, fill fragment,
+source plan y qty. Los fills canónicos explícitos pueden viajar como metadata
+local en el snapshot P-L48; la metadata no forma parte del payload enviado al
+broker.
+
+La frontera aún no crea automáticamente provenance histórica: las salidas que
+no contienen `trade_attribution` y `canonical_fill_fragments` explícitos quedan
+`ambiguous`/`unavailable`. La fixture del defecto P-L51A conserva los 18 SELL
+descriptivos, pero devuelve `attributed_sell_count=0`,
+`closed_lot_count=0` y `net_realized_pl=null`.
+
+### Wiring y persistencia
+
+El PMR ejecuta una única construcción y persistencia de P-L51B después de
+`canonical_operation_telemetry` y antes de `performance`. Usa el mismo objeto
+construido y no vuelve a consultar broker, reconciliación, cartera, outcomes ni
+SQLite para reconstruirlo. El orden verificado queda:
+
+```text
+coordination → reconciliation → outcome_update → daily_learning
+→ postmarket_report → canonical_operation_telemetry
+→ canonical_trade_attribution → performance → measurement_pipeline
+→ thesis → terminal
+```
+
+La persistencia reutiliza `agent_events`, sin tablas ni migraciones nuevas,
+`BEGIN IMMEDIATE` sólo durante la inserción corta y sin `INSERT OR REPLACE`.
+`captured_at` queda fuera del hash estable; mismo contenido es idempotente y
+contenido distinto crea conflicto auditable conservando el original. Un fallo
+del productor o de persistencia no bloquea el PMR ni altera performance.
+
+Los denominadores publicados por el snapshot son:
+
+```text
+buy_order_count, sell_order_count, fill_fragment_count,
+attributed_sell_count, unavailable_sell_count, ambiguous_sell_count,
+conflict_count, closed_lot_count, partially_closed_lot_count, open_lot_count
+```
+
+Gross, costes, net, riesgo, R, holding y MAE/MFE conservan cobertura explícita;
+un coste ausente no se convierte en cero y `net_realized_pl` permanece null.
+Los lectores de health, digest y CLI leen el evento persistido y no
+reconstruyen la atribución.
+
+### Validación realizada
+
+- `17 passed` en `tests/test_p51b_trade_attribution_shadow.py`.
+- `82 passed` en la batería combinada focal `tests/test_p48br1_adversarial_qa.py` y
+  `tests/test_p51b_trade_attribution_shadow.py`.
+- `109 passed` en la validación conjunta que añade los 27 tests heredados de
+  `tests/test_p51b_canonical_trade_attribution.py`.
+- Las pruebas cubren las 27 caracterizaciones heredadas de P-L51B-T, API
+  productiva, lotes parciales y multi-lote explícitos, estados pendientes,
+  costes parciales, concurrencia inserted/idempotent, conflicto separado,
+  readers sin rebuild, build/persist fail-open, orden de stages y paridad
+  byte-a-byte del payload del broker.
+- Ruff focal limpio y `git diff --check` limpio al cerrar las commits.
+- No se ejecutaron suite completa, smoke, benchmark largo, prueba histórica de
+  33.336 filas, servicios, jobs reales, broker, red, yfinance, LLM,
+  reconciliación productiva ni postmarket productivo.
+- Los gates de mercado cerrado (`validate-agent-config` aislado, suite
+  completa y smoke) quedan pendientes para la validación de integración con
+  XNYS cerrado.
+
+### Paridad, protección y Git
+
+Versión candidata `0.4.189`. No se modificaron `kernel.py`, `broker.py`,
+`execution.py`, `risk.py`, `config.py` ni `.env`. La sombra no modifica
+candidatos, scores, ranks, recomendaciones, gates, sizing, microexperimentos,
+planes, cantidades, precios, stops, takes, órdenes, exposición, límites ni
+frecuencia de jobs.
+
+Worktree:
+`C:\Antonio\Bref\agenteBolsa_worktrees\pl51b_trade_attribution_impl`.
+Rama: `codex/pl51b-trade-attribution-impl`. Base P-L51B-T exacta:
+`e4b62a1beafc59d342396cd1cb808cce15c47fed`.
+
+Commits separados:
+
+```text
+17ac189d feat: add canonical trade attribution shadow
+07925b8c test: verify canonical trade attribution wiring
+```
+
+La commit documental de esta sección es el tercer commit del lote. Producción,
+el ensayo combinado 0.4.188 y P-L51B-T no se modifican; no hubo merge,
+despliegue, reinicio ni push.
