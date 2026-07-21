@@ -276,3 +276,25 @@ por lo que no se ejecutaron suite completa, smoke ni despliegue.
   inputs disponibles y 23 unavailable. Estado `ready_for_integration_rehearsal`.
 - P-L49B conserva el slot 0.4.186 y P-L46BR3 el 0.4.187. No hubo despliegue ni
   push; la suite completa queda para mercado cerrado.
+
+## P-L51C-W - relevo del carrier BUY -> SELL (candidato 0.4.189)
+
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl51c_provenance_carrier_impl`;
+  rama `codex/pl51c-provenance-carrier-impl`; base P-L51C-T
+  `0c5f1314986d5cf8bfdbe3a691dd7706be096903`.
+- La frontera validada es metadata de `order_plan` transportada al payload
+  local de `broker_order`, conservada por reconciliacion y proyectada de forma
+  explicita por P-L48 para P-L51. No se cambia el request broker ni la ruta
+  activa.
+- End-to-end temporal: `buy-1 -> sell-1`, fills canonicos 2, allocation 1,
+  `attributed_sell_count=1`, `closed_lot_count=1`, gross 100.0 y net 98.5.
+  Costes incompletos, historicos sin carrier y provenance ambigua permanecen
+  null/unavailable; no se hace FIFO ni backfill.
+- Commits: `c86917ee feat: persist exit lot provenance carrier` y
+  `5c0077d9 test: verify end-to-end exit lot provenance`. Falta el commit
+  documental de este lote.
+- No promover ni desplegar con XNYS abierto. Siguiente gate: ejecutar Ruff,
+  `check_no_nulls.py` y `validate-agent-config --json` con DATA_DIR temporal;
+  posteriormente, con XNYS cerrado y PMR terminal, suite completa, smoke y
+  validacion de mercado cerrado. Sin cambios en archivos protegidos, produccion,
+  SQLite productiva, servicios, reinicios o push.

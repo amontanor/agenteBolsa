@@ -2208,3 +2208,17 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Cambio exclusivamente de presentacion y lectura. No altera trading,
   ranking, gates, sizing, planes, ordenes, stops, takes, exposicion, SQLite ni
   runtime state. P-L49 conserva `0.4.186`; este lote reserva `0.4.187`.
+
+## P-L51C-W - carrier futuro BUY -> SELL (candidato 0.4.189)
+
+- Implementada en worktree aislado la frontera `P-L43BR6 open lots -> order_plan
+  metadata -> broker_order local -> reconciliation -> P-L48/P-L51`.
+- El carrier `p-l51c.exit-lot-provenance.v1` usa solo IDs y cantidades exactas,
+  es append-only/idempotente/conflict-safe y fail-open; no entra en el request
+  del broker ni en autoridad de riesgo o ejecucion.
+- Evidencia Store temporal: BUY/SELL exactos, un lote cerrado, atribucion 1,
+  gross 100.0 y net 98.5 con costes completos; costes parciales dejan net
+  null; historicos sin carrier permanecen unavailable.
+- Commits separados: `c86917ee` funcional y `5c0077d9` pruebas. La
+  documentacion de este estado queda en `docs/P-L51_informe.md` y en este
+  plan; la validacion completa, suite, smoke y despliegue esperan XNYS cerrado.

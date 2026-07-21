@@ -441,3 +441,110 @@ Rama: `codex/pl51c-provenance-carrier-tests`. Base:
 No se modifico `src`, produccion, SQLite productiva, configuracion, servicios,
 locks, leases, broker, red, LLM, despliegue ni push. No se ejecuto suite completa,
 smoke, benchmark largo, reconciliacion/postmarket productivos ni merge.
+
+## P-L51C-W - implementacion del carrier futuro (21-jul-2026)
+
+### Dictamen
+
+`ready_for_closed_market_full_validation`.
+
+La frontera seleccionada por P-L51C-T queda implementada en shadow: los lotes
+BUY abiertos exactos de P-L43BR6 alimentan allocations del SELL antes de guardar
+el plan; el carrier vive en metadata local del `order_plan`, se conserva en el
+`broker_order` local y atraviesa reconciliacion hasta la proyeccion P-L48/P-L51.
+No contiene P/L futuro, outcomes, MAE/MFE ni autoridad de riesgo o ejecucion.
+Los historicos sin carrier siguen `unavailable` y no se hace backfill.
+
+### Contrato y productor
+
+El modulo `src/agente_bolsa/tools/exit_lot_provenance.py` implementa
+`p-l51c.exit-lot-provenance.v1`. Cada allocation declara
+`buy_broker_order_id`, `buy_plan_id`, `allocated_qty`,
+`available_open_qty_at_decision`, fills BUY canonicos cuando existen y las
+identidades de posicion/lote disponibles. Las allocations se ordenan
+deterministicamente y deben sumar exactamente el SELL sin superar `open_qty`.
+Una sola coincidencia exacta por `source_plan_id` puede producir la allocation
+automatica; las recompras y salidas multi-lote requieren identidad y allocations
+explicitas. No existe fallback por simbolo, fecha, ultima compra, FIFO, texto o
+signal aproximada.
+
+Si el carrier no puede construirse, se crea un carrier `unavailable` con
+`reason_codes` y hash valido sin volver a ejecutar el builder. La salida
+protectora mantiene su trigger, cantidad, precio, tipo, stops/takes/trailing y
+checks originales. La persistencia del carrier es fail-open y no oculta el
+terminal del PMR.
+
+### Transporte, persistencia y consumidores
+
+La secuencia implementada y probada es:
+
+```text
+P-L43BR6 open lots -> risk-exit order_plan metadata
+-> local broker_order payload -> reconciliation merge
+-> P-L48 canonical_operation_telemetry -> P-L51 canonical_trade_attribution
+```
+
+`Store.record_exit_lot_provenance` usa `agent_events` existente, transaccion
+corta `BEGIN IMMEDIATE`, contenido append-only y sin tablas/migraciones. Mismo
+evento y mismo contenido devuelve `idempotent`; contenido distinto conserva el
+original y crea un conflicto separado. `captured_at` queda fuera del
+`content_hash`. P-L48 conserva el carrier y solo lo proyecta a P-L51 cuando
+existen fills BUY canonicos, lote y cantidades reconciliadas; un carrier valido
+sin esos fills sigue siendo evidencia de provenance pero no atribucion P/L.
+P-L48 y P-L51 conservan construccion/persistencia unica y orden P-L48 -> P-L51.
+
+### Evidencia end-to-end
+
+Con `Store` temporal y modelos/serializadores productivos se verifico:
+
+```text
+BUY broker_order_id=buy-1, plan=buy-plan-1, fill=buy-fill-1, qty=10
+SELL broker_order_id=sell-1, carrier exacto, fill=sell-fill-1, qty=10
+P-L48: buy_order_count=1, sell_order_count=1, fill_fragment_count=2
+P-L51: attributed_sell_count=1, closed_lot_count=1, open_lot_count=0
+gross_realized_pl=100.0, net_realized_pl=98.5
+```
+
+Con costes parciales, `net_realized_pl` permanece `null`; sin carrier historico
+no se aplica FIFO y la atribucion permanece `unavailable`. La prueba de
+reconciliation confirma que el carrier sobrevive al merge del payload local.
+
+### Denominadores y paridad
+
+La API publica y mantiene separados:
+
+```text
+plans_with_carrier, plans_without_carrier, sell_orders_with_carrier,
+attributed, unavailable, ambiguous, conflict, allocation_count,
+fill_fragment_count, closed_lot_count, partially_closed_lot_count,
+open_lot_count, gross/cost/net coverage
+```
+
+El caso end-to-end anterior resulta en
+`plans_with_carrier=1`, `sell_orders_with_carrier=1`,
+`attributed=1`, `unavailable=0`, `ambiguous=0`, `conflict=0`,
+`allocation_count=1`, `fill_fragment_count=2`,
+`closed_lot_count=1`, `partially_closed_lot_count=0` y `open_lot_count=0`.
+
+La comparacion del request de broker antes/despues del carrier es identica en
+estructura normalizada. Los tests tambien verifican igualdad de trigger,
+cantidad, precio, tipo, stops/takes/trailing, risk checks, orden y exposicion;
+el carrier nunca entra en `build_market_order_request`.
+
+### Validacion, commits y limites
+
+- `tests/test_p51c_provenance_carrier_impl.py`: 18 passed.
+- Regresiones focales combinadas: 355 passed y una expectativa heredada
+  obsoleta; tras actualizar esa caracterizacion, las focales P-L51C-T/W pasan
+  36/36.
+- El commit funcional es `c86917ee`; el commit de pruebas es `5c0077d9`.
+- Version candidata conservada: `0.4.189`.
+- Pendientes por XNYS abierto: Ruff completo, `check_no_nulls.py`,
+  `validate-agent-config --json` aislado, suite completa, smoke, benchmark
+  largo, prueba de 33.336 filas, servicios/jobs reales, broker, red, LLM,
+  reconciliacion/postmarket productivos y despliegue.
+
+No se modificaron `kernel.py`, `broker.py`, `execution.py`, `risk.py`,
+`config.py` ni `.env`. Produccion, el ensayo combinado 0.4.188 y los worktrees
+de candidatos originales permanecen intactos. No hubo SQLite productiva,
+merge, reinicio, despliegue ni push.
