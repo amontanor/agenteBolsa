@@ -2260,3 +2260,22 @@ de despliegue quedan pendientes con XNYS cerrado.
   deben verificarse con XNYS cerrado el PMR terminal, suite completa, P-L45B2,
   smoke aislado seguro, configuración/kernel y paridad final. No cambiar
   thresholds, sizing, ranking, gates, stops, política ni producción.
+
+## P-L52BR1 — ensayo integrado P-L51C + P-L52B (candidato 0.4.190)
+
+- Worktree/rama: `C:\Antonio\Bref\agenteBolsa_worktrees\pl52br1_integration_rehearsal`,
+  `codex/pl52br1-integration-rehearsal`, base `76381496`.
+- Merge `--no-ff` P-L52B-W: `36bdd366`; correccion QA separada: `932c648a`.
+- Se verifico reconciliation -> P-L48 -> P-L51 -> P-L52 -> performance ->
+  measurement -> thesis -> terminal, con una sola construccion/persistencia y
+  reutilizacion del objeto P-L52.
+- La QA E2E corrigio la perdida de allocations exactas P-L51 en P-L52. El fix
+  conserva IDs de lote y deja null cualquier importe que no sea explicito;
+  multi-lote no se prorratea. No cambia trading ni request broker.
+- Resultado: `1899 passed, 1 skipped, 1 warning`; P-L45B2 33.336 incluido y
+  pasado; QA nueva 3 y volumen 100 sesiones/1000 operaciones sin locks. Ruff,
+  NUL, diff y config verdes. Smoke CLI queda `smoke_unavailable_by_safety`;
+  sustituto PMR aislado verde.
+- Dictamen: `ready_for_closed_market_deployment`, sin despliegue ni push. La
+  promocion requiere tarea operativa separada, preflight nuevo y autorizacion
+  humana; produccion/candidatos originales permanecen intactos.

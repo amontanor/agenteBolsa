@@ -337,3 +337,25 @@ por lo que no se ejecutaron suite completa, smoke ni despliegue.
   Focales del lote: `32 passed`; Ruff y diff verdes.
 - Estado: `ready_for_integration_rehearsal`, no desplegado. Suite completa,
   P-L45B2, smoke y promoción quedan pendientes con XNYS cerrado y PMR terminal.
+
+## P-L52BR1 — cierre del ensayo integrado (22-jul-2026)
+
+- Ensayo: `C:\Antonio\Bref\agenteBolsa_worktrees\pl52br1_integration_rehearsal`,
+  rama `codex/pl52br1-integration-rehearsal`, version 0.4.190.
+- Merge `36bdd366` (`--no-ff`) de P-L52B-W; correccion QA `932c648a`.
+- Secuencia final: reconciliation -> P-L48 -> P-L51 -> P-L52 -> performance ->
+  measurement -> thesis -> terminal. Los tres eventos son append-only,
+  idempotentes/conflict-safe y fail-open; el mismo objeto P-L52 llega a
+  performance.
+- Evidencia E2E real temporal: BUY/SELL carrier exacto, reconciliacion,
+  `attributed_sell_count=1`, neto 98.5 y contribution exacta por lote. Las
+  salidas multi-lote sin importe por allocation quedan con importe null.
+- QA: `1899 passed, 1 skipped, 1 warning`; P-L45B2 33.336 filas pasado,
+  volumen 100 sesiones/1000 operaciones sin locks, Ruff/NUL/diff/config verdes.
+  Smoke CLI real: `smoke_unavailable_by_safety`; sustituto aislado verde.
+- Produccion 0.4.185 y candidatos P-L51C/P-L52B-W intactos. Kernel productivo
+  sellado; archivos protegidos iguales a base/produccion. No hubo SQLite
+  productiva, despliegue, reinicio, servicios ni push.
+- Dictamen: `ready_for_closed_market_deployment`. Siguiente paso: preflight
+  operativo independiente y autorizacion humana; no promover automaticamente
+  desde este ensayo.

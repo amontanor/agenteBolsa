@@ -277,3 +277,90 @@ degradado; no convierte el valor descriptivo en beneficio neto.
 No se modificó producción, SQLite productiva, servicios, broker, red, LLM,
 archivos protegidos ni candidatos originales; no hubo merge, despliegue ni
 push.
+
+## P-L52BR1 — ensayo integrado P-L51C + P-L52B (22-jul-2026)
+
+### Dictamen
+
+`ready_for_closed_market_deployment`.
+
+El ensayo aislado parte de P-L51C validado y fusiona P-L52B-W con `merge
+--no-ff`. La suite cerrada y la QA integrada pasan; no se autoriza ni se
+realiza despliegue en este lote.
+
+### Referencias y secuencia
+
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl52br1_integration_rehearsal`.
+- Rama: `codex/pl52br1-integration-rehearsal`.
+- Base: P-L51C `7638149610060153dfe8a8edf2037ad9dab028a3`, tree
+  `85791739016915c1985d347583e747c1663ab797`, version 0.4.189.
+- Merge P-L52B-W: `36bdd366`, desde `cd5caba0bac649237ae5b5679fb0174e30f2b974`.
+- Correccion QA separada: `932c648a`, `fix: preserve exact P-L51 contributions in P-L52`.
+- Version final del ensayo: 0.4.190.
+
+No hubo conflictos de merge. La revisión campo a campo confirmó la secuencia:
+
+```text
+reconciliation -> postmarket_report/outcome_update/daily_learning
+-> canonical_operation_telemetry (P-L48)
+-> canonical_trade_attribution (P-L51)
+-> canonical_eod_account_snapshot (P-L52)
+-> performance -> measurement_pipeline -> thesis -> terminal
+```
+
+P-L48, P-L51 y P-L52 construyen y persisten una vez por PMR efectivo. El mismo
+objeto P-L52 se entrega a `performance_daily`; los lectores no reconstruyen,
+no consultan broker/cartera/SPY/outcomes adicionales y no usan `runtime_state`
+como historia.
+
+### Defecto reproducible y correccion
+
+La QA E2E reprodujo que el flujo real BUY -> SELL -> reconciliacion -> P-L48 ->
+P-L51 alcanzaba `attributed_sell_count=1` y `net_realized_pl=98.5`, pero P-L52
+descartaba las allocations y publicaba `contribution_coverage=unavailable`.
+El fix proyecta solo allocations P-L51 exactas por `buy_broker_order_id` y
+`lot_identity`. Una salida de un solo lote puede transportar su neto explicito;
+una salida multi-lote conserva IDs pero deja importes `null` si no existe
+importe por allocation. Costes parciales mantienen neto y residual `null`; no
+hay prorrateo, FIFO, backfill ni inferencia por simbolo/fecha.
+
+### QA, volumen y gates
+
+- QA nueva P-L52BR1: `3 passed`; volumen: 100 sesiones y 1.000 operaciones,
+  100 eventos, maximo 6.775 bytes por evento, pico tracemalloc 219.600 bytes,
+  WAL temporal 0 bytes al medir y cero `database is locked`.
+- Regresion afectada (P-L52/P-L51/P-L48 y ensayo): `57 passed`.
+- Suite completa `tests/ -x -vv --tb=short`: `1899 passed, 1 skipped, 1
+  warning` en 570.29 s. La prueba P-L45B2 de 33.336 filas paso dentro de la
+  suite (`test_current_sequential_baseline_records_one_connection_and_commit_per_row[33336]`).
+- El unico skip es preexistente: `tests/test_pre_earnings.py` por ausencia de
+  historial SQLite local; no se anadieron skips ni xfails.
+- Ruff completo: `All checks passed!`.
+- `scripts/check_no_nulls.py`: `OK (417 archivos)`.
+- `git diff --check`: OK.
+- `validate-agent-config --json` temporal: `ok=true`, sin errores ni warnings.
+- Smoke CLI `run-once` no se ejecuta: `smoke_unavailable_by_safety`. El
+  sustituto aislado PMR con DATA_DIR temporal, Store temporal, broker
+  monkeypatched y sin red/LLM paso en los focales de wiring.
+
+La QA confirma carrier BUY -> SELL exacto, parcial/multi-lote sin prorrateo,
+recompras separadas, costes completos/parciales, idempotencia/conflicto,
+fail-open independiente, lectores sin reconstruccion, request broker byte a
+byte identico, P-L46BR3 coherente y paridad de candidatos, ranking, gates,
+sizing, planes, ordenes, stops/takes/trailing, exposicion y limites.
+
+### Seguridad y estado externo
+
+Los hashes Git de `kernel.py`, `broker.py`, `execution.py`, `risk.py` y
+`config.py` son iguales a la base y produccion. Produccion permanece en
+`24537e813ff0905696cda0b3925a212045ee7b09`, tree
+`4747f27f3d5dc152410203bf089baee500440897`, version 0.4.185, con solo la
+suciedad conocida. P-L51C permanece en `7638149610060153dfe8a8edf2037ad9dab028a3`
+y P-L52B-W en `cd5caba0bac649237ae5b5679fb0174e30f2b974`; ambos worktrees no se
+modificaron.
+
+XNYS estaba cerrado, el PMR 21-jul estaba terminalizado y el lease vacio,
+paper activo, live/auto-apply desactivados y kernel productivo sellado. No se
+accedio a SQLite productiva, no hubo jobs manuales, broker, red, LLM,
+reinicios, despliegue ni push. La promocion/despliegue queda para una tarea
+operativa separada y autorizada.
