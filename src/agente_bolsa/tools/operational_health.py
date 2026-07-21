@@ -1213,6 +1213,16 @@ def build_operational_health_report(
             "coverage": None,
             "metrics": None,
         }
+    try:
+        from .canonical_eod_account_snapshot import canonical_eod_account_snapshot_digest
+
+        report_health["canonical_eod_account_snapshot"] = canonical_eod_account_snapshot_digest(store)
+    except Exception:  # noqa: BLE001 - accounting shadow is observability only.
+        report_health["canonical_eod_account_snapshot"] = {
+            "status": "degraded_observability",
+            "coverage": None,
+            "result": None,
+        }
     if adaptive_governance["status"] == "critical":
         report_alerts.append(
             {

@@ -49,6 +49,12 @@ def collect_autonomy_state(store: Store, settings: Settings) -> dict[str, Any]:
         attribution = canonical_trade_attribution_digest(store)
     except Exception:  # noqa: BLE001 - attribution is observability only.
         attribution = {"status": "degraded_observability", "denominators": None}
+    try:
+        from .canonical_eod_account_snapshot import canonical_eod_account_snapshot_digest
+
+        eod_snapshot = canonical_eod_account_snapshot_digest(store)
+    except Exception:  # noqa: BLE001 - EOD accounting is observability only.
+        eod_snapshot = {"status": "degraded_observability", "coverage": None, "result": None}
     return {
         "autonomy_level": level,
         "applied": sum(1 for c in applied if c.get("status") == "APPLIED"),
@@ -66,6 +72,7 @@ def collect_autonomy_state(store: Store, settings: Settings) -> dict[str, Any]:
         "llm_cost_today_usd": _safe(lambda: _llm_cost_today(settings), 0.0),
         "pnl_pct_today": latest_perf.get("pnl_pct"),
         "canonical_trade_attribution": attribution,
+        "canonical_eod_account_snapshot": eod_snapshot,
         "lab_enabled": _safe(lambda: store.get_runtime_value(LAB_ENABLED_KEY), None),
         # Flujo del laboratorio (Etapa 7): WIP, edades y throughput. Si
         # oldest_open_days crece sin parar, el lab acumula en vez de terminar.

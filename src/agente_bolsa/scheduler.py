@@ -40,6 +40,11 @@ from .tools.autonomous_research import build_autonomous_research_report
 from .tools.breakout_scanner import build_breakout_scan, merge_breakout_universe
 from .tools.broker import BrokerClientFactory
 from .tools.broker_reconciliation import reconcile_broker_orders
+from .tools.canonical_eod_account_snapshot import (
+    build_from_postmarket_inputs,
+    persist_canonical_eod_account_snapshot,
+    unavailable_canonical_eod_account_snapshot,
+)
 from .tools.canonical_operation_telemetry import (
     build_canonical_operation_telemetry,
     persist_canonical_operation_telemetry,
@@ -2721,6 +2726,7 @@ def _persist_daily_performance(
     run_id: str,
     portfolio: Any = _PORTFOLIO_UNSET,
     canonical_telemetry: dict[str, Any] | None = None,
+    canonical_eod_snapshot: dict[str, Any] | None = None,
 ) -> None:
     """Calcula y persiste la fila de ``performance_daily`` de la sesion (T0.2).
 
@@ -2741,6 +2747,7 @@ def _persist_daily_performance(
             session_date,
             portfolio=portfolio,
             canonical_telemetry=canonical_telemetry,
+            canonical_eod_snapshot=canonical_eod_snapshot,
         )
         # Mantener los benchmarks/regimen legacy en el payload completo sin
         # volver a consultar mercado ni alterar el contrato nuevo.
@@ -3209,6 +3216,43 @@ def post_market_review_job(
             report["canonical_trade_attribution"] = canonical_trade_attribution
             report["canonical_trade_attribution_persistence"] = attribution_persistence
         coordinator.stage(lease, current_stage, "completed")
+        current_stage = "canonical_eod_account_snapshot"
+        coordinator.stage(lease, current_stage, "started")
+        eod_persistence: dict[str, Any] | None = None
+        try:
+            canonical_eod_snapshot = build_from_postmarket_inputs(
+                session_date,
+                portfolio=portfolio,
+                canonical_telemetry=canonical_telemetry,
+                canonical_trade_attribution=canonical_trade_attribution,
+                report=report,
+            )
+        except Exception as exc:  # noqa: BLE001 - accounting shadow is fail-open.
+            canonical_eod_snapshot = unavailable_canonical_eod_account_snapshot(
+                session_date,
+                warning=f"producer_failed:{type(exc).__name__}",
+            )
+            log_system_event(
+                settings.logs_dir,
+                "canonical_eod_account_snapshot_build_failed",
+                {"error": repr(exc), "session_date": session_date},
+            )
+        try:
+            eod_persistence = persist_canonical_eod_account_snapshot(store, canonical_eod_snapshot)
+            canonical_eod_snapshot["persistence"] = eod_persistence
+        except Exception as exc:  # noqa: BLE001 - accounting shadow is fail-open.
+            canonical_eod_snapshot.setdefault("warnings", []).append(
+                f"persistence_failed:{type(exc).__name__}"
+            )
+            log_system_event(
+                settings.logs_dir,
+                "canonical_eod_account_snapshot_persistence_failed",
+                {"error": repr(exc), "session_date": session_date},
+            )
+        if isinstance(report, dict):
+            report["canonical_eod_account_snapshot"] = canonical_eod_snapshot
+            report["canonical_eod_account_snapshot_persistence"] = eod_persistence
+        coordinator.stage(lease, current_stage, "completed")
         # La foto de cartera y performance_daily deben existir antes del
         # digest final de medición; el productor es fail-open y no altera el
         # resultado principal si la observabilidad no está disponible.
@@ -3222,6 +3266,7 @@ def post_market_review_job(
             run_id,
             portfolio=portfolio,
             canonical_telemetry=canonical_telemetry,
+            canonical_eod_snapshot=canonical_eod_snapshot,
         )
         coordinator.stage(lease, current_stage, "completed")
         current_stage = "measurement_pipeline"

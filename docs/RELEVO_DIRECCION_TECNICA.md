@@ -310,3 +310,30 @@ por lo que no se ejecutaron suite completa, smoke ni despliegue.
 - Dictamen: `ready_for_closed_market_deployment`, sin despliegue. La siguiente
   tarea decide/promueve separadamente y conserva el control humano; no tocar
   produccion, SQLite productiva, servicios, archivos protegidos ni hacer push.
+## P-L52B-T — snapshot EOD contable y benchmark comparable (21-jul-2026)
+
+- Se caracterizó en worktree aislado el contrato
+  `p-l52b.canonical-eod-account-snapshot.v1`, sin cambios en `src` ni en
+  producción. La ecuación probada es `delta_equity = flows + net_realized_pl
+  + delta_open_pl + residual`.
+- El contrato exige ledger exacto de flujos, costes completos para neto,
+  posiciones/lot IDs exactos y SPY con misma ventana, timestamps, `price_basis`
+  y calidad. P-L52A queda reproducible como pérdida absoluta verificada, cash
+  opportunity descriptiva y residual/atribución unavailable.
+- Resultado: `21 passed` P-L52B-T, `248 passed` focales, Ruff/NUL/diff/config
+  verdes. Dictamen: `ready_for_p52b_implementation`.
+- Próximo lote: implementación shadow mínima, fail-open y append-only, sin
+  tablas/migraciones ni consumo en trading hasta demostrar paridad.
+
+## P-L52B-W — implementación shadow EOD contable (candidato 0.4.190)
+
+- Worktree/rama: `C:\Antonio\Bref\agenteBolsa_worktrees\pl52b_eod_snapshot_impl`,
+  `codex/pl52b-eod-snapshot-impl`, base `609183e1`.
+- Secuencia PMR verificada en tests: P-L48 → P-L51 → P-L52 → performance.
+  P-L52 reutiliza los objetos ya construidos, publica el contrato
+  `p-l52b.canonical-eod-account-snapshot.v1`, conserva missing/unavailable y
+  falla abierto. No aparece en la ruta de trading ni toca archivos protegidos.
+- Commits: `57ec7b7f` feature, `eb17d582` tests, `4e868109` QA freshness.
+  Focales del lote: `32 passed`; Ruff y diff verdes.
+- Estado: `ready_for_integration_rehearsal`, no desplegado. Suite completa,
+  P-L45B2, smoke y promoción quedan pendientes con XNYS cerrado y PMR terminal.
