@@ -2353,6 +2353,30 @@ def command_data_quality_decision_shadow_report(args: argparse.Namespace) -> Non
             "denominators": None,
             "details_included": None,
             "details_omitted": None,
+
+
+def command_canonical_trade_attribution(args: argparse.Namespace) -> None:
+    """Read one persisted P-L51B snapshot; never reconstructs attribution."""
+
+    settings = get_settings()
+    try:
+        from .tools.canonical_trade_attribution import read_canonical_trade_attribution
+
+        store = Store(settings.database_path, settings.agent_logs_dir)
+        report = read_canonical_trade_attribution(store, args.session)
+        ok = report.get("status") not in {
+            "unavailable",
+            "collecting",
+            "legacy_without_canonical_trade_attribution",
+        }
+    except Exception as exc:  # noqa: BLE001 - read-only CLI remains informative.
+        report = {
+            "status": "collecting",
+            "session_date": args.session,
+            "denominators": None,
+            "coverage": None,
+            "metrics": None,
+            "operations": [],
             "warnings": [f"read_failed:{type(exc).__name__}"],
         }
         ok = False
@@ -2363,6 +2387,11 @@ def command_data_quality_decision_shadow_report(args: argparse.Namespace) -> Non
     print(f"status={report.get('status')} | cycle_id={report.get('cycle_id')}")
     print(f"denominators={report.get('denominators')}")
     print(f"details={report.get('details_included')} included / {report.get('details_omitted')} omitted")
+
+
+    print("CANONICAL TRADE ATTRIBUTION")
+    print(f"session={args.session} | status={report.get('status')}")
+    print(f"denominators={report.get('denominators')}")
 
 
 def command_policy_candidates(args: argparse.Namespace) -> None:
@@ -3811,6 +3840,13 @@ def build_parser() -> argparse.ArgumentParser:
     data_quality_shadow.add_argument("--cycle-id", help="Ciclo exacto a consultar.")
     data_quality_shadow.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     data_quality_shadow.set_defaults(func=command_data_quality_decision_shadow_report)
+    canonical_trade_attribution = subparsers.add_parser(
+        "canonical-trade-attribution",
+        help="Lee el snapshot canónico P-L51B de una sesión sin reconstruir lotes.",
+    )
+    canonical_trade_attribution.add_argument("--session", required=True, help="Sesión YYYY-MM-DD.")
+    canonical_trade_attribution.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    canonical_trade_attribution.set_defaults(func=command_canonical_trade_attribution)
 
     policy_candidates = subparsers.add_parser(
         "policy-candidates",

@@ -1202,6 +1202,17 @@ def build_operational_health_report(
             "denominators": None,
             "warnings": ["read_failed"],
         }
+    try:
+        from .canonical_trade_attribution import canonical_trade_attribution_digest
+
+        report_health["canonical_trade_attribution"] = canonical_trade_attribution_digest(store)
+    except Exception:  # noqa: BLE001 - attribution is observability only.
+        report_health["canonical_trade_attribution"] = {
+            "status": "degraded_observability",
+            "denominators": None,
+            "coverage": None,
+            "metrics": None,
+        }
     if adaptive_governance["status"] == "critical":
         report_alerts.append(
             {
