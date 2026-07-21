@@ -334,6 +334,6 @@ por lo que no se ejecutaron suite completa, smoke ni despliegue.
   `p-l52b.canonical-eod-account-snapshot.v1`, conserva missing/unavailable y
   falla abierto. No aparece en la ruta de trading ni toca archivos protegidos.
 - Commits: `57ec7b7f` feature, `eb17d582` tests, `4e868109` QA freshness.
-  Focales del lote: `31 passed`; Ruff y diff verdes.
+  Focales del lote: `32 passed`; Ruff y diff verdes.
 - Estado: `ready_for_integration_rehearsal`, no desplegado. Suite completa,
   P-L45B2, smoke y promoción quedan pendientes con XNYS cerrado y PMR terminal.

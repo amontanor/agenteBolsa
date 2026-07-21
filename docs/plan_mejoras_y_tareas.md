@@ -2255,7 +2255,7 @@ de despliegue quedan pendientes con XNYS cerrado.
   lector/digest/health/CLI y stage PMR después de P-L48/P-L51 y antes de
   performance. La ruta activa y los archivos protegidos permanecen intactos.
 - Commits: `57ec7b7f` feature, `eb17d582` tests, `4e868109` QA de freshness.
-  Las 31 pruebas del lote pasan y Ruff/diff también.
+  Las 32 pruebas del lote pasan y Ruff/diff también.
 - Dictamen: `ready_for_integration_rehearsal`. Antes de cualquier promoción
   deben verificarse con XNYS cerrado el PMR terminal, suite completa, P-L45B2,
   smoke aislado seguro, configuración/kernel y paridad final. No cambiar

@@ -265,7 +265,7 @@ degradado; no convierte el valor descriptivo en beneficio neto.
 - `57ec7b7f` — `feat: add canonical EOD account snapshot shadow`.
 - `eb17d582` — `test: verify canonical EOD snapshot wiring`.
 - `4e868109` — `fix: include canonical EOD freshness ages`.
-- Validación focal P-L52B-W + contrato T: `31 passed`.
+- Validación focal P-L52B-W + contrato T: `32 passed`.
 - Ruff completo `src tests`: `All checks passed`; `git diff --check`: OK.
 - Se mantuvieron las 21 fixtures T y se añadieron persistencia temporal,
   idempotencia/conflicto, concurrencia sin `database is locked`, consumidores
