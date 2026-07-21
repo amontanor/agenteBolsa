@@ -353,3 +353,91 @@ No se modificaron `kernel.py`, `broker.py`, `execution.py`, `risk.py`,
 `config.py`, `.env` ni la produccion. Produccion y los candidatos originales
 permanecen fuera del worktree; no hubo SQLite productiva, despliegue, reinicio,
 detencion de servicios ni push.
+
+## P-L51C-T - caracterizacion del carrier de provenance BUY -> SELL (21-jul-2026)
+
+### Dictamen
+
+`ready_for_p51c_implementation`.
+
+La frontera minima viable queda identificada sin tocar archivos protegidos ni el
+request al broker: construir el carrier en la decision de salida a partir de los
+lotes exactos de P-L43BR6, guardarlo como metadata del `order_plan` y transportarlo
+sin cambios dentro del payload local de `broker_order`. La reconciliacion conserva
+ese payload. La perdida actual ocurre despues, cuando P-L48 proyecta la orden a su
+operacion canonica y solo copia metadata explicita `trade_attribution` y
+`canonical_fill_fragments`; no copia un carrier arbitrario. P-L51 recibe por ello
+`unavailable` hasta que un lote posterior implemente esa proyeccion acotada.
+
+### Carrier probado
+
+Schema de test: `p-l51c.exit-lot-provenance.v1`. Incluye `schema_version`,
+`sell_plan_id`, `source_plan_id`, allocations ordenadas con
+`buy_broker_order_id`, `buy_plan_id`, `allocated_qty`,
+`available_open_qty_at_decision` y fills BUY canonicos con sus cantidades cuando
+existen; tambien incluye identidades canonicas opcionales, `provenance_quality`,
+`reason_codes`, `captured_at` y `content_hash`. `captured_at` queda fuera del hash.
+
+Las allocations suman exactamente el SELL, no exceden `open_qty`, no usan
+simbolo/fecha/FIFO/texto y mantienen recompras, parcialidades y multi-lote
+separados. En multi-lote `source_plan_id` de nivel superior es `null` cuando no
+existe un unico plan fuente; cada `buy_plan_id` exacto permanece en su allocation.
+Pending, rejected, cancelled, ausencia de BUY o fills sin autoridad quedan
+`unavailable`; duplicados, exceso de cantidad y contenido distinto quedan
+`conflict`. Repeticion identica es `idempotent` y nunca se sobreescribe el original.
+El carrier no contiene P/L, outcomes, MAE/MFE ni datos postdecision.
+
+### Traza productor -> transporte -> consumidor
+
+1. `Store.executed_open_buy_lots_by_symbol` y P-L43BR6 aportan
+   `broker_order_id`, `order_plan_id`, `source_plan_id`, `filled_qty` y
+   `open_qty` con autoridad `exact_source_plan_sell_reconciliation`; no aportan
+   un fill fragment canonico.
+2. `_risk_exit_plan` crea el SELL con trigger, qty y `source_plan_id`, pero no
+   allocations BUY.
+3. `save_order_plan` conserva metadata local en el payload del plan y
+   `save_broker_order` la conserva dentro del payload del orden local.
+4. `execution_quality_snapshot` se conserva como contrato separado; no es el
+   carrier de lotes.
+5. La reconciliacion agrega `broker_order_reconciled` mediante merge y conserva
+   la metadata del plan/orden local.
+6. La prueba con Store temporal y reconciliacion fake confirma que el carrier
+   sobrevive hasta esa frontera, pero `build_canonical_operation_telemetry`
+   descarta `exit_lot_provenance` al proyectar la operacion; el builder P-L51
+   resultante mantiene `attributed_sell_count=0` y `net_realized_pl=null`.
+
+### Matriz de fronteras
+
+| Frontera | Identidad | Momento | Sobrevive reconciliacion | Cambia request broker | Protegida | Riesgo | Dictamen |
+|---|---|---|---|---|---|---|---|
+| Metadata de `order_plan` | exacta | decision | si | no | no | requiere proyeccion P-L48 | almacenamiento minimo |
+| Payload local de `broker_order` | exacta | decision | si | no | no | requiere proyeccion P-L48 | seleccionada |
+| `execution_quality_snapshot` | parcial | mixto | si | no | no | contrato semantico incorrecto | no viable |
+| Sidecar `agent_event` | exacta | decision | si | no | no | P-L51 actual no lo consume | no minimo |
+
+La frontera seleccionada es, por tanto, `order_plan` metadata -> payload local de
+`broker_order`; el siguiente lote debe proyectar exclusivamente ese carrier a
+P-L48/P-L51 sin reconstruir ni consultar broker, cartera u outcomes.
+
+### Fixtures, paridad y validacion
+
+- 18 pruebas nuevas P-L51C-T: stop_loss y time_stop con el mismo contrato,
+  partial fills, recompras, multi-lote explicito, ausencia de allocation,
+  source plan sin BUY, exceso/duplicado, pending/rejected/cancelled,
+  idempotencia/conflicto, persistencia real en Store temporal y perdida exacta
+  en la proyeccion P-L48.
+- Focales P-L43BR6/P-L43BR5, execution quality, reconciliation, P-L48 y P-L51:
+  `217 passed`, 1 warning de `websockets.legacy`, 0 fallos.
+- Ruff completo: OK; `check_no_nulls.py`: OK, 410 archivos; `git diff --check`:
+  OK; `validate-agent-config --json` temporal: `ok=true`.
+- Paridad byte-a-byte confirmada para el request de broker; sin cambios en
+  trigger, qty, precio, tipo, stops, takes, risk checks, plan operativo,
+  ordenes, exposicion o limites.
+
+Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl51c_provenance_carrier_tests`.
+Rama: `codex/pl51c-provenance-carrier-tests`. Base:
+`adf9a5c4cdbd2a66f709c138a778ed302d98900b`. Commit de tests:
+`9b12b07e test: characterize BUY SELL provenance carrier`.
+No se modifico `src`, produccion, SQLite productiva, configuracion, servicios,
+locks, leases, broker, red, LLM, despliegue ni push. No se ejecuto suite completa,
+smoke, benchmark largo, reconciliacion/postmarket productivos ni merge.

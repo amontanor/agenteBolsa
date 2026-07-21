@@ -17,6 +17,18 @@
   conserva el estado historico del ensayo individual P-L49B.
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
+## P-L51C-T - carrier de provenance BUY -> SELL (21-jul-2026)
+
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl51c_provenance_carrier_tests`,
+  rama `codex/pl51c-provenance-carrier-tests`, base `adf9a5c4`.
+- Se caracteriza como frontera minima viable el metadata del `order_plan`
+  transportado al payload local de `broker_order`; no cambia el request al
+  broker y sobrevive la reconciliacion.
+- La proyeccion actual P-L48 pierde el carrier arbitrario. Dictamen:
+  `ready_for_p51c_implementation`; falta implementar solo esa proyeccion
+  acotada y volver a demostrar captura futura real.
+- Commit de tests: `9b12b07e`; no hay bump de version ni cambios en `src`.
+
 ## P-L51BR1 - ensayo combinado (21-jul-2026)
 
 - Worktree candidato: `C:\Antonio\Bref\agenteBolsa_worktrees\pl49_pl46_pl50_pl51_combined_rehearsal`,

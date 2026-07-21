@@ -12,6 +12,13 @@
 > queda bloqueada por falta de provenance BUY->SELL y fill fragments canonicos
 > en los objetos persistidos. Dictamen: `needs_redesign`; produccion intacta.
 
+> P-L51C-T (21-jul-2026): el carrier minimo ya esta caracterizado en tests.
+> La frontera seleccionada es metadata del `order_plan` transportada al payload
+> local de `broker_order`; sobrevive reconciliacion y no cambia el request del
+> broker. P-L48 aun lo descarta al proyectar operaciones. Siguiente lote:
+> implementar esa proyeccion acotada sin tocar kernel/broker/execution/risk/config.
+> Dictamen: `ready_for_p51c_implementation`.
+
 ## Objetivo
 
 Mejorar beneficio neto sin aceptar grandes caidas y construir expertos
