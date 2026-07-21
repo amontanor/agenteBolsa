@@ -259,6 +259,17 @@ def build_canonical_eod_account_snapshot(
     for key, value in sources.items():
         if value is None:
             reasons.add(f"source_timestamp_invalid:{key}")
+    age_seconds: dict[str, float | None] = {}
+    as_of_dt = datetime.fromisoformat(as_of_normalized.replace("Z", "+00:00")) if as_of_normalized else None
+    for key, value in sources.items():
+        if value is None or as_of_dt is None:
+            age_seconds[key] = None
+            continue
+        source_dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        age = (as_of_dt - source_dt).total_seconds()
+        if age < 0:
+            reasons.add(f"source_timestamp_after_as_of:{key}")
+        age_seconds[key] = round(age, 3)
     nums = {name: _number(value) for name, value in (("equity_start", equity_start), ("equity_end", equity_end), ("cash_start", cash_start), ("cash_end", cash_end), ("open_pl_start", open_pl_start), ("open_pl_end", open_pl_end))}
     for name, raw in (("equity_start", equity_start), ("equity_end", equity_end), ("cash_start", cash_start), ("cash_end", cash_end), ("open_pl_start", open_pl_start), ("open_pl_end", open_pl_end)):
         if raw is not None and nums[name] is None:
@@ -328,6 +339,11 @@ def build_canonical_eod_account_snapshot(
         "generated_at": generated,
         "as_of": as_of_normalized,
         "source_timestamps": sources,
+        "freshness": {
+            "status": "exact" if sources and all(value is not None for value in age_seconds.values()) and not any(reason.startswith("source_timestamp_after_as_of:") for reason in reasons) else "unavailable" if not sources else "partial",
+            "age_seconds": age_seconds,
+            "as_of": as_of_normalized,
+        },
         "captured_at": captured,
         "equity_start": nums["equity_start"],
         "equity_end": nums["equity_end"],
