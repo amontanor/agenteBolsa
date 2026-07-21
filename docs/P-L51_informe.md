@@ -616,6 +616,7 @@ limites ni frecuencia de jobs. Los objetos Git de `kernel.py`, `broker.py`,
 No hubo correccion QA, cambio de version, SQLite productiva, servicios,
 broker/red/LLM, postmarket o reconciliacion manual, merge, despliegue o push.
 
-La suite completa, smoke real, benchmark largo y despliegue quedan registrados
-como pendientes operativos de la siguiente tarea de promocion cerrada; la
-ausencia de smoke real no se oculta y requiere conservar el control humano.
+El smoke real y el despliegue quedan registrados como pendientes operativos de
+la siguiente tarea de promocion cerrada. La suite completa y P-L45B2 ya estan
+validados en este lote; la ausencia de smoke real no se oculta y requiere
+conservar el control humano.
