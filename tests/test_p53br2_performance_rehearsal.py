@@ -16,16 +16,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from test_p53b_selection_ledger_shadow import (
+    _candidate as p53_candidate,
+)
+from test_p53b_selection_ledger_shadow import (
+    _plan_record,
+    _recommendation,
+)
+
 import agente_bolsa.tools.canonical_selection_ledger as selection_ledger
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.canonical_selection_ledger import (
     build_canonical_selection_ledger,
     persist_canonical_selection_ledger,
-)
-from test_p53b_selection_ledger_shadow import (
-    _candidate as p53_candidate,
-    _plan_record,
-    _recommendation,
 )
 
 CAPTURED_AT = datetime(2026, 7, 22, tzinfo=timezone.utc)
