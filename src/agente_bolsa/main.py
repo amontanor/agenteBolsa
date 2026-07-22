@@ -2440,6 +2440,21 @@ def command_comparable_control_quality(args: argparse.Namespace) -> None:
     print(json.dumps(report, indent=2, ensure_ascii=True, default=str))
 
 
+def command_canonical_selection_ledger(args: argparse.Namespace) -> None:
+    """Read the canonical P-L53B selection ledger without reconstruction."""
+
+    from .tools.canonical_selection_ledger import canonical_selection_ledger_digest
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    report = canonical_selection_ledger_digest(store, cycle_id=args.cycle_id)
+    if args.json:
+        _print_json({"ok": report.get("status") in {"verified", "partial"}, **report})
+        return
+    print(json.dumps(report, indent=2, ensure_ascii=True, default=str))
+
+
 def command_gate_effectiveness_quality(args: argparse.Namespace) -> None:
     """Read-only P-L32B gate-path coverage diagnostic."""
 
@@ -3841,6 +3856,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     comparable_controls.add_argument("--json", action="store_true", help="Devuelve el diagnostico en JSON.")
     comparable_controls.set_defaults(func=command_comparable_control_quality)
+
+    selection_ledger = subparsers.add_parser(
+        "canonical-selection-ledger",
+        help="Lee el ledger shadow canónico de selección por ciclo (P-L53B).",
+    )
+    selection_ledger.add_argument("--cycle-id", help="Filtra por cycle_id exacto.")
+    selection_ledger.add_argument("--json", action="store_true", help="Devuelve el ledger en JSON.")
+    selection_ledger.set_defaults(func=command_canonical_selection_ledger)
 
     gate_effectiveness = subparsers.add_parser(
         "gate-effectiveness-quality",
