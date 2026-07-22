@@ -23,8 +23,9 @@ shadow, pero no debe cambiar la política de selección.
   `tests/test_version_policy.py` al añadir el test; es un candidato de
   caracterización, no una versión desplegada ni una reserva funcional de
   producción.
-- Solo se modifican tests y este informe. No se toca `src/`, producción,
-  configuración ni SQLite operativa.
+- Solo se modifican tests, este informe y el marcador de versión
+  `src/agente_bolsa/__init__.py`, obligado por `test_version_policy`; no se toca
+  código productivo, configuración ni SQLite operativa.
 
 ## Contrato caracterizado
 
@@ -140,8 +141,9 @@ lote.
 
 Los tests comprueban que el helper no muta candidatos ni altera scores, ranks,
 gates, sizing, planes, cantidades, precios, stops, takes, órdenes, exposición o
-límites. No hay referencias nuevas en `src/agente_bolsa/`, `kernel.py`,
-`broker.py`, `execution.py`, `risk.py`, `config.py` ni `.env`.
+límites. No hay código funcional nuevo en `src/agente_bolsa/`; solo se actualiza
+`__version__` por el gate. No se modifican `kernel.py`, `broker.py`,
+`execution.py`, `risk.py`, `config.py` ni `.env`.
 
 ## Validación
 
