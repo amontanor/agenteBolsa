@@ -158,13 +158,16 @@ eventos; no reconstruyen por simbolo.
 ### QA y limites
 
 - P-L43C-T heredado: 29 pruebas verdes.
-- P-L43C-W productivo: 39 pruebas verdes.
+- P-L43C-W productivo: 40 pruebas verdes.
 - Focales P-L43BR5/BR6, time-stop, storage, scheduler, P-L47, P-L48,
   reconciliacion, execution quality y conectividad: 176 pruebas verdes.
 - Ruff completo, `check_no_nulls.py`, `git diff --check` y
   `validate-agent-config --json` temporal: verdes.
 - La politica de version: 17 pruebas verdes; el valor sigue exactamente en
   `0.4.192`, con una nota de slot en `__init__.py`.
+- QA fix separado `1788917041f7f141371ee873739634f4d1826c47`: un
+  `source_plan_id` del contexto legacy que difiere del lote BUY exacto deja el
+  carrier `unavailable`; la salida activa no cambia.
 
 No se ejecutaron suite completa, smoke, run-once, broker, red, LLM, servicios,
 postmarket ni reconciliacion productivos. La validacion cerrada completa y un
