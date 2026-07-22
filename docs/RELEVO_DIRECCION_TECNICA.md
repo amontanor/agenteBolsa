@@ -78,6 +78,20 @@ powershell -ExecutionPolicy Bypass -File scripts\stack_status.ps1
 ```
 
 `docs/plan_mejoras_y_tareas.md` es la unica fuente de tareas.
+
+## P-L43C-W - estado del candidato shadow (22-jul-2026)
+
+- Candidato aislado: worktree `pl43c_exit_authority_impl`, rama
+  `codex/pl43c-exit-authority-impl`, version `0.4.192`.
+- La autoridad activa sigue siendo `legacy_calendar_days`; XNYS es
+  `shadow_only`. No se modifica la politica ni la llamada protegida
+  `close_position(symbol)`.
+- Carrier: captura en memoria antes del submit; decision/link append-only
+  despues del intento; identidad exacta de lote y conflicto seguro. Sin
+  simbolo/fecha/FIFO.
+- QA: 38 pruebas P-L43C-W, 176 focales relacionadas, Ruff/NUL/diff/config
+  verdes. Suite completa, smoke aislado y validacion cerrada integrada quedan
+  pendientes; no desplegar hasta completarlos con XNYS cerrado.
 ## P-L43B — estado del candidato shadow (15-jul-2026)
 
 - P-L43BR4 desplegó en producción la versión `0.4.173` mediante merge no destructivo.
