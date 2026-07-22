@@ -160,7 +160,7 @@ eventos; no reconstruyen por simbolo.
 - P-L43C-T heredado: 29 pruebas verdes.
 - P-L43C-W productivo: 40 pruebas verdes.
 - Focales P-L43BR5/BR6, time-stop, storage, scheduler, P-L47, P-L48,
-  reconciliacion, execution quality y conectividad: 176 pruebas verdes.
+  reconciliacion, execution quality y conectividad: 178 pruebas verdes.
 - Ruff completo, `check_no_nulls.py`, `git diff --check` y
   `validate-agent-config --json` temporal: verdes.
 - La politica de version: 17 pruebas verdes; el valor sigue exactamente en

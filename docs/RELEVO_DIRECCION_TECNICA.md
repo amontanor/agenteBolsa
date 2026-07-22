@@ -89,7 +89,7 @@ powershell -ExecutionPolicy Bypass -File scripts\stack_status.ps1
 - Carrier: captura en memoria antes del submit; decision/link append-only
   despues del intento; identidad exacta de lote y conflicto seguro. Sin
   simbolo/fecha/FIFO.
-- QA: 40 pruebas P-L43C-W, 176 focales relacionadas, Ruff/NUL/diff/config
+- QA: 40 pruebas P-L43C-W, 178 focales relacionadas, Ruff/NUL/diff/config
   verdes. Suite completa, smoke aislado y validacion cerrada integrada quedan
   pendientes; no desplegar hasta completarlos con XNYS cerrado.
 ## P-L43B — estado del candidato shadow (15-jul-2026)
