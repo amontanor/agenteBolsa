@@ -2029,7 +2029,7 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
 - La identidad exige cycle/watch, position_identity, plan y BUY broker order
   exactos; multilote, recompra ambigua, fill no autorizado y version de
   politica ausente quedan unavailable/ambiguous. No hay join por simbolo/fecha.
-- QA del worktree: P-L43C-T 29, P-L43C-W 38, focales relacionadas 176; Ruff,
+- QA del worktree: P-L43C-T 29, P-L43C-W 39, focales relacionadas 176; Ruff,
   NUL, diff y validate-agent-config verdes. No desplegado. Siguiente paso:
   validacion cerrada integrada.
 

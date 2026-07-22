@@ -158,7 +158,7 @@ eventos; no reconstruyen por simbolo.
 ### QA y limites
 
 - P-L43C-T heredado: 29 pruebas verdes.
-- P-L43C-W productivo: 38 pruebas verdes.
+- P-L43C-W productivo: 39 pruebas verdes.
 - Focales P-L43BR5/BR6, time-stop, storage, scheduler, P-L47, P-L48,
   reconciliacion, execution quality y conectividad: 176 pruebas verdes.
 - Ruff completo, `check_no_nulls.py`, `git diff --check` y
