@@ -170,6 +170,25 @@ No se ejecutaron suite completa, smoke, run-once, broker, red, LLM, servicios,
 postmarket ni reconciliacion productivos. La validacion cerrada completa y un
 smoke totalmente aislado quedan pendientes para el siguiente lote.
 
+### Performance focal de 100 decisiones temporales
+
+Medicion descriptiva sobre SQLite temporal, 100 decisiones y 100 transacciones:
+
+- construccion: p50 0.0793 ms, p95 0.1016 ms, max 0.2020 ms;
+- serializacion captura+link: p50 0.0419 ms, p95 0.0525 ms, max 0.2137 ms;
+- persistencia de la transaccion post-submit: p50 5.9917 ms, p95
+  10.4367 ms, max 13.2141 ms;
+- evento decision+link: p50/max 2,221 bytes;
+- conexiones/transacciones: 100/100, una de cada por salida;
+- WAL final temporal: 3,724,512 bytes; no hubo locks.
+
+La medicion no separa internamente la espera de `BEGIN IMMEDIATE` del
+trabajo dentro de la transaccion; el tiempo publicado es la persistencia total
+de esa unica transaccion. No se establece un umbral arbitrario. El riesgo
+operativo focal es `low` para esta carga porque la persistencia ocurre
+despues del envio y no hay trabajo por candidato, pero la validacion larga y
+concurrencia integrada siguen pendientes.
+
 ### Commits y seguridad
 
 - `0dfc3d2d638a4ec4f8bafb18e819c5cda9479b08` -
