@@ -2279,3 +2279,20 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Dictamen: `ready_for_closed_market_deployment`, sin despliegue ni push. La
   promocion requiere tarea operativa separada, preflight nuevo y autorizacion
   humana; produccion/candidatos originales permanecen intactos.
+
+## P-L51CR2 - correccion de regresiones temporales de provenance (22-jul-2026)
+
+- Worktree aislado desde P-L52BR1: `pl51cr2_exact_provenance_fix`, rama
+  `codex/pl51cr2-exact-provenance-fix`, base `134ec525`, version conservada
+  `0.4.190` porque no hubo cambio en `src/`.
+- Los tres fallos heredados compartian una fixture sin reloj congelado:
+  `created_at` caia el 22-jul mientras la sesion consultada era 21-jul. El
+  productor P-L48 filtraba correctamente; no se perdio carrier en produccion.
+- Commits separados: `9a7b46d2` caracterizacion y `494e6515` correccion de las
+  fixtures. Los tres tests pasan; focales `239 passed`; suite segura
+  `1900 passed, 1 deselected`.
+- Ruff/NUL/diff/configuracion/kernel productivo y P-L45B2 verdes. No se
+  modificaron archivos protegidos, produccion, servicios, SQLite productiva ni
+  candidatos. No hubo despliegue ni push.
+- Dictamen: `ready_for_reintegration`. Siguiente lote unico: reintentar
+  P-L53BR1 sobre este fix como candidato posterior 0.4.192.

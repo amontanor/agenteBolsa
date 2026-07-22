@@ -359,3 +359,20 @@ por lo que no se ejecutaron suite completa, smoke ni despliegue.
 - Dictamen: `ready_for_closed_market_deployment`. Siguiente paso: preflight
   operativo independiente y autorizacion humana; no promover automaticamente
   desde este ensayo.
+
+## P-L51CR2 - correccion de regresiones temporales de provenance (22-jul-2026)
+
+- El padre P-L52BR1 fue reproducido en un worktree nuevo. Los tres fallos de
+  provenance no eran perdida de carrier: las fixtures persistian ordenes con
+  `created_at` del 22-jul y consultaban sesion 21-jul.
+- `9a7b46d2` anade la caracterizacion de la frontera temporal y `494e6515`
+  congela el reloj de las tres pruebas. No cambia `src/`, por lo que la version
+  permanece `0.4.190`; no se reserva 0.4.191 para este lote.
+- Resultado: tres regresiones verdes, `239` focales relacionadas y suite segura
+  `1900 passed, 1 deselected`. La exclusion es unicamente el test legado que
+  apunta a `data/state/agente_bolsa.sqlite3`; no se anadieron skips/xfails.
+- El carrier sobrevive plan -> orden local -> reconciliacion -> P-L48 -> P-L51
+  -> P-L52 con IDs exactos, sin joins por simbolo/fecha y con request broker
+  identico. Produccion, P-L52BR1 y P-L53BR1 permanecen intactos.
+- Dictamen: `ready_for_reintegration`. Siguiente lote: reintentar P-L53BR1
+  sobre este worktree con slot posterior 0.4.192, sin ejecutarlo ahora.

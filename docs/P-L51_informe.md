@@ -620,3 +620,90 @@ El smoke real y el despliegue quedan registrados como pendientes operativos de
 la siguiente tarea de promocion cerrada. La suite completa y P-L45B2 ya estan
 validados en este lote; la ausencia de smoke real no se oculta y requiere
 conservar el control humano.
+
+## P-L51CR2 - correccion de las regresiones de provenance heredadas (22-jul-2026)
+
+### Dictamen
+
+`ready_for_reintegration`.
+
+La causa raiz comun de los tres fallos era temporal y estaba en las fixtures,
+no en la cadena productiva: `Store` escribia `created_at` con el reloj real del
+ensayo (22-jul-2026), mientras P-L48 consultaba la sesion exacta
+2026-07-21. El filtro `substr(created_at, 1, 10) = session_date` devolvia
+correctamente cero ordenes. P-L51 recibia una captura vacia y publicaba
+`unavailable`; P-L52 no podia crear contribuciones. No se modifico `src/` ni
+se consumo el slot funcional 0.4.191; el worktree conserva la version 0.4.190.
+
+### Referencias y commits
+
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl51cr2_exact_provenance_fix`.
+- Rama: `codex/pl51cr2-exact-provenance-fix`.
+- Base exacta: `134ec525f10ce96d571071b8eea497fcc5ce16be`, arbol
+  `42ba58b6f4cb7407273191bbc4b2a9febd323378`, version `0.4.190`.
+- Caracterizacion: `9a7b46d2`, `test: reproduce exact provenance carrier regressions`.
+- Correccion: `494e6515`, `fix: preserve exact provenance through reconciliation`.
+- Documentacion de este lote: commit separado posterior.
+
+El commit de test caracteriza la frontera temporal exacta. El commit fix
+congela `storage._utc_iso` a la sesion 2026-07-21 en las tres fixtures
+adversariales; no cambia Store, reconciliacion, P-L48, P-L51, P-L52 ni la
+peticion al broker.
+
+### Cadena y contrato verificados
+
+Con el reloj de sesion congelado, la cadena real temporal queda:
+
+`order_plan metadata/provenance -> broker_order local -> reconciliacion -> P-L48
+canonical operation -> P-L51 attribution -> P-L52 contribution`.
+
+El carrier mantiene `plan_id`, `source_plan_id`, `broker_order_id`,
+`client_order_id`, `buy_broker_order_id`, `lot_id/position_identity`, fill IDs,
+`cycle_id` y los demas IDs disponibles. No se usa simbolo, fecha, texto ni FIFO
+para unir lotes. La reconciliacion actualiza estado y fills sin borrar el
+payload del plan; costes incompletos, parcialidad o ambiguedad siguen siendo
+`null/unavailable/partial`.
+
+La prueba end-to-end confirma que P-L48 entrega el carrier estructurado a P-L51
+y que P-L52 conserva la contribucion por IDs exactos. El carrier no entra en
+`build_market_order_request`; triggers, cantidad, precio, tipo, stops/takes,
+risk checks, ordenes, exposicion y limites son identicos.
+
+### Caracterizacion y cobertura
+
+Los tres fallos originales contra `134ec525` fueron:
+
+| Prueba | Observacion antes del fix | Causa |
+|---|---|---|
+| `test_real_boundary_is_not_mistaken_for_synthetic_exact_capture` | `buy_order_count=0` en vez de 1 | `created_at` fuera de la sesion |
+| `test_e2e_carrier_reconciliation_p48_p51_p52_keeps_exact_contribution_ids` | attribution `unavailable` | P-L48 vacio por fecha |
+| `test_selected_order_plan_metadata_survives_store_reconciliation_and_p48_projection` | `sell-1` ausente | P-L48 vacio por fecha |
+
+Tras congelar el reloj: las tres pasan (`3 passed`, un warning externo). La
+caracterizacion nueva pasa (`1 passed`) y demuestra que el productor no debe
+reconstruir ordenes fuera de la sesion solicitada.
+
+QA adicional relacionada: `239 passed`, un warning de `websockets.legacy`; la
+prueba P-L45B2 de 33.336 filas pasa (`1 passed`). Suite completa segura:
+`1900 passed, 1 deselected, 1 warning in 618,52 s`. La unica exclusion es
+`tests/test_pre_earnings.py::test_score_study_regression_current_sqlite`, que
+abre literalmente `data/state/agente_bolsa.sqlite3`; no se abrio SQLite
+productiva ni se conto como verde. No se anadieron skips ni xfails.
+
+Ruff completo, `check_no_nulls.py`, `git diff --check`,
+`validate-agent-config --json` y la politica de version quedaron verdes. El
+kernel temporal es `unsealed` por falta de manifiesto; la comprobacion de
+produccion sigue siendo la autoridad.
+
+### Estados externos y siguiente paso
+
+XNYS estaba cerrado, PMR/reconciliacion terminales, lease vacio y sin pytest
+productivo. Produccion conserva HEAD `24537e813ff0905696cda0b3925a212045ee7b09`,
+arbol `4747f27f3d5dc152410203bf089baee500440897`, version 0.4.185 y su suciedad
+conocida. P-L52BR1, P-L53BR1 y P-L53B-W no se modificaron. No hubo servicios,
+jobs manuales, broker, red, LLM, SQLite productiva, despliegue, reinicio ni
+push. Smoke CLI/run-once quedo `smoke_unavailable_by_safety` por no poder
+garantizar el aislamiento completo del entrypoint.
+
+Siguiente paso unico: reintentar P-L53BR1 sobre este fix, reservando para esa
+integracion el slot posterior 0.4.192; no ejecutarlo en este lote.
