@@ -90,7 +90,8 @@ from .tools.technical_study import build_closed_market_technical_study
 from .tools.time_stop_exit_authority import (
     attach_time_stop_exit_authority_reference,
     build_time_stop_exit_authority_capture,
-    submit_with_time_stop_exit_authority,
+    persist_time_stop_exit_authority_after_order,
+    persist_time_stop_exit_authority_submission_failure,
 )
 from .tools.time_stop_policy import (
     POLICY_VERSION as TIME_STOP_POLICY_VERSION,
@@ -1516,25 +1517,30 @@ def _execute_stop_take_exits(
                 attach_time_stop_exit_authority_reference(plan, authority_capture)
             except Exception as exc:  # noqa: BLE001 - carrier is observability only.
                 LOGGER.warning("time-stop authority capture unavailable for %s: %s", symbol, exc)
+        request_descriptor = {
+            "operation": "close_position",
+            "method": "close_position",
+            "symbol": symbol,
+            "side": "sell",
+            "client_order_id": client_order_id,
+            "qty": exit_qty,
+        }
         try:
-            order, _authority_link = submit_with_time_stop_exit_authority(
-                submit=lambda settings=settings, plan=plan, client_order_id=client_order_id: submit_paper_order_plan(
+            try:
+                order = submit_paper_order_plan(
                     settings,
                     plan,
                     client_order_id=client_order_id,
-                ),
-                store=store,
-                capture=authority_capture,
-                client_order_id=client_order_id,
-                request_descriptor={
-                    "operation": "close_position",
-                    "method": "close_position",
-                    "symbol": symbol,
-                    "side": "sell",
-                    "client_order_id": client_order_id,
-                    "qty": exit_qty,
-                },
-            )
+                )
+            except Exception as exc:
+                persist_time_stop_exit_authority_submission_failure(
+                    store=store,
+                    capture=authority_capture,
+                    client_order_id=client_order_id,
+                    request_descriptor=request_descriptor,
+                    error=exc,
+                )
+                raise
             store.save_broker_order(
                 broker_order_id=order["id"] or plan["plan_id"],
                 plan_id=plan["plan_id"],
@@ -1543,6 +1549,13 @@ def _execute_stop_take_exits(
                 side="sell",
                 status=order["status"],
                 payload={"plan": plan, "broker_order": order},
+            )
+            persist_time_stop_exit_authority_after_order(
+                store=store,
+                capture=authority_capture,
+                order=order,
+                client_order_id=client_order_id,
+                request_descriptor=request_descriptor,
             )
             if (
                 trigger == "time_stop_v2"

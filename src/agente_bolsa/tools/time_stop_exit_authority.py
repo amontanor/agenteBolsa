@@ -322,6 +322,85 @@ def persist_time_stop_exit_authority(store: Any, capture: Mapping[str, Any], lin
     return store.record_time_stop_exit_authority(dict(capture), dict(link), cycle_id=_as_text(capture.get("cycle_id")))
 
 
+def _order_link_from_result(
+    capture: Mapping[str, Any],
+    *,
+    order: Mapping[str, Any],
+    client_order_id: str,
+    request_descriptor: Mapping[str, Any],
+    attempt_ordinal: int,
+) -> dict[str, Any]:
+    order_dict = dict(order)
+    return build_time_stop_exit_order_link(
+        capture,
+        broker_order_id=_as_text(order_dict.get("id")),
+        client_order_id=_as_text(order_dict.get("client_order_id")) or client_order_id,
+        submitted_at=_as_text(order_dict.get("submitted_at")) or _iso_now(),
+        completed_at=_as_text(order_dict.get("filled_at")) or _as_text(order_dict.get("updated_at")),
+        submission_status=_as_text(order_dict.get("status")) or "submitted",
+        request_descriptor=request_descriptor,
+        attempt_ordinal=attempt_ordinal,
+    )
+
+
+def persist_time_stop_exit_authority_after_order(
+    *,
+    store: Any,
+    capture: Mapping[str, Any] | None,
+    order: Mapping[str, Any],
+    client_order_id: str,
+    request_descriptor: Mapping[str, Any],
+    attempt_ordinal: int = 1,
+) -> dict[str, Any] | None:
+    """Persist the shadow only after the local broker order is durable."""
+
+    if capture is None:
+        return None
+    try:
+        link = _order_link_from_result(
+            capture,
+            order=order,
+            client_order_id=client_order_id,
+            request_descriptor=request_descriptor,
+            attempt_ordinal=attempt_ordinal,
+        )
+        persist_time_stop_exit_authority(store, capture, link)
+    except Exception:  # noqa: BLE001 - shadow telemetry is fail-open.
+        return None
+    return link
+
+
+def persist_time_stop_exit_authority_submission_failure(
+    *,
+    store: Any,
+    capture: Mapping[str, Any] | None,
+    client_order_id: str,
+    request_descriptor: Mapping[str, Any],
+    error: BaseException,
+    attempt_ordinal: int = 1,
+) -> dict[str, Any] | None:
+    """Keep a failed attempt observable without inventing a submitted order."""
+
+    if capture is None:
+        return None
+    try:
+        link = build_time_stop_exit_order_link(
+            capture,
+            broker_order_id=None,
+            client_order_id=client_order_id,
+            submitted_at=None,
+            completed_at=None,
+            submission_status="failed",
+            request_descriptor=request_descriptor,
+            error_reason={"code": "submission_exception", "error_type": type(error).__name__},
+            attempt_ordinal=attempt_ordinal,
+        )
+        persist_time_stop_exit_authority(store, capture, link)
+    except Exception:  # noqa: BLE001 - shadow telemetry is fail-open.
+        return None
+    return link
+
+
 def submit_with_time_stop_exit_authority(
     *,
     submit: Callable[[], Mapping[str, Any]],
@@ -338,34 +417,19 @@ def submit_with_time_stop_exit_authority(
     try:
         order = submit()
     except Exception as exc:
-        link = build_time_stop_exit_order_link(
-            capture,
-            broker_order_id=None,
+        persist_time_stop_exit_authority_submission_failure(
+            store=store,
+            capture=capture,
             client_order_id=client_order_id,
-            submitted_at=None,
-            completed_at=None,
-            submission_status="failed",
             request_descriptor=request_descriptor,
-            error_reason={"code": "submission_exception", "error_type": type(exc).__name__},
+            error=exc,
             attempt_ordinal=attempt_ordinal,
         )
-        try:
-            persist_time_stop_exit_authority(store, capture, link)
-        except Exception:  # noqa: BLE001 - shadow telemetry is fail-open.
-            pass
         raise
-    order_dict = dict(order)
-    broker_order_id = _as_text(order_dict.get("id"))
-    actual_client_order_id = _as_text(order_dict.get("client_order_id")) or client_order_id
-    submitted_at = _as_text(order_dict.get("submitted_at")) or _iso_now()
-    completed_at = _as_text(order_dict.get("filled_at")) or _as_text(order_dict.get("updated_at"))
-    link = build_time_stop_exit_order_link(
+    link = _order_link_from_result(
         capture,
-        broker_order_id=broker_order_id,
-        client_order_id=actual_client_order_id,
-        submitted_at=submitted_at,
-        completed_at=completed_at,
-        submission_status=_as_text(order_dict.get("status")) or "submitted",
+        order=order,
+        client_order_id=client_order_id,
         request_descriptor=request_descriptor,
         attempt_ordinal=attempt_ordinal,
     )
@@ -437,6 +501,8 @@ __all__ = [
     "build_time_stop_exit_order_link",
     "content_hash",
     "persist_time_stop_exit_authority",
+    "persist_time_stop_exit_authority_after_order",
+    "persist_time_stop_exit_authority_submission_failure",
     "submit_with_time_stop_exit_authority",
     "time_stop_exit_authority_digest",
 ]
