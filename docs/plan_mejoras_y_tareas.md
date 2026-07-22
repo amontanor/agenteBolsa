@@ -2279,7 +2279,6 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Dictamen: `ready_for_closed_market_deployment`, sin despliegue ni push. La
   promocion requiere tarea operativa separada, preflight nuevo y autorizacion
   humana; produccion/candidatos originales permanecen intactos.
-
 ## P-L51CR2 - correccion de regresiones temporales de provenance (22-jul-2026)
 
 - Worktree aislado desde P-L52BR1: `pl51cr2_exact_provenance_fix`, rama
@@ -2296,3 +2295,40 @@ de despliegue quedan pendientes con XNYS cerrado.
   candidatos. No hubo despliegue ni push.
 - Dictamen: `ready_for_reintegration`. Siguiente lote unico: reintentar
   P-L53BR1 sobre este fix como candidato posterior 0.4.192.
+
+## P-L53B-W - ledger canónico shadow de selección por ciclo (candidato 0.4.191)
+
+- Implementado en `pl53b_selection_ledger_impl`, rama
+  `codex/pl53b-selection-ledger-impl`, desde la base exacta P-L53B-T
+  `4ec81a0c`. Reserva funcional `0.4.191`.
+- Captura el universo completo de fase A y los objetos exactos de
+  recomendaciones, gates, planes y órdenes de fase B. `signal_capture_id`
+  prevalece sobre `signal_id`; símbolo/fecha y `source_run_id + symbol` no son
+  identidad.
+- Persistencia append-only en `agent_events`, hash estable sin `captured_at`,
+  `BEGIN IMMEDIATE` corto, idempotencia y conflictos separados. Fail-open y
+  sin autoridad sobre trading.
+- Commits: `e5ace319` feature y `eea3794a` tests/paridad. Documentación
+  consolidada pendiente del commit documental P-L53B-W.
+- QA focal P-L53B-T/W: 28 passed; suite completa y smoke quedan pendientes
+  para mercado cerrado con precondiciones operativas verificadas. Siguiente
+  lote único: ensayo integrado P-L53BR1 aislado.
+
+## P-L53BR1 - ensayo integrado P-L53B-W sobre P-L52BR1 (22-jul-2026)
+
+- Worktree `pl53br1_integration_rehearsal`, rama
+  `codex/pl53br1-integration-rehearsal`, base exacta `134ec525`; merge
+  `fc4eb767` con `--no-ff`, versión final `0.4.191`.
+- Se comprobó la ruta de mercado P-L49/P-L50/P-L53 y el PMR P-L48/P-L51/P-L52.
+  P-L53 reutiliza el contexto rankeado y finaliza después del envío activo,
+  sin autoridad sobre trading ni entrada en el pipeline PMR.
+- QA integrada y volumen 100x500 verdes; la suite segura final obtuvo
+  `1928 passed, 4 deselected`. Las cuatro exclusiones son el test de SQLite
+  productiva y tres fallos heredados reproducidos en el padre P-L52BR1; no se
+  añadieron skips/xfails.
+- Ruff, NUL, diff, versión, configuración y kernel productivo sellado verdes.
+  Producción, SQLite productiva, servicios y candidatos originales intactos;
+  no hubo despliegue ni push.
+- Dictamen del ensayo: `needs_fix` por la deuda heredada P-L51/P-L51C.
+  Siguiente lote único: corregir esos tres focales y repetir la suite cerrada;
+  P-L53 permanece shadow y no se cambia política de trading.

@@ -359,7 +359,6 @@ por lo que no se ejecutaron suite completa, smoke ni despliegue.
 - Dictamen: `ready_for_closed_market_deployment`. Siguiente paso: preflight
   operativo independiente y autorizacion humana; no promover automaticamente
   desde este ensayo.
-
 ## P-L51CR2 - correccion de regresiones temporales de provenance (22-jul-2026)
 
 - El padre P-L52BR1 fue reproducido en un worktree nuevo. Los tres fallos de
@@ -376,3 +375,45 @@ por lo que no se ejecutaron suite completa, smoke ni despliegue.
   identico. Produccion, P-L52BR1 y P-L53BR1 permanecen intactos.
 - Dictamen: `ready_for_reintegration`. Siguiente lote: reintentar P-L53BR1
   sobre este worktree con slot posterior 0.4.192, sin ejecutarlo ahora.
+
+## P-L53B-W - handoff del candidato 0.4.191
+
+- Worktree aislado: `C:\Antonio\Bref\agenteBolsa_worktrees\pl53b_selection_ledger_impl`;
+  rama `codex/pl53b-selection-ledger-impl`.
+- Commits funcional/QA: `e5ace319` y `eea3794a`; falta únicamente el commit
+  documental separado de este lote.
+- El ledger shadow captura una vez por ciclo la fase A completa y las etapas
+  reales de decisión posteriores, con identidad `signal_capture_id` exacta,
+  fallback explícito `signal_id`, estados separados y persistencia
+  append-only/conflict-safe.
+- No cambia prompts, ranking, selección, LLM, gates, sizing, planes, órdenes,
+  broker requests, exposición ni límites. Históricos sin identidad permanecen
+  unavailable; outcomes futuros se unen solo por identidad y madurez XNYS.
+- Validación focal P-L53B-T/W: 28 passed, Ruff/check_no_nulls/diff/version en
+  verde. Suite completa y smoke están pendientes de precondiciones cerradas.
+
+Siguiente lote único: P-L53BR1, ensayo integrado aislado desde el candidato
+0.4.191; no desplegar ni hacer push antes de esa validación.
+
+## P-L53BR1 - ensayo integrado sobre P-L52BR1 (22-jul-2026)
+
+- Se creó el worktree aislado `pl53br1_integration_rehearsal` desde
+  `134ec525` y se fusionó P-L53B-W con `--no-ff` en `fc4eb767`; la QA quedó en
+  `52668b42`. Versión final: `0.4.191`.
+- La ruta de mercado verificada conserva P-L49/P-L50/P-L44, añade P-L53 como
+  sombra predecisión/finalización y no altera decisiones ni retrasa el envío.
+  El PMR permanece `reconciliation -> P-L48 -> P-L51 -> P-L52 -> performance
+  -> measurement -> thesis -> terminal`, con sus etapas previas ya validadas.
+- La batería combinada cubrió 500 observaciones, 37 anomalías, 443 candidatos,
+  20 finalistas, 5 recomendaciones, 3 planes y 2 órdenes; la persistencia
+  concurrente fue `inserted` sin locks, con idempotencia y conflictos separados.
+  El volumen 100x500 fue verde, con p50/p95/máximo de construcción
+  373,9511/406,0575/434,1302 ms y persistencia 67,8627/82,5894/86,6022 ms.
+- Gates: Ruff, NUL, diff, configuración, versión, kernel productivo sellado y
+  suite segura `1928 passed, 4 deselected`. Tres tests P-L51/P-L51C fallan
+  también en el padre P-L52BR1 y quedan como deuda heredada; el cuarto es el
+  test legado que intenta abrir SQLite productiva. No se añadieron skips/xfails.
+- Dictamen: `needs_fix`; no desplegar. Siguiente lote mínimo: resolver esos
+  tres focales heredados y repetir suite/preflight cerrado. Producción,
+  servicios, SQLite productiva, locks y candidatos originales permanecen
+  intactos; no hubo reinicio, despliegue ni push.
