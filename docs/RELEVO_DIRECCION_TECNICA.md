@@ -192,3 +192,22 @@ P-L43BR6 y P-L44BR3 permanecen fuera y conservan los slots `0.4.181` y
   denominadores null, 0 eventos canonicos, sin backfill.
 - Deuda `profitability_scoreboard` (`pnl_pct=NULL` sin `max_dd`) NO corregida
   (backlog). Sin push. Produccion `8cfa0db3` / tree `4c3636be` limpia.
+
+## P-L53B-W - handoff del candidato 0.4.191
+
+- Worktree aislado: `C:\Antonio\Bref\agenteBolsa_worktrees\pl53b_selection_ledger_impl`;
+  rama `codex/pl53b-selection-ledger-impl`.
+- Commits funcional/QA: `e5ace319` y `eea3794a`; falta únicamente el commit
+  documental separado de este lote.
+- El ledger shadow captura una vez por ciclo la fase A completa y las etapas
+  reales de decisión posteriores, con identidad `signal_capture_id` exacta,
+  fallback explícito `signal_id`, estados separados y persistencia
+  append-only/conflict-safe.
+- No cambia prompts, ranking, selección, LLM, gates, sizing, planes, órdenes,
+  broker requests, exposición ni límites. Históricos sin identidad permanecen
+  unavailable; outcomes futuros se unen solo por identidad y madurez XNYS.
+- Validación focal P-L53B-T/W: 28 passed, Ruff/check_no_nulls/diff/version en
+  verde. Suite completa y smoke están pendientes de precondiciones cerradas.
+
+Siguiente lote único: P-L53BR1, ensayo integrado aislado desde el candidato
+0.4.191; no desplegar ni hacer push antes de esa validación.

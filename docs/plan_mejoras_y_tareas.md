@@ -2102,3 +2102,21 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
 - Secuencia desplegada: P-L45B2 `0.4.175`, P-L43BR5 `0.4.176`, P-L44B
   `0.4.177` y este cambio UI `0.4.178`. El merge productivo es `4158ac5f`;
   la verificación visual confirmó la versión y el orden descendente.
+
+## P-L53B-W - ledger canónico shadow de selección por ciclo (candidato 0.4.191)
+
+- Implementado en `pl53b_selection_ledger_impl`, rama
+  `codex/pl53b-selection-ledger-impl`, desde la base exacta P-L53B-T
+  `4ec81a0c`. Reserva funcional `0.4.191`.
+- Captura el universo completo de fase A y los objetos exactos de
+  recomendaciones, gates, planes y órdenes de fase B. `signal_capture_id`
+  prevalece sobre `signal_id`; símbolo/fecha y `source_run_id + symbol` no son
+  identidad.
+- Persistencia append-only en `agent_events`, hash estable sin `captured_at`,
+  `BEGIN IMMEDIATE` corto, idempotencia y conflictos separados. Fail-open y
+  sin autoridad sobre trading.
+- Commits: `e5ace319` feature y `eea3794a` tests/paridad. Documentación
+  consolidada pendiente del commit documental P-L53B-W.
+- QA focal P-L53B-T/W: 28 passed; suite completa y smoke quedan pendientes
+  para mercado cerrado con precondiciones operativas verificadas. Siguiente
+  lote único: ensayo integrado P-L53BR1 aislado.
