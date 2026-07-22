@@ -177,13 +177,13 @@ smoke totalmente aislado quedan pendientes para el siguiente lote.
 
 Medicion descriptiva sobre SQLite temporal, 100 decisiones y 100 transacciones:
 
-- construccion: p50 0.0793 ms, p95 0.1016 ms, max 0.2020 ms;
-- serializacion captura+link: p50 0.0419 ms, p95 0.0525 ms, max 0.2137 ms;
-- persistencia de la transaccion post-submit: p50 5.9917 ms, p95
-  10.4367 ms, max 13.2141 ms;
-- evento decision+link: p50/max 2,221 bytes;
+- construccion: p50 0.0767 ms, p95 0.0883 ms, max 0.2385 ms;
+- serializacion captura+link: p50 0.0420 ms, p95 0.0642 ms, max 0.3183 ms;
+- persistencia de la transaccion post-submit: p50 5.7060 ms, p95
+  11.5251 ms, max 17.3407 ms;
+- evento decision+link: p50/max 2,075 bytes;
 - conexiones/transacciones: 100/100, una de cada por salida;
-- WAL final temporal: 3,724,512 bytes; no hubo locks.
+- WAL final temporal: 3,534,992 bytes; no hubo locks.
 
 La medicion no separa internamente la espera de `BEGIN IMMEDIATE` del
 trabajo dentro de la transaccion; el tiempo publicado es la persistencia total
