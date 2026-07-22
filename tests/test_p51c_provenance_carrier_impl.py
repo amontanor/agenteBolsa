@@ -327,10 +327,12 @@ def test_concurrent_identical_carrier_persistence_is_inserted_or_idempotent(tmp_
     carrier = build_exit_lot_provenance(_plan(), [_lot("buy-1", "buy-plan-1", 10)], explicit_allocations=[_explicit_allocation("buy-1", "buy-plan-1", 10)])
     results: list[str] = []
     barrier = threading.Barrier(2)
+    database_path = tmp_path / "state.sqlite3"
+    logs_path = tmp_path / "logs"
+    Store(database_path, logs_path).ensure_schema()
 
     def _write() -> None:
-        store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
-        store.ensure_schema()
+        store = Store(database_path, logs_path)
         barrier.wait()
         results.append(store.record_exit_lot_provenance(carrier, event_id="exit_lot_provenance:sell-concurrent")["status"])
 
