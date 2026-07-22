@@ -377,3 +377,26 @@ por lo que no se ejecutaron suite completa, smoke ni despliegue.
 
 Siguiente lote único: P-L53BR1, ensayo integrado aislado desde el candidato
 0.4.191; no desplegar ni hacer push antes de esa validación.
+
+## P-L53BR1 - ensayo integrado sobre P-L52BR1 (22-jul-2026)
+
+- Se creó el worktree aislado `pl53br1_integration_rehearsal` desde
+  `134ec525` y se fusionó P-L53B-W con `--no-ff` en `fc4eb767`; la QA quedó en
+  `52668b42`. Versión final: `0.4.191`.
+- La ruta de mercado verificada conserva P-L49/P-L50/P-L44, añade P-L53 como
+  sombra predecisión/finalización y no altera decisiones ni retrasa el envío.
+  El PMR permanece `reconciliation -> P-L48 -> P-L51 -> P-L52 -> performance
+  -> measurement -> thesis -> terminal`, con sus etapas previas ya validadas.
+- La batería combinada cubrió 500 observaciones, 37 anomalías, 443 candidatos,
+  20 finalistas, 5 recomendaciones, 3 planes y 2 órdenes; la persistencia
+  concurrente fue `inserted` sin locks, con idempotencia y conflictos separados.
+  El volumen 100x500 fue verde, con p50/p95/máximo de construcción
+  373,9511/406,0575/434,1302 ms y persistencia 67,8627/82,5894/86,6022 ms.
+- Gates: Ruff, NUL, diff, configuración, versión, kernel productivo sellado y
+  suite segura `1928 passed, 4 deselected`. Tres tests P-L51/P-L51C fallan
+  también en el padre P-L52BR1 y quedan como deuda heredada; el cuarto es el
+  test legado que intenta abrir SQLite productiva. No se añadieron skips/xfails.
+- Dictamen: `needs_fix`; no desplegar. Siguiente lote mínimo: resolver esos
+  tres focales heredados y repetir suite/preflight cerrado. Producción,
+  servicios, SQLite productiva, locks y candidatos originales permanecen
+  intactos; no hubo reinicio, despliegue ni push.

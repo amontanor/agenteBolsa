@@ -269,3 +269,171 @@ reinicio, acceso a SQLite productiva ni push.
 
 Ensayo integrado aislado P-L53BR1 desde este candidato, con XNYS cerrado y
 precondiciones completas verificadas, antes de cualquier promoción.
+
+---
+
+## P-L53BR1 — ensayo integrado sobre P-L52BR1 (22-jul-2026)
+
+### Dictamen
+
+`needs_fix` para el candidato integrado. La integración P-L53B-W es
+funcionalmente compatible y la QA propia queda verde, pero la suite canónica
+completa todavía contiene tres fallos heredados de P-L51/P-L51C que se
+reproducen sin cambios en el padre P-L52BR1. No se atribuyen al merge P-L53 y
+no se corrigen en este lote.
+
+### Referencias y Git
+
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl53br1_integration_rehearsal`.
+- Rama: `codex/pl53br1-integration-rehearsal`.
+- Base exacta: `134ec525f10ce96d571071b8eea497fcc5ce16be`,
+  árbol `42ba58b6f4cb7407273191bbc4b2a9febd323378`, versión `0.4.190`.
+- Merge requerido: `fc4eb767`, `merge: integrate P-L53B-W into P-L52BR1`.
+- QA integrada: `52668b42`, `qa: verify P-L53BR1 integrated shadow parity`.
+- Versión final: `0.4.191`. El árbol queda limpio después del commit
+  documental de este informe.
+- P-L53B-W de origen: `0e07c1c9`, árbol
+  `92d752243fa64b10e4fb9e17f08b5960a7374507`; producción y el worktree de
+  origen no se modificaron.
+
+Los conflictos del merge se resolvieron campo a campo en `__init__.py`,
+`cycle_runner.py`, `storage.py`, plan y relevo: se conservaron las fases P-L49,
+P-L50/P-L44, P-L51 y P-L52, y se añadieron las proyecciones P-L53 sin reemplazo
+global. `main.py` y `scheduler.py` se fusionaron automáticamente y fueron
+revisados; no se usó squash, rebase, cherry-pick ni amend.
+
+### Orden real e interacción
+
+La ruta de mercado comprobada es:
+
+`market data/observaciones → market_state → P-L49 Fase A → aprendizaje y
+ranking → P-L50/P-L44 Fase A → P-L53 Fase A → selección/recomendaciones →
+gates/límites/cuotas/pausas → controles/planes → P-L49/P-L50 Fase B →
+persistencia/envío activo → P-L53 finalización y persistencia`.
+
+La Fase A recibe el mismo `ranked_context` en memoria producido por el ranking;
+no recalcula ranking, aprendizaje, LLM, gates, RiskManager, controles, planes ni
+órdenes. La finalización P-L53 se ejecuta después del envío activo cuando el
+objeto exacto de envío existe; si no existe una identidad de orden exacta,
+`ordered/broker_order_id` permanece `null/unavailable`.
+
+El PMR no fue alterado por P-L53. Su orden validado en P-L52BR1 permanece:
+`reconciliation → outcome_update → daily_learning → postmarket_report →
+P-L48 canonical_operation_telemetry → P-L51 canonical_trade_attribution →
+P-L52 canonical_eod_account_snapshot → performance → measurement → thesis →
+terminal`. P-L53 no entra en ese pipeline.
+
+Las identidades siguen separadas: P-L49 usa observación/proveedor/intervalo/barra
+exacta; P-L50 usa `signal_capture_id → signal_id` más `action/recommendation_id`;
+P-L53 usa `cycle_id + action + signal_capture_id` y solo el fallback `signal_id`;
+P-L51 usa `broker_order_id` y provenance de lotes; P-L52 usa sesión/equity/
+contribuciones. No hay unión por símbolo, fecha, texto ni
+`source_run_id + symbol`; BUY y EXIT permanecen separadas.
+
+### QA adversarial y denominadores
+
+La prueba combinada temporal cubrió 500 observaciones/símbolos, 37 anomalías
+P-L49, 443 candidatos P-L50/P-L53, 20 finalistas, 5 recomendaciones, 3 planes
+y 2 órdenes. Los denominadores P-L53 fueron:
+
+| Campo | Valor |
+|---|---:|
+| raw/canonical/eligible | 443 / 443 / 443 |
+| selected/recommended/planned/ordered | 20 / 5 / 3 / 2 |
+| identity unavailable/ambiguous | 0 / 0 |
+| shadow inputs unavailable/conflicts | 0 / 0 |
+| truncated | 0 |
+
+Se verificó una atribución P-L51 exacta `attributed=1` y una contribución P-L52
+por IDs exactos en la misma batería. Se comprobaron selected-for-LLM sin orden,
+`deterministic_capacity_fill`, BUY/EXIT con la misma señal, controles
+excluidos, cap/truncación explícita, estados `collecting`, conflictos separados
+y madurez 3d disponible frente a 5d/10d inmadura. El evento predecisión no
+contiene outcomes, fills, P/L, MAE/MFE, first-hit ni prompts LLM; un forward
+return nunca se etiqueta como beneficio neto.
+
+La persistencia concurrente de P-L49/P-L48/P-L53 produjo tres estados
+`inserted` sin `database is locked`. La repetición idéntica fue idempotente y el
+contenido P-L53 distinto produjo `conflict` conservando el original; el evento
+P-L48 quedó intacto. Los event IDs y schemas de P-L49, P-L48, P-L51, P-L52 y
+P-L53 no colisionaron. No hay tablas, migraciones, backfill, `INSERT OR
+REPLACE`, runtime_state como historia ni conexión por candidato.
+
+### Volumen y persistencia
+
+En 100 ciclos sintéticos × 500 candidatos, la descomposición observada fue:
+
+| Medida | p50 | p95 | máximo |
+|---|---:|---:|---:|
+| captura Fase A (ms) | 198,7762 | 207,9281 | 227,9587 |
+| finalización (ms) | 16,0091 | 17,3014 | 25,8787 |
+| construcción completa (ms) | 373,9511 | 406,0575 | 434,1302 |
+| serialización (ms) | 59,1514 | 63,0870 | 78,9222 |
+| `BEGIN IMMEDIATE` (ms) | 4,7631 | 17,7848 | 20,0429 |
+| persistencia total (ms) | 67,8627 | 82,5894 | 86,6022 |
+| tamaño evento (bytes) | 760154 | 760154 | 760154 |
+
+Memoria pico: 12.029.144 bytes. WAL observado: 0 bytes al cierre. Hubo 100
+transacciones y 100 conexiones, una por ciclo, no por candidato; los resultados
+no muestran trabajo O(n²) ni copia del conjunto activo completo en la frontera
+de persistencia. Como estimación descriptiva, 26 ciclos diarios equivaldrían a
+19.764.004 bytes de payload y 100 ciclos a 76.015.400 bytes, sin presentarlo
+como capacidad garantizada ni incluir overhead de SQLite.
+
+### Validación exacta y gates
+
+- QA integrada: `4 passed`; volumen incluido: `1 passed in 76,93 s`.
+- Focales combinados antes de la suite: `295 passed, 3 failed`; los tres
+  fallos se reprodujeron en el padre exacto P-L52BR1.
+- P-L45B2 de 33.336 filas: `1 passed in 2,10 s`.
+- Ruff completo: verde.
+- `check_no_nulls.py`: `OK (421 archivos)`.
+- `git diff --check`: verde.
+- `validate-agent-config --json`: `ok=true`, sin errores ni warnings.
+- `test_version_policy.py`: `1 passed` después del commit QA.
+- Suite segura final: `1928 passed, 4 deselected, 1 warning in 780,95 s`.
+- El warning fue la deprecación externa de `websockets.legacy`.
+
+Las cuatro exclusiones de línea de comandos no son skips/xfails añadidos:
+
+1. `tests/test_pre_earnings.py::test_score_study_regression_current_sqlite`,
+   que abre literalmente `data/state/agente_bolsa.sqlite3`; se reprodujo por
+   inspección estática en la base y producción, y no se ejecutó para proteger
+   SQLite productiva.
+2. `tests/test_p51br1_combined_integration.py::test_real_boundary_is_not_mistaken_for_synthetic_exact_capture`;
+3. `tests/test_p52br1_integration.py::test_e2e_carrier_reconciliation_p48_p51_p52_keeps_exact_contribution_ids`;
+4. `tests/test_p51c_provenance_carrier.py::test_selected_order_plan_metadata_survives_store_reconciliation_and_p48_projection`.
+
+Los tres últimos fallaron en el ensayo y con el mismo resultado en el padre
+P-L52BR1: respectivamente `buy_order_count=0`, estado de atribución
+`unavailable` y ausencia de `sell-1` en la proyección P-L48. Quedan como deuda
+heredada P-L51/P-L51C, no como regresión P-L53; no se modificaron en este lote.
+
+Smoke operativo real, broker, red, LLM, jobs productivos, postmarket y
+reconciliación manual quedaron omitidos por alcance y seguridad. No se ejecutó
+`run-once`; un smoke totalmente aislado equivalente no aporta evidencia de
+despliegue y queda pendiente de un lote cerrado autorizado.
+
+### Seguridad y paridad
+
+La QA confirma paridad byte/estructura de candidatos, scores, ranks, selección,
+recomendaciones, gates, sizing, microexperimentos, controles, planes,
+cantidades, precios, stops/takes/trailing, órdenes, broker requests, exposición,
+límites y cadencia. P-L53 no aparece como autoridad en `trade_decision`, risk,
+broker o execution y sus fallos son fail-open.
+
+Los hashes Git de los protegidos coinciden con producción: `kernel.py`
+`35788edf80cc02c015fdef24f7c62fe8a490a442`, `broker.py`
+`2050468ca4d81f06bb58464a688eaf4d916f80e5`, `execution.py`
+`018c52f0754bec4a1f8cf8440f308bc10b01a588`, `risk.py`
+`75c1242c2f10c989120243ca1149e22749d342bb` y `config.py`
+`912e943b24160b5e4b1fb4b1f60dbdf15f4c9e9f`. `.env` no se modificó. Producción,
+P-L52BR1 base, P-L53B-W y los demás candidatos permanecieron intactos; no hubo
+SQLite productiva, despliegue, reinicio ni push.
+
+### Siguiente lote mínimo
+
+Resolver y revalidar únicamente la deuda heredada de los tres focales P-L51/
+P-L51C, manteniendo P-L53 en shadow; después repetir la suite cerrada completa
+y el preflight operativo. No cambiar thresholds, ranking, gates, sizing ni
+política de trading.

@@ -2296,3 +2296,22 @@ de despliegue quedan pendientes con XNYS cerrado.
 - QA focal P-L53B-T/W: 28 passed; suite completa y smoke quedan pendientes
   para mercado cerrado con precondiciones operativas verificadas. Siguiente
   lote único: ensayo integrado P-L53BR1 aislado.
+
+## P-L53BR1 - ensayo integrado P-L53B-W sobre P-L52BR1 (22-jul-2026)
+
+- Worktree `pl53br1_integration_rehearsal`, rama
+  `codex/pl53br1-integration-rehearsal`, base exacta `134ec525`; merge
+  `fc4eb767` con `--no-ff`, versión final `0.4.191`.
+- Se comprobó la ruta de mercado P-L49/P-L50/P-L53 y el PMR P-L48/P-L51/P-L52.
+  P-L53 reutiliza el contexto rankeado y finaliza después del envío activo,
+  sin autoridad sobre trading ni entrada en el pipeline PMR.
+- QA integrada y volumen 100x500 verdes; la suite segura final obtuvo
+  `1928 passed, 4 deselected`. Las cuatro exclusiones son el test de SQLite
+  productiva y tres fallos heredados reproducidos en el padre P-L52BR1; no se
+  añadieron skips/xfails.
+- Ruff, NUL, diff, versión, configuración y kernel productivo sellado verdes.
+  Producción, SQLite productiva, servicios y candidatos originales intactos;
+  no hubo despliegue ni push.
+- Dictamen del ensayo: `needs_fix` por la deuda heredada P-L51/P-L51C.
+  Siguiente lote único: corregir esos tres focales y repetir la suite cerrada;
+  P-L53 permanece shadow y no se cambia política de trading.
