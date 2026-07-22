@@ -187,7 +187,8 @@ planes ni órdenes.
 - Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl53b_selection_ledger_impl`.
 - Rama: `codex/pl53b-selection-ledger-impl`.
 - Versión candidata: `0.4.191`.
-- Commits funcional y QA: `e5ace319` y `eea3794a`.
+- Commits feature/test/docs/QA: `e5ace319`, `eea3794a`, `e07601bb` y
+  `731002ec`.
 - Producción no modificada: HEAD
   `24537e813ff0905696cda0b3925a212045ee7b09`, versión `0.4.185`, con su
   suciedad conocida preservada.
@@ -248,9 +249,13 @@ prompt. La caracterización temporal de 100 ciclos × 500 candidatos pasó en
 WAL temporal de 0 bytes al cierre y 0 errores de lock. El resultado es
 descriptivo, no un umbral de promoción.
 
-Ruff completo, `check_no_nulls.py`, `git diff --check` y la política de versión
-quedaron verdes en el worktree. Suite completa, smoke operativo, broker, red,
-LLM, postmarket y reconciliación productivos no se ejecutaron. La validación
+Ruff completo, `check_no_nulls.py`, `git diff --check`, la política de versión
+y `validate-agent-config --json` quedaron verdes en el worktree. La suite
+segura final ejecutó `1719 passed, 1 deselected` en 689.80 s; el único caso
+deseleccionado es una regresión preexistente que apunta a una ruta SQLite fija
+de historial productivo. El consumidor CLI con DATA_DIR vacío devuelve ahora
+`collecting` y denominadores nulos. Smoke operativo, broker, red, LLM,
+postmarket y reconciliación productivos no se ejecutaron. La validación
 completa cerrada y el ensayo integrado P-L53BR1 siguen pendientes.
 
 ### Seguridad
