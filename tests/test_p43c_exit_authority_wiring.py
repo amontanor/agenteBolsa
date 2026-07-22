@@ -93,6 +93,14 @@ def test_multi_lot_is_ambiguous_without_fifo_or_symbol_fallback() -> None:
     assert "multiple_open_lots_no_exact_allocation" in capture["reason_codes"]
 
 
+def test_source_plan_context_mismatch_is_unavailable() -> None:
+    capture = _capture(
+        source_plan={"plan_id": "different-context-plan"},
+    )
+    assert capture["authority_status"] == "unavailable"
+    assert "source_plan_context_mismatch" in capture["reason_codes"]
+
+
 def test_xnys_shadow_does_not_authorize_an_exit() -> None:
     capture = _capture(
         time_stop_evidence=_evidence(legacy=False, xnys=True, comparison="xnys_only"),

@@ -117,8 +117,11 @@ def _resolve_exact_lot(
     buy_id = _lot_value(selected, "broker_order_id", "buy_broker_order_id")
     buy_plan_id = _lot_value(selected, "buy_plan_id", "order_plan_id", "plan_id")
     source_plan_id = _lot_value(selected, "source_plan_id", "source_plan")
+    context_source_plan_id = _as_text(source_plan.get("plan_id")) if source_plan is not None else None
     if source_plan_id is None and source_plan is not None:
-        source_plan_id = _as_text(source_plan.get("plan_id"))
+        source_plan_id = context_source_plan_id
+    elif context_source_plan_id and source_plan_id and context_source_plan_id != source_plan_id:
+        reasons.append("source_plan_context_mismatch")
     fill_authority = _lot_value(selected, "fill_authority")
     buy_fill_at = _lot_value(selected, "entry_fill_at", "first_fill_at", "filled_at")
     if source_plan_id is None:
