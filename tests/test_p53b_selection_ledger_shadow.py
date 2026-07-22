@@ -320,6 +320,11 @@ def test_concurrent_writers_are_inserted_and_idempotent_without_lock(tmp_path: P
 
 
 def test_collecting_reader_has_null_denominators_and_fail_open_helper(monkeypatch, tmp_path: Path) -> None:
+    empty_store = Store(tmp_path / "missing" / "agent.sqlite3", tmp_path / "logs")
+    empty_read = read_canonical_selection_ledger(empty_store, "missing-cycle")
+    assert empty_read["status"] == "collecting"
+    assert all(value is None for value in empty_read["denominators"].values())
+
     store = _store(tmp_path)
     collecting = read_canonical_selection_ledger(store, "missing-cycle")
     assert collecting["status"] == "collecting"

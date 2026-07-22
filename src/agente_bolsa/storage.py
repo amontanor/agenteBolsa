@@ -1334,6 +1334,8 @@ class Store:
     def canonical_selection_ledger_event(self, cycle_id: str) -> dict[str, Any] | None:
         """Read one canonical selection ledger event without reconstruction."""
 
+        if not self.database_path.exists():
+            return None
         event_id = f"canonical_selection_ledger:{cycle_id}"
         try:
             with self.read_connection() as conn:
@@ -1359,6 +1361,8 @@ class Store:
     def latest_canonical_selection_ledger_event(self) -> dict[str, Any] | None:
         """Read the newest canonical ledger event, without aggregating rows."""
 
+        if not self.database_path.exists():
+            return None
         try:
             with self.read_connection() as conn:
                 row = conn.execute(
@@ -1392,6 +1396,8 @@ class Store:
     ) -> list[dict[str, Any]]:
         """Read selection-ledger conflicts separately from canonical events."""
 
+        if not self.database_path.exists():
+            return []
         query = """
             SELECT event_id, event_type, cycle_id, payload_json, created_at
             FROM agent_events
