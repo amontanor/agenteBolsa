@@ -126,8 +126,8 @@ La ruta conservada es:
 
 `_execute_stop_take_exits` -> `_risk_exit_plan` -> captura P-L43C en memoria ->
 metadata local `risk_decision.checks.time_stop_exit_authority` ->
-`submit_paper_order_plan` sin cambios -> persistencia P-L43C ->
-`save_broker_order` -> reconciliacion existente.
+`submit_paper_order_plan` sin cambios -> `save_broker_order` local canonico ->
+persistencia P-L43C fail-open -> reconciliacion existente.
 
 El `execution.py` protegido no se modifica. En la salida completa sigue
 recibiendo el mismo `settings`, `plan` y `client_order_id`, y sigue llamando a
@@ -202,3 +202,62 @@ concurrencia integrada siguen pendientes.
 La documentacion se consolida en este informe y no crea un plan paralelo.
 Produccion, otros candidatos, servicios y SQLite productiva permanecen fuera
 del lote; no hubo despliegue, reinicio ni push.
+
+## P-L43C-R1 - prioridad durable tras el envio
+
+### Dictamen
+
+`ready_for_closed_market_full_validation`.
+
+La auditoria de revision encontro que el candidato P-L43C-W podia persistir
+decision/link antes de guardar el `broker_order` local. Esto invertia la
+prioridad de evidencia: un fallo entre el envio activo y `save_broker_order`
+podria dejar telemetria shadow sin la orden local canonica. El cambio R1
+corrige unicamente ese orden y mantiene la version `0.4.192`.
+
+### Reproduccion y correccion
+
+La prueba negativa contra `1cd5db9841a376d8d7da9a393aeeaa59cbde9f27`
+registro la secuencia real:
+
+`submit -> persist_time_stop_exit_authority -> save_broker_order`.
+
+La prueba positiva en el worktree R1 exige y observa:
+
+`submit -> save_broker_order -> persist_time_stop_exit_authority`.
+
+La captura y su `decision_id/content_hash` se construyen antes del envio en
+memoria. El `broker_order` local se guarda por la ruta existente y solo cuando
+esa llamada termina correctamente se construye/persiste el link P-L43C. No se
+duplica el guardado, no se abre una conexion adicional antes del guardado y la
+llamada activa recibe el mismo plan, cantidad, identificador y request.
+
+### Fallos y paridad
+
+- submit correcto + save correcto + P-L43C correcto: orden y telemetria
+  completas;
+- submit correcto + save correcto + P-L43C fallido: la orden local y el
+  resultado activo permanecen intactos; la telemetria es fail-open;
+- submit correcto + save fallido: se conserva el manejo activo y no se
+  persiste un link que aparente una orden local durable;
+- submit con excepcion: se conserva la excepcion, sin `broker_order_id` ni
+  link `submitted`; solo puede quedar un enlace `failed` fail-open;
+- P-L43C no precede ni retrasa submit/save, y los reintentos siguen siendo
+  idempotentes/conflict-safe.
+
+Las pruebas comparan la llamada activa y el objeto guardado antes/despues del
+carrier. No cambian `legacy_calendar_days`, `shadow_only`, triggers, qty,
+precios, stops, takes, trailing, riesgo, exposicion, limites ni reconciliacion.
+Los archivos protegidos permanecen sin cambios.
+
+### QA de R1
+
+- 44 pruebas focales P-L43C/R1 verdes, con un warning de dependencia;
+- Ruff completo verde;
+- la reproduccion negativa se ejecuto previamente contra la base exacta;
+- no se anadieron skips ni xfails;
+- con XNYS abierto se omiten suite completa, smoke, benchmark largo, P-L45
+  de 33.336 filas, jobs, broker, red, LLM, postmarket y reconciliacion
+  productivos;
+- el siguiente gate es la validacion cerrada integrada, no el despliegue
+  automatico.
