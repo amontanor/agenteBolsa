@@ -73,6 +73,7 @@ def _save_buy(store: Store) -> list[dict[str, Any]]:
 def test_e2e_carrier_reconciliation_p48_p51_p52_keeps_exact_contribution_ids(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr("agente_bolsa.storage._utc_iso", lambda: "2026-07-21T16:05:00+00:00")
     settings = Settings(DATA_DIR=tmp_path)
     store = _store(tmp_path)
     lots = _save_buy(store)

@@ -332,6 +332,7 @@ def _persisted_buy(store: Store) -> list[dict[str, Any]]:
 
 
 def test_selected_order_plan_metadata_survives_store_reconciliation_and_p48_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("agente_bolsa.storage._utc_iso", lambda: "2026-07-21T16:05:00+00:00")
     settings = Settings(DATA_DIR=tmp_path)
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()

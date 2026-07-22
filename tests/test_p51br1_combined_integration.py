@@ -171,7 +171,11 @@ def test_combined_shadow_events_remain_independent_and_active_inputs_unchanged(t
     assert active_candidate == active_before
 
 
-def test_real_boundary_is_not_mistaken_for_synthetic_exact_capture(tmp_path: Path) -> None:
+def test_real_boundary_is_not_mistaken_for_synthetic_exact_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("agente_bolsa.storage._utc_iso", lambda: "2026-07-21T16:05:00+00:00")
     store = _store(tmp_path)
     _persisted_cycle_orders(store)
     telemetry = build_canonical_operation_telemetry(store, SESSION, captured_at=CAPTURED_AT)
