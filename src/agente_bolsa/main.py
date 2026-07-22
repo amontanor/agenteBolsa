@@ -2336,6 +2336,37 @@ def command_canonical_operation_telemetry(args: argparse.Namespace) -> None:
     print(f"denominators={report.get('denominators')}")
 
 
+def command_time_stop_exit_authority(args: argparse.Namespace) -> None:
+    """Read exact P-L43C authority/link events without reconstructing orders."""
+
+    settings = get_settings()
+    try:
+        from .tools.time_stop_exit_authority import time_stop_exit_authority_digest
+
+        store = Store(settings.database_path, settings.agent_logs_dir)
+        report = time_stop_exit_authority_digest(store)
+        ok = report.get("status") not in {"unavailable", "degraded_observability"}
+    except Exception as exc:  # noqa: BLE001 - a missing ledger is collecting.
+        report = {
+            "status": "collecting",
+            "canonical_decisions": None,
+            "linked_orders": None,
+            "conflicts": None,
+            "error": f"read_failed:{type(exc).__name__}",
+        }
+        ok = False
+    if args.json:
+        _print_json({"ok": ok, **report})
+        return
+    print("TIME-STOP EXIT AUTHORITY")
+    print(f"status={report.get('status')}")
+    print(
+        "decisions="
+        f"{report.get('canonical_decisions')} | linked_orders={report.get('linked_orders')} | "
+        f"conflicts={report.get('conflicts')}"
+    )
+
+
 def command_policy_candidates(args: argparse.Namespace) -> None:
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
@@ -3774,6 +3805,13 @@ def build_parser() -> argparse.ArgumentParser:
     canonical_operation_telemetry.add_argument("--session", required=True, help="Sesión YYYY-MM-DD.")
     canonical_operation_telemetry.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     canonical_operation_telemetry.set_defaults(func=command_canonical_operation_telemetry)
+
+    time_stop_exit_authority = subparsers.add_parser(
+        "time-stop-exit-authority",
+        help="Lee autoridad causal shadow P-L43C sin reconstruir órdenes.",
+    )
+    time_stop_exit_authority.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    time_stop_exit_authority.set_defaults(func=command_time_stop_exit_authority)
 
     policy_candidates = subparsers.add_parser(
         "policy-candidates",

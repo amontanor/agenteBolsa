@@ -87,6 +87,11 @@ from .tools.retention import cleanup_runtime_data
 from .tools.rr_cohort import write_rr_cohort_report
 from .tools.signal_learning import record_signal_candidates
 from .tools.technical_study import build_closed_market_technical_study
+from .tools.time_stop_exit_authority import (
+    attach_time_stop_exit_authority_reference,
+    build_time_stop_exit_authority_capture,
+    submit_with_time_stop_exit_authority,
+)
 from .tools.time_stop_policy import (
     POLICY_VERSION as TIME_STOP_POLICY_VERSION,
 )
@@ -1490,11 +1495,45 @@ def _execute_stop_take_exits(
             source_plan=source_plan,
             time_stop_evidence=(exit_policy_state or {}).get("time_stop_evidence"),
         )
+        client_order_id = f"agente-{plan['plan_id'][:20]}"
+        authority_capture = None
+        if trigger == "time_stop_v2":
+            try:
+                evidence = (exit_policy_state or {}).get("time_stop_evidence") or {}
+                authority_capture = build_time_stop_exit_authority_capture(
+                    cycle_id=run_id,
+                    watch_id=run_id,
+                    position_identity=evidence.get("position_identity"),
+                    plan_id=plan.get("plan_id"),
+                    symbol=symbol,
+                    qty=exit_qty,
+                    trigger=trigger,
+                    time_stop_evidence=evidence,
+                    lots=list(buy_lots.get(symbol, [])),
+                    source_plan=source_plan,
+                    decided_at=temporal_evaluation_at.isoformat(),
+                )
+                attach_time_stop_exit_authority_reference(plan, authority_capture)
+            except Exception as exc:  # noqa: BLE001 - carrier is observability only.
+                LOGGER.warning("time-stop authority capture unavailable for %s: %s", symbol, exc)
         try:
-            order = submit_paper_order_plan(
-                settings,
-                plan,
-                client_order_id=f"agente-{plan['plan_id'][:20]}",
+            order, _authority_link = submit_with_time_stop_exit_authority(
+                submit=lambda settings=settings, plan=plan, client_order_id=client_order_id: submit_paper_order_plan(
+                    settings,
+                    plan,
+                    client_order_id=client_order_id,
+                ),
+                store=store,
+                capture=authority_capture,
+                client_order_id=client_order_id,
+                request_descriptor={
+                    "operation": "close_position",
+                    "method": "close_position",
+                    "symbol": symbol,
+                    "side": "sell",
+                    "client_order_id": client_order_id,
+                    "qty": exit_qty,
+                },
             )
             store.save_broker_order(
                 broker_order_id=order["id"] or plan["plan_id"],
