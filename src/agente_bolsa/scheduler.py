@@ -2238,6 +2238,7 @@ def market_cycle_job(
             run_id=run_id,
             timing=timing,
             learning_penalty_shadow=learning_penalty_shadow,
+            selection_ledger_phase_a=ranked_context,
         )
         _set_job_status(
             store,
@@ -2495,6 +2496,7 @@ def closed_market_technical_study_job(
                 technical_context=_compact_scan_context(report, selected_candidates),
                 run_id=run_id,
                 learning_penalty_shadow=learning_penalty_shadow,
+                selection_ledger_phase_a=ranked_context,
             )
         except Exception as exc:  # noqa: BLE001 - scheduler must keep running after LLM failures.
             _persist_learning_penalty_cycle_shadow_partial(store, reporter, learning_penalty_shadow, run_id)

@@ -25,6 +25,10 @@ from .storage import Store
 from .tools.adversarial_reviewer import review_recommendations_adversarial
 from .tools.backtest import build_symbol_backtest
 from .tools.broker import BrokerClientFactory
+from .tools.canonical_selection_ledger import (
+    build_canonical_selection_ledger,
+    persist_canonical_selection_ledger,
+)
 from .tools.comparable_controls import (
     build_comparable_control_sets,
     build_unavailable_control_set,
@@ -1207,6 +1211,7 @@ def _persist_learning_penalty_cycle_shadow_final(
     """Finalize and persist exactly one post-selection event, fail-open."""
     if not isinstance(phase_a, dict):
         return None
+
     try:
         final = finalize_learning_penalty_cycle_shadow(
             phase_a,
@@ -1338,6 +1343,70 @@ def _persist_data_quality_decision_shadow_final(
         return None
 
 
+def _persist_selection_ledger_shadow(
+    *,
+    store: Store,
+    reporter: EventReporter,
+    phase_a: dict[str, Any] | None,
+    run_id: str,
+    recommendations: list[Any] | None = None,
+    plans: list[Any] | None = None,
+    plan_records: list[dict[str, Any]] | None = None,
+    rejected_order_plans: list[dict[str, Any]] | None = None,
+    ordered_records: list[dict[str, Any]] | None = None,
+    failed_records: list[dict[str, Any]] | None = None,
+    gate_snapshots: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Capture the exact cycle funnel once, without authority over trading."""
+
+    try:
+        payload = build_canonical_selection_ledger(
+            run_id,
+            phase_a,
+            recommendations=recommendations,
+            plans=plans,
+            plan_records=plan_records,
+            rejected_order_plans=rejected_order_plans,
+            ordered_records=ordered_records,
+            failed_records=failed_records,
+            gate_snapshots=gate_snapshots,
+        )
+        persisted = persist_canonical_selection_ledger(store, payload)
+        reporter.emit(
+            "self_improvement_engineer",
+            "canonical_selection_ledger",
+            run_id,
+            "Ledger shadow de seleccion capturado despues de la ruta activa.",
+            {
+                "status": payload.get("status"),
+                "persist_status": persisted.get("status"),
+                "denominators": payload.get("denominators"),
+                "policy_mode": "shadow_only",
+            },
+        )
+        return {
+            "status": payload.get("status"),
+            "persist_status": persisted.get("status"),
+            "event_id": payload.get("event_id"),
+            "content_hash": payload.get("content_hash"),
+            "denominators": payload.get("denominators"),
+        }
+    except Exception as exc:  # noqa: BLE001 - telemetry is fail-open by contract.
+        reporter.emit(
+            "self_improvement_engineer",
+            "canonical_selection_ledger_failed",
+            run_id,
+            "No se pudo capturar el ledger shadow; la ruta activa continua sin cambios.",
+            {"error": repr(exc), "policy_mode": "shadow_only"},
+        )
+        return {
+            "status": "unavailable",
+            "persist_status": "failed",
+            "event_id": f"canonical_selection_ledger:{run_id}",
+            "error": repr(exc),
+        }
+
+
 def _auto_paper_trade(
     settings: Settings,
     store: Store,
@@ -1350,6 +1419,7 @@ def _auto_paper_trade(
     data_quality_shadow: dict[str, Any] | None = None,
     agent_run_id: str | None = None,
     timing: MarketCycleTiming | None = None,
+    selection_ledger_phase_a: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if not settings.auto_paper_trading:
         return None
@@ -1361,7 +1431,14 @@ def _auto_paper_trade(
             "Auto paper trading bloqueado porque REQUIRE_HUMAN_APPROVAL=true.",
             {},
         )
-        return {"submitted": [], "failed": [], "blocked": "REQUIRE_HUMAN_APPROVAL"}
+        return {
+            "submitted": [],
+            "failed": [],
+            "blocked": "REQUIRE_HUMAN_APPROVAL",
+            "selection_ledger": _persist_selection_ledger_shadow(
+                store=store, reporter=reporter, phase_a=selection_ledger_phase_a, run_id=run_id
+            ),
+        }
     if settings.trading_mode != "paper" or not settings.alpaca_paper or settings.allow_live_trading:
         reporter.emit(
             "execution_agent",
@@ -1374,7 +1451,14 @@ def _auto_paper_trade(
                 "allow_live_trading": settings.allow_live_trading,
             },
         )
-        return {"submitted": [], "failed": [], "blocked": "paper_safety"}
+        return {
+            "submitted": [],
+            "failed": [],
+            "blocked": "paper_safety",
+            "selection_ledger": _persist_selection_ledger_shadow(
+                store=store, reporter=reporter, phase_a=selection_ledger_phase_a, run_id=run_id
+            ),
+        }
     learning_mode = active_learning_mode(settings)
     daily_learning_digest = load_daily_learning_context(settings.data_dir)
     operational_response_context = load_operational_response_context(settings.data_dir)
@@ -1397,6 +1481,9 @@ def _auto_paper_trade(
             "failed": [],
             "blocked": "operational_kill_switch",
             "operational_kill_switch": operational_kill_switch,
+            "selection_ledger": _persist_selection_ledger_shadow(
+                store=store, reporter=reporter, phase_a=selection_ledger_phase_a, run_id=run_id
+            ),
         }
 
     market_status = MarketCalendar(settings.market_calendar, settings.local_timezone).status()
@@ -1408,7 +1495,14 @@ def _auto_paper_trade(
             "Auto paper trading bloqueado: mercado cerrado. No se envian ordenes intradia.",
             market_status.as_dict(),
         )
-        return {"submitted": [], "failed": [], "blocked": "market_closed"}
+        return {
+            "submitted": [],
+            "failed": [],
+            "blocked": "market_closed",
+            "selection_ledger": _persist_selection_ledger_shadow(
+                store=store, reporter=reporter, phase_a=selection_ledger_phase_a, run_id=run_id
+            ),
+        }
 
     try:
         portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
@@ -1475,7 +1569,16 @@ def _auto_paper_trade(
                 f"No compra ni vende. Decision automatica fallida: {exc}",
                 {"error": repr(exc)},
             )
-            return {"submitted": [], "failed": [{"stage": "decision", "error": str(exc)}]}
+            return {
+                "submitted": [],
+                "failed": [{"stage": "decision", "error": str(exc)}],
+                "selection_ledger": _persist_selection_ledger_shadow(
+                    store=store,
+                    reporter=reporter,
+                    phase_a=selection_ledger_phase_a,
+                    run_id=run_id,
+                ),
+            }
 
     # Medicion shadow A2 (cada ciclo, no solo en fallback): mide el funnel de
     # setup-quality y como reordenaria el sesgo de edge, sin tocar la seleccion.
@@ -1687,6 +1790,9 @@ def _auto_paper_trade(
             {"source_run_id": decision_context.get("run_id"), "updated": learned_decisions},
         )
     rejected_order_plans: list[dict[str, Any]] = []
+    plan_records: list[dict[str, Any]] = []
+    ordered_records: list[dict[str, Any]] = []
+    failed_records: list[dict[str, Any]] = []
 
     def _recommendation_identity(item: Any) -> tuple[str, str, str]:
         lineage = dict(getattr(item, "decision_lineage", {}) or {})
@@ -1982,14 +2088,35 @@ def _auto_paper_trade(
                     rejected_order_plans=rejected_order_plans,
                     phase_b_available=True,
                 ),
+                "selection_ledger": _persist_selection_ledger_shadow(
+                    store=store,
+                    reporter=reporter,
+                    phase_a=selection_ledger_phase_a,
+                    run_id=run_id,
+                    recommendations=reviewed_recommendations,
+                    plans=plans,
+                    plan_records=plan_records,
+                    rejected_order_plans=rejected_order_plans,
+                    gate_snapshots=gate_snapshots,
+                ),
             }
     planned_symbols = [plan.symbol for plan in plans if str(plan.side).lower() == "buy"]
     for plan in plans:
         plan_id = new_id("plan")
+        plan_payload = asdict(plan)
+        plan_records.append(
+            {
+                "cycle_id": run_id,
+                "action": str(plan.side).lower(),
+                "plan_id": plan_id,
+                "payload": plan_payload,
+                "decision_lineage": copy.deepcopy(plan_payload.get("decision_lineage") or {}),
+            }
+        )
         with optional_measure(timing, "persistence", "order_plan_records"):
             store.save_order_plan(
                 plan_id=plan_id, cycle_id=run_id, symbol=plan.symbol, side=plan.side,
-                notional=plan.notional, approved=plan.risk_decision.approved, dry_run=plan.dry_run, payload=asdict(plan),
+                notional=plan.notional, approved=plan.risk_decision.approved, dry_run=plan.dry_run, payload=plan_payload,
             )
             recommendation_tags = list(getattr(getattr(plan, "recommendation", None), "tags", []) or [])
             if LOW_SAMPLE_EXPLORATION_TAG in recommendation_tags and str(plan.side).lower() == "buy":
@@ -2051,6 +2178,17 @@ def _auto_paper_trade(
             "recommendation_augmentation": recommendation_augmentation,
             "learning_penalty_shadow": learning_penalty_shadow_final,
             "data_quality_decision_shadow": _data_quality_shadow_final,
+            "selection_ledger": _persist_selection_ledger_shadow(
+                store=store,
+                reporter=reporter,
+                phase_a=selection_ledger_phase_a,
+                run_id=run_id,
+                recommendations=reviewed_recommendations,
+                plans=plans,
+                plan_records=plan_records,
+                rejected_order_plans=rejected_order_plans,
+                gate_snapshots=gate_snapshots,
+            ),
         }
 
     submitted = []
@@ -2071,6 +2209,18 @@ def _auto_paper_trade(
                 side=plan["side"],
                 status=order["status"],
                 payload={"plan": plan, "broker_order": order},
+            )
+            ordered_records.append(
+                {
+                    "cycle_id": run_id,
+                    "action": str(plan.get("side") or "").lower(),
+                    "plan_id": plan.get("plan_id"),
+                    "broker_order_id": broker_order_id,
+                    "decision_lineage": copy.deepcopy(
+                        plan.get("payload", {}).get("decision_lineage")
+                        or recommendation.get("decision_lineage", {})
+                    ),
+                }
             )
             submitted.append(
                 {
@@ -2093,6 +2243,15 @@ def _auto_paper_trade(
             )
         except Exception as exc:  # noqa: BLE001 - one rejected order should not hide the rest.
             failed.append({"symbol": plan["symbol"], "side": plan["side"], "error": str(exc)})
+            failed_records.append(
+                {
+                    "cycle_id": run_id,
+                    "action": str(plan.get("side") or "").lower(),
+                    "plan_id": plan.get("plan_id"),
+                    "decision_lineage": copy.deepcopy(plan.get("payload", {}).get("decision_lineage") or {}),
+                    "reason": str(exc),
+                }
+            )
 
     buys = [item for item in submitted if item["side"].lower() == "buy"]
     sells = [item for item in submitted if item["side"].lower() == "sell"]
@@ -2149,6 +2308,19 @@ def _auto_paper_trade(
         "recommendation_augmentation": recommendation_augmentation,
         "learning_penalty_shadow": learning_penalty_shadow_final,
         "data_quality_decision_shadow": _data_quality_shadow_final,
+        "selection_ledger": _persist_selection_ledger_shadow(
+            store=store,
+            reporter=reporter,
+            phase_a=selection_ledger_phase_a,
+            run_id=run_id,
+            recommendations=reviewed_recommendations,
+            plans=plans,
+            plan_records=plan_records,
+            rejected_order_plans=rejected_order_plans,
+            ordered_records=ordered_records,
+            failed_records=failed_records,
+            gate_snapshots=gate_snapshots,
+        ),
     }
 
 
@@ -2162,6 +2334,7 @@ def run_observable_cycle(
     run_id: str | None = None,
     timing: MarketCycleTiming | None = None,
     learning_penalty_shadow: dict[str, Any] | None = None,
+    selection_ledger_phase_a: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run one cycle and make every phase visible in the console and logs."""
 
@@ -2371,6 +2544,7 @@ def run_observable_cycle(
                 data_quality_shadow=data_quality_shadow,
                 agent_run_id=crew_run.agent_run_id,
                 timing=timing,
+                selection_ledger_phase_a=selection_ledger_phase_a,
             )
         except Exception as exc:
             timing.finalize("failed", error=exc)
@@ -2435,6 +2609,16 @@ def run_observable_cycle(
                 rejected_order_plans=(auto_result or {}).get("rejected_order_plans", []) if isinstance(auto_result, dict) else [],
                 phase_b_available=False,
             )
+    if not isinstance(auto_result, dict) or "selection_ledger" not in auto_result:
+        _persist_selection_ledger_shadow(
+            store=store,
+            reporter=reporter,
+            phase_a=selection_ledger_phase_a,
+            run_id=run_id,
+            recommendations=(auto_result or {}).get("recommendations") if isinstance(auto_result, dict) else None,
+            plans=(auto_result or {}).get("plans") if isinstance(auto_result, dict) else None,
+            rejected_order_plans=(auto_result or {}).get("rejected_order_plans") if isinstance(auto_result, dict) else None,
+        )
     with timing.measure("persistence", "trade_summary"):
         _record_trade_summary(settings, store, reporter, run_id, auto_result)
     if not timing.is_running("technical_analysis"):

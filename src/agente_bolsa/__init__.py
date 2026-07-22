@@ -6,4 +6,7 @@ __all__ = ["__version__"]
 # Bump this on every functional, UI, behavior, or shipped product change.
 # P-L50B: immutable lineage/input propagation into the P-L44 shadow (0.4.188).
 # P-L52B-W shadow contract for canonical EOD accounting (0.4.190).
-__version__ = "0.4.190"
+# P-L53B-W shadow candidate: canonical selection ledger by cycle.
+# QA correction: empty read-only DATA_DIR returns collecting without opening a write DB.
+# P-L53BR1: integrated selection ledger over the P-L52BR1 rehearsal (0.4.191).
+__version__ = "0.4.191"
