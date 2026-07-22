@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
@@ -169,6 +171,33 @@ def test_storage_persists_decision_and_link_once_and_preserves_conflict(tmp_path
     assert report["canonical_decisions"] == 1
     assert report["linked_orders"] == 1
     assert report["conflicts"] == 1
+
+
+def test_storage_concurrent_retry_is_inserted_then_idempotent(tmp_path) -> None:
+    store = Store(tmp_path / "concurrent.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    capture = _capture()
+    link = build_time_stop_exit_order_link(
+        capture,
+        broker_order_id="sell-concurrent",
+        client_order_id="client-concurrent",
+        submitted_at="2026-07-22T13:30:01+00:00",
+        completed_at=None,
+        submission_status="filled",
+        request_descriptor={"operation": "close_position", "symbol": "AAPL"},
+    )
+    barrier = Barrier(2)
+
+    def writer() -> dict:
+        barrier.wait()
+        return store.record_time_stop_exit_authority(capture, link, cycle_id="watch-1")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _item: writer(), (0, 1)))
+    assert {result["status"] for result in results} == {"inserted", "idempotent"}
+    events = store.time_stop_exit_authority_events()
+    assert sum(event["event_type"] == "time_stop_exit_authority" for event in events) == 1
+    assert sum(event["event_type"] == "time_stop_exit_order_link" for event in events) == 1
 
 
 def test_submit_persists_only_after_call_and_preserves_submission_exception() -> None:
