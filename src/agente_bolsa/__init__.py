@@ -4,5 +4,5 @@ __all__ = ["__version__"]
 
 # Semantic versioning (major.minor.patch).
 # Bump this on every functional, UI, behavior, or shipped product change.
-# P-L48BR1 QA rehearsal: identity fallback and digest conflict fixes (0.4.185).
-__version__ = "0.4.185"
+# P-L53B-T test-policy candidate: canonical selection ledger characterization (0.4.186).
+__version__ = "0.4.186"
