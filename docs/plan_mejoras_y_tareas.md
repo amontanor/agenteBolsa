@@ -2330,5 +2330,28 @@ de despliegue quedan pendientes con XNYS cerrado.
   Producción, SQLite productiva, servicios y candidatos originales intactos;
   no hubo despliegue ni push.
 - Dictamen del ensayo: `needs_fix` por la deuda heredada P-L51/P-L51C.
+
+## P-L53BR2 - reensayo limpio de P-L53 sobre P-L51CR2 (22-jul-2026)
+
+- Base `2da5ccda`, tree `cdf34263`; merge `--no-ff` `3b2ae0bf` desde P-L53BR1.
+  Worktree `pl53br2_integration_rehearsal`, rama
+  `codex/pl53br2-integration-rehearsal`, version final `0.4.191`.
+- Gate de las tres fixtures temporales: `3 passed`. QA adicional
+  `2bb92a4b`/`165ad748`; fixture concurrente estabilizada en `ff6267a0`, sin
+  cambio en src.
+- P-L53 conserva la ruta shadow y queda fuera del PMR; identidades, cap,
+  truncation/maturity, fail-open y paridad verificados.
+- BR2: 100x500 mas escalas 250/500/1000; 109 eventos/conexiones/transacciones,
+  uno por ciclo; evento p50/max `757177`, memoria pico `17066653`, WAL `0`,
+  shadow p50 `511.6280 ms`. Riesgo `medium` por tamano/latencia, con
+  persistencia despues del envio y sin locks.
+- Suite final: `1933 passed, 1 deselected, 1 warning` en 753.78 s, incluyendo
+  P-L45 de 33.336 filas. Unico deselect:
+  `tests/test_pre_earnings.py::test_score_study_regression_current_sqlite`,
+  que abre SQLite productiva; no se anadieron skips/xfails.
+- Smoke real queda `smoke_unavailable_by_safety`. Sin produccion, SQLite
+  productiva, servicios, reinicio, despliegue ni push.
+- Dictamen: `ready_for_closed_market_deployment` como candidato no desplegado;
+  siguiente paso unico: preflight operativo y autorizacion humana.
   Siguiente lote único: corregir esos tres focales y repetir la suite cerrada;
   P-L53 permanece shadow y no se cambia política de trading.

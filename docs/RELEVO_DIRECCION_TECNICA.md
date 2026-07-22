@@ -397,6 +397,26 @@ Siguiente lote único: P-L53BR1, ensayo integrado aislado desde el candidato
 
 ## P-L53BR1 - ensayo integrado sobre P-L52BR1 (22-jul-2026)
 
+## P-L53BR2 - relevo final del reensayo limpio (22-jul-2026)
+
+- Worktree `C:\Antonio\Bref\agenteBolsa_worktrees\pl53br2_integration_rehearsal`,
+  rama `codex/pl53br2-integration-rehearsal`, base `2da5ccda`, merge
+  `3b2ae0bf`, version `0.4.191`.
+- Gate temporal `3 passed`; QA de volumen `2bb92a4b`/`165ad748` y fixture
+  concurrente `ff6267a0`, sin cambio productivo.
+- Orden de mercado y PMR conservado; P-L53 fase A tras ranking, finalizacion
+  despues del envio activo y fuera de PMR. Identidades/paridad exactas.
+- BR2: 100x500 y escalas, 109 eventos/conexiones/transacciones, evento p50/max
+  `757177`, memoria pico `17066653`, WAL `0`, shadow p50 `511.6280 ms`; riesgo
+  `medium`, sin O(n2) descriptivo y sin retraso del envio.
+- Suite final `1933 passed, 1 deselected, 1 warning`; el unico deselect es el
+  test legado que abre `data/state/agente_bolsa.sqlite3`; no hay skips/xfails.
+  P-L45 33.336 esta incluido. Smoke real:
+  `smoke_unavailable_by_safety`.
+- Dictamen: `ready_for_closed_market_deployment` como candidato no desplegado.
+  Siguiente paso unico: preflight cerrado y autorizacion humana; no deploy ni
+  push desde este ensayo.
+
 - Se creó el worktree aislado `pl53br1_integration_rehearsal` desde
   `134ec525` y se fusionó P-L53B-W con `--no-ff` en `fc4eb767`; la QA quedó en
   `52668b42`. Versión final: `0.4.191`.

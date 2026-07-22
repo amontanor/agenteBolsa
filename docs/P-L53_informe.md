@@ -416,6 +416,30 @@ despliegue y queda pendiente de un lote cerrado autorizado.
 
 ### Seguridad y paridad
 
+## P-L53BR2 - reensayo limpio sobre P-L51CR2 (22-jul-2026)
+
+Dictamen: `ready_for_closed_market_deployment`, solo como candidato pendiente de preflight y autorizacion operativa. XNYS cerrado; siguiente apertura observada 2026-07-22 15:30 CEST. PMR terminalizado, reintento `session_already_completed`, lease efectivo vacio y sin jobs operativos efectivos.
+
+- Base P-L51CR2: `2da5ccda408f2070e1555faf30ae887917430918`, tree `cdf34263c7bd566086f5624995020bf522db0c7a`, version `0.4.190`.
+- Merge `--no-ff`: `3b2ae0bf21a270250da05727479544a990bdb4a7`; QA `2bb92a4b`, `165ad748` y `ff6267a0`.
+- Worktree/rama: `C:\Antonio\Bref\agenteBolsa_worktrees\pl53br2_integration_rehearsal`, `codex/pl53br2-integration-rehearsal`; version final `0.4.191`.
+
+Gate inicial: las tres pruebas de provenance pasaron `3 passed, 1 warning` con reloj/sesion coherentes. La ruta de mercado es P-L49 A -> aprendizaje/ranking -> P-L50/P-L44 A -> P-L53 A sobre el contexto rankeado -> seleccion/recomendaciones -> gates/limites/cuotas/pausas -> controles/planes -> P-L49 B -> P-L50/P-L44 B -> persistencia/envio activo -> P-L53 finalizacion/persistencia. P-L53 reutiliza objetos, no repite ranking/LLM/gates/planes/RiskManager/broker y persiste despues del envio.
+
+El PMR permanece reconciliation -> P-L48 -> P-L51 -> P-L52 -> performance -> measurement -> thesis -> terminal; P-L53 esta fuera. P-L49, P-L50, P-L53, P-L51 y P-L52 mantienen dominios/identidades separados; BUY/EXIT separados; no hay joins por simbolo/fecha/texto. Ordered/broker_order_id solo con identidad exacta; si no, null/unavailable.
+
+QA combinada: raw=canonical=443, eligible=443, 20 seleccionados, 5 recomendaciones, 3 planes, 2 ordenes, 500 observaciones P-L49 y 37 anomalias; P-L48/P-L51/P-L52 independientes. Truncation conserva partial/truncated_count; 3d maduro exacto y 5d/10d inmaduros unavailable; sin outcomes futuros en el ledger.
+
+Rendimiento BR2 en 100x500: fase A p50/p95/max `202.0263/211.1987/216.4099 ms`; finalizacion `16.3908/17.0357/21.1327`; serializacion `131.5130/139.4094/144.2063`; build `382.3727/393.8780/400.3456`; espera BEGIN `0.6130/0.8006/0.8545`; transaccion `3.9896/16.3855/18.0177`; persistencia `67.8134/79.4254/85.7986`; shadow total `511.6280/526.8102/534.7351`.
+
+Evento p50/max `757177` bytes, memoria pico `17066653`, WAL pico/final `0`; 109 eventos/conexiones/transacciones para 109 ciclos (uno por ciclo, no por candidato). Escalas 250/500/1000: bytes p50 `375497/751173/1510506`, build p50 `188.8587/387.7908/762.8497 ms`; crecimiento descriptivo compatible con lineal, sin garantia de capacidad. A 26/100 ciclos: aprox. 19.686.602/75.717.700 bytes y 13.3/51.2 s de shadow p50. Riesgo `medium` por tamano/latencia, mitigado por persistencia posterior al envio y ausencia de locks.
+
+Suite integrada final: `1933 passed, 1 deselected, 1 warning` en 753.78 s; incluye P-L45 33.336, P-L53B-T/W/BR1/BR2, P-L51B/C, P-L48, P-L49/P-L50, P-L43/P-L44/P-L45/P-L47, UI, scheduler, storage, PMR, reconciliation, performance, digest, health y CLI. Unico deselect: `tests/test_pre_earnings.py::test_score_study_regression_current_sqlite`, que abre `data/state/agente_bolsa.sqlite3`; no se abrio esa SQLite. No skips/xfails.
+
+Smoke real `run-once --skip-crew`, broker, red, LLM, servicios y jobs reales: `smoke_unavailable_by_safety`. Paridad de trading/riesgo/ejecucion verificada; protegidos Git iguales a produccion. No hubo produccion, SQLite productiva, reinicio, despliegue ni push.
+
+Siguiente paso unico: preflight operativo independiente y autorizacion humana; no cambiar politica ni promover automaticamente.
+
 La QA confirma paridad byte/estructura de candidatos, scores, ranks, selección,
 recomendaciones, gates, sizing, microexperimentos, controles, planes,
 cantidades, precios, stops/takes/trailing, órdenes, broker requests, exposición,
