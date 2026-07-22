@@ -333,7 +333,7 @@ def test_scheduler_wiring_keeps_close_position_call_and_persists_after_submit(mo
         evaluation_at=datetime.fromisoformat("2026-07-22T13:30:00+00:00"),
     )
     assert exits[0]["status"] == "accepted"
-    assert [item[0] for item in calls] == ["submit", "persist", "save_broker_order"]
+    assert [item[0] for item in calls] == ["submit", "save_broker_order", "persist"]
 
 
 def test_empty_reader_is_collecting_with_null_denominators(tmp_path) -> None:
