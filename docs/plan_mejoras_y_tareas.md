@@ -2573,18 +2573,26 @@ de despliegue quedan pendientes con XNYS cerrado.
 - 17 tests verdes. Contrato decision_rows completo en informe único.
 - P-L59E sigue bloqueado por precondiciones.
 
-## P-L59F-I — implementacion decision_rows v2. HECHO (v0.4.197).
+## P-L59F-I-R1 — implementacion decision_rows v2 corregida. HECHO (v0.4.197).
 
-- Dictamen: `ready_for_integration_rehearsal`.
+- El candidato inicial `305b56ee` quedo `needs_fix`; el worker fue
+  interrumpido durante R1 y sus cambios parciales se revisaron antes de
+  continuar.
+- Dictamen corregido: `ready_for_integration_rehearsal`.
 - Worktree/rama: `pl59fi_decision_rows`, `codex/pl59fi-decision-rows`.
 - Base `224b4958`, tree `135df124`, version `0.4.196`.
-- Candidato version `0.4.197`. Commits: src, tests, version, docs.
+- Candidato version `0.4.197`; correccion funcional/QA `1ce3c155`, tree
+  `ed1e6879`.
 - Solo `canonical_selection_ledger.py` (+449/-43) y `__init__.py`.
   Sin cambios en cycle_runner, storage, protegidos, config, politica.
 - SCHEMA_VERSION `p-l53b.canonical-selection-ledger.v2`. candidate_rows
   summary 8 estados. decision_rows por identidad exacta. Bounded 600.
   Denominadores v2. Reader backward-compatible v1.
-- 152 passed (33 nuevos P-L59F-I). Ruff/NUL/diff/py_compile/config verdes.
+- 169 passed en la bateria focal disjunta; Ruff completo, NUL y diff verdes.
+- Se separan conflictos de duplicados idempotentes, se cuentan denominadores
+  pre-truncado y se exigen candidato/linaje exactos para recomendaciones y
+  adjuntos.
 - Brecha P-L53 recommendation_id: CERRADA.
 - Gates omitidos: suite, smoke, benchmark, P-L45, kernel (precondiciones).
-- Siguiente: P-L59F-D rehearsal de integracion.
+- Siguiente: P-L59F-D rehearsal `--no-ff` y validacion cerrada completa; sin
+  despliegue automatico.

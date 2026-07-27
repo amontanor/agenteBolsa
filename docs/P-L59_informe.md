@@ -394,7 +394,7 @@ sujeta a verificacion de que ningun otro candidato use ese numero.
 
 ## Dictamen
 
-**`ready_for_integration_rehearsal`**.
+**`needs_fix`** para el candidato inicial `305b56ee`.
 
 ## Causa
 
@@ -419,12 +419,12 @@ planes, ordenes o politica activa.
 | `e4eb869f` | src | decision_rows v2 in canonical_selection_ledger.py |
 | `f2e31ab9` | tests | 33 new focal + updated existing for v2 |
 | `650ccc22` | version | bump to 0.4.197 |
-| (HEAD) | docs | informe, plan, relevo |
+| `305b56ee` | docs | informe, plan y relevo iniciales |
 
 ### HEAD/tree
 
-- HEAD: ver commit docs (actual)
-- Tree: limpio, sin cambios unstaged
+- HEAD inicial: `305b56ee835b6a19178239c8559260346b0831a0`
+- Tree inicial: `0a9a9834f3f209591cc075216e76dec1b669abf0`
 
 ## Schema
 
@@ -484,7 +484,8 @@ tabla, migracion, backfill.
 
 ## Pruebas
 
-- **152 passed** en 7 archivos (64s):
+- El informe inicial declaro **152 passed**, pero sus subtotales sumaban 182.
+  Esa cifra queda invalidada; la evidencia corregida se publica en P-L59F-I-R1.
   - P-L53: 13 (test_p53b_selection_ledger_shadow.py)
   - P-L59F-T: 17 (test_p59ft_recommendation_identity_design.py)  
   - **P-L59F-I: 33 nuevos** (test_p59fi_decision_rows.py)
@@ -553,3 +554,59 @@ senal/accion. Candidate summary refleja estado ambiguous con 2 decision_ids.
 
 P-L59F-D: rehearsal de integracion de P-L59F-I. Requiere worktree aislado,
 merge --no-ff, QA completa con XNYS cerrado y precondiciones satisfechas.
+
+---
+
+# P-L59F-I-R1 — cierre correctivo tras interrupcion (27-jul-2026)
+
+## Dictamen
+
+**`ready_for_integration_rehearsal`**.
+
+El worker fue interrumpido con cambios sin commit. Direccion inspecciono el
+diff completo, conservo solo cambios coherentes con el contrato y corrigio:
+
+- identidad de decision de cuatro componentes:
+  `cycle_id + action + canonical_signal + recommendation_id`;
+- recomendaciones sin ID como filas `unavailable`, nunca descartadas;
+- recomendaciones ajenas a Fase A o con ciclo incompatible como
+  `unavailable`, sin inventar candidato;
+- adjuntos plan/orden/rechazo/fallo por `recommendation_id`/`plan_id` y linaje
+  de candidato coincidente; nunca solo por simbolo, fecha o ID parcial;
+- `client_order_id` y `failure_reason` preservados;
+- hashes de decision recalculados despues de todos los adjuntos;
+- campos singulares del candidato nulos ante ambiguedad y booleanos agregados
+  con semantica `any`;
+- denominadores antes del truncado de 600;
+- `recommendation_conflict` separado de `recommendation_idempotent`;
+- duplicados idempotentes no degradan el estado canonico;
+- test fail-open que fuerza una excepcion real en el builder y verifica que el
+  wrapper de ciclo la contiene.
+
+## Candidato corregido
+
+- Worktree/rama: `pl59fi_decision_rows`,
+  `codex/pl59fi-decision-rows`.
+- Base: `224b4958`, version `0.4.196`.
+- Commit funcional/QA:
+  `1ce3c1553c4c403635829d329c4543f7e87c0f8f`.
+- Tree funcional:
+  `ed1e6879d1499304fa400c8605346e2ccaaf53ed`.
+- Version: `0.4.197`.
+
+## Validacion focal
+
+- 169 passed en los 7 archivos P-L53/P-L59/version, 59.71 s.
+- Subconjunto adversarial P-L59F-I/P-L59F-T: 67 passed.
+- Ruff completo: verde.
+- `check_no_nulls.py`: OK, 437 archivos.
+- `git diff --check`: verde.
+
+Suite completa, smoke aislado, configuracion/kernel y benchmark largo se
+ejecutan en el ensayo de integracion, no en este commit correctivo. No hubo
+broker, red, LLM, yfinance, SQLite productiva, servicios, despliegue ni push.
+
+## Siguiente paso
+
+P-L59F-D: merge `--no-ff` del candidato corregido en un worktree aislado y
+validacion cerrada completa. No autoriza despliegue.

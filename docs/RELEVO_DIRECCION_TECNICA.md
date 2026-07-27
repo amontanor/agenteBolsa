@@ -637,17 +637,22 @@ cerrada.
 - Dictamen: `ready_for_implementation`. HEAD `224b4958`, tree `135df124`, v0.4.196.
 - 17 tests verdes. Contrato decision_rows completo. P-L59E bloqueado.
 
-## P-L59F-I — implementacion decision_rows v2 (27-jul-2026)
+## P-L59F-I-R1 — implementacion decision_rows v2 corregida (27-jul-2026)
 
-- Dictamen: **`ready_for_integration_rehearsal`**.
+- El candidato inicial `305b56ee` fue `needs_fix`; la correccion del worker se
+  interrumpio y direccion clasifico el diff antes de completarlo.
+- Dictamen final: **`ready_for_integration_rehearsal`**.
 - Worktree/rama: `pl59fi_decision_rows`, `codex/pl59fi-decision-rows`.
 - Base `224b4958`, tree `135df124`, version `0.4.196`.
-- Candidato v0.4.197. Commits: `e4eb869f` (src), `f2e31ab9` (tests),
-  `650ccc22` (version), (HEAD) (docs).
+- Candidato v0.4.197. Commit correctivo `1ce3c155`, tree funcional
+  `ed1e6879`.
 - SCHEMA_VERSION v2. decision_rows por identidad exacta de recomendacion.
   candidate_rows summary 8 estados. Bounded 600. Denominadores v2.
   Reader backward-compatible v1. Sin cambios en cycle_runner/storage/protegidos.
-- 152 passed (33 nuevos). Ruff/NUL/diff/py_compile/config verdes.
+- 169 passed en la bateria focal disjunta; Ruff completo, NUL y diff verdes.
+- Recomendaciones fuera de Fase A/ciclo quedan unavailable; adjuntos exigen
+  IDs y linaje exactos; idempotencias y conflictos tienen denominadores
+  separados; el test fail-open fuerza un fallo real.
 - Brecha P-L53 recommendation_id: CERRADA.
 - Gates omitidos: suite, smoke, benchmark, P-L45, kernel (precondiciones
   no terminales: postmarket no terminal, continuous_improvement running).
