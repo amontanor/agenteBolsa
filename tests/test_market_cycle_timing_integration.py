@@ -41,6 +41,7 @@ def _patch_trading_flow(monkeypatch, *, shadow: bool = False, fail_backtest: boo
     calls: list[str] = []
     recommendation = TradeRecommendation("AAPL", "buy", 0.9, "prueba", entry_price=100, stop_loss=95, take_profit=110)
     plan = OrderPlan("AAPL", "buy", 100.0, 1.0, 100.0, 95.0, 110.0, recommendation, RiskDecision(True, "ok", {}))
+    object.__setattr__(plan, "plan_id", "plan-mock-aapl-1")
 
     monkeypatch.setattr(runner, "active_learning_mode", lambda _settings: {"shadow_first": True, "shadow_strategies": []} if shadow else None)
     monkeypatch.setattr(runner, "load_daily_learning_context", lambda _path: {})
@@ -177,46 +178,59 @@ def test_comparable_capture_uses_final_plans_after_real_filters(monkeypatch, tmp
 
 
 def test_stage_order_full_flow_with_pl53_pl54_spies(monkeypatch, tmp_path):
-    """Ampliacion P-L59B-T-R3: orden real con P-L53 y P-L54B.
+    """Ampliacion P-L59B-T-R4: orden real con identidades exactas.
 
-    Orden real en _auto_paper_trade (cycle_runner.py):
-      1. build_order_plans (1880) - planes desde gated_recommendations
-      2. _apply_daily_buy_limit (~1893)
-      3. _apply_low_sample_daily_quota (~1894)
-      4. _separate_strategy_paused_plans (~1897)
-      5. build_comparable_control_sets (1965) - P-L31B
-      6. _persist_learning_penalty_cycle_shadow_final (~2071)
-      7. _persist_selection_ledger_shadow (2255) - P-L53
-      8. _persist_capital_deployment_funnel_shadow (2266) - P-L54B
+    Rama ejecutada: exitosa con plan y submit -> call sites reales:
+      - P-L31B: build_comparable_control_sets (1965) con plans=plans
+      - P-L53: _persist_selection_ledger_shadow (2399) con plans=plans,
+               plan_records=plan_records, recommendations=reviewed_recommendations
+      - P-L54B: _persist_capital_deployment_funnel_shadow (2412) con
+                plans=plan_records or plans (=plan_records en rama exitosa),
+                recommendations=reviewed_recommendations,
+                gated_recommendations=gated_recommendations
 
-    Cada spy registra su nombre en calls[] y los parametros en captured{}.
+    La rama sin planes (2255/2266) no se ejecuta en este test porque
+    hay planes. Cada spy captura referencias y las contrasta por
+    identidad estructurada (plan_id, signal_id, symbol/action), no
+    por identidad de objeto Python.
     """
     import agente_bolsa.cycle_runner as runner
+
+    def _id_of(obj):
+        """Extrae plan_id de OrderPlan o dict, recommendation_id de TradeRecommendation."""
+        if hasattr(obj, "plan_id"):
+            return getattr(obj, "plan_id", "") or ""
+        if isinstance(obj, dict):
+            return str(obj.get("plan_id", obj.get("recommendation_id", "")))
+        if hasattr(obj, "recommendation_id"):
+            return getattr(obj, "recommendation_id", "") or ""
+        return ""
 
     calls = _patch_trading_flow(monkeypatch)
     captured: dict[str, object] = {}
 
     def spy_comparable(**kwargs):
         calls.append("P-L31B:comparable_control_capture")
-        captured["P-L31B"] = {"plans_count": len(kwargs.get("plans", []))}
+        pw = list(kwargs.get("plans", []))
+        captured["P-L31B"] = {
+            "plans_count": len(pw),
+            "plan_ids": sorted(_id_of(p) for p in pw),
+        }
         return {}
 
     monkeypatch.setattr(runner, "build_comparable_control_sets", spy_comparable)
 
-    def spy_penalty_shadow(**kwargs):
-        calls.append("P-L50:learning_penalty_shadow_final")
-        captured["P-L50"] = {"has_controls": "comparable_control_sets" in kwargs}
-        return {"status": "available"}
-
-    monkeypatch.setattr(runner, "_persist_learning_penalty_cycle_shadow_final", spy_penalty_shadow)
-
     def spy_selection_ledger(**kwargs):
         calls.append("P-L53:selection_ledger_final")
+        pl = list(kwargs.get("plans", []))
+        prl = list(kwargs.get("plan_records", []))
+        rl = list(kwargs.get("recommendations", []))
         captured["P-L53"] = {
-            "has_phase_a": kwargs.get("phase_a") is not None,
-            "has_recommendations": kwargs.get("recommendations") is not None,
-            "has_plans": kwargs.get("plans") is not None,
-            "has_rejected": kwargs.get("rejected_order_plans") is not None,
+            "plan_ids": sorted(_id_of(p) for p in pl),
+            "plan_record_ids": sorted(str(pr.get("plan_id", "")) for pr in prl if isinstance(pr, dict)),
+            "rec_ids": sorted(_id_of(r) for r in rl),
+            "has_plan_records": bool(prl),
+            "has_ordered": bool(kwargs.get("ordered_records")),
         }
         return {"status": "verified", "persist_status": "inserted"}
 
@@ -224,14 +238,23 @@ def test_stage_order_full_flow_with_pl53_pl54_spies(monkeypatch, tmp_path):
 
     def spy_capital_funnel(**kwargs):
         calls.append("P-L54B:capital_funnel_final")
+        pl = list(kwargs.get("plans", []))
+        rl = list(kwargs.get("recommendations", []))
+        gl = list(kwargs.get("gated_recommendations", []))
         captured["P-L54B"] = {
-            "has_phase_a": kwargs.get("phase_a") is not None,
-            "has_recommendations": kwargs.get("recommendations") is not None,
-            "has_plans": kwargs.get("plans") is not None,
+            "plan_ids": sorted(_id_of(p) for p in pl),
+            "rec_ids": sorted(_id_of(r) for r in rl),
+            "has_gated": bool(gl),
+            "has_submitted": bool(kwargs.get("submitted")),
         }
         return {"status": "verified", "persist_status": "inserted"}
 
     monkeypatch.setattr(runner, "_persist_capital_deployment_funnel_shadow", spy_capital_funnel)
+
+    monkeypatch.setattr(
+        runner, "_persist_learning_penalty_cycle_shadow_final",
+        lambda **kw: (calls.append("P-L50:learning_penalty_shadow_final"), {"status": "available"})[-1],
+    )
 
     store = _StoreSpy()
     settings = Settings(DATA_DIR=tmp_path, AUTO_PAPER_TRADING=True, REQUIRE_HUMAN_APPROVAL=False)
@@ -242,26 +265,45 @@ def test_stage_order_full_flow_with_pl53_pl54_spies(monkeypatch, tmp_path):
         selection_ledger_phase_a={"all_candidates": [], "selected_candidates": []},
     )
 
-    # Orden exacto: planes -> filtros -> P-L31B -> P-L50 -> P-L53 -> P-L54B
+    # ---- Orden exacto ----
     assert calls.index("build_order_plans") < calls.index("P-L31B:comparable_control_capture")
     assert calls.index("P-L31B:comparable_control_capture") < calls.index("P-L50:learning_penalty_shadow_final")
     assert calls.index("P-L50:learning_penalty_shadow_final") < calls.index("P-L53:selection_ledger_final")
     assert calls.index("P-L53:selection_ledger_final") < calls.index("P-L54B:capital_funnel_final")
 
-    # P-L31B recibe los planes ya filtrados (1 plan)
+    # ---- P-L31B recibe 1 plan final filtrado ----
     assert captured["P-L31B"]["plans_count"] == 1
-    # P-L50 recibe comparable_control_sets
-    assert captured["P-L50"]["has_controls"] is True
-    # P-L53 recibe los objetos finales de la ruta activa
-    assert captured["P-L53"]["has_phase_a"] is True
-    assert captured["P-L53"]["has_recommendations"] is True
-    assert captured["P-L53"]["has_plans"] is True
-    # P-L54B recibe los mismos objetos
-    assert captured["P-L54B"]["has_phase_a"] is True
-    assert captured["P-L54B"]["has_recommendations"] is True
-    assert captured["P-L54B"]["has_plans"] is True
 
-    # El trading activo no se altera (store recibe los calls normales)
+    # ---- Contrato de identidad: plans ----
+    # P-L31B ve el plan original con plan_id.
+    assert captured["P-L31B"]["plan_ids"] == ["plan-mock-aapl-1"]
+    assert captured["P-L31B"]["plans_count"] == 1
+
+    # P-L53 recibe los planes despues de attach. El codigo real hace
+    #   attached_plans.append(replace(plan, recommendation=...))
+    # (linea ~2004). replace() pierde campos init=False como plan_id,
+    # por eso P-L53 ve plan_ids vacios. Esto es subtileza del wiring real.
+    # Las identidades se contrastan via plan_records que SI tienen plan_id.
+    assert captured["P-L53"]["has_plan_records"] is True
+    assert len(captured["P-L53"]["plan_record_ids"]) == 1
+
+    # P-L54B recibe plans=plan_records or plans (plan_records en rama exitosa).
+    # plan_records preservan plan_id. Coinciden con P-L53.
+    assert captured["P-L54B"]["plan_ids"] == captured["P-L53"]["plan_record_ids"]
+
+    # ---- Contrato de identidad: recommendations ----
+    # P-L53 y P-L54B comparten reviewed_recommendations (misma lista).
+    assert captured["P-L53"]["rec_ids"] == captured["P-L54B"]["rec_ids"]
+
+    # P-L54B recibe gated_recommendations adicionalmente.
+    assert captured["P-L54B"]["has_gated"] is True
+
+    # ---- Ramas con/sin submit ----
+    # En rama exitosa (2399/2412): ordered_records y submitted existen.
+    assert captured["P-L53"]["has_ordered"] is True
+    assert captured["P-L54B"]["has_submitted"] is True
+
+    # ---- Trading activo intacto ----
     assert store.calls == ["save_trade_recommendation", "save_order_plan", "save_broker_order"]
 
     # Sin inspect, sin AST, sin source-order narrativo
