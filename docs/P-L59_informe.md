@@ -87,9 +87,10 @@ los cambios de P-L59C conviven sin sobreescribir ni colisionar.
 - **Integrado**: P-L59C-R6D `30b6b76b05b55f6b879b5218d8094fef2f6ece29`, version `0.4.196`
 - **Worktree**: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59d_llm_selected_rehearsal`
 - **Rama**: `codex/pl59d-llm-selected-rehearsal`
-- **HEAD**: `9009c7f21f43a9136822f4fbaba383773e3f3051`
-- **Tree**: `ad69264ecbbc0d8764a5a5ce722e38d117d98e8f` (identico a P-L59C-R6D)
-- **Hora**: 2026-07-27 ~21:15 CEST, XNYS abierto
+- **HEAD**: `4524cbe38896b5d451f0ff34450855f4b3f7988b`
+- **Tree**: `661216b322138324475c0aa989d0ce42a586b822` (final documental; tree del merge `9009c7f2`: `ad69264e`, identico a P-L59C-R6D)
+- **Merge `9009c7f2`**: tree `ad69264ecbbc0d8764a5a5ce722e38d117d98e8f`, padres `70de3401` (P-L60R1) y `30b6b76b` (P-L59C-R6D)
+- **Hora**: 2026-07-27 ~21:32 CEST, XNYS abierto
 - **Version**: `0.4.196`
 
 ### Commits
@@ -97,7 +98,7 @@ los cambios de P-L59C conviven sin sobreescribir ni colisionar.
 | Commit | Tipo | Descripcion |
 |---|---|---|
 | `9009c7f2` | merge | P-L59D: rehearsal de integracion --no-ff de P-L59C-R6D sobre P-L60R1 |
-| (proximo) | docs | P-L59D informe, plan y relevo actualizados |
+| `4524cbe3` | docs | P-L59D informe, plan, relevo y QA evidence |
 
 ### Parents
 
@@ -126,14 +127,15 @@ Ningun archivo de P-L60R1 fue sobreescrito. Los cambios de P-L60R1 (`web_app.py`
 
 ## Protegidos
 
-Los 6 archivos protegidos son identicos contra base P-L60R1 y contra produccion `24537e8`:
+Los 5 archivos versionados son objetos Git identicos contra base P-L60R1 (`70de3401`) y contra produccion (`24537e8`):
 
 - `src/agente_bolsa/kernel.py` ✓
 - `src/agente_bolsa/tools/broker.py` ✓
 - `src/agente_bolsa/tools/execution.py` ✓
 - `src/agente_bolsa/tools/risk.py` ✓
 - `src/agente_bolsa/config.py` ✓
-- `.env` ✓
+
+`.env`: no modificado por el lote; hash/equivalencia unavailable (no se lee ni revela contenido del secreto).
 
 ## QA
 
@@ -151,7 +153,7 @@ Comando: `pytest tests/test_p59c_llm_selected_authority.py tests/test_p59bt_llm_
 2. **Malformed -> None antes de hash/persist**: cubierto por `test_normalize_llm_selected_*` (9 variantes: int, str, list, dict, float, etc.) y `test_snapshot_malformed_int_string_degrades_to_none`
 3. **P-L53 Store idempotencia/conflicto**: cubierto por `test_persist_and_read_llm_selected_*`, `test_persist_conflict_different_llm_selected`
 4. **`_auto_paper_trade` paridad IDs/hashes anidados**: cubierto por `test_market_cycle_timing_integration.py` con strip context-aware + nested block preservation
-5. **Fail-open del ledger**: cubierto por `test_ledger_idempotent_fail_open`, `test_source_llm_without_llm_selected_yields_none`
+5. **Fail-open del ledger**: cubierto por `test_fail_open_selection_ledger_does_not_block_route` (fuerza fallo interno del build mediante wrapper real, preserva submit/store)
 6. **Version policy**: `tests/test_version_policy.py` 1 passed en 0.20s
 
 ### Gates estaticos
@@ -173,9 +175,9 @@ Suite completa, smoke, benchmark P-L53/P-L54, P-L45 33.336, kernel productivo, p
 
 Sigue abierta. P-L53 colisiona dos `recommendation_id` de la misma senal/accion. No corregida en este rehearsal. Documentada en linea 64 de este informe.
 
-## No broker/red/LLM/yfinance/SQLite productiva
+## No broker/red/LLM/yfinance/SQLite productiva / no escrituras en produccion
 
-Confirmado. Los tests usan `Store` con `DATA_DIR` temporal. Sin conexiones externas. Sin jobs operativos lanzados.
+Confirmado. Los tests usan `Store` con `DATA_DIR` temporal, sin SQLite productiva. Sin escrituras en produccion. Sin conexiones externas. Sin jobs operativos lanzados. El worktree recibio merge y docs (escrituras aisladas en el candidato, no en produccion).
 
 ## Siguiente paso
 
