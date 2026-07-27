@@ -1,4 +1,4 @@
-# P-L59B-T-R2 — informe único corregido
+# P-L59B-T-R3 — informe único final
 
 ## Dictamen único
 
@@ -7,41 +7,46 @@
 ### Causa
 
 **(a) `llm_selected`**: el candidato P-L60R1 deriva este campo exclusivamente
-de `decision_source` en `canonical_selection_ledger.py:383`. La lógica es:
-
-```python
-"llm_selected": True if source == "llm" else False if source else None
-```
-
-No existe un booleano independiente sellado en la etapa de decisión. Fuentes no
-reconocidas se normalizan a `"other"` y reciben `False` en vez de
-`None`/`unavailable`. La derivación es determinista y reproducible, pero
-**`llm_selected` no demuestra selección LLM causal**: `True` significa "la
-recomendación fue generada por el agente LLM", no "el LLM eligió este
-candidato". `False` colapsa capacity-fill (basado en ranking LLM) con fallback
-(sin LLM), que son semánticamente distintos.
+de `decision_source` en `canonical_selection_ledger.py:383`. No existe un
+booleano independiente sellado en la etapa de decisión. Fuentes no reconocidas
+se normalizan a `"other"` y reciben `False` en vez de `None`/`unavailable`. La
+derivación es determinista pero `llm_selected` no demuestra selección LLM
+causal: `True` = "la recomendación fue generada por el agente LLM", no "el
+LLM eligió este candidato". `False` colapsa capacity-fill con fallback.
 
 **(b) Controles elegibles**: `comparable_controls.py` (P-L31B, desplegado en
-producción `0.4.185`) define `PRIMARY_REASONS = {lower_rank, capacity_limit}` y
-los separa de `BLOCKED_REASONS`. La API `build_comparable_control_sets` produce
-control sets verificados con schema, identidad exacta, non_execution_reason y
-gate_eligibility. Esto funciona en el candidato P-L60R1 pero **los 0 controles
-exactos en P-L59A (ventana 20-24 jul) son un hecho observado cuya causa no está
-demostrada**. P-L31B está desplegado; la ausencia de controles puede deberse a
-falta de planes finales, estrategias pausadas, o ausencia de rechazos
-`lower_rank`/`capacity_limit` en esa ventana — ninguna de estas causas se
-atribuye a P-L53/P-L54B, que operan en dominios distintos del de controles.
+producción `0.4.185`) define `PRIMARY_REASONS = {lower_rank, capacity_limit}`.
+La API `build_comparable_control_sets` produce control sets verificados. Los 0
+controles P-L59A son un hecho observado con causa no demostrada (P-L31B es
+independiente de P-L53/P-L54B).
 
-**(c) Colisión P-L53**: dos recomendaciones con la misma señal y distinto
-`recommendation_id` colisionan en el ledger P-L53 (la identidad primaria no
-incluye `recommendation_id`). P-L54B maneja `decision_identity` con dominios
-propios; si esto repara la colisión en P-L54B no está demostrado en este lote
-(sería necesario un test end-to-end con ambos productores). Son dominios
-separados.
+**(c) Colisión P-L53**: la identidad primaria no incluye `recommendation_id`.
+Dos recomendaciones con misma señal y distinto rec_id colisionan. P-L54B usa
+dominios propios; no demostrada reparación cruzada.
+
+## Stage order real (R3)
+
+Verificado ejecutablemente en
+`tests/test_market_cycle_timing_integration.py::test_stage_order_full_flow_with_pl53_pl54_spies`
+que ejecuta `_auto_paper_trade` con `_patch_trading_flow` y espía cada paso:
+
+1. `build_order_plans` (cycle_runner:1880) — planes desde gated_recommendations
+2. `_apply_daily_buy_limit` (~1893)
+3. `_apply_low_sample_daily_quota` (~1894)
+4. `_separate_strategy_paused_plans` (~1897)
+5. `build_comparable_control_sets` (1965) — **P-L31B**
+6. `_persist_learning_penalty_cycle_shadow_final` (~2071)
+7. `_persist_selection_ledger_shadow` (2255) — **P-L53 final**
+8. `_persist_capital_deployment_funnel_shadow` (2266) — **P-L54B final**
+
+Los filtros (`build_order_plans`, daily limit, low-sample, strategy pause)
+ocurren ANTES de P-L31B. P-L31B recibe los planes ya filtrados. P-L53/P-L54B
+reciben los mismos objetos finales (phase_a, recommendations, plans,
+rejected_order_plans) después de P-L31B. Sin inspect/AST/source-order narrativo.
 
 ## Alcance y estado
 
-- Hora real: 2026-07-27 19:20 CEST.
+- Hora real: 2026-07-27 19:26 CEST (R3).
 - **XNYS ABIERTO** (sesión 2026-07-27, cierre 22:00 CEST).
 - Base exacta: `70de34011b74403281c32673c32947cab0ee0952`, tree `1d960a6723c0f2fbe5bc4afc72c7df08284c43d1`.
 - Producción desplegada: HEAD `24537e813ff0905696cda0b3925a212045ee7b09`, versión `0.4.185`.
@@ -49,15 +54,17 @@ separados.
 - Candidato: P-L60R1, versión `0.4.195`.
 - Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59bt_llm_selection_contract`.
 - Rama: `codex/pl59bt-llm-selection-contract`.
-- HEAD R2: `06c95f02`.
+- HEAD R3: `e32c39cb`.
 - Solo tests, este informe, plan y relevo. Versión `0.4.195`.
 
 ## Validación
 
 | Artefacto | Resultado |
 |---|---|
-| `test_p59bt_llm_selected_contract_characterization.py` | **28 passed** (1.01s) |
-| Ruff | **All checks passed** |
+| `test_p59bt_llm_selected_contract_characterization.py` | **27 passed** (0.48s) |
+| `test_market_cycle_timing_integration.py` (5 tests) | **5 passed** (0.81s) |
+| **Total focales** | **32 passed** (1.10s) |
+| Ruff (ambos archivos) | **All checks passed** |
 | `check_no_nulls.py` | **OK (434 archivos)** |
 | `git diff --check` | **verde** |
 | `src/` modificado | **0 archivos** |
@@ -70,10 +77,10 @@ separados.
 | (A) `llm_selected` proxy/brecha | 6 | `build_canonical_selection_ledger` + source llm/capacity/fallback/None/unknown |
 | (B) Colisión rec_id P-L53 | 1 | `build_canonical_selection_ledger` con 2 recs misma señal |
 | (C) BUY/EXIT, cross-cycle, missing | 4 | `build_canonical_selection_ledger` |
-| (D) Persistencia Store | 5 | `persist_canonical_selection_ledger`, `read_canonical_selection_ledger`, `Store(tmp_path)` |
+| (D) Persistencia Store | 5 | `persist`, `read`, `Store(tmp_path)` |
 | (E) Match con exclusión real | 3 | `match_same_cycle_controls` con recomendada excluida + cross-cycle |
-| (F) Controles funcionales | 7 | `build_comparable_control_sets` con `TradeRecommendation`/`OrderPlan`/`RiskDecision` reales, `lower_rank`, `capacity_limit`, gate_blocked, cross-cycle, `validate_comparable_control_set` |
-| (G) Stage order | 1 | Inspección de `_persist_selection_ledger_shadow`, `_persist_capital_deployment_funnel_shadow`, `_auto_paper_trade` |
+| (F) Controles funcionales | 7 | `build_comparable_control_sets` reales: lower_rank, capacity_limit, gate_blocked, cross-cycle, `validate` |
+| (G) Stage order | 1 | `test_market_cycle_timing_integration.py`: `_auto_paper_trade` + spies P-L31B/P-L50/P-L53/P-L54B |
 | (H) Paridad | 2 | `selected_for_llm` vs `llm_selected`, forbidden fields |
 
 **Gates omitidos** (XNYS abierto): suite completa, smoke, benchmark largo,

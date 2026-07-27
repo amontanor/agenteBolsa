@@ -592,21 +592,15 @@ cerrada.
   SQLite productiva, despliegue ni push. La incertidumbre historica
   `unconfirmed_sqlite_mutation` y P-L54 se conservan sin declararlas resueltas.
 
-## P-L59B-T-R2 (corregido) - caracterizacion llm_selected y controles (27-jul-2026)
+## P-L59B-T-R3 (final) - caracterizacion llm_selected y controles (27-jul-2026)
 
-- Dictamen unico: **`needs_fix`**. XNYS abierto. Hora real: 19:20 CEST.
+- Dictamen unico: **`needs_fix`**. XNYS abierto. Hora real: 19:26 CEST.
 - Worktree: `pl59bt_llm_selection_contract`, rama
-  `codex/pl59bt-llm-selection-contract`, base `70de3401`. HEAD R2: `06c95f02`.
-- 28 tests con APIs reales (Store, TradeRecommendation/OrderPlan/RiskDecision,
-  build_comparable_control_sets lower_rank/capacity_limit/gate_blocked).
-  Ruff/NUL/diff verdes.
-- Hallazgo: `llm_selected` es proxy de `decision_source`, no booleano
-  independiente. Fuente desconocida -> False (brecha).
-- Controles: P-L31B desplegado e independiente de P-L53/P-L54B.
-  0 controles P-L59A = hecho observado, causa no demostrada.
-- Colision P-L53 sin recommendation_id; no afirmado que P-L54B repara.
-- Stage order: phase A -> seleccion -> P-L31B -> planes -> P-L53 final ->
-  P-L54B final (cycle_runner:1965-2276).
-- Produccion HEAD: 0.4.185; working tree: 0.4.186 (P-L61). Sin leer/modificar.
-- Informe unico: `docs/P-L59_informe.md`.
-- Siguiente lote: P-L59C (rediseno productor). No se inicia.
+  `codex/pl59bt-llm-selection-contract`, base `70de3401`. HEAD R3: `e32c39cb`.
+- 27 tests P-L59 + 5 integracion (32 total). Ruff/NUL/diff verdes.
+- Stage order ejecutable: `build_order_plans -> filtros -> P-L31B(1965) ->
+  P-L50 -> P-L53(2255) -> P-L54B(2266)`. Espias reales sobre `_auto_paper_trade`.
+  Sin inspect/AST. `llm_considered` explicito en fixtures.
+- `llm_selected` = proxy de source. Controles: P-L31B desplegado. 0 controles
+  P-L59A sin causa demostrada. Colision P-L53 sin recommendation_id.
+- Informe unico: `docs/P-L59_informe.md`. Siguiente: P-L59C (no iniciado).
