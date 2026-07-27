@@ -138,7 +138,7 @@ def test_br2_volume_decomposition_and_scaling_is_per_cycle(
     scale_records: dict[int, list[dict[str, float]]] = {250: [], 500: [], 1000: []}
 
     original_phase_a = selection_ledger._phase_a_rows
-    original_attach = selection_ledger._attach_phase_b
+    original_finalize = selection_ledger._build_decision_rows
     original_hash = selection_ledger.stable_content_hash
 
     def timed_phase_a(*args: Any, **kwargs: Any) -> Any:
@@ -147,9 +147,9 @@ def test_br2_volume_decomposition_and_scaling_is_per_cycle(
         phase_a_ms.append((time.perf_counter() - started) * 1000)
         return result
 
-    def timed_attach(*args: Any, **kwargs: Any) -> Any:
+    def timed_finalize(*args: Any, **kwargs: Any) -> Any:
         started = time.perf_counter()
-        result = original_attach(*args, **kwargs)
+        result = original_finalize(*args, **kwargs)
         finalization_ms.append((time.perf_counter() - started) * 1000)
         return result
 
@@ -162,7 +162,7 @@ def test_br2_volume_decomposition_and_scaling_is_per_cycle(
         return result
 
     monkeypatch.setattr(selection_ledger, "_phase_a_rows", timed_phase_a)
-    monkeypatch.setattr(selection_ledger, "_attach_phase_b", timed_attach)
+    monkeypatch.setattr(selection_ledger, "_build_decision_rows", timed_finalize)
     monkeypatch.setattr(selection_ledger, "stable_content_hash", timed_hash)
 
     tracemalloc.start()
