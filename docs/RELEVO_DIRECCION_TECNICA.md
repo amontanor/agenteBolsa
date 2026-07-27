@@ -620,3 +620,25 @@ cerrada.
 - Brecha P-L53 recommendation_id sigue abierta.
 - Gates omitidos: suite, smoke, benchmark, P-L45 33.336, kernel (XNYS abierto).
 - Siguiente: P-L59E validacion cerrada completa.
+
+## P-L59F-T — caracterizacion y diseno de la colision recommendation_id (27-jul-2026)
+
+- Dictamen: **`ready_for_implementation`**. XNYS abierto, ~21:50 CEST.
+- Base: P-L59D-D HEAD `520559c6`, tree `e3c80ba`, v0.4.196.
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59ft_recommendation_identity_design`,
+  rama `codex/pl59ft-recommendation-identity-design`.
+- HEAD test: `34a70248`. Solo tests/docs, sin cambios en src.
+- Colision: `_attach_phase_b` en `canonical_selection_ledger.py` usa
+  `(cycle_id, action, canonical_id)` como clave; dos recomendaciones para
+  la misma identidad → last-wins. P-L54 usa `(cycle, action, signal, rec_id)`
+  y NO sufre esta colision.
+- 17 tests pasan con APIs reales: colision last-wins, idempotencia store,
+  conflicto append-only, BUY/EXIT separados, legacy IDs, productor/wiring,
+  13 consumidores catalogados, impacto expansion, stage order.
+- Ruff/NUL/diff verdes. Gates omitidos: suite, smoke, benchmark, P-L45 33.336,
+  kernel (XNYS abierto). Sin broker, red, LLM, SQLite productiva.
+- Diseno B recomendado: `decision_rows` separado en CLS v2.
+  `candidate_rows` preserva 1:1 candidato; `decision_rows` 1:1 decision.
+  Denominadores: candidate_count, recommendation_count, conflict_count.
+- Version 0.4.197 reservada como propuesta (NO asignada). Sin migracion/backfill.
+- Siguiente: P-L59F-I implementacion de decision_rows en worktree aislado.
