@@ -1143,6 +1143,162 @@ class Store:
                 return {"status": "conflict", "event_id": event_id, "conflict_event_id": conflict_id, "existing_content_hash": raced_hash, "candidate_content_hash": candidate_hash}
         return {"status": "inserted", "event_id": event_id, "content_hash": candidate_hash}
 
+    def record_time_stop_exit_authority(
+        self,
+        capture: dict[str, Any],
+        link: dict[str, Any],
+        *,
+        cycle_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist P-L43C decision and order link in one short append-only tx."""
+
+        events = (
+            (
+                f"time_stop_exit_authority:{capture.get('decision_id')}",
+                "time_stop_exit_authority",
+                capture,
+            ),
+            (
+                str(link.get("event_id") or ""),
+                "time_stop_exit_order_link",
+                link,
+            ),
+        )
+        if not all(event_id for event_id, _event_type, _payload in events):
+            raise ValueError("P-L43C events require deterministic identities")
+
+        def append_one(
+            conn: sqlite3.Connection,
+            *,
+            event_id: str,
+            event_type: str,
+            payload: dict[str, Any],
+        ) -> dict[str, Any]:
+            encoded = _dumps(payload)
+            candidate_hash = str(payload.get("content_hash") or "")
+            existing = conn.execute(
+                "SELECT payload_json FROM agent_events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+            if existing is not None:
+                try:
+                    existing_payload = json.loads(existing["payload_json"] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    existing_payload = {}
+                existing_hash = str(existing_payload.get("content_hash") or "")
+                if existing_hash and existing_hash == candidate_hash:
+                    return {"status": "idempotent", "event_id": event_id, "content_hash": candidate_hash}
+                if not existing_hash and _dumps(existing_payload) == encoded:
+                    return {"status": "idempotent", "event_id": event_id, "content_hash": candidate_hash}
+                conflict_id = f"{event_id}:conflict:{candidate_hash or 'unknown'}"
+                conflict_payload = {
+                    "schema_version": payload.get("schema_version"),
+                    "event_id": event_id,
+                    "original_event_id": event_id,
+                    "existing_content_hash": existing_hash or None,
+                    "candidate_content_hash": candidate_hash or None,
+                    "status": "conflict",
+                }
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO agent_events (
+                            event_id, agent, event_type, cycle_id, payload_json, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            conflict_id,
+                            "risk_manager",
+                            f"{event_type}_conflict",
+                            cycle_id,
+                            _dumps(conflict_payload),
+                            _utc_iso(),
+                        ),
+                    )
+                except sqlite3.IntegrityError:
+                    pass
+                return {
+                    "status": "conflict",
+                    "event_id": event_id,
+                    "conflict_event_id": conflict_id,
+                    "existing_content_hash": existing_hash or None,
+                    "candidate_content_hash": candidate_hash or None,
+                }
+            conn.execute(
+                """
+                INSERT INTO agent_events (
+                    event_id, agent, event_type, cycle_id, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (event_id, "risk_manager", event_type, cycle_id, encoded, _utc_iso()),
+            )
+            return {"status": "inserted", "event_id": event_id, "content_hash": candidate_hash}
+
+        conn = self.connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            decision_result = append_one(
+                conn,
+                event_id=events[0][0],
+                event_type=events[0][1],
+                payload=events[0][2],
+            )
+            link_result = append_one(
+                conn,
+                event_id=events[1][0],
+                event_type=events[1][1],
+                payload=events[1][2],
+            )
+            conn.commit()
+            statuses = {decision_result["status"], link_result["status"]}
+            overall = (
+                "conflict"
+                if "conflict" in statuses
+                else "inserted"
+                if "inserted" in statuses
+                else "idempotent"
+            )
+            return {
+                "status": overall,
+                "decision": decision_result,
+                "link": link_result,
+                "transaction_count": 1,
+            }
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def time_stop_exit_authority_events(self, *, limit: int = 50000) -> list[dict[str, Any]]:
+        """Read only exact P-L43C event types; generic reporters are excluded."""
+
+        query = """
+            SELECT event_id, agent, event_type, cycle_id, payload_json, created_at
+            FROM agent_events
+            WHERE event_type IN (
+                'time_stop_exit_authority',
+                'time_stop_exit_order_link',
+                'time_stop_exit_authority_conflict',
+                'time_stop_exit_order_link_conflict'
+            )
+            ORDER BY created_at ASC, event_id ASC
+            LIMIT ?
+        """
+        with self.read_connection() as conn:
+            rows = conn.execute(query, (max(1, int(limit)),)).fetchall()
+        return [
+            {
+                "event_id": row["event_id"],
+                "agent": row["agent"],
+                "event_type": row["event_type"],
+                "cycle_id": row["cycle_id"],
+                "payload": json.loads(row["payload_json"] or "{}"),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
     def record_canonical_operation_telemetry(
         self,
         payload: dict[str, Any],

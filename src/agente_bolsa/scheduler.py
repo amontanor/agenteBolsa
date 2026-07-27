@@ -103,6 +103,12 @@ from .tools.retention import cleanup_runtime_data
 from .tools.rr_cohort import write_rr_cohort_report
 from .tools.signal_learning import prepare_signal_candidate_identities, record_signal_candidates
 from .tools.technical_study import build_closed_market_technical_study
+from .tools.time_stop_exit_authority import (
+    attach_time_stop_exit_authority_reference,
+    build_time_stop_exit_authority_capture,
+    persist_time_stop_exit_authority_after_order,
+    persist_time_stop_exit_authority_submission_failure,
+)
 from .tools.time_stop_policy import (
     POLICY_VERSION as TIME_STOP_POLICY_VERSION,
 )
@@ -1524,6 +1530,35 @@ def _execute_stop_take_exits(
             time_stop_evidence=(exit_policy_state or {}).get("time_stop_evidence"),
             open_buy_lots=buy_lots.get(symbol, []),
         )
+        client_order_id = f"agente-{plan['plan_id'][:20]}"
+        authority_capture = None
+        if trigger == "time_stop_v2":
+            try:
+                evidence = (exit_policy_state or {}).get("time_stop_evidence") or {}
+                authority_capture = build_time_stop_exit_authority_capture(
+                    cycle_id=run_id,
+                    watch_id=run_id,
+                    position_identity=evidence.get("position_identity"),
+                    plan_id=plan.get("plan_id"),
+                    symbol=symbol,
+                    qty=exit_qty,
+                    trigger=trigger,
+                    time_stop_evidence=evidence,
+                    lots=list(buy_lots.get(symbol, [])),
+                    source_plan=source_plan,
+                    decided_at=temporal_evaluation_at.isoformat(),
+                )
+                attach_time_stop_exit_authority_reference(plan, authority_capture)
+            except Exception as exc:  # noqa: BLE001 - carrier is observability only.
+                LOGGER.warning("time-stop authority capture unavailable for %s: %s", symbol, exc)
+        request_descriptor = {
+            "operation": "close_position",
+            "method": "close_position",
+            "symbol": symbol,
+            "side": "sell",
+            "client_order_id": client_order_id,
+            "qty": exit_qty,
+        }
         try:
             carrier = (plan.get("payload") or {}).get(CARRIER_FIELD)
             if isinstance(carrier, dict):
@@ -1547,11 +1582,21 @@ def _execute_stop_take_exits(
                 )
             except Exception as exc:  # noqa: BLE001 - local shadow must not block exit.
                 LOGGER.warning("risk exit plan provenance save unavailable for %s: %s", symbol, exc)
-            order = submit_paper_order_plan(
-                settings,
-                plan,
-                client_order_id=f"agente-{plan['plan_id'][:20]}",
-            )
+            try:
+                order = submit_paper_order_plan(
+                    settings,
+                    plan,
+                    client_order_id=client_order_id,
+                )
+            except Exception as exc:
+                persist_time_stop_exit_authority_submission_failure(
+                    store=store,
+                    capture=authority_capture,
+                    client_order_id=client_order_id,
+                    request_descriptor=request_descriptor,
+                    error=exc,
+                )
+                raise
             store.save_broker_order(
                 broker_order_id=order["id"] or plan["plan_id"],
                 plan_id=plan["plan_id"],
@@ -1560,6 +1605,13 @@ def _execute_stop_take_exits(
                 side="sell",
                 status=order["status"],
                 payload={"plan": plan, "broker_order": order},
+            )
+            persist_time_stop_exit_authority_after_order(
+                store=store,
+                capture=authority_capture,
+                order=order,
+                client_order_id=client_order_id,
+                request_descriptor=request_descriptor,
             )
             if (
                 trigger == "time_stop_v2"

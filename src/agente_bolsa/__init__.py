@@ -9,4 +9,8 @@ __all__ = ["__version__"]
 # P-L53B-W shadow candidate: canonical selection ledger by cycle.
 # QA correction: empty read-only DATA_DIR returns collecting without opening a write DB.
 # P-L53BR1: integrated selection ledger over the P-L52BR1 rehearsal (0.4.191).
-__version__ = "0.4.191"
+# P-L48BR1 QA rehearsal: identity fallback and digest conflict fixes (0.4.185).
+# P-L43C-W shadow carrier: causal time-stop authority in the reserved 0.4.192 slot.
+# P-L43C-R1: broker order durability precedes shadow authority telemetry (0.4.192).
+# P-L57A: null-safe postmarket scoreboard continuity (0.4.193).
+__version__ = "0.4.193"

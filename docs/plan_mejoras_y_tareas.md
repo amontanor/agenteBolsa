@@ -2059,6 +2059,32 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
 - Ambos shadows siguen `collecting`/`partial`; no hay backfill ni autoridad
   sobre trading.
 
+## P-L43C-W - carrier shadow de autoridad causal time-stop (candidato 0.4.192)
+
+- Implementacion aislada en el worktree P-L43C-W desde la base de
+  caracterizacion e0ba03ff; `legacy_calendar_days` sigue activa y XNYS sigue
+  shadow-only.
+- La captura predecisional se conserva en memoria antes del envio y los
+  eventos decision/link se persisten despues, en una transaccion append-only
+  fail-open. No se toca `execution.py` ni la llamada `close_position`.
+- La identidad exige cycle/watch, position_identity, plan y BUY broker order
+  exactos; multilote, recompra ambigua, fill no autorizado y version de
+  politica ausente quedan unavailable/ambiguous. No hay join por simbolo/fecha.
+- QA del worktree: P-L43C-T 29, P-L43C-W 40, focales relacionadas 178; Ruff,
+  NUL, diff y validate-agent-config verdes. No desplegado. Siguiente paso:
+  validacion cerrada integrada.
+
+### P-L43C-R1 - prioridad durable de la orden local (candidato 0.4.192)
+
+- Reproduccion contra la base P-L43C-W: `submit` persistia P-L43C antes de
+  `save_broker_order`.
+- Correccion aislada: `submit activo -> save_broker_order local -> P-L43C
+  decision/link fail-open -> reconciliacion`; no cambia request, resultado,
+  excepciones, politica, plan, orden ni reconciliacion.
+- QA focal: 44 pruebas P-L43C/R1 verdes; no se ejecutan suite completa, smoke
+  ni validacion cerrada con XNYS abierto. Produccion intacta y sin despliegue.
+- Siguiente paso unico: validacion cerrada integrada del candidato exacto.
+
 ## P-L48B-W - telemetria canonica de operaciones (candidato 0.4.184)
 
 - Implementado en shadow un productor unico `p-l48b.canonical-operation-telemetry.v1`.
