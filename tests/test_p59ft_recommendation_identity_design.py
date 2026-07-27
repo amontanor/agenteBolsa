@@ -12,6 +12,7 @@ Base: P-L59D-D HEAD 520559c6, tree e3c80ba, v0.4.196.
 from __future__ import annotations
 
 import copy
+from dataclasses import replace as dc_replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,6 +23,7 @@ from agente_bolsa.cycle_runner import _auto_paper_trade
 from agente_bolsa.models import OrderPlan, RiskDecision, TradeRecommendation
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.canonical_selection_ledger import (
+    _denominators,
     build_canonical_selection_ledger,
     match_same_cycle_controls,
     persist_canonical_selection_ledger,
@@ -356,7 +358,7 @@ def test_wiring_two_recs_same_lineage_ids_assigned_ordered(monkeypatch, tmp_path
     -> P-L53 final -> P-L54 final."""
     import agente_bolsa.cycle_runner as runner
 
-    # --- recomendaciones sin recommendation_id, mismo lineage ---
+    # --- recomendaciones sin recommendation_id, MISMO decision_lineage literal ---
     rec1 = TradeRecommendation(symbol="AAPL", action="buy", confidence=0.9,
                                 reason="test1", entry_price=100,
                                 stop_loss=95, take_profit=110)
@@ -365,6 +367,18 @@ def test_wiring_two_recs_same_lineage_ids_assigned_ordered(monkeypatch, tmp_path
                                 stop_loss=96, take_profit=112)
     assert rec1.recommendation_id is None
     assert rec2.recommendation_id is None
+    # Asignar MISMO decision_lineage literal (como haria _annotate con cycle_id real)
+    common_lineage = {
+        "cycle_id": "cycle-two-recs",
+        "action": "buy",
+        "signal_capture_id": "capture:aapl:buy",
+        "signal_id": "signal:aapl:buy",
+        "candidate_id": "candidate:aapl:buy",
+    }
+    rec1 = dc_replace(rec1, decision_lineage=common_lineage)
+    rec2 = dc_replace(rec2, decision_lineage=common_lineage)
+    assert rec1.decision_lineage == rec2.decision_lineage
+    assert rec1.decision_lineage["cycle_id"] == "cycle-two-recs"
 
     # --- spies ---
     calls_order: list[str] = []
@@ -427,6 +441,14 @@ def test_wiring_two_recs_same_lineage_ids_assigned_ordered(monkeypatch, tmp_path
     monkeypatch.setattr(runner, "_annotate_recommendations_with_strategy", lambda items, *_a: items)
     monkeypatch.setattr(runner, "_annotate_recommendations_with_lineage", lambda items, *_a, **_kw: items)
     monkeypatch.setattr(runner, "recommendation_input_fingerprint", lambda *_a, **_kw: "fp")
+    monkeypatch.setattr(runner, "_decision_context_snapshot_for_recommendation",
+                        lambda _store, rec, **kw: {
+                            "llm_considered": True,
+                            "gate_frontier": "entry_eligibility_v1",
+                            "llm_selected": None,
+                            "cycle_id": kw.get("cycle_id"),
+                            "source_run_id": kw.get("source_run_id"),
+                        })
 
     # gates -> ambos pasan (devolver quality_recommendations/gated)
     # _apply_entry_quality_gate(s, rep, run_id, reviewed, ...) -> _a[3]
@@ -513,6 +535,11 @@ def test_wiring_two_recs_same_lineage_ids_assigned_ordered(monkeypatch, tmp_path
     assert p53_idx > max(submit_indices)
     assert p54_idx > max(submit_indices)
 
+    # --- Stage: P-L53 explícitamente antes que P-L54 ---
+    assert p53_idx < p54_idx, (
+        f"P-L53 debe ejecutarse antes que P-L54: P-L53@{p53_idx}, P-L54@{p54_idx}"
+    )
+
     # --- P-L53 recibio 2 recomendaciones con IDs NO nulos y distintos ---
     assert len(p53_calls) >= 1
     p53_kw = p53_calls[-1]
@@ -522,40 +549,60 @@ def test_wiring_two_recs_same_lineage_ids_assigned_ordered(monkeypatch, tmp_path
     )
     id_a = getattr(p53_recs[0], "recommendation_id", None)
     id_b = getattr(p53_recs[1], "recommendation_id", None)
-    assert id_a is not None and id_b is not None, (
-        f"IDs no nulos: {id_a}, {id_b}"
-    )
+    assert id_a is not None and id_b is not None
     assert id_a != id_b, f"IDs deben ser distintos: {id_a} == {id_b}"
+    # Verificar que ambas conservan el mismo decision_lineage
+    for rec in p53_recs:
+        lineage = getattr(rec, "decision_lineage", None)
+        assert lineage is not None, "P-L53 debe recibir recommendations con decision_lineage"
+        assert lineage.get("cycle_id") == "cycle-two-recs"
+        assert lineage.get("action") == "buy"
+        assert lineage.get("signal_capture_id") == common_lineage["signal_capture_id"]
 
-    # --- P-L54 recibio 2 recomendaciones ---
+    # --- Coherencia adjuntos P-L53: plans y plan_records ---
+    p53_plans = p53_kw.get("plans")
+    p53_plan_records = p53_kw.get("plan_records")
+    if p53_plans is not None:
+        assert len(p53_plans) == 2, f"P-L53 esperaba 2 plans, recibio {len(p53_plans)}"
+        for plan in p53_plans:
+            plan_rec = plan.recommendation if hasattr(plan, "recommendation") else plan.get("recommendation", {})
+            plan_rec_id = getattr(plan_rec, "recommendation_id", None)
+            assert plan_rec_id in {id_a, id_b}, (
+                f"Cada plan debe apuntar a un recommendation_id de P-L53: {plan_rec_id}"
+            )
+    if p53_plan_records is not None:
+        for pr in p53_plan_records:
+            rec_in_record = pr.get("recommendation") if isinstance(pr, dict) else getattr(pr, "recommendation", None)
+            if rec_in_record is not None:
+                pr_rec_id = getattr(rec_in_record, "recommendation_id", None)
+                assert pr_rec_id in {id_a, id_b, None}, (
+                    f"plan_record debe transportar recommendation_id coherente: {pr_rec_id}"
+                )
+
+    # --- P-L54: recomendaciones + planes ---
     assert len(p54_calls) >= 1
     p54_kw = p54_calls[-1]
     p54_recs = p54_kw.get("recommendations")
     assert p54_recs is not None and len(p54_recs) == 2
+    p54_ids = [getattr(r, "recommendation_id", None) for r in p54_recs]
+    assert set(p54_ids) == {id_a, id_b}, (
+        f"P-L54 debe recibir los mismos recommendation_id que P-L53: {p54_ids} != {{{id_a}, {id_b}}}"
+    )
+    # P-L54 recibe tambien plans (o plan_records)
+    p54_plans = p54_kw.get("plans")
+    p54_plan_records = p54_kw.get("plan_records")
+    p54_effective = p54_plan_records or p54_plans
+    if p54_effective is not None:
+        assert len(p54_effective) == 2, f"P-L54 esperaba 2 planes/plan_records, recibio {len(p54_effective)}"
 
-    # --- Coherencia: IDs en recommendations coinciden con IDs en plans
-    #     (build_order_plans construyo desde gated_recommendations) ---
+    # --- Coherencia: IDs en gated coinciden con P-L53 y P-L54 ---
     assert len(gated_recs_captured) >= 1
     gated = gated_recs_captured[-1]
     assert len(gated) == 2
     gated_ids = [getattr(g, "recommendation_id", None) for g in gated]
     assert gated_ids[0] is not None and gated_ids[1] is not None
     assert gated_ids[0] != gated_ids[1]
-    # Los IDs en los gated deben coincidir con los que recibio P-L53
-    assert gated_ids[0] == id_a
-    assert gated_ids[1] == id_b
-
-    # --- P-L53 plan_records (si los hay) usan IDs coherentes ---
-    p53_plan_records = p53_kw.get("plan_records")
-    if p53_plan_records:
-        for pr in p53_plan_records:
-            pr_id = pr.get("plan_id") if isinstance(pr, dict) else getattr(pr, "plan_id", None)
-            assert pr_id is not None
-
-    # --- P-L54 recibe mismas recomendaciones ---
-    p54_ids = [getattr(r, "recommendation_id", None) for r in p54_recs]
-    assert p54_ids[0] in {id_a, id_b}
-    assert p54_ids[1] in {id_a, id_b}
+    assert set(gated_ids) == {id_a, id_b}
 
 
 # ===================================================================
@@ -672,14 +719,22 @@ def test_expansion_same_identity_duplicated_inflates_counters() -> None:
     duplicada["decision_source"] = "fallback"
 
     expanded_rows = [original, duplicada]
-    # Contar manualmente (lo que haria _denominators con esta lista)
     assert len(expanded_rows) == 2
-    recommended_manual = sum(r.get("recommended") is True for r in expanded_rows)
-    assert recommended_manual == 2, (
-        "Con expansion ingenua recommended contaria 2 en vez de 1"
+
+    # --- Paso 2: _denominators REAL sobre la lista expandida ---
+    # raw_count=1 porque solo hay 1 identidad de candidato unica real,
+    # pero la lista artificial tiene 2 filas con misma identity_key
+    deno = _denominators(expanded_rows, raw_count=1, conflicts=0, truncated_count=0)
+    assert deno["recommended_count"] == 2, (
+        f"Con expansion, recommended_count inflado a {deno['recommended_count']}"
     )
-    canonical_manual = sum(r.get("identity_status") == "verified" for r in expanded_rows)
-    assert canonical_manual == 2
+    assert deno["canonical_count"] == 2, (
+        f"Con expansion, canonical_count inflado a {deno['canonical_count']}"
+    )
+    # Contraste: con raw_count=1 pero 2 filas, recommended_count > raw_count
+    assert deno["recommended_count"] > (deno["raw_count"] or 0), (
+        "recommended_count no deberia exceder raw_count (candidatos unicos)"
+    )
 
     # --- Paso 3: match_same_cycle_controls sobre lista expandida ---
     # La fila original como treatment, la duplicada como candidata
