@@ -43,7 +43,7 @@ DROP_REASONS = {
     "execution_rejected_cancelled",
     "not_applicable_exit",
 }
-STAGE_ORDER = ("selection", "capacity", "gates", "risk", "sizing", "plans", "orders", "fills")
+STAGE_ORDER = ("selection", "gates", "capacity", "sizing", "risk", "plans", "orders", "fills")
 
 
 def _as_action(value: Any) -> str | None:
@@ -150,11 +150,6 @@ def _derive_stage_path(
         return statuses, "not_selected" if selection_status == "not_selected" else "not_generated"
     statuses["selection"] = "passed"
 
-    if source.get("capacity_exhausted") is True:
-        statuses["capacity"] = "rejected"
-        return statuses, "capacity_exhausted"
-    statuses["capacity"] = "passed"
-
     gate_status = str(source.get("gate_status") or "").strip().lower()
     if gate_status in {"unavailable", "unknown", ""}:
         statuses["gates"] = "unavailable"
@@ -164,17 +159,10 @@ def _derive_stage_path(
         return statuses, "gate_rejected"
     statuses["gates"] = "passed"
 
-    risk_status = str(source.get("risk_status") or "").strip().lower()
-    if risk_status in {"unavailable", "unknown", ""}:
-        statuses["risk"] = "unavailable"
-        return statuses, "risk_unavailable"
-    if risk_status in {"rejected", "failed"}:
-        statuses["risk"] = "rejected"
-        return statuses, "risk_rejected"
-    if risk_status != "approved":
-        statuses["risk"] = "unavailable"
-        return statuses, "risk_unavailable"
-    statuses["risk"] = "passed"
+    if source.get("capacity_exhausted") is True:
+        statuses["capacity"] = "rejected"
+        return statuses, "capacity_exhausted"
+    statuses["capacity"] = "passed"
 
     sizing_status = str(source.get("sizing_status") or "").strip().lower()
     if sizing_status in {"unavailable", "unknown"}:
@@ -187,6 +175,18 @@ def _derive_stage_path(
         statuses["sizing"] = "rejected"
         return statuses, "cap_limited"
     statuses["sizing"] = "passed"
+
+    risk_status = str(source.get("risk_status") or "").strip().lower()
+    if risk_status in {"unavailable", "unknown", ""}:
+        statuses["risk"] = "unavailable"
+        return statuses, "risk_unavailable"
+    if risk_status in {"rejected", "failed"}:
+        statuses["risk"] = "rejected"
+        return statuses, "risk_rejected"
+    if risk_status != "approved":
+        statuses["risk"] = "unavailable"
+        return statuses, "risk_unavailable"
+    statuses["risk"] = "passed"
 
     if not source.get("plan_id"):
         return statuses, "not_generated"
@@ -567,13 +567,13 @@ def _large_fixture() -> tuple[list[dict[str, Any]], dict[str, Any]]:
         if 15 <= index < 85:
             row.update({"selection_status": "not_selected", "gate_status": None, "risk_status": None, "reason_codes": ["not_selected"]})
         elif 85 <= index < 135:
-            row.update({"capacity_exhausted": True, "gate_status": None, "risk_status": None, "reason_codes": ["quota"]})
+            row.update({"capacity_exhausted": True, "gate_status": "passed", "risk_status": None, "reason_codes": ["quota"]})
         elif 135 <= index < 196:
             row.update({"gate_status": "unavailable", "risk_status": None, "reason_codes": ["gate_unavailable"]})
         elif 196 <= index < 296:
             row.update({"gate_status": "rejected", "risk_status": None, "reason_codes": ["gate_rejected"]})
         elif index >= 296:
-            row.update({"gate_status": "passed", "risk_status": "rejected", "reason_codes": ["risk_rejected"]})
+            row.update({"gate_status": "passed", "risk_status": "rejected", "sizing_approved_notional": 1000.0, "reason_codes": ["risk_rejected"]})
         rows.append(row)
     account = {
         "account_equity": 100000.0,
@@ -598,8 +598,8 @@ def test_376_recommendations_15_plans_15_fills_keep_denominators_and_target_null
     assert result["denominators"]["raw_count"] == 376
     assert result["denominators"]["canonical_count"] == 376
     assert result["denominators"]["recommendations_generated"] == 376
-    assert result["denominators"]["gates_evaluated"] == 256
-    assert result["denominators"]["gates_passed"] == 95
+    assert result["denominators"]["gates_evaluated"] == 306
+    assert result["denominators"]["gates_passed"] == 145
     assert result["denominators"]["gates_rejected"] == 100
     assert result["denominators"]["gates_unavailable"] == 61
     assert result["denominators"]["risk_approved"] == 15
@@ -613,6 +613,10 @@ def test_376_recommendations_15_plans_15_fills_keep_denominators_and_target_null
     assert result["notional_waterfall"]["risk_approved_notional"]["value"] == 15000.0
     assert result["notional_waterfall"]["risk_approved_notional"]["available_count"] == 15
     assert result["notional_waterfall"]["risk_approved_notional"]["denominator_count"] == 15
+    assert result["notional_waterfall"]["gate_eligible_notional"]["value"] == 217500.0
+    assert result["notional_waterfall"]["gate_eligible_notional"]["denominator_count"] == 145
+    assert result["notional_waterfall"]["sizing_approved_notional"]["value"] == 95000.0
+    assert result["notional_waterfall"]["sizing_approved_notional"]["denominator_count"] == 95
     assert result["notional_waterfall"]["filled_notional"]["value"] == 15000.0
     assert result["invariants"]["valid"] is True
     assert result["invariants"]["terminal_partition"] == {
@@ -644,10 +648,10 @@ def test_stage_transition_table_is_monotonic_and_closes_exactly() -> None:
     result = characterize_funnel(rows, cycle_id="cycle-capital", account=account, as_of="2026-07-21T20:00:00+00:00")
     expected = {
         "selection": (376, 306, 70, 0, 0),
-        "capacity": (306, 256, 50, 0, 70),
-        "gates": (256, 95, 100, 61, 120),
+        "gates": (306, 145, 100, 61, 70),
+        "capacity": (145, 95, 50, 0, 231),
+        "sizing": (95, 95, 0, 0, 281),
         "risk": (95, 15, 80, 0, 281),
-        "sizing": (15, 15, 0, 0, 361),
         "plans": (15, 15, 0, 0, 361),
         "orders": (15, 15, 0, 0, 361),
         "fills": (15, 15, 0, 0, 361),
@@ -679,7 +683,7 @@ def test_structured_terminal_paths_preserve_monotonicity(terminal: str) -> None:
     if terminal == "not_selected":
         row.update({"selection_status": "not_selected", "gate_status": None, "risk_status": None, "plan_id": None, "order": None})
     elif terminal == "capacity_exhausted":
-        row.update({"capacity_exhausted": True, "gate_status": None, "risk_status": None, "plan_id": None, "order": None})
+        row.update({"capacity_exhausted": True, "gate_status": "passed", "risk_status": None, "plan_id": None, "order": None})
     elif terminal == "gate_rejected":
         row.update({"gate_status": "rejected", "risk_status": None, "plan_id": None, "order": None})
     elif terminal == "gate_unavailable":
