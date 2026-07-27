@@ -533,3 +533,18 @@ Siguiente lote único: P-L53BR1, ensayo integrado aislado desde el candidato
 - QA focal P-L54B-T/R1/W: 33 passed; quedan pendientes suite completa, smoke,
   prueba P-L45 larga y ensayo integrado cerrado P-L54BR1. No desplegar ni hacer
   push desde este lote.
+
+## P-L54B-R1 - relevo de identidad de decision
+
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl54br1_decision_identity`;
+  rama `codex/pl54br1-decision-identity`; base `9c8940a0`; version `0.4.194`.
+- La decision canonica es `cycle_id + signal_identity + action +
+  recommendation_id` cuando existe. Repeticion exacta es idempotente; contenido
+  incompatible es conflicto auditable; faltante es partial/ambiguous segun
+  colision. No se adjuntan planes u ordenes por simbolo, fecha o candidato.
+- Stages y notional solo cuentan decision identity verificada y exponen la
+  poblacion excluida. La paridad de la ruta activa no cambia.
+- Commits `de08b9fd`, `8d814934`, `3f85071f`; focales `49 passed` incluyendo
+  P-L54B T/R1/W y cycle funnel. Siguiente paso unico: reintentar P-L54BR1;
+  suite completa y smoke siguen pendientes. Produccion intacta; sin deploy ni
+  push.

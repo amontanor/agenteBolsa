@@ -301,3 +301,67 @@ No se modificaron `kernel.py`, `broker.py`, `execution.py`, `risk.py`,
 `config.py` ni `.env`; produccion, P-L54B-T-R1, P-L58R1 y SQLite productiva
 permanecen intactos. No hubo despliegue, reinicio ni push. Siguiente lote unico:
 ensayo integrado P-L54BR1 sobre este candidato.
+
+## P-L54B-R1 - identidad de decision antes del ensayo integrado
+
+Dictamen: `ready_for_integration_rehearsal`.
+
+La reproduccion contra `9c8940a0` confirmo que la clave anterior era solo
+`cycle_id + action + signal_capture_id` (con fallback a `signal_id`). Dos
+recomendaciones distintas para la misma senal y accion se fusionaban en una
+fila y el segundo contenido incompatible se descartaba como duplicado. Tambien
+faltaban estados durables para una recomendacion sin `recommendation_id` y para
+un ciclo embebido distinto del ciclo externo.
+
+Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl54br1_decision_identity`.
+Rama: `codex/pl54br1-decision-identity`. Base y referencia exactas:
+`9c8940a00d8d57521720bbeade0725bbc33d2f6d`, tree
+`9d496ba5568e4a0cd24039fa75ead96eafb70b92`, version `0.4.194`.
+Commits: `de08b9fd` caracterizacion inicial, `8d814934` cobertura adicional y
+fixture temporal coherente, `3f85071f` correccion funcional. La version no
+cambia.
+
+El contrato corregido separa cuatro dominios:
+
+- `signal_identity`: `signal_capture_id` preferido, `signal_id` como fallback;
+  `candidate_id` es auxiliar.
+- `decision_identity`: `cycle_id + action + signal_identity +
+  recommendation_id` cuando existe.
+- `plan_identity`: `plan_id`.
+- `order_identity`: `broker_order_id`/`client_order_id`.
+
+Una recomendacion sin `recommendation_id` queda `partial` si es unica; dos
+filas parciales de la misma senal/accion/ciclo quedan `ambiguous`. Contenido
+incompatible con la misma decision exacta conserva ambas filas como conflicto
+auditable y excluye ambas de stages y notional evaluables. Una repeticion
+identica es no-op. Un plan u orden sin decision exacta no se adhiere por senal,
+posicion o lista; queda `attachment_unavailable`/`ambiguous`. BUY y EXIT siguen
+separados por `action`; un `candidate_id` distinto no crea una decision nueva.
+Un ciclo embebido distinto del ciclo externo es `cycle_mismatch` y no se
+reencaja silenciosamente.
+
+Los denominadores nuevos son `signal_identity_verified/unavailable/ambiguous`,
+`decision_identity_verified/partial/unavailable/ambiguous`,
+`recommendation_id_available/unavailable`, `plan_attachment_*` y
+`order_attachment_*`. `canonical_count`, stages, razones primarias y
+waterfalls usan solo la poblacion de decision verificada; la poblacion BUY
+observada y la poblacion excluida se publican por separado. El cierre de
+invariantes exige `success + dropped + excluded_identity = observed`.
+
+La compactacion de detalles conserva el limite de volumen: la fixture de 500
+filas sigue por debajo de 350 KB y el tiempo de construccion/serializacion de
+la prueba focal queda por debajo de 250 ms en el entorno temporal. El hash
+determinista incorpora la identidad con `recommendation_id`; `captured_at`
+continua fuera del hash. No se cambio el orden de productor, stages, notional,
+persistencia, callbacks, cap/truncation ni la ruta activa.
+
+QA focal: `15 passed` para la regresion de identidad y el contrato P-L54B-W;
+`49 passed` al incluir caracterizacion T, R1 y `cycle_funnel`. Ruff completo,
+compilacion, `check_no_nulls.py` y `git diff --check` quedan verdes. Suite
+completa, smoke y P-L45 de 33.336 observaciones se omiten por alcance; no se
+anadieron skips/xfails. No se modificaron archivos protegidos, produccion,
+SQLite productiva, servicios ni otros candidatos; no hubo despliegue, reinicio
+ni push.
+
+Siguiente lote unico: reintentar P-L54BR1 desde este candidato con validacion
+integrada cerrada; no se ejecuta en P-L54B-R1.

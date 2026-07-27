@@ -2471,3 +2471,16 @@ de despliegue quedan pendientes con XNYS cerrado.
   unavailable sin autoridad estructurada.
 - Focales P-L54B-T/R1/W: 33 passed; suite completa, smoke y prueba larga quedan
   pendientes del ensayo integrado cerrado P-L54BR1.
+
+## P-L54B-R1 - correccion de identidad de decision (0.4.194)
+
+- La colision `cycle + signal + action` se reprodujo contra P-L54B-W y se
+  corrigio incorporando `recommendation_id` cuando existe.
+- Decision parcial, ambigua, conflicto de contenido y ciclo inconsistente
+  quedan separados de stages/notional evaluables; no se usa `candidate_id` ni
+  symbol/date como sustituto.
+- Worktree `pl54br1_decision_identity`, rama
+  `codex/pl54br1-decision-identity`; commits `de08b9fd`, `8d814934` y
+  `3f85071f`; version `0.4.194`.
+- QA focal verde; suite completa, smoke y ensayo P-L54BR1 quedan pendientes con
+  XNYS cerrado y precondiciones operativas comprobadas. No desplegar.
