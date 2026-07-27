@@ -1,8 +1,18 @@
 # Relevo de direccion tecnica — agenteBolsa
 
 > Actualizado: **27-jul-2026**. Produccion estable **0.4.185** (`24537e81`,
-> tree `4747f27f`). P-L57A candidato **0.4.193** aislado y no desplegado;
+> tree `4747f27f`). Candidato integrado P-L58R1 **0.4.193** aislado y no
+> desplegado; P-L57A queda conservado dentro del historial.
 > P-L48B sigue desplegado y P-L44B sigue en shadow.
+
+> P-L58R1-Retry (27-jul-2026): worktree
+> `C:\Antonio\Bref\agenteBolsa_worktrees\pl58r1_measurement_safety_rehearsal`,
+> rama `codex/pl58r1-measurement-safety-rehearsal`, HEAD final posterior al
+> commit documental. Merges `01c2c564` -> `b61a3036` -> `e0e19625` en orden.
+> Dictamen `ready_for_closed_market_full_validation`: 1987 passed, 1 skip
+> preexistente, Ruff/NUL/diff/config/version policy verdes. No despliegue.
+> El siguiente gate es preflight humano y smoke completamente aislado; no
+> promover sombras ni cambiar politica.
 
 > P-L50BR1: el worktree combinado queda en candidato **0.4.188**, con la
 > secuencia P-L49B 0.4.186 -> P-L46BR3 0.4.187 -> P-L50B 0.4.188. No es un

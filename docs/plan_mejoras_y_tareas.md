@@ -18,6 +18,25 @@
   conserva el estado historico del ensayo individual P-L49B.
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
+## P-L58R1 - ensayo combinado de seguridad de medicion (27-jul-2026)
+
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl58r1_measurement_safety_rehearsal`,
+  rama `codex/pl58r1-measurement-safety-rehearsal`, version 0.4.193.
+- Merges `--no-ff` en orden P-L53BR2 -> P-L43C-R1 -> P-L57A:
+  `01c2c5644d449b235c594e79032b5260c8a82fe1`,
+  `b61a3036ee05bfa8a6fd2edef90a34e548e9aa73`,
+  `e0e1962534e0877fa96fcfd80c524f000a58dafe`.
+- QA combinada: `b066b65c50d0a43713bbcd899304e5b3202753ec`.
+- Resultado: `ready_for_closed_market_full_validation`. Suite cerrada:
+  1987 passed, 1 skip preexistente; Ruff, NUL, diff, configuracion y version
+  policy verdes. Smoke CLI no ejecutado por seguridad (`smoke_unavailable_by_safety`).
+- No cambia trading: P-L53 queda fuera del PMR; P-L43C conserva
+  submit -> save_broker_order -> telemetria fail-open; P-L57A solo hace
+  null-safe a los consumidores observacionales.
+- El perfil P-L53 de 500 candidatos registra evento de 757177 bytes y 17 MB
+  de memoria pico; riesgo operativo medio, sin locks y con persistencia despues
+  del envio. No se promociona ni despliega en este lote.
+
 ## P-L51C-T - carrier de provenance BUY -> SELL (21-jul-2026)
 
 - Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl51c_provenance_carrier_tests`,
