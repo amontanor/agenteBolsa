@@ -2504,3 +2504,16 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Reproduccion y fix en worktree aislado; 75 pruebas UI verdes. Suite completa,
   smoke y validacion cerrada siguen pendientes con XNYS abierto.
 - No cambia trading, riesgo, broker, persistencia ni consultas adicionales.
+
+## P-L60R1 - ensayo integrado UI sobre P-L54BR1 (27-jul-2026)
+
+- Merge aislado `489b229f` en `pl60r1_ui_measurement_integration`, version
+  final `0.4.195`, tree `5f3afdc7`. P-L46BR3 ya estaba en la base y no se
+  duplicaron helpers ni widgets.
+- El selector unico ofrece 7/15/30/90/`Desde inicio`; la serie calendario
+  filtrada se reutiliza para grafica, Resultado del periodo, porcentaje y
+  fechas. P/L abierto mantiene las posiciones cargadas y no hay broker extra.
+- QA: `82 passed` UI/version y `159 passed, 1 warning` relacionados. Ruff,
+  NUL, diff, py_compile y configuracion temporal verdes. XNYS abierto impide
+  suite completa, smoke y validacion cerrada; sin cambios de trading ni
+  despliegue. Se conserva `unconfirmed_sqlite_mutation` como incertidumbre.

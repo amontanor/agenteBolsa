@@ -75,3 +75,21 @@ QA del worktree aislado:
 
 El cambio es exclusivamente UI/lectura: no anade llamadas broker, escrituras,
 SQLite ni autoridad sobre trading. Commit funcional: `9ad9775c`.
+
+## P-L60R1 - ensayo integrado P-L46BR4 sobre P-L54BR1 (27-jul-2026)
+
+- Worktree aislado: `pl60r1_ui_measurement_integration`, rama
+  `codex/pl60r1-ui-measurement-integration`. Merge `--no-ff`:
+  `489b229f`; version final `0.4.195`, tree `5f3afdc793f60875420f3ea883dc75b7fc073100`.
+- P-L46BR3 ya estaba presente; la integracion no duplica helpers ni widgets.
+  El selector unico ofrece 7/15/30/90/`Desde inicio`; el filtro usa fechas
+  calendario del ultimo snapshot, con orden estable y deduplicacion sin mutar
+  la serie original. La misma serie visible alimenta grafica y resultado del
+  periodo; P/L abierto usa las posiciones ya cargadas.
+- QA focal UI/versionado: `82 passed`; bateria relacionada P-L43/P-L48--P-L54/
+  P-L57 y helpers de presentacion: `159 passed, 1 warning`. Ruff, NUL,
+  `git diff --check`, py_compile y `validate-agent-config --json` temporal
+  pasaron. No se anadieron pruebas redundantes, skips ni xfails.
+- Con XNYS abierto quedan pendientes suite completa, smoke y validacion cerrada.
+  No hubo broker, red, SQLite productiva, servicios, despliegue ni push. P-L54
+  y la incertidumbre historica `unconfirmed_sqlite_mutation` se conservan.

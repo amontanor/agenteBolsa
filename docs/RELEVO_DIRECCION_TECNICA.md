@@ -575,3 +575,19 @@ de fechas, y la serie visible alimenta tanto grafica como Resultado del
 periodo. El cambio no toca trading ni broker. El worktree tiene 75 pruebas UI
 verdes; con XNYS abierto quedan pendientes suite completa, smoke y validacion
 cerrada.
+
+## P-L60R1 - ensayo integrado UI sobre P-L54BR1 (27-jul-2026)
+
+- Worktree/rama: `pl60r1_ui_measurement_integration`,
+  `codex/pl60r1-ui-measurement-integration`; merge `489b229f`, version
+  `0.4.195`, tree `5f3afdc7`.
+- P-L46BR3 ya estaba presente. El selector unico y estable ofrece
+  7/15/30/90/`Desde inicio`; la ventana se aplica por fechas calendario al
+  ultimo snapshot visible, con orden/deduplicacion deterministas y sin mutar
+  la fuente. Grafica y Resultado del periodo comparten la misma serie; P/L
+  abierto reutiliza posiciones ya cargadas.
+- QA focal: `82 passed`; relacionados: `159 passed, 1 warning`; Ruff, NUL,
+  diff, py_compile y config temporal verdes. Con XNYS abierto quedan
+  pendientes suite completa, smoke y validacion cerrada. No hubo broker, red,
+  SQLite productiva, despliegue ni push. La incertidumbre historica
+  `unconfirmed_sqlite_mutation` y P-L54 se conservan sin declararlas resueltas.
