@@ -130,7 +130,8 @@ def _recommendation(
 # ===================================================================
 
 
-def test_two_recommendations_same_identity_last_wins() -> None:
+def test_two_recommendations_same_identity_ambiguous_v2() -> None:
+    """V2: candidate summary ambiguous with 2 decision_rows. No last-wins."""
     row = _candidate_row()
     rec_a = _recommendation(row, recommendation_id="rec:first", llm_selected=True, confidence=0.90)
     rec_b = _recommendation(row, recommendation_id="rec:second", llm_selected=False, confidence=0.60)
@@ -138,16 +139,27 @@ def test_two_recommendations_same_identity_last_wins() -> None:
         "cycle-collision", _phase_a(row),
         recommendations=[rec_a, rec_b], captured_at=CAPTURED_AT,
     )
+    # Candidate row: ambiguous, no singular fields
     assert len(result["candidate_rows"]) == 1
     r = result["candidate_rows"][0]
-    assert r["recommendation_id"] == "rec:second"
-    assert r["llm_selected"] is False
+    assert r["recommendation_id"] is None
+    assert r["llm_selected"] is None
+    assert r["decision_summary_status"] == "ambiguous"
     assert r["recommended"] is True
+    assert r["decision_ids"] == ["rec:first", "rec:second"]
     assert result["denominators"]["recommended_count"] == 1
+    # Decision rows: both preserved
+    assert len(result["decision_rows"]) == 2
+    by_rec = {d["decision_id"]: d for d in result["decision_rows"]}
+    assert by_rec["rec:first"]["llm_selected"] is True
+    assert by_rec["rec:second"]["llm_selected"] is False
+    assert result["denominators"]["recommendation_observed"] == 2
+    assert result["denominators"]["recommendation_canonical"] == 2
     assert result["content_hash"] == stable_content_hash(result)
 
 
-def test_two_recommendations_same_identity_reverse_order_last_wins() -> None:
+def test_two_recommendations_same_identity_reverse_order_stable() -> None:
+    """V2: order reversal produces same result (no last-wins, both preserved)."""
     row = _candidate_row()
     rec_a = _recommendation(row, recommendation_id="rec:first", llm_selected=False)
     rec_b = _recommendation(row, recommendation_id="rec:second", llm_selected=True)
@@ -156,11 +168,16 @@ def test_two_recommendations_same_identity_reverse_order_last_wins() -> None:
         recommendations=[rec_b, rec_a], captured_at=CAPTURED_AT,
     )
     r = result["candidate_rows"][0]
-    assert r["recommendation_id"] == "rec:first"
-    assert r["llm_selected"] is False
+    assert r["recommendation_id"] is None
+    assert r["decision_summary_status"] == "ambiguous"
+    assert len(result["decision_rows"]) == 2
+    by_rec = {d["decision_id"]: d for d in result["decision_rows"]}
+    assert by_rec["rec:first"]["llm_selected"] is False
+    assert by_rec["rec:second"]["llm_selected"] is True
 
 
-def test_first_recommendation_evidence_lost() -> None:
+def test_first_recommendation_evidence_preserved_v2() -> None:
+    """V2: both recommendations preserved in decision_rows. No evidence lost."""
     row = _candidate_row()
     rec_first = _recommendation(row, recommendation_id="rec:first", llm_selected=True, confidence=0.90)
     rec_second = _recommendation(row, recommendation_id="rec:second", llm_selected=False, confidence=0.40)
@@ -168,12 +185,16 @@ def test_first_recommendation_evidence_lost() -> None:
         "cycle-collision", _phase_a(row),
         recommendations=[rec_first, rec_second], captured_at=CAPTURED_AT,
     )
+    # Candidate ambiguous (2 canonical decisions)
     r = result["candidate_rows"][0]
-    assert r["recommendation_id"] != "rec:first"
-    assert r["llm_selected"] is not True
-    assert "recommendation_without_phase_a_candidate" not in result.get("warnings", [])
-    collision_warnings = [w for w in result.get("warnings", []) if "collision" in w.lower() or "overwrite" in w.lower()]
-    assert len(collision_warnings) == 0
+    assert r["decision_summary_status"] == "ambiguous"
+    # Both preserved in decision_rows
+    assert len(result["decision_rows"]) == 2
+    by_rec = {d["decision_id"]: d for d in result["decision_rows"]}
+    assert by_rec["rec:first"]["llm_selected"] is True
+    assert by_rec["rec:first"]["confidence"] == 0.90
+    assert by_rec["rec:second"]["llm_selected"] is False
+    assert by_rec["rec:second"]["confidence"] == 0.40
 
 
 # ===================================================================
@@ -181,7 +202,8 @@ def test_first_recommendation_evidence_lost() -> None:
 # ===================================================================
 
 
-def test_same_rec_id_same_content_within_one_build_last_wins_silently() -> None:
+def test_same_rec_id_same_content_within_one_build_idempotent_v2() -> None:
+    """V2: same-rec_id same-content within one build → idempotent, 1 decision_row."""
     row = _candidate_row()
     rec_a = _recommendation(row, recommendation_id="rec:dual", source="llm", llm_selected=True, confidence=0.80)
     rec_b = _recommendation(row, recommendation_id="rec:dual", source="llm", llm_selected=True, confidence=0.80)
@@ -189,13 +211,19 @@ def test_same_rec_id_same_content_within_one_build_last_wins_silently() -> None:
         "cycle-same-content", _phase_a(row),
         recommendations=[rec_a, rec_b], captured_at=CAPTURED_AT,
     )
+    # Candidate: canonical (1 decision, 1 rec_id, idempotent duplicate)
     r = result["candidate_rows"][0]
+    assert r["decision_summary_status"] == "canonical"
     assert r["recommendation_id"] == "rec:dual"
     assert r["recommended"] is True
-    assert "candidate_idempotent_duplicate" not in result.get("warnings", [])
+    # Decision rows: 1 (duplicate detected, not added)
+    assert len(result["decision_rows"]) == 1
+    assert result["decision_rows"][0]["decision_id"] == "rec:dual"
+    assert "decision_idempotent_duplicate" in result["warnings"]
 
 
-def test_same_rec_id_different_content_within_one_build_last_wins() -> None:
+def test_same_rec_id_different_content_within_one_build_conflict_v2() -> None:
+    """V2: same-rec_id different content → conflict, original preserved, no last-wins."""
     row = _candidate_row()
     rec_a = _recommendation(row, recommendation_id="rec:dual", source="llm", llm_selected=True, confidence=0.90)
     rec_b = _recommendation(row, recommendation_id="rec:dual", source="capacity_fill", llm_selected=False, confidence=0.40)
@@ -203,11 +231,19 @@ def test_same_rec_id_different_content_within_one_build_last_wins() -> None:
         "cycle-diff-content", _phase_a(row),
         recommendations=[rec_a, rec_b], captured_at=CAPTURED_AT,
     )
+    # Candidate: ambiguous (same rec_id conflict)
     r = result["candidate_rows"][0]
-    assert r["recommendation_id"] == "rec:dual"
-    assert r["llm_selected"] is False
-    assert r["decision_source"] == "deterministic_capacity_fill"
-    assert "conflict" not in str(result.get("warnings", [])).lower()
+    assert r["decision_summary_status"] == "ambiguous"
+    assert r["recommendation_id"] is None
+    # Decision rows: original canonical + conflict entry
+    assert len(result["decision_rows"]) >= 1
+    canonicals = [d for d in result["decision_rows"] if d["decision_identity"] == "verified"]
+    conflicts = [d for d in result["decision_rows"] if d["decision_identity"] == "conflict"]
+    assert len(canonicals) == 1
+    assert canonicals[0]["llm_selected"] is True
+    assert canonicals[0]["decision_source"] == "llm"
+    assert len(conflicts) >= 1
+    assert result["decision_conflict_count"] >= 1
 
 
 def test_same_rec_id_different_content_across_builds_store_conflict(tmp_path: Path) -> None:
@@ -267,7 +303,8 @@ def test_buy_and_exit_same_signal_preserved_separately() -> None:
     assert result["denominators"]["recommended_count"] == 2
 
 
-def test_two_buys_one_exit_same_signal() -> None:
+def test_two_buys_one_exit_same_signal_v2() -> None:
+    """V2: two buys on same signal → ambiguous candidate, 2 buy decision_rows."""
     row_buy = _candidate_row(action="buy", signal_id="signal:aapl")
     row_exit = _candidate_row(action="exit", signal_id="signal:aapl",
                               signal_capture_id="capture:aapl:exit",
@@ -283,9 +320,18 @@ def test_two_buys_one_exit_same_signal() -> None:
     )
     assert len(result["candidate_rows"]) == 2
     by_action = {r["action"]: r for r in result["candidate_rows"]}
-    assert by_action["buy"]["recommendation_id"] == "rec:buy:b"
+    # Buy: ambiguous (2 recommendations)
+    assert by_action["buy"]["decision_summary_status"] == "ambiguous"
+    assert by_action["buy"]["recommendation_id"] is None
+    assert by_action["buy"]["decision_ids"] == ["rec:buy:a", "rec:buy:b"]
+    # Exit: canonical (1 recommendation)
+    assert by_action["exit"]["decision_summary_status"] == "canonical"
     assert by_action["exit"]["recommendation_id"] == "rec:exit:x"
     assert result["denominators"]["recommended_count"] == 2
+    # Decision rows: 3 (2 buy + 1 exit)
+    assert len(result["decision_rows"]) == 3
+    buy_decisions = [d for d in result["decision_rows"] if d["action"] == "buy"]
+    assert len(buy_decisions) == 2
 
 
 # ===================================================================
@@ -306,7 +352,8 @@ def test_missing_recommendation_id_stays_none() -> None:
     assert r["recommended"] is True
 
 
-def test_mixed_legacy_and_new_recommendation_ids() -> None:
+def test_mixed_legacy_and_new_recommendation_ids_v2() -> None:
+    """V2: 1 missing-ID + 1 canonical → ambiguous candidate summary."""
     row = _candidate_row()
     rec_legacy = _recommendation(row, recommendation_id="")
     rec_legacy["recommendation_id"] = None
@@ -316,11 +363,16 @@ def test_mixed_legacy_and_new_recommendation_ids() -> None:
         recommendations=[rec_legacy, rec_new], captured_at=CAPTURED_AT,
     )
     r = result["candidate_rows"][0]
-    assert r["recommendation_id"] == "rec:new"
-    assert r["llm_selected"] is False
+    assert r["decision_summary_status"] == "ambiguous"
+    assert r["recommendation_id"] is None
+    # Decision rows: 1 (only canonical rec:new; missing-ID not in decision_rows)
+    assert len(result["decision_rows"]) == 1
+    assert result["decision_rows"][0]["decision_id"] == "rec:new"
+    assert result["decision_rows"][0]["llm_selected"] is False
 
 
-def test_multiple_recommendations_all_missing_ids() -> None:
+def test_multiple_recommendations_all_missing_ids_v2() -> None:
+    """V2: multiple missing-ID → ambiguous candidate, 0 decision_rows."""
     row = _candidate_row()
     rec_a = _recommendation(row, recommendation_id="", llm_selected=True)
     rec_a["recommendation_id"] = None
@@ -332,8 +384,12 @@ def test_multiple_recommendations_all_missing_ids() -> None:
     )
     r = result["candidate_rows"][0]
     assert r["recommendation_id"] is None
-    assert r["llm_selected"] is False
+    assert r["decision_summary_status"] == "ambiguous"
+    assert r["llm_selected"] is None
+    assert r["recommended"] is True
     assert result["denominators"]["recommended_count"] == 1
+    assert len(result["decision_rows"]) == 0
+    assert result["decision_detail_total"] == 0
 
 
 # ===================================================================
