@@ -2518,26 +2518,14 @@ de despliegue quedan pendientes con XNYS cerrado.
   suite completa, smoke y validacion cerrada; sin cambios de trading ni
   despliegue. Se conserva `unconfirmed_sqlite_mutation` como incertidumbre.
 
-## P-L59B-T-R3 (final) - caracterizacion llm_selected y controles (27-jul-2026)
+## P-L59B-T-R4 (final) - caracterizacion cerrada (27-jul-2026)
 
-- Dictamen unico: **`needs_fix`**. XNYS abierto. Hora real: 19:26 CEST.
-- Base: `70de34011b74403281c32673c32947cab0ee0952` (P-L60R1, v0.4.195).
-- Worktree: `pl59bt_llm_selection_contract`, rama `codex/pl59bt-llm-selection-contract`.
-- HEAD R3: `e32c39cb`. Tree limpio. Version `0.4.195`.
-- 27 tests P-L59 + 5 tests integracion (32 total). Ruff/NUL/diff verdes.
-
-### Hallazgos R3
-
-1. `llm_selected` = proxy de `decision_source`; no booleano independiente.
-2. P-L31B desplegado en prod 0.4.185. P-L53/P-L54B no.
-3. 0 controles P-L59A: hecho, causa no demostrada.
-4. Colision P-L53 sin recommendation_id.
-5. **Stage order real ejecutable** (ampliado en integracion):
-   `build_order_plans(1880) -> daily_limit -> low_sample -> strategy_pause
-   -> P-L31B(1965) -> P-L50(~2071) -> P-L53(2255) -> P-L54B(2266)`.
-   Verificado con `_auto_paper_trade` + spies monkeypatch, sin inspect/AST.
-6. `_rec` usa `llm_considered` como parametro obligatorio explicito.
-
-### Siguiente lote
-
-P-L59C: rediseno de productor para llm_selected independiente. No se inicia.
+- Dictamen: **`needs_fix`**. XNYS abierto. Hora real: 19:33 CEST.
+- HEAD R4: `ef5835a1`. Tree limpio. Version 0.4.195.
+- 27 tests P-L59 + 5 integracion (32 total). Ruff/NUL/diff verdes.
+- Stage order ejecutable con identidades exactas (spies reales, sin inspect).
+- Rama ejecutada: 2399 (P-L53) y 2412 (P-L54B). Rama sin planes: 2255/2266.
+- Contrato: P-L31B ve plans originales; P-L53 ve plans tras replace() que
+  pierde plan_id (init=False); P-L54B ve plan_records; recommendations
+  compartidas; gated_recommendations extra en P-L54B.
+- Caracterizacion cerrada. Siguiente: P-L59C (no iniciado).

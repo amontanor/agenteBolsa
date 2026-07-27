@@ -1,4 +1,4 @@
-# P-L59B-T-R3 — informe único final
+# P-L59B-T-R4 — informe único final
 
 ## Dictamen único
 
@@ -24,29 +24,43 @@ independiente de P-L53/P-L54B).
 Dos recomendaciones con misma señal y distinto rec_id colisionan. P-L54B usa
 dominios propios; no demostrada reparación cruzada.
 
-## Stage order real (R3)
+## Stage order real (R4 — precisión corregida)
 
 Verificado ejecutablemente en
-`tests/test_market_cycle_timing_integration.py::test_stage_order_full_flow_with_pl53_pl54_spies`
-que ejecuta `_auto_paper_trade` con `_patch_trading_flow` y espía cada paso:
+`tests/test_market_cycle_timing_integration.py::test_stage_order_full_flow_with_pl53_pl54_spies`.
+Ejecuta `_auto_paper_trade` con `_patch_trading_flow` y espía cada paso con
+`monkeypatch`. Rama ejecutada: exitosa con plan y submit.
 
-1. `build_order_plans` (cycle_runner:1880) — planes desde gated_recommendations
-2. `_apply_daily_buy_limit` (~1893)
-3. `_apply_low_sample_daily_quota` (~1894)
-4. `_separate_strategy_paused_plans` (~1897)
-5. `build_comparable_control_sets` (1965) — **P-L31B**
-6. `_persist_learning_penalty_cycle_shadow_final` (~2071)
-7. `_persist_selection_ledger_shadow` (2255) — **P-L53 final**
-8. `_persist_capital_deployment_funnel_shadow` (2266) — **P-L54B final**
+| Orden | Línea real | Componente | Recibe |
+|---|---|---|---|
+| 1 | 1880 | `build_order_plans` | gated_recommendations → `plans` (OrderPlan) |
+| 2 | ~1893 | `_apply_daily_buy_limit` | filtra `plans` |
+| 3 | ~1894 | `_apply_low_sample_daily_quota` | filtra `plans` |
+| 4 | ~1897 | `_separate_strategy_paused_plans` | separa `plans` |
+| 5 | 1965 | **P-L31B** `build_comparable_control_sets` | `plans=plans` (OrderPlan originales) |
+| 6 | ~2004 | Attach: `replace(plan, recommendation=...)` → `plans = attached_plans` | — |
+| 7 | ~2071 | P-L50 `_persist_learning_penalty_cycle_shadow_final` | `comparable_control_sets` |
+| 8 | **2399** | **P-L53** `_persist_selection_ledger_shadow` | `plans=plans` (attached), `plan_records=plan_records`, `recommendations=reviewed_recommendations` |
+| 9 | **2412** | **P-L54B** `_persist_capital_deployment_funnel_shadow` | `plans=plan_records or plans`, `recommendations=reviewed_recommendations`, `gated_recommendations=gated_recommendations` |
 
-Los filtros (`build_order_plans`, daily limit, low-sample, strategy pause)
-ocurren ANTES de P-L31B. P-L31B recibe los planes ya filtrados. P-L53/P-L54B
-reciben los mismos objetos finales (phase_a, recommendations, plans,
-rejected_order_plans) después de P-L31B. Sin inspect/AST/source-order narrativo.
+La rama sin submit (2255/2266) tiene la misma estructura pero sin
+`ordered_records`/`failed_records`/`submitted`. El test recorre la rama 2399/2412.
+
+**Contrato de identidad observado**:
+- P-L31B recibe los `plans` originales con `plan_id` intacto.
+- P-L53 recibe los `plans` después de `replace(plan, recommendation=...)` que
+  pierde campos `init=False` como `plan_id`. Las identidades se recuperan vía
+  `plan_records` (dicts durables) que sí preservan `plan_id`.
+- P-L54B recibe `plans=plan_records or plans` (en rama exitosa, `plan_records`
+  existe). No son los mismos objetos que P-L31B/P-L53, pero los `plan_id`
+  coinciden con los `plan_record_ids` de P-L53.
+- P-L53 y P-L54B comparten `recommendations=reviewed_recommendations` (misma
+  lista literal).
+- P-L54B recibe adicionalmente `gated_recommendations`.
 
 ## Alcance y estado
 
-- Hora real: 2026-07-27 19:26 CEST (R3).
+- Hora real: 2026-07-27 19:33 CEST (R4).
 - **XNYS ABIERTO** (sesión 2026-07-27, cierre 22:00 CEST).
 - Base exacta: `70de34011b74403281c32673c32947cab0ee0952`, tree `1d960a6723c0f2fbe5bc4afc72c7df08284c43d1`.
 - Producción desplegada: HEAD `24537e813ff0905696cda0b3925a212045ee7b09`, versión `0.4.185`.
@@ -54,7 +68,7 @@ rejected_order_plans) después de P-L31B. Sin inspect/AST/source-order narrativo
 - Candidato: P-L60R1, versión `0.4.195`.
 - Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59bt_llm_selection_contract`.
 - Rama: `codex/pl59bt-llm-selection-contract`.
-- HEAD R3: `e32c39cb`.
+- HEAD R4: `ef5835a1`.
 - Solo tests, este informe, plan y relevo. Versión `0.4.195`.
 
 ## Validación

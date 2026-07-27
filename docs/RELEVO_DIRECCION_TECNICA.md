@@ -592,15 +592,11 @@ cerrada.
   SQLite productiva, despliegue ni push. La incertidumbre historica
   `unconfirmed_sqlite_mutation` y P-L54 se conservan sin declararlas resueltas.
 
-## P-L59B-T-R3 (final) - caracterizacion llm_selected y controles (27-jul-2026)
+## P-L59B-T-R4 (final) - caracterizacion cerrada (27-jul-2026)
 
-- Dictamen unico: **`needs_fix`**. XNYS abierto. Hora real: 19:26 CEST.
-- Worktree: `pl59bt_llm_selection_contract`, rama
-  `codex/pl59bt-llm-selection-contract`, base `70de3401`. HEAD R3: `e32c39cb`.
+- Dictamen: **`needs_fix`**. XNYS abierto. Hora real: 19:33 CEST. HEAD: `ef5835a1`.
 - 27 tests P-L59 + 5 integracion (32 total). Ruff/NUL/diff verdes.
-- Stage order ejecutable: `build_order_plans -> filtros -> P-L31B(1965) ->
-  P-L50 -> P-L53(2255) -> P-L54B(2266)`. Espias reales sobre `_auto_paper_trade`.
-  Sin inspect/AST. `llm_considered` explicito en fixtures.
-- `llm_selected` = proxy de source. Controles: P-L31B desplegado. 0 controles
-  P-L59A sin causa demostrada. Colision P-L53 sin recommendation_id.
-- Informe unico: `docs/P-L59_informe.md`. Siguiente: P-L59C (no iniciado).
+- Stage order: rama 2399/2412 (con submit). Rama sin planes: 2255/2266.
+- Contrato identidades: P-L31B(plans), P-L53(plans+plan_records+recs),
+  P-L54B(plan_records, recs, gated_recs). Replace() pierde plan_id.
+- Caracterizacion cerrada. Siguiente: P-L59C.
