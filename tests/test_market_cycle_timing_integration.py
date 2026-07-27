@@ -523,37 +523,36 @@ def test_fail_open_selection_ledger_does_not_block_route(monkeypatch, tmp_path):
 # ===================================================================
 
 # ===================================================================
-# P-L59C-R3: paridad economica con IDs deterministicos
+# P-L59C-R4: paridad con normalizacion context-aware
 # ===================================================================
 
-_OBSERVATIONAL_LEAF_KEYS = {
-    "llm_selected",
-}
-_OBSERVATIONAL_RECURSIVE_KEYS = {
-    "content_hash",
-    "snapshot_id",
-    "captured_at",
-}
 
+def _strip_observational_minimal(obj: dict, *, inside_dcs: bool = False) -> dict:
+    """Context-aware: solo llm_selected global; content_hash+captured_at en DCS y comparable_control_set.
 
-def _strip_observational_minimal(d: dict) -> dict:
-    """Retira SOLO llm_selected, content_hash, snapshot_id, captured_at.
-
-    Conserva TODOS los IDs canonicos (recommendation_id, plan_id,
-    broker_order_id, signal_id, signal_capture_id, candidate_id, cycle_id,
-    source_run_id), action, schema_version, signal_link_status, y el
-    decision_context_snapshot completo (salvo campos observacionales).
+    - Globalmente (todos los niveles): retira llm_selected.
+    - Dentro de decision_context_snapshot o comparable_control_set: retira
+      content_hash y captured_at (timestamps/hashes observacionales que no
+      dependen del carrier P-L59C pero varian por wall-clock o derivacion).
+    - Conserva snapshot_id, otros content_hash/hashes/timestamps de bloques
+      ajenos (plan, broker, execution, etc.).
     """
+    OBS_BLOCKS = {"decision_context_snapshot", "comparable_control_set"}
     out = {}
-    for k, v in d.items():
-        if k in _OBSERVATIONAL_LEAF_KEYS:
+    for k, v in obj.items():
+        if k == "llm_selected":
             continue
-        if k in _OBSERVATIONAL_RECURSIVE_KEYS:
+        if inside_dcs and k in ("content_hash", "captured_at"):
             continue
         if isinstance(v, dict):
-            out[k] = _strip_observational_minimal(v)
+            next_dcs = inside_dcs or (k in OBS_BLOCKS)
+            out[k] = _strip_observational_minimal(v, inside_dcs=next_dcs)
         elif isinstance(v, list):
-            out[k] = [_strip_observational_minimal(i) if isinstance(i, dict) else i for i in v]
+            out[k] = [
+                _strip_observational_minimal(i, inside_dcs=inside_dcs)
+                if isinstance(i, dict) else i
+                for i in v
+            ]
         else:
             out[k] = v
     return out
@@ -621,33 +620,104 @@ def test_economic_parity_true_false_none_identical_payloads(monkeypatch, tmp_pat
         assert true_run[key] == false_run[key], f"{key} difiere True vs False"
         assert true_run[key] == none_run[key], f"{key} difiere True vs None"
 
-        # Negative assertions: IDs canonicos y campos economicos preservados
-        for run in (true_run, false_run, none_run):
-            rp = run["rec_payloads"]
-            assert len(rp) >= 1, "Debe haber al menos un rec payload"
-            assert "recommendation_id" in rp[0], "recommendation_id debe conservarse"
-            assert isinstance(rp[0]["recommendation_id"], str), "recommendation_id str"
-            assert rp[0]["symbol"] == "AAPL", "symbol debe conservarse"
-            assert rp[0]["action"] == "buy", "action debe conservarse"
-            assert rp[0]["confidence"] == 0.9, "confidence debe conservarse"
-            # decision_context_snapshot conservado (salvo campos observacionales)
-            if "decision_context_snapshot" in rp[0]:
-                dcs = rp[0]["decision_context_snapshot"]
-                assert "cycle_id" in dcs, "cycle_id en snapshot"
-                assert "decision_source" in dcs, "decision_source en snapshot"
-                assert "llm_selected" not in dcs, "llm_selected retirado"
-                assert "content_hash" not in dcs, "content_hash retirado"
-                assert "captured_at" not in dcs, "captured_at retirado"
+    # Negative assertions: IDs canonicos y campos economicos preservados
+    for run in (true_run, false_run, none_run):
+        rp = run["rec_payloads"]
+        assert len(rp) >= 1, "Debe haber al menos un rec payload"
+        assert "recommendation_id" in rp[0], "recommendation_id debe conservarse"
+        assert isinstance(rp[0]["recommendation_id"], str), "recommendation_id str"
+        assert rp[0]["symbol"] == "AAPL", "symbol debe conservarse"
+        assert rp[0]["action"] == "buy", "action debe conservarse"
+        assert rp[0]["confidence"] == 0.9, "confidence debe conservarse"
+        # decision_context_snapshot conservado (salvo llm_selected, content_hash, captured_at)
+        if "decision_context_snapshot" in rp[0]:
+            dcs = rp[0]["decision_context_snapshot"]
+            assert "cycle_id" in dcs, "cycle_id en snapshot"
+            assert "decision_source" in dcs, "decision_source en snapshot"
+            assert "llm_selected" not in dcs, "llm_selected retirado"
+            assert "content_hash" not in dcs, "content_hash retirado (deriva del snapshot)"
+            assert "captured_at" not in dcs, "captured_at retirado (deriva del snapshot)"
+            # snapshot_id NO depende de llm_selected: se conserva
+            assert "snapshot_id" in dcs, "snapshot_id conservado en DCS"
+            assert isinstance(dcs["snapshot_id"], str), "snapshot_id str"
 
-            pp = run["plan_payloads"]
-            assert len(pp) >= 1, "Debe haber al menos un plan payload"
-            assert "plan_id" in pp[0], "plan_id debe conservarse"
-            assert isinstance(pp[0]["plan_id"], str), "plan_id str"
-            assert "symbol" in pp[0], "symbol en plan"
-            assert "side" in pp[0], "side en plan"
+        pp = run["plan_payloads"]
+        assert len(pp) >= 1, "Debe haber al menos un plan payload"
+        assert "plan_id" in pp[0], "plan_id debe conservarse"
+        assert isinstance(pp[0]["plan_id"], str), "plan_id str"
+        assert "symbol" in pp[0], "symbol en plan"
+        assert "side" in pp[0], "side en plan"
 
-            bp = run["broker_payloads"]
-            assert len(bp) >= 1, "Debe haber al menos un broker payload"
-            assert "broker_order_id" in bp[0], "broker_order_id debe conservarse"
-            assert isinstance(bp[0]["broker_order_id"], str), "broker_order_id str"
-            assert "symbol" in bp[0] or "order" in bp[0], "identidad en broker payload"
+        bp = run["broker_payloads"]
+        assert len(bp) >= 1, "Debe haber al menos un broker payload"
+        assert "broker_order_id" in bp[0], "broker_order_id debe conservarse"
+        assert isinstance(bp[0]["broker_order_id"], str), "broker_order_id str"
+        assert "symbol" in bp[0] or "order" in bp[0], "identidad en broker payload"
+
+    # snapshot_id identico en las tres ejecuciones (no depende de llm_selected)
+    # Solo si decision_context_snapshot esta presente (mock puede no producirlo).
+    def _dcs_snapshot_id(run):
+        for rp in run["rec_payloads"]:
+            dcs = rp.get("decision_context_snapshot", {})
+            if dcs and "snapshot_id" in dcs:
+                return dcs["snapshot_id"]
+        return None
+
+    sid_true = _dcs_snapshot_id(true_run)
+    sid_false = _dcs_snapshot_id(false_run)
+    sid_none = _dcs_snapshot_id(none_run)
+    if sid_true is not None:
+        assert sid_true == sid_false == sid_none, (
+            f"snapshot_id identico en True/False/None: {sid_true} vs {sid_false} vs {sid_none}"
+        )
+
+
+def test_strip_context_aware_preserves_external_hashes():
+    """content_hash fuera de DCS/comparable_control_set sobrevive al normalizador."""
+    payload = {
+        "llm_selected": True,                     # debe retirarse globalmente
+        "recommendation_id": "rec-123",
+        "content_hash": "abc123",                  # externo: se conserva
+        "captured_at": "2026-07-27T20:00:00Z",    # externo: se conserva
+        "snapshot_id": "snap-999",                 # externo: se conserva
+        "decision_context_snapshot": {
+            "llm_selected": True,                  # DCS: debe retirarse
+            "content_hash": "dcs-hash",            # DCS: debe retirarse
+            "captured_at": "2026-07-27T19:00:00Z", # DCS: debe retirarse
+            "snapshot_id": "snap-001",             # DCS: se conserva
+            "cycle_id": "c1",
+            "decision_source": "llm",
+        },
+        "comparable_control_set": {
+            "content_hash": "ccs-hash",            # CCS: debe retirarse
+            "captured_at": "2026-07-27T18:00:00Z", # CCS: debe retirarse
+            "snapshot_id": "snap-002",             # CCS: se conserva
+            "status": "verified",
+        },
+    }
+    result = _strip_observational_minimal(payload)
+
+    # Global: llm_selected removed
+    assert "llm_selected" not in result
+
+    # External fields preserved
+    assert result["content_hash"] == "abc123"
+    assert result["captured_at"] == "2026-07-27T20:00:00Z"
+    assert result["snapshot_id"] == "snap-999"
+    assert result["recommendation_id"] == "rec-123"
+
+    # DCS: llm_selected, content_hash, captured_at removed
+    dcs = result["decision_context_snapshot"]
+    assert "llm_selected" not in dcs
+    assert "content_hash" not in dcs
+    assert "captured_at" not in dcs
+    assert dcs["snapshot_id"] == "snap-001"
+    assert dcs["cycle_id"] == "c1"
+    assert dcs["decision_source"] == "llm"
+
+    # CCS: content_hash, captured_at removed; snapshot_id preserved
+    ccs = result["comparable_control_set"]
+    assert "content_hash" not in ccs
+    assert "captured_at" not in ccs
+    assert ccs["snapshot_id"] == "snap-002"
+    assert ccs["status"] == "verified"
