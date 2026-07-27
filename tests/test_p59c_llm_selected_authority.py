@@ -20,11 +20,13 @@ from agente_bolsa.models import TradeRecommendation
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.canonical_selection_ledger import (
     build_canonical_selection_ledger,
-    normalize_llm_selected,
     persist_canonical_selection_ledger,
     read_canonical_selection_ledger,
 )
-from agente_bolsa.tools.decision_context import build_decision_context_snapshot
+from agente_bolsa.tools.decision_context import (
+    build_decision_context_snapshot,
+    normalize_llm_selected,
+)
 from agente_bolsa.tools.trade_decision import _recommendation_from_dict
 
 CAPTURED_AT = datetime(2026, 7, 27, 14, 0, tzinfo=timezone.utc)
@@ -612,6 +614,151 @@ def test_ledger_normalizes_string_true_to_none_via_fixture():
         "cycle-A", _phase([c]), recommendations=[r], captured_at=CAPTURED_AT,
     )
     assert result["candidate_rows"][0]["llm_selected"] is None
+
+
+# ===================================================================
+# P-L59C-R2: snapshot normalization inside build_decision_context_snapshot
+# ===================================================================
+
+def test_snapshot_normalizes_int_to_none():
+    """build_decision_context_snapshot normaliza 1 -> None."""
+    rec = TradeRecommendation(
+        symbol="AAPL", action="buy", confidence=0.9, reason="t",
+    )
+    snapshot = build_decision_context_snapshot(
+        rec, cycle_id="c1", source_run_id="r1",
+        market_state=_market_state(cycle_id="c1"),
+        captured_at=CAPTURED_AT, llm_selected=1,
+    )
+    assert snapshot["llm_selected"] is None
+
+
+def test_snapshot_normalizes_zero_to_none():
+    """0 no es bool -> None."""
+    rec = TradeRecommendation(
+        symbol="MSFT", action="buy", confidence=0.9, reason="t",
+    )
+    snapshot = build_decision_context_snapshot(
+        rec, cycle_id="c1", source_run_id="r1",
+        market_state=_market_state(cycle_id="c1"),
+        captured_at=CAPTURED_AT, llm_selected=0,
+    )
+    assert snapshot["llm_selected"] is None
+
+
+def test_snapshot_normalizes_string_to_none():
+    """'true' no es bool -> None."""
+    rec = TradeRecommendation(
+        symbol="AAPL", action="buy", confidence=0.9, reason="t",
+    )
+    snapshot = build_decision_context_snapshot(
+        rec, cycle_id="c1", source_run_id="r1",
+        market_state=_market_state(cycle_id="c1"),
+        captured_at=CAPTURED_AT, llm_selected="true",
+    )
+    assert snapshot["llm_selected"] is None
+
+
+def test_snapshot_normalizes_list_to_none():
+    rec = TradeRecommendation(
+        symbol="AAPL", action="buy", confidence=0.9, reason="t",
+    )
+    snapshot = build_decision_context_snapshot(
+        rec, cycle_id="c1", source_run_id="r1",
+        market_state=_market_state(cycle_id="c1"),
+        captured_at=CAPTURED_AT, llm_selected=[True],
+    )
+    assert snapshot["llm_selected"] is None
+
+
+def test_snapshot_normalizes_float_to_none():
+    rec = TradeRecommendation(
+        symbol="AAPL", action="buy", confidence=0.9, reason="t",
+    )
+    snapshot = build_decision_context_snapshot(
+        rec, cycle_id="c1", source_run_id="r1",
+        market_state=_market_state(cycle_id="c1"),
+        captured_at=CAPTURED_AT, llm_selected=1.0,
+    )
+    assert snapshot["llm_selected"] is None
+
+
+def test_snapshot_preserves_true():
+    """True literal se conserva."""
+    rec = TradeRecommendation(
+        symbol="AAPL", action="buy", confidence=0.9, reason="t",
+    )
+    snapshot = build_decision_context_snapshot(
+        rec, cycle_id="c1", source_run_id="r1",
+        market_state=_market_state(cycle_id="c1"),
+        captured_at=CAPTURED_AT, llm_selected=True,
+    )
+    assert snapshot["llm_selected"] is True
+
+
+def test_snapshot_preserves_false():
+    """False literal se conserva."""
+    rec = TradeRecommendation(
+        symbol="AAPL", action="buy", confidence=0.9, reason="t",
+    )
+    snapshot = build_decision_context_snapshot(
+        rec, cycle_id="c1", source_run_id="r1",
+        market_state=_market_state(cycle_id="c1"),
+        captured_at=CAPTURED_AT, llm_selected=False,
+    )
+    assert snapshot["llm_selected"] is False
+
+
+def test_snapshot_preserves_none():
+    """None se conserva."""
+    rec = TradeRecommendation(
+        symbol="AAPL", action="buy", confidence=0.9, reason="t",
+    )
+    snapshot = build_decision_context_snapshot(
+        rec, cycle_id="c1", source_run_id="r1",
+        market_state=_market_state(cycle_id="c1"),
+        captured_at=CAPTURED_AT, llm_selected=None,
+    )
+    assert snapshot["llm_selected"] is None
+
+
+def test_snapshot_malformed_persisted_via_store_normalizes(tmp_path: Path):
+    """Snapshot con llm_selected=1 persiste via Store y se lee como None."""
+    store = _store(tmp_path)
+    c = _cand(0, selected_for_llm=True)
+
+    # Build a snapshot with malformed llm_selected=1 (int)
+    rec = TradeRecommendation(
+        symbol=c["symbol"], action=c["action"], confidence=0.9, reason="t",
+        source="llm", decision_lineage=_lineage(c),
+    )
+    snapshot = build_decision_context_snapshot(
+        rec, cycle_id=c["cycle_id"], source_run_id=c["source_run_id"],
+        market_state=_market_state(cycle_id=c["cycle_id"]),
+        captured_at=CAPTURED_AT, llm_selected=1,  # malformed: int instead of bool
+    )
+    # build_decision_context_snapshot normalizes before hashing
+    assert snapshot["llm_selected"] is None  # normalized from 1
+
+    # Now inject a direct malformed value into the snapshot to test P-L53 defense-in-depth
+    snapshot["llm_selected"] = 1
+    r = {
+        "cycle_id": c["cycle_id"], "action": c["action"],
+        "source": "llm", "decision_origin": "llm",
+        "decision_lineage": _lineage(c),
+        "decision_context_snapshot": snapshot,
+        "recommendation_id": "rec:stored",
+    }
+    p = build_canonical_selection_ledger(
+        "cycle-A", _phase([c]), recommendations=[r], captured_at=CAPTURED_AT,
+    )
+    # P-L53 normalizes via the same normalize_llm_selected imported from decision_context
+    assert p["candidate_rows"][0]["llm_selected"] is None
+
+    # Persist and read back
+    assert persist_canonical_selection_ledger(store, p)["status"] == "inserted"
+    rb = read_canonical_selection_ledger(store, "cycle-A")
+    assert rb["candidate_rows"][0]["llm_selected"] is None
 
 
 # ===================================================================

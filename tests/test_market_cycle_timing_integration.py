@@ -12,19 +12,25 @@ class _StoreSpy:
     def __init__(self) -> None:
         self.calls: list[str] = []
         self.plans: list[dict] = []
+        self.rec_payloads: list[dict] = []
+        self.plan_payloads: list[dict] = []
+        self.broker_payloads: list[dict] = []
 
-    def save_trade_recommendation(self, **_kwargs) -> None:
+    def save_trade_recommendation(self, **kwargs) -> None:
         self.calls.append("save_trade_recommendation")
+        self.rec_payloads.append(dict(kwargs))
 
     def save_order_plan(self, **kwargs) -> None:
         self.calls.append("save_order_plan")
         self.plans.append({**kwargs, "status": "PENDING"})
+        self.plan_payloads.append(dict(kwargs))
 
     def pending_order_plans(self, **_kwargs):
         return self.plans
 
-    def save_broker_order(self, **_kwargs) -> None:
+    def save_broker_order(self, **kwargs) -> None:
         self.calls.append("save_broker_order")
+        self.broker_payloads.append(dict(kwargs))
 
     def count_broker_orders(self, **_kwargs) -> int:
         return 0
@@ -510,3 +516,92 @@ def test_fail_open_selection_ledger_does_not_block_route(monkeypatch, tmp_path):
     # El resultado del ledger es unavailable
     assert result["selection_ledger"]["status"] == "unavailable"
     assert result["selection_ledger"]["persist_status"] == "failed"
+
+
+# ===================================================================
+# P-L59C-R2: paridad economica real (payloads, no solo nombres)
+# ===================================================================
+
+def _strip_observational(d: dict) -> dict:
+    """Retira llm_selected, snapshot/hashes/IDs, y campos generados por ejecucion.
+
+    Conserva campos economicos: symbol/action/confidence/entry/stop/take/qty/
+    notional/side/dry_run/risk_decision/decision_lineage estructural.
+    """
+    OBSERVATIONAL_KEYS = {
+        "llm_selected", "content_hash", "snapshot_id", "event_id",
+        "captured_at", "schema_version", "signal_link_status",
+        "signal_capture_id", "source_run_id", "candidate_id",
+        "recommendation_id", "plan_id", "broker_order_id",
+        "decision_context_snapshot",
+    }
+    out = {}
+    for k, v in d.items():
+        if k in OBSERVATIONAL_KEYS:
+            continue
+        if isinstance(v, dict):
+            stripped = _strip_observational(v)
+            if stripped:
+                out[k] = stripped
+        elif isinstance(v, list):
+            stripped_list = [_strip_observational(i) if isinstance(i, dict) else i for i in v]
+            out[k] = stripped_list
+        else:
+            out[k] = v
+    return out
+
+
+def _capture_parity_run(monkeypatch, tmp_path, llm_selected):
+    """Run _auto_paper_trade and return stripped store payloads."""
+    from dataclasses import asdict, is_dataclass
+
+    import agente_bolsa.cycle_runner as runner
+
+    _patch_trading_flow(monkeypatch, llm_selected=llm_selected)
+    store = _StoreSpy()
+    settings = Settings(DATA_DIR=tmp_path, AUTO_PAPER_TRADING=True, REQUIRE_HUMAN_APPROVAL=False)
+
+    result = runner._auto_paper_trade(
+        settings, store, _Reporter(), "cycle",
+        {"run_id": "source"}, {}, {},
+        learning_penalty_shadow={"phase": "pre_decision"},
+        selection_ledger_phase_a={"all_candidates": [], "selected_candidates": []},
+    )
+
+    def _as_dict_recursive(obj):
+        """Convert dataclasses to dicts recursively."""
+        if is_dataclass(obj):
+            return {k: _as_dict_recursive(v) for k, v in asdict(obj).items()}
+        if isinstance(obj, dict):
+            return {k: _as_dict_recursive(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [_as_dict_recursive(i) for i in obj]
+        return obj
+
+    return {
+        "calls": list(store.calls),
+        "rec_payloads": [_strip_observational(_as_dict_recursive(p)) for p in store.rec_payloads],
+        "plan_payloads": [_strip_observational(_as_dict_recursive(p)) for p in store.plan_payloads],
+        "broker_payloads": [_strip_observational(_as_dict_recursive(p)) for p in store.broker_payloads],
+        "submitted": bool(result.get("submitted")),
+        "failed": bool(result.get("failed")),
+    }
+
+
+def test_economic_parity_true_false_none_identical_payloads(monkeypatch, tmp_path):
+    """Tras retirar llm_selected/hashes/snapshot IDs, los payloads son identicos."""
+    true_run = _capture_parity_run(monkeypatch, tmp_path / "true", True)
+    false_run = _capture_parity_run(monkeypatch, tmp_path / "false", False)
+    none_run = _capture_parity_run(monkeypatch, tmp_path / "none", None)
+
+    # Submitted/failed identicos
+    assert true_run["submitted"] == false_run["submitted"] == none_run["submitted"]
+    assert true_run["failed"] == false_run["failed"] == none_run["failed"]
+
+    # Store call sequence identica
+    assert true_run["calls"] == false_run["calls"] == none_run["calls"]
+
+    # Payloads identicos (sin campos observacionales)
+    for key in ("rec_payloads", "plan_payloads", "broker_payloads"):
+        assert true_run[key] == false_run[key], f"{key} difiere True vs False"
+        assert true_run[key] == none_run[key], f"{key} difiere True vs None"
