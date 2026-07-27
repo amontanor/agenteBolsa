@@ -18,6 +18,20 @@
   conserva el estado historico del ensayo individual P-L49B.
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
+## P-L54B-T - caracterizacion del embudo shadow de capital (27-jul-2026)
+
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl54bt_capital_funnel_characterization`,
+  rama `codex/pl54bt-capital-funnel-characterization`, base P-L58R1 exacta,
+  version conservada `0.4.193`.
+- Dictamen: `ready_for_p54b_implementation`. Tests y documentacion solamente;
+  no hay productor shadow ni wiring productivo.
+- La fixture canonica separa 376 recomendaciones BUY, 15 planes y 15
+  ordenes/fills. Exposicion observada 10,85%; target y notional objetivo
+  permanecen `unavailable` si no existe autoridad estructurada.
+- Siguiente paso unico: implementacion shadow aislada del contrato
+  `p-l54b.capital-deployment-funnel-shadow.v1`; no desplegar ni cambiar
+  politica con esta caracterizacion.
+
 ## P-L58R1 - ensayo combinado de seguridad de medicion (27-jul-2026)
 
 - Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl58r1_measurement_safety_rehearsal`,

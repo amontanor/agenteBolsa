@@ -5,6 +5,16 @@
 > desplegado; P-L57A queda conservado dentro del historial.
 > P-L48B sigue desplegado y P-L44B sigue en shadow.
 
+> P-L54B-T (27-jul-2026): caracterizacion aislada completada en
+> `C:\Antonio\Bref\agenteBolsa_worktrees\pl54bt_capital_funnel_characterization`,
+> rama `codex/pl54bt-capital-funnel-characterization`, desde P-L58R1 exacto.
+> Dictamen `ready_for_p54b_implementation`: el productor real queda trazado
+> hasta `save_order_plan`/`save_broker_order`, pero target exposure y notional
+> objetivo no tienen autoridad estructurada y deben permanecer
+> `unavailable`. La fixture 376 -> 15 -> 15 y la bateria focal pasan; no hubo
+> cambios en src, produccion ni politica. Siguiente paso: implementar el
+> shadow en worktree separado, sin desplegar.
+
 > P-L58R1-Retry (27-jul-2026): worktree
 > `C:\Antonio\Bref\agenteBolsa_worktrees\pl58r1_measurement_safety_rehearsal`,
 > rama `codex/pl58r1-measurement-safety-rehearsal`, HEAD final posterior al
