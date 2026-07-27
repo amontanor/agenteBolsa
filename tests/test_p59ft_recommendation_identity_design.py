@@ -353,7 +353,7 @@ def test_missing_recommendation_id_stays_none() -> None:
 
 
 def test_mixed_legacy_and_new_recommendation_ids_v2() -> None:
-    """V2: 1 missing-ID + 1 canonical → ambiguous candidate summary."""
+    """V2: 1 missing-ID + 1 canonical → 2 decision_rows (missing preserved as unavailable)."""
     row = _candidate_row()
     rec_legacy = _recommendation(row, recommendation_id="")
     rec_legacy["recommendation_id"] = None
@@ -365,14 +365,18 @@ def test_mixed_legacy_and_new_recommendation_ids_v2() -> None:
     r = result["candidate_rows"][0]
     assert r["decision_summary_status"] == "ambiguous"
     assert r["recommendation_id"] is None
-    # Decision rows: 1 (only canonical rec:new; missing-ID not in decision_rows)
-    assert len(result["decision_rows"]) == 1
-    assert result["decision_rows"][0]["decision_id"] == "rec:new"
-    assert result["decision_rows"][0]["llm_selected"] is False
+    # R1: missing-ID preserved in decision_rows with decision_id=None
+    assert len(result["decision_rows"]) == 2
+    canon = [d for d in result["decision_rows"] if d["decision_id"] == "rec:new"]
+    missing = [d for d in result["decision_rows"] if d["decision_id"] is None]
+    assert len(canon) == 1
+    assert len(missing) == 1
+    assert canon[0]["llm_selected"] is False
+    assert missing[0]["decision_identity"] == "unavailable"
 
 
 def test_multiple_recommendations_all_missing_ids_v2() -> None:
-    """V2: multiple missing-ID → ambiguous candidate, 0 decision_rows."""
+    """V2: multiple missing-ID → 2 unavailable decision_rows."""
     row = _candidate_row()
     rec_a = _recommendation(row, recommendation_id="", llm_selected=True)
     rec_a["recommendation_id"] = None
@@ -388,8 +392,11 @@ def test_multiple_recommendations_all_missing_ids_v2() -> None:
     assert r["llm_selected"] is None
     assert r["recommended"] is True
     assert result["denominators"]["recommended_count"] == 1
-    assert len(result["decision_rows"]) == 0
-    assert result["decision_detail_total"] == 0
+    # R1: missing-ID recommendations preserved as decision_rows
+    assert len(result["decision_rows"]) == 2
+    assert all(d["decision_id"] is None for d in result["decision_rows"])
+    assert all(d["decision_identity"] == "unavailable" for d in result["decision_rows"])
+    assert result["decision_detail_total"] == 2
 
 
 # ===================================================================
