@@ -77,6 +77,22 @@ def stable_content_hash(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def normalize_llm_selected(value: Any) -> bool | None:
+    """Normalize llm_selected to bool or None only. Fail-open.
+
+    Only literal Python bool values (True/False) are accepted as structured
+    authority.  Any other type -- int (0, 1), str ('true', 'false'), list,
+    dict, float -- is degraded silently to None (unavailable/legacy).
+
+    This function must never raise; it is a fail-open telemetry guard.
+    """
+    if value is None:
+        return None
+    if type(value) is bool:
+        return value
+    return None
+
+
 def _mapping(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
         return dict(value)
@@ -378,7 +394,8 @@ def _attach_phase_b(
             # P-L59C: llm_selected is now a structured authority set by the producer
             # (True=LLM selected, False=not selected, None=legacy/unavailable).
             # Consumed directly from decision_context_snapshot; never inferred from source.
-            snapshot_llm_selected = snapshot.get("llm_selected")
+            # P-L59C-R1: normalize_llm_selected enforces bool|None; non-bool degrades to None.
+            snapshot_llm_selected = normalize_llm_selected(snapshot.get("llm_selected"))
             target.update(
                 {
                     "recommended": True,
