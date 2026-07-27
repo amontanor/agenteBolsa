@@ -41,7 +41,6 @@ def _patch_trading_flow(monkeypatch, *, shadow: bool = False, fail_backtest: boo
     calls: list[str] = []
     recommendation = TradeRecommendation("AAPL", "buy", 0.9, "prueba", entry_price=100, stop_loss=95, take_profit=110)
     plan = OrderPlan("AAPL", "buy", 100.0, 1.0, 100.0, 95.0, 110.0, recommendation, RiskDecision(True, "ok", {}))
-    object.__setattr__(plan, "plan_id", "plan-mock-aapl-1")
 
     monkeypatch.setattr(runner, "active_learning_mode", lambda _settings: {"shadow_first": True, "shadow_strategies": []} if shadow else None)
     monkeypatch.setattr(runner, "load_daily_learning_context", lambda _path: {})
@@ -178,33 +177,41 @@ def test_comparable_capture_uses_final_plans_after_real_filters(monkeypatch, tmp
 
 
 def test_stage_order_full_flow_with_pl53_pl54_spies(monkeypatch, tmp_path):
-    """Ampliacion P-L59B-T-R4: orden real con identidades exactas.
+    """P-L59B-T-R5: stage order con identidades reales del modelo.
 
-    Rama ejecutada: exitosa con plan y submit -> call sites reales:
-      - P-L31B: build_comparable_control_sets (1965) con plans=plans
-      - P-L53: _persist_selection_ledger_shadow (2399) con plans=plans,
-               plan_records=plan_records, recommendations=reviewed_recommendations
-      - P-L54B: _persist_capital_deployment_funnel_shadow (2412) con
-                plans=plan_records or plans (=plan_records en rama exitosa),
-                recommendations=reviewed_recommendations,
-                gated_recommendations=gated_recommendations
+    OrderPlan NO define plan_id (models.py:117-134). plan_id nace al
+    construir plan_records (save_order_plan). Las identidades se
+    contrastan por campos reales: symbol, side, decision_lineage,
+    recommendation identity.
 
-    La rama sin planes (2255/2266) no se ejecuta en este test porque
-    hay planes. Cada spy captura referencias y las contrasta por
-    identidad estructurada (plan_id, signal_id, symbol/action), no
-    por identidad de objeto Python.
+    Rama ejecutada: exitosa con plan y submit (2399/2412).
+    Rama sin submit (2255/2266) en rama sin planes.
     """
     import agente_bolsa.cycle_runner as runner
 
-    def _id_of(obj):
-        """Extrae plan_id de OrderPlan o dict, recommendation_id de TradeRecommendation."""
-        if hasattr(obj, "plan_id"):
-            return getattr(obj, "plan_id", "") or ""
-        if isinstance(obj, dict):
-            return str(obj.get("plan_id", obj.get("recommendation_id", "")))
-        if hasattr(obj, "recommendation_id"):
-            return getattr(obj, "recommendation_id", "") or ""
-        return ""
+    def _plan_identity(p):
+        """Identidad estructurada de plan: symbol + side + signal_id."""
+        if hasattr(p, "symbol"):
+            sym = str(getattr(p, "symbol", "") or "")
+            side = str(getattr(p, "side", "") or "")
+            dl = getattr(p, "decision_lineage", {}) or {}
+            sid = str(dl.get("signal_id", ""))
+        elif isinstance(p, dict):
+            sym = str(p.get("symbol", ""))
+            side = str(p.get("side", ""))
+            dl = p.get("decision_lineage") or {}
+            sid = str(dl.get("signal_id", p.get("signal_id", "")))
+        else:
+            return "unknown"
+        return f"{sym}|{side}|{sid}"
+
+    def _rec_identity(r):
+        """Identidad de recomendacion: symbol + action + signal_id."""
+        sym = getattr(r, "symbol", "")
+        act = getattr(r, "action", "")
+        dl = getattr(r, "decision_lineage", {}) or {}
+        sid = str(dl.get("signal_id", ""))
+        return f"{sym}|{act}|{sid}"
 
     calls = _patch_trading_flow(monkeypatch)
     captured: dict[str, object] = {}
@@ -214,7 +221,7 @@ def test_stage_order_full_flow_with_pl53_pl54_spies(monkeypatch, tmp_path):
         pw = list(kwargs.get("plans", []))
         captured["P-L31B"] = {
             "plans_count": len(pw),
-            "plan_ids": sorted(_id_of(p) for p in pw),
+            "plan_identities": sorted(_plan_identity(p) for p in pw),
         }
         return {}
 
@@ -226,9 +233,13 @@ def test_stage_order_full_flow_with_pl53_pl54_spies(monkeypatch, tmp_path):
         prl = list(kwargs.get("plan_records", []))
         rl = list(kwargs.get("recommendations", []))
         captured["P-L53"] = {
-            "plan_ids": sorted(_id_of(p) for p in pl),
+            "plan_identities": sorted(_plan_identity(p) for p in pl),
             "plan_record_ids": sorted(str(pr.get("plan_id", "")) for pr in prl if isinstance(pr, dict)),
-            "rec_ids": sorted(_id_of(r) for r in rl),
+            "plan_record_lineages": sorted(
+                str((pr.get("decision_lineage", {}) or {}).get("signal_id", ""))
+                for pr in prl if isinstance(pr, dict)
+            ),
+            "rec_identities": sorted(_rec_identity(r) for r in rl),
             "has_plan_records": bool(prl),
             "has_ordered": bool(kwargs.get("ordered_records")),
         }
@@ -242,8 +253,11 @@ def test_stage_order_full_flow_with_pl53_pl54_spies(monkeypatch, tmp_path):
         rl = list(kwargs.get("recommendations", []))
         gl = list(kwargs.get("gated_recommendations", []))
         captured["P-L54B"] = {
-            "plan_ids": sorted(_id_of(p) for p in pl),
-            "rec_ids": sorted(_id_of(r) for r in rl),
+            "plan_ids": sorted(
+                str(getattr(p, "plan_id", p.get("plan_id", "") if isinstance(p, dict) else ""))
+                for p in pl
+            ),
+            "rec_identities": sorted(_rec_identity(r) for r in rl),
             "has_gated": bool(gl),
             "has_submitted": bool(kwargs.get("submitted")),
         }
@@ -271,39 +285,34 @@ def test_stage_order_full_flow_with_pl53_pl54_spies(monkeypatch, tmp_path):
     assert calls.index("P-L50:learning_penalty_shadow_final") < calls.index("P-L53:selection_ledger_final")
     assert calls.index("P-L53:selection_ledger_final") < calls.index("P-L54B:capital_funnel_final")
 
-    # ---- P-L31B recibe 1 plan final filtrado ----
+    # ---- P-L31B recibe 1 plan ----
     assert captured["P-L31B"]["plans_count"] == 1
 
-    # ---- Contrato de identidad: plans ----
-    # P-L31B ve el plan original con plan_id.
-    assert captured["P-L31B"]["plan_ids"] == ["plan-mock-aapl-1"]
-    assert captured["P-L31B"]["plans_count"] == 1
+    # ---- Contrato: plans por identidad real ----
+    # P-L31B y P-L53 comparten los mismos planes por identidad semantica
+    # (symbol+side+signal_id), aunque P-L53 los recibe tras replace()
+    # que sustituye recommendation (cycle_runner:~2004). La decision_lineage
+    # y symbol/side se preservan.
+    assert captured["P-L31B"]["plan_identities"] == captured["P-L53"]["plan_identities"]
 
-    # P-L53 recibe los planes despues de attach. El codigo real hace
-    #   attached_plans.append(replace(plan, recommendation=...))
-    # (linea ~2004). replace() pierde campos init=False como plan_id,
-    # por eso P-L53 ve plan_ids vacios. Esto es subtileza del wiring real.
-    # Las identidades se contrastan via plan_records que SI tienen plan_id.
+    # ---- plan_id nace en plan_records (save_order_plan) ----
+    # OrderPlan no tiene plan_id. plan_records lo adquiere al persistir.
     assert captured["P-L53"]["has_plan_records"] is True
     assert len(captured["P-L53"]["plan_record_ids"]) == 1
+    # plan_records preservan la identidad de lineage
+    assert len(captured["P-L53"]["plan_record_lineages"]) == 1
 
     # P-L54B recibe plans=plan_records or plans (plan_records en rama exitosa).
-    # plan_records preservan plan_id. Coinciden con P-L53.
+    # plan_records tienen plan_id real; se contrasta contra P-L53.
     assert captured["P-L54B"]["plan_ids"] == captured["P-L53"]["plan_record_ids"]
 
-    # ---- Contrato de identidad: recommendations ----
-    # P-L53 y P-L54B comparten reviewed_recommendations (misma lista).
-    assert captured["P-L53"]["rec_ids"] == captured["P-L54B"]["rec_ids"]
-
-    # P-L54B recibe gated_recommendations adicionalmente.
+    # ---- Recommendations compartidas P-L53/P-L54B ----
+    assert captured["P-L53"]["rec_identities"] == captured["P-L54B"]["rec_identities"]
     assert captured["P-L54B"]["has_gated"] is True
 
-    # ---- Ramas con/sin submit ----
-    # En rama exitosa (2399/2412): ordered_records y submitted existen.
+    # ---- Submit en rama exitosa ----
     assert captured["P-L53"]["has_ordered"] is True
     assert captured["P-L54B"]["has_submitted"] is True
 
     # ---- Trading activo intacto ----
     assert store.calls == ["save_trade_recommendation", "save_order_plan", "save_broker_order"]
-
-    # Sin inspect, sin AST, sin source-order narrativo
