@@ -548,3 +548,20 @@ Siguiente lote único: P-L53BR1, ensayo integrado aislado desde el candidato
   P-L54B T/R1/W y cycle funnel. Siguiente paso unico: reintentar P-L54BR1;
   suite completa y smoke siguen pendientes. Produccion intacta; sin deploy ni
   push.
+
+## P-L54BR1-Retry - relevo (27-jul-2026)
+
+- Worktree `pl54br1_integration_rehearsal`, rama
+  `codex/pl54br1-integration-rehearsal`, merge `8574a227`, version `0.4.194`,
+  tree `ff42c750`.
+- XNYS estaba abierto al comenzar; PMR 24-jul terminal completed y leases
+  activos vacios se verificaron mediante fuentes persistidas/directas.
+- QA focal integrada: `330 passed`; Ruff, NUL, diff y validate-agent-config
+  verdes. No se ejecutaron suite completa, P-L45 33336, smoke ni benchmark
+  combinado.
+- P-L54 mantiene `376 -> 306 -> 145 -> 95 -> 15`, 361 razones primarias y
+  notional target unavailable. No cambia trading, riesgo, ejecucion ni PMR.
+- Dictamen: `ready_for_closed_market_full_validation`. Siguiente paso unico:
+  repetir los gates cerrados, incluida suite/smoke/benchmark, sin desplegar
+  automaticamente. El incidente previo queda documentado como
+  `unconfirmed_sqlite_mutation`, sin limpieza.

@@ -365,3 +365,54 @@ ni push.
 
 Siguiente lote unico: reintentar P-L54BR1 desde este candidato con validacion
 integrada cerrada; no se ejecuta en P-L54B-R1.
+
+## P-L54BR1-Retry - ensayo integrado sobre P-L58R1 (27-jul-2026)
+
+Dictamen: `ready_for_closed_market_full_validation`.
+
+El preflight seguro no uso `operational-health`, `schedule-status`, `status`,
+`Store` ni `ensure_schema`. Las fuentes persistidas confirmaron el terminal
+postmarket de 2026-07-24 y leases activos vacios. A las 15:54 CEST XNYS ya
+estaba abierto; por ello esta ejecucion se limito a merge aislado, focales y
+gates estaticos. El incidente P-L54BR1-I1 se conserva como
+`unconfirmed_sqlite_mutation`; no se borraron ni restauraron sus artefactos.
+
+Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl54br1_integration_rehearsal`.
+Rama: `codex/pl54br1-integration-rehearsal`.
+Base: `2e7602bace51cd43806e8ecab0abb23748c63ec9`, tree
+`5430155c405bd916fe932362f767d4696bd70aef`.
+Candidato fusionado: `25506bbe5093c49906d0f80522047d030a8560aa`.
+Merge `--no-ff`: `8574a227a484c1b93afd35dec70cb1f1bd73bcfe`.
+Tree final: `ff42c75088e709f065a8b1006c3b7c2a43965ab6`.
+Version: `0.4.194`. Arbol limpio tras la documentacion.
+
+La ruta revisada conserva `seleccion -> gates -> capacity -> sizing ->
+RiskManager -> plan -> filtros post-plan -> save_order_plan ->
+submit/save_broker_order -> P-L54 shadow`. El evento P-L54 se prepara con
+objetos ya producidos y se persiste despues del envio activo; no recalcula ni
+autoriza etapas. P-L53 permanece fuera del PMR. El orden de exits sigue
+`submit -> save_broker_order -> P-L43C fail-open`, y el PMR sigue
+`reconciliation -> report -> P-L48 -> P-L51 -> P-L52 -> performance ->
+measurement -> thesis -> terminal`.
+
+Denominadores de la fixture cerrada: BUY observado/canonico `376`, seleccion
+`306`, gates `145`, capacity `95`, sizing `95`, risk aprobado `15`, planes
+`15`, ordenes `15`, fills observables `15`, caidas primarias exclusivas `361`.
+El notional verificado es gate elegible `217500 USD`, sizing aprobado `95000
+USD`, risk aprobado `15000 USD`; target exposure y undeployed notional siguen
+`null/unavailable`. Recommendation IDs distintos, parciales, conflictos,
+BUY/EXIT y attachments plan/order permanecen separados por identidad exacta.
+
+QA focal: `42 passed` de P-L54BR1 y `288 passed` de las regresiones focales
+relacionadas; total `330 passed`, sin skips ni xfails nuevos. Ruff completo,
+`check_no_nulls.py`, `git diff --check` y `validate-agent-config --json`
+pasaron. `kernel-status` del DATA_DIR temporal fue `unsealed`, esperado; no
+describe el kernel productivo. El test de volumen canonico P-L54 para 500
+candidatos paso el limite de 350 KB/250 ms; la medicion previa del productor W
+es 310450 bytes y p95 37.3 ms. La medicion combinada P-L53+P-L54, crecimiento
+de DB/WAL en 100 ciclos y benchmark largo no se ejecutaron con XNYS abierto.
+
+Suite completa, P-L45 de 33336 filas, smoke y despliegue quedan pendientes de
+una validacion cerrada con precondiciones completas. No se modificaron los
+archivos protegidos ni produccion; no se uso SQLite productiva en tests, no
+hubo broker, red, LLM, jobs manuales, reinicio, despliegue ni push.

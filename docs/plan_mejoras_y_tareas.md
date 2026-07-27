@@ -2484,3 +2484,14 @@ de despliegue quedan pendientes con XNYS cerrado.
   `3f85071f`; version `0.4.194`.
 - QA focal verde; suite completa, smoke y ensayo P-L54BR1 quedan pendientes con
   XNYS cerrado y precondiciones operativas comprobadas. No desplegar.
+
+## P-L54BR1-Retry - estado del ensayo integrado (27-jul-2026)
+
+- Merge aislado `8574a227` sobre P-L58R1, version final `0.4.194`, tree
+  `ff42c750`; produccion permanece en `0.4.185`.
+- XNYS estaba abierto al iniciar la QA; se ejecutaron solo focales y gates
+  estaticos: `330 passed`, Ruff/NUL/diff/configuracion verdes.
+- La ruta, identidades, fail-open y denominadores P-L54 se mantienen; target
+  exposure/undeployed notional siguen unavailable.
+- Suite completa, P-L45 33336, smoke y benchmark combinado quedan pendientes
+  para mercado cerrado. Dictamen: `ready_for_closed_market_full_validation`.
