@@ -2112,9 +2112,12 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
   continúan con resultado parcial auditable. La ruta de trading, PMR activo,
   reconciliación, ranking, gates, sizing, planes, órdenes, exits, exposición
   y límites no cambia.
-- Commits: `5d05092c` reproducción; `12684790` corrección; documentación
-  pendiente en un commit separado. Dictamen del lote después de la validación:
-  `ready_for_integration_rehearsal` si todos los gates cerrados pasan.
+- Commits: `5d05092c` reproducción; `12684790` corrección; `6ddf93da`
+  actualización de la expectativa de primera sesión; `ee9afee6` documentación.
+  La suite cerrada terminó `1698 passed, 1 skipped`; el único skip es el test
+  legado `test_score_study_regression_current_sqlite`, que requiere la SQLite
+  local ausente del worktree. Ruff, NUL, diff, configuración y version policy
+  pasan. El dictamen es `ready_for_integration_rehearsal`.
 - Siguiente paso único: ensayo de integración aislado P-L57A; no desplegar ni
   hacer backfill hasta validar el candidato con las precondiciones de mercado
   cerrado.

@@ -1,10 +1,9 @@
 # P-L57A — continuidad null-safe del cierre postmarket y del scoreboard
 
-## Dictamen provisional
+## Dictamen
 
-`ready_for_integration_rehearsal`, sujeto a que la validación cerrada del
-candidato termine sin fallos. El cambio corrige una causa reproducida y queda
-limitado a continuidad observacional; no está desplegado.
+`ready_for_integration_rehearsal`. El cambio corrige una causa reproducida y
+queda limitado a continuidad observacional; no está desplegado.
 
 ## Estado y alcance
 
@@ -102,10 +101,13 @@ alpha.
 
 1. `5d05092c88d0b01670d3357280cdd0cd2a712d1b` — `test: reproduce null
    postmarket scoreboard failure`.
-2. `1268479060a03e67f00853ff28dafb684fe251d5d5` — `fix: keep postmarket
+2. `1268479060a03e67f00853ff28dafb684fe251d5` — `fix: keep postmarket
    scoreboard null-safe`.
-3. Commit documental de este informe, plan maestro y relevo: se crea por
-   separado al cerrar la validación.
+3. `6ddf93dab9115efa49789257f0b1166268152586` — `test: align first-session
+   null performance contract`.
+4. `ee9afee697ab183f48827994fb64d166bdd23fab` — `docs: record P-L57A
+   continuity contract`.
+5. Este cierre documental actualiza el resultado final de validación.
 
 No se usa amend, squash, rebase, cherry-pick ni push.
 
@@ -121,15 +123,23 @@ No hubo backfill, migración, tabla nueva, escritura productiva, servicio,
 job, broker, red, LLM, reconciliación manual, postmarket manual, despliegue,
 reinicio ni push.
 
-## Validación pendiente y siguiente paso
+## Validación ejecutada y siguiente paso
 
-Quedan por cerrar en el worktree candidato, con DATA_DIR temporal: suite
-completa `tests/ -x -q`, focales de postmarket/performance/scoreboard/
-promotion/web, Ruff, `check_no_nulls.py`, `git diff --check`,
-`validate-agent-config --json`, version policy y `kernel-status` temporal
-interpretado frente a producción sellada. Smoke solo será válido si queda
-aislado de red, broker y LLM; en caso contrario se declara
-`smoke_unavailable_by_safety`.
+Con `DATA_DIR` temporal, la suite `tests/ -x -q` terminó `1698 passed, 1
+skipped` en 561,21 s. El skip preexistente exacto es
+`tests/test_pre_earnings.py::test_score_study_regression_current_sqlite`, que
+intenta `data/state/agente_bolsa.sqlite3` y se saltó porque esa SQLite no
+existe en el worktree; no se abrió la SQLite productiva ni se añadió
+skip/xfail. La suite también ejerció los tests sintéticos existentes de
+batching de 33.336 observaciones; no se ejecutó una caracterización histórica
+productiva ni se accedió a sus datos.
 
-Si esos gates pasan, el único siguiente lote es un ensayo de integración
-aislado P-L57A. Este informe no autoriza despliegue ni promoción.
+Ruff completo, `check_no_nulls.py`, `git diff --check`,
+`validate-agent-config --json`, `kernel-status` temporal y `test_version_policy`
+pasaron. El kernel temporal fue `unsealed` por falta de manifiesto; la
+producción verificó `ok=true`, sellada y sin violaciones. Smoke no se ejecutó:
+no se pudo garantizar un sustituto de `run-once` completamente aislado de red,
+broker y LLM, por lo que queda `smoke_unavailable_by_safety`.
+
+El único siguiente lote es un ensayo de integración aislado P-L57A. Este
+informe no autoriza despliegue ni promoción.

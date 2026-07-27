@@ -86,13 +86,16 @@ suite verde, hash sensible intacto y rollback por revert.
   de drawdown numérico. El 24-jul conservó `pnl_pct`, `previous_equity` y
   `alpha` como null cuando faltaba una sesión XNYS comparable; no se copió el
   `result_metrics.pnl_pct` al ledger SQL.
-- Estado de commits: `5d05092c` test/reproducción y `12684790` fix. Falta el
-  commit documental tras cerrar la validación. No cambiar la secuencia PMR:
-  solo se hace observacionalmente tolerante a filas incompletas; no se
-  reconstruyen datos ni se reejecutan sesiones históricas.
-- Próximo paso: validación completa aislada y ensayo de integración; la
-  promoción a producción requiere otra precondición cerrada, comparación de
-  objetos protegidos y autorización explícita.
+- Estado de commits: `5d05092c` test/reproducción, `12684790` fix,
+  `6ddf93da` expectativa null-safe de primera sesión y `ee9afee6` documentación.
+  La suite cerrada terminó `1698 passed, 1 skipped`; el skip preexistente es
+  `test_score_study_regression_current_sqlite` por ausencia de SQLite local.
+  Ruff, NUL, diff, configuración, kernel productivo sellado y version policy
+  pasan. No cambiar la secuencia PMR: solo se hace observacionalmente tolerante
+  a filas incompletas; no se reconstruyen datos ni se reejecutan sesiones.
+- Dictamen P-L57A: `ready_for_integration_rehearsal`. Próximo paso: ensayo de
+  integración aislado; la promoción a producción requiere otra precondición
+  cerrada, comparación de objetos protegidos y autorización explícita.
 
 ## Comandos
 
