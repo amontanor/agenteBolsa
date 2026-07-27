@@ -98,9 +98,16 @@ def _lineage(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _rec(row: dict[str, Any], *, source: str, llm_considered: bool,
-         rec_id: str | None = None) -> dict[str, Any]:
-    """Recommendation fixture. llm_considered es dato explicito obligatorio, sin derivacion."""
+         rec_id: str | None = None, llm_selected: bool | None = None) -> dict[str, Any]:
+    """Recommendation fixture. llm_selected es ahora autoridad estructurada (P-L59C).
+    Si no se pasa, es None (legacy/unavailable)."""
     rec_id = rec_id or f"rec:{row['symbol']}"
+    snapshot: dict[str, Any] = {
+        "llm_considered": llm_considered,
+        "gate_frontier": row["gate_frontier"],
+    }
+    if llm_selected is not None:
+        snapshot["llm_selected"] = llm_selected
     return {
         "cycle_id": row.get("cycle_id", "cycle-A"),
         "action": row["action"],
@@ -108,10 +115,7 @@ def _rec(row: dict[str, Any], *, source: str, llm_considered: bool,
         "source": source,
         "decision_origin": source,
         "decision_lineage": _lineage(row),
-        "decision_context_snapshot": {
-            "llm_considered": llm_considered,
-            "gate_frontier": row["gate_frontier"],
-        },
+        "decision_context_snapshot": snapshot,
     }
 
 
@@ -122,12 +126,13 @@ def _store(tmp_path: Path) -> Store:
 
 
 # ===================================================================
-# (A) llm_selected: proxy de source, brecha documentada
+# (A) llm_selected: autoridad estructurada del productor (P-L59C)
 # ===================================================================
 
-def test_llm_selected_true_when_source_is_llm():
+def test_llm_selected_true_when_authority_set():
+    """P-L59C: el productor fija llm_selected=True en el snapshot."""
     c = _cand(0, selected_for_llm=True)
-    r = _rec(c, source="llm", llm_considered=True)
+    r = _rec(c, source="llm", llm_considered=True, llm_selected=True)
     result = build_canonical_selection_ledger(
         "cycle-A", _phase([c]), recommendations=[r], captured_at=CAPTURED_AT,
     )
@@ -135,22 +140,24 @@ def test_llm_selected_true_when_source_is_llm():
     assert result["candidate_rows"][0]["decision_source"] == "llm"
 
 
-def test_llm_selected_false_when_source_is_capacity_fill():
+def test_llm_selected_false_when_authority_set():
+    """P-L59C: capacity-fill fija llm_selected=False."""
     c = _cand(0, selected_for_llm=True)
-    r = _rec(c, source="capacity_fill", llm_considered=False)
+    r = _rec(c, source="capacity_fill", llm_considered=False, llm_selected=False)
     result = build_canonical_selection_ledger(
         "cycle-A", _phase([c]), recommendations=[r], captured_at=CAPTURED_AT,
     )
     assert result["candidate_rows"][0]["llm_selected"] is False
 
 
-def test_llm_selected_false_when_source_is_fallback():
+def test_llm_selected_none_when_authority_missing():
+    """P-L59C: sin llm_selected en snapshot -> None (no se infiere de source)."""
     c = _cand(0, selected_for_llm=True)
-    r = _rec(c, source="fallback", llm_considered=False)
+    r = _rec(c, source="fallback", llm_considered=False)  # sin llm_selected
     result = build_canonical_selection_ledger(
         "cycle-A", _phase([c]), recommendations=[r], captured_at=CAPTURED_AT,
     )
-    assert result["candidate_rows"][0]["llm_selected"] is False
+    assert result["candidate_rows"][0]["llm_selected"] is None
 
 
 def test_llm_selected_none_when_no_recommendation():
@@ -161,11 +168,11 @@ def test_llm_selected_none_when_no_recommendation():
     assert result["candidate_rows"][0]["llm_selected"] is None
 
 
-def test_llm_selected_is_proxy_not_independent():
-    """BREACH: llm_selected se deriva de decision_source (linea 383).
+def test_llm_selected_not_inferred_from_source():
+    """P-L59C FIX: llm_selected ya NO es proxy de source.
 
-    No existe booleano independiente sellado en etapa de decision.
-    Capacity-fill y fallback colapsan en False.
+    Capacity-fill y fallback con llm_selected=False lo fija su productor.
+    Sin autoridad, None (no se colapsa semanticamente).
     """
     c_llm = _cand(0, symbol="LLM_DIRECT", selected_for_llm=True)
     c_cap = _cand(1, symbol="CAPACITY", selected_for_llm=True)
@@ -173,21 +180,20 @@ def test_llm_selected_is_proxy_not_independent():
     result = build_canonical_selection_ledger(
         "cycle-A", _phase([c_llm, c_cap, c_fb]),
         recommendations=[
-            _rec(c_llm, source="llm", llm_considered=True),
-            _rec(c_cap, source="capacity_fill", llm_considered=False),
-            _rec(c_fb, source="fallback", llm_considered=False),
+            _rec(c_llm, source="llm", llm_considered=True, llm_selected=True),
+            _rec(c_cap, source="capacity_fill", llm_considered=False, llm_selected=False),
+            _rec(c_fb, source="fallback", llm_considered=False, llm_selected=False),
         ], captured_at=CAPTURED_AT,
     )
     by_sym = {r["symbol"]: r for r in result["candidate_rows"]}
     assert by_sym["LLM_DIRECT"]["llm_selected"] is True
+    # P-L59C: capacity-fill y fallback siguen siendo False pero via autoridad explicita
     assert by_sym["CAPACITY"]["llm_selected"] is False
     assert by_sym["FALLBACK"]["llm_selected"] is False
-    # colapsan semanticamente distintos
-    assert by_sym["CAPACITY"]["llm_selected"] == by_sym["FALLBACK"]["llm_selected"]
 
 
-def test_source_unknown_maps_to_other_breach():
-    """Source desconocida -> 'other' -> llm_selected=False (deberia ser None)."""
+def test_source_unknown_without_authority_yields_none():
+    """P-L59C FIX: Source desconocida sin llm_selected -> None (antes False)."""
     c = _cand(0, selected_for_llm=True)
     r = _rec(c, source="bogus_unknown_source", llm_considered=False)
     result = build_canonical_selection_ledger(
@@ -195,7 +201,7 @@ def test_source_unknown_maps_to_other_breach():
     )
     row = result["candidate_rows"][0]
     assert row["decision_source"] == "other"
-    assert row["llm_selected"] is False  # BRECHA
+    assert row["llm_selected"] is None  # P-L59C FIX: ya no es False
 
 
 # ===================================================================
@@ -274,7 +280,7 @@ def test_candidate_id_alone_not_identity():
 def test_persist_and_read_ledger(tmp_path: Path):
     store = _store(tmp_path)
     c = _cand(0, selected_for_llm=True)
-    r = _rec(c, source="llm", llm_considered=True)
+    r = _rec(c, source="llm", llm_considered=True, llm_selected=True)
     p = build_canonical_selection_ledger(
         "cycle-A", _phase([c]), recommendations=[r], captured_at=CAPTURED_AT,
     )
@@ -574,7 +580,8 @@ def test_validate_rejects_post_decision_fields():
 
 def test_selected_for_llm_and_llm_selected_independent():
     c = _cand(0, selected_for_llm=True)
-    r = _rec(c, source="deterministic_capacity_fill", llm_considered=False)
+    r = _rec(c, source="deterministic_capacity_fill", llm_considered=False,
+             llm_selected=False)
     result = build_canonical_selection_ledger(
         "cycle-A", _phase([c]), recommendations=[r], captured_at=CAPTURED_AT,
     )

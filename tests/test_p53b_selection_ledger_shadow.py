@@ -91,6 +91,18 @@ def _lineage(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _recommendation(row: dict[str, Any], index: int, *, source: str = "llm") -> dict[str, Any]:
+    # P-L59C: llm_selected es autoridad estructurada del productor
+    _llm_sel: bool | None = None
+    if source == "llm":
+        _llm_sel = True
+    elif source in {"capacity_fill", "deterministic_capacity_fill", "fallback", "deterministic_fallback", "hold_override"}:
+        _llm_sel = False
+    snapshot: dict[str, Any] = {
+        "llm_considered": source in {"llm", "deterministic_capacity_fill"},
+        "gate_frontier": row["gate_frontier"],
+    }
+    if _llm_sel is not None:
+        snapshot["llm_selected"] = _llm_sel
     return {
         "cycle_id": row["cycle_id"],
         "action": row["action"],
@@ -98,10 +110,7 @@ def _recommendation(row: dict[str, Any], index: int, *, source: str = "llm") -> 
         "source": source,
         "decision_origin": source,
         "decision_lineage": _lineage(row),
-        "decision_context_snapshot": {
-            "llm_considered": source in {"llm", "deterministic_capacity_fill"},
-            "gate_frontier": row["gate_frontier"],
-        },
+        "decision_context_snapshot": snapshot,
     }
 
 
@@ -121,6 +130,11 @@ def _build_large() -> dict[str, Any]:
     recommendations = [_recommendation(rows[index], index) for index in range(5)]
     recommendations[3]["source"] = "capacity_fill"
     recommendations[3]["decision_origin"] = "capacity_fill"
+    # P-L59C: update llm_selected in snapshot when source changes post-hoc
+    rec3_snap = dict(recommendations[3].get("decision_context_snapshot", {}))
+    rec3_snap["llm_selected"] = False
+    rec3_snap["llm_considered"] = True
+    recommendations[3]["decision_context_snapshot"] = rec3_snap
     plans = [_plan_record(rows[index], index) for index in range(3)]
     ordered = [
         {
