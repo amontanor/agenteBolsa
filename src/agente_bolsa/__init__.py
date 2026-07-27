@@ -17,4 +17,5 @@ __all__ = ["__version__"]
 # P-L54B-W: fail-open capital deployment funnel shadow (0.4.194).
 # P-L46BR4: calendar-safe portfolio chart filter (0.4.195).
 # P-L59C-R2: normalize_llm_selected moved to decision_context, economic parity (0.4.196).
-__version__ = "0.4.196"
+# P-L59F-I: decision_rows v2 in canonical selection ledger, candidate summary, bounded 600 (0.4.197).
+__version__ = "0.4.197"
