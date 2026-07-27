@@ -387,3 +387,169 @@ Postmarket no terminal, continuous_improvement running: P-L59E bloqueado.
 P-L59F-I: implementacion de `decision_rows` en `canonical_selection_ledger.py`
 segun este contrato completo, en worktree aislado. Version `0.4.197` propuesta
 sujeta a verificacion de que ningun otro candidato use ese numero.
+
+---
+
+# P-L59F-I — implementacion funcional decision_rows v2 (27-jul-2026)
+
+## Dictamen
+
+**`ready_for_integration_rehearsal`**.
+
+## Causa
+
+El last-wins de P-L53 (colision silenciosa de recommendation_id sobre la misma
+senal/accion) queda corregido mediante decision_rows v2 con identidad exacta de
+recomendacion. Telemetria shadow/fail-open; cero cambio de seleccion, gates,
+planes, ordenes o politica activa.
+
+## Candidato
+
+- **Base**: P-L59F-T-R4 `224b4958`, tree `135df124`, v0.4.196
+- **Worktree**: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59fi_decision_rows`
+- **Rama**: `codex/pl59fi-decision-rows`
+- **Version**: `0.4.197`
+- **Hora**: 2026-07-27 ~23:00 CEST, XNYS cerrado (postmarket no terminal,
+  continuous_improvement running; P-L59E bloqueado)
+
+### Commits
+
+| Commit | Tipo | Descripcion |
+|---|---|---|
+| `e4eb869f` | src | decision_rows v2 in canonical_selection_ledger.py |
+| `f2e31ab9` | tests | 33 new focal + updated existing for v2 |
+| `650ccc22` | version | bump to 0.4.197 |
+| (HEAD) | docs | informe, plan, relevo |
+
+### HEAD/tree
+
+- HEAD: ver commit docs (actual)
+- Tree: limpio, sin cambios unstaged
+
+## Schema
+
+`p-l53b.canonical-selection-ledger.v2` (`revision: 2`).
+
+## Cambios en `src/`
+
+Solo `src/agente_bolsa/tools/canonical_selection_ledger.py` (+449/-43) y
+`src/agente_bolsa/__init__.py` (version).
+
+No se tocaron: `cycle_runner.py`, `storage.py`, protegidos, config, politica,
+tabla, migracion, backfill.
+
+## Contrato implementado
+
+1. **candidate_rows**: 1 por (cycle_id, action, canonical_signal). Summary
+   booleans (`recommended`/`planned`/`ordered`) agregan `any`; campos
+   singulares solo caso inequivoco con `decision_summary_status=canonical`.
+
+2. **decision_rows**: 1 por (cycle_id, action, canonical_signal,
+   recommendation_id) con ID exacto. Incluye lineage, llm_selected, source,
+   confidence, decision_context_snapshot y adjuntos plan/order/failure.
+
+3. **8-state summary**: 0 observed→unavailable; 1 canonical→canonical;
+   >1 canonical→ambiguous; 1 missing-ID→partial; multiple missing-ID→ambiguous;
+   1 canonical+1 missing→ambiguous; same-ID idempotent→canonical;
+   same-ID conflict→ambiguous.
+
+4. **Duplicate detection**: same decision key + same hash→idempotent (no-op);
+   same key + different hash→conserva original canonica, conflicto separado
+   no canonico. `captured_at` fuera del hash semantico.
+
+5. **Missing recommendation_id**: no inventado. Preserva como
+   unavailable/ambiguous y cuenta. Nunca join por simbolo/fecha.
+
+6. **Adjuntos**: plan_id/status desde plan/plan_record unidos por
+   recommendation_id exacto; broker/client/order/failure por plan_id exacto;
+   rejection por recommendation_id/plan_id exacto. Sin union por simbolo.
+
+7. **Bounded 600**: `decision_detail_total`, `decision_detail_persisted`,
+   `decision_truncated_count`, `decision_conflict_count`. Orden estable por
+   identity_key + decision_id.
+
+8. **Denominadores v2**: candidate_count, recommendation_observed,
+   recommendation_canonical, recommendation_conflict,
+   recommendation_unavailable. Conserva v1 para compatibilidad.
+
+9. **Reader**: valida/lee v1 historico sin reescribir; decision_rows y
+   nuevos denominadores `None/unavailable` en proyeccion legacy. v2 expone
+   ambos arrays. digest/CLI JSON no rotos.
+
+10. **P-L59C**: autoridad leida desde decision_rows v2; candidate singular
+    solo caso inequivoco.
+
+11. **Fail-open**: fallo del builder no altera ruta activa; no mutacion
+    de inputs.
+
+## Pruebas
+
+- **152 passed** en 7 archivos (64s):
+  - P-L53: 13 (test_p53b_selection_ledger_shadow.py)
+  - P-L59F-T: 17 (test_p59ft_recommendation_identity_design.py)  
+  - **P-L59F-I: 33 nuevos** (test_p59fi_decision_rows.py)
+  - P-L59C authority: 75 (test_p59c_llm_selected_authority.py)
+  - P-L59BT: 28 (test_p59bt_llm_selected_contract_characterization.py)
+  - Integration: 15 (test_market_cycle_timing_integration.py)
+  - Version policy: 1 (test_version_policy.py)
+
+### Nuevos tests P-L59F-I (33):
+
+8-state table (8), plan/order/failure attachments (6), bounded 600 (3),
+v1/v2 persist/read (4), P-L59C authority (3), no mutation (2), fail-open (3),
+v2 denominators (3), content hash stability (2).
+
+### Gates estaticos
+
+| Gate | Resultado |
+|---|---|
+| Ruff (src + 6 test files) | All checks passed |
+| `check_no_nulls.py` | OK (437 archivos) |
+| `git diff --check` | clean |
+| `py_compile` | OK |
+| `validate-agent-config --json` | ok=true, 0 errors, 0 warnings |
+
+### Gates omitidos (XNYS cerrado, precondiciones no terminales)
+
+Suite completa, smoke, benchmark, P-L45 33.336, kernel productivo.
+Sin broker, red, LLM, yfinance, SQLite productiva, reinicio, push.
+P-L59E bloqueado: postmarket no terminal, continuous_improvement running.
+
+## Archivos modificados
+
+| Archivo | Cambio |
+|---|---|
+| `src/agente_bolsa/tools/canonical_selection_ledger.py` | decision_rows v2 + candidate summary |
+| `src/agente_bolsa/__init__.py` | bump 0.4.197 |
+| `tests/test_p59fi_decision_rows.py` | NUEVO: 33 tests focales |
+| `tests/test_p53b_selection_ledger_shadow.py` | denominators adaptados |
+| `tests/test_p59ft_recommendation_identity_design.py` | v1→v2 semantica |
+| `tests/test_p59bt_llm_selected_contract_characterization.py` | v1→v2 collision |
+| `tests/test_p59c_llm_selected_authority.py` | version bump |
+| `docs/P-L59_informe.md` | este informe |
+| `docs/plan_mejoras_y_tareas.md` | P-L59F-I |
+| `docs/RELEVO_DIRECCION_TECNICA.md` | P-L59F-I |
+
+## Protegidos
+
+Los 5 archivos versionados sin cambios (identicos a base `224b4958`):
+`kernel.py`, `broker.py`, `execution.py`, `risk.py`, `config.py`.
+`.env` no modificado.
+
+## Paridad de trading
+
+- Telemetria shadow/fail-open. Sin cambio de seleccion, gates, planes, ordenes.
+- `_auto_paper_trade`: dos rec IDs llegan y se adjuntan sin cambio de submits
+  (test_wiring_two_recs_same_lineage_ids_assigned_ordered).
+- P-L54 permanece independiente (test_p54_* intactos).
+- Sin mutacion de inputs activos.
+
+## Brecha P-L53 recommendation_id
+
+**CERRADA**. decision_rows v2 preserva ambos recommendation_id de la misma
+senal/accion. Candidate summary refleja estado ambiguous con 2 decision_ids.
+
+## Siguiente paso (sin ejecutar)
+
+P-L59F-D: rehearsal de integracion de P-L59F-I. Requiere worktree aislado,
+merge --no-ff, QA completa con XNYS cerrado y precondiciones satisfechas.
