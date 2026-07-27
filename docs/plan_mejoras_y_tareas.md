@@ -2596,3 +2596,15 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Gates omitidos: suite, smoke, benchmark, P-L45, kernel (precondiciones).
 - Siguiente: P-L59F-D rehearsal `--no-ff` y validacion cerrada completa; sin
   despliegue automatico.
+
+## P-L59F-D — ensayo integrado cerrado. HECHO (v0.4.197).
+
+- Merge `--no-ff` `f535923f` sobre P-L59D-D; QA `e0290762` y `2f156eb8`;
+  tree funcional `f8193f6d`.
+- Suite completa: 2184 passed, 1 skip y 1 warning preexistentes. Ruff, NUL,
+  diff y configuracion verdes; kernel productivo sellado y protegidos iguales.
+- Benchmark v2: 500 candidatos, p95 total 649.32 ms, 840,943 bytes/evento,
+  memoria pico 17.2 MB. Riesgo de volumen medio; shadow/fail-open.
+- Dictamen: `ready_for_closed_market_deployment`, pero el despliegue no esta
+  autorizado. Smoke real omitido por seguridad al no existir proveedor
+  sintetico CLI garantizado.

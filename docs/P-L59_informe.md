@@ -610,3 +610,84 @@ broker, red, LLM, yfinance, SQLite productiva, servicios, despliegue ni push.
 
 P-L59F-D: merge `--no-ff` del candidato corregido en un worktree aislado y
 validacion cerrada completa. No autoriza despliegue.
+
+---
+
+# P-L59F-D — ensayo integrado y validacion cerrada (27-jul-2026)
+
+## Dictamen
+
+**`ready_for_closed_market_deployment`**, sin autorizacion de despliegue.
+
+## Integracion
+
+- Base: P-L59D-D `520559c614a68199cef4a9add982cd5930661757`.
+- Candidato: P-L59F-I-R1
+  `40e1edffba2d2d27dfdc274dd5b15eebc38871c4`.
+- Worktree/rama: `pl59fd_decision_rows_rehearsal`,
+  `codex/pl59fd-decision-rows-rehearsal`.
+- Merge `--no-ff`: `f535923fea7e6d58874bd447ef4af49a4b25ab4e`.
+- QA de denominadores v1/v2: `e029076290b7b11026a243884bc4c45b4fc221b4`.
+- QA de instrumentacion de rendimiento v2:
+  `2f156eb8ba8c6e4645e33c867b8e71ffde8c4873`.
+- Tree funcional final:
+  `f8193f6d2a3ca6bbe0f73be1aac36eed7276e617`.
+- Version: `0.4.197`.
+
+No hubo conflictos de merge. P-L59C, P-L46BR4, P-L54 y las mediciones
+anteriores permanecen en el arbol; decision_rows v2 solo cambia telemetria
+shadow/fail-open.
+
+## Hallazgos QA del ensayo
+
+1. Una prueba integrada comparaba el diccionario completo de denominadores v1
+   y rechazaba los seis campos v2. Se conserva la igualdad exacta del subconjunto
+   v1 y se valida por separado el cierre:
+   `observed = canonical + conflict + idempotent + unavailable`.
+2. El benchmark heredado instrumentaba `_attach_phase_b`, frontera v1 ya
+   sustituida. Ahora mide `_build_decision_rows`, la finalizacion real v2,
+   sin reducir ciclos, candidatos ni escala.
+
+Ambos defectos estaban en QA/observabilidad; no modificaban trading.
+
+## Validacion
+
+- Suite completa: **2184 passed, 1 skipped, 1 warning** en 788.80 s.
+- Skip preexistente: historia SQLite local insuficiente.
+- Warning preexistente: deprecacion `websockets.legacy`.
+- Focal adversarial posterior al primer ajuste: 54 passed.
+- Benchmark P-L53BR2 v2: 1 passed, 109 eventos.
+- Ruff completo: verde.
+- `check_no_nulls.py`: OK, 437 archivos.
+- `git diff --check`: verde.
+- `validate-agent-config --json` con `DATA_DIR` temporal: `ok=true`.
+- Kernel temporal: `unsealed`, 0 violaciones, esperado sin manifiesto.
+- Kernel productivo: sellado, `ok=true`, 0 violaciones.
+- Cinco archivos protegidos versionados: objetos Git identicos.
+- Smoke `run-once`: `smoke_unavailable_by_safety`; no existe proveedor CLI
+  sintetico garantizado sin red/broker/LLM.
+
+## Rendimiento
+
+Para 100 ciclos de 500 candidatos:
+
+- build p95: 498.89 ms;
+- finalizacion decision_rows p95: 64.71 ms;
+- serializacion p95: 161.81 ms;
+- persistencia p95: 83.99 ms;
+- total shadow p95: 649.32 ms;
+- evento: 840,943 bytes;
+- memoria pico: 17,191,583 bytes;
+- 109 conexiones, 109 transacciones, 109 eventos;
+- WAL final: 0 bytes.
+
+Escala observada: 250 candidatos 426,903 bytes; 500 candidatos 834,579;
+1000 candidatos 1,658,093. El coste de 500 permanece dentro de los limites
+integrados previos de 1 s p95 y 1.25 MB/ciclo. Riesgo operativo: medio por
+volumen, no por autoridad.
+
+## Seguridad
+
+Sin broker, red, LLM, yfinance, SQLite productiva, backfill, migracion,
+servicios, reinicio, despliegue ni push. Produccion conserva su HEAD y su
+suciedad preexistente sin alteraciones.

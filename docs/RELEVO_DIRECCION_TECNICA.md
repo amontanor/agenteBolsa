@@ -657,3 +657,21 @@ cerrada.
 - Gates omitidos: suite, smoke, benchmark, P-L45, kernel (precondiciones
   no terminales: postmarket no terminal, continuous_improvement running).
 - Siguiente: P-L59F-D rehearsal de integracion. P-L59E sigue bloqueado.
+
+## P-L59F-D — ensayo integrado cerrado (27-jul-2026)
+
+- Dictamen: `ready_for_closed_market_deployment`, sin autorizacion para
+  desplegar.
+- Worktree/rama: `pl59fd_decision_rows_rehearsal`,
+  `codex/pl59fd-decision-rows-rehearsal`.
+- Merge `f535923f`; QA `e0290762`, `2f156eb8`; tree `f8193f6d`; version
+  `0.4.197`.
+- Suite completa: 2184 passed, 1 skip y 1 warning preexistentes. Ruff, NUL,
+  diff/config/kernel/protegidos verdes.
+- QA corrigio una asercion v1 exacta para validar v1+v2 y movio la
+  instrumentacion de `_attach_phase_b` a `_build_decision_rows`.
+- Benchmark 500 candidatos: total p95 649.32 ms, 840,943 bytes/evento,
+  memoria pico 17.2 MB. Riesgo operativo medio por volumen.
+- Smoke real no ejecutado por seguridad; sin proveedor CLI sintetico que
+  garantice cero red/broker/LLM.
+- Produccion y servicios intactos; sin SQLite productiva, despliegue ni push.
