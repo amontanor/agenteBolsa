@@ -27,7 +27,7 @@ Correcciones R2 sobre R1:
 ## Base y candidato
 
 - **Base exacta**: P-L59B-T-R5, `49059f18`, tree `b29c262c`, version `0.4.195`.
-- **Candidato P-L59C-R2**: rama `codex/pl59c-llm-selection-producer`.
+- **Candidato P-L59C-R2**: HEAD `88c10a8d`, tree `6714e53e`, rama `codex/pl59c-llm-selection-producer`.
 - **Worktree**: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59c_llm_selection_producer`.
 - **Version**: `0.4.196`.
 - **Hora**: 2026-07-27 20:30 CEST (direccion), XNYS abierto.
@@ -46,9 +46,9 @@ P-L59C-R1:
 7. `e777dbd8` — docs: informe corregido
 
 P-L59C-R2:
-8. `XXXXXX` — fix: `normalize_llm_selected` → `decision_context.py`, uso en snapshot
-9. `YYYYYY` — test: snapshot normalization + economic parity
-10. `ZZZZZZ` — docs: placeholders, stale blocks, contabilidad exacta
+8. `f9fff29c` — fix: `normalize_llm_selected` → `decision_context.py`, uso en snapshot
+9. `4508cb70` — test: snapshot normalization + economic parity
+10. `88c10a8d` — docs: placeholders, stale blocks, contabilidad exacta
 
 ## Esquema
 
