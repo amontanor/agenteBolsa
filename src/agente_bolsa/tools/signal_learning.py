@@ -132,15 +132,63 @@ def _market_regime_features(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def record_signal_candidates(store: Store, report: dict[str, Any], *, source: str) -> int:
+def _apply_signal_candidate_identities(
+    report: dict[str, Any],
+    *,
+    source: str,
+    identity_by_key: dict[str, dict[str, Any]],
+    ambiguous_keys: set[str],
+) -> None:
+    """Carry producer-owned identity into each in-memory candidate copy."""
+
+    for bucket_name in ("all_candidates", "selected_candidates", "top_longs", "top_shorts"):
+        for candidate in list(report.get(bucket_name, []) or []):
+            if not isinstance(candidate, dict):
+                continue
+            key = canonical_signal_id(source, candidate)
+            identity = identity_by_key.get(key)
+            if identity and key not in ambiguous_keys:
+                candidate.update(
+                    {
+                        field: value
+                        for field, value in identity.items()
+                        if field != "signal_capture"
+                    }
+                )
+                candidate["signal_identity_status"] = "verified"
+            elif key in ambiguous_keys:
+                for field in (
+                    "signal_id",
+                    "signal_capture_id",
+                    "signal_source_run_id",
+                    "signal_date",
+                    "signal_strategy_name",
+                    "signal_strategy_version",
+                ):
+                    candidate.pop(field, None)
+                candidate["signal_identity_status"] = "ambiguous"
+
+
+def prepare_signal_candidate_identities(
+    report: dict[str, Any],
+    *,
+    source: str,
+) -> dict[str, Any]:
+    """Mint signal identity once, before learning annotation and ranking.
+
+    This is the producer boundary. Consumers receive the concrete IDs copied
+    here and never reconstruct them from a symbol/date after ranking.
+    """
+
     source_run_id = str(report.get("run_id") or "")
     if not source_run_id:
-        return 0
-    rows = []
+        return {
+            "source": source,
+            "source_run_id": None,
+            "identity_by_key": {},
+            "ambiguous_keys": set(),
+        }
     active_candidates = list(report.get("all_candidates", []) or [])
-    shadow_candidates = list(report.get("shadow_candidates", []) or [])
-    # Enrich the in-memory report too: later decision stages must transport this
-    # concrete producer identity rather than rebuild it from partial context.
     identity_by_key: dict[str, dict[str, Any]] = {}
     ambiguous_keys: set[str] = set()
     for candidate in active_candidates:
@@ -178,44 +226,47 @@ def record_signal_candidates(store: Store, report: dict[str, Any], *, source: st
                 "signal_capture": capture,
             }
             identity_by_key[key] = identity
-    for candidate in active_candidates:
-        if not isinstance(candidate, dict):
-            continue
-        key = canonical_signal_id(source, candidate)
-        if key in ambiguous_keys:
-            for field in (
-                "signal_id",
-                "signal_capture_id",
-                "signal_source_run_id",
-                "signal_date",
-                "signal_strategy_name",
-                "signal_strategy_version",
-            ):
-                candidate.pop(field, None)
-            candidate["signal_identity_status"] = "ambiguous"
-        elif key in identity_by_key:
-            candidate.update({key: value for key, value in identity_by_key[key].items() if key != "signal_capture"})
-    # Selected/top buckets are independent dictionaries in production.  Match
-    # on the complete canonical key; an absent or ambiguous key stays explicit.
-    for bucket_name in ("all_candidates", "selected_candidates", "top_longs", "top_shorts"):
-        for candidate in list(report.get(bucket_name, []) or []):
-            if not isinstance(candidate, dict):
-                continue
-            key = canonical_signal_id(source, candidate)
-            identity = identity_by_key.get(key)
-            if identity and key not in ambiguous_keys:
-                candidate.update({key: value for key, value in identity.items() if key != "signal_capture"})
-            elif key in ambiguous_keys:
-                for field in (
-                    "signal_id",
-                    "signal_capture_id",
-                    "signal_source_run_id",
-                    "signal_date",
-                    "signal_strategy_name",
-                    "signal_strategy_version",
-                ):
-                    candidate.pop(field, None)
-                candidate["signal_identity_status"] = "ambiguous"
+    _apply_signal_candidate_identities(
+        report,
+        source=source,
+        identity_by_key=identity_by_key,
+        ambiguous_keys=ambiguous_keys,
+    )
+    return {
+        "source": source,
+        "source_run_id": source_run_id,
+        "identity_by_key": identity_by_key,
+        "ambiguous_keys": ambiguous_keys,
+    }
+
+
+def record_signal_candidates(
+    store: Store,
+    report: dict[str, Any],
+    *,
+    source: str,
+    prepared_identity: dict[str, Any] | None = None,
+) -> int:
+    source_run_id = str(report.get("run_id") or "")
+    if not source_run_id:
+        return 0
+    prepared = prepared_identity or {}
+    if (
+        prepared.get("source") != source
+        or prepared.get("source_run_id") != source_run_id
+    ):
+        prepared = prepare_signal_candidate_identities(report, source=source)
+    identity_by_key = dict(prepared.get("identity_by_key") or {})
+    ambiguous_keys = set(prepared.get("ambiguous_keys") or set())
+    _apply_signal_candidate_identities(
+        report,
+        source=source,
+        identity_by_key=identity_by_key,
+        ambiguous_keys=ambiguous_keys,
+    )
+    rows = []
+    active_candidates = list(report.get("all_candidates", []) or [])
+    shadow_candidates = list(report.get("shadow_candidates", []) or [])
     candidates = [
         {**candidate, "shadow_candidate": False}
         for candidate in active_candidates

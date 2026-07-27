@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 from collections.abc import Iterable, Mapping
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
@@ -19,8 +20,46 @@ from agente_bolsa.config import Settings
 
 from .learning_penalty_shadow import build_learning_penalty_shadow
 
-SCHEMA_VERSION = "p-l44b.learning-penalty-cycle-shadow.v1"
+LEGACY_SCHEMA_VERSION = "p-l44b.learning-penalty-cycle-shadow.v1"
+SCHEMA_VERSION = "p-l44b.learning-penalty-cycle-shadow.v2"
 EVENT_TYPE = "learning_penalty_cycle_shadow"
+
+_PHASE_A_CANDIDATE_FIELDS = {
+    "cycle_id",
+    "signal_capture_id",
+    "signal_id",
+    "signal_source_run_id",
+    "signal_date",
+    "candidate_id",
+    "signal_identity_status",
+    "symbol",
+    "direction",
+    "strategy_name",
+    "strategy_version",
+    "decision_source",
+    "decision_lineage",
+    "score",
+    "candidate_rank",
+    "selection_rank",
+    "score_rank",
+    "rank_priority_score",
+    "learning_prior",
+    "setup_edge_3d_raw",
+    "historical_prior",
+    "operational_penalty",
+    "expected_edge_3d",
+    "sample_size",
+    "confidence",
+    "signal_at",
+    "recommendation_at",
+    "plan_at",
+    "submitted_at",
+    "signal_price",
+    "recommendation_price",
+    "plan_price",
+    "price_quote_at",
+    "price_refresh_status",
+}
 
 _POST_DECISION_FIELDS = {
     "pnl",
@@ -161,7 +200,9 @@ def _candidate_detail(
     identity_key: str | None = None,
 ) -> dict[str, Any]:
     prior = candidate.get("learning_prior") if isinstance(candidate.get("learning_prior"), Mapping) else {}
+    structured_inputs = _structured_candidate_inputs(candidate)
     return {
+        "cycle_id": _candidate_cycle_id(candidate),
         "candidate_id": candidate.get("candidate_id"),
         "signal_id": candidate.get("signal_id"),
         "signal_capture_id": candidate.get("signal_capture_id"),
@@ -173,6 +214,11 @@ def _candidate_detail(
         "strategy_version": candidate.get("strategy_version"),
         "decision_source": candidate.get("decision_source"),
         "decision_source_status": "available" if candidate.get("decision_source") else "unavailable",
+        "structured_inputs": structured_inputs,
+        "score": structured_inputs.get("score"),
+        "candidate_rank": structured_inputs.get("candidate_rank"),
+        "score_rank": structured_inputs.get("score_rank"),
+        "rank_priority_score": structured_inputs.get("rank_priority_score"),
         "historical_edge_3d": result.get("historical_edge_3d"),
         "operational_penalty": result.get("operational_penalty"),
         "legacy_expected_edge_3d": result.get("legacy_expected_edge_3d"),
@@ -196,6 +242,17 @@ def _candidate_detail(
         "warnings": sorted(set(result.get("data_quality_warnings", []) or [])),
         "sample_size_3d": prior.get("sample_size_3d"),
         "confidence": prior.get("confidence_weight_3d"),
+        "freshness": {
+            "signal_at": candidate.get("signal_at"),
+            "recommendation_at": candidate.get("recommendation_at"),
+            "plan_at": candidate.get("plan_at"),
+            "submitted_at": candidate.get("submitted_at"),
+            "signal_to_recommendation_seconds": None,
+            "signal_to_plan_seconds": None,
+            "signal_to_submit_seconds": None,
+            "stale_signal": None,
+            "price_refresh_status": candidate.get("price_refresh_status"),
+        },
     }
 
 
@@ -206,6 +263,57 @@ def _safe_detail(detail: Mapping[str, Any]) -> dict[str, Any]:
         key: value
         for key, value in detail.items()
         if str(key).lower() not in _POST_DECISION_FIELDS
+    }
+
+
+def _phase_a_candidate_projection(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    """Return an immutable, pre-decision-only structured projection."""
+
+    return {
+        key: deepcopy(value)
+        for key, value in candidate.items()
+        if key in _PHASE_A_CANDIDATE_FIELDS and str(key).lower() not in _POST_DECISION_FIELDS
+    }
+
+
+def project_learning_penalty_phase_a_context(
+    technical_context: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Project the already annotated/ranked context without recomputation.
+
+    The returned dictionaries share no mutable containers with the active
+    cycle. Identity is copied verbatim; no symbol/date lookup is performed.
+    """
+
+    result: dict[str, Any] = {}
+    for bucket in ("all_candidates", "ranked_candidates", "selected_candidates"):
+        rows = technical_context.get(bucket)
+        if isinstance(rows, list):
+            result[bucket] = [
+                _phase_a_candidate_projection(item)
+                for item in rows
+                if isinstance(item, Mapping)
+            ]
+    return result
+
+
+def _structured_candidate_inputs(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    prior = candidate.get("learning_prior") if isinstance(candidate.get("learning_prior"), Mapping) else {}
+
+    def present(primary: Any, fallback: Any) -> Any:
+        return primary if primary is not None else fallback
+
+    return {
+        "score": candidate.get("score"),
+        "candidate_rank": present(candidate.get("candidate_rank"), candidate.get("selection_rank")),
+        "score_rank": candidate.get("score_rank"),
+        "rank_priority_score": candidate.get("rank_priority_score"),
+        "setup_edge_3d_raw": present(prior.get("setup_edge_3d_raw"), candidate.get("setup_edge_3d_raw")),
+        "historical_prior": deepcopy(candidate.get("historical_prior")),
+        "operational_penalty": prior.get("operational_penalty"),
+        "expected_edge_3d": prior.get("expected_edge_3d"),
+        "sample_size": present(prior.get("sample_size_3d"), candidate.get("sample_size")),
+        "confidence": present(prior.get("confidence_weight_3d"), candidate.get("confidence")),
     }
 
 
@@ -286,6 +394,7 @@ def build_learning_penalty_cycle_shadow(
             warnings.append("duplicate_identity_ambiguous")
         if identity_status == "identity_unavailable":
             identity_unavailable += 1
+            shadow_inputs_unavailable += 1
             rows.append(
                 {
                     "candidate": item,
@@ -305,6 +414,7 @@ def build_learning_penalty_cycle_shadow(
             continue
         if identity_status == "identity_ambiguous":
             identity_ambiguous += 1
+            shadow_inputs_unavailable += 1
             rows.append(
                 {
                     "candidate": item,
@@ -491,6 +601,10 @@ def build_learning_penalty_cycle_shadow(
         "policy_mode": "shadow_only",
         "active_policy": "legacy_double_application",
         "shadow_policy": "single_application",
+        "denominator_compatibility": {
+            "identity_and_shadow_inputs": "comparable_v1_v2",
+            "decision_controls_rejections_freshness": "v2_only",
+        },
         "captured_at": _captured_at(captured_at),
         "candidate_counts": counts,
         "configured_capacity": capacity,
@@ -615,6 +729,229 @@ def _gate_block_reason(value: Any, *, cycle_id: str | None) -> str | None:
     return "gate_blocked" if item.get("decision") == "blocked" else None
 
 
+def _text(value: Any) -> str | None:
+    result = str(value or "").strip()
+    return result or None
+
+
+def _normalized_action(value: Any) -> str | None:
+    item = _as_mapping(value)
+    action = _text(item.get("action") or item.get("side"))
+    if action is None and isinstance(item.get("recommendation"), Mapping):
+        action = _text(item["recommendation"].get("action"))
+    return action.lower() if action else None
+
+
+def _decision_identity(value: Any) -> dict[str, Any]:
+    item = _as_mapping(value)
+    nested = item.get("recommendation") if isinstance(item.get("recommendation"), Mapping) else {}
+    lineage = item.get("decision_lineage") if isinstance(item.get("decision_lineage"), Mapping) else {}
+    if not lineage and isinstance(nested.get("decision_lineage"), Mapping):
+        lineage = nested["decision_lineage"]
+    capture_id = _text(item.get("signal_capture_id") or lineage.get("signal_capture_id"))
+    signal_id = _text(item.get("signal_id") or lineage.get("signal_id"))
+    candidate_id = _text(item.get("candidate_id") or lineage.get("candidate_id"))
+    return {
+        "signal_capture_id": capture_id,
+        "signal_id": signal_id,
+        "candidate_id": candidate_id,
+        "cycle_id": _cycle_id(value),
+        "action": _normalized_action(value),
+        "recommendation_id": _text(item.get("recommendation_id") or nested.get("recommendation_id")),
+    }
+
+
+def _structured_value(item: Mapping[str, Any], key: str) -> Any:
+    if item.get(key) is not None:
+        return item.get(key)
+    context = item.get("decision_context_snapshot")
+    if isinstance(context, Mapping) and context.get(key) is not None:
+        return context.get(key)
+    return None
+
+
+def _aware_datetime(value: Any) -> datetime | None:
+    text = _text(value)
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def _seconds_between(start: Any, end: Any) -> float | None:
+    start_at = _aware_datetime(start)
+    end_at = _aware_datetime(end)
+    if start_at is None or end_at is None or end_at < start_at:
+        return None
+    return round((end_at - start_at).total_seconds(), 6)
+
+
+def _freshness_observation(item: Mapping[str, Any]) -> dict[str, Any]:
+    signal_at = _structured_value(item, "signal_at")
+    recommendation_at = _structured_value(item, "recommendation_at")
+    plan_at = _structured_value(item, "plan_at")
+    submitted_at = _structured_value(item, "submitted_at")
+    quote_at = _structured_value(item, "price_quote_at")
+    signal_to_submit = _seconds_between(signal_at, submitted_at)
+    explicit_refresh = _text(_structured_value(item, "price_refresh_status"))
+    has_price_context = any(
+        _structured_value(item, key) is not None
+        for key in ("signal_price", "recommendation_price", "plan_price")
+    )
+    return {
+        "signal_at": signal_at,
+        "recommendation_at": recommendation_at,
+        "plan_at": plan_at,
+        "submitted_at": submitted_at,
+        "signal_to_recommendation_seconds": _seconds_between(signal_at, recommendation_at),
+        "signal_to_plan_seconds": _seconds_between(signal_at, plan_at),
+        "signal_to_submit_seconds": signal_to_submit,
+        "stale_signal": signal_to_submit > 3600 if signal_to_submit is not None else None,
+        "price_refresh_status": (
+            explicit_refresh
+            or ("verified" if _aware_datetime(quote_at) is not None else "unverified" if has_price_context else None)
+        ),
+    }
+
+
+def _decision_observations(values: Iterable[Any], *, cycle_id: str | None) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for value in values:
+        item = _as_mapping(value)
+        identity = _decision_identity(value)
+        canonical_signal = identity["signal_capture_id"] or identity["signal_id"]
+        status = "identity_verified"
+        warnings: list[str] = []
+        if canonical_signal is None:
+            status = "identity_unavailable"
+            warnings.append("decision_signal_identity_unavailable")
+        if cycle_id and identity["cycle_id"] != str(cycle_id):
+            status = "identity_ambiguous"
+            warnings.append("decision_cycle_id_mismatch")
+        decision_key = (
+            canonical_signal,
+            identity["candidate_id"],
+            identity["cycle_id"],
+            identity["action"],
+            identity["recommendation_id"],
+        )
+        if decision_key in seen:
+            status = "identity_ambiguous"
+            warnings.append("duplicate_decision_identity")
+        seen.add(decision_key)
+        rows.append(
+            {
+                **identity,
+                "decision_identity_status": status,
+                "decision_source": (
+                    item.get("decision_source")
+                    or (item.get("decision_lineage") or {}).get("decision_source")
+                    if isinstance(item.get("decision_lineage"), Mapping)
+                    else item.get("decision_source")
+                ),
+                "freshness": _freshness_observation(item),
+                "warnings": warnings,
+            }
+        )
+    return rows
+
+
+def _control_counts(
+    recommendations: Iterable[Any],
+    controls: Mapping[str, Mapping[str, Any]],
+) -> dict[str, int]:
+    counts = {
+        "comparable_control": 0,
+        "control_unavailable": 0,
+        "control_not_generated": 0,
+        "control_identity_unavailable": 0,
+        "control_persistence_missing": 0,
+    }
+    for value in recommendations:
+        item = _as_mapping(value)
+        identity = _decision_identity(value)
+        signal_key = identity["signal_id"]
+        if not identity["signal_capture_id"] and not signal_key:
+            counts["control_identity_unavailable"] += 1
+            continue
+        attached = item.get("comparable_control_set")
+        persisted = controls.get(str(signal_key or "")) if signal_key else None
+        if isinstance(attached, Mapping) and attached and persisted is None:
+            counts["control_persistence_missing"] += 1
+            continue
+        control = persisted or (attached if isinstance(attached, Mapping) else None)
+        if not isinstance(control, Mapping):
+            counts["control_not_generated"] += 1
+            continue
+        status = _text(control.get("status"))
+        if status in {"verified", "partially_comparable"}:
+            counts["comparable_control"] += 1
+        elif status == "unavailable" and control.get("reason") == "treatment_identity_unavailable":
+            counts["control_identity_unavailable"] += 1
+        else:
+            counts["control_unavailable"] += 1
+    return counts
+
+
+def _rejection_observations(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    cycle_id: str | None,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    raw_rows = list(rows)
+    observations: list[dict[str, Any]] = []
+    exact_seen: set[tuple[Any, ...]] = set()
+    generic_ignored = 0
+    duplicates = 0
+    identity_unavailable = 0
+    for raw in raw_rows:
+        item = dict(raw)
+        event_id = _text(item.get("event_id"))
+        if event_id and event_id.startswith("evt_"):
+            generic_ignored += 1
+            continue
+        identity = _decision_identity(item)
+        if cycle_id and identity["cycle_id"] != str(cycle_id):
+            identity_unavailable += 1
+            continue
+        exact_key = (
+            identity["cycle_id"],
+            identity["signal_capture_id"] or identity["signal_id"],
+            identity["candidate_id"],
+            identity["action"],
+            identity["recommendation_id"],
+            _text(item.get("plan_id")),
+        )
+        if not exact_key[1] or not exact_key[2]:
+            identity_unavailable += 1
+        elif exact_key in exact_seen:
+            duplicates += 1
+            continue
+        else:
+            exact_seen.add(exact_key)
+        observations.append(
+            {
+                **identity,
+                "plan_id": _text(item.get("plan_id")),
+                "event_id": event_id,
+                "reason_code": _text(item.get("reason_code") or item.get("reason")),
+                "stage": _text(item.get("stage")),
+                "identity_quality": "exact" if exact_key[1] and exact_key[2] else "unavailable",
+            }
+        )
+    return observations, {
+        "raw": len(raw_rows),
+        "canonical": len(observations),
+        "generic_rows_ignored": generic_ignored,
+        "duplicates": duplicates,
+        "identity_unavailable": identity_unavailable,
+    }
+
+
 def finalize_learning_penalty_cycle_shadow(
     phase_a: Mapping[str, Any],
     *,
@@ -642,12 +979,47 @@ def finalize_learning_penalty_cycle_shadow(
         snapshot.setdefault("warnings", []).append("cycle_id_mismatch")
         phase_b_available = False
 
-    raw_recs = [value for value in (recommendations or []) if _buy(value)]
+    raw_decisions = list(recommendations or [])
+    decisions = [value for value in raw_decisions if _cycle_matches(value, cycle_id)]
+    raw_recs = [value for value in raw_decisions if _buy(value)]
     raw_plans = [value for value in (plans or []) if str(_as_mapping(value).get("side") or "").lower() == "buy"]
     recs = [value for value in raw_recs if _cycle_matches(value, cycle_id)]
     final_plans = [value for value in raw_plans if _cycle_matches(value, cycle_id)]
     rejected = [dict(value) for value in (rejected_order_plans or []) if isinstance(value, Mapping)]
     controls = comparable_control_sets or {}
+    decision_observations = _decision_observations(decisions, cycle_id=cycle_id)
+    plan_observations = [
+        {
+            **_decision_identity(value),
+            "plan_id": _text(_as_mapping(value).get("plan_id")),
+        }
+        for value in final_plans
+    ]
+    for decision in decision_observations:
+        matching_plan = next(
+            (
+                plan
+                for plan in plan_observations
+                if plan.get("cycle_id") == decision.get("cycle_id")
+                and plan.get("action") == decision.get("action")
+                and (
+                    plan.get("recommendation_id") == decision.get("recommendation_id")
+                    if decision.get("recommendation_id")
+                    else (
+                        plan.get("signal_capture_id") or plan.get("signal_id")
+                    )
+                    == (decision.get("signal_capture_id") or decision.get("signal_id"))
+                )
+            ),
+            None,
+        )
+        decision["planned_by_active_path"] = matching_plan is not None
+        decision["plan_id"] = matching_plan.get("plan_id") if matching_plan else None
+    control_counts = _control_counts(decisions, controls)
+    rejection_observations, rejection_counts = _rejection_observations(
+        rejected,
+        cycle_id=cycle_id,
+    )
     control_rows: list[Mapping[str, Any]] = []
     for control_set in controls.values():
         if not isinstance(control_set, Mapping):
@@ -661,7 +1033,7 @@ def finalize_learning_penalty_cycle_shadow(
 
     identity_issues = any(
         not _cycle_matches(value, cycle_id) or not any(_identity_parts(value))
-        for value in [*raw_recs, *raw_plans]
+        for value in [*raw_decisions, *raw_plans]
     )
     gate_rows = [
         value
@@ -742,6 +1114,10 @@ def finalize_learning_penalty_cycle_shadow(
             control_ids.append(identity)
 
     snapshot["phase"] = "post_selection"
+    snapshot["decision_observations"] = decision_observations
+    snapshot["control_counts"] = control_counts
+    snapshot["rejection_observations"] = rejection_observations
+    snapshot["rejection_counts"] = rejection_counts
     snapshot["selected_candidates"] = sorted(set(selected_ids))
     snapshot["planned_candidates"] = sorted(set(planned_ids))
     snapshot["comparable_control_candidates"] = sorted(set(control_ids))
@@ -749,6 +1125,19 @@ def finalize_learning_penalty_cycle_shadow(
     snapshot["candidate_counts"]["planned_by_active_path"] = len(set(planned_ids))
     snapshot["candidate_counts"]["comparable_control"] = len(set(control_ids))
     snapshot["candidate_counts"]["blocked_candidate"] = sum(bool(item.get("blocked_candidate")) for item in snapshot.get("bounded_candidates") or [])
+    snapshot["candidate_counts"]["decisions_total"] = len(decision_observations)
+    snapshot["candidate_counts"]["decision_identity_verified"] = sum(
+        item.get("decision_identity_status") == "identity_verified"
+        for item in decision_observations
+    )
+    snapshot["candidate_counts"]["decision_identity_unavailable"] = sum(
+        item.get("decision_identity_status") == "identity_unavailable"
+        for item in decision_observations
+    )
+    snapshot["candidate_counts"]["decision_identity_ambiguous"] = sum(
+        item.get("decision_identity_status") == "identity_ambiguous"
+        for item in decision_observations
+    )
     snapshot["candidate_counts"]["detail_persisted"] = len(snapshot.get("bounded_candidates") or [])
     snapshot["candidate_counts"]["detail_omitted"] = max(
         0,
@@ -813,6 +1202,7 @@ def learning_penalty_shadow_digest(
                 "observations": None,
                 "cycles": None,
                 "candidate_counts": None,
+                "control_coverage": None,
                 "canonical_cycles": None,
                 "canonical_events": None,
                 "generic_reporter_rows_ignored": None,
@@ -839,6 +1229,8 @@ def learning_penalty_shadow_digest(
             "invalid_canonical_rows": int(readout.get("invalid_canonical_rows") or 0),
             "idempotent_duplicates": int(readout.get("idempotent_duplicates") or 0),
             "candidate_counts": None,
+            "control_coverage": None,
+            "schema_versions": dict(readout.get("schema_versions") or {}),
             "conflicts": None if not conflicts else conflicts,
             "freshness": {"status": "unavailable", "latest_event_created_at": None, "latest_captured_at": None},
         }
@@ -859,13 +1251,33 @@ def learning_penalty_shadow_digest(
         "planned_by_active_path",
         "comparable_control",
         "blocked_candidate",
+        "decisions_total",
+        "decision_identity_verified",
+        "decision_identity_unavailable",
+        "decision_identity_ambiguous",
     )
     totals = {key: 0 for key in count_keys}
+    control_keys = (
+        "comparable_control",
+        "control_unavailable",
+        "control_not_generated",
+        "control_identity_unavailable",
+        "control_persistence_missing",
+    )
+    control_totals = {key: 0 for key in control_keys}
+    v2_control_events = 0
     for event in events:
         for key in count_keys:
             value = (event.get("candidate_counts") or {}).get(key)
             if isinstance(value, int) and not isinstance(value, bool):
                 totals[key] += value
+        event_controls = event.get("control_counts")
+        if isinstance(event_controls, Mapping):
+            v2_control_events += 1
+            for key in control_keys:
+                value = event_controls.get(key)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    control_totals[key] += value
     event_statuses = {str(item.get("status") or "unavailable") for item in events}
     digest_status = "available"
     if event_statuses == {"unavailable"}:
@@ -911,6 +1323,16 @@ def learning_penalty_shadow_digest(
             "selected": totals["selected_by_decision"],
             "planned": totals["planned_by_active_path"],
             "control": totals["comparable_control"],
+            "decisions_total": totals["decisions_total"],
+            "identity_verified": totals["decision_identity_verified"],
+            "identity_unavailable": totals["decision_identity_unavailable"],
+            "identity_ambiguous": totals["decision_identity_ambiguous"],
+        },
+        "control_coverage": control_totals if v2_control_events else None,
+        "schema_versions": dict(readout.get("schema_versions") or {}),
+        "denominator_compatibility": {
+            "identity_and_shadow_inputs": "comparable_v1_v2",
+            "decision_controls_rejections_freshness": "v2_only",
         },
         "latest_cycle_id": latest.get("cycle_id"),
         "latest_captured_at": latest_captured,

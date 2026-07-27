@@ -10,9 +10,50 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama de integracion desplegada: `codex/mejora_continua`
-- Version actual: **0.4.185** (P-L48B desplegado en producción el 19-jul; ensayo P-L48BR1)
-- Ultima actualizacion: 2026-07-19
+- Version actual del candidato: **0.4.189** (P-L51BR1 en ensayo; producción permanece 0.4.185)
+- Ultima actualizacion: 2026-07-21
+- Estado P-L50BR1: worktree combinado candidato **0.4.188**; secuencia
+  P-L49B 0.4.186 -> P-L46BR3 0.4.187 -> P-L50B 0.4.188. La linea anterior
+  conserva el estado historico del ensayo individual P-L49B.
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
+
+## P-L51C-T - carrier de provenance BUY -> SELL (21-jul-2026)
+
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl51c_provenance_carrier_tests`,
+  rama `codex/pl51c-provenance-carrier-tests`, base `adf9a5c4`.
+- Se caracteriza como frontera minima viable el metadata del `order_plan`
+  transportado al payload local de `broker_order`; no cambia el request al
+  broker y sobrevive la reconciliacion.
+- La proyeccion actual P-L48 pierde el carrier arbitrario. Dictamen:
+  `ready_for_p51c_implementation`; falta implementar solo esa proyeccion
+  acotada y volver a demostrar captura futura real.
+- Commit de tests: `9b12b07e`; no hay bump de version ni cambios en `src`.
+
+## P-L51BR1 - ensayo combinado (21-jul-2026)
+
+- Worktree candidato: `C:\Antonio\Bref\agenteBolsa_worktrees\pl49_pl46_pl50_pl51_combined_rehearsal`,
+  rama `codex/pl49-pl46-pl50-pl51-combined-rehearsal`, version `0.4.189`.
+- Merge `--no-ff` P-L51B-W: `5e3d2887aaa4f65ad67cda26885de9c09148af6d`.
+- QA focal: `991cd95d`; 219 pruebas pasaron. Ruff, NUL, diff y
+  `validate-agent-config --json` temporal pasaron.
+- Dictamen: `needs_redesign`. Los objetos persistidos reales no contienen aun
+  provenance BUY->SELL suficiente (`buy_broker_order_id`, allocations y fill
+  fragments canonicos); el contrato responde unavailable/ambiguous y net null.
+- No se toca produccion ni se ejecutan suite completa, smoke, servicios, broker,
+  red, postmarket, reconciliacion ni validacion de mercado cerrado. El siguiente
+  lote minimo debe rediseñar esa frontera y volver a demostrar captura futura
+  real antes de cualquier integracion.
+
+### P-L49B — shadow de calidad de datos por candidato (**ENSAYO 0.4.186**)
+
+Fase A captura en memoria la observación de mercado exacta disponible en el
+ciclo y Fase B la sella tras la ruta activa, antes de registrar/enviar planes.
+El evento `data_quality_decision_shadow:<cycle_id>` es append-only, idempotente,
+conflict-safe y fail-open. `blocked_exact_quality` exige identidad de observación,
+identidad de candidato y temporalidad verificables; una anomalía posterior o no
+enlazada no gobierna retroactivamente una decisión. SELL y salidas protectoras
+permanecen fuera del shadow. Estado: `ready_for_integration_rehearsal`; no hay
+activación de gate ni despliegue en este lote.
 
 ## Consolidacion operativa - 16-jul-2026
 
@@ -2089,6 +2130,29 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
   lock/lease v1 con token coherente. Deuda `profitability_scoreboard` no
   corregida (backlog). Detalle en `docs/P-L48_informe.md`. Dictamen: `deployed`.
 
+## P-L50BR1 - ensayo combinado secuenciado (pendiente de validacion cerrada)
+
+Secuencia del worktree: P-L49B `0.4.186`, P-L46BR3 `0.4.187`, P-L50B
+`0.4.188`. QA focal: 675 passed; interacción nueva: 10 passed. Ambos shadows
+son fail-open, append-only e independientes. Suite completa, smoke y validación
+de despliegue quedan pendientes con XNYS cerrado.
+
+### Cierre QA P-L50BR1 (20-jul-2026)
+
+- Base y aislamiento: `24537e81`; worktree `pl49_pl46_pl50_combined_rehearsal`;
+  rama `codex/pl49-pl46-pl50-combined-rehearsal`.
+- Merges `--no-ff`: `0f5a26a0` <- `753136fc`, `17b5fbc7` <- `a0ab7ce4`,
+  `045288dd` <- `8ebac5f2`, en ese orden. QA: `c99cd318`.
+- Baterías permitidas: 90 + 84 + 211 + 290 = **675 passed**. Ruff completo,
+  `check_no_nulls.py` (405 archivos), `git diff --check` y
+  `validate-agent-config --json` aislado (`ok=true`) verdes.
+- P-L49/P-L50 no comparten identidad ni autoridad; los planes, controles,
+  gates, cantidades, precios, stops/takes, órdenes, exposición y límites del
+  camino activo permanecen sin mutación. P-L46BR3 es solo lectura.
+- Suite completa, smoke, jobs reales, prueba histórica de 33.336 filas y
+  despliegue quedan pendientes para mercado cerrado. Dictamen:
+  `ready_for_closed_market_full_validation`.
+
 ## P-L46B - orden cronologico de Cartera abierta (desplegado 0.4.178)
 
 - El orden anterior mostraba primero las posiciones con mayor valor absoluto de
@@ -2099,6 +2163,195 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
   `Fecha de compra no disponible`; no se usa la fecha de creacion de una orden como sustituto.
 - Es un cambio exclusivamente visual. No altera posiciones, trading, ranking,
   gates, stops, takes, cantidades ni ordenes.
+- P-L50T (20-jul, caracterizacion aislada): worktree sobre produccion 0.4.185,
+  solo fixtures/pruebas e informe, sin cambios en `src/` ni politicas activas.
+- Dictamen tecnico: `mixed_contract_gap`; P-L44 fase A recibe un contexto sin
+  IDs mientras la ruta de recomendacion los completa despues, con scores/prior
+  y controles no uniformes.
+- P-L50B queda reservado como shadow-only, minimo 0.4.188; P-L50T no cambia
+  version ni autoriza activacion de aprendizaje.
+- P-L50B implementado en candidato `0.4.188`: la identidad se prepara antes de
+  ranking y la fase A consume una proyección inmutable del mismo contexto
+  enriquecido. El contrato P-L44 v2 separa identidad, inputs, decisiones,
+  controles, rechazos y freshness sin modificar el camino activo. Estado:
+  `ready_for_integration_rehearsal`; queda pendiente la validación completa fuera
+  de mercado. P-L49B conserva `0.4.186` y P-L46BR3 conserva `0.4.187`.
 - Secuencia desplegada: P-L45B2 `0.4.175`, P-L43BR5 `0.4.176`, P-L44B
   `0.4.177` y este cambio UI `0.4.178`. El merge productivo es `4158ac5f`;
   la verificación visual confirmó la versión y el orden descendente.
+
+## P-L49BR1 — estado del ensayo (0.4.186)
+
+- Ensayo aislado fusionado desde `24537e81` con candidato `938580b7`:
+  merge `2ea57983`; QA adicional `b8aee78a` y `db6577b2`.
+- La captura de calidad sigue siendo observabilidad shadow. Sin provenance OHLC
+  exacta en el objeto que alimentó features, los candidatos identificados se
+  clasifican `unavailable_temporal`/`partial`; no se aplican informes
+  posteriores ni bloqueos retroactivos.
+- Pendiente: suite completa, smoke y validación de 33.336 observaciones con
+  XNYS cerrado. No habilitar gates ni iniciar P-L48C.
+## P-L46BR3 - resultado de cartera coherente con el rango visible (candidato 0.4.187)
+
+- Causa: la tarjeta `P/L desde abril` procedia del historial de operaciones,
+  mientras la grafica representa equity de cuenta. La mezcla podia publicar
+  una ganancia positiva sobre una curva descendente.
+- La tarjeta pasa a llamarse `Resultado del periodo` y se calcula como ultimo
+  equity menos primer equity del rango seleccionado; muestra porcentaje y
+  fechas de ambos extremos. `Desde inicio` solicita todo el historial
+  disponible y conserva el corte operativo del 28-abr-2026.
+- Se elimina de este bloque el duplicado `P/L hoy`; permanece en la cabecera.
+  El segundo y unico KPI del bloque es `P/L abierto`, sumado desde las
+  posiciones actuales ya cargadas, sin otra consulta al broker.
+- La cabecera `Cuenta · desde inicio` y el control externo usan la misma
+  variacion de equity completa. Sin datos suficientes se muestra `-`, nunca
+  un cero inventado.
+- Cambio exclusivamente de presentacion y lectura. No altera trading,
+  ranking, gates, sizing, planes, ordenes, stops, takes, exposicion, SQLite ni
+  runtime state. P-L49 conserva `0.4.186`; este lote reserva `0.4.187`.
+
+## P-L51C-W - carrier futuro BUY -> SELL (candidato 0.4.189)
+
+- Implementada en worktree aislado la frontera `P-L43BR6 open lots -> order_plan
+  metadata -> broker_order local -> reconciliation -> P-L48/P-L51`.
+- El carrier `p-l51c.exit-lot-provenance.v1` usa solo IDs y cantidades exactas,
+  es append-only/idempotente/conflict-safe y fail-open; no entra en el request
+  del broker ni en autoridad de riesgo o ejecucion.
+- Evidencia Store temporal: BUY/SELL exactos, un lote cerrado, atribucion 1,
+  gross 100.0 y net 98.5 con costes completos; costes parciales dejan net
+  null; historicos sin carrier permanecen unavailable.
+- Commits separados: `c86917ee` funcional y `5c0077d9` pruebas. La
+  documentacion de este estado queda en `docs/P-L51_informe.md` y en este
+  plan; la validacion completa, suite, smoke y despliegue esperan XNYS cerrado.
+## P-L51CV2 - validacion completa nocturna del candidato 0.4.189 (21-jul-2026)
+
+- Con XNYS cerrado, PMR `pmr_7a4f5b7f8f4b` terminal y lease vacio, la suite
+  completa paso `1864 passed, 1 skipped` y las focales/regresiones pasaron
+  `364 passed`. P-L45B2 de 33.336 filas paso `1 passed`.
+- Ruff, NUL, diff y `validate-agent-config --json` temporal quedaron verdes.
+  El smoke real `run-once` queda `smoke_unavailable_by_safety`; el sustituto
+  aislado paso 8 pruebas. No se anadio skip/xfail.
+- Dictamen: `ready_for_closed_market_deployment`. No hubo despliegue ni push;
+  la promocion requiere una tarea separada y autorizacion operativa.
+## P-L52B-T — snapshot EOD contable y benchmark comparable (21-jul-2026)
+
+- Worktree de tests: `C:\Antonio\Bref\agenteBolsa_worktrees\pl52b_eod_snapshot_tests`,
+  rama `codex/pl52b-eod-snapshot-tests`, base P-L51CV2
+  `7638149610060153dfe8a8edf2037ad9dab028a3`.
+- Contrato caracterizado: `p-l52b.canonical-eod-account-snapshot.v1`.
+  Separa equity, flujos, realized neto, open P/L, costes, exposición, cash,
+  benchmark SPY comparable y residual; missing permanece null/unavailable.
+- Tests P-L52B-T `21 passed`; focales `248 passed`; Ruff/NUL/diff/configuración
+  verdes. Sin cambios en `src` ni bump de versión.
+- Dictamen: `ready_for_p52b_implementation`. Siguiente lote mínimo: productor
+  shadow fail-open del snapshot con ledger de flujos y benchmark autorizados;
+  no cambiar trading, política, UI ni producción.
+
+## P-L52B-W — implementación shadow EOD contable (candidato 0.4.190)
+
+- Worktree aislado: `C:\Antonio\Bref\agenteBolsa_worktrees\pl52b_eod_snapshot_impl`;
+  rama `codex/pl52b-eod-snapshot-impl`; base P-L52B-T `609183e1`.
+- Implementados el módulo `canonical_eod_account_snapshot`, evento
+  `canonical_eod_account_snapshot:<session_date>`, persistencia append-only,
+  lector/digest/health/CLI y stage PMR después de P-L48/P-L51 y antes de
+  performance. La ruta activa y los archivos protegidos permanecen intactos.
+- Commits: `57ec7b7f` feature, `eb17d582` tests, `4e868109` QA de freshness.
+  Las 32 pruebas del lote pasan y Ruff/diff también.
+- Dictamen: `ready_for_integration_rehearsal`. Antes de cualquier promoción
+  deben verificarse con XNYS cerrado el PMR terminal, suite completa, P-L45B2,
+  smoke aislado seguro, configuración/kernel y paridad final. No cambiar
+  thresholds, sizing, ranking, gates, stops, política ni producción.
+
+## P-L52BR1 — ensayo integrado P-L51C + P-L52B (candidato 0.4.190)
+
+- Worktree/rama: `C:\Antonio\Bref\agenteBolsa_worktrees\pl52br1_integration_rehearsal`,
+  `codex/pl52br1-integration-rehearsal`, base `76381496`.
+- Merge `--no-ff` P-L52B-W: `36bdd366`; correccion QA separada: `932c648a`.
+- Se verifico reconciliation -> P-L48 -> P-L51 -> P-L52 -> performance ->
+  measurement -> thesis -> terminal, con una sola construccion/persistencia y
+  reutilizacion del objeto P-L52.
+- La QA E2E corrigio la perdida de allocations exactas P-L51 en P-L52. El fix
+  conserva IDs de lote y deja null cualquier importe que no sea explicito;
+  multi-lote no se prorratea. No cambia trading ni request broker.
+- Resultado: `1899 passed, 1 skipped, 1 warning`; P-L45B2 33.336 incluido y
+  pasado; QA nueva 3 y volumen 100 sesiones/1000 operaciones sin locks. Ruff,
+  NUL, diff y config verdes. Smoke CLI queda `smoke_unavailable_by_safety`;
+  sustituto PMR aislado verde.
+- Dictamen: `ready_for_closed_market_deployment`, sin despliegue ni push. La
+  promocion requiere tarea operativa separada, preflight nuevo y autorizacion
+  humana; produccion/candidatos originales permanecen intactos.
+## P-L51CR2 - correccion de regresiones temporales de provenance (22-jul-2026)
+
+- Worktree aislado desde P-L52BR1: `pl51cr2_exact_provenance_fix`, rama
+  `codex/pl51cr2-exact-provenance-fix`, base `134ec525`, version conservada
+  `0.4.190` porque no hubo cambio en `src/`.
+- Los tres fallos heredados compartian una fixture sin reloj congelado:
+  `created_at` caia el 22-jul mientras la sesion consultada era 21-jul. El
+  productor P-L48 filtraba correctamente; no se perdio carrier en produccion.
+- Commits separados: `9a7b46d2` caracterizacion y `494e6515` correccion de las
+  fixtures. Los tres tests pasan; focales `239 passed`; suite segura
+  `1900 passed, 1 deselected`.
+- Ruff/NUL/diff/configuracion/kernel productivo y P-L45B2 verdes. No se
+  modificaron archivos protegidos, produccion, servicios, SQLite productiva ni
+  candidatos. No hubo despliegue ni push.
+- Dictamen: `ready_for_reintegration`. Siguiente lote unico: reintentar
+  P-L53BR1 sobre este fix como candidato posterior 0.4.192.
+
+## P-L53B-W - ledger canónico shadow de selección por ciclo (candidato 0.4.191)
+
+- Implementado en `pl53b_selection_ledger_impl`, rama
+  `codex/pl53b-selection-ledger-impl`, desde la base exacta P-L53B-T
+  `4ec81a0c`. Reserva funcional `0.4.191`.
+- Captura el universo completo de fase A y los objetos exactos de
+  recomendaciones, gates, planes y órdenes de fase B. `signal_capture_id`
+  prevalece sobre `signal_id`; símbolo/fecha y `source_run_id + symbol` no son
+  identidad.
+- Persistencia append-only en `agent_events`, hash estable sin `captured_at`,
+  `BEGIN IMMEDIATE` corto, idempotencia y conflictos separados. Fail-open y
+  sin autoridad sobre trading.
+- Commits: `e5ace319` feature y `eea3794a` tests/paridad. Documentación
+  consolidada pendiente del commit documental P-L53B-W.
+- QA focal P-L53B-T/W: 28 passed; suite completa y smoke quedan pendientes
+  para mercado cerrado con precondiciones operativas verificadas. Siguiente
+  lote único: ensayo integrado P-L53BR1 aislado.
+
+## P-L53BR1 - ensayo integrado P-L53B-W sobre P-L52BR1 (22-jul-2026)
+
+- Worktree `pl53br1_integration_rehearsal`, rama
+  `codex/pl53br1-integration-rehearsal`, base exacta `134ec525`; merge
+  `fc4eb767` con `--no-ff`, versión final `0.4.191`.
+- Se comprobó la ruta de mercado P-L49/P-L50/P-L53 y el PMR P-L48/P-L51/P-L52.
+  P-L53 reutiliza el contexto rankeado y finaliza después del envío activo,
+  sin autoridad sobre trading ni entrada en el pipeline PMR.
+- QA integrada y volumen 100x500 verdes; la suite segura final obtuvo
+  `1928 passed, 4 deselected`. Las cuatro exclusiones son el test de SQLite
+  productiva y tres fallos heredados reproducidos en el padre P-L52BR1; no se
+  añadieron skips/xfails.
+- Ruff, NUL, diff, versión, configuración y kernel productivo sellado verdes.
+  Producción, SQLite productiva, servicios y candidatos originales intactos;
+  no hubo despliegue ni push.
+- Dictamen del ensayo: `needs_fix` por la deuda heredada P-L51/P-L51C.
+
+## P-L53BR2 - reensayo limpio de P-L53 sobre P-L51CR2 (22-jul-2026)
+
+- Base `2da5ccda`, tree `cdf34263`; merge `--no-ff` `3b2ae0bf` desde P-L53BR1.
+  Worktree `pl53br2_integration_rehearsal`, rama
+  `codex/pl53br2-integration-rehearsal`, version final `0.4.191`.
+- Gate de las tres fixtures temporales: `3 passed`. QA adicional
+  `2bb92a4b`/`165ad748`; fixture concurrente estabilizada en `ff6267a0`, sin
+  cambio en src.
+- P-L53 conserva la ruta shadow y queda fuera del PMR; identidades, cap,
+  truncation/maturity, fail-open y paridad verificados.
+- BR2: 100x500 mas escalas 250/500/1000; 109 eventos/conexiones/transacciones,
+  uno por ciclo; evento p50/max `757177`, memoria pico `17066653`, WAL `0`,
+  shadow p50 `511.6280 ms`. Riesgo `medium` por tamano/latencia, con
+  persistencia despues del envio y sin locks.
+- Suite final: `1933 passed, 1 deselected, 1 warning` en 753.78 s, incluyendo
+  P-L45 de 33.336 filas. Unico deselect:
+  `tests/test_pre_earnings.py::test_score_study_regression_current_sqlite`,
+  que abre SQLite productiva; no se anadieron skips/xfails.
+- Smoke real queda `smoke_unavailable_by_safety`. Sin produccion, SQLite
+  productiva, servicios, reinicio, despliegue ni push.
+- Dictamen: `ready_for_closed_market_deployment` como candidato no desplegado;
+  siguiente paso unico: preflight operativo y autorizacion humana.
+  Siguiente lote único: corregir esos tres focales y repetir la suite cerrada;
+  P-L53 permanece shadow y no se cambia política de trading.

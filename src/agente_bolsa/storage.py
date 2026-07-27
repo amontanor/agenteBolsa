@@ -25,7 +25,11 @@ ORDER_PLAN_STATUS_PENDING = "PENDING"
 ORDER_PLAN_STATUS_SUBMITTED = "SUBMITTED"
 ORDER_PLAN_STATUS_EXPIRED = "EXPIRED"
 DEFAULT_LEARNING_OBSERVATION_BATCH_SIZE = 250
-LEARNING_PENALTY_CYCLE_SCHEMA = "p-l44b.learning-penalty-cycle-shadow.v1"
+LEARNING_PENALTY_CYCLE_SCHEMA = "p-l44b.learning-penalty-cycle-shadow.v2"
+LEARNING_PENALTY_CYCLE_SCHEMAS = {
+    "p-l44b.learning-penalty-cycle-shadow.v1",
+    LEARNING_PENALTY_CYCLE_SCHEMA,
+}
 LEARNING_PENALTY_CYCLE_EVENT_TYPE = "learning_penalty_cycle_shadow"
 
 
@@ -1210,6 +1214,355 @@ class Store:
         finally:
             conn.close()
 
+    def record_exit_lot_provenance(
+        self,
+        payload: dict[str, Any],
+        *,
+        event_id: str,
+    ) -> dict[str, Any]:
+        """Persist one exact exit carrier without replacing its original."""
+
+        from .tools.exit_lot_provenance import carrier_content_hash
+
+        encoded = _dumps(payload)
+        candidate_hash = carrier_content_hash(payload)
+        now = _utc_iso()
+        conn = self.connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT payload_json FROM agent_events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+            if existing is not None:
+                try:
+                    existing_payload = json.loads(existing["payload_json"] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    existing_payload = {}
+                existing_hash = carrier_content_hash(existing_payload)
+                if existing_hash == candidate_hash:
+                    conn.commit()
+                    return {"status": "idempotent", "event_id": event_id, "content_hash": candidate_hash}
+                conflict_id = f"{event_id}:conflict:{candidate_hash}"
+                conn.execute(
+                    "INSERT OR IGNORE INTO agent_events (event_id, agent, event_type, cycle_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        conflict_id,
+                        "p51c_provenance",
+                        "exit_lot_provenance_conflict",
+                        None,
+                        _dumps(
+                            {
+                                "schema_version": payload.get("schema_version"),
+                                "event_id": event_id,
+                                "existing_content_hash": existing_hash,
+                                "candidate_content_hash": candidate_hash,
+                                "status": "conflict",
+                            }
+                        ),
+                        now,
+                    ),
+                )
+                conn.commit()
+                return {
+                    "status": "conflict",
+                    "event_id": event_id,
+                    "conflict_event_id": conflict_id,
+                    "existing_content_hash": existing_hash,
+                    "candidate_content_hash": candidate_hash,
+                }
+            conn.execute(
+                "INSERT INTO agent_events (event_id, agent, event_type, cycle_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (event_id, "p51c_provenance", "exit_lot_provenance", None, encoded, now),
+            )
+            conn.commit()
+            return {"status": "inserted", "event_id": event_id, "content_hash": candidate_hash}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def record_data_quality_decision_shadow(
+        self,
+        payload: dict[str, Any],
+        *,
+        event_id: str,
+    ) -> dict[str, Any]:
+        """Persist one P-L49B event in a short append-only transaction."""
+
+        encoded = _dumps(payload)
+        candidate_hash = str(payload.get("content_hash") or "")
+        cycle_id = str(payload.get("cycle_id") or "") or None
+        now = _utc_iso()
+        conn = self.connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT payload_json FROM agent_events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+            if existing is not None:
+                try:
+                    existing_payload = json.loads(existing["payload_json"] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    existing_payload = {}
+                existing_hash = str(existing_payload.get("content_hash") or "")
+                if existing_hash and existing_hash == candidate_hash:
+                    conn.commit()
+                    return {"status": "idempotent", "event_id": event_id, "content_hash": candidate_hash}
+                conflict_id = f"{event_id}:conflict:{candidate_hash or 'unknown'}"
+                conflict_payload = {
+                    "schema_version": payload.get("schema_version"),
+                    "event_id": event_id,
+                    "cycle_id": cycle_id,
+                    "existing_content_hash": existing_hash or None,
+                    "candidate_content_hash": candidate_hash or None,
+                    "status": "conflict",
+                }
+                conn.execute(
+                    "INSERT OR IGNORE INTO agent_events (event_id, agent, event_type, cycle_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (conflict_id, "market_data_researcher", "data_quality_decision_shadow_conflict", cycle_id, _dumps(conflict_payload), now),
+                )
+                conn.commit()
+                return {
+                    "status": "conflict",
+                    "event_id": event_id,
+                    "conflict_event_id": conflict_id,
+                    "existing_content_hash": existing_hash or None,
+                    "candidate_content_hash": candidate_hash or None,
+                }
+            conn.execute(
+                "INSERT INTO agent_events (event_id, agent, event_type, cycle_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (event_id, "market_data_researcher", "data_quality_decision_shadow", cycle_id, encoded, now),
+            )
+            conn.commit()
+            return {"status": "inserted", "event_id": event_id, "content_hash": candidate_hash}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def record_canonical_trade_attribution(
+        self,
+        payload: dict[str, Any],
+        *,
+        event_id: str,
+    ) -> dict[str, Any]:
+        """Persist P-L51B attribution in one short append-only transaction."""
+
+        encoded = _dumps(payload)
+        candidate_hash = str(payload.get("content_hash") or "")
+        event_type = "canonical_trade_attribution"
+        cycle_id = payload.get("cycle_id")
+        now = _utc_iso()
+        conn = self.connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT payload_json FROM agent_events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+            if existing is not None:
+                try:
+                    existing_payload = json.loads(existing["payload_json"] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    existing_payload = {}
+                existing_hash = str(existing_payload.get("content_hash") or "")
+                if candidate_hash and candidate_hash == existing_hash:
+                    conn.commit()
+                    return {"status": "idempotent", "event_id": event_id, "content_hash": candidate_hash}
+                conflict_id = f"{event_id}:conflict:{candidate_hash or 'unknown'}"
+                conflict_payload = {
+                    "schema_version": payload.get("schema_version"),
+                    "event_id": event_id,
+                    "existing_content_hash": existing_hash or None,
+                    "candidate_content_hash": candidate_hash or None,
+                    "status": "conflict",
+                }
+                conn.execute(
+                    "INSERT OR IGNORE INTO agent_events (event_id, agent, event_type, cycle_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (conflict_id, "p51b_trade_attribution", f"{event_type}_conflict", cycle_id, _dumps(conflict_payload), now),
+                )
+                conn.commit()
+                return {
+                    "status": "conflict",
+                    "event_id": event_id,
+                    "conflict_event_id": conflict_id,
+                    "existing_content_hash": existing_hash or None,
+                    "candidate_content_hash": candidate_hash or None,
+                }
+            conn.execute(
+                "INSERT INTO agent_events (event_id, agent, event_type, cycle_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (event_id, "p51b_trade_attribution", event_type, cycle_id, encoded, now),
+            )
+            conn.commit()
+            return {"status": "inserted", "event_id": event_id, "content_hash": candidate_hash}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def record_canonical_eod_account_snapshot(
+        self,
+        payload: dict[str, Any],
+        *,
+        event_id: str,
+    ) -> dict[str, Any]:
+        """Persist the P-L52B snapshot append-only and conflict-safe."""
+
+        from .tools.canonical_eod_account_snapshot import content_hash
+
+        encoded = _dumps(payload)
+        candidate_hash = str(payload.get("content_hash") or content_hash(payload))
+        event_type = "canonical_eod_account_snapshot"
+        cycle_id = str(payload.get("session_date") or "") or None
+        now = _utc_iso()
+        conn = self.connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT payload_json FROM agent_events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+            if existing is not None:
+                try:
+                    existing_payload = json.loads(existing["payload_json"] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    existing_payload = {}
+                existing_hash = str(existing_payload.get("content_hash") or content_hash(existing_payload))
+                if candidate_hash == existing_hash:
+                    conn.commit()
+                    return {"status": "idempotent", "event_id": event_id, "content_hash": candidate_hash}
+                conflict_id = f"{event_id}:conflict:{candidate_hash or 'unknown'}"
+                conflict_payload = {
+                    "schema_version": payload.get("schema_version"),
+                    "event_id": event_id,
+                    "session_date": payload.get("session_date"),
+                    "existing_content_hash": existing_hash or None,
+                    "candidate_content_hash": candidate_hash or None,
+                    "status": "conflict",
+                }
+                conn.execute(
+                    "INSERT OR IGNORE INTO agent_events (event_id, agent, event_type, cycle_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (conflict_id, "p52b_eod_snapshot", f"{event_type}_conflict", cycle_id, _dumps(conflict_payload), now),
+                )
+                conn.commit()
+                return {
+                    "status": "conflict",
+                    "event_id": event_id,
+                    "conflict_event_id": conflict_id,
+                    "existing_content_hash": existing_hash or None,
+                    "candidate_content_hash": candidate_hash or None,
+                }
+            conn.execute(
+                "INSERT INTO agent_events (event_id, agent, event_type, cycle_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (event_id, "p52b_eod_snapshot", event_type, cycle_id, encoded, now),
+            )
+            conn.commit()
+            return {"status": "inserted", "event_id": event_id, "content_hash": candidate_hash}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def data_quality_decision_shadow_event(self, cycle_id: str) -> dict[str, Any] | None:
+        """Read one P-L49B event without opening a writable transaction."""
+
+        event_id = f"data_quality_decision_shadow:{cycle_id}"
+        conn = self.read_connection()
+        try:
+            row = conn.execute(
+                "SELECT event_id, event_type, cycle_id, payload_json, created_at FROM agent_events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                payload = {}
+            return {
+                "event_id": row["event_id"],
+                "event_type": row["event_type"],
+                "cycle_id": row["cycle_id"],
+                "payload": payload,
+                "created_at": row["created_at"],
+            }
+        finally:
+            self.close_read_connection()
+
+    def data_quality_decision_shadow_events(self, *, limit: int = 50000) -> list[dict[str, Any]]:
+        """Read P-L49B snapshots/conflicts through the mode=ro connection."""
+
+        conn = self.read_connection()
+        try:
+            rows = conn.execute(
+                """
+                SELECT event_id, agent, event_type, cycle_id, payload_json, created_at
+                FROM agent_events
+                WHERE event_type LIKE 'data_quality_decision_shadow%'
+                ORDER BY created_at ASC
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
+            result = []
+            for row in rows:
+                try:
+                    payload = json.loads(row["payload_json"] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    payload = {}
+                result.append(
+                    {
+                        "event_id": row["event_id"],
+                        "agent": row["agent"],
+                        "event_type": row["event_type"],
+                        "cycle_id": row["cycle_id"],
+                        "payload": payload,
+                        "created_at": row["created_at"],
+                    }
+                )
+            return result
+        finally:
+            self.close_read_connection()
+    def canonical_trade_attribution_event(self, session_date: str) -> dict[str, Any] | None:
+        """Read one P-L51B event without rebuilding attribution."""
+
+        event_id = f"canonical_trade_attribution:{session_date}"
+        row = None
+        try:
+            with self.read_connection() as conn:
+                row = conn.execute(
+                    "SELECT event_id, event_type, payload_json, created_at FROM agent_events WHERE event_id = ?",
+                    (event_id,),
+                ).fetchone()
+        finally:
+            self.close_read_connection()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        return {
+            "event_id": row["event_id"],
+            "event_type": row["event_type"],
+            "payload": payload,
+            "created_at": row["created_at"],
+        }
+
+    def canonical_trade_attribution_conflicts(self, session_date: str) -> list[dict[str, Any]]:
+        prefix = f"canonical_trade_attribution:{session_date}:conflict:"
+        return [
+            item
+            for item in self.agent_events(event_type_prefix="canonical_trade_attribution_conflict", limit=50000)
+            if str(item.get("event_id") or "").startswith(prefix)
+        ]
+
     def canonical_operation_telemetry_event(self, session_date: str) -> dict[str, Any] | None:
         """Read one canonical event without recalculating or backfilling."""
 
@@ -1234,6 +1587,232 @@ class Store:
             "payload": payload,
             "created_at": row["created_at"],
         }
+
+    def canonical_eod_account_snapshot_event(self, session_date: str) -> dict[str, Any] | None:
+        """Read the latest P-L52B event for a session without rebuilding it."""
+
+        event_id = f"canonical_eod_account_snapshot:{session_date}"
+        with self.read_connection() as conn:
+            row = conn.execute(
+                "SELECT event_id, event_type, payload_json, created_at FROM agent_events WHERE event_type = ? AND event_id = ?",
+                ("canonical_eod_account_snapshot", event_id),
+            ).fetchone()
+        self.close_read_connection()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        return {
+            "event_id": row["event_id"],
+            "event_type": row["event_type"],
+            "payload": payload,
+            "created_at": row["created_at"],
+        }
+
+    def record_canonical_selection_ledger(
+        self,
+        payload: dict[str, Any],
+        *,
+        event_id: str,
+    ) -> dict[str, Any]:
+        """Persist one P-L53B ledger event append-only and conflict-safe.
+
+        The payload is prepared and hashed by the shadow producer before this
+        method is called.  The short transaction only compares the canonical
+        event and inserts either the original or a separately auditable
+        conflict; it never replaces historical evidence.
+        """
+
+        encoded = _dumps(payload)
+        candidate_hash = str(payload.get("content_hash") or "")
+        event_type = "canonical_selection_ledger"
+        cycle_id = payload.get("cycle_id")
+        now = _utc_iso()
+        conn = self.connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT payload_json FROM agent_events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+            if existing is not None:
+                try:
+                    existing_payload = json.loads(existing["payload_json"] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    existing_payload = {}
+                existing_hash = str(existing_payload.get("content_hash") or "")
+                if candidate_hash and existing_hash == candidate_hash:
+                    conn.commit()
+                    return {
+                        "status": "idempotent",
+                        "event_id": event_id,
+                        "content_hash": candidate_hash,
+                    }
+                conflict_id = f"{event_id}:conflict:{candidate_hash or 'unknown'}"
+                conflict_payload = {
+                    "schema_version": payload.get("schema_version"),
+                    "event_id": event_id,
+                    "cycle_id": cycle_id,
+                    "existing_content_hash": existing_hash or None,
+                    "candidate_content_hash": candidate_hash or None,
+                    "status": "conflict",
+                }
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO agent_events (
+                            event_id, agent, event_type, cycle_id, payload_json, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            conflict_id,
+                            "selection_ledger_shadow",
+                            f"{event_type}_conflict",
+                            cycle_id,
+                            _dumps(conflict_payload),
+                            now,
+                        ),
+                    )
+                except sqlite3.IntegrityError:
+                    # A retry of the same conflict is itself idempotent.  Do
+                    # not overwrite or reinterpret the original event.
+                    pass
+                conn.commit()
+                return {
+                    "status": "conflict",
+                    "event_id": event_id,
+                    "conflict_event_id": conflict_id,
+                    "existing_content_hash": existing_hash or None,
+                    "candidate_content_hash": candidate_hash or None,
+                }
+            conn.execute(
+                """
+                INSERT INTO agent_events (
+                    event_id, agent, event_type, cycle_id, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (event_id, "selection_ledger_shadow", event_type, cycle_id, encoded, now),
+            )
+            conn.commit()
+            return {
+                "status": "inserted",
+                "event_id": event_id,
+                "content_hash": candidate_hash,
+            }
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def canonical_selection_ledger_event(self, cycle_id: str) -> dict[str, Any] | None:
+        """Read one canonical selection ledger event without reconstruction."""
+
+        if not self.database_path.exists():
+            return None
+        event_id = f"canonical_selection_ledger:{cycle_id}"
+        try:
+            with self.read_connection() as conn:
+                row = conn.execute(
+                    "SELECT event_id, event_type, payload_json, created_at FROM agent_events WHERE event_id = ?",
+                    (event_id,),
+                ).fetchone()
+        finally:
+            self.close_read_connection()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        return {
+            "event_id": row["event_id"],
+            "event_type": row["event_type"],
+            "payload": payload,
+            "created_at": row["created_at"],
+        }
+
+    def canonical_eod_account_snapshot_conflicts(self, session_date: str) -> list[dict[str, Any]]:
+        prefix = f"canonical_eod_account_snapshot:{session_date}:conflict:"
+        return [
+            item
+            for item in self.agent_events(event_type_prefix="canonical_eod_account_snapshot_conflict", limit=50000)
+            if str(item.get("event_id") or "").startswith(prefix)
+        ]
+
+    def latest_canonical_selection_ledger_event(self) -> dict[str, Any] | None:
+        """Read the newest canonical ledger event, without aggregating rows."""
+
+        if not self.database_path.exists():
+            return None
+        try:
+            with self.read_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT event_id, event_type, payload_json, created_at
+                    FROM agent_events
+                    WHERE event_type = ?
+                    ORDER BY created_at DESC, event_id DESC
+                    LIMIT 1
+                    """,
+                    ("canonical_selection_ledger",),
+                ).fetchone()
+        finally:
+            self.close_read_connection()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        return {
+            "event_id": row["event_id"],
+            "event_type": row["event_type"],
+            "payload": payload,
+            "created_at": row["created_at"],
+        }
+
+    def canonical_selection_ledger_conflicts(
+        self,
+        cycle_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read selection-ledger conflicts separately from canonical events."""
+
+        if not self.database_path.exists():
+            return []
+        query = """
+            SELECT event_id, event_type, cycle_id, payload_json, created_at
+            FROM agent_events
+            WHERE event_type = ?
+        """
+        params: list[Any] = ["canonical_selection_ledger_conflict"]
+        if cycle_id is not None:
+            query += " AND cycle_id = ?"
+            params.append(cycle_id)
+        query += " ORDER BY created_at ASC, event_id ASC"
+        try:
+            with self.read_connection() as conn:
+                rows = conn.execute(query, tuple(params)).fetchall()
+        finally:
+            self.close_read_connection()
+        conflicts: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                payload = {}
+            conflicts.append(
+                {
+                    "event_id": row["event_id"],
+                    "event_type": row["event_type"],
+                    "cycle_id": row["cycle_id"],
+                    "payload": payload,
+                    "created_at": row["created_at"],
+                }
+            )
+        return conflicts
 
     def record_time_stop_shadow_observation(
         self,
@@ -1440,6 +2019,7 @@ class Store:
         event_type = "learning_penalty_cycle_shadow"
         conflict_type = "learning_penalty_cycle_shadow_conflict"
         with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             existing = conn.execute(
                 "SELECT payload_json FROM agent_events WHERE event_id = ?",
                 (event_id,),
@@ -1556,6 +2136,7 @@ class Store:
 
         rows = self.agent_events(event_type_prefix=LEARNING_PENALTY_CYCLE_EVENT_TYPE, limit=limit)
         by_cycle: dict[str, dict[str, Any]] = {}
+        schema_versions: dict[str, int] = {}
         generic_ignored = 0
         invalid_canonical = 0
         idempotent_duplicates = 0
@@ -1574,7 +2155,8 @@ class Store:
             if not event_id or event_id != expected_event_id or not isinstance(payload, dict):
                 generic_ignored += 1
                 continue
-            if payload.get("schema_version") != LEARNING_PENALTY_CYCLE_SCHEMA or str(payload.get("cycle_id") or "") != cycle_id:
+            schema_version = str(payload.get("schema_version") or "")
+            if schema_version not in LEARNING_PENALTY_CYCLE_SCHEMAS or str(payload.get("cycle_id") or "") != cycle_id:
                 invalid_canonical += 1
                 continue
             supplied_hash = str(payload.get("content_hash") or "")
@@ -1593,6 +2175,7 @@ class Store:
             existing = by_cycle.get(cycle_id)
             if existing is None:
                 by_cycle[cycle_id] = enriched
+                schema_versions[schema_version] = schema_versions.get(schema_version, 0) + 1
             elif str(existing.get("content_hash") or "") == supplied_hash:
                 idempotent_duplicates += 1
             else:
@@ -1606,6 +2189,7 @@ class Store:
             "invalid_canonical_rows": invalid_canonical,
             "idempotent_duplicates": idempotent_duplicates,
             "conflicts": conflicts,
+            "schema_versions": schema_versions,
         }
 
     def learning_penalty_cycle_shadow_events(self, *, limit: int = 50000) -> list[dict[str, Any]]:
@@ -4509,6 +5093,32 @@ class Store:
                 remaining_qty = max(0.0, submitted_qty - filled_qty)
             plan = payload.get("plan") or {}
             symbol = str(row["symbol"] or "").upper()
+            explicit_fill_rows: list[dict[str, Any]] = []
+            explicit_seen: set[tuple[str, float]] = set()
+            fill_sources = [
+                payload.get("canonical_fill_fragments"),
+                broker.get("canonical_fill_fragments"),
+                (plan.get("payload") or {}).get("canonical_fill_fragments"),
+                execution_snapshot.get("canonical_fill_fragments"),
+            ]
+            for fill_source in fill_sources:
+                if not isinstance(fill_source, list):
+                    continue
+                for fill in fill_source:
+                    if not isinstance(fill, dict):
+                        continue
+                    fill_id = str(fill.get("fill_fragment_id") or fill.get("fill_id") or "").strip()
+                    fill_order_id = str(fill.get("broker_order_id") or "").strip()
+                    fill_side = str(fill.get("side") or "BUY").upper()
+                    fill_qty = _number(fill.get("qty"))
+                    if not fill_id or (fill_order_id and fill_order_id != str(row["broker_order_id"])) or fill_side != "BUY" or fill_qty is None or fill_qty <= 0:
+                        continue
+                    fill_key = (fill_id, fill_qty)
+                    if fill_key in explicit_seen:
+                        continue
+                    explicit_seen.add(fill_key)
+                    explicit_fill_rows.append({"fill_id": fill_id, "qty": fill_qty})
+            plan_payload = plan.get("payload") or {}
             lot = {
                 "broker_order_id": str(row["broker_order_id"] or ""),
                 "order_plan_id": str(row["plan_id"] or plan.get("plan_id") or ""),
@@ -4527,6 +5137,21 @@ class Store:
                 "is_partial": is_partial,
                 "remaining_qty": remaining_qty,
                 "remaining_qty_scope": "order",
+                "canonical_buy_fill_ids": sorted(explicit_fill_rows, key=lambda item: item["fill_id"]) or None,
+                "position_identity": str(
+                    payload.get("position_identity")
+                    or plan_payload.get("position_identity")
+                    or execution_snapshot.get("position_identity")
+                    or ""
+                ).strip()
+                or None,
+                "lot_identity": str(
+                    payload.get("lot_identity")
+                    or plan_payload.get("lot_identity")
+                    or execution_snapshot.get("lot_identity")
+                    or ""
+                ).strip()
+                or None,
                 "plan": plan,
             }
             result.setdefault(symbol, []).append(lot)

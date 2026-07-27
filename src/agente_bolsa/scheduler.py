@@ -40,18 +40,34 @@ from .tools.autonomous_research import build_autonomous_research_report
 from .tools.breakout_scanner import build_breakout_scan, merge_breakout_universe
 from .tools.broker import BrokerClientFactory
 from .tools.broker_reconciliation import reconcile_broker_orders
+from .tools.canonical_eod_account_snapshot import (
+    build_from_postmarket_inputs,
+    persist_canonical_eod_account_snapshot,
+    unavailable_canonical_eod_account_snapshot,
+)
 from .tools.canonical_operation_telemetry import (
     build_canonical_operation_telemetry,
     persist_canonical_operation_telemetry,
 )
+from .tools.canonical_trade_attribution import (
+    build_canonical_trade_attribution,
+    persist_canonical_trade_attribution,
+    unavailable_canonical_trade_attribution,
+)
 from .tools.daily_learning import build_learning_digest_report, load_daily_learning_context
 from .tools.execution import submit_paper_order_plan
+from .tools.exit_lot_provenance import (
+    CARRIER_FIELD,
+    build_exit_lot_provenance,
+    unavailable_exit_lot_provenance,
+)
 from .tools.gate_effectiveness_reporting import publish_gate_effectiveness_postmarket
 from .tools.learning_mode import active_learning_mode, learning_mode_source
 from .tools.learning_penalty_cycle_shadow import (
     build_learning_penalty_cycle_shadow,
     finalize_learning_penalty_cycle_shadow,
     persist_learning_penalty_cycle_shadow,
+    project_learning_penalty_phase_a_context,
 )
 from .tools.learning_scoreboard import build_learning_scoreboard
 from .tools.market_cycle_timing import MarketCycleTiming
@@ -85,7 +101,7 @@ from .tools.pre_earnings import (
 from .tools.reporting import write_json_report
 from .tools.retention import cleanup_runtime_data
 from .tools.rr_cohort import write_rr_cohort_report
-from .tools.signal_learning import record_signal_candidates
+from .tools.signal_learning import prepare_signal_candidate_identities, record_signal_candidates
 from .tools.technical_study import build_closed_market_technical_study
 from .tools.time_stop_policy import (
     POLICY_VERSION as TIME_STOP_POLICY_VERSION,
@@ -747,7 +763,8 @@ def _prepare_learning_penalty_cycle_shadow(
     if not isinstance(ranked_context, dict):
         return None
     try:
-        source = ranked_context.get("all_candidates") or ranked_context.get("ranked_candidates") or []
+        phase_a_context = project_learning_penalty_phase_a_context(ranked_context)
+        source = phase_a_context.get("all_candidates") or phase_a_context.get("ranked_candidates") or []
         buy_items = [
             item
             for item in source
@@ -778,7 +795,7 @@ def _prepare_learning_penalty_cycle_shadow(
         }
         return build_learning_penalty_cycle_shadow(
             run_id,
-            ranked_context,
+            phase_a_context,
             selected_candidates=active_candidates,
             active_candidates=active_candidates,
             configured_capacity=getattr(settings, "max_orders_per_cycle", None),
@@ -1017,6 +1034,8 @@ def _risk_exit_plan(
     level: float,
     source_plan: dict[str, Any],
     time_stop_evidence: dict[str, Any] | None = None,
+    open_buy_lots: list[dict[str, Any]] | None = None,
+    exit_lot_allocations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     exit_policy_payload: dict[str, Any] = {
         "enabled": trigger in {"time_stop_v2", "trailing_stop_v2", "partial_take_profit_v2"},
@@ -1030,7 +1049,7 @@ def _risk_exit_plan(
                 "temporal_evidence": time_stop_evidence or {},
             }
         )
-    return {
+    plan = {
         "plan_id": new_id("risk_exit"),
         "cycle_id": new_id("watch_exit"),
         "symbol": symbol,
@@ -1074,6 +1093,20 @@ def _risk_exit_plan(
         },
         "created_at": "",
     }
+    if open_buy_lots is not None:
+        try:
+            plan["payload"][CARRIER_FIELD] = build_exit_lot_provenance(
+                plan,
+                open_buy_lots,
+                explicit_allocations=exit_lot_allocations,
+            )
+        except Exception as exc:  # noqa: BLE001 - provenance is observational.
+            plan["payload"][CARRIER_FIELD] = unavailable_exit_lot_provenance(
+                plan,
+                f"carrier_build_failed:{type(exc).__name__}",
+                captured_at=datetime.now(timezone.utc),
+            )
+    return plan
 
 
 def _parse_datetime(value: Any) -> datetime | None:
@@ -1489,8 +1522,31 @@ def _execute_stop_take_exits(
             level=level,
             source_plan=source_plan,
             time_stop_evidence=(exit_policy_state or {}).get("time_stop_evidence"),
+            open_buy_lots=buy_lots.get(symbol, []),
         )
         try:
+            carrier = (plan.get("payload") or {}).get(CARRIER_FIELD)
+            if isinstance(carrier, dict):
+                try:
+                    store.record_exit_lot_provenance(
+                        carrier,
+                        event_id=f"exit_lot_provenance:{plan['plan_id']}",
+                    )
+                except Exception as exc:  # noqa: BLE001 - carrier is fail-open.
+                    LOGGER.warning("exit lot provenance persistence unavailable for %s: %s", symbol, exc)
+            try:
+                store.save_order_plan(
+                    plan_id=plan["plan_id"],
+                    cycle_id=plan["cycle_id"],
+                    symbol=symbol,
+                    side="sell",
+                    notional=plan["notional"],
+                    approved=bool(plan["approved"]),
+                    dry_run=bool(plan["dry_run"]),
+                    payload=plan,
+                )
+            except Exception as exc:  # noqa: BLE001 - local shadow must not block exit.
+                LOGGER.warning("risk exit plan provenance save unavailable for %s: %s", symbol, exc)
             order = submit_paper_order_plan(
                 settings,
                 plan,
@@ -2018,6 +2074,11 @@ def market_cycle_job(
             learning_mode_config=active_learning_mode(settings),
             persist_report=False,
         )
+        signal_source = learning_mode_source(settings=settings, default_source="intraday_scan")
+        prepared_signal_identity = prepare_signal_candidate_identities(
+            report,
+            source=signal_source,
+        )
         selected_candidates, selected_symbols = _selected_candidates(report, settings)
         report["selected_candidates"] = selected_candidates
         ranked_context = report.pop("_learning_penalty_ranked_context", None)
@@ -2032,7 +2093,8 @@ def market_cycle_job(
         signals_saved = record_signal_candidates(
             store,
             report,
-            source=learning_mode_source(settings=settings, default_source="intraday_scan"),
+            source=signal_source,
+            prepared_identity=prepared_signal_identity,
         )
         learning_penalty_shadow = _prepare_learning_penalty_cycle_shadow(
             settings,
@@ -2176,6 +2238,7 @@ def market_cycle_job(
             run_id=run_id,
             timing=timing,
             learning_penalty_shadow=learning_penalty_shadow,
+            selection_ledger_phase_a=ranked_context,
         )
         _set_job_status(
             store,
@@ -2292,6 +2355,11 @@ def closed_market_technical_study_job(
         learning_mode_config=active_learning_mode(settings),
         persist_report=False,
     )
+    signal_source = learning_mode_source(settings=settings, default_source="closed_market_study")
+    prepared_signal_identity = prepare_signal_candidate_identities(
+        report,
+        source=signal_source,
+    )
     selected_candidates, selected_symbols = _selected_candidates(report, settings)
     report["selected_candidates"] = selected_candidates
     ranked_context = report.pop("_learning_penalty_ranked_context", None)
@@ -2313,7 +2381,8 @@ def closed_market_technical_study_job(
     signals_saved = record_signal_candidates(
         store,
         report,
-        source=learning_mode_source(settings=settings, default_source="closed_market_study"),
+        source=signal_source,
+        prepared_identity=prepared_signal_identity,
     )
     original_report_path = report.get("path")
     report = write_json_report(
@@ -2427,6 +2496,7 @@ def closed_market_technical_study_job(
                 technical_context=_compact_scan_context(report, selected_candidates),
                 run_id=run_id,
                 learning_penalty_shadow=learning_penalty_shadow,
+                selection_ledger_phase_a=ranked_context,
             )
         except Exception as exc:  # noqa: BLE001 - scheduler must keep running after LLM failures.
             _persist_learning_penalty_cycle_shadow_partial(store, reporter, learning_penalty_shadow, run_id)
@@ -2658,6 +2728,7 @@ def _persist_daily_performance(
     run_id: str,
     portfolio: Any = _PORTFOLIO_UNSET,
     canonical_telemetry: dict[str, Any] | None = None,
+    canonical_eod_snapshot: dict[str, Any] | None = None,
 ) -> None:
     """Calcula y persiste la fila de ``performance_daily`` de la sesion (T0.2).
 
@@ -2678,6 +2749,7 @@ def _persist_daily_performance(
             session_date,
             portfolio=portfolio,
             canonical_telemetry=canonical_telemetry,
+            canonical_eod_snapshot=canonical_eod_snapshot,
         )
         # Mantener los benchmarks/regimen legacy en el payload completo sin
         # volver a consultar mercado ni alterar el contrato nuevo.
@@ -3110,6 +3182,79 @@ def post_market_review_job(
         if isinstance(report, dict):
             report["canonical_operation_telemetry"] = canonical_telemetry
         coordinator.stage(lease, current_stage, "completed")
+        current_stage = "canonical_trade_attribution"
+        coordinator.stage(lease, current_stage, "started")
+        attribution_persistence: dict[str, Any] | None = None
+        try:
+            canonical_trade_attribution = build_canonical_trade_attribution(
+                canonical_telemetry,
+                session_date,
+            )
+        except Exception as exc:  # noqa: BLE001 - shadow producer is fail-open.
+            canonical_trade_attribution = unavailable_canonical_trade_attribution(
+                session_date,
+                warning=f"producer_failed:{type(exc).__name__}",
+            )
+            log_system_event(
+                settings.logs_dir,
+                "canonical_trade_attribution_build_failed",
+                {"error": repr(exc), "session_date": session_date},
+            )
+        try:
+            attribution_persistence = persist_canonical_trade_attribution(
+                store,
+                canonical_trade_attribution,
+            )
+        except Exception as exc:  # noqa: BLE001 - attribution is observational and fail-open.
+            canonical_trade_attribution.setdefault("warnings", []).append(
+                f"persistence_failed:{type(exc).__name__}"
+            )
+            log_system_event(
+                settings.logs_dir,
+                "canonical_trade_attribution_persistence_failed",
+                {"error": repr(exc), "session_date": session_date},
+            )
+        if isinstance(report, dict):
+            report["canonical_trade_attribution"] = canonical_trade_attribution
+            report["canonical_trade_attribution_persistence"] = attribution_persistence
+        coordinator.stage(lease, current_stage, "completed")
+        current_stage = "canonical_eod_account_snapshot"
+        coordinator.stage(lease, current_stage, "started")
+        eod_persistence: dict[str, Any] | None = None
+        try:
+            canonical_eod_snapshot = build_from_postmarket_inputs(
+                session_date,
+                portfolio=portfolio,
+                canonical_telemetry=canonical_telemetry,
+                canonical_trade_attribution=canonical_trade_attribution,
+                report=report,
+            )
+        except Exception as exc:  # noqa: BLE001 - accounting shadow is fail-open.
+            canonical_eod_snapshot = unavailable_canonical_eod_account_snapshot(
+                session_date,
+                warning=f"producer_failed:{type(exc).__name__}",
+            )
+            log_system_event(
+                settings.logs_dir,
+                "canonical_eod_account_snapshot_build_failed",
+                {"error": repr(exc), "session_date": session_date},
+            )
+        try:
+            eod_persistence = persist_canonical_eod_account_snapshot(store, canonical_eod_snapshot)
+            canonical_eod_snapshot["persistence"] = eod_persistence
+        except Exception as exc:  # noqa: BLE001 - accounting shadow is fail-open.
+            canonical_eod_snapshot.setdefault("warnings", []).append(
+                f"persistence_failed:{type(exc).__name__}"
+            )
+            log_system_event(
+                settings.logs_dir,
+                "canonical_eod_account_snapshot_persistence_failed",
+                {"error": repr(exc), "session_date": session_date},
+            )
+        if isinstance(report, dict):
+            report["canonical_eod_account_snapshot"] = canonical_eod_snapshot
+            report["canonical_eod_account_snapshot_persistence"] = eod_persistence
+        coordinator.stage(lease, current_stage, "completed")
         # La foto de cartera y performance_daily deben existir antes del
         # digest final de medición; el productor es fail-open y no altera el
         # resultado principal si la observabilidad no está disponible.
@@ -3123,6 +3268,7 @@ def post_market_review_job(
             run_id,
             portfolio=portfolio,
             canonical_telemetry=canonical_telemetry,
+            canonical_eod_snapshot=canonical_eod_snapshot,
         )
         coordinator.stage(lease, current_stage, "completed")
         current_stage = "measurement_pipeline"

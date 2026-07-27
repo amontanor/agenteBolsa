@@ -93,7 +93,9 @@ def test_missing_signal_is_unavailable_and_well_does_not_block_other_candidates(
     counts = snapshot["candidate_counts"]
     assert counts["identity_unavailable"] == 1
     assert counts["identity_verified"] == 1
-    assert counts["shadow_inputs_unavailable"] == 1
+    # v2 keeps identity and input denominators independent: the missing WELL
+    # identity and the identified row without scoring inputs are both input-unavailable.
+    assert counts["shadow_inputs_unavailable"] == 2
     assert "WELL" not in json.dumps(snapshot)
 
 
