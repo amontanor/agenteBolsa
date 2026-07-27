@@ -601,13 +601,10 @@ cerrada.
 - Informe unico sin secciones duplicadas. Caracterizacion cerrada.
 - Siguiente: P-L59C.
 
-## P-L59C-R4 - autoridad prospectiva estructurada de llm_selected (27-jul-2026)
+## P-L59C-R5 - autoridad prospectiva estructurada de llm_selected (27-jul-2026)
 
-- Dictamen: **`ready_for_integration_rehearsal`** (R4 corregido). XNYS abierto, 20:30 CEST.
-- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59c_llm_selection_producer`,
-  rama `codex/pl59c-llm-selection-producer`, base `49059f18`, version `0.4.196`.
-- R4: normalizador context-aware. Strip solo llm_selected global, content_hash+captured_at
-  en DCS/comparable_control_set. snapshot_id conservado, external hashes sobreviven.
-- R2 baseline 278. R4: 14 integration + 45 authority. Ruff/NUL/diff verdes.
+- Dictamen: **`ready_for_integration_rehearsal`** (R5 corregido). XNYS abierto, 20:30 CEST.
+- R5: strip solo en raiz DCS/CCS (no propaga a subbloques). Test unitario ampliado.
+  R2 baseline 278. R5: 14 integration. Ruff/NUL/diff verdes.
 - Brecha P-L53 recommendation_id sigue abierta.
 - Siguiente: P-L59D rehearsal de integracion.

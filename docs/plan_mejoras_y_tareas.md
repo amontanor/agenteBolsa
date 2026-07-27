@@ -2528,16 +2528,14 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Seccion stale 2255/2266 eliminada del informe. Caracterizacion cerrada.
 - Siguiente: P-L59C (no iniciado).
 
-## P-L59C-R4 - autoridad prospectiva estructurada de llm_selected (27-jul-2026)
+## P-L59C-R5 - autoridad prospectiva estructurada de llm_selected (27-jul-2026)
 
-- Dictamen: **`ready_for_integration_rehearsal`** (R4 corregido). XNYS abierto, 20:30 CEST.
-- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59c_llm_selection_producer`,
-  rama `codex/pl59c-llm-selection-producer`, base `49059f18`, version `0.4.196`.
-- R4: normalizador context-aware (llm_selected global; content_hash+captured_at
-  solo en decision_context_snapshot y comparable_control_set). snapshot_id
-  conservado. External hashes/timestamps sobreviven. Test unitario del strip.
-- R2 baseline: 278 tests (9 archivos). R4: 14 integration + 45 authority.
-  Ruff/NUL/diff/compile/config verdes.
+- Dictamen: **`ready_for_integration_rehearsal`** (R5 corregido). XNYS abierto, 20:30 CEST.
+- Worktree y rama: igual, version `0.4.196`.
+- R5: strip solo en raiz DCS/CCS (no propaga a subbloques nested).
+  Test unitario con market_state_ref, gate_evaluation anidados.
+- R2 baseline 278. R5 post-cambio: 14 integration.
+  Ruff/NUL/diff verdes.
 - Brecha P-L53 recommendation_id sigue abierta.
 - Gates omitidos (XNYS abierto): suite, smoke, benchmark, P-L45.
 - Siguiente: P-L59D rehearsal de integracion.
