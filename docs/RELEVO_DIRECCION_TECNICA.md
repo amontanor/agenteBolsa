@@ -5,6 +5,23 @@
 > desplegado; P-L57A queda conservado dentro del historial.
 > P-L48B sigue desplegado y P-L44B sigue en shadow.
 
+> P-L54B-T (27-jul-2026): caracterizacion aislada completada en
+> `C:\Antonio\Bref\agenteBolsa_worktrees\pl54bt_capital_funnel_characterization`,
+> rama `codex/pl54bt-capital-funnel-characterization`, desde P-L58R1 exacto.
+> Dictamen `ready_for_p54b_implementation`: el productor real queda trazado
+> hasta `save_order_plan`/`save_broker_order`, pero target exposure y notional
+> objetivo no tienen autoridad estructurada y deben permanecer
+> `unavailable`. La fixture 376 -> 15 -> 15 y la bateria focal pasan; no hubo
+> cambios en src, produccion ni politica. Siguiente paso: implementar el
+> shadow en worktree separado, sin desplegar.
+
+> P-L54B-T-R1 (27-jul-2026): se corrigieron las invariantes del contrato sin
+> tocar src. El snapshot anterior permitia risk-approved=135 y risk-rejected=80
+> con gates-passed=135, y 135.000 USD de notional no alcanzable. La tabla
+> cerrada es 376 -> 306 -> 256 -> 95 -> 15, con 361 caidas y 15 planes.
+> Dictamen: `ready_for_p54b_implementation`. El siguiente lote unico es
+> implementar el productor shadow en worktree separado.
+
 > P-L58R1-Retry (27-jul-2026): worktree
 > `C:\Antonio\Bref\agenteBolsa_worktrees\pl58r1_measurement_safety_rehearsal`,
 > rama `codex/pl58r1-measurement-safety-rehearsal`, HEAD final posterior al
@@ -502,3 +519,32 @@ Siguiente lote único: P-L53BR1, ensayo integrado aislado desde el candidato
   tres focales heredados y repetir suite/preflight cerrado. Producción,
   servicios, SQLite productiva, locks y candidatos originales permanecen
   intactos; no hubo reinicio, despliegue ni push.
+
+## P-L54B-W - relevo del candidato 0.4.194
+
+- Worktree aislado: `C:\Antonio\Bref\agenteBolsa_worktrees\pl54bw_capital_funnel_shadow`;
+  rama `codex/pl54bw-capital-funnel-shadow`; base `20e8be04`; version 0.4.194.
+- El productor shadow captura transiciones ya decididas y persiste un unico
+  evento por `cycle_id` despues de la ruta activa. No tiene autoridad sobre
+  seleccion, gates, sizing, RiskManager, planes, ordenes o exposicion.
+- Persistencia append-only, hash sin `captured_at`, idempotencia y conflictos
+  separados. Lector/CLI devuelven `collecting` con denominadores null cuando
+  no existe evento. Target exposure permanece unavailable sin autoridad.
+- QA focal P-L54B-T/R1/W: 33 passed; quedan pendientes suite completa, smoke,
+  prueba P-L45 larga y ensayo integrado cerrado P-L54BR1. No desplegar ni hacer
+  push desde este lote.
+
+## P-L54B-R1 - relevo de identidad de decision
+
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl54br1_decision_identity`;
+  rama `codex/pl54br1-decision-identity`; base `9c8940a0`; version `0.4.194`.
+- La decision canonica es `cycle_id + signal_identity + action +
+  recommendation_id` cuando existe. Repeticion exacta es idempotente; contenido
+  incompatible es conflicto auditable; faltante es partial/ambiguous segun
+  colision. No se adjuntan planes u ordenes por simbolo, fecha o candidato.
+- Stages y notional solo cuentan decision identity verificada y exponen la
+  poblacion excluida. La paridad de la ruta activa no cambia.
+- Commits `de08b9fd`, `8d814934`, `3f85071f`; focales `49 passed` incluyendo
+  P-L54B T/R1/W y cycle funnel. Siguiente paso unico: reintentar P-L54BR1;
+  suite completa y smoke siguen pendientes. Produccion intacta; sin deploy ni
+  push.

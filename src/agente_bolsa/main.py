@@ -2575,6 +2575,21 @@ def command_canonical_selection_ledger(args: argparse.Namespace) -> None:
     print(json.dumps(report, indent=2, ensure_ascii=True, default=str))
 
 
+def command_capital_deployment_funnel(args: argparse.Namespace) -> None:
+    """Read the canonical P-L54B capital funnel without reconstruction."""
+
+    from .tools.capital_deployment_funnel_shadow import capital_deployment_funnel_digest
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    report = capital_deployment_funnel_digest(store, cycle_id=args.cycle_id)
+    if args.json:
+        _print_json({"ok": report.get("status") in {"verified", "partial"}, **report})
+        return
+    print(json.dumps(report, indent=2, ensure_ascii=True, default=str))
+
+
 def command_gate_effectiveness_quality(args: argparse.Namespace) -> None:
     """Read-only P-L32B gate-path coverage diagnostic."""
 
@@ -4013,6 +4028,14 @@ def build_parser() -> argparse.ArgumentParser:
     selection_ledger.add_argument("--cycle-id", help="Filtra por cycle_id exacto.")
     selection_ledger.add_argument("--json", action="store_true", help="Devuelve el ledger en JSON.")
     selection_ledger.set_defaults(func=command_canonical_selection_ledger)
+
+    capital_funnel = subparsers.add_parser(
+        "capital-deployment-funnel",
+        help="Lee el embudo shadow canonico de despliegue de capital (P-L54B).",
+    )
+    capital_funnel.add_argument("--cycle-id", help="Filtra por cycle_id exacto.")
+    capital_funnel.add_argument("--json", action="store_true", help="Devuelve el embudo en JSON.")
+    capital_funnel.set_defaults(func=command_capital_deployment_funnel)
 
     gate_effectiveness = subparsers.add_parser(
         "gate-effectiveness-quality",

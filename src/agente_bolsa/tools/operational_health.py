@@ -1190,6 +1190,17 @@ def build_operational_health_report(
             "freshness": None,
         }
     try:
+        from .capital_deployment_funnel_shadow import capital_deployment_funnel_digest
+
+        report_health["capital_deployment_funnel_shadow"] = capital_deployment_funnel_digest(store)
+    except Exception:  # noqa: BLE001 - capital telemetry is observability only.
+        report_health["capital_deployment_funnel_shadow"] = {
+            "status": "unavailable",
+            "shadow_only": True,
+            "denominators": None,
+            "warnings": ["read_failed"],
+        }
+    try:
         from .data_quality_decision_shadow import data_quality_decision_shadow_digest
 
         # Read-only consumer: it never evaluates a gate and never derives

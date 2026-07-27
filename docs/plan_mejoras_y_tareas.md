@@ -18,6 +18,32 @@
   conserva el estado historico del ensayo individual P-L49B.
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
+## P-L54B-T - caracterizacion del embudo shadow de capital (27-jul-2026)
+
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl54bt_capital_funnel_characterization`,
+  rama `codex/pl54bt-capital-funnel-characterization`, base P-L58R1 exacta,
+  version conservada `0.4.193`.
+- Dictamen: `ready_for_p54b_implementation`. Tests y documentacion solamente;
+  no hay productor shadow ni wiring productivo.
+- La fixture canonica separa 376 recomendaciones BUY, 15 planes y 15
+  ordenes/fills. Exposicion observada 10,85%; target y notional objetivo
+  permanecen `unavailable` si no existe autoridad estructurada.
+- Siguiente paso unico: implementacion shadow aislada del contrato
+  `p-l54b.capital-deployment-funnel-shadow.v1`; no desplegar ni cambiar
+  politica con esta caracterizacion.
+
+## P-L54B-T-R1 - invariantes de alcance y notional (27-jul-2026)
+
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl54btr1_funnel_invariants`,
+  rama `codex/pl54btr1-funnel-invariants`, desde `b99d6fc4`, version 0.4.193.
+- Se reproduce y corrige el snapshot no secuencial: la tabla valida queda
+  selection 376 -> gates 306 -> capacity 145 -> sizing 95 -> risk/plans 15.
+  Caidas primarias exactas: 361; planes/ordenes/fills: 15.
+- El notional risk-approved queda en 15.000 USD con cobertura 15/15; target
+  exposure y notional objetivo siguen unavailable. No se modifica src ni
+  productor.
+- Siguiente paso unico: P-L54B-W sobre este contrato cerrado, en otro lote.
+
 ## P-L58R1 - ensayo combinado de seguridad de medicion (27-jul-2026)
 
 - Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl58r1_measurement_safety_rehearsal`,
@@ -2432,3 +2458,29 @@ de despliegue quedan pendientes con XNYS cerrado.
   siguiente paso unico: preflight operativo y autorizacion humana.
   Siguiente lote único: corregir esos tres focales y repetir la suite cerrada;
   P-L53 permanece shadow y no se cambia política de trading.
+
+## P-L54B-W - embudo shadow de despliegue de capital
+
+- Candidato aislado 0.4.194 desde `20e8be04`; productor fail-open con evento
+  `capital_deployment_funnel_shadow:<cycle_id>` y persistencia append-only.
+- Observa la ruta activa sin recalcular selección, gates, capacity, sizing,
+  RiskManager, planes u órdenes. Identidad exacta por ciclo/señal/acción; no
+  joins por símbolo/fecha.
+- Denominadores y notional conservan cobertura, `null/unavailable`, razones
+  primarias exclusivas y estado de truncation. Target exposure queda
+  unavailable sin autoridad estructurada.
+- Focales P-L54B-T/R1/W: 33 passed; suite completa, smoke y prueba larga quedan
+  pendientes del ensayo integrado cerrado P-L54BR1.
+
+## P-L54B-R1 - correccion de identidad de decision (0.4.194)
+
+- La colision `cycle + signal + action` se reprodujo contra P-L54B-W y se
+  corrigio incorporando `recommendation_id` cuando existe.
+- Decision parcial, ambigua, conflicto de contenido y ciclo inconsistente
+  quedan separados de stages/notional evaluables; no se usa `candidate_id` ni
+  symbol/date como sustituto.
+- Worktree `pl54br1_decision_identity`, rama
+  `codex/pl54br1-decision-identity`; commits `de08b9fd`, `8d814934` y
+  `3f85071f`; version `0.4.194`.
+- QA focal verde; suite completa, smoke y ensayo P-L54BR1 quedan pendientes con
+  XNYS cerrado y precondiciones operativas comprobadas. No desplegar.
