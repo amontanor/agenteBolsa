@@ -2530,7 +2530,14 @@ de despliegue quedan pendientes con XNYS cerrado.
 
 ## P-L59C - autoridad prospectiva estructurada de llm_selected (27-jul-2026)
 
-- Dictamen: **`ready_for_integration_rehearsal`**. XNYS abierto, ~21:00 CEST.
+- Dictamen: **`ready_for_integration_rehearsal`** (corregido R1). XNYS abierto, ~22:00 CEST.
+- P-L59C-R1 corrige: validacion runtime `normalize_llm_selected` (solo bool|None),
+  paridad real `_auto_paper_trade` (True/False/None identicos, sin llamadas extra),
+  fail-open real (build falla y ruta completa).
+- 268 tests totales (37 P-L59C + 27 P-L59B + 12 integration + 15 P-L53 char +
+  13 P-L53 shadow + 27 P-L54 char + 7 P-L54 shadow + 129 trade_decision +
+  1 version policy). 0 fallos, 0 solapes.
+- Ruff/NUL/diff/compile/config verdes.
 - Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59c_llm_selection_producer`,
   rama `codex/pl59c-llm-selection-producer`, base P-L59B-T-R5 `49059f18`.
 - HEAD `0dce08d8`, version `0.4.196`.
