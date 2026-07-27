@@ -559,41 +559,81 @@ def test_wiring_two_recs_same_lineage_ids_assigned_ordered(monkeypatch, tmp_path
         assert lineage.get("action") == "buy"
         assert lineage.get("signal_capture_id") == common_lineage["signal_capture_id"]
 
-    # --- Coherencia adjuntos P-L53: plans y plan_records ---
+    # --- Coherencia adjuntos P-L53: plans (OrderPlan) y plan_records (dict) ---
     p53_plans = p53_kw.get("plans")
     p53_plan_records = p53_kw.get("plan_records")
-    if p53_plans is not None:
-        assert len(p53_plans) == 2, f"P-L53 esperaba 2 plans, recibio {len(p53_plans)}"
-        for plan in p53_plans:
-            plan_rec = plan.recommendation if hasattr(plan, "recommendation") else plan.get("recommendation", {})
-            plan_rec_id = getattr(plan_rec, "recommendation_id", None)
-            assert plan_rec_id in {id_a, id_b}, (
-                f"Cada plan debe apuntar a un recommendation_id de P-L53: {plan_rec_id}"
-            )
-    if p53_plan_records is not None:
+    assert p53_plans is not None and len(p53_plans) == 2
+    p53_plan_ids_from_plans = {
+        p.recommendation.recommendation_id for p in p53_plans
+    }
+    assert p53_plan_ids_from_plans == {id_a, id_b}, (
+        f"P-L53 plans[*].recommendation.recommendation_id debe ser {{{id_a},{id_b}}}, "
+        f"obtenido {p53_plan_ids_from_plans}"
+    )
+    # plan_records: ruta exacta payload.recommendation.recommendation_id (dict anidado)
+    assert p53_plan_records is not None and len(p53_plan_records) == 2
+    p53_pr_ids: set[str] = set()
+    for pr in p53_plan_records:
+        rec_id_val = pr["payload"]["recommendation"]["recommendation_id"]
+        assert rec_id_val is not None
+        p53_pr_ids.add(rec_id_val)
+    assert p53_pr_ids == {id_a, id_b}, (
+        f"P-L53 plan_records[*].payload.recommendation.recommendation_id "
+        f"debe ser {{{id_a},{id_b}}}, obtenido {p53_pr_ids}"
+    )
+    # ordered_records: plan_id enlaza con plan_records; recommendation_id
+    # se obtiene via plan_id -> plan_records -> payload.recommendation
+    p53_ordered = p53_kw.get("ordered_records")
+    if p53_ordered:
+        p53_plan_id_to_rec_id: dict[str, str] = {}
         for pr in p53_plan_records:
-            rec_in_record = pr.get("recommendation") if isinstance(pr, dict) else getattr(pr, "recommendation", None)
-            if rec_in_record is not None:
-                pr_rec_id = getattr(rec_in_record, "recommendation_id", None)
-                assert pr_rec_id in {id_a, id_b, None}, (
-                    f"plan_record debe transportar recommendation_id coherente: {pr_rec_id}"
-                )
+            pid = pr["plan_id"]
+            rid = pr["payload"]["recommendation"]["recommendation_id"]
+            p53_plan_id_to_rec_id[pid] = rid
+        for order in p53_ordered:
+            ord_plan_id = order.get("plan_id")
+            assert ord_plan_id in p53_plan_id_to_rec_id, (
+                f"ordered_record plan_id={ord_plan_id} debe existir en plan_records"
+            )
+            # recommendation_id no viaja directamente en ordered_record;
+            # el join es plan_id -> plan_records. No inventar union por simbolo.
+            assert "recommendation_id" not in order, (
+                "ordered_record no transporta recommendation_id directamente; "
+                "el join es via plan_id"
+            )
 
-    # --- P-L54: recomendaciones + planes ---
+    # --- P-L54: recomendaciones + planes/plan_records ---
     assert len(p54_calls) >= 1
     p54_kw = p54_calls[-1]
     p54_recs = p54_kw.get("recommendations")
     assert p54_recs is not None and len(p54_recs) == 2
-    p54_ids = [getattr(r, "recommendation_id", None) for r in p54_recs]
-    assert set(p54_ids) == {id_a, id_b}, (
-        f"P-L54 debe recibir los mismos recommendation_id que P-L53: {p54_ids} != {{{id_a}, {id_b}}}"
+    p54_rec_ids = {getattr(r, "recommendation_id", None) for r in p54_recs}
+    assert None not in p54_rec_ids
+    assert p54_rec_ids == {id_a, id_b}, (
+        f"P-L54 recommendations deben ser {{{id_a},{id_b}}}, obtenido {p54_rec_ids}"
     )
-    # P-L54 recibe tambien plans (o plan_records)
+    # P-L54 recibe plans (OrderPlan) o plan_records (dict)
     p54_plans = p54_kw.get("plans")
     p54_plan_records = p54_kw.get("plan_records")
     p54_effective = p54_plan_records or p54_plans
-    if p54_effective is not None:
-        assert len(p54_effective) == 2, f"P-L54 esperaba 2 planes/plan_records, recibio {len(p54_effective)}"
+    assert p54_effective is not None and len(p54_effective) == 2
+    # Extraer rec_id segun estructura real
+    p54_transport_ids: set[str] = set()
+    for item in p54_effective:
+        if hasattr(item, "recommendation"):
+            # OrderPlan: item.recommendation.recommendation_id
+            rid = item.recommendation.recommendation_id
+        elif isinstance(item, dict):
+            # plan_record dict: item["payload"]["recommendation"]["recommendation_id"]
+            rid = item["payload"]["recommendation"]["recommendation_id"]
+        else:
+            rid = None
+        assert rid is not None, "P-L54 plan/record sin recommendation_id extraible"
+        p54_transport_ids.add(rid)
+    assert p54_transport_ids == {id_a, id_b}, (
+        f"P-L54 planes/plan_records deben portar {{{id_a},{id_b}}}, "
+        f"obtenido {p54_transport_ids}"
+    )
 
     # --- Coherencia: IDs en gated coinciden con P-L53 y P-L54 ---
     assert len(gated_recs_captured) >= 1
