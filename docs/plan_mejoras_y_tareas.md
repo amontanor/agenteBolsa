@@ -2513,7 +2513,7 @@ de despliegue quedan pendientes con XNYS cerrado.
 - El selector unico ofrece 7/15/30/90/`Desde inicio`; la serie calendario
   filtrada se reutiliza para grafica, Resultado del periodo, porcentaje y
   fechas. P/L abierto mantiene las posiciones cargadas y no hay broker extra.
-- QA: `82 passed` UI/version y `159 passed, 1 warning` relacionados. Ruff,
+- QA: `83 passed` UI/version y `159 passed, 1 warning` relacionados. Ruff,
   NUL, diff, py_compile y configuracion temporal verdes. XNYS abierto impide
   suite completa, smoke y validacion cerrada; sin cambios de trading ni
   despliegue. Se conserva `unconfirmed_sqlite_mutation` como incertidumbre.

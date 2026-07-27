@@ -586,7 +586,7 @@ cerrada.
   ultimo snapshot visible, con orden/deduplicacion deterministas y sin mutar
   la fuente. Grafica y Resultado del periodo comparten la misma serie; P/L
   abierto reutiliza posiciones ya cargadas.
-- QA focal: `82 passed`; relacionados: `159 passed, 1 warning`; Ruff, NUL,
+- QA focal: `83 passed`; relacionados: `159 passed, 1 warning`; Ruff, NUL,
   diff, py_compile y config temporal verdes. Con XNYS abierto quedan
   pendientes suite completa, smoke y validacion cerrada. No hubo broker, red,
   SQLite productiva, despliegue ni push. La incertidumbre historica

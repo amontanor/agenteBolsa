@@ -86,7 +86,7 @@ SQLite ni autoridad sobre trading. Commit funcional: `9ad9775c`.
   calendario del ultimo snapshot, con orden estable y deduplicacion sin mutar
   la serie original. La misma serie visible alimenta grafica y resultado del
   periodo; P/L abierto usa las posiciones ya cargadas.
-- QA focal UI/versionado: `82 passed`; bateria relacionada P-L43/P-L48--P-L54/
+- QA focal UI/versionado: `83 passed`; bateria relacionada P-L43/P-L48--P-L54/
   P-L57 y helpers de presentacion: `159 passed, 1 warning`. Ruff, NUL,
   `git diff --check`, py_compile y `validate-agent-config --json` temporal
   pasaron. No se anadieron pruebas redundantes, skips ni xfails.
