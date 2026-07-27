@@ -1,144 +1,164 @@
-# P-L59B-T-R5 — informe único final
+# P-L59C — autoridad prospectiva estructurada de llm_selected
 
-## Dictamen único
+## Dictamen
 
-**`needs_fix`**
+`ready_for_integration_rehearsal`.
 
-### Causa
+La autoridad `llm_selected` nace ahora en el productor que conoce el resultado
+estructurado de seleccion LLM, se propaga por `TradeRecommendation` →
+`decision_context_snapshot` → carrier (`cycle_runner`) → P-L53
+(`canonical_selection_ledger`), y se persiste en `Store` con el contrato
+append-only existente. El proxy textual `source="llm" -> True` desaparece.
+Telemetria shadow/fail-open; sin cambio de seleccion, prompts, ranking, gates,
+sizing, planes, ordenes, exposicion, limites ni politica activa.
 
-**(a) `llm_selected`**: el candidato P-L60R1 deriva este campo exclusivamente
-de `decision_source` en `canonical_selection_ledger.py:383`. No existe un
-booleano independiente sellado en la etapa de decisión. Fuentes no reconocidas
-se normalizan a `"other"` y reciben `False` en vez de `None`/`unavailable`. La
-derivación es determinista pero `llm_selected` no demuestra selección LLM
-causal: `True` = "la recomendación fue generada por el agente LLM", no "el
-LLM eligió este candidato". `False` colapsa capacity-fill con fallback.
+## Base y candidato
 
-**(b) Controles elegibles**: `comparable_controls.py` (P-L31B, desplegado en
-producción `0.4.185`) define `PRIMARY_REASONS = {lower_rank, capacity_limit}`.
-La API `build_comparable_control_sets` produce control sets verificados. Los 0
-controles P-L59A son un hecho observado con causa no demostrada (P-L31B es
-independiente de P-L53/P-L54B).
+- **Base exacta**: P-L59B-T-R5, `49059f18`, tree `b29c262c`, version `0.4.195`.
+- **Candidato P-L59C**: HEAD `0dce08d8`, rama `codex/pl59c-llm-selection-producer`.
+- **Worktree**: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59c_llm_selection_producer`.
+- **Version**: `0.4.196`.
 
-**(c) Colisión P-L53**: la identidad primaria no incluye `recommendation_id`.
-Dos recomendaciones con misma señal y distinto rec_id colisionan. P-L54B usa
-dominios propios; no demostrada reparación cruzada.
+Commits:
+1. `b6d7c176` — feat: implementacion (models, trade_decision, decision_context, cycle_runner, canonical_selection_ledger)
+2. `c599a335` — test: 24 pruebas P-L59C + adaptacion P-L59B/P-L53 fixtures
+3. `0dce08d8` — chore: bump version a 0.4.196
 
-## Stage order real (R5 — identidades del modelo)
+## Esquema y semantica
 
-Verificado ejecutablemente en
-`tests/test_market_cycle_timing_integration.py::test_stage_order_full_flow_with_pl53_pl54_spies`.
-Ejecuta `_auto_paper_trade` con `_patch_trading_flow` y espía cada paso con
-`monkeypatch`. Rama ejecutada: exitosa con plan y submit (2399/2412).
-Rama sin planes: 2255/2266.
+### Campo `llm_selected` en `TradeRecommendation`
 
-| Orden | Línea | Componente | Recibe |
-|---|---|---|---|
-| 1 | 1880 | `build_order_plans` | gated_recommendations → `plans` (OrderPlan) |
-| 2 | ~1893 | `_apply_daily_buy_limit` | filtra `plans` |
-| 3 | ~1894 | `_apply_low_sample_daily_quota` | filtra `plans` |
-| 4 | ~1897 | `_separate_strategy_paused_plans` | separa `plans` |
-| 5 | 1965 | **P-L31B** `build_comparable_control_sets` | `plans=plans` (OrderPlan) |
-| 6 | ~2004 | Attach: `replace(plan, recommendation=...)` | — |
-| 7 | ~2071 | P-L50 `_persist_learning_penalty_cycle_shadow_final` | `comparable_control_sets` |
-| 8 | **2399** | **P-L53** `_persist_selection_ledger_shadow` | `plans=plans`, `plan_records=plan_records`, `recommendations=reviewed_recommendations`, `ordered_records` |
-| 9 | **2412** | **P-L54B** `_persist_capital_deployment_funnel_shadow` | `plans=plan_records or plans`, `recommendations=reviewed_recommendations`, `gated_recommendations`, `submitted=ordered_records` |
+- **Tipo**: `bool | None`, default `None`.
+- **True**: el LLM selecciono explicitamente esta recomendacion en su salida estructurada valida. Fijado por `_recommendation_from_dict`.
+- **False**: se conoce explicitamente que NO fue seleccionada por LLM (capacity-fill, fallback determinista, hold override). Fijado por `deterministic_trade_fallback_recommendations` y `augment_recommendations_with_deterministic_fallback`.
+- **None**: legacy, productor desconocido o evidencia ausente/ambigua. Default para constructores no migrados.
 
-**Contrato de identidad observado (R5)**:
-- OrderPlan NO define `plan_id` (models.py:117-134). `plan_id` nace al construir
-  `plan_records` en `save_order_plan`.
-- P-L31B y P-L53 reciben planes con la misma identidad semántica
-  (symbol+side+signal_id de decision_lineage), aunque P-L53 los recibe tras
-  `replace()` que sustituye la recommendation.
-- P-L53 recibe adicionalmente `plan_records` con `plan_id` real generado por la
-  ruta de persistencia.
-- P-L54B recibe `plans=plan_records or plans` (en rama exitosa, plan_records).
-  El `plan_id` de P-L54B coincide con el de `plan_records` de P-L53.
-- P-L53 y P-L54B comparten `recommendations=reviewed_recommendations` (misma
-  lista). P-L54B recibe adicionalmente `gated_recommendations`.
-- Sin `object.__setattr__`, sin `inspect`, sin AST.
+### Propagacion
 
-## Alcance y estado
+```
+_recommendation_from_dict (llm_selected=True)
+  → TradeRecommendation.llm_selected
+    → cycle_runner: getattr(recommendation, "llm_selected", None)
+      → build_decision_context_snapshot(llm_selected=...)
+        → snapshot["llm_selected"]
+          → canonical_selection_ledger: snapshot.get("llm_selected")
+            → candidate_row["llm_selected"]
+              → persist_canonical_selection_ledger (Store)
+                → read_canonical_selection_ledger
+```
 
-- Hora real: 2026-07-27 19:43 CEST (R5).
-- **XNYS ABIERTO** (sesión 2026-07-27, cierre 22:00 CEST).
-- Base exacta: `70de34011b74403281c32673c32947cab0ee0952`, tree `1d960a6723c0f2fbe5bc4afc72c7df08284c43d1`.
-- Producción desplegada: HEAD `24537e813ff0905696cda0b3925a212045ee7b09`, versión `0.4.185`.
-- Working tree productivo: versión `0.4.186` (P-L61, cambios unstaged, no leído ni modificado).
-- Candidato: P-L60R1, versión `0.4.195`.
-- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59bt_llm_selection_contract`.
-- Rama: `codex/pl59bt-llm-selection-contract`.
-- HEAD R5: `a48113fe`.
-- Solo tests, este informe, plan y relevo. Versión `0.4.195`.
+### Consumo en P-L53 (`canonical_selection_ledger.py`)
 
-## Validación
+Antes (proxy, linea 383):
+```python
+"llm_selected": True if source == "llm" else False if source else None,
+```
 
-| Artefacto | Resultado |
-|---|---|
-| `test_p59bt_llm_selected_contract_characterization.py` | **27 passed** (0.48s) |
-| `test_market_cycle_timing_integration.py` (5 tests) | **5 passed** (0.81s) |
-| **Total focales** | **32 passed** (1.10s) |
-| Ruff (ambos archivos) | **All checks passed** |
-| `check_no_nulls.py` | **OK (434 archivos)** |
-| `git diff --check` | **verde** |
-| `src/` modificado | **0 archivos** |
-| Archivos protegidos | **0 modificados** |
+Ahora (autoridad estructurada):
+```python
+"llm_selected": snapshot.get("llm_selected"),
+```
 
-**Cobertura funcional contra APIs reales**:
+`snapshot` es el `decision_context_snapshot` del objeto `recommendation`.
 
-| Grupo | Tests | APIs ejercitadas |
+## Productor-evento-consumidor
+
+| Frontera | Productor | Consumidor |
 |---|---|---|
-| (A) `llm_selected` proxy/brecha | 6 | `build_canonical_selection_ledger` + source llm/capacity/fallback/None/unknown |
-| (B) Colisión rec_id P-L53 | 1 | `build_canonical_selection_ledger` con 2 recs misma señal |
-| (C) BUY/EXIT, cross-cycle, missing | 4 | `build_canonical_selection_ledger` |
-| (D) Persistencia Store | 5 | `persist`, `read`, `Store(tmp_path)` |
-| (E) Match con exclusión real | 3 | `match_same_cycle_controls` con recomendada excluida + cross-cycle |
-| (F) Controles funcionales | 7 | `build_comparable_control_sets` reales: lower_rank, capacity_limit, gate_blocked, cross-cycle, `validate` |
-| (G) Stage order | 1 | `test_market_cycle_timing_integration.py`: `_auto_paper_trade` + spies P-L31B/P-L50/P-L53/P-L54B |
-| (H) Paridad | 2 | `selected_for_llm` vs `llm_selected`, forbidden fields |
+| LLM parsing | `_recommendation_from_dict()` → `llm_selected=True` | `cycle_runner` lee `recommendation.llm_selected` |
+| Fallback determinista | `deterministic_trade_fallback_recommendations()` → `llm_selected=False` | idem |
+| Capacity-fill | `augment_recommendations_with_deterministic_fallback()` → `replace()` preserva `llm_selected=False` del fallback | idem |
+| Snapshot | `build_decision_context_snapshot(llm_selected=...)` | `canonical_selection_ledger` lee `snapshot["llm_selected"]` |
+| Persistencia | `persist_canonical_selection_ledger` | `read_canonical_selection_ledger` |
 
-**Gates omitidos** (XNYS abierto): suite completa, smoke, benchmark largo,
-P-L45 33.336, broker, red, LLM, yfinance, postmarket, reconciliación,
-despliegue. Sin skips/xfails.
+## Contrato adversarial
 
-## Productor → Evento → Consumidor
+1. `source="llm"` **sin** `llm_selected` en snapshot → `None` (no infiere True).
+2. `source` no-LLM **con** `llm_selected=True` → `True` (la autoridad manda sobre el source textual).
+3. Source desconocida (`"bogus"`) sin `llm_selected` → `None` (nunca colapsa a False).
+4. `selected_for_llm`, `llm_selected`, `llm_considered` y `decision_source` son dimensiones separadas.
 
-| Eslabón | P-L53 | P-L31B | P-L54B |
-|---|---|---|---|
-| **¿Desplegado en prod 0.4.185?** | **NO** | **SÍ** | **NO** |
-| Productor | `build_canonical_selection_ledger` | `build_comparable_control_sets` | `build_capital_deployment_funnel_shadow` |
-| Evento | `canonical_selection_ledger:<cycle_id>` | `comparable_control_set` en `learning_observations.features` | `capital_deployment_funnel_shadow:<cycle_id>` |
-| Persistencia | `agent_events` vía `Store` | `Store.attach_comparable_control_set` | `agent_events` vía `Store` |
-| Consumidor | `read_canonical_selection_ledger`, CLI, digest | `comparable-control-quality --json` (CLI en `main.py:2545`) | `read_capital_deployment_funnel`, CLI |
-| Estado en P-L60R1 | implementado (shadow) | heredado de prod | implementado (shadow) |
+## Identidad y paridad
 
-## Defectos y brechas
+- Identidad de decision: `cycle_id + signal identity + action + recommendation_id`.
+- BUY y EXIT preservados. `recommendation_id` preservado en persistencia.
+- Paridad: antes/despues, ignorando solo el nuevo carrier observacional y version, coinciden recomendaciones economicas, scores/ranks, gates, planes, qty/notional, prices/stops/takes/trailing, submitted/failed y broker request count/order.
+- **Brecha P-L53 recommendation_id abierta**: dos recomendaciones de la misma senal colisionan porque la identidad primaria de P-L53 no incluye `recommendation_id`. No se corrige en este lote.
 
-1. **`llm_selected` = proxy de source** (BREACH): no existe booleano
-   independiente de selección LLM causal. Requiere rediseño del productor.
+## Archivos modificados
 
-2. **Colisión P-L53 sin `recommendation_id`**: dos recomendaciones distintas
-   para la misma señal colisionan. P-L54B maneja esto en su propio dominio de
-   `decision_identity`, pero no se ha demostrado end-to-end que lo corrija en el
-   ledger P-L53.
+| Archivo | Cambio |
+|---|---|
+| `src/agente_bolsa/models.py` | Campo `llm_selected: bool \| None = None` en `TradeRecommendation` |
+| `src/agente_bolsa/tools/trade_decision.py` | `_recommendation_from_dict`: `llm_selected=True`; fallback: `llm_selected=False` (2 sitios) |
+| `src/agente_bolsa/tools/decision_context.py` | Parametro `llm_selected` en `build_decision_context_snapshot` + inclusion en snapshot dict |
+| `src/agente_bolsa/cycle_runner.py` | Lee `recommendation.llm_selected` y lo pasa al snapshot builder |
+| `src/agente_bolsa/tools/canonical_selection_ledger.py` | Consume `snapshot.get("llm_selected")` en vez de inferir de `source` |
+| `tests/test_p59c_llm_selected_authority.py` | NUEVO: 24 pruebas de autoridad |
+| `tests/test_p59bt_llm_selected_contract_characterization.py` | Actualizadas 7 pruebas a contrato P-L59C |
+| `tests/test_p53b_selection_ledger_shadow.py` | `_recommendation()` incluye `llm_selected` en snapshot; `_build_large()` sincroniza |
 
-3. **Source desconocida → `other` → `False`**: missing colapsa a falso.
+## Archivos protegidos
 
-4. **0 controles P-L59A**: hecho observado, causa NO demostrada. P-L31B está
-   desplegado y es independiente de P-L53/P-L54B. Posibles causas inferidas (no
-   demostradas): ausencia de planes finales en esa ventana, estrategias
-   pausadas, o rechazos que no mapean a `lower_rank`/`capacity_limit`. No se
-   atribuye a P-L53/P-L54B.
+Sin cambios: `kernel.py`, `broker.py`, `execution.py`, `risk.py`, `config.py`, `.env`.
 
-## Seguridad y paridad
+## Pruebas
 
-No se modificaron `kernel.py`, `broker.py`, `execution.py`, `risk.py`,
-`config.py` ni `.env`. Sin cambio de política, ranking, gates, sizing, planes,
-órdenes, exposición o límites. Sin despliegue, reinicio, SQLite productiva,
-broker, red, LLM, yfinance ni push.
+### P-L59C (24 tests, 24 passed)
+- Productor: 2 tests (`_recommendation_from_dict` fija `llm_selected=True`)
+- Propagacion snapshot: 3 tests (True/False/None)
+- Ledger: 3 tests (True/False/None desde snapshot)
+- Adversarial: 3 tests (source sin autoridad → None; source no-LLM con True → True; unknown → None)
+- Persistencia Store: 4 tests (insert, idempotent, conflict, non-mutation)
+- Fail-open: 2 tests (sin recomendaciones, snapshot roto)
+- BUY/EXIT y recommendation_id: 2 tests
+- Dimensiones independientes: 3 tests (selected_for_llm vs llm_selected)
+- Predecision: 1 test (sin outcomes)
+- Version policy: 1 test
 
-## Siguiente lote
+### P-L59B characterization (27 tests, 27 passed)
+- 7 tests actualizados al nuevo contrato; 20 preservados sin cambios.
 
-Para `llm_selected` causal haría falta un rediseño del productor (P-L59C). Para
-los controles, se necesita evidencia real de producción (no sintética) que
-demuestre qué poblaciones existen. Ningún lote se inicia desde aquí.
+### P-L53 (27 tests, 27 passed)
+- Characterization: 15 passed. Shadow: 12 passed (excluyendo volume test).
+
+### P-L54 (34 tests, 34 passed)
+- Characterization: 27 passed. Shadow: 7 passed.
+
+### Trade decision (129 tests, 129 passed)
+
+### Integration (5 tests, 5 passed)
+
+### Version policy (1 test, 1 passed)
+
+### Total focales: 220 tests, 0 fallos.
+
+## Gates
+
+- Ruff: verde (0 errores).
+- `check_no_nulls.py`: OK (435 archivos).
+- `git diff --check`: OK.
+- `py_compile`: OK.
+- `validate-agent-config --json`: `ok=true`, 0 errores, 0 warnings.
+
+### Omitidos por XNYS abierto
+- Suite completa
+- Smoke `run-once --skip-crew`
+- Benchmark P-L53/P-L54
+- P-L45 33.336 observaciones
+- Kernel-status productivo
+- Broker, red, LLM, yfinance, SQLite productiva, jobs, reconciliacion, postmarket
+
+## Siguiente paso unico
+
+P-L59D: integracion de P-L59C en un rehearsal `codex/pl59d-llm-selected-rehearsal`
+sobre la base `0dce08d8`, con QA adversarial de paridad (`_auto_paper_trade` sin
+llamadas adicionales a broker/LLM), y ensayo de merge `--no-ff` para validacion
+cerrada. Sin despliegue ni cambio de politica. Brecha P-L53 recommendation_id
+sigue abierta.
+
+---
+
+## P-L59B-T-R5 (caracterizacion cerrada, base de P-L59C)
+
+Ver HANDOFF para el historial completo de iteraciones P-L59B-T-R1 a R5.

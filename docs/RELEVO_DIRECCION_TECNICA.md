@@ -600,3 +600,18 @@ cerrada.
   symbol+side+lineage reales del modelo. Sin object.__setattr__.
 - Informe unico sin secciones duplicadas. Caracterizacion cerrada.
 - Siguiente: P-L59C.
+
+## P-L59C - autoridad prospectiva estructurada de llm_selected (27-jul-2026)
+
+- Dictamen: **`ready_for_integration_rehearsal`**. XNYS abierto.
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59c_llm_selection_producer`,
+  rama `codex/pl59c-llm-selection-producer`, base P-L59B-T-R5 `49059f18`.
+- HEAD `0dce08d8`, tree limpio, version `0.4.196`.
+- `llm_selected` nace en el productor (TradeRecommendation), se propaga por
+  decision_context_snapshot, y P-L53 lo consume sin inferir de source textual.
+  True=LLM selecciono, False=no seleccionado, None=legacy/unavailable.
+- 220 tests focales (51 P-L59 + 27 P-L53 + 34 P-L54 + 129 trade_decision +
+  5 integracion + 1 version policy), 0 fallos. Ruff/NUL/diff/compile/config verdes.
+- Sin cambio de politica, gates, sizing, planes, ordenes ni limites.
+- Brecha P-L53 recommendation_id sigue abierta.
+- Siguiente: P-L59D rehearsal de integracion.

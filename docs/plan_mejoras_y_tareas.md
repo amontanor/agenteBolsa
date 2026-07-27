@@ -2527,3 +2527,21 @@ de despliegue quedan pendientes con XNYS cerrado.
   Sin object.__setattr__ ni campos inventados.
 - Seccion stale 2255/2266 eliminada del informe. Caracterizacion cerrada.
 - Siguiente: P-L59C (no iniciado).
+
+## P-L59C - autoridad prospectiva estructurada de llm_selected (27-jul-2026)
+
+- Dictamen: **`ready_for_integration_rehearsal`**. XNYS abierto, ~21:00 CEST.
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59c_llm_selection_producer`,
+  rama `codex/pl59c-llm-selection-producer`, base P-L59B-T-R5 `49059f18`.
+- HEAD `0dce08d8`, version `0.4.196`.
+- Commits: `b6d7c176` (impl), `c599a335` (tests), `0dce08d8` (version).
+- 24 tests P-L59C + 27 P-L59B actualizadas + adaptacion P-L53 shadow fixtures = 51 P-L59.
+  15 P-L53 characterization, 12 P-L53 shadow, 34 P-L54, 129 trade_decision,
+  5 integration, 1 version policy = 220 total focales, 0 fallos.
+- Ruff/NUL/diff verdes. `validate-agent-config` `ok=true`.
+- `llm_selected` nace en el productor, se propaga por TradeRecommendation →
+  decision_context_snapshot → canonical_selection_ledger. Ya no es proxy de source.
+- Brecha P-L53 recommendation_id sigue abierta. Sin cambio de politica, gates,
+  sizing, planes, ordenes, exposicion ni limites.
+- Gates omitidos por XNYS abierto: suite completa, smoke, benchmark, P-L45 33.336.
+- Siguiente: P-L59D integracion/rehearsal sobre esta base.
