@@ -591,3 +591,18 @@ cerrada.
   pendientes suite completa, smoke y validacion cerrada. No hubo broker, red,
   SQLite productiva, despliegue ni push. La incertidumbre historica
   `unconfirmed_sqlite_mutation` y P-L54 se conservan sin declararlas resueltas.
+
+## P-L59B-T - caracterizacion llm_selected y controles (27-jul-2026)
+
+- Dictamen: `ready_for_implementation`. XNYS abierto; solo tests y docs.
+- Worktree nuevo `pl59bt_llm_selection_contract`, rama
+  `codex/pl59bt-llm-selection-contract`, base `70de3401`.
+- 45 tests sinteticos; Ruff/NUL/diff verdes. Sin suite, smoke ni broker.
+- Informe: `docs/P-L59_informe.md`.
+- Hallazgo principal: `llm_selected` se deriva de `decision_source`
+  (`source == "llm"` → True, resto → False, None → None). No es un booleano
+  independiente. Los controles primarios (`lower_rank`, `capacity_limit`)
+  estan definidos en P-L31B y capturados desde planes finales.
+- Produccion 0.4.185: ambos `unavailable`. Candidato P-L60R1: implementados
+  en shadow, funcionales, no desplegados.
+- Siguiente lote: P-L59B-W (lector/consumidor) o despliegue de P-L60R1.

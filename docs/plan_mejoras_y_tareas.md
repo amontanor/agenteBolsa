@@ -2517,3 +2517,50 @@ de despliegue quedan pendientes con XNYS cerrado.
   NUL, diff, py_compile y configuracion temporal verdes. XNYS abierto impide
   suite completa, smoke y validacion cerrada; sin cambios de trading ni
   despliegue. Se conserva `unconfirmed_sqlite_mutation` como incertidumbre.
+
+## P-L59B-T - caracterizacion del contrato llm_selected y controles (27-jul-2026)
+
+- Dictamen: `ready_for_implementation`. XNYS abierto; solo tests y docs.
+- Base: `70de34011b74403281c32673c32947cab0ee0952` (candidato P-L60R1, v0.4.195).
+- Worktree nuevo: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59bt_llm_selection_contract`.
+- Rama: `codex/pl59bt-llm-selection-contract`. Version `0.4.195` (sin bump).
+
+### Hallazgo central
+
+`llm_selected` es un campo **derivado** de `decision_source`, no un booleano
+independiente sellado en la etapa de decision:
+- `source == "llm"` → `llm_selected = True`
+- `source != "llm"` y `source != None` → `llm_selected = False`
+- `source is None` → `llm_selected = None`
+
+La derivacion esta en `canonical_selection_ledger.py:383`. Es correcta pero
+limitada: `llm_selected=True` significa "la recomendacion fue generada
+directamente por el agente LLM", no "el LLM eligio este candidato del pool".
+
+### Controles elegibles
+
+`comparable_controls.py` (P-L31B) define:
+- `PRIMARY_REASONS = {lower_rank, capacity_limit}` → controles primarios
+- `BLOCKED_REASONS` → gate_blocked, risk_blocked, strategy_paused, etc.
+- Captura desde planes finales con identidad exacta
+(`cycle_id + action + signal_capture_id`).
+
+### Produccion vs candidato
+
+- Produccion `0.4.185`: `llm_selected = unavailable`, controles exactos = 0
+  (P-L53/P-L54B/P-L31B no desplegados).
+- Candidato P-L60R1: los tres modulos existen en shadow, fail-open,
+  funcionales. La brecha es despliegue, no diseno.
+
+### Validacion
+
+- `tests/test_p59bt_llm_selected_contract_characterization.py`: **45 passed**.
+- Ruff, check_no_nulls.py, git diff --check: verdes.
+- Sin suite completa, smoke, broker, red, LLM (XNYS abierto).
+- Informe: `docs/P-L59_informe.md`.
+
+### Siguiente lote
+
+P-L59B-W: lector/consumidor que materialice llm_selected y controles para la
+ventana P-L59A desde datos historicos, sin backfill. Requiere P-L53/P-L54B
+desplegados en shadow. Alternativa: desplegar P-L60R1 con validacion cerrada.
