@@ -97,11 +97,10 @@ def _lineage(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _rec(row: dict[str, Any], *, source: str = "llm", llm_considered: bool | None = None,
+def _rec(row: dict[str, Any], *, source: str, llm_considered: bool,
          rec_id: str | None = None) -> dict[str, Any]:
-    """Recommendation fixture. llm_considered es dato explicito, no derivado de source."""
+    """Recommendation fixture. llm_considered es dato explicito obligatorio, sin derivacion."""
     rec_id = rec_id or f"rec:{row['symbol']}"
-    lc = llm_considered if llm_considered is not None else (source == "llm")
     return {
         "cycle_id": row.get("cycle_id", "cycle-A"),
         "action": row["action"],
@@ -110,7 +109,7 @@ def _rec(row: dict[str, Any], *, source: str = "llm", llm_considered: bool | Non
         "decision_origin": source,
         "decision_lineage": _lineage(row),
         "decision_context_snapshot": {
-            "llm_considered": lc,
+            "llm_considered": llm_considered,
             "gate_frontier": row["gate_frontier"],
         },
     }
@@ -290,10 +289,10 @@ def test_persist_conflict(tmp_path: Path):
     store = _store(tmp_path)
     c = _cand(0, selected_for_llm=True)
     p1 = build_canonical_selection_ledger(
-        "cycle-A", _phase([c]), recommendations=[_rec(c, source="llm")], captured_at=CAPTURED_AT,
+        "cycle-A", _phase([c]), recommendations=[_rec(c, source="llm", llm_considered=True)], captured_at=CAPTURED_AT,
     )
     p2 = build_canonical_selection_ledger(
-        "cycle-A", _phase([c]), recommendations=[_rec(c, source="fallback")], captured_at=CAPTURED_AT,
+        "cycle-A", _phase([c]), recommendations=[_rec(c, source="fallback", llm_considered=False)], captured_at=CAPTURED_AT,
     )
     assert persist_canonical_selection_ledger(store, p1)["status"] == "inserted"
     assert persist_canonical_selection_ledger(store, p2)["status"] == "conflict"
@@ -302,10 +301,10 @@ def test_persist_conflict(tmp_path: Path):
 def test_content_hash_different_for_different_content():
     c = _cand(0, selected_for_llm=True)
     p1 = build_canonical_selection_ledger(
-        "cycle-A", _phase([c]), recommendations=[_rec(c, source="llm")], captured_at=CAPTURED_AT,
+        "cycle-A", _phase([c]), recommendations=[_rec(c, source="llm", llm_considered=True)], captured_at=CAPTURED_AT,
     )
     p2 = build_canonical_selection_ledger(
-        "cycle-A", _phase([c]), recommendations=[_rec(c, source="fallback")], captured_at=CAPTURED_AT,
+        "cycle-A", _phase([c]), recommendations=[_rec(c, source="fallback", llm_considered=False)], captured_at=CAPTURED_AT,
     )
     assert p1["content_hash"] != p2["content_hash"]
 
@@ -319,7 +318,7 @@ def test_build_ledger_does_not_mutate_inputs():
     c = _cand(0, selected_for_llm=True)
     orig = copy.deepcopy(c)
     build_canonical_selection_ledger(
-        "cycle-A", _phase([c]), recommendations=[_rec(c, source="llm")], captured_at=CAPTURED_AT,
+        "cycle-A", _phase([c]), recommendations=[_rec(c, source="llm", llm_considered=True)], captured_at=CAPTURED_AT,
     )
     assert c == orig
 
@@ -555,53 +554,18 @@ def test_validate_rejects_post_decision_fields():
 
 
 # ===================================================================
-# (G) Stage order ejecutable (defecto 3)
+# (G) Stage order: verificado en test de integracion real
 # ===================================================================
-
-def test_stage_order_p53_and_controls_in_wiring():
-    """Verifica que las funciones de orquestacion existen y siguen el orden real.
-
-    El orden observado en cycle_runner._auto_paper_trade (lineas 1965-2276) es:
-      1. Phase A predecision P-L53 (selection_ledger_phase_a)
-      2. Seleccion/recomendaciones/gates
-      3. P-L31B: build_comparable_control_sets (linea 1965)
-      4. Planes finales, attaches a recomendaciones
-      5. P-L53 final: _persist_selection_ledger_shadow (linea 2255)
-      6. P-L54B final: _persist_capital_deployment_funnel_shadow (linea 2266)
-
-    Verificacion: importar funciones reales y comprobar que aceptan los
-    parametros que la orquestacion les pasa en el orden documentado.
-    """
-    from agente_bolsa.cycle_runner import (
-        _auto_paper_trade,
-        _persist_capital_deployment_funnel_shadow,
-        _persist_selection_ledger_shadow,
-    )
-    # Las funciones de shadow existen
-    assert callable(_persist_selection_ledger_shadow)
-    assert callable(_persist_capital_deployment_funnel_shadow)
-    assert callable(_auto_paper_trade)
-
-    # Verificar que _persist_selection_ledger_shadow acepta los parametros
-    # que recibe en la linea 2255 del wiring real
-    import inspect
-    sig = inspect.signature(_persist_selection_ledger_shadow)
-    params = set(sig.parameters.keys())
-    expected = {"store", "reporter", "phase_a", "run_id",
-                "recommendations", "plans", "plan_records",
-                "rejected_order_plans", "ordered_records",
-                "failed_records", "gate_snapshots"}
-    assert expected.issubset(params), f"Faltan parametros: {expected - params}"
-
-    sig_cf = inspect.signature(_persist_capital_deployment_funnel_shadow)
-    params_cf = set(sig_cf.parameters.keys())
-    expected_cf = {"store", "reporter", "phase_a", "run_id",
-                   "recommendations", "gated_recommendations",
-                   "plans", "rejected_order_plans", "submitted", "account"}
-    assert expected_cf.issubset(params_cf), f"Faltan parametros: {expected_cf - params_cf}"
-
-    # P-L31B usa build_comparable_control_sets que ya se prueba en (F)
-    # y se cablea en cycle_runner:1965 antes de _persist_selection_ledger_shadow
+# El orden ejecutable real esta demostrado en
+#   tests/test_market_cycle_timing_integration.py::
+#   test_stage_order_full_flow_with_pl53_pl54_spies
+# que ejecuta _auto_paper_trade con _patch_trading_flow y espia:
+#   build_order_plans -> daily_limit -> low_sample -> strategy_pause
+#   -> comparable_control_capture (P-L31B, linea 1965)
+#   -> learning_penalty_shadow_final
+#   -> selection_ledger_final (P-L53, linea 2255)
+#   -> capital_funnel_final (P-L54B, linea 2266)
+# No se duplica aqui.
 
 
 # ===================================================================

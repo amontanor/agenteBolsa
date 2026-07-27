@@ -174,3 +174,94 @@ def test_comparable_capture_uses_final_plans_after_real_filters(monkeypatch, tmp
     assert store.calls == ["save_trade_recommendation", "save_order_plan", "save_broker_order"]
     assert len(captured["plans"]) == 1
     assert captured["rejected_order_plans"] == []
+
+
+def test_stage_order_full_flow_with_pl53_pl54_spies(monkeypatch, tmp_path):
+    """Ampliacion P-L59B-T-R3: orden real con P-L53 y P-L54B.
+
+    Orden real en _auto_paper_trade (cycle_runner.py):
+      1. build_order_plans (1880) - planes desde gated_recommendations
+      2. _apply_daily_buy_limit (~1893)
+      3. _apply_low_sample_daily_quota (~1894)
+      4. _separate_strategy_paused_plans (~1897)
+      5. build_comparable_control_sets (1965) - P-L31B
+      6. _persist_learning_penalty_cycle_shadow_final (~2071)
+      7. _persist_selection_ledger_shadow (2255) - P-L53
+      8. _persist_capital_deployment_funnel_shadow (2266) - P-L54B
+
+    Cada spy registra su nombre en calls[] y los parametros en captured{}.
+    """
+    import agente_bolsa.cycle_runner as runner
+
+    calls = _patch_trading_flow(monkeypatch)
+    captured: dict[str, object] = {}
+
+    def spy_comparable(**kwargs):
+        calls.append("P-L31B:comparable_control_capture")
+        captured["P-L31B"] = {"plans_count": len(kwargs.get("plans", []))}
+        return {}
+
+    monkeypatch.setattr(runner, "build_comparable_control_sets", spy_comparable)
+
+    def spy_penalty_shadow(**kwargs):
+        calls.append("P-L50:learning_penalty_shadow_final")
+        captured["P-L50"] = {"has_controls": "comparable_control_sets" in kwargs}
+        return {"status": "available"}
+
+    monkeypatch.setattr(runner, "_persist_learning_penalty_cycle_shadow_final", spy_penalty_shadow)
+
+    def spy_selection_ledger(**kwargs):
+        calls.append("P-L53:selection_ledger_final")
+        captured["P-L53"] = {
+            "has_phase_a": kwargs.get("phase_a") is not None,
+            "has_recommendations": kwargs.get("recommendations") is not None,
+            "has_plans": kwargs.get("plans") is not None,
+            "has_rejected": kwargs.get("rejected_order_plans") is not None,
+        }
+        return {"status": "verified", "persist_status": "inserted"}
+
+    monkeypatch.setattr(runner, "_persist_selection_ledger_shadow", spy_selection_ledger)
+
+    def spy_capital_funnel(**kwargs):
+        calls.append("P-L54B:capital_funnel_final")
+        captured["P-L54B"] = {
+            "has_phase_a": kwargs.get("phase_a") is not None,
+            "has_recommendations": kwargs.get("recommendations") is not None,
+            "has_plans": kwargs.get("plans") is not None,
+        }
+        return {"status": "verified", "persist_status": "inserted"}
+
+    monkeypatch.setattr(runner, "_persist_capital_deployment_funnel_shadow", spy_capital_funnel)
+
+    store = _StoreSpy()
+    settings = Settings(DATA_DIR=tmp_path, AUTO_PAPER_TRADING=True, REQUIRE_HUMAN_APPROVAL=False)
+    runner._auto_paper_trade(
+        settings, store, _Reporter(), "cycle",
+        {"run_id": "source"}, {}, {},
+        learning_penalty_shadow={"phase": "pre_decision"},
+        selection_ledger_phase_a={"all_candidates": [], "selected_candidates": []},
+    )
+
+    # Orden exacto: planes -> filtros -> P-L31B -> P-L50 -> P-L53 -> P-L54B
+    assert calls.index("build_order_plans") < calls.index("P-L31B:comparable_control_capture")
+    assert calls.index("P-L31B:comparable_control_capture") < calls.index("P-L50:learning_penalty_shadow_final")
+    assert calls.index("P-L50:learning_penalty_shadow_final") < calls.index("P-L53:selection_ledger_final")
+    assert calls.index("P-L53:selection_ledger_final") < calls.index("P-L54B:capital_funnel_final")
+
+    # P-L31B recibe los planes ya filtrados (1 plan)
+    assert captured["P-L31B"]["plans_count"] == 1
+    # P-L50 recibe comparable_control_sets
+    assert captured["P-L50"]["has_controls"] is True
+    # P-L53 recibe los objetos finales de la ruta activa
+    assert captured["P-L53"]["has_phase_a"] is True
+    assert captured["P-L53"]["has_recommendations"] is True
+    assert captured["P-L53"]["has_plans"] is True
+    # P-L54B recibe los mismos objetos
+    assert captured["P-L54B"]["has_phase_a"] is True
+    assert captured["P-L54B"]["has_recommendations"] is True
+    assert captured["P-L54B"]["has_plans"] is True
+
+    # El trading activo no se altera (store recibe los calls normales)
+    assert store.calls == ["save_trade_recommendation", "save_order_plan", "save_broker_order"]
+
+    # Sin inspect, sin AST, sin source-order narrativo
