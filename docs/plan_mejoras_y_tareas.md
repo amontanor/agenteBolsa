@@ -2518,49 +2518,47 @@ de despliegue quedan pendientes con XNYS cerrado.
   suite completa, smoke y validacion cerrada; sin cambios de trading ni
   despliegue. Se conserva `unconfirmed_sqlite_mutation` como incertidumbre.
 
-## P-L59B-T - caracterizacion del contrato llm_selected y controles (27-jul-2026)
+## P-L59B-T (corregido) - caracterizacion del contrato llm_selected y controles (27-jul-2026)
 
-- Dictamen: `ready_for_implementation`. XNYS abierto; solo tests y docs.
+- Dictamen: **`needs_redesign`** para llm_selected (proxy de source, no
+  seleccion causal); **`ready_for_implementation`** para controles elegibles.
+  XNYS abierto; solo tests y docs. Hora real: 19:05 CEST.
 - Base: `70de34011b74403281c32673c32947cab0ee0952` (candidato P-L60R1, v0.4.195).
-- Worktree nuevo: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59bt_llm_selection_contract`.
-- Rama: `codex/pl59bt-llm-selection-contract`. Version `0.4.195` (sin bump).
+- Worktree: `pl59bt_llm_selection_contract`. Rama: `codex/pl59bt-llm-selection-contract`.
+- HEAD: `a169b2f2`. Tree: limpio. Version `0.4.195`.
 
-### Hallazgo central
+### Hallazgos corregidos
 
-`llm_selected` es un campo **derivado** de `decision_source`, no un booleano
-independiente sellado en la etapa de decision:
-- `source == "llm"` → `llm_selected = True`
-- `source != "llm"` y `source != None` → `llm_selected = False`
-- `source is None` → `llm_selected = None`
+1. `llm_selected` se deriva exclusivamente de `decision_source`
+   (`source=="llm"` → True, resto → False, None → None). **No existe un
+   booleano independiente** sellado en la etapa de decision. Esto NO demuestra
+   seleccion LLM causal. Fuente desconocida → `"other"` → `False` (brecha:
+   deberia ser `None`).
 
-La derivacion esta en `canonical_selection_ledger.py:383`. Es correcta pero
-limitada: `llm_selected=True` significa "la recomendacion fue generada
-directamente por el agente LLM", no "el LLM eligio este candidato del pool".
+2. Dos recomendaciones con misma senal y distinto `recommendation_id` colisionan
+   en P-L53 (la identidad primaria no incluye `recommendation_id`). P-L54B-R1
+   lo corrige.
 
-### Controles elegibles
+3. **P-L31B (`comparable_controls.py`) SI esta desplegado** en produccion
+   `0.4.185` (cableado en `cycle_runner.py`, `main.py`, `storage.py`). El
+   informe anterior afirmaba incorrectamente que no lo estaba.
 
-`comparable_controls.py` (P-L31B) define:
-- `PRIMARY_REASONS = {lower_rank, capacity_limit}` → controles primarios
-- `BLOCKED_REASONS` → gate_blocked, risk_blocked, strategy_paused, etc.
-- Captura desde planes finales con identidad exacta
-(`cycle_id + action + signal_capture_id`).
+4. **P-L53 y P-L54B NO estan desplegados**. Existen solo en el candidato
+   P-L60R1 como shadow. Sin ellos, `llm_selected` durable es `unavailable` en
+   produccion.
 
-### Produccion vs candidato
+### Validacion (corregida)
 
-- Produccion `0.4.185`: `llm_selected = unavailable`, controles exactos = 0
-  (P-L53/P-L54B/P-L31B no desplegados).
-- Candidato P-L60R1: los tres modulos existen en shadow, fail-open,
-  funcionales. La brecha es despliegue, no diseno.
-
-### Validacion
-
-- `tests/test_p59bt_llm_selected_contract_characterization.py`: **45 passed**.
+- `tests/test_p59bt_llm_selected_contract_characterization.py`: **29 passed**
+  (reescrito: cero helpers duplicados, solo APIs reales del candidato,
+  Store(tmp_path), `build_canonical_selection_ledger`,
+  `match_same_cycle_controls`, `persist/read`, `build_comparable_control_sets`).
 - Ruff, check_no_nulls.py, git diff --check: verdes.
 - Sin suite completa, smoke, broker, red, LLM (XNYS abierto).
-- Informe: `docs/P-L59_informe.md`.
+- Informe unico: `docs/P-L59_informe.md` (corregido).
 
 ### Siguiente lote
 
-P-L59B-W: lector/consumidor que materialice llm_selected y controles para la
-ventana P-L59A desde datos historicos, sin backfill. Requiere P-L53/P-L54B
-desplegados en shadow. Alternativa: desplegar P-L60R1 con validacion cerrada.
+P-L59C: redisenar el productor para que `llm_selected` sea un booleano
+independiente sellado en la etapa de decision, no un proxy de source.
+Alternativa: aceptar la semantica actual y desplegar P-L60R1 para datos nuevos.

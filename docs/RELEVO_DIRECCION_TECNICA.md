@@ -592,17 +592,23 @@ cerrada.
   SQLite productiva, despliegue ni push. La incertidumbre historica
   `unconfirmed_sqlite_mutation` y P-L54 se conservan sin declararlas resueltas.
 
-## P-L59B-T - caracterizacion llm_selected y controles (27-jul-2026)
+## P-L59B-T (corregido) - caracterizacion llm_selected y controles (27-jul-2026)
 
-- Dictamen: `ready_for_implementation`. XNYS abierto; solo tests y docs.
-- Worktree nuevo `pl59bt_llm_selection_contract`, rama
-  `codex/pl59bt-llm-selection-contract`, base `70de3401`.
-- 45 tests sinteticos; Ruff/NUL/diff verdes. Sin suite, smoke ni broker.
-- Informe: `docs/P-L59_informe.md`.
-- Hallazgo principal: `llm_selected` se deriva de `decision_source`
-  (`source == "llm"` → True, resto → False, None → None). No es un booleano
-  independiente. Los controles primarios (`lower_rank`, `capacity_limit`)
-  estan definidos en P-L31B y capturados desde planes finales.
-- Produccion 0.4.185: ambos `unavailable`. Candidato P-L60R1: implementados
-  en shadow, funcionales, no desplegados.
-- Siguiente lote: P-L59B-W (lector/consumidor) o despliegue de P-L60R1.
+- Dictamen: **`needs_redesign`** (llm_selected es proxy de source, no seleccion
+  causal) + `ready_for_implementation` (controles via P-L31B). XNYS abierto.
+  Hora real: 19:05 CEST. Solo tests y docs.
+- Worktree: `pl59bt_llm_selection_contract`, rama
+  `codex/pl59bt-llm-selection-contract`, base `70de3401`. HEAD `a169b2f2`.
+- 29 tests con APIs reales (Store, build_canonical_selection_ledger,
+  match_same_cycle_controls, build_comparable_control_sets); Ruff/NUL/diff
+  verdes. Cero helpers duplicados.
+- Hallazgo: `llm_selected` en `canonical_selection_ledger.py:383` se deriva de
+  `decision_source`. No existe booleano independiente de seleccion LLM.
+- **Correccion**: P-L31B SI esta desplegado en prod (cableado en cycle_runner,
+  main, storage). P-L53/P-L54B NO.
+- Informe: `docs/P-L59_informe.md` (corregido).
+- P-L59A sigue con `llm_selected=unavailable` y `controles=0` en produccion.
+  Sin P-L53/P-L54B no hay evento durable. No se autoriza reconstruir desde
+  fuentes textuales.
+- Siguiente lote: P-L59C (rediseno del productor para booleano independiente)
+  o despliegue de P-L60R1 para datos nuevos.
