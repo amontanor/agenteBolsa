@@ -377,6 +377,30 @@ def test_portfolio_chart_windows_cover_selector_and_consecutive_changes_without_
     pd.testing.assert_frame_equal(df, original)
 
 
+def test_portfolio_chart_all_public_windows_share_visible_series_and_period_summary():
+    dates = pd.bdate_range("2026-01-01", periods=120).strftime("%Y-%m-%d").tolist()
+    df = pd.DataFrame({"fecha": dates, "valor_cartera": list(range(1000, 1120))})
+    original = df.copy(deep=True)
+
+    for days in PORTFOLIO_CHART_WINDOWS:
+        visible = _trim_portfolio_chart_range(df, days=days)
+        summary = _portfolio_chart_visible_summary(visible)
+
+        assert summary["start_date"] == visible["fecha"].iloc[0]
+        assert summary["end_date"] == visible["fecha"].iloc[-1]
+        if days is None:
+            assert len(visible) == len(df)
+        else:
+            cutoff = pd.Timestamp(dates[-1]) - pd.Timedelta(days=days - 1)
+            assert pd.Timestamp(visible["fecha"].iloc[0]) >= cutoff
+        assert summary["pl"] == round(
+            visible["valor_cartera"].iloc[-1] - visible["valor_cartera"].iloc[0],
+            2,
+        )
+
+    pd.testing.assert_frame_equal(df, original)
+
+
 def test_trim_portfolio_chart_range_deduplicates_and_orders_dates():
     df = pd.DataFrame(
         {
