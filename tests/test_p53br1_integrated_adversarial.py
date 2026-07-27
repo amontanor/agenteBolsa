@@ -187,7 +187,7 @@ def test_combined_500_37_443_funnel_has_independent_events_and_exact_denominator
     assert persist_canonical_eod_account_snapshot(store, p52)["status"] == "inserted"
 
     p53 = _build_large()
-    assert p53["denominators"] == {
+    expected_v1 = {
         "raw_count": 443,
         "canonical_count": 443,
         "eligible_count": 443,
@@ -201,6 +201,23 @@ def test_combined_500_37_443_funnel_has_independent_events_and_exact_denominator
         "conflict_count": 0,
         "truncated_count": 0,
     }
+    denominators = p53["denominators"]
+    assert {key: denominators[key] for key in expected_v1} == expected_v1
+    assert denominators["candidate_count"] == 443
+    assert denominators["recommendation_observed"] == 5
+    assert denominators["recommendation_canonical"] == 5
+    assert denominators["recommendation_conflict"] == 0
+    assert denominators["recommendation_idempotent"] == 0
+    assert denominators["recommendation_unavailable"] == 0
+    assert denominators["recommendation_observed"] == sum(
+        denominators[key]
+        for key in (
+            "recommendation_canonical",
+            "recommendation_conflict",
+            "recommendation_idempotent",
+            "recommendation_unavailable",
+        )
+    )
     assert p53["outcomes"] is None
     assert all("return_3d" not in row and "fill_price" not in row for row in p53["candidate_rows"])
     assert persist_canonical_selection_ledger(store, p53)["status"] == "inserted"
