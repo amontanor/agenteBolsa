@@ -10,8 +10,9 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama de integracion desplegada: `codex/mejora_continua`
-- Version actual: **0.4.185** (P-L48B desplegado en producción el 19-jul; ensayo P-L48BR1)
-- Ultima actualizacion: 2026-07-19
+- Version productiva estable: **0.4.185** (P-L48B desplegado en producción el 19-jul)
+- Candidato aislado P-L57A: **0.4.193** (no desplegado)
+- Ultima actualizacion: 2026-07-27
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
 ## Consolidacion operativa - 16-jul-2026
@@ -2088,6 +2089,35 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
   (`single_application` shadow); P-L45 batching 250 y outcomes unicos; P-L47
   lock/lease v1 con token coherente. Deuda `profitability_scoreboard` no
   corregida (backlog). Detalle en `docs/P-L48_informe.md`. Dictamen: `deployed`.
+
+## P-L57A - continuidad null-safe del cierre postmarket y scoreboard (0.4.193)
+
+- Base exacta: producción `24537e813ff0905696cda0b3925a212045ee7b09`, tree
+  `4747f27f3d5dc152410203bf089baee500440897`, versión `0.4.185`. Worktree
+  aislado `pl57a_pmr_null_safety`, rama `codex/pl57a-pmr-null-safety`.
+- La reproducción contra la base confirmó que `pmr_dbfa382016b8` del
+  23-jul terminó en `stage_postmarket_report_failed` por
+  `TypeError("'<' not supported between instances of 'NoneType' and 'int'")`:
+  `profitability_scoreboard._performance_summary` pasaba `pnl_pct=NULL` a la
+  reducción de drawdown. La fila incompleta no era una razón para abortar el
+  terminal del PMR.
+- El contrato corregido rechaza null, bool, strings no numéricos, NaN e
+  infinitos en métricas numéricas; reduce solo observaciones válidas; cuando
+  no hay valores devuelve `null` y cobertura `unavailable`, y cuando hay una
+  parte devuelve cobertura `partial`. No rellena `previous_equity`, retorno,
+  alpha, costes, flujos ni drawdown; tampoco reconstruye ni hace backfill del
+  23-jul. `result_metrics` del payload no sustituye columnas SQL ausentes.
+- `performance_daily`, `profitability_scoreboard`, `promotion_readiness`,
+  digest semanal y la serie read-only de web conservan filas válidas y
+  continúan con resultado parcial auditable. La ruta de trading, PMR activo,
+  reconciliación, ranking, gates, sizing, planes, órdenes, exits, exposición
+  y límites no cambia.
+- Commits: `5d05092c` reproducción; `12684790` corrección; documentación
+  pendiente en un commit separado. Dictamen del lote después de la validación:
+  `ready_for_integration_rehearsal` si todos los gates cerrados pasan.
+- Siguiente paso único: ensayo de integración aislado P-L57A; no desplegar ni
+  hacer backfill hasta validar el candidato con las precondiciones de mercado
+  cerrado.
 
 ## P-L46B - orden cronologico de Cartera abierta (desplegado 0.4.178)
 
