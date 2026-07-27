@@ -549,8 +549,11 @@ def _strip_observational_minimal(obj: dict, *, inside_dcs: bool = False) -> dict
             next_dcs = (k in OBS_BLOCKS)
             out[k] = _strip_observational_minimal(v, inside_dcs=next_dcs)
         elif isinstance(v, list):
+            # List items are not direct children of DCS/CCS root;
+            # pass inside_dcs=False.  If an item dict happens to contain
+            # an OBS_BLOCK key, the normal recursion will detect it.
             out[k] = [
-                _strip_observational_minimal(i, inside_dcs=inside_dcs)
+                _strip_observational_minimal(i, inside_dcs=False)
                 if isinstance(i, dict) else i
                 for i in v
             ]
@@ -742,3 +745,33 @@ def test_strip_context_aware_preserves_external_hashes():
     assert "captured_at" not in ccs
     assert ccs["snapshot_id"] == "snap-002"
     assert ccs["status"] == "verified"
+
+
+def test_strip_preserves_list_item_hashes_inside_dcs():
+    """Lista dentro de DCS: items conservan content_hash/captured_at; llm_selected global retirado."""
+    payload = {
+        "decision_context_snapshot": {
+            "content_hash": "dcs-root-hash",       # DCS root: retirado
+            "captured_at": "t-root",               # DCS root: retirado
+            "snapshot_id": "s1",
+            "controls": [                           # lista dentro de DCS
+                {"content_hash": "ctrl-hash-1", "llm_selected": True, "symbol": "A"},
+                {"content_hash": "ctrl-hash-2", "captured_at": "t-ctrl", "symbol": "B"},
+            ],
+        },
+    }
+    result = _strip_observational_minimal(payload)
+    dcs = result["decision_context_snapshot"]
+    assert "content_hash" not in dcs   # root stripped
+    assert "captured_at" not in dcs    # root stripped
+    assert dcs["snapshot_id"] == "s1"
+
+    controls = dcs["controls"]
+    # Item 0: content_hash preserved, llm_selected stripped
+    assert controls[0]["content_hash"] == "ctrl-hash-1"
+    assert "llm_selected" not in controls[0]
+    assert controls[0]["symbol"] == "A"
+    # Item 1: captured_at preserved (not root), content_hash preserved
+    assert controls[1]["content_hash"] == "ctrl-hash-2"
+    assert controls[1]["captured_at"] == "t-ctrl"
+    assert controls[1]["symbol"] == "B"
