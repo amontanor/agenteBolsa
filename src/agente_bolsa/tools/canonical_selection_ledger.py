@@ -21,10 +21,12 @@ if TYPE_CHECKING:  # pragma: no cover
 
 from .decision_context import normalize_llm_selected
 
-SCHEMA_VERSION = "p-l53b.canonical-selection-ledger.v1"
+SCHEMA_VERSION = "p-l53b.canonical-selection-ledger.v2"
+V1_SCHEMA_VERSION = "p-l53b.canonical-selection-ledger.v1"
 EVENT_TYPE = "canonical_selection_ledger"
 EVENT_ID_PREFIX = "canonical_selection_ledger:"
 VALID_ACTIONS = {"buy", "exit"}
+DECISION_ROW_LIMIT = 600
 _DECISION_SOURCES = {
     "llm": "llm",
     "capacity_fill": "deterministic_capacity_fill",
@@ -53,7 +55,6 @@ _FORBIDDEN_FIELDS = {
     "exit_status",
 }
 
-
 def _safe(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {str(key): _safe(item) for key, item in value.items()}
@@ -62,7 +63,6 @@ def _safe(value: Any) -> Any:
     if isinstance(value, float) and not math.isfinite(value):
         return None
     return value
-
 
 def stable_content_hash(payload: Mapping[str, Any]) -> str:
     body = copy.deepcopy(dict(payload))
@@ -77,7 +77,6 @@ def stable_content_hash(payload: Mapping[str, Any]) -> str:
     )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
-
 def _mapping(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
         return dict(value)
@@ -85,13 +84,11 @@ def _mapping(value: Any) -> dict[str, Any]:
         return asdict(value)
     return {}
 
-
 def _text(value: Any) -> str | None:
     if value is None:
         return None
     text = str(value).strip()
     return text or None
-
 
 def _action(value: Any) -> str | None:
     row = _mapping(value)
@@ -105,7 +102,6 @@ def _action(value: Any) -> str | None:
             raw = "exit"
     raw = raw.lower() if raw else None
     return "exit" if raw == "sell" else raw if raw in VALID_ACTIONS else None
-
 
 def _identity(value: Any, cycle_id: str) -> tuple[str, str, str] | None:
     row = _mapping(value)
@@ -122,12 +118,37 @@ def _identity(value: Any, cycle_id: str) -> tuple[str, str, str] | None:
         return None
     return cycle, action, canonical_id
 
-
 def _identity_text(key: tuple[str, str, str] | None) -> str | None:
     if key is None:
         return None
     return "|".join(key)
 
+def _decision_identity_key(value: Any, cycle_id: str) -> tuple[str, str, str, str] | None:
+    """Build decision-row identity: (cycle_id, action, canonical_signal, recommendation_id)."""
+    row = _mapping(value)
+    key = _identity(row, cycle_id)
+    if key is None:
+        return None
+    rec_id = _text(row.get("recommendation_id"))
+    if rec_id is None:
+        return None
+    return key[0], key[1], key[2], rec_id
+
+def _decision_key_text(key: tuple[str, str, str, str] | None) -> str | None:
+    if key is None:
+        return None
+    return "|".join(key)
+
+def _extract_recommendation_id_from_plan(payload_obj: Any) -> str | None:
+    """Extract recommendation_id from a plan or plan_record, handling both
+    OrderPlan (dataclass with .recommendation attribute) and dict payloads."""
+    row = _mapping(payload_obj)
+    rec = row.get("recommendation")
+    if isinstance(rec, Mapping):
+        return _text(rec.get("recommendation_id"))
+    if is_dataclass(rec):
+        return _text(getattr(rec, "recommendation_id", None))
+    return None
 
 def _parse_timestamp(value: Any, captured_at: datetime, warnings: list[str], field: str) -> str | None:
     raw = _text(value)
@@ -147,7 +168,6 @@ def _parse_timestamp(value: Any, captured_at: datetime, warnings: list[str], fie
         return None
     return parsed.isoformat()
 
-
 def _normalize_source(value: Any, decision_origin: Any = None) -> str | None:
     if value is None and decision_origin is None:
         return None
@@ -156,7 +176,6 @@ def _normalize_source(value: Any, decision_origin: Any = None) -> str | None:
         if source in text:
             return normalized
     return "other"
-
 
 def _states(row: Mapping[str, Any]) -> list[str]:
     states: list[str] = []
@@ -195,7 +214,6 @@ def _states(row: Mapping[str, Any]) -> list[str]:
         states.append("not_generated")
     return list(dict.fromkeys(states))
 
-
 def _candidate_projection(
     candidate: Mapping[str, Any],
     *,
@@ -228,6 +246,9 @@ def _candidate_projection(
         "signal_id": _text(raw.get("signal_id") or lineage.get("signal_id")),
         "candidate_id": _text(raw.get("candidate_id") or lineage.get("candidate_id")),
         "recommendation_id": None,
+        "decision_summary_status": None,
+        "decision_ids": None,
+        "decision_rows_count": None,
         "plan_id": None,
         "broker_order_id": None,
         "source_run_id": _text(raw.get("source_run_id") or raw.get("signal_source_run_id")),
@@ -278,6 +299,305 @@ def _candidate_projection(
     row["states"] = _states(row)
     return row
 
+def _build_decision_row(
+    recommendation: Mapping[str, Any],
+    *,
+    cycle_id: str,
+    captured_at: datetime,
+    candidate_key: tuple[str, str, str] | None,
+) -> dict[str, Any]:
+    """Build a single decision row from one recommendation."""
+    raw = dict(recommendation)
+    lineage = _mapping(raw.get("decision_lineage"))
+    snapshot = _mapping(raw.get("decision_context_snapshot"))
+    decision_id = _text(raw.get("recommendation_id"))
+    llm_raw = normalize_llm_selected(snapshot.get("llm_selected"))
+    source = _normalize_source(raw.get("source"), raw.get("decision_origin"))
+    row: dict[str, Any] = {
+        "decision_id": decision_id,
+        "cycle_id": candidate_key[0] if candidate_key else _text(raw.get("cycle_id")) or cycle_id,
+        "action": candidate_key[1] if candidate_key else _action(raw),
+        "signal_capture_id": candidate_key[2] if candidate_key else None,
+        "signal_id": _text(raw.get("signal_id") or lineage.get("signal_id")),
+        "candidate_id": _text(raw.get("candidate_id") or lineage.get("candidate_id")),
+        "identity_key": _identity_text(candidate_key),
+        "llm_selected": llm_raw,
+        "decision_source": source,
+        "confidence": raw.get("confidence"),
+        "decision_context_snapshot": copy.deepcopy(snapshot) if snapshot else None,
+        "llm_considered": snapshot.get("llm_considered"),
+        "plan_id": None,
+        "plan_status": None,
+        "broker_order_id": None,
+        "order_status": None,
+        "rejection_reason": None,
+        "decision_identity": "verified",
+        "captured_at": captured_at.isoformat(),
+    }
+    # Forbid forward-looking fields in decision rows
+    forbidden = sorted(_FORBIDDEN_FIELDS.intersection(raw))
+    if forbidden:
+        raise ValueError(f"predecision_forbidden_field:{forbidden[0]}")
+    row["content_hash"] = stable_content_hash(row)
+    return row
+
+def _build_decision_rows(
+    candidate_rows: list[dict[str, Any]],
+    *,
+    cycle_id: str,
+    recommendations: Sequence[Any] | None,
+    plans: Sequence[Any] | None,
+    plan_records: Sequence[Mapping[str, Any]] | None,
+    ordered_records: Sequence[Mapping[str, Any]] | None,
+    failed_records: Sequence[Mapping[str, Any]] | None,
+    rejected_order_plans: Sequence[Mapping[str, Any]] | None,
+    captured_at: datetime,
+    warnings: list[str],
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Build decision_rows from recommendations, plans, orders and failures.
+
+    Returns (decision_rows, truncated_count, conflict_count)."""
+
+    # Map candidate identity_key -> candidate_row for summary updates
+    candidate_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in candidate_rows:
+        key = _identity(row, cycle_id)
+        if key is not None:
+            candidate_by_key[key] = row
+            # Initialize booleans for verified rows
+            if row.get("identity_status") == "verified":
+                if row.get("recommended") is not True:
+                    row["recommended"] = False
+                if row.get("rejected") is not True:
+                    row["rejected"] = False
+                if row.get("planned") is not True:
+                    row["planned"] = False
+                if row.get("ordered") is not True:
+                    row["ordered"] = False
+
+    # Decision rows and tracking maps
+    decision_rows: list[dict[str, Any]] = []
+    by_rec_id: dict[str, dict[str, Any]] = {}  # recommendation_id -> decision_row
+    seen_hashes: dict[str, str] = {}  # rec_id -> content_hash
+    rec_ids_for_candidate: dict[tuple[str, str, str], list[str]] = {}  # candidate_key -> [rec_id, ...]
+    missing_ids_for_candidate: dict[tuple[str, str, str], int] = {}  # candidate_key -> count
+    conflict_count = 0
+
+    # --- Process recommendations ---
+    if recommendations is not None:
+        for rec in recommendations:
+            key = _identity(rec, cycle_id)
+            rec_id = _text(_mapping(rec).get("recommendation_id"))
+
+            if rec_id is None:
+                # Missing-ID recommendation
+                if key is not None:
+                    missing_ids_for_candidate[key] = missing_ids_for_candidate.get(key, 0) + 1
+                if key is not None:
+                    target = candidate_by_key.get(key)
+                    if target is not None:
+                        target["recommended"] = True
+                warnings.append("recommendation_missing_id")
+                continue
+
+            # Build the decision row
+            d_row = _build_decision_row(rec, cycle_id=cycle_id, captured_at=captured_at, candidate_key=key)
+            d_hash = d_row.get("content_hash", "")
+
+            # Check for same-rec_id
+            existing = by_rec_id.get(rec_id)
+            if existing is not None:
+                prev_hash = seen_hashes.get(rec_id, "")
+                if prev_hash == d_hash:
+                    # Idempotent duplicate: skip, but mark as duplicate in summary
+                    warnings.append("decision_idempotent_duplicate")
+                    continue
+                else:
+                    # Different content, same rec_id: conflict.
+                    # Original stays canonical; conflict entry is non-canonical.
+                    conflict_count += 1
+                    d_row["decision_identity"] = "conflict"
+                    warnings.append("decision_identity_conflict")
+                    # Still add as a non-canonical entry (kept separate)
+                    decision_rows.append(d_row)
+                    continue
+
+            # New canonical decision
+            decision_rows.append(d_row)
+            by_rec_id[rec_id] = d_row
+            seen_hashes[rec_id] = d_hash
+
+            if key is not None:
+                rec_ids_for_candidate.setdefault(key, []).append(rec_id)
+                target = candidate_by_key.get(key)
+                if target is not None:
+                    target["recommended"] = True
+
+    # --- Process plans (by recommendation_id for decision_rows, by identity_key for candidates) ---
+    effective_plans: list[dict[str, Any]] = []
+    if plan_records is not None:
+        effective_plans = [dict(pr) if isinstance(pr, Mapping) else {} for pr in plan_records]
+    elif plans is not None:
+        effective_plans = [{"payload": _mapping(plan), "plan_id": _text(getattr(plan, "plan_id", None)) if not isinstance(plan, Mapping) else _text(plan.get("plan_id"))} for plan in plans]
+
+    rec_id_from_plan: dict[str, str] = {}  # plan_id -> recommendation_id
+    for plan in effective_plans:
+        payload = _mapping(plan.get("payload") if isinstance(plan, Mapping) else _mapping(plan))
+        # Update candidate row (aggregate)
+        key = _identity(plan, cycle_id) or _identity(payload, cycle_id)
+        if key is not None:
+            target = candidate_by_key.get(key)
+            if target is not None:
+                target["planned"] = True
+                if target.get("plan_id") is None:
+                    target["plan_id"] = _text(plan.get("plan_id")) if isinstance(plan, Mapping) else None
+        # Map plan_id -> recommendation_id for decision_rows
+        plan_id = _text(plan.get("plan_id")) if isinstance(plan, Mapping) else None
+        plan_rec_id = _extract_recommendation_id_from_plan(payload)
+        if plan_id and plan_rec_id:
+            rec_id_from_plan[plan_id] = plan_rec_id
+        # Attach plan to matching decision row
+        if plan_rec_id:
+            d_row = by_rec_id.get(plan_rec_id)
+            if d_row is not None:
+                d_row["plan_id"] = plan_id
+                plan_status = _text(plan.get("status")) if isinstance(plan, Mapping) else None
+                d_row["plan_status"] = plan_status or "PENDING"
+
+    # --- Process rejected orders ---
+    if rejected_order_plans is not None:
+        for rejection in rejected_order_plans:
+            rec_row = _mapping(rejection)
+            key = _identity(rec_row, cycle_id)
+            if key is not None:
+                target = candidate_by_key.get(key)
+                if target is not None:
+                    reason = _text(rec_row.get("reason") or rec_row.get("reason_code"))
+                    target.update({
+                        "rejected": True,
+                        "gated_out": True,
+                        "planned": False,
+                        "exclusion_reason": reason,
+                        "source_stage": "rejection",
+                    })
+            # Also attach to decision row if recommendation_id present
+            rec_id = _text(rec_row.get("recommendation_id"))
+            if rec_id:
+                d_row = by_rec_id.get(rec_id)
+                if d_row is not None:
+                    d_row["rejection_reason"] = _text(rec_row.get("reason") or rec_row.get("reason_code"))
+                    d_row["plan_status"] = "REJECTED"
+
+    # --- Process ordered records ---
+    if ordered_records is not None:
+        for record in ordered_records:
+            rec_row = _mapping(record)
+            key = _identity(rec_row, cycle_id)
+            if key is not None:
+                target = candidate_by_key.get(key)
+                if target is not None:
+                    target.update({
+                        "ordered": True,
+                        "broker_order_id": _text(rec_row.get("broker_order_id")),
+                        "source_stage": "ordered",
+                    })
+            # Attach to decision row via plan_id -> rec_id mapping
+            ord_plan_id = _text(rec_row.get("plan_id"))
+            if ord_plan_id:
+                rec_id = rec_id_from_plan.get(ord_plan_id)
+                if rec_id:
+                    d_row = by_rec_id.get(rec_id)
+                    if d_row is not None:
+                        d_row["broker_order_id"] = _text(rec_row.get("broker_order_id"))
+                        d_row["order_status"] = _text(rec_row.get("status")) or "accepted"
+
+    # --- Process failed records ---
+    if failed_records is not None:
+        for record in failed_records:
+            rec_row = _mapping(record)
+            key = _identity(rec_row, cycle_id)
+            if key is not None:
+                target = candidate_by_key.get(key)
+                if target is not None:
+                    target["ordered"] = False
+                    target["exclusion_reason"] = _text(rec_row.get("reason")) or "order_submission_failed"
+
+    # --- Finalize candidate summary: compute 8-state decision_summary_status ---
+    canonical_rec_ids: set[str] = set()
+    for rec_id, d_row in by_rec_id.items():
+        if d_row.get("decision_identity") == "verified":
+            canonical_rec_ids.add(rec_id)
+
+    for c_key, c_row in candidate_by_key.items():
+        rec_ids = rec_ids_for_candidate.get(c_key, [])
+        missing = missing_ids_for_candidate.get(c_key, 0)
+        canonical_for_candidate = [rid for rid in rec_ids if rid in canonical_rec_ids]
+
+        # Compute summary status
+        if len(rec_ids) == 0 and missing == 0:
+            # 0 observed
+            c_row["decision_summary_status"] = "unavailable"
+            # Singular fields stay null (already set by _candidate_projection)
+        elif len(canonical_for_candidate) == 1 and missing == 0 and len(rec_ids) == 1:
+            # Exactly 1 canonical, no legacy/missing: use its fields as singular
+            d = by_rec_id.get(canonical_for_candidate[0])
+            if d is not None and d.get("decision_identity") == "verified":
+                c_row["decision_summary_status"] = "canonical"
+                c_row["recommendation_id"] = canonical_for_candidate[0]
+                c_row["llm_selected"] = d.get("llm_selected")
+                c_row["llm_considered"] = d.get("llm_considered")
+                c_row["decision_source"] = d.get("decision_source")
+                c_row["confidence"] = d.get("confidence")
+                c_row["source_stage"] = "decision"
+            else:
+                c_row["decision_summary_status"] = "ambiguous"
+                c_row["recommendation_id"] = None
+        elif len(canonical_for_candidate) > 1:
+            # >1 canonical: ambiguous
+            c_row["decision_summary_status"] = "ambiguous"
+            c_row["recommendation_id"] = None
+        elif missing == 1 and len(rec_ids) == 0:
+            # 1 missing-ID only
+            c_row["decision_summary_status"] = "partial"
+            c_row["recommendation_id"] = None
+        elif missing > 1 and len(rec_ids) == 0:
+            # multiple missing-ID
+            c_row["decision_summary_status"] = "ambiguous"
+            c_row["recommendation_id"] = None
+        else:
+            # Mixed: canonicals + missing, different rec_ids, conflicts
+            c_row["decision_summary_status"] = "ambiguous"
+            c_row["recommendation_id"] = None
+
+        # Store decision_ids list for reference
+        if len(rec_ids) == 0 and missing == 0:
+            # 0 observed: leave decision_ids as None
+            pass
+        else:
+            all_dec_ids = list(dict.fromkeys(rec_ids))  # preserve order, deduplicate
+            if missing > 0:
+                all_dec_ids.extend([None] * missing)
+            c_row["decision_ids"] = all_dec_ids
+        c_row["decision_rows_count"] = len(rec_ids) + missing if (len(rec_ids) + missing) > 0 else None
+
+        # Check for same-ID conflicts affecting this candidate
+        has_conflict = any(
+            d["decision_id"] in rec_ids and d.get("decision_identity") == "conflict"
+            for d in decision_rows
+        )
+        if has_conflict and c_row.get("decision_summary_status") == "canonical":
+            c_row["decision_summary_status"] = "ambiguous"
+            c_row["recommendation_id"] = None
+
+    # --- Sort and bound decision_rows ---
+    decision_rows.sort(key=lambda r: f"{r.get('identity_key') or ''}|{r.get('decision_id') or ''}")
+    detail_total = len(decision_rows)
+    truncated_count = 0
+    if detail_total > DECISION_ROW_LIMIT:
+        truncated_count = detail_total - DECISION_ROW_LIMIT
+        decision_rows = decision_rows[:DECISION_ROW_LIMIT]
+
+    return decision_rows, truncated_count, conflict_count
 
 def _phase_a_rows(
     phase_a: Mapping[str, Any] | None,
@@ -333,7 +653,6 @@ def _phase_a_rows(
         rows.append(row)
     return rows, conflicts, selected_ids
 
-
 def _decision_projection(value: Any, cycle_id: str) -> tuple[tuple[str, str, str] | None, dict[str, Any]]:
     row = _mapping(value)
     key = _identity(row, cycle_id)
@@ -343,7 +662,6 @@ def _decision_projection(value: Any, cycle_id: str) -> tuple[tuple[str, str, str
         "lineage": lineage,
         "decision_source": _normalize_source(row.get("source"), row.get("decision_origin")),
     }
-
 
 def _attach_phase_b(
     rows: list[dict[str, Any]],
@@ -477,13 +795,15 @@ def _attach_phase_b(
     for row in rows:
         row["states"] = _states(row)
 
-
 def _denominators(
     rows: list[dict[str, Any]] | None,
     *,
     raw_count: int | None,
     conflicts: int,
     truncated_count: int | None,
+    decision_rows: list[dict[str, Any]] | None = None,
+    decision_truncated_count: int = 0,
+    decision_conflict_count: int = 0,
 ) -> dict[str, Any]:
     if rows is None or raw_count is None:
         nulls = {
@@ -501,11 +821,18 @@ def _denominators(
                 "shadow_inputs_unavailable",
                 "conflict_count",
                 "truncated_count",
+                "candidate_count",
+                "recommendation_observed",
+                "recommendation_canonical",
+                "recommendation_conflict",
+                "recommendation_unavailable",
             )
         }
         return nulls
     verified = [row for row in rows if row.get("identity_status") == "verified"]
+    d_rows = decision_rows or []
     return {
+        # v1 denominators (preserved)
         "raw_count": raw_count,
         "canonical_count": len(verified),
         "eligible_count": sum(row.get("eligible_at_selection") is True for row in rows),
@@ -518,8 +845,18 @@ def _denominators(
         "shadow_inputs_unavailable": sum(row.get("eligible_at_selection") is None for row in rows),
         "conflict_count": conflicts,
         "truncated_count": truncated_count or 0,
+        # v2 denominators
+        "candidate_count": sum(row.get("identity_status") == "verified" for row in rows),
+        "recommendation_observed": len(d_rows) + decision_truncated_count,
+        "recommendation_canonical": sum(d.get("decision_identity") == "verified" for d in d_rows),
+        "recommendation_conflict": decision_conflict_count,
+        "recommendation_unavailable": sum(
+            1 for row in rows
+            if row.get("decision_summary_status") in {"partial", "ambiguous"}
+            and row.get("recommendation_id") is None
+            and row.get("decision_rows_count", 0) > 0
+        ),
     }
-
 
 def _coverage(denominators: Mapping[str, Any]) -> dict[str, float | None]:
     raw = denominators.get("raw_count")
@@ -532,7 +869,6 @@ def _coverage(denominators: Mapping[str, Any]) -> dict[str, float | None]:
         "selection": round(denominators["selected_count"] / raw, 6),
         "decision": round(denominators["recommended_count"] / raw, 6),
     }
-
 
 def build_canonical_selection_ledger(
     cycle_id: str,
@@ -547,7 +883,7 @@ def build_canonical_selection_ledger(
     gate_snapshots: Mapping[str, Any] | Sequence[Any] | None = None,
     captured_at: datetime | None = None,
 ) -> dict[str, Any]:
-    """Build one immutable, pre-decision-only selection ledger event."""
+    """Build one immutable, pre-decision-only selection ledger event (v2)."""
 
     if not _text(cycle_id):
         raise ValueError("cycle_id_required")
@@ -556,7 +892,7 @@ def build_canonical_selection_ledger(
         capture = capture.replace(tzinfo=timezone.utc)
     capture = capture.astimezone(timezone.utc)
     warnings: list[str] = []
-    rows, conflicts, _selected_ids = _phase_a_rows(
+    rows, phase_a_conflicts, _selected_ids = _phase_a_rows(
         phase_a,
         cycle_id=cycle_id,
         captured_at=capture,
@@ -566,62 +902,101 @@ def build_canonical_selection_ledger(
     if isinstance(phase_a, Mapping) and rows is not None:
         raw_value = phase_a.get("all_candidates", phase_a.get("ranked_candidates"))
         raw_count = len(raw_value) if isinstance(raw_value, Sequence) and not isinstance(raw_value, (str, bytes)) else len(rows)
-    truncated = phase_a.get("truncated_count") if isinstance(phase_a, Mapping) else None
-    if truncated is not None:
+    phase_a_truncated = phase_a.get("truncated_count") if isinstance(phase_a, Mapping) else None
+    if phase_a_truncated is not None:
         try:
-            truncated = max(0, int(truncated))
+            phase_a_truncated = max(0, int(phase_a_truncated))
         except (TypeError, ValueError):
-            truncated = None
-    _attach_phase_b(
-        rows or [],
+            phase_a_truncated = None
+
+    # --- Build decision rows (v2) ---
+    effective_rows = rows or []
+    decision_rows, decision_truncated, decision_conflicts = _build_decision_rows(
+        effective_rows,
         cycle_id=cycle_id,
         recommendations=recommendations,
         plans=plans,
         plan_records=plan_records,
-        rejected_order_plans=rejected_order_plans,
         ordered_records=ordered_records,
         failed_records=failed_records,
-        gate_snapshots=gate_snapshots,
+        rejected_order_plans=rejected_order_plans,
+        captured_at=capture,
         warnings=warnings,
     )
-    denominators = _denominators(rows, raw_count=raw_count, conflicts=conflicts, truncated_count=truncated)
+
+    # --- Attach gate_snapshots to candidate_rows (preserved from v1) ---
+    if gate_snapshots is not None:
+        by_key = {_identity(row, cycle_id): row for row in effective_rows if _identity(row, cycle_id) is not None}
+        snapshots = gate_snapshots.values() if isinstance(gate_snapshots, Mapping) else gate_snapshots
+        for snapshot in snapshots:
+            if not isinstance(snapshot, Mapping):
+                continue
+            key = _identity(snapshot, cycle_id)
+            if key is None:
+                continue
+            target = by_key.get(key)
+            if target is not None and snapshot.get("gate_frontier"):
+                target["gate_frontier"] = snapshot["gate_frontier"]
+
+    # --- Recompute states for all candidate rows ---
+    for row in effective_rows:
+        row["states"] = _states(row)
+
+    # --- Denominators ---
+    denominators = _denominators(
+        rows, raw_count=raw_count,
+        conflicts=phase_a_conflicts, truncated_count=phase_a_truncated,
+        decision_rows=decision_rows,
+        decision_truncated_count=decision_truncated,
+        decision_conflict_count=decision_conflicts,
+    )
+
+    # --- Status ---
     if rows is None:
         status = "collecting"
-    elif truncated:
+    elif phase_a_truncated or decision_truncated:
         status = "partial"
-        warnings.append("universe_truncated")
-    elif conflicts or any(row.get("identity_status") != "verified" for row in rows) or warnings:
+        if phase_a_truncated:
+            warnings.append("universe_truncated")
+        if decision_truncated:
+            warnings.append("decision_rows_truncated")
+    elif phase_a_conflicts or decision_conflicts or any(row.get("identity_status") != "verified" for row in effective_rows) or warnings:
         status = "partial"
     else:
         status = "verified"
-    session_dates = sorted({str(row.get("session_date")) for row in rows or [] if row.get("session_date")})
+
+    session_dates = sorted({str(row.get("session_date")) for row in effective_rows if row.get("session_date")})
+    decision_total = len(decision_rows) + decision_truncated
     payload: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
-        "revision": 1,
+        "revision": 2,
         "event_id": f"{EVENT_ID_PREFIX}{cycle_id}",
         "event_type": EVENT_TYPE,
         "cycle_id": cycle_id,
         "session_date": session_dates[0] if len(session_dates) == 1 else None,
         "status": status,
         "captured_at": capture.isoformat(),
-        "candidate_rows": sorted(rows or [], key=lambda row: str(row.get("identity_key") or "")),
+        "candidate_rows": sorted(effective_rows, key=lambda row: str(row.get("identity_key") or "")),
+        "decision_rows": sorted(decision_rows, key=lambda r: f"{r.get('identity_key') or ''}|{r.get('decision_id') or ''}"),
         "denominators": denominators,
         "coverage": _coverage(denominators),
-        "truncated_count": truncated,
+        "truncated_count": phase_a_truncated,
+        "decision_detail_total": decision_total,
+        "decision_detail_persisted": len(decision_rows),
+        "decision_truncated_count": decision_truncated,
+        "decision_conflict_count": decision_conflicts,
         "warnings": sorted(set(warnings)),
-        "conflicts": conflicts,
+        "conflicts": phase_a_conflicts,
         "outcomes": None,
     }
     payload["content_hash"] = stable_content_hash(payload)
     return _safe(payload)
-
 
 def persist_canonical_selection_ledger(store: Store, payload: Mapping[str, Any]) -> dict[str, Any]:
     event_id = _text(payload.get("event_id"))
     if not event_id:
         raise ValueError("selection_ledger_event_id_required")
     return store.record_canonical_selection_ledger(dict(payload), event_id=event_id)
-
 
 def _empty_read(cycle_id: str | None, *, warning: str) -> dict[str, Any]:
     return {
@@ -642,26 +1017,57 @@ def _empty_read(cycle_id: str | None, *, warning: str) -> dict[str, Any]:
             "shadow_inputs_unavailable",
             "conflict_count",
             "truncated_count",
+            "candidate_count",
+            "recommendation_observed",
+            "recommendation_canonical",
+            "recommendation_conflict",
+            "recommendation_unavailable",
         )},
         "coverage": None,
         "candidate_rows": [],
+        "decision_rows": None,
+        "decision_detail_total": None,
+        "decision_detail_persisted": None,
+        "decision_truncated_count": None,
+        "decision_conflict_count": None,
         "warnings": [warning],
         "conflicts": [],
     }
-
 
 def read_canonical_selection_ledger(store: Store, cycle_id: str | None = None) -> dict[str, Any]:
     event = store.canonical_selection_ledger_event(cycle_id) if cycle_id else store.latest_canonical_selection_ledger_event()
     if event is None:
         return _empty_read(cycle_id, warning="no_canonical_selection_ledger")
     payload = dict(event.get("payload") or {})
+    schema_version = payload.get("schema_version", "")
     expected_id = f"{EVENT_ID_PREFIX}{payload.get('cycle_id')}"
-    if payload.get("schema_version") != SCHEMA_VERSION or payload.get("event_id") != expected_id:
+
+    # Validate schema version (accept v1 and v2)
+    if schema_version not in {SCHEMA_VERSION, V1_SCHEMA_VERSION}:
+        return _empty_read(cycle_id, warning="invalid_canonical_selection_ledger") | {"status": "unavailable"}
+    if payload.get("event_id") != expected_id:
         return _empty_read(cycle_id, warning="invalid_canonical_selection_ledger") | {"status": "unavailable"}
     if stable_content_hash(payload) != payload.get("content_hash"):
         return _empty_read(cycle_id, warning="content_hash_mismatch") | {"status": "unavailable"}
-    return payload
 
+    # Backward compat: v1 payloads get decision_rows=None and v2 denominators=None
+    if schema_version == V1_SCHEMA_VERSION:
+        payload["decision_rows"] = None
+        payload["decision_detail_total"] = None
+        payload["decision_detail_persisted"] = None
+        payload["decision_truncated_count"] = None
+        payload["decision_conflict_count"] = None
+        for v2_key in ("candidate_count", "recommendation_observed",
+                        "recommendation_canonical", "recommendation_conflict",
+                        "recommendation_unavailable"):
+            payload.setdefault("denominators", {})[v2_key] = None
+        # v1 candidate_rows don't have decision_summary_status
+        for row in payload.get("candidate_rows", []):
+            if isinstance(row, dict):
+                row.setdefault("decision_summary_status", None)
+                row.setdefault("decision_ids", None)
+                row.setdefault("decision_rows_count", None)
+    return payload
 
 def canonical_selection_ledger_digest(store: Store, cycle_id: str | None = None) -> dict[str, Any]:
     payload = read_canonical_selection_ledger(store, cycle_id)
@@ -669,8 +1075,10 @@ def canonical_selection_ledger_digest(store: Store, cycle_id: str | None = None)
     payload["conflict_events"] = len(conflicts)
     if conflicts and payload.get("status") == "verified":
         payload["status"] = "partial"
+    # Ensure decision_rows is always present for consumers (v1 compatibility)
+    if "decision_rows" not in payload:
+        payload["decision_rows"] = None
     return payload
-
 
 def _matching_timestamp_delta_seconds(left: Any, right: Any) -> float | None:
     try:
@@ -681,7 +1089,6 @@ def _matching_timestamp_delta_seconds(left: Any, right: Any) -> float | None:
     if left_dt.tzinfo is None or right_dt.tzinfo is None:
         return None
     return abs((left_dt.astimezone(timezone.utc) - right_dt.astimezone(timezone.utc)).total_seconds())
-
 
 def match_same_cycle_controls(
     treatment: Mapping[str, Any],
@@ -759,7 +1166,6 @@ def match_same_cycle_controls(
         "controls": controls,
         "excluded": excluded,
     }
-
 
 def match_mature_forward_outcome(
     row: Mapping[str, Any],
