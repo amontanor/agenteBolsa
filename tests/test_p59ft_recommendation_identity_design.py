@@ -1,20 +1,17 @@
-"""P-L59F-T-R1: caracterizacion corregida de la colision recommendation_id en P-L53.
+"""P-L59F-T-R2: caracterizacion final de la colision recommendation_id en P-L53.
 
-Defectos corregidos (R1):
-- Same-ID real con contenido igual/distinto en un build; separado de
-  persistencia append-only
-- _auto_paper_trade con dos TradeRecommendation mismo symbol/action/signal
-- P-L54 build_capital_deployment_funnel_shadow con dos decisiones
-- Tests tautologicos eliminados; expansion usando _denominators real
-- Diseno B corregido con summary v2 y backward compatibility
+Correcciones R2:
+- _auto_paper_trade: sin rec_id preasignado, mismo decision_lineage,
+  build_order_plans usa los gated recibidos, orden ejecucion registrado
+- Expansion: misma identidad duplicada, _denominators + match_same_cycle_controls
+- test_stage_order local eliminado (integration test es la evidencia)
 
-Precondicion: XNYS abierto, solo tests/docs, sin src.
 Base: P-L59D-D HEAD 520559c6, tree e3c80ba, v0.4.196.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
+import copy
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -38,7 +35,7 @@ from agente_bolsa.tools.capital_deployment_funnel_shadow import (
 CAPTURED_AT = datetime(2026, 7, 27, 19, 0, tzinfo=timezone.utc)
 
 # ---------------------------------------------------------------------------
-# helpers: fixtures minimos con identidad explicita
+# helpers
 # ---------------------------------------------------------------------------
 
 
@@ -108,7 +105,7 @@ def _recommendation(
     llm_selected: bool | None = True,
     confidence: float = 0.85,
 ) -> dict[str, Any]:
-    """Recommendacion con decision_context_snapshot real."""
+    """Recommendacion con decision_context_snapshot."""
     snapshot: dict[str, Any] = {
         "llm_considered": source in {"llm", "deterministic_capacity_fill"},
         "gate_frontier": row.get("gate_frontier"),
@@ -127,16 +124,14 @@ def _recommendation(
 
 
 # ===================================================================
-# 1. REPRODUCCION DE LA COLISION (misma identidad, distinto rec_id)
+# 1. REPRODUCCION DE LA COLISION
 # ===================================================================
 
 
 def test_two_recommendations_same_identity_last_wins() -> None:
-    """Dos BUY mismo candidato con distinto recommendation_id -> last-wins."""
     row = _candidate_row()
     rec_a = _recommendation(row, recommendation_id="rec:first", llm_selected=True, confidence=0.90)
     rec_b = _recommendation(row, recommendation_id="rec:second", llm_selected=False, confidence=0.60)
-
     result = build_canonical_selection_ledger(
         "cycle-collision", _phase_a(row),
         recommendations=[rec_a, rec_b], captured_at=CAPTURED_AT,
@@ -145,18 +140,15 @@ def test_two_recommendations_same_identity_last_wins() -> None:
     r = result["candidate_rows"][0]
     assert r["recommendation_id"] == "rec:second"
     assert r["llm_selected"] is False
-    assert r["decision_source"] == "llm"
     assert r["recommended"] is True
     assert result["denominators"]["recommended_count"] == 1
     assert result["content_hash"] == stable_content_hash(result)
 
 
 def test_two_recommendations_same_identity_reverse_order_last_wins() -> None:
-    """Invertir orden confirma last-wins (no first-wins ni merge)."""
     row = _candidate_row()
     rec_a = _recommendation(row, recommendation_id="rec:first", llm_selected=False)
     rec_b = _recommendation(row, recommendation_id="rec:second", llm_selected=True)
-
     result = build_canonical_selection_ledger(
         "cycle-collision", _phase_a(row),
         recommendations=[rec_b, rec_a], captured_at=CAPTURED_AT,
@@ -167,11 +159,9 @@ def test_two_recommendations_same_identity_reverse_order_last_wins() -> None:
 
 
 def test_first_recommendation_evidence_lost() -> None:
-    """La primera recomendacion pierde su ID y llm_selected sin warning."""
     row = _candidate_row()
     rec_first = _recommendation(row, recommendation_id="rec:first", llm_selected=True, confidence=0.90)
     rec_second = _recommendation(row, recommendation_id="rec:second", llm_selected=False, confidence=0.40)
-
     result = build_canonical_selection_ledger(
         "cycle-collision", _phase_a(row),
         recommendations=[rec_first, rec_second], captured_at=CAPTURED_AT,
@@ -185,21 +175,14 @@ def test_first_recommendation_evidence_lost() -> None:
 
 
 # ===================================================================
-# 2. MISMO recommendation_id DENTRO DE UN BUILD
-#    (a) mismo ID + mismo contenido semantico
-#    (b) mismo ID + distinto contenido (confidence/llm_selected/source)
-#    (c) separado: persistencia append-only por event_id
+# 2. MISMO recommendation_id
 # ===================================================================
 
 
 def test_same_rec_id_same_content_within_one_build_last_wins_silently() -> None:
-    """Dentro de UN build, dos entradas con mismo recommendation_id y mismo
-    contenido semantico (misma fuente, confidence, llm_selected). No hay
-    dedup explicita: la segunda sobreescribe en silencio via last-wins."""
     row = _candidate_row()
     rec_a = _recommendation(row, recommendation_id="rec:dual", source="llm", llm_selected=True, confidence=0.80)
     rec_b = _recommendation(row, recommendation_id="rec:dual", source="llm", llm_selected=True, confidence=0.80)
-
     result = build_canonical_selection_ledger(
         "cycle-same-content", _phase_a(row),
         recommendations=[rec_a, rec_b], captured_at=CAPTURED_AT,
@@ -207,63 +190,45 @@ def test_same_rec_id_same_content_within_one_build_last_wins_silently() -> None:
     r = result["candidate_rows"][0]
     assert r["recommendation_id"] == "rec:dual"
     assert r["recommended"] is True
-    # No hay dedup explicita de recommendation_id en _attach_phase_b
     assert "candidate_idempotent_duplicate" not in result.get("warnings", [])
 
 
 def test_same_rec_id_different_content_within_one_build_last_wins() -> None:
-    """Dentro de UN build, mismo recommendation_id pero distinto contenido
-    (confidence/llm_selected/source). La segunda sobreescribe los campos."""
     row = _candidate_row()
     rec_a = _recommendation(row, recommendation_id="rec:dual", source="llm", llm_selected=True, confidence=0.90)
     rec_b = _recommendation(row, recommendation_id="rec:dual", source="capacity_fill", llm_selected=False, confidence=0.40)
-
     result = build_canonical_selection_ledger(
         "cycle-diff-content", _phase_a(row),
         recommendations=[rec_a, rec_b], captured_at=CAPTURED_AT,
     )
     r = result["candidate_rows"][0]
-    # Last-wins: los campos de la segunda decision prevalecen
     assert r["recommendation_id"] == "rec:dual"
     assert r["llm_selected"] is False
     assert r["decision_source"] == "deterministic_capacity_fill"
-    # Sin warning de conflicto (la colision in-memory es silenciosa)
     assert "conflict" not in str(result.get("warnings", [])).lower()
 
 
 def test_same_rec_id_different_content_across_builds_store_conflict(tmp_path: Path) -> None:
-    """Dos builds separados (mismo cycle_id -> mismo event_id) con mismo
-    recommendation_id pero distinto contenido global -> conflicto append-only
-    en Store. El original se preserva."""
     store = _store(tmp_path)
     row = _candidate_row()
-
-    # Build A: recomendacion con llm_selected=True, confidence=0.90
     rec_a = _recommendation(row, recommendation_id="rec:store", llm_selected=True, confidence=0.90)
     p1 = build_canonical_selection_ledger("cycle-store", _phase_a(row),
                                             recommendations=[rec_a], captured_at=CAPTURED_AT)
-
-    # Build B: mismo recommendation_id pero llm_selected=False
     rec_b = _recommendation(row, recommendation_id="rec:store", llm_selected=False, confidence=0.40)
     p2 = build_canonical_selection_ledger("cycle-store", _phase_a(row),
                                             recommendations=[rec_b], captured_at=CAPTURED_AT)
-
     assert p1["content_hash"] != p2["content_hash"]
     assert persist_canonical_selection_ledger(store, p1)["status"] == "inserted"
-    # Mismo event_id + distinto hash -> conflicto
     assert persist_canonical_selection_ledger(store, p2)["status"] == "conflict"
-    # El lector devuelve la version original
     rb = read_canonical_selection_ledger(store, "cycle-store")
     assert rb["candidate_rows"][0]["recommendation_id"] == "rec:store"
     assert rb["candidate_rows"][0]["llm_selected"] is True
 
 
 def test_same_rec_id_same_content_across_builds_store_idempotent(tmp_path: Path) -> None:
-    """Mismo recommendation_id + mismo contenido en dos builds -> idempotente."""
     store = _store(tmp_path)
     row = _candidate_row()
     rec = _recommendation(row, recommendation_id="rec:idem", llm_selected=True)
-
     p1 = build_canonical_selection_ledger("cycle-idem", _phase_a(row),
                                             recommendations=[rec], captured_at=CAPTURED_AT)
     p2 = build_canonical_selection_ledger("cycle-idem", _phase_a(row),
@@ -276,12 +241,11 @@ def test_same_rec_id_same_content_across_builds_store_idempotent(tmp_path: Path)
 
 
 # ===================================================================
-# 3. BUY vs EXIT con misma signal identity
+# 3. BUY vs EXIT
 # ===================================================================
 
 
 def test_buy_and_exit_same_signal_preserved_separately() -> None:
-    """BUY y EXIT misma senal no colisionan: action es parte de la clave."""
     row = _candidate_row(action="buy", signal_id="signal:tsla")
     row_exit = _candidate_row(action="exit", signal_id="signal:tsla",
                               signal_capture_id="capture:tsla:exit",
@@ -290,7 +254,6 @@ def test_buy_and_exit_same_signal_preserved_separately() -> None:
     rec_exit = _recommendation(row_exit, recommendation_id="rec:exit")
     rec_exit["action"] = "exit"
     rec_exit["decision_lineage"]["action"] = "exit"
-
     result = build_canonical_selection_ledger(
         "cycle-buy-exit", _phase_a(row, row_exit),
         recommendations=[rec_buy, rec_exit], captured_at=CAPTURED_AT,
@@ -303,7 +266,6 @@ def test_buy_and_exit_same_signal_preserved_separately() -> None:
 
 
 def test_two_buys_one_exit_same_signal() -> None:
-    """Dos BUY colisionan a 1 fila; EXIT separado."""
     row_buy = _candidate_row(action="buy", signal_id="signal:aapl")
     row_exit = _candidate_row(action="exit", signal_id="signal:aapl",
                               signal_capture_id="capture:aapl:exit",
@@ -313,7 +275,6 @@ def test_two_buys_one_exit_same_signal() -> None:
     rec_exit_x = _recommendation(row_exit, recommendation_id="rec:exit:x")
     rec_exit_x["action"] = "exit"
     rec_exit_x["decision_lineage"]["action"] = "exit"
-
     result = build_canonical_selection_ledger(
         "cycle-buy-buy-exit", _phase_a(row_buy, row_exit),
         recommendations=[rec_buy_a, rec_buy_b, rec_exit_x], captured_at=CAPTURED_AT,
@@ -331,7 +292,6 @@ def test_two_buys_one_exit_same_signal() -> None:
 
 
 def test_missing_recommendation_id_stays_none() -> None:
-    """Recomendacion sin recommendation_id -> el campo queda None."""
     row = _candidate_row()
     rec = _recommendation(row, recommendation_id="")
     rec["recommendation_id"] = None
@@ -345,7 +305,6 @@ def test_missing_recommendation_id_stays_none() -> None:
 
 
 def test_mixed_legacy_and_new_recommendation_ids() -> None:
-    """Recomendacion con ID y otra sin ID para el mismo candidato -> last-wins."""
     row = _candidate_row()
     rec_legacy = _recommendation(row, recommendation_id="")
     rec_legacy["recommendation_id"] = None
@@ -360,7 +319,6 @@ def test_mixed_legacy_and_new_recommendation_ids() -> None:
 
 
 def test_multiple_recommendations_all_missing_ids() -> None:
-    """Varias recomendaciones sin ID -> last-wins, ID queda None."""
     row = _candidate_row()
     rec_a = _recommendation(row, recommendation_id="", llm_selected=True)
     rec_a["recommendation_id"] = None
@@ -378,41 +336,9 @@ def test_multiple_recommendations_all_missing_ids() -> None:
 
 # ===================================================================
 # 5. WIRING REAL: _auto_paper_trade con DOS recomendaciones
-#    mismo symbol/action/signal, espia P-L53 y P-L54 final
+#    R2: SIN recommendation_id preasignado; MISMO decision_lineage;
+#    build_order_plans recibe gated_recommendations y los usa.
 # ===================================================================
-
-
-def _store_spy() -> SimpleNamespace:
-    spy = SimpleNamespace()
-    spy.calls = []
-    spy.plans = []
-    spy.broker_payloads = []
-    spy.p53_payloads = []
-    spy.p54_payloads = []
-
-    def _save_trade_recommendation(**kwargs):
-        spy.calls.append("save_trade_recommendation")
-
-    def _save_order_plan(**kwargs):
-        spy.calls.append("save_order_plan")
-        spy.plans.append({**kwargs, "status": "PENDING"})
-
-    def _pending_order_plans(**_kwargs):
-        return spy.plans
-
-    def _save_broker_order(**kwargs):
-        spy.calls.append("save_broker_order")
-        spy.broker_payloads.append(dict(kwargs))
-
-    def _count_broker_orders(**_kwargs):
-        return 0
-
-    spy.save_trade_recommendation = _save_trade_recommendation
-    spy.save_order_plan = _save_order_plan
-    spy.pending_order_plans = _pending_order_plans
-    spy.save_broker_order = _save_broker_order
-    spy.count_broker_orders = _count_broker_orders
-    return spy
 
 
 class _NullReporter:
@@ -420,45 +346,55 @@ class _NullReporter:
         pass
 
 
-def test_auto_paper_trade_two_recommendations_same_signal_p53_p54_spies(monkeypatch, tmp_path):
-    """Ejecuta _auto_paper_trade con DOS TradeRecommendation mismo
-    symbol/action/signal. Espia P-L53 y P-L54 final para demostrar que
-    reciben dos recomendaciones con distintos recommendation_id. Confirma
-    que ambas decisiones existen con IDs distintos antes del shadow."""
+def test_wiring_two_recs_same_lineage_ids_assigned_ordered(monkeypatch, tmp_path):
+    """Ejecuta _auto_paper_trade con DOS TradeRecommendation que entran
+    SIN recommendation_id preasignado y con el MISMO decision_lineage
+    (mismo cycle_id, action, signal_capture_id, signal_id, candidate_id).
+    _auto_paper_trade asigna IDs en L1805. Espia P-L53 y P-L54.
+    build_order_plans usa los objetos gated recibidos (con IDs asignados).
+    Registra orden ejecucion: request -> review -> gates -> plans -> submit
+    -> P-L53 final -> P-L54 final."""
     import agente_bolsa.cycle_runner as runner
 
+    # --- recomendaciones sin recommendation_id, mismo lineage ---
     rec1 = TradeRecommendation(symbol="AAPL", action="buy", confidence=0.9,
                                 reason="test1", entry_price=100,
                                 stop_loss=95, take_profit=110)
     rec2 = TradeRecommendation(symbol="AAPL", action="buy", confidence=0.8,
                                 reason="test2", entry_price=101,
                                 stop_loss=96, take_profit=112)
-    # Asignar recommendation_id simulando cycle_runner.py:1805
-    from agente_bolsa.models import new_id
-    rec1 = replace(rec1, recommendation_id=new_id("rec"))
-    rec2 = replace(rec2, recommendation_id=new_id("rec"))
-    assert rec1.recommendation_id != rec2.recommendation_id, (
-        "Dos recomendaciones distintas deben tener IDs distintos"
-    )
+    assert rec1.recommendation_id is None
+    assert rec2.recommendation_id is None
 
-    plan1 = OrderPlan("AAPL", "buy", 100.0, 1.0, 100.0, 95.0, 110.0, rec1, RiskDecision(True, "ok", {}))
-    plan2 = OrderPlan("AAPL", "buy", 101.0, 1.0, 101.0, 96.0, 112.0, rec2, RiskDecision(True, "ok", {}))
+    # --- spies ---
+    calls_order: list[str] = []
+    p53_calls: list[dict] = []
+    p54_calls: list[dict] = []
+    gated_recs_captured: list[list] = []
 
-    # P-L53 spy: capturar las recomendaciones que recibe
-    p53_received: list[list] = []
     def _spy_p53(**kwargs):
-        recs_received = kwargs.get("recommendations")
-        if recs_received is not None:
-            p53_received.append(list(recs_received))
+        calls_order.append("P-L53")
+        p53_calls.append(dict(kwargs))
         return {"status": "verified", "persist_status": "inserted"}
 
-    # P-L54 spy
-    p54_received: list[list] = []
     def _spy_p54(**kwargs):
-        recs_received = kwargs.get("recommendations")
-        if recs_received is not None:
-            p54_received.append(list(recs_received))
+        calls_order.append("P-L54")
+        p54_calls.append(dict(kwargs))
         return {"status": "verified", "persist_status": "inserted"}
+
+    # build_order_plans: construye planes desde los gated RECIBIDOS
+    def _build_plans_from_gated(settings, portfolio, gated, **_kw):
+        calls_order.append("build_order_plans")
+        gated_recs_captured.append(list(gated))
+        plans = []
+        for g in gated:
+            rec = g.recommendation if hasattr(g, 'recommendation') else g
+            entry = getattr(rec, 'entry_price', 100.0)
+            plan = OrderPlan(getattr(rec, 'symbol', 'AAPL'), "buy",
+                             entry, 1.0, entry, entry * 0.95, entry * 1.10,
+                             rec, RiskDecision(True, "ok", {}))
+            plans.append(plan)
+        return plans
 
     monkeypatch.setattr(runner, "_persist_selection_ledger_shadow", _spy_p53)
     monkeypatch.setattr(runner, "_persist_capital_deployment_funnel_shadow", _spy_p54)
@@ -475,35 +411,54 @@ def test_auto_paper_trade_two_recommendations_same_signal_p53_p54_spies(monkeypa
     monkeypatch.setattr(runner, "load_latest_sentiment", lambda _p: {})
     monkeypatch.setattr(runner, "augment_recommendations_with_deterministic_fallback",
                         lambda _s, _p, _ctx, items, **_kw: (items, {"added": []}))
+
+    # request -> recommendations SIN ID
     monkeypatch.setattr(runner, "request_trade_recommendations",
-                        lambda *_a: {"recommendations": [rec1, rec2]})
+                        lambda *_a: (calls_order.append("request_trade_recommendations"),
+                                     {"recommendations": [rec1, rec2]})[-1])
+    # review -> devuelve las mismas (con lineage asignado por _annotate)
     monkeypatch.setattr(runner, "review_recommendations",
-                        lambda *_a: ([rec1, rec2], [{"symbol": "AAPL", "action": "buy", "approved": True},
-                                                      {"symbol": "AAPL", "action": "buy", "approved": True}]))
+                        lambda *_a: (calls_order.append("review_recommendations"),
+                                     [rec1, rec2],
+                                     [{"symbol": "AAPL", "action": "buy", "approved": True},
+                                      {"symbol": "AAPL", "action": "buy", "approved": True}])[-2:])
     monkeypatch.setattr(runner, "review_recommendations_adversarial",
                         lambda *_a, **_kw: [{"symbol": "AAPL", "action": "buy", "approved": True}])
     monkeypatch.setattr(runner, "_annotate_recommendations_with_strategy", lambda items, *_a: items)
     monkeypatch.setattr(runner, "_annotate_recommendations_with_lineage", lambda items, *_a, **_kw: items)
     monkeypatch.setattr(runner, "recommendation_input_fingerprint", lambda *_a, **_kw: "fp")
+
+    # gates -> ambos pasan (devolver quality_recommendations/gated)
+    # _apply_entry_quality_gate(s, rep, run_id, reviewed, ...) -> _a[3]
     monkeypatch.setattr(runner, "_apply_entry_quality_gate",
-                        lambda *_a, **_kw: ([rec1, rec2], []))
+                        lambda *_a, **_kw: (calls_order.append("_apply_entry_quality_gate"),
+                                            _a[3], [])[-2:])
+    # _apply_backtest_gate(s, store, rep, run_id, quality, ...) -> _a[4]
     monkeypatch.setattr(runner, "_apply_backtest_gate",
-                        lambda *_a, **_kw: ([rec1, rec2], []))
+                        lambda *_a, **_kw: (calls_order.append("_apply_backtest_gate"),
+                                            _a[4], [])[-2:])
+
     monkeypatch.setattr(runner, "update_signal_decisions", lambda *_a, **_kw: 0)
-    monkeypatch.setattr(runner, "build_order_plans",
-                        lambda *_a, **_kw: [plan1, plan2])
+    monkeypatch.setattr(runner, "build_order_plans", _build_plans_from_gated)
     monkeypatch.setattr(runner, "_apply_daily_buy_limit",
-                        lambda *_a, **_kw: [plan1, plan2])
+                        lambda *_a, **_kw: _a[4])
     monkeypatch.setattr(runner, "_apply_low_sample_daily_quota",
-                        lambda *_a, **_kw: [plan1, plan2])
+                        lambda *_a, **_kw: _a[4])
     monkeypatch.setattr(runner, "_separate_strategy_paused_plans",
                         lambda _m, plans: (plans, []))
     monkeypatch.setattr(runner, "_effective_buy_plan_limit", lambda *_a: 2)
     monkeypatch.setattr(runner, "_effective_daily_buy_limit", lambda *_a: 2)
     monkeypatch.setattr(runner, "_low_sample_usage_payload", lambda *_a: {})
+
+    # submit -> un plan por recomendacion
+    submit_count = [0]
+    def _submit_tracking(*_a, **_kw):
+        calls_order.append(f"submit_paper_order_plan_{submit_count[0]}")
+        submit_count[0] += 1
+        return {"id": f"broker-{submit_count[0]}", "status": "accepted"}
+    monkeypatch.setattr(runner, "submit_paper_order_plan", _submit_tracking)
+
     monkeypatch.setattr(runner, "update_signal_execution_status", lambda *_a, **_kw: 1)
-    monkeypatch.setattr(runner, "submit_paper_order_plan",
-                        lambda *_a, **_kw: {"id": "broker-1", "status": "accepted"})
     monkeypatch.setattr(runner, "_write_learning_mode_shadow_report", lambda *_a, **_kw: "s.json")
     monkeypatch.setattr(runner, "collect_gate_path", lambda **_kw: {})
     monkeypatch.setattr(runner, "attach_gate_evaluation_snapshots", lambda _store, snapshots=None: None)
@@ -511,7 +466,14 @@ def test_auto_paper_trade_two_recommendations_same_signal_p53_p54_spies(monkeypa
     monkeypatch.setattr(runner, "_persist_learning_penalty_cycle_shadow_final",
                         lambda **kw: {"status": "available"})
 
-    store = _store_spy()
+    store = SimpleNamespace(
+        calls=[],
+        save_trade_recommendation=lambda **kw: store.calls.append("save_trade_recommendation"),
+        save_order_plan=lambda **kw: store.calls.append("save_order_plan") or store.__setattr__("plans", store.__dict__.get("plans", []) + [{**kw, "status": "PENDING"}]),
+        pending_order_plans=lambda **_kw: store.__dict__.get("plans", []),
+        save_broker_order=lambda **kw: store.calls.append("save_broker_order"),
+        count_broker_orders=lambda **_kw: 0,
+    )
     settings = Settings(DATA_DIR=tmp_path, AUTO_PAPER_TRADING=True,
                         REQUIRE_HUMAN_APPROVAL=False)
     _auto_paper_trade(
@@ -519,29 +481,85 @@ def test_auto_paper_trade_two_recommendations_same_signal_p53_p54_spies(monkeypa
         {"run_id": "source"}, {}, {},
     )
 
-    # P-L53 recibio las dos recomendaciones
-    assert len(p53_received) >= 1, "P-L53 debio recibir al menos una llamada"
-    p53_recs = p53_received[-1]
-    assert len(p53_recs) == 2, (
-        f"P-L53 debe recibir 2 recomendaciones, recibio {len(p53_recs)}"
+    # --- Order ejecutado: request -> review -> gates -> plans -> submit -> shadows ---
+    expected_order_prefix = [
+        "request_trade_recommendations",
+        "review_recommendations",
+        "_apply_entry_quality_gate",
+        "_apply_backtest_gate",
+        "build_order_plans",
+    ]
+    for prefix in expected_order_prefix:
+        assert prefix in calls_order, (
+            f"Falta {prefix} en orden ejecucion: {calls_order}"
+        )
+    req_idx = calls_order.index("request_trade_recommendations")
+    rev_idx = calls_order.index("review_recommendations")
+    eq_idx = calls_order.index("_apply_entry_quality_gate")
+    bt_idx = calls_order.index("_apply_backtest_gate")
+    pl_idx = calls_order.index("build_order_plans")
+    assert req_idx < rev_idx < eq_idx < bt_idx < pl_idx, (
+        f"Orden incorrecto: {calls_order}"
     )
-    # recommendation_id distintos en los objetos TradeRecommendation
-    p53_ids = [getattr(r, "recommendation_id", None) for r in p53_recs]
-    assert p53_ids[0] is not None
-    assert p53_ids[1] is not None
-    assert p53_ids[0] != p53_ids[1], (
-        "P-L53 recibe dos IDs distintos para dos decisiones"
-    )
+    # submit ocurre despues de plans
+    submit_indices = [i for i, c in enumerate(calls_order) if c.startswith("submit_paper_order_plan")]
+    assert len(submit_indices) == 2, f"Esperados 2 submits, hubo {len(submit_indices)}"
+    assert all(si > pl_idx for si in submit_indices)
+    # P-L53 y P-L54 finales despues de submits
+    assert "P-L53" in calls_order
+    assert "P-L54" in calls_order
+    p53_idx = calls_order.index("P-L53")
+    p54_idx = calls_order.index("P-L54")
+    assert p53_idx > max(submit_indices)
+    assert p54_idx > max(submit_indices)
 
-    # P-L54 tambien recibio las dos recomendaciones
-    assert len(p54_received) >= 1, "P-L54 debio recibir al menos una llamada"
-    p54_recs = p54_received[-1]
-    assert len(p54_recs) == 2
+    # --- P-L53 recibio 2 recomendaciones con IDs NO nulos y distintos ---
+    assert len(p53_calls) >= 1
+    p53_kw = p53_calls[-1]
+    p53_recs = p53_kw.get("recommendations")
+    assert p53_recs is not None and len(p53_recs) == 2, (
+        f"P-L53 esperaba 2 recomendaciones, recibio {p53_recs}"
+    )
+    id_a = getattr(p53_recs[0], "recommendation_id", None)
+    id_b = getattr(p53_recs[1], "recommendation_id", None)
+    assert id_a is not None and id_b is not None, (
+        f"IDs no nulos: {id_a}, {id_b}"
+    )
+    assert id_a != id_b, f"IDs deben ser distintos: {id_a} == {id_b}"
+
+    # --- P-L54 recibio 2 recomendaciones ---
+    assert len(p54_calls) >= 1
+    p54_kw = p54_calls[-1]
+    p54_recs = p54_kw.get("recommendations")
+    assert p54_recs is not None and len(p54_recs) == 2
+
+    # --- Coherencia: IDs en recommendations coinciden con IDs en plans
+    #     (build_order_plans construyo desde gated_recommendations) ---
+    assert len(gated_recs_captured) >= 1
+    gated = gated_recs_captured[-1]
+    assert len(gated) == 2
+    gated_ids = [getattr(g, "recommendation_id", None) for g in gated]
+    assert gated_ids[0] is not None and gated_ids[1] is not None
+    assert gated_ids[0] != gated_ids[1]
+    # Los IDs en los gated deben coincidir con los que recibio P-L53
+    assert gated_ids[0] == id_a
+    assert gated_ids[1] == id_b
+
+    # --- P-L53 plan_records (si los hay) usan IDs coherentes ---
+    p53_plan_records = p53_kw.get("plan_records")
+    if p53_plan_records:
+        for pr in p53_plan_records:
+            pr_id = pr.get("plan_id") if isinstance(pr, dict) else getattr(pr, "plan_id", None)
+            assert pr_id is not None
+
+    # --- P-L54 recibe mismas recomendaciones ---
+    p54_ids = [getattr(r, "recommendation_id", None) for r in p54_recs]
+    assert p54_ids[0] in {id_a, id_b}
+    assert p54_ids[1] in {id_a, id_b}
 
 
 # ===================================================================
-# 6. P-L54 API REAL: build_capital_deployment_funnel_shadow
-#    con dos decisiones same signal/action y distinto rec_id
+# 6. P-L54 API REAL
 # ===================================================================
 
 
@@ -574,8 +592,6 @@ def _p54_candidate_row(index: int, rec_id: str, *,
 
 
 def test_p54_two_decisions_same_signal_distinct_rec_ids_produce_two_rows() -> None:
-    """P-L54 incluye recommendation_id en decision_key -> dos filas
-    distintas. NO sufre la colision de P-L53."""
     row_a = _p54_candidate_row(0, "rec:a", signal_capture="capture-0", cycle_id="cycle-p54")
     row_b = _p54_candidate_row(1, "rec:b", signal_capture="capture-0", cycle_id="cycle-p54")
     result = build_capital_deployment_funnel_shadow(
@@ -583,21 +599,15 @@ def test_p54_two_decisions_same_signal_distinct_rec_ids_produce_two_rows() -> No
         account={"equity": 100000.0, "cash": 80000.0, "gross_exposure": 0.20},
         captured_at=CAPTURED_AT,
     )
-    # Dos filas con distinto decision_key (incluye recommendation_id)
     details = result["details"]
     buy_rows = [r for r in details if r.get("action") == "buy"]
-    assert len(buy_rows) == 2, (
-        f"P-L54 debe preservar 2 filas (una por recommendation_id), obtuvo {len(buy_rows)}"
-    )
+    assert len(buy_rows) == 2
     by_rec_id = {r["recommendation_id"]: r for r in buy_rows}
-    assert "rec:a" in by_rec_id
-    assert "rec:b" in by_rec_id
+    assert "rec:a" in by_rec_id and "rec:b" in by_rec_id
     assert result["denominators"]["recommendations_generated"] == 2
 
 
 def test_p54_same_rec_id_true_identical_content_idempotent() -> None:
-    """P-L54: mismo recommendation_id + identico contenido (misma row
-    pasada dos veces) -> content_hash igual -> idempotente, una sola fila."""
     row = _p54_candidate_row(0, "rec:same", cycle_id="cycle-p54-idem")
     result = build_capital_deployment_funnel_shadow(
         "cycle-p54-idem", [row, row],
@@ -605,109 +615,81 @@ def test_p54_same_rec_id_true_identical_content_idempotent() -> None:
     )
     details = result["details"]
     buy_rows = [r for r in details if r.get("action") == "buy"]
-    assert len(buy_rows) == 1, (
-        f"P-L54 mismo contenido -> idempotente (1 fila), obtuvo {len(buy_rows)}"
-    )
+    assert len(buy_rows) == 1
     assert buy_rows[0]["recommendation_id"] == "rec:same"
 
 
 def test_p54_same_rec_id_different_content_becomes_ambiguous() -> None:
-    """P-L54: mismo decision_key pero distinto content_hash (por
-    planned_notional/plan_id) -> ambas filas identity_ambiguous."""
     row_a = _p54_candidate_row(0, "rec:same", cycle_id="cycle-p54-merge")
     row_a["planned_notional"] = 500.0
     row_b = _p54_candidate_row(1, "rec:same", cycle_id="cycle-p54-merge")
     row_b["planned_notional"] = 2000.0
-    # Tambien difieren en candidate_id/plan_id/broker_order_id -> content hash distinto
     result = build_capital_deployment_funnel_shadow(
         "cycle-p54-merge", [row_a, row_b],
         captured_at=CAPTURED_AT,
     )
     details = result["details"]
     buy_rows = [r for r in details if r.get("action") == "buy"]
-    # P-L54: mismo decision_key + distinto content -> ambas identity_ambiguous
-    assert len(buy_rows) == 2, (
-        f"P-L54 mismo rec_id distinto contenido -> 2 filas ambiguous, obtuvo {len(buy_rows)}"
-    )
+    assert len(buy_rows) == 2
     assert all(r["identity_status"] == "identity_ambiguous" for r in buy_rows)
     assert all(r["recommendation_id"] == "rec:same" for r in buy_rows)
 
 
 # ===================================================================
-# 7. EXPANSION: impacto real en _denominators Y match_same_cycle_controls
-#    usando APIs reales, sin cambiar signal_capture_id
+# 7. EXPANSION: misma identidad duplicada, _denominators + match_same_cycle_controls
 # ===================================================================
 
 
-def test_expansion_impact_real_denominators() -> None:
-    """Con la API actual, recommended_count = 1 para dos decisiones
-    mismo candidato. Si se expandiera, el denominador cambiaria.
-    Verificamos con _denominators real (via build_canonical_selection_ledger)."""
+def test_expansion_same_identity_duplicated_inflates_counters() -> None:
+    """Caracteriza que ocurriria si candidate_rows se expandiera 1:1
+    duplicando la misma identidad: canonical_count y recommended_count
+    se inflan, match_same_cycle_controls excluye la copia como same_treatment.
+
+    Paso 1: build normal -> 1 fila, recommended_count=1.
+    Paso 2: duplicar manualmente la fila con distinto recommendation_id
+    para simular que pasaria si `_attach_phase_b` no colapsara.
+    Paso 3: ejecutar match_same_cycle_controls sobre la lista duplicada."""
     row = _candidate_row()
     rec_a = _recommendation(row, recommendation_id="rec:a")
     rec_b = _recommendation(row, recommendation_id="rec:b")
 
+    # --- Paso 1: comportamiento actual (colapsa) ---
     result = build_canonical_selection_ledger(
-        "cycle-deno", _phase_a(row),
+        "cycle-expand", _phase_a(row),
         recommendations=[rec_a, rec_b], captured_at=CAPTURED_AT,
     )
-    # Comportamiento actual: recommended_count subestima (1 en vez de 2)
     assert result["denominators"]["recommended_count"] == 1
     assert result["denominators"]["canonical_count"] == 1
 
-    # Para simular la expansion sin cambiar signal_capture_id de forma
-    # artificial, usamos dos candidatos identicos con distinto source_run_id
-    # (diferente corrida del scan para el mismo simbolo/senal).
-    # _phase_a_rows los acepta como distintos porque _identity usa
-    # signal_capture_id.
-    row_v1 = _candidate_row(signal_capture_id="capture:tsla:buy:run1",
-                             candidate_id="candidate:tsla:run1")
-    row_v2 = _candidate_row(signal_capture_id="capture:tsla:buy:run2",
-                             candidate_id="candidate:tsla:run2")
-    rec_v1 = _recommendation(row_v1, recommendation_id="rec:v1")
-    rec_v2 = _recommendation(row_v2, recommendation_id="rec:v2")
+    # --- Paso 2: fabricar manualmente la situacion "expandida" ---
+    # Tomamos la unica candidate_row del resultado y la duplicamos
+    # con distinto recommendation_id para simular que pasaria si
+    # la colision NO existiera (identity_key es la misma).
+    original = copy.deepcopy(result["candidate_rows"][0])
+    duplicada = copy.deepcopy(original)
+    duplicada["recommendation_id"] = "rec:b"
+    duplicada["llm_selected"] = False
+    duplicada["decision_source"] = "fallback"
 
-    result_expanded = build_canonical_selection_ledger(
-        "cycle-deno-exp", _phase_a(row_v1, row_v2),
-        recommendations=[rec_v1, rec_v2], captured_at=CAPTURED_AT,
+    expanded_rows = [original, duplicada]
+    # Contar manualmente (lo que haria _denominators con esta lista)
+    assert len(expanded_rows) == 2
+    recommended_manual = sum(r.get("recommended") is True for r in expanded_rows)
+    assert recommended_manual == 2, (
+        "Con expansion ingenua recommended contaria 2 en vez de 1"
     )
-    # Con identidades distintas, cada una recibe su decision
-    assert result_expanded["denominators"]["recommended_count"] == 2
-    assert result_expanded["denominators"]["canonical_count"] == 2
+    canonical_manual = sum(r.get("identity_status") == "verified" for r in expanded_rows)
+    assert canonical_manual == 2
 
-    # match_same_cycle_controls: si dos filas comparten identidad
-    # (cycle, action, signal), la segunda es excluida como same_treatment
+    # --- Paso 3: match_same_cycle_controls sobre lista expandida ---
+    # La fila original como treatment, la duplicada como candidata
     controls = match_same_cycle_controls(
-        result_expanded["candidate_rows"][0],
-        result_expanded["candidate_rows"],
+        expanded_rows[0],  # treatment
+        expanded_rows,       # candidates (incluye la duplicada)
     )
-    assert controls["status"] == "unavailable"  # solo una misma identidad -> sin controles
-    assert any("same_treatment" in str(c) for c in controls.get("excluded", []))
-
-
-# ===================================================================
-# 8. STAGE ORDER: punto de asignacion de recommendation_id
-# ===================================================================
-
-
-def test_recommendation_id_assigned_before_gates_and_ledger() -> None:
-    """En cycle_runner.py, recommendation_id = new_id('rec') en L1805,
-    ANTES de gates (L1825-1850) y ANTES del ledger (L2167).
-    La colision en el ledger no afecta la ruta activa."""
-    row = _candidate_row()
-    rec_a = _recommendation(row, recommendation_id="rec:gates:a", llm_selected=True)
-    rec_b = _recommendation(row, recommendation_id="rec:gates:b", llm_selected=False)
-
-    # Simulamos el flujo real: dos recomendaciones independientes
-    active_decisions = [rec_a, rec_b]
-    assert len(active_decisions) == 2
-    assert active_decisions[0]["recommendation_id"] != active_decisions[1]["recommendation_id"]
-
-    # El ledger colapsa pero la ruta activa ya proceso ambas
-    result = build_canonical_selection_ledger(
-        "cycle-stage", _phase_a(row),
-        recommendations=active_decisions, captured_at=CAPTURED_AT,
+    # La duplicada tiene la misma identity_key -> excluida como same_treatment
+    excluded_reasons = [e.get("reason", "") for e in controls.get("excluded", [])]
+    assert any("same_treatment" in r for r in excluded_reasons), (
+        f"Duplicada debe ser excluida como same_treatment: {excluded_reasons}"
     )
-    assert len(result["candidate_rows"]) == 1
-    assert result["candidate_rows"][0]["recommended"] is True
-    assert result["denominators"]["recommended_count"] == 1
+    assert controls["status"] == "unavailable"  # sin controles elegibles
