@@ -592,11 +592,11 @@ cerrada.
   SQLite productiva, despliegue ni push. La incertidumbre historica
   `unconfirmed_sqlite_mutation` y P-L54 se conservan sin declararlas resueltas.
 
-## P-L59B-T-R4 (final) - caracterizacion cerrada (27-jul-2026)
+## P-L59B-T-R5 (final) - caracterizacion cerrada (27-jul-2026)
 
-- Dictamen: **`needs_fix`**. XNYS abierto. Hora real: 19:33 CEST. HEAD: `ef5835a1`.
-- 27 tests P-L59 + 5 integracion (32 total). Ruff/NUL/diff verdes.
-- Stage order: rama 2399/2412 (con submit). Rama sin planes: 2255/2266.
-- Contrato identidades: P-L31B(plans), P-L53(plans+plan_records+recs),
-  P-L54B(plan_records, recs, gated_recs). Replace() pierde plan_id.
-- Caracterizacion cerrada. Siguiente: P-L59C.
+- Dictamen: **`needs_fix`**. XNYS abierto. Hora real: 19:43 CEST. HEAD: `a48113fe`.
+- 27 P-L59 + 5 integracion (32 total). Ruff/NUL/diff verdes.
+- Stage order: rama 2399/2412. plan_id nace en plan_records; identidades por
+  symbol+side+lineage reales del modelo. Sin object.__setattr__.
+- Informe unico sin secciones duplicadas. Caracterizacion cerrada.
+- Siguiente: P-L59C.

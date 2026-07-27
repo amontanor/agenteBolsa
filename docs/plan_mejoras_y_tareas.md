@@ -2518,14 +2518,12 @@ de despliegue quedan pendientes con XNYS cerrado.
   suite completa, smoke y validacion cerrada; sin cambios de trading ni
   despliegue. Se conserva `unconfirmed_sqlite_mutation` como incertidumbre.
 
-## P-L59B-T-R4 (final) - caracterizacion cerrada (27-jul-2026)
+## P-L59B-T-R5 (final) - caracterizacion cerrada (27-jul-2026)
 
-- Dictamen: **`needs_fix`**. XNYS abierto. Hora real: 19:33 CEST.
-- HEAD R4: `ef5835a1`. Tree limpio. Version 0.4.195.
+- Dictamen: **`needs_fix`**. XNYS abierto. Hora real: 19:43 CEST. HEAD: `a48113fe`.
 - 27 tests P-L59 + 5 integracion (32 total). Ruff/NUL/diff verdes.
-- Stage order ejecutable con identidades exactas (spies reales, sin inspect).
-- Rama ejecutada: 2399 (P-L53) y 2412 (P-L54B). Rama sin planes: 2255/2266.
-- Contrato: P-L31B ve plans originales; P-L53 ve plans tras replace() que
-  pierde plan_id (init=False); P-L54B ve plan_records; recommendations
-  compartidas; gated_recommendations extra en P-L54B.
-- Caracterizacion cerrada. Siguiente: P-L59C (no iniciado).
+- Stage order: rama 2399/2412 (con submit). plan_id nace en plan_records, no
+  en OrderPlan (modelo real). Identidades: symbol+side+decision_lineage.
+  Sin object.__setattr__ ni campos inventados.
+- Seccion stale 2255/2266 eliminada del informe. Caracterizacion cerrada.
+- Siguiente: P-L59C (no iniciado).

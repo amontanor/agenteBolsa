@@ -1,4 +1,4 @@
-# P-L59B-T-R4 — informe único final
+# P-L59B-T-R5 — informe único final
 
 ## Dictamen único
 
@@ -24,43 +24,43 @@ independiente de P-L53/P-L54B).
 Dos recomendaciones con misma señal y distinto rec_id colisionan. P-L54B usa
 dominios propios; no demostrada reparación cruzada.
 
-## Stage order real (R4 — precisión corregida)
+## Stage order real (R5 — identidades del modelo)
 
 Verificado ejecutablemente en
 `tests/test_market_cycle_timing_integration.py::test_stage_order_full_flow_with_pl53_pl54_spies`.
 Ejecuta `_auto_paper_trade` con `_patch_trading_flow` y espía cada paso con
-`monkeypatch`. Rama ejecutada: exitosa con plan y submit.
+`monkeypatch`. Rama ejecutada: exitosa con plan y submit (2399/2412).
+Rama sin planes: 2255/2266.
 
-| Orden | Línea real | Componente | Recibe |
+| Orden | Línea | Componente | Recibe |
 |---|---|---|---|
 | 1 | 1880 | `build_order_plans` | gated_recommendations → `plans` (OrderPlan) |
 | 2 | ~1893 | `_apply_daily_buy_limit` | filtra `plans` |
 | 3 | ~1894 | `_apply_low_sample_daily_quota` | filtra `plans` |
 | 4 | ~1897 | `_separate_strategy_paused_plans` | separa `plans` |
-| 5 | 1965 | **P-L31B** `build_comparable_control_sets` | `plans=plans` (OrderPlan originales) |
-| 6 | ~2004 | Attach: `replace(plan, recommendation=...)` → `plans = attached_plans` | — |
+| 5 | 1965 | **P-L31B** `build_comparable_control_sets` | `plans=plans` (OrderPlan) |
+| 6 | ~2004 | Attach: `replace(plan, recommendation=...)` | — |
 | 7 | ~2071 | P-L50 `_persist_learning_penalty_cycle_shadow_final` | `comparable_control_sets` |
-| 8 | **2399** | **P-L53** `_persist_selection_ledger_shadow` | `plans=plans` (attached), `plan_records=plan_records`, `recommendations=reviewed_recommendations` |
-| 9 | **2412** | **P-L54B** `_persist_capital_deployment_funnel_shadow` | `plans=plan_records or plans`, `recommendations=reviewed_recommendations`, `gated_recommendations=gated_recommendations` |
+| 8 | **2399** | **P-L53** `_persist_selection_ledger_shadow` | `plans=plans`, `plan_records=plan_records`, `recommendations=reviewed_recommendations`, `ordered_records` |
+| 9 | **2412** | **P-L54B** `_persist_capital_deployment_funnel_shadow` | `plans=plan_records or plans`, `recommendations=reviewed_recommendations`, `gated_recommendations`, `submitted=ordered_records` |
 
-La rama sin submit (2255/2266) tiene la misma estructura pero sin
-`ordered_records`/`failed_records`/`submitted`. El test recorre la rama 2399/2412.
-
-**Contrato de identidad observado**:
-- P-L31B recibe los `plans` originales con `plan_id` intacto.
-- P-L53 recibe los `plans` después de `replace(plan, recommendation=...)` que
-  pierde campos `init=False` como `plan_id`. Las identidades se recuperan vía
-  `plan_records` (dicts durables) que sí preservan `plan_id`.
-- P-L54B recibe `plans=plan_records or plans` (en rama exitosa, `plan_records`
-  existe). No son los mismos objetos que P-L31B/P-L53, pero los `plan_id`
-  coinciden con los `plan_record_ids` de P-L53.
+**Contrato de identidad observado (R5)**:
+- OrderPlan NO define `plan_id` (models.py:117-134). `plan_id` nace al construir
+  `plan_records` en `save_order_plan`.
+- P-L31B y P-L53 reciben planes con la misma identidad semántica
+  (symbol+side+signal_id de decision_lineage), aunque P-L53 los recibe tras
+  `replace()` que sustituye la recommendation.
+- P-L53 recibe adicionalmente `plan_records` con `plan_id` real generado por la
+  ruta de persistencia.
+- P-L54B recibe `plans=plan_records or plans` (en rama exitosa, plan_records).
+  El `plan_id` de P-L54B coincide con el de `plan_records` de P-L53.
 - P-L53 y P-L54B comparten `recommendations=reviewed_recommendations` (misma
-  lista literal).
-- P-L54B recibe adicionalmente `gated_recommendations`.
+  lista). P-L54B recibe adicionalmente `gated_recommendations`.
+- Sin `object.__setattr__`, sin `inspect`, sin AST.
 
 ## Alcance y estado
 
-- Hora real: 2026-07-27 19:33 CEST (R4).
+- Hora real: 2026-07-27 19:43 CEST (R5).
 - **XNYS ABIERTO** (sesión 2026-07-27, cierre 22:00 CEST).
 - Base exacta: `70de34011b74403281c32673c32947cab0ee0952`, tree `1d960a6723c0f2fbe5bc4afc72c7df08284c43d1`.
 - Producción desplegada: HEAD `24537e813ff0905696cda0b3925a212045ee7b09`, versión `0.4.185`.
@@ -68,7 +68,7 @@ La rama sin submit (2255/2266) tiene la misma estructura pero sin
 - Candidato: P-L60R1, versión `0.4.195`.
 - Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59bt_llm_selection_contract`.
 - Rama: `codex/pl59bt-llm-selection-contract`.
-- HEAD R4: `ef5835a1`.
+- HEAD R5: `a48113fe`.
 - Solo tests, este informe, plan y relevo. Versión `0.4.195`.
 
 ## Validación
@@ -101,26 +101,7 @@ La rama sin submit (2255/2266) tiene la misma estructura pero sin
 P-L45 33.336, broker, red, LLM, yfinance, postmarket, reconciliación,
 despliegue. Sin skips/xfails.
 
-## Stage order observado
-
-El orden real en `cycle_runner._auto_paper_trade` (líneas 1965-2276):
-
-1. **Phase A predecision P-L53**: `selection_ledger_phase_a` captura el universo
-   rankeado.
-2. **Selección y recomendaciones**: LLM/gates producen `reviewed_recommendations`.
-3. **P-L31B controles**: `build_comparable_control_sets` (línea 1965) desde
-   `gated_recommendations` y `plans` finales.
-4. **Planes finales**: se adjuntan control sets a los planes buy finales.
-5. **P-L53 finalización**: `_persist_selection_ledger_shadow` (línea 2255)
-   construye el ledger completo con phase A + recomendaciones + planes + órdenes.
-6. **P-L54B finalización**: `_persist_capital_deployment_funnel_shadow` (línea
-   2266) construye el funnel shadow con los mismos objetos.
-
-P-L31B se ejecuta ANTES de la finalización de P-L53 y P-L54B, y DESPUÉS de
-gates/planes. P-L53 y P-L54B son shadows fail-open que ocurren tras la ruta
-activa; no afectan decisiones.
-
-## Productor → Evento → Consumidor (corregido)
+## Productor → Evento → Consumidor
 
 | Eslabón | P-L53 | P-L31B | P-L54B |
 |---|---|---|---|
