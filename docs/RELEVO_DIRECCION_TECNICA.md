@@ -601,15 +601,13 @@ cerrada.
 - Informe unico sin secciones duplicadas. Caracterizacion cerrada.
 - Siguiente: P-L59C.
 
-## P-L59C-R1 - autoridad prospectiva estructurada de llm_selected (27-jul-2026)
+## P-L59C-R2 - autoridad prospectiva estructurada de llm_selected (27-jul-2026)
 
-- Dictamen: **`ready_for_integration_rehearsal`** (corregido R1). XNYS abierto, ~22:00 CEST.
+- Dictamen: **`ready_for_integration_rehearsal`** (R2 corregido). XNYS abierto, 20:30 CEST.
 - Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59c_llm_selection_producer`,
-  rama `codex/pl59c-llm-selection-producer`, base P-L59B-T-R5 `49059f18`.
-- Version `0.4.196`.
-- `normalize_llm_selected` runtime: solo `type(v) is bool` o None. 1, 0, "true", etc → None.
-- Paridad `_auto_paper_trade`: True/False/None identicos (sin llamadas extra broker/LLM).
-- Fail-open: build falla y ruta activa completa (store calls intactas).
-- 268 tests totales (conjuntos disjuntos), 0 fallos. Ruff/NUL/diff/compile/config verdes.
+  rama `codex/pl59c-llm-selection-producer`, base P-L59B-T-R5 `49059f18`, version `0.4.196`.
+- R2: `normalize_llm_selected` centralizada en `decision_context.py` (snapshot + P-L53).
+  Paridad economica real con payloads (no solo nombres de llamadas).
+- 278 tests totales (9 archivos disjuntos), 0 fallos. Ruff/NUL/diff/compile/config verdes.
 - Brecha P-L53 recommendation_id sigue abierta.
 - Siguiente: P-L59D rehearsal de integracion.
