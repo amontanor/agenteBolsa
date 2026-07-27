@@ -2528,14 +2528,11 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Seccion stale 2255/2266 eliminada del informe. Caracterizacion cerrada.
 - Siguiente: P-L59C (no iniciado).
 
-## P-L59C-R5 - autoridad prospectiva estructurada de llm_selected (27-jul-2026)
+## P-L59C-R6 - autoridad prospectiva estructurada de llm_selected (27-jul-2026)
 
-- Dictamen: **`ready_for_integration_rehearsal`** (R5 corregido). XNYS abierto, 20:30 CEST.
-- Worktree y rama: igual, version `0.4.196`.
-- R5: strip solo en raiz DCS/CCS (no propaga a subbloques nested).
-  Test unitario con market_state_ref, gate_evaluation anidados.
-- R2 baseline 278. R5 post-cambio: 14 integration.
+- Dictamen: **`ready_for_integration_rehearsal`** (R6 corregido). XNYS abierto, 20:30 CEST.
+- R6: list branch inside_dcs=False (items nested conservan hashes). Test unitario listas.
+  Docs con hashes R5 (`4b1c1982`, `c50f23ae`). R2 baseline 278. R6: 15 integration.
   Ruff/NUL/diff verdes.
 - Brecha P-L53 recommendation_id sigue abierta.
-- Gates omitidos (XNYS abierto): suite, smoke, benchmark, P-L45.
 - Siguiente: P-L59D rehearsal de integracion.

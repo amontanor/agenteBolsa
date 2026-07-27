@@ -601,10 +601,9 @@ cerrada.
 - Informe unico sin secciones duplicadas. Caracterizacion cerrada.
 - Siguiente: P-L59C.
 
-## P-L59C-R5 - autoridad prospectiva estructurada de llm_selected (27-jul-2026)
+## P-L59C-R6 - autoridad prospectiva estructurada de llm_selected (27-jul-2026)
 
-- Dictamen: **`ready_for_integration_rehearsal`** (R5 corregido). XNYS abierto, 20:30 CEST.
-- R5: strip solo en raiz DCS/CCS (no propaga a subbloques). Test unitario ampliado.
-  R2 baseline 278. R5: 14 integration. Ruff/NUL/diff verdes.
-- Brecha P-L53 recommendation_id sigue abierta.
+- Dictamen: **`ready_for_integration_rehearsal`** (R6 corregido). XNYS abierto, 20:30 CEST.
+- R6: list branch inside_dcs=False. Docs con hashes R5 reales. 15 integration.
+  Ruff/NUL/diff verdes. Brecha P-L53 abierta.
 - Siguiente: P-L59D rehearsal de integracion.

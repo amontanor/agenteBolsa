@@ -39,7 +39,8 @@ R1: `86120c43`, `40768a22`, `e777dbd8`
 R2: `f9fff29c`, `4508cb70`, `88c10a8d`, `cca19660`
 R3: `6ab89896`, `ea42ac26`
 R4: `d4acf339`, `cad0592f`
-R5: test commit + docs commit
+R5: `4b1c1982`, `c50f23ae`
+R6: test commit + docs commit
 
 ## Archivos modificados en R5
 
