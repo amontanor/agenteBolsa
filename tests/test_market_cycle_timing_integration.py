@@ -528,14 +528,14 @@ def test_fail_open_selection_ledger_does_not_block_route(monkeypatch, tmp_path):
 
 
 def _strip_observational_minimal(obj: dict, *, inside_dcs: bool = False) -> dict:
-    """Context-aware: solo llm_selected global; content_hash+captured_at en DCS y comparable_control_set.
+    """Context-aware: solo llm_selected global; content_hash+captured_at solo en raiz DCS/CCS.
 
     - Globalmente (todos los niveles): retira llm_selected.
-    - Dentro de decision_context_snapshot o comparable_control_set: retira
-      content_hash y captured_at (timestamps/hashes observacionales que no
-      dependen del carrier P-L59C pero varian por wall-clock o derivacion).
-    - Conserva snapshot_id, otros content_hash/hashes/timestamps de bloques
-      ajenos (plan, broker, execution, etc.).
+    - Solo en el NIVEL RAIZ exacto de decision_context_snapshot o
+      comparable_control_set: retira content_hash y captured_at.
+    - Dentro de DCS/CCS, los subbloques anidados (market_state_ref, gates, etc.)
+      conservan sus propios content_hash/captured_at intactos.
+    - snapshot_id, IDs canonicos y campos economicos siempre conservados.
     """
     OBS_BLOCKS = {"decision_context_snapshot", "comparable_control_set"}
     out = {}
@@ -545,7 +545,8 @@ def _strip_observational_minimal(obj: dict, *, inside_dcs: bool = False) -> dict
         if inside_dcs and k in ("content_hash", "captured_at"):
             continue
         if isinstance(v, dict):
-            next_dcs = inside_dcs or (k in OBS_BLOCKS)
+            # Only descend into OBS_BLOCKS with strip flag; children inherit False
+            next_dcs = (k in OBS_BLOCKS)
             out[k] = _strip_observational_minimal(v, inside_dcs=next_dcs)
         elif isinstance(v, list):
             out[k] = [
@@ -673,7 +674,7 @@ def test_economic_parity_true_false_none_identical_payloads(monkeypatch, tmp_pat
 
 
 def test_strip_context_aware_preserves_external_hashes():
-    """content_hash fuera de DCS/comparable_control_set sobrevive al normalizador."""
+    """content_hash fuera de DCS/CCS y en subbloques anidados sobrevive."""
     payload = {
         "llm_selected": True,                     # debe retirarse globalmente
         "recommendation_id": "rec-123",
@@ -681,17 +682,26 @@ def test_strip_context_aware_preserves_external_hashes():
         "captured_at": "2026-07-27T20:00:00Z",    # externo: se conserva
         "snapshot_id": "snap-999",                 # externo: se conserva
         "decision_context_snapshot": {
-            "llm_selected": True,                  # DCS: debe retirarse
-            "content_hash": "dcs-hash",            # DCS: debe retirarse
-            "captured_at": "2026-07-27T19:00:00Z", # DCS: debe retirarse
-            "snapshot_id": "snap-001",             # DCS: se conserva
+            "llm_selected": True,                  # DCS root: debe retirarse
+            "content_hash": "dcs-hash",            # DCS root: debe retirarse
+            "captured_at": "2026-07-27T19:00:00Z", # DCS root: debe retirarse
+            "snapshot_id": "snap-001",             # DCS root: se conserva
             "cycle_id": "c1",
             "decision_source": "llm",
+            "market_state_ref": {                  # nested: se conserva integro (salvo llm_selected)
+                "content_hash": "msr-hash",         # nested: se conserva
+                "captured_at": "2026-07-27T18:00:00Z", # nested: se conserva
+                "status": "available",
+            },
+            "gate_evaluation": {                   # nested: se conserva integro
+                "content_hash": "gate-hash",
+                "captured_at": "2026-07-27T17:00:00Z",
+            },
         },
         "comparable_control_set": {
-            "content_hash": "ccs-hash",            # CCS: debe retirarse
-            "captured_at": "2026-07-27T18:00:00Z", # CCS: debe retirarse
-            "snapshot_id": "snap-002",             # CCS: se conserva
+            "content_hash": "ccs-hash",            # CCS root: debe retirarse
+            "captured_at": "2026-07-27T18:00:00Z", # CCS root: debe retirarse
+            "snapshot_id": "snap-002",             # CCS root: se conserva
             "status": "verified",
         },
     }
@@ -706,7 +716,7 @@ def test_strip_context_aware_preserves_external_hashes():
     assert result["snapshot_id"] == "snap-999"
     assert result["recommendation_id"] == "rec-123"
 
-    # DCS: llm_selected, content_hash, captured_at removed
+    # DCS root: llm_selected, content_hash, captured_at removed
     dcs = result["decision_context_snapshot"]
     assert "llm_selected" not in dcs
     assert "content_hash" not in dcs
@@ -715,7 +725,18 @@ def test_strip_context_aware_preserves_external_hashes():
     assert dcs["cycle_id"] == "c1"
     assert dcs["decision_source"] == "llm"
 
-    # CCS: content_hash, captured_at removed; snapshot_id preserved
+    # DCS nested market_state_ref: content_hash/captured_at SURVIVEN
+    msr = dcs["market_state_ref"]
+    assert msr["content_hash"] == "msr-hash"
+    assert msr["captured_at"] == "2026-07-27T18:00:00Z"
+    assert msr["status"] == "available"
+
+    # DCS nested gate_evaluation: content_hash/captured_at SURVIVEN
+    gate = dcs["gate_evaluation"]
+    assert gate["content_hash"] == "gate-hash"
+    assert gate["captured_at"] == "2026-07-27T17:00:00Z"
+
+    # CCS root: content_hash, captured_at removed; snapshot_id preserved
     ccs = result["comparable_control_set"]
     assert "content_hash" not in ccs
     assert "captured_at" not in ccs
