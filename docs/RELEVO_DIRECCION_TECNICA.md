@@ -15,6 +15,13 @@
 > cambios en src, produccion ni politica. Siguiente paso: implementar el
 > shadow en worktree separado, sin desplegar.
 
+> P-L54B-T-R1 (27-jul-2026): se corrigieron las invariantes del contrato sin
+> tocar src. El snapshot anterior permitia risk-approved=135 y risk-rejected=80
+> con gates-passed=135, y 135.000 USD de notional no alcanzable. La tabla
+> cerrada es 376 -> 306 -> 256 -> 95 -> 15, con 361 caidas y 15 planes.
+> Dictamen: `ready_for_p54b_implementation`. El siguiente lote unico es
+> implementar el productor shadow en worktree separado.
+
 > P-L58R1-Retry (27-jul-2026): worktree
 > `C:\Antonio\Bref\agenteBolsa_worktrees\pl58r1_measurement_safety_rehearsal`,
 > rama `codex/pl58r1-measurement-safety-rehearsal`, HEAD final posterior al

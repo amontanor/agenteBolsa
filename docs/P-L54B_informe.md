@@ -12,6 +12,14 @@ Ambos quedan `null/unavailable` cuando no existe una fuente estructurada
 autorizada. El siguiente paso es una implementación shadow aislada; no se
 ejecuta en este lote.
 
+P-L54B-T-R1 corrige una deuda del primer informe: sus conteos intermedios no
+eran una particion secuencial. El snapshot anterior publicado decia
+`gates_passed=135`, `risk_approved=135` y `risk_rejected=80`; por tanto,
+`risk_approved + risk_rejected = 215 > gates_passed`. Tambien declaraba
+135.000 USD de riesgo aprobado aunque solo 15 identidades llegaban a plan.
+Esas aserciones negativas reproducen el fallo contra `b99d6fc4` y ahora quedan
+rechazadas por el contrato.
+
 ## Alcance y estado
 
 - Fecha de ejecución: 27-jul-2026, Europe/Madrid; XNYS cerrado, próxima
@@ -116,8 +124,8 @@ La exposición observada es 0,1085 (10,85%); `target_account_exposure` y
 | recommendations generated | 376 | complete |
 | `llm_selected` / `llm_considered` | 15 / 15 | complete |
 | decision source LLM / deterministic capacity fill | 126 / 250 | descriptive |
-| gates evaluated / passed / rejected / unavailable | 376 / 135 / 180 / 61 | complete |
-| risk approved / rejected / unavailable | 135 / 80 / 161 | complete |
+| gates evaluated / passed / rejected / unavailable | 256 / 95 / 100 / 61 | complete |
+| risk approved / rejected / unavailable | 15 / 80 / 0 | complete |
 | plans generated | 15 | complete |
 | orders submitted / filled | 15 / 15 | complete |
 | pending / rejected / cancelled orders | 0 / 0 / 0 | verified zero |
@@ -126,11 +134,13 @@ La exposición observada es 0,1085 (10,85%); `target_account_exposure` y
 
 | Etapa | Notional USD | Cobertura |
 |---|---:|---|
-| candidate requested | 564.000 | 376/376, complete |
-| risk approved | 135.000 | 135/376, partial |
-| planned | 15.000 | 15/376, partial |
-| submitted | 15.000 | 15/376, partial |
-| filled | 15.000 | 15/376, partial |
+| candidate requested | 564.000 | 376/376, USD, complete |
+| gate eligible | 142.500 | 95/95, USD, complete |
+| risk approved | 15.000 | 15/15, USD, complete |
+| sizing approved | 15.000 | 15/15, USD, complete |
+| planned | 15.000 | 15/15, USD, complete |
+| submitted | 15.000 | 15/15, USD, complete |
+| filled | 15.000 | 15/15, USD, complete |
 | target/min/max exposure estructurados | `null` | unavailable |
 | notional objetivo realmente desplegable | `null` | unavailable |
 
@@ -147,8 +157,9 @@ ni una garantía de scheduler.
 
 Se asigna una sola razón primaria por identidad con prioridad estable:
 
-`identity_unavailable` → `temporal_unavailable` → `gate_unavailable` →
-`gate_rejected` → `risk_rejected` → `execution_rejected_cancelled` →
+`identity_unavailable` → `temporal_unavailable` → `selection_unavailable` →
+`gate_unavailable` → `gate_rejected` → `risk_unavailable` → `risk_rejected` →
+`execution_rejected_cancelled` →
 `capacity_exhausted` → `quota_duplicate_guard` → `not_selected` →
 `sizing_zero` → `cap_limited` → `not_generated` →
 `not_applicable_exit`.
@@ -178,7 +189,7 @@ conflictos separados.
 Ejecutado con Python del proyecto, `PYTHONPATH` del worktree y `DATA_DIR`
 temporal:
 
-- nuevas pruebas P-L54B-T: **13 passed**;
+- pruebas P-L54B-T/R1: **27 passed**;
 - focales P-L53/P-L50/P-L51/P-L52: **126 passed**, con una advertencia de
   deprecación de `websockets` preexistente;
 - trade-decision/riesgo/gates/lineage/storage/controles: **80 passed**;
@@ -200,6 +211,36 @@ servicios, procesos, configuración, locks, leases, P-L58R1 ni otros worktrees.
 No hubo despliegue, reinicio ni push. La caracterización no cambia candidatos,
 scores, ranks, recomendaciones, gates, sizing, planes, órdenes, exposición ni
 límites.
+
+## P-L54B-T-R1 — invariantes de alcance y notional
+
+La tabla corregida es secuencial y sin doble conteo:
+
+| Etapa | Reached | Passed/approved | Rejected | Unavailable | Not generated |
+|---|---:|---:|---:|---:|---:|
+| selection | 376 | 306 | 70 | 0 | 0 |
+| capacity | 306 | 256 | 50 | 0 | 70 |
+| gates | 256 | 95 | 100 | 61 | 120 |
+| risk | 95 | 15 | 80 | 0 | 281 |
+| sizing | 15 | 15 | 0 | 0 | 361 |
+| plans | 15 | 15 | 0 | 0 | 361 |
+| orders | 15 | 15 | 0 | 0 | 361 |
+| fills | 15 | 15 | 0 | 0 | 361 |
+
+El orden caracterizado es selección → `capacity check` dentro de
+`build_buy_order_plans` → gates → `RiskManager` → sizing → plan. Una etapa
+posterior a una caída primaria es `not_generated`, no `unavailable`.
+
+El waterfall corregido es: requested 564.000 USD (376/376), gate eligible
+142.500 USD (95/95), risk approved 15.000 USD (15/15), sizing approved 15.000,
+planned 15.000, submitted 15.000 y filled 15.000. Cada importe lleva
+`available_count`, `unavailable_count`, `denominator_count`, moneda y estado.
+Target/min/max exposure y notional objetivo siguen `null/unavailable`.
+
+La partición terminal BUY es 15 éxitos de plan/orden/fill + 361 caídas = 376.
+Los estados `risk_unavailable`, `sizing_unavailable` y
+`selection_unavailable` son categorías separadas. Un gate rechazado no aparece
+como riesgo rechazado; un riesgo unavailable no genera plan.
 
 Siguiente lote único: implementar el productor shadow en un worktree nuevo desde
 este commit, reutilizando los objetos reales del ciclo y dejando explícitos los

@@ -32,6 +32,18 @@
   `p-l54b.capital-deployment-funnel-shadow.v1`; no desplegar ni cambiar
   politica con esta caracterizacion.
 
+## P-L54B-T-R1 - invariantes de alcance y notional (27-jul-2026)
+
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl54btr1_funnel_invariants`,
+  rama `codex/pl54btr1-funnel-invariants`, desde `b99d6fc4`, version 0.4.193.
+- Se reproduce y corrige el snapshot no secuencial: la tabla valida queda
+  selection 376 -> capacity 306 -> gates 256 -> risk 95 -> sizing/plans 15.
+  Caidas primarias exactas: 361; planes/ordenes/fills: 15.
+- El notional risk-approved queda en 15.000 USD con cobertura 15/15; target
+  exposure y notional objetivo siguen unavailable. No se modifica src ni
+  productor.
+- Siguiente paso unico: P-L54B-W sobre este contrato cerrado, en otro lote.
+
 ## P-L58R1 - ensayo combinado de seguridad de medicion (27-jul-2026)
 
 - Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl58r1_measurement_safety_rehearsal`,
