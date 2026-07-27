@@ -621,27 +621,14 @@ cerrada.
 - Gates omitidos: suite, smoke, benchmark, P-L45 33.336, kernel (XNYS abierto).
 - Siguiente: P-L59E validacion cerrada completa.
 
-## P-L59F-T — caracterizacion y diseno de la colision recommendation_id (27-jul-2026)
+## P-L59F-T-R2 — caracterizacion final y contrato de implementacion (27-jul-2026)
 
-- Dictamen: **`ready_for_implementation`**. XNYS abierto, ~21:50 CEST.
-- Base: P-L59D-D HEAD `520559c6`, tree `e3c80ba`, v0.4.196.
-- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59ft_recommendation_identity_design`,
-  rama `codex/pl59ft-recommendation-identity-design`.
-- HEAD test: `34a70248`. Solo tests/docs, sin cambios en src.
-- Colision: `_attach_phase_b` en `canonical_selection_ledger.py` usa
-  `(cycle_id, action, canonical_id)` como clave; dos recomendaciones para
-  la misma identidad → last-wins. P-L54 usa `(cycle, action, signal, rec_id)`
-  y NO sufre esta colision.
-- 17 tests pasan con APIs reales: colision last-wins, idempotencia store,
-  conflicto append-only, BUY/EXIT separados, legacy IDs, productor/wiring,
-  13 consumidores catalogados, impacto expansion, stage order.
-- Ruff/NUL/diff verdes. Gates omitidos: suite, smoke, benchmark, P-L45 33.336,
-  kernel (XNYS abierto). Sin broker, red, LLM, SQLite productiva.
-- Dictamen R1: **`ready_for_implementation`**. Correcciones: same-rec_id
-  en un build, _auto_paper_trade con dos recomendaciones, P-L54 API real,
-  tests tautologicos eliminados, expansion con APIs reales.
-- Diseno B corregido: summary v2 (0/1/>1 decisiones), backward compat,
-  decision_rows con clave exacta, bounded memory, denominadores separados,
-  readers v1/v2. Cero migracion/backfill.
-- 18 tests pasan (0.94s). Ruff/NUL/diff verdes. XNYS abierto.
+- Dictamen: **`ready_for_implementation`**. XNYS abierto, ~22:15 CEST.
+- HEAD tests R2: `7af01727`. Solo tests/docs, sin src.
+- 17 tests: colision, same-rec_id, BUY/EXIT, missing IDs, wiring real
+  `_auto_paper_trade` (sin rec_id preasignado, mismo lineage, orden),
+  P-L54 API, expansion misma identidad + match_same_cycle_controls.
+- Contrato de implementacion completo en informe (candidate_rows v2,
+  decision_rows con adjuntos, hash, bounded, readers, consumidores).
+- Ruff/NUL/diff verdes. Gates omitidos (XNYS abierto).
 - Siguiente: P-L59F-I implementacion de decision_rows en worktree aislado.

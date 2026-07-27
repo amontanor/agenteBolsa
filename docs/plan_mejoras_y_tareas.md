@@ -2550,30 +2550,21 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Gates omitidos (XNYS abierto): suite, smoke, benchmark, P-L45 33.336, kernel.
 - Siguiente: P-L59E validacion cerrada completa (requiere XNYS cerrado).
 
-## P-L59F-T — caracterizacion y diseno de la colision recommendation_id (27-jul-2026)
+## P-L59F-T-R2 — caracterizacion final y contrato de implementacion (27-jul-2026)
 
-- Dictamen: **`ready_for_implementation`**. XNYS abierto, ~21:50 CEST.
+- Dictamen: **`ready_for_implementation`**. XNYS abierto, ~22:15 CEST.
 - Base: P-L59D-D `520559c6` (tree `e3c80ba`, v0.4.196).
 - Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59ft_recommendation_identity_design`,
   rama `codex/pl59ft-recommendation-identity-design`.
-- HEAD test: `34a70248`. Solo tests/docs, sin cambios en src.
-- Colision confirmada: dos recomendaciones mismo (cycle, action, canonical_id)
-  → last-wins silencioso en `_attach_phase_b`. P-L54 NO sufre esta colision
-  (incluye recommendation_id en decision_key).
-- 17 tests de caracterizacion con APIs reales: colision, idempotencia,
-  conflicto append-only, BUY/EXIT, legacy IDs, productor/wiring, consumidores,
-  expansion vs sobrescritura, stage order.
-- Ruff/NUL/diff verdes. Gates omitidos (XNYS abierto): suite, smoke,
-  benchmark, P-L45, kernel.
-- Dictamen R1: **`ready_for_implementation`**. Defectos corregidos:
-  same-rec_id en un build, _auto_paper_trade con dos recomendaciones,
-  P-L54 API real con build_capital_deployment_funnel_shadow, tests
-  tautologicos eliminados, expansion con APIs reales.
-- Diseno B corregido: summary v2 (0/1/>1 decisiones), backward compat
-  (campos singulares conservados para 1 decision), decision_rows con
-  clave (cycle+action+canonical_signal+rec_id), bounded memory, denominadores
-  separados (candidate_count/recommendation_observed/canonical/conflict/
-  unavailable), readers v1/v2, cero migracion/backfill.
-- 18 tests pasan (0.94s). Ruff/NUL/diff verdes. XNYS abierto.
+- HEAD tests R2: `7af01727`. Solo tests/docs, sin cambios en src.
+- 17 tests: colision last-wins, same-rec_id in-memory y Store, BUY/EXIT,
+  missing IDs, wiring real `_auto_paper_trade` (sin rec_id preasignado,
+  mismo lineage, orden ejecucion registrado), P-L54 API real (distintos
+  rec_id 2 filas, same-ID same 1 fila, same-ID different ambiguous),
+  expansion con identidad duplicada + match_same_cycle_controls.
+- Ruff/NUL/diff verdes. Gates omitidos (XNYS abierto).
+- Contrato de implementacion completo: candidate_rows v2 summary (8 estados),
+  decision_rows con adjuntos plan/order/rejection, hash semantico, bounded
+  memory, denominadores separados, readers v1/v2, consumidores catalogados.
 - Siguiente: P-L59F-I implementacion de decision_rows en worktree aislado.
-  Version propuesta 0.4.197 sujeta a verificacion de disponibilidad.
+  Version 0.4.197 propuesta sujeta a verificacion.

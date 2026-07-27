@@ -191,123 +191,180 @@ P-L59E: validacion cerrada completa de P-L59D. Requiere:
 
 ---
 
-# P-L59F-T-R1 — caracterizacion corregida y diseno B (27-jul-2026)
+# P-L59F-T-R2 — caracterizacion final y contrato de implementacion (27-jul-2026)
 
 ## Dictamen
 
-**`ready_for_implementation`** (R1 corregido).
+**`ready_for_implementation`** (R2 final).
 
-## Candidato R1
+## Candidato
 
 - **Base**: P-L59D-D `520559c6`, tree `e3c80ba`, v0.4.196
 - **Worktree**: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59ft_recommendation_identity_design`
 - **Rama**: `codex/pl59ft-recommendation-identity-design`
+- **HEAD R2 tests**: `7af01727`
 - **Version**: `0.4.196` (sin bump; solo tests/docs)
 - **Hora**: 2026-07-27 CEST, XNYS abierto
 
-## Correcciones R1
+## Correcciones acumuladas (R1 + R2)
 
 ### 1. Same recommendation_id real
-- `test_same_rec_id_same_content_within_one_build_last_wins_silently`: mismo
-  rec_id + mismo contenido, un solo build -> segunda sobreescribe; sin dedup
-  explicita de recommendation_id.
-- `test_same_rec_id_different_content_within_one_build_last_wins`: mismo rec_id
-  + distinto confidence/source dentro de un build -> last-wins.
-- `test_same_rec_id_different_content_across_builds_store_conflict`: mismo
-  rec_id, distinto contenido global, dos builds (mismo event_id) -> conflicto
-  append-only en Store; original preservado.
-- `test_same_rec_id_same_content_across_builds_store_idempotent`: mismo contenido,
-  dos builds -> idempotente.
+4 tests: same/different-content dentro de un build, conflicto Store entre
+builds, idempotencia entre builds.
 
-### 2. Wiring real con _auto_paper_trade
-- `test_auto_paper_trade_two_recommendations_same_signal_p53_p54_spies`: ejecuta
-  `_auto_paper_trade` con DOS TradeRecommendation mismo symbol/action/signal.
-  Espia P-L53 y P-L54. Confirma IDs distintos asignados por `new_id("rec")`
-  antes de gates/ledger. P-L53 y P-L54 reciben 2 recomendaciones con IDs distintos.
+### 2. Wiring real con _auto_paper_trade (R2)
+`test_wiring_two_recs_same_lineage_ids_assigned_ordered`: DOS TradeRecommendation
+entran SIN recommendation_id preasignado y con MISMO decision_lineage.
+`_auto_paper_trade` asigna IDs via `new_id("rec")`. `build_order_plans`
+construye desde los gated recibidos (con IDs ya asignados). Registra orden:
+request -> review -> entry/backtest gates -> plans -> 2 submits -> P-L53 -> P-L54.
+Afirma coherencia: IDs en gated == IDs en P-L53 == IDs en P-L54.
 
 ### 3. P-L54 API real
-- `test_p54_two_decisions_same_signal_distinct_rec_ids_produce_two_rows`: dos
-  decisiones mismo signal + distinto recommendation_id -> 2 filas en details.
-  P-L54 no sufre la colision porque decision_key incluye recommendation_id.
-- `test_p54_same_rec_id_true_identical_content_idempotent`: misma row -> 1 fila.
-- `test_p54_same_rec_id_different_content_becomes_ambiguous`: mismo decision_key
-  + distinto content -> ambas identity_ambiguous.
+3 tests: distinto rec_id -> 2 filas; same rec_id same content -> 1 fila;
+same rec_id different content -> ambiguous.
 
-### 4. Tests tautologicos eliminados
-- Inventario y diseno en informe, no en tests.
-- Stage order local sustituido por `_auto_paper_trade` real.
-- `test_expansion_impact_real_denominators`: APIs `build_canonical_selection_ledger`
-  + `match_same_cycle_controls` reales.
+### 4. Tests tautologicos eliminados (R2)
+`test_recommendation_id_assigned_before_gates_and_ledger` eliminado; el wiring
+test es la evidencia. Inventario en informe.
 
-### 5. Diseno B corregido con backward compatibility
+### 5. Expansion real sin cambiar identidad (R2)
+`test_expansion_same_identity_duplicated_inflates_counters`: construye una
+candidate_row, duplica LA MISMA desde el resultado del ledger (misma identity_key,
+distinto recommendation_id). Demuestra recommended_count inflado (1 vs 2) y
+exclusion same_treatment en match_same_cycle_controls.
 
-#### Summary v2 de candidate_rows
-- **0 decisiones**: campos singulares null/unavailable.
-- **Exactamente 1 decision canonica**: recommendation_id, llm_selected,
-  decision_source se conservan para compatibilidad v1.
-- **>1 decisiones**: `decision_summary_status="ambiguous"`, campos singulares
-  null (nunca last-wins), `decision_ids`, `decision_rows` completas.
+### 6. Contrato de implementacion completo
 
-#### decision_rows
-- Una entrada por `(cycle_id, action, canonical_signal, recommendation_id)`.
-- Mismo rec_id + mismo contenido: idempotente, no duplicar.
-- Mismo rec_id + distinto contenido: conservar original, conflicto auditable.
-- Missing recommendation_id: identity_unavailable, sin inventar ID.
+#### candidate_rows v2 — resumen candidato-centrico
+
+Cada candidato tiene UNA entrada. Campos singulares
+(`recommendation_id`/`llm_selected`/`decision_source`/`confidence`) solo se
+rellenan cuando hay exactamente una decision canonica y cero
+legacy/conflict/ambiguous.
+
+| Estado | decision_summary_status | Singular fields | decision_ids | decision_rows count |
+|---|---|---|---|---|
+| 0 observed | `unavailable` | null | [] | 0 |
+| 1 canonical | `canonical` | valor real | [id] | 1 |
+| >1 canonical, distinto rec_id | `ambiguous` | null | [id1, id2, ...] | >=2 |
+| 1 missing-ID | `partial` | null (sin ID) | [] | 1 (unavailable) |
+| multiple missing-ID | `ambiguous` | null | [] | >=2 (unavailable) |
+| 1 canonical + 1 missing-ID | `ambiguous` | null | [id, null] | 2 |
+| same-ID duplicate (idempotent) | `canonical` | valor real | [id] | 1 |
+| same-ID conflict (different content) | `ambiguous` | null | [id] | 1 canonical + 1 conflict |
+
+Booleans agregados en candidate_rows: `recommended`/`planned`/`ordered` = True
+si AL MENOS una decision asociada tiene esa etapa.
+
+#### decision_rows — una entrada por decision
+
+Cada decision es una fila independiente. Clave: `(cycle_id, action, canonical_signal, recommendation_id)`.
+
+Campos:
+
+| Campo | Origen | Nota |
+|---|---|---|
+| `decision_id` | recommendation_id | PK de decision |
+| `cycle_id` | lineage | mismo que candidate_row |
+| `action` | lineage | buy/exit |
+| `signal_capture_id` | lineage | identidad canonica |
+| `signal_id` | lineage | fallback canonico |
+| `candidate_id` | lineage | vinculo con candidate_row |
+| `llm_selected` | P-L59C producer | bool, null=legacy |
+| `decision_source` | source normalizado | llm/capacity_fill/fallback |
+| `confidence` | TradeRecommendation | float |
+| `decision_context_snapshot` | snapshot completo | hash, market_state, gates |
+| `plan_id` | plan_record | unido por recommendation_id |
+| `plan_status` | plan_record | PENDING/SUBMITTED/REJECTED |
+| `broker_order_id` | ordered_record | unido por plan_id |
+| `order_status` | ordered_record | accepted/filled/rejected |
+| `rejection_reason` | rejected_order_plans | unido por recommendation_id/plan_id |
+| `decision_lineage_status` | `verified`/`partial`/`unavailable` | calidad de identidad |
+
+Nunca unir por simbolo o fecha.
+
+#### Hash de decision row
+
+- `content_hash`: SHA256 de decision_row completo excluyendo `captured_at` y
+  `content_hash` propio.
+- Mismo ID + mismo hash semantico -> idempotente (no-op en persistencia).
+- Mismo ID + distinto hash -> conservar original, crear conflict row separada
+  (no canonica), `conflict_count++`.
+- `captured_at` no rompe idempotencia (excluido del hash).
 
 #### Bounded memory
-- `observed_count`, `detail_persisted`, `truncated_count`, `conflict_count`.
-- Reutilizar DEFAULT_DETAIL_LIMIT de P-L54.
 
-#### Denominadores separados
-- `candidate_count`: identity_status=verified.
-- `recommendation_observed`: total recomendaciones procesadas.
-- `recommendation_canonical`: decision_identity=verified.
-- `recommendation_conflict`: same-rec_id different-content.
-- `recommendation_unavailable`: sin ID o identidad parcial.
+- `detail_total`: total de decision_rows antes de truncar.
+- `detail_persisted`: filas persistidas (<= limit).
+- `truncated_count`: `detail_total - detail_persisted`.
+- `conflict_count`: conflict rows (mismo ID, distinto hash).
+- Orden estable: por identity_key + decision_id.
+- Reutilizar DEFAULT_DETAIL_LIMIT (actualmente en P-L54, ~1000).
+- No backfill ni VACUUM.
 
-#### Readers v1/v2
-- **v1**: `candidate_rows[*]["recommendation_id"]` fallback a singular si
-  existe, null si ambiguous.
-- **v2**: `decision_rows` por recommendation_id.
-- Cero migracion ni backfill.
+#### Denominadores separados (v2)
 
-#### Inventario de consumidores
+| Denominador | Definicion |
+|---|---|
+| `candidate_count` | candidate_rows con identity_status=verified |
+| `recommendation_observed` | recomendaciones procesadas (total) |
+| `recommendation_canonical` | decision_rows con decision_identity=verified |
+| `recommendation_conflict` | same-rec_id different-content |
+| `recommendation_unavailable` | sin recommendation_id o identidad parcial |
 
-| Consumidor | Modulo | Adaptacion |
+#### Readers v1/v2 y consumidores
+
+| Consumidor | Lee | v2 Adaptacion |
 |---|---|---|
-| `read_canonical_selection_ledger` | canonical_selection_ledger.py:653 | v2: decision_rows |
-| `canonical_selection_ledger_digest` | canonical_selection_ledger.py:666 | Sin cambio directo |
-| `match_same_cycle_controls` | canonical_selection_ledger.py:686 | Sin cambio |
-| `match_mature_forward_outcome` | canonical_selection_ledger.py:764 | Sin cambio |
-| P-L54 funnel shadow | capital_deployment_funnel_shadow.py:120 | YA independiente |
-| P-L48B operation telemetry | canonical_operation_telemetry.py:340 | Sin cambio |
-| Post-market review | post_market_review.py:541 | Sin cambio |
-| CLI canonical-selection-ledger | main.py:2563 | Transparente |
+| `read_canonical_selection_ledger` | candidate_rows, decision_rows | Nuevo array decision_rows; candidate_rows mantiene API |
+| `canonical_selection_ledger_digest` | via read | Transparente |
+| `match_same_cycle_controls` | candidate_rows identity_key | Sin cambio (candidate_rows 1:1) |
+| `match_mature_forward_outcome` | candidate_rows identity_key | Sin cambio |
+| CLI `canonical-selection-ledger` | digest JSON | Transparente |
+| P-L59C authority tests | candidate_rows llm_selected | Leer de decision_rows en v2 |
+| `test_llm_selected_*` (tests) | candidate_rows llm_selected | Adaptar aserciones a decision_rows |
+| P-L54 funnel shadow | decision_key propio | YA independiente |
+| P-L48B telemetry | SQL trade_recommendations | Sin cambio |
+| Post-market review | SQL trade_recommendations | Sin cambio |
+| Exec quality P-L33B | payload recommendation_id | Sin cambio |
 
-## Pruebas
+Consumidores que **si requieren adaptacion** a v2:
+- `test_p59c_llm_selected_authority.py`: lee `candidate_rows[0]["llm_selected"]`;
+  debe leer `decision_rows[0]["llm_selected"]`.
+- `test_p59bt_llm_selected_contract_characterization.py`: idem.
 
-- **18 passed** en 0.94s (colision, same-rec_id, BUY/EXIT, missing IDs,
-  _auto_paper_trade, P-L54, expansion, stage order)
+#### P-L54 evidencia limitada a tests reales
+
+- IDs distintos: dos filas en details, recommendations_generated=2.
+- Same-ID same-content: una fila (idempotente).
+- Same-ID different-content: dos filas identity_ambiguous.
+
+## Pruebas R2
+
+- **17 passed** en 0.92s (colision + same-rec_id + BUY/EXIT + missing IDs
+  + wiring real + P-L54 API + expansion)
 - Ruff: All checks passed
 - NUL: OK (436 archivos)
 - git diff --check: clean
 
 ## Gates omitidos (XNYS abierto)
 
-Suite completa, smoke, benchmark, P-L45 33.336, kernel.
+Suite completa, smoke, benchmark, P-L45 33.336, kernel, validate-agent-config,
+py_compile. Sin cambios en src. Sin broker/red/LLM/SQLite productiva.
 
-## Archivos
+## Archivos modificados
 
-| Archivo | Cambio R1 |
+| Archivo | Cambio R2 |
 |---|---|
-| `tests/test_p59ft_recommendation_identity_design.py` | Reescrito: 18 tests |
-| `docs/P-L59_informe.md` | Seccion P-L59F-T-R1 agregada |
-| `docs/plan_mejoras_y_tareas.md` | Actualizado |
-| `docs/RELEVO_DIRECCION_TECNICA.md` | Actualizado |
-| `docs/P-L59F-T_informe.md` | ELIMINADO (consolidado) |
+| `tests/test_p59ft_recommendation_identity_design.py` | R2: wiring sin rec_id preasignado, expansion misma identidad, stage local eliminado |
+| `docs/P-L59_informe.md` | Contrato de implementacion completo (R2) |
+| `docs/plan_mejoras_y_tareas.md` | Limpiado (R2 final) |
+| `docs/RELEVO_DIRECCION_TECNICA.md` | Limpiado (R2 final) |
+| `docs/P-L59F-T_informe.md` | ELIMINADO (consolidado en R1) |
 
 ## Siguiente paso (sin ejecutar)
 
 P-L59F-I: implementacion de `decision_rows` en `canonical_selection_ledger.py`
-segun diseno B corregido, worktree aislado. Version propuesta `0.4.197` sujeta
-a verificacion de disponibilidad.
+segun este contrato completo, en worktree aislado. Version `0.4.197` propuesta
+sujeta a verificacion de que ningun otro candidato use ese numero.
