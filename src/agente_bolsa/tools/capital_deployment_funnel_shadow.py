@@ -117,20 +117,49 @@ def _action(value: Any) -> str | None:
     return None
 
 
-def _identity(value: Any, cycle_id: str) -> tuple[str, str, str] | None:
+def _identity_info(value: Any, cycle_id: str) -> dict[str, Any]:
     row = _mapping(value)
     lineage = _mapping(row.get("decision_lineage"))
-    cycle = _text(row.get("cycle_id") or lineage.get("cycle_id")) or _text(cycle_id)
+    external_cycle = _text(cycle_id)
+    embedded_cycle = _text(row.get("cycle_id")) or _text(lineage.get("cycle_id"))
     action = _action(row)
     capture = _text(row.get("signal_capture_id") or lineage.get("signal_capture_id"))
     signal = _text(row.get("signal_id") or lineage.get("signal_id"))
     canonical_signal = capture or signal
-    if not cycle or not action or not canonical_signal:
-        return None
-    return cycle, action, canonical_signal
+    recommendation = _text(row.get("recommendation_id") or lineage.get("recommendation_id"))
+    cycle_mismatch = bool(embedded_cycle and external_cycle and embedded_cycle != external_cycle)
+    signal_key = (external_cycle, action, canonical_signal) if external_cycle and action and canonical_signal and not cycle_mismatch else None
+    decision_key = signal_key + (recommendation,) if signal_key and recommendation else None
+    signal_quality = "verified" if signal_key else "unavailable"
+    if cycle_mismatch:
+        reason = "cycle_mismatch"
+    elif not action or not canonical_signal or not external_cycle:
+        reason = "identity_unavailable"
+    else:
+        reason = None
+    decision_quality = "verified" if decision_key else "partial" if signal_key else "unavailable"
+    return {
+        "external_cycle": external_cycle,
+        "embedded_cycle": embedded_cycle,
+        "cycle_mismatch": cycle_mismatch,
+        "action": action,
+        "signal_capture_id": capture,
+        "signal_id": signal,
+        "canonical_signal": canonical_signal,
+        "recommendation_id": recommendation,
+        "signal_key": signal_key,
+        "decision_key": decision_key,
+        "signal_quality": signal_quality,
+        "decision_quality": decision_quality,
+        "reason": reason,
+    }
 
 
-def _identity_text(key: tuple[str, str, str] | None) -> str | None:
+def _identity(value: Any, cycle_id: str) -> tuple[str, str, str, str] | None:
+    return _identity_info(value, cycle_id)["decision_key"]
+
+
+def _identity_text(key: tuple[str, ...] | None) -> str | None:
     return "|".join(key) if key else None
 
 
@@ -184,7 +213,13 @@ def _normalise_stage_map(row: Mapping[str, Any]) -> dict[str, str]:
     if not result:
         if _action(row) == "exit":
             return {stage: "not_applicable" for stage in STAGE_ORDER}
-        if row.get("identity_status") in {"identity_unavailable", "identity_ambiguous"}:
+        if row.get("identity_status") in {
+            "identity_unavailable",
+            "identity_ambiguous",
+            "decision_identity_partial",
+            "decision_identity_ambiguous",
+            "cycle_mismatch",
+        }:
             return {stage: "unavailable" if stage == "selection" else "not_generated" for stage in STAGE_ORDER}
         result["selection"] = "passed" if row.get("eligible_at_selection", row.get("eligible", True)) is not False else "rejected"
         if row.get("selected_for_llm") is False and row.get("recommended") is not True:
@@ -239,6 +274,10 @@ def _primary_reason(row: Mapping[str, Any], stages: Mapping[str, str]) -> str | 
 def _compact_detail(row: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "identity_key": row.get("identity_key"),
+        "signal_identity_key": row.get("signal_identity_key")
+        if row.get("decision_identity_quality") != "verified"
+        else None,
+        "identity_status": row.get("identity_status"),
         "action": row.get("action"),
         "candidate_id": row.get("candidate_id"),
         "recommendation_id": row.get("recommendation_id"),
@@ -258,14 +297,24 @@ def _compact_detail(row: Mapping[str, Any]) -> dict[str, Any]:
 def _normalise_row(value: Any, *, cycle_id: str, captured_at: datetime, warnings: list[str]) -> dict[str, Any]:
     raw = _mapping(value)
     lineage = _mapping(raw.get("decision_lineage"))
-    key = _identity(raw, cycle_id)
+    info = _identity_info(raw, cycle_id)
+    identity_status = "verified" if info["decision_quality"] == "verified" else (
+        "cycle_mismatch" if info["cycle_mismatch"] else "decision_identity_partial" if info["signal_key"] else "identity_unavailable"
+    )
+    if raw.get("identity_ambiguous") is True:
+        identity_status = "identity_ambiguous"
+    identity_reasons = [info["reason"]] if info["reason"] else []
+    if identity_status == "identity_ambiguous":
+        identity_reasons.append("identity_ambiguous")
     row = {
-        "cycle_id": key[0] if key else _text(raw.get("cycle_id") or lineage.get("cycle_id")) or cycle_id,
-        "action": key[1] if key else _action(raw),
-        "signal_capture_id": _text(raw.get("signal_capture_id") or lineage.get("signal_capture_id")),
-        "signal_id": _text(raw.get("signal_id") or lineage.get("signal_id")),
+        "cycle_id": info["external_cycle"] or cycle_id,
+        "source_cycle_id": info["embedded_cycle"],
+        "cycle_identity_status": "mismatch" if info["cycle_mismatch"] else "verified",
+        "action": info["action"],
+        "signal_capture_id": info["signal_capture_id"],
+        "signal_id": info["signal_id"],
         "candidate_id": _text(raw.get("candidate_id") or lineage.get("candidate_id")),
-        "recommendation_id": _text(raw.get("recommendation_id") or lineage.get("recommendation_id")),
+        "recommendation_id": info["recommendation_id"],
         "plan_id": _text(raw.get("plan_id")),
         "broker_order_id": _text(raw.get("broker_order_id")),
         "client_order_id": _text(raw.get("client_order_id")),
@@ -281,9 +330,13 @@ def _normalise_row(value: Any, *, cycle_id: str, captured_at: datetime, warnings
         "plan_at": _timestamp(raw.get("plan_at"), captured_at, warnings, "plan_at"),
         "submitted_at": _timestamp(raw.get("submitted_at"), captured_at, warnings, "submitted_at"),
         "filled_at": _timestamp(raw.get("filled_at"), captured_at, warnings, "filled_at"),
-        "identity_status": "verified" if key else _text(raw.get("identity_status")) or "identity_unavailable",
-        "identity_key": _identity_text(key),
-        "stage_statuses": _normalise_stage_map(raw),
+        "identity_status": identity_status,
+        "signal_identity_quality": "ambiguous" if raw.get("signal_identity_ambiguous") is True else info["signal_quality"],
+        "decision_identity_quality": info["decision_quality"] if identity_status != "identity_ambiguous" else "ambiguous",
+        "identity_reason_codes": sorted(set(identity_reasons)),
+        "signal_identity_key": _identity_text(info["signal_key"]),
+        "identity_key": _identity_text(info["decision_key"]),
+        "stage_statuses": _normalise_stage_map({**raw, "identity_status": identity_status}),
         "primary_drop_reason": None,
         "secondary_reasons": sorted({_text(item) for item in (raw.get("secondary_reasons") or []) if _text(item)}),
         "requested_notional": _finite(raw.get("requested_notional", raw.get("notional")), allow_negative=False),
@@ -299,33 +352,47 @@ def _normalise_row(value: Any, *, cycle_id: str, captured_at: datetime, warnings
         "micro_experiment": raw.get("micro_experiment") if isinstance(raw.get("micro_experiment"), bool) else None,
         "notional_authority": _text(raw.get("notional_authority")),
     }
-    if row["identity_status"] == "verified" and raw.get("identity_ambiguous") is True:
-        row["identity_status"] = "identity_ambiguous"
     row["primary_drop_reason"] = _primary_reason(raw, row["stage_statuses"])
     return row
 
 
-def _key(value: Any, cycle_id: str) -> tuple[str, str, str] | None:
+def _key(value: Any, cycle_id: str) -> tuple[str, str, str, str] | None:
     return _identity(value, cycle_id)
 
 
-def _merge_exact(rows: dict[tuple[str, str, str], dict[str, Any]], values: Sequence[Any] | None, *, cycle_id: str, warnings: list[str], label: str) -> None:
+def _merge_exact(
+    rows: list[dict[str, Any]],
+    exact_index: dict[tuple[str, str, str, str], int],
+    values: Sequence[Any] | None,
+    *,
+    cycle_id: str,
+    warnings: list[str],
+    label: str,
+    attachment_counts: dict[str, int],
+) -> None:
     for value in values or []:
-        key = _key(value, cycle_id)
+        info = _identity_info(value, cycle_id)
+        key = info["decision_key"]
         if key is None:
-            warnings.append(f"{label}_identity_unavailable")
+            warnings.append(f"{label}_{info['reason'] or 'identity_unavailable'}")
+            attachment_counts[f"{label}_attachment_unavailable"] += 1
             continue
-        target = rows.get(key)
-        if target is None:
+        target_index = exact_index.get(key)
+        if target_index is None:
             warnings.append(f"{label}_without_candidate")
+            attachment_counts[f"{label}_attachment_unavailable"] += 1
+            continue
+        target = rows[target_index]
+        if target.get("identity_status") != "verified":
+            warnings.append(f"{label}_identity_conflict")
+            attachment_counts[f"{label}_attachment_ambiguous"] += 1
             continue
         raw = _mapping(value)
-        lineage = _mapping(raw.get("decision_lineage"))
         raw_payload = _mapping(raw.get("payload"))
         for field in ("recommendation_id", "plan_id", "broker_order_id", "client_order_id", "order_status"):
             if raw.get(field) is not None:
                 target[field] = _text(raw.get(field))
-        target["recommendation_id"] = target.get("recommendation_id") or _text(lineage.get("recommendation_id"))
+        target["recommendation_id"] = target.get("recommendation_id") or info["recommendation_id"]
         explicit_stages = raw.get("stage_statuses")
         if isinstance(explicit_stages, Mapping):
             target["stage_statuses"].update(_normalise_stage_map({"stage_statuses": explicit_stages}))
@@ -353,10 +420,19 @@ def _merge_exact(rows: dict[tuple[str, str, str], dict[str, Any]], values: Seque
                     target[field] = parsed
         if raw.get("source") is not None:
             target["decision_source"] = _text(raw.get("source"))
+        if label in {"plan", "rejection"}:
+            attachment_counts["plan_attachment_verified"] += 1 if target.get("plan_id") else 0
+        if label == "submitted":
+            attachment_counts["order_attachment_verified"] += 1 if target.get("broker_order_id") or target.get("client_order_id") else 0
         target["primary_drop_reason"] = _primary_reason(target, target["stage_statuses"])
 
 
-def _stage_counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, int]]:
+def _stage_counts(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    identity_unavailable_count: int = 0,
+    identity_ambiguous_count: int = 0,
+) -> dict[str, dict[str, int]]:
     result: dict[str, dict[str, int]] = {}
     for stage in STAGE_ORDER:
         statuses = [(_mapping(row).get("stage_statuses") or {}).get(stage, "not_generated") for row in rows]
@@ -369,7 +445,8 @@ def _stage_counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, int]
             "rejected_count": sum(status == "rejected" for status in statuses),
             "unavailable_count": sum(status in {"unavailable", "ambiguous"} for status in statuses),
             "not_generated_count": sum(status == "not_generated" for status in statuses),
-            "identity_unavailable_count": sum(_mapping(row).get("identity_status") != "verified" for row in rows),
+            "identity_unavailable_count": identity_unavailable_count if stage == "selection" else 0,
+            "identity_ambiguous_count": identity_ambiguous_count if stage == "selection" else 0,
         }
     return result
 
@@ -388,7 +465,13 @@ def _waterfall(rows: Sequence[Mapping[str, Any]], field: str) -> dict[str, Any]:
     }
 
 
-def _invariants(rows: Sequence[Mapping[str, Any]], stages: Mapping[str, Mapping[str, int]]) -> dict[str, Any]:
+def _invariants(
+    rows: Sequence[Mapping[str, Any]],
+    stages: Mapping[str, Mapping[str, int]],
+    *,
+    excluded_identity_count: int = 0,
+    observed_count: int | None = None,
+) -> dict[str, Any]:
     errors: list[str] = []
     for left, right in zip(STAGE_ORDER, STAGE_ORDER[1:], strict=False):
         if stages[right]["reached_count"] > stages[left]["passed_count"]:
@@ -415,6 +498,8 @@ def _invariants(rows: Sequence[Mapping[str, Any]], stages: Mapping[str, Mapping[
         errors.append("orders_not_subset_plans")
     if stages["fills"]["reached_count"] > stages["orders"]["passed_count"]:
         errors.append("fills_not_subset_orders")
+    if observed_count is not None and success + dropped + excluded_identity_count != observed_count:
+        errors.append("identity_exclusion_partition_not_closed")
     return {
         "valid": not errors,
         "errors": sorted(set(errors)),
@@ -422,6 +507,8 @@ def _invariants(rows: Sequence[Mapping[str, Any]], stages: Mapping[str, Mapping[
         "successful_count": success,
         "dropped_count": dropped,
         "denominator_count": len(rows),
+        "excluded_identity_count": excluded_identity_count,
+        "observed_count": observed_count,
     }
 
 
@@ -447,60 +534,220 @@ def build_capital_deployment_funnel_shadow(
         capture = capture.replace(tzinfo=timezone.utc)
     capture = capture.astimezone(timezone.utc)
     warnings: list[str] = []
-    rows: dict[tuple[str, str, str], dict[str, Any]] = {}
+    rows: list[dict[str, Any]] = []
+    exact_index: dict[tuple[str, str, str, str], int] = {}
+    missing_recommendation_groups: dict[tuple[str, str, str], list[int]] = {}
+    identity_conflicts: list[dict[str, Any]] = []
+    attachment_counts = {
+        "plan_attachment_verified": 0,
+        "plan_attachment_unavailable": 0,
+        "plan_attachment_ambiguous": 0,
+        "order_attachment_verified": 0,
+        "order_attachment_unavailable": 0,
+        "order_attachment_ambiguous": 0,
+    }
     raw_count = None if candidates is None else len(candidates)
     for value in candidates or []:
+        info = _identity_info(value, cycle_id)
         row = _normalise_row(value, cycle_id=cycle_id, captured_at=capture, warnings=warnings)
-        key = _key(value, cycle_id)
+        key = info["decision_key"]
         if key is None:
-            warnings.append("candidate_identity_unavailable")
+            rows.append(row)
+            row_index = len(rows) - 1
+            if info["signal_key"] and not info["recommendation_id"] and not info["cycle_mismatch"]:
+                missing_recommendation_groups.setdefault(info["signal_key"], []).append(row_index)
+            else:
+                warnings.append(f"candidate_{info['reason'] or 'identity_unavailable'}")
             continue
-        if key in rows:
-            warnings.append("candidate_identity_conflict_or_duplicate")
+        existing_index = exact_index.get(key)
+        if existing_index is None:
+            exact_index[key] = len(rows)
+            rows.append(row)
             continue
-        rows[key] = row
-    _merge_exact(rows, recommendations, cycle_id=cycle_id, warnings=warnings, label="recommendation")
-    _merge_exact(rows, gated_recommendations, cycle_id=cycle_id, warnings=warnings, label="gate")
-    _merge_exact(rows, plans, cycle_id=cycle_id, warnings=warnings, label="plan")
-    _merge_exact(rows, rejected_order_plans, cycle_id=cycle_id, warnings=warnings, label="rejection")
-    _merge_exact(rows, submitted, cycle_id=cycle_id, warnings=warnings, label="submitted")
-    ordered_rows = sorted(rows.values(), key=lambda row: str(row.get("identity_key") or ""))
+        existing = rows[existing_index]
+        if content_hash(existing) == content_hash(row):
+            # Exact retries are idempotent at the row projection boundary.
+            continue
+        existing_hash = content_hash(existing)
+        conflicting_hash = content_hash(row)
+        for conflicted in (existing, row):
+            conflicted["identity_status"] = "identity_ambiguous"
+            conflicted["decision_identity_quality"] = "ambiguous"
+            conflicted["identity_reason_codes"] = sorted(
+                set(conflicted.get("identity_reason_codes") or []) | {"identity_conflict"}
+            )
+            conflicted["stage_statuses"] = {
+                stage: "unavailable" if stage == "selection" else "not_generated" for stage in STAGE_ORDER
+            }
+            conflicted["primary_drop_reason"] = "identity_ambiguous"
+        rows.append(row)
+        exact_index.pop(key, None)
+        identity_conflicts.append(
+            {
+                "decision_identity": _identity_text(key),
+                "original_content_hash": existing_hash,
+                "conflicting_content_hash": conflicting_hash,
+            }
+        )
+        warnings.append("candidate_identity_conflict")
+
+    for _signal_key, indexes in missing_recommendation_groups.items():
+        if len(indexes) == 1:
+            row = rows[indexes[0]]
+            row["identity_status"] = "decision_identity_partial"
+            row["decision_identity_quality"] = "partial"
+            row["identity_reason_codes"] = sorted(
+                set(row.get("identity_reason_codes") or []) | {"recommendation_id_unavailable"}
+            )
+        else:
+            for index in indexes:
+                row = rows[index]
+                row["identity_status"] = "identity_ambiguous"
+                row["decision_identity_quality"] = "ambiguous"
+                row["identity_reason_codes"] = sorted(
+                    set(row.get("identity_reason_codes") or []) | {"recommendation_id_collision"}
+                )
+                row["stage_statuses"] = {
+                    stage: "unavailable" if stage == "selection" else "not_generated" for stage in STAGE_ORDER
+                }
+                row["primary_drop_reason"] = "identity_ambiguous"
+            warnings.append("candidate_recommendation_id_collision")
+
+    _merge_exact(
+        rows,
+        exact_index,
+        recommendations,
+        cycle_id=cycle_id,
+        warnings=warnings,
+        label="recommendation",
+        attachment_counts=attachment_counts,
+    )
+    _merge_exact(
+        rows,
+        exact_index,
+        gated_recommendations,
+        cycle_id=cycle_id,
+        warnings=warnings,
+        label="gate",
+        attachment_counts=attachment_counts,
+    )
+    _merge_exact(
+        rows,
+        exact_index,
+        plans,
+        cycle_id=cycle_id,
+        warnings=warnings,
+        label="plan",
+        attachment_counts=attachment_counts,
+    )
+    _merge_exact(
+        rows,
+        exact_index,
+        rejected_order_plans,
+        cycle_id=cycle_id,
+        warnings=warnings,
+        label="rejection",
+        attachment_counts=attachment_counts,
+    )
+    _merge_exact(
+        rows,
+        exact_index,
+        submitted,
+        cycle_id=cycle_id,
+        warnings=warnings,
+        label="submitted",
+        attachment_counts=attachment_counts,
+    )
+    attachment_counts["plan_attachment_verified"] = sum(
+        row.get("identity_status") == "verified" and row.get("plan_id") is not None for row in rows
+    )
+    attachment_counts["order_attachment_verified"] = sum(
+        row.get("identity_status") == "verified" and (row.get("broker_order_id") or row.get("client_order_id")) is not None
+        for row in rows
+    )
+    ordered_rows = sorted(rows, key=lambda row: (str(row.get("identity_key") or ""), str(row.get("candidate_id") or "")))
     stages = _stage_counts(ordered_rows)
     buy_rows = [row for row in ordered_rows if row.get("action") == "buy"]
+    exact_buy_rows = [
+        row
+        for row in buy_rows
+        if row.get("identity_status") == "verified" and row.get("decision_identity_quality") == "verified"
+    ]
+    excluded_identity_count = len(buy_rows) - len(exact_buy_rows)
+    identity_unavailable_count = sum(
+        row.get("signal_identity_quality") == "unavailable" or row.get("identity_status") == "cycle_mismatch"
+        for row in buy_rows
+    )
+    identity_ambiguous_count = sum(row.get("identity_status") == "identity_ambiguous" for row in buy_rows)
+    stages = _stage_counts(
+        exact_buy_rows,
+        identity_unavailable_count=identity_unavailable_count,
+        identity_ambiguous_count=identity_ambiguous_count,
+    )
+    signal_identity_verified = sum(row.get("signal_identity_quality") == "verified" for row in ordered_rows)
+    signal_identity_unavailable = sum(row.get("signal_identity_quality") == "unavailable" for row in ordered_rows)
+    signal_identity_ambiguous = sum(row.get("signal_identity_quality") == "ambiguous" for row in ordered_rows)
+    decision_identity_verified = sum(row.get("decision_identity_quality") == "verified" for row in ordered_rows)
+    decision_identity_partial = sum(row.get("decision_identity_quality") == "partial" for row in ordered_rows)
+    decision_identity_unavailable = sum(row.get("decision_identity_quality") == "unavailable" for row in ordered_rows)
+    decision_identity_ambiguous = sum(row.get("decision_identity_quality") == "ambiguous" for row in ordered_rows)
     denominators = {
         "raw_count": raw_count,
-        "canonical_count": len(ordered_rows) if candidates is not None else None,
-        "identity_unavailable": (raw_count - len(ordered_rows)) if isinstance(raw_count, int) else None,
+        "canonical_count": decision_identity_verified if candidates is not None else None,
+        "identity_unavailable": identity_unavailable_count if candidates is not None else None,
+        "identity_ambiguous": identity_ambiguous_count if candidates is not None else None,
         "buy_population_total": len(buy_rows) if candidates is not None else None,
+        "buy_population_identity_verified": len(exact_buy_rows) if candidates is not None else None,
         "candidates_observed": raw_count,
-        "technically_eligible": sum(row.get("stage_statuses", {}).get("selection") == "passed" for row in buy_rows) if candidates is not None else None,
-        "recommendations_generated": len([row for row in buy_rows if row.get("recommendation_id")]) if candidates is not None else None,
-        "plans_generated": sum(row.get("stage_statuses", {}).get("plans") == "passed" for row in buy_rows) if candidates is not None else None,
-        "orders_submitted": sum(row.get("stage_statuses", {}).get("orders") == "passed" for row in buy_rows) if candidates is not None else None,
-        "orders_filled": sum(row.get("stage_statuses", {}).get("fills") == "passed" for row in buy_rows) if candidates is not None else None,
-        "pending_orders": sum(str(row.get("order_status") or "").lower() == "pending" for row in buy_rows) if candidates is not None else None,
-        "conflict_count": sum("conflict" in warning for warning in warnings),
+        "technically_eligible": sum(row.get("stage_statuses", {}).get("selection") == "passed" for row in exact_buy_rows) if candidates is not None else None,
+        "recommendations_generated": len([row for row in exact_buy_rows if row.get("recommendation_id")]) if candidates is not None else None,
+        "plans_generated": sum(row.get("stage_statuses", {}).get("plans") == "passed" for row in exact_buy_rows) if candidates is not None else None,
+        "orders_submitted": sum(row.get("stage_statuses", {}).get("orders") == "passed" for row in exact_buy_rows) if candidates is not None else None,
+        "orders_filled": sum(row.get("stage_statuses", {}).get("fills") == "passed" for row in exact_buy_rows) if candidates is not None else None,
+        "pending_orders": sum(str(row.get("order_status") or "").lower() == "pending" for row in exact_buy_rows) if candidates is not None else None,
+        "conflict_count": len(identity_conflicts),
         "truncated_count": 0,
+        "signal_identity_verified": signal_identity_verified if candidates is not None else None,
+        "signal_identity_unavailable": signal_identity_unavailable if candidates is not None else None,
+        "signal_identity_ambiguous": signal_identity_ambiguous if candidates is not None else None,
+        "decision_identity_verified": decision_identity_verified if candidates is not None else None,
+        "decision_identity_partial": decision_identity_partial if candidates is not None else None,
+        "decision_identity_unavailable": decision_identity_unavailable if candidates is not None else None,
+        "decision_identity_ambiguous": decision_identity_ambiguous if candidates is not None else None,
+        "recommendation_id_available": sum(row.get("recommendation_id") is not None for row in ordered_rows) if candidates is not None else None,
+        "recommendation_id_unavailable": sum(row.get("recommendation_id") is None for row in ordered_rows) if candidates is not None else None,
+        "cycle_mismatch_count": sum(row.get("cycle_identity_status") == "mismatch" for row in ordered_rows) if candidates is not None else None,
+        "plan_attachment_verified": attachment_counts["plan_attachment_verified"] if candidates is not None else None,
+        "plan_attachment_unavailable": attachment_counts["plan_attachment_unavailable"] if candidates is not None else None,
+        "plan_attachment_ambiguous": attachment_counts["plan_attachment_ambiguous"] if candidates is not None else None,
+        "order_attachment_verified": attachment_counts["order_attachment_verified"] if candidates is not None else None,
+        "order_attachment_unavailable": attachment_counts["order_attachment_unavailable"] if candidates is not None else None,
+        "order_attachment_ambiguous": attachment_counts["order_attachment_ambiguous"] if candidates is not None else None,
     }
     notional = {
-        "requested": _waterfall(buy_rows, "requested_notional"),
-        "gate_eligible": _waterfall([row for row in buy_rows if row.get("stage_statuses", {}).get("gates") == "passed"], "gate_eligible_notional"),
-        "capacity_eligible": _waterfall([row for row in buy_rows if row.get("stage_statuses", {}).get("capacity") == "passed"], "capacity_eligible_notional"),
-        "sizing_approved": _waterfall([row for row in buy_rows if row.get("stage_statuses", {}).get("sizing") == "passed"], "sizing_approved_notional"),
-        "risk_approved": _waterfall([row for row in buy_rows if row.get("stage_statuses", {}).get("risk") == "passed"], "risk_approved_notional"),
-        "planned": _waterfall([row for row in buy_rows if row.get("stage_statuses", {}).get("plans") == "passed"], "planned_notional"),
-        "submitted": _waterfall([row for row in buy_rows if row.get("stage_statuses", {}).get("orders") == "passed"], "submitted_notional"),
-        "filled": _waterfall([row for row in buy_rows if row.get("stage_statuses", {}).get("fills") == "passed"], "filled_notional"),
+        "requested": _waterfall(exact_buy_rows, "requested_notional"),
+        "gate_eligible": _waterfall([row for row in exact_buy_rows if row.get("stage_statuses", {}).get("gates") == "passed"], "gate_eligible_notional"),
+        "capacity_eligible": _waterfall([row for row in exact_buy_rows if row.get("stage_statuses", {}).get("capacity") == "passed"], "capacity_eligible_notional"),
+        "sizing_approved": _waterfall([row for row in exact_buy_rows if row.get("stage_statuses", {}).get("sizing") == "passed"], "sizing_approved_notional"),
+        "risk_approved": _waterfall([row for row in exact_buy_rows if row.get("stage_statuses", {}).get("risk") == "passed"], "risk_approved_notional"),
+        "planned": _waterfall([row for row in exact_buy_rows if row.get("stage_statuses", {}).get("plans") == "passed"], "planned_notional"),
+        "submitted": _waterfall([row for row in exact_buy_rows if row.get("stage_statuses", {}).get("orders") == "passed"], "submitted_notional"),
+        "filled": _waterfall([row for row in exact_buy_rows if row.get("stage_statuses", {}).get("fills") == "passed"], "filled_notional"),
     }
     limit = max(0, int(detail_limit))
     details = [_compact_detail(row) for row in ordered_rows[:limit]]
     omitted = max(0, len(ordered_rows) - len(details))
-    invariants = _invariants(buy_rows, stages)
+    invariants = _invariants(
+        exact_buy_rows,
+        stages,
+        excluded_identity_count=excluded_identity_count,
+        observed_count=len(buy_rows),
+    )
     account_projection = {}
     for field in ("equity", "cash", "buying_power", "gross_exposure", "net_exposure", "target_account_exposure", "target_min_exposure", "target_max_exposure"):
         account_projection[field] = _finite((account or {}).get(field), allow_negative=True) if isinstance(account, Mapping) else None
     status = "collecting" if candidates is None else "verified"
-    if warnings or omitted or not invariants["valid"]:
+    if warnings or omitted or excluded_identity_count or not invariants["valid"]:
         status = "invalid" if not invariants["valid"] else "partial"
     payload: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
@@ -527,8 +774,10 @@ def build_capital_deployment_funnel_shadow(
         "truncated": bool(omitted),
         "details": details,
         "invariants": invariants,
+        "identity_conflicts": identity_conflicts,
+        "attachment_coverage": attachment_counts,
         "warnings": sorted(set(warnings)),
-        "conflicts": sum("conflict" in warning for warning in warnings),
+        "conflicts": len(identity_conflicts),
     }
     payload["content_hash"] = content_hash(payload)
     return _safe(payload)
