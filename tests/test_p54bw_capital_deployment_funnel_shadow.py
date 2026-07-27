@@ -142,7 +142,7 @@ def test_truncation_preserves_denominators_and_is_compact() -> None:
 
 
 def test_hash_excludes_capture_time_and_persistence_is_append_only(tmp_path) -> None:
-    rows = _closed_376()[:2]
+    rows = [{**row, "cycle_id": "cycle-persist"} for row in _closed_376()[:2]]
     first = build_capital_deployment_funnel_shadow("cycle-persist", rows, captured_at=CAPTURED)
     second = build_capital_deployment_funnel_shadow(
         "cycle-persist", rows, captured_at=CAPTURED.replace(hour=11)

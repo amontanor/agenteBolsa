@@ -8,7 +8,6 @@ from agente_bolsa.tools.capital_deployment_funnel_shadow import (
     build_capital_deployment_funnel_shadow,
 )
 
-
 CAPTURED = datetime(2026, 7, 27, 10, 0, tzinfo=timezone.utc)
 
 
@@ -75,6 +74,26 @@ def test_same_recommendation_incompatible_content_is_a_conflict() -> None:
     assert result["notional_waterfall"]["planned"]["value"] is None
 
 
+def test_same_recommendation_identical_content_is_idempotent() -> None:
+    row = _row(recommendation_id="rec-a", plan_id="plan-a")
+
+    result = build_capital_deployment_funnel_shadow("cycle-identity", [row, dict(row)], captured_at=CAPTURED)
+
+    assert result["detail_total"] == 1
+    assert result["denominators"]["decision_identity_verified"] == 1
+    assert result["denominators"]["conflict_count"] == 0
+
+
+def test_candidate_id_does_not_create_a_second_decision() -> None:
+    first = _row(recommendation_id="rec-a", candidate_id="candidate-a")
+    second = _row(recommendation_id="rec-a", candidate_id="candidate-b")
+
+    result = build_capital_deployment_funnel_shadow("cycle-identity", [first, second], captured_at=CAPTURED)
+
+    assert result["denominators"]["decision_identity_ambiguous"] == 2
+    assert result["detail_total"] == 2
+
+
 def test_missing_recommendation_is_partial_and_repeated_partial_is_ambiguous() -> None:
     single = _row(recommendation_id=None, candidate_id="candidate-single", plan_id=None)
     result = build_capital_deployment_funnel_shadow("cycle-identity", [single], captured_at=CAPTURED)
@@ -85,6 +104,34 @@ def test_missing_recommendation_is_partial_and_repeated_partial_is_ambiguous() -
     second = _row(recommendation_id=None, candidate_id="candidate-b", plan_id=None)
     ambiguous = build_capital_deployment_funnel_shadow("cycle-identity", [first, second], captured_at=CAPTURED)
     assert ambiguous["denominators"]["decision_identity_ambiguous"] == 2
+
+
+def test_plan_without_recommendation_is_not_attached_by_signal() -> None:
+    candidate = _row(recommendation_id="rec-a", plan_id=None)
+    candidate["stage_statuses"] = {
+        **candidate["stage_statuses"],
+        "plans": "not_generated",
+        "orders": "not_generated",
+        "fills": "not_generated",
+    }
+    plan_without_recommendation = {
+        "cycle_id": "cycle-identity",
+        "action": "buy",
+        "signal_capture_id": "capture-1",
+        "plan_id": "plan-without-decision-id",
+        "planned_notional": 1000.0,
+    }
+
+    result = build_capital_deployment_funnel_shadow(
+        "cycle-identity",
+        [candidate],
+        plans=[plan_without_recommendation],
+        captured_at=CAPTURED,
+    )
+
+    assert result["denominators"]["plans_generated"] == 0
+    assert result["denominators"]["plan_attachment_verified"] == 0
+    assert result["denominators"]["plan_attachment_unavailable"] == 1
 
 
 def test_action_and_candidate_do_not_replace_decision_identity() -> None:
@@ -104,4 +151,5 @@ def test_cycle_mismatch_is_unavailable_not_rekeyed_to_embedded_cycle() -> None:
 
     assert result["denominators"]["cycle_mismatch_count"] == 1
     assert result["denominators"]["decision_identity_unavailable"] == 1
-    assert result["denominators"]["buy_population_total"] == 0
+    assert result["denominators"]["buy_population_total"] == 1
+    assert result["denominators"]["buy_population_identity_verified"] == 0
