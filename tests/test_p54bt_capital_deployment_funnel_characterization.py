@@ -26,13 +26,16 @@ from agente_bolsa.tools import trade_decision
 SCHEMA_VERSION = "p-l54b.capital-deployment-funnel-shadow.v1"
 EVENT_PREFIX = "capital_deployment_funnel:"
 DROP_REASONS = {
+    "selection_unavailable",
     "gate_rejected",
     "gate_unavailable",
     "risk_rejected",
+    "risk_unavailable",
     "quota_duplicate_guard",
     "not_selected",
     "capacity_exhausted",
     "sizing_zero",
+    "sizing_unavailable",
     "cap_limited",
     "identity_unavailable",
     "temporal_unavailable",
@@ -40,7 +43,7 @@ DROP_REASONS = {
     "execution_rejected_cancelled",
     "not_applicable_exit",
 }
-ORDER_TERMINAL = {"filled", "partially_filled", "rejected", "cancelled", "pending"}
+STAGE_ORDER = ("selection", "capacity", "gates", "risk", "sizing", "plans", "orders", "fills")
 
 
 def _as_action(value: Any) -> str | None:
@@ -89,51 +92,122 @@ def _stable_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _coverage_sum(rows: list[dict[str, Any]], field: str) -> dict[str, Any]:
-    values = [_finite_number(row.get(field)) for row in rows]
+def _coverage_sum(
+    rows: list[dict[str, Any]],
+    field: str,
+    *,
+    eligible: Any = None,
+    currency: str = "USD",
+) -> dict[str, Any]:
+    eligible_rows = [row for row in rows if eligible is None or eligible(row)]
+    values = [_finite_number(row.get(field)) for row in eligible_rows]
     available = [value for value in values if value is not None]
+    unavailable_count = len(eligible_rows) - len(available)
     return {
         "value": round(sum(available), 2) if available else None,
         "available_count": len(available),
-        "total_count": len(rows),
-        "status": "complete" if len(available) == len(rows) else "partial" if available else "unavailable",
+        "unavailable_count": unavailable_count,
+        "denominator_count": len(eligible_rows),
+        "currency": currency,
+        "status": "complete" if available and not unavailable_count else "partial" if available else "unavailable",
     }
 
 
-def _primary_drop_reason(row: dict[str, Any], *, identity_status: str, temporal_status: str | None) -> str | None:
+def _derive_stage_path(
+    source: dict[str, Any],
+    *,
+    identity_status: str,
+    temporal_status: str | None,
+) -> tuple[dict[str, str], str | None]:
+    """Derive a structured path from fields produced before each frontier."""
+
+    statuses = {stage: "not_generated" for stage in STAGE_ORDER}
+    action = _as_action(source.get("action"))
+    if action != "buy":
+        return statuses, "not_applicable_exit" if action == "exit" else "identity_unavailable"
     if identity_status != "verified":
-        return "identity_unavailable"
+        return statuses, "identity_unavailable"
     if temporal_status:
-        return "temporal_unavailable"
-    gate_status = str(row.get("gate_status") or "").lower()
-    risk_status = str(row.get("risk_status") or "").lower()
-    order_status = str((row.get("order") or {}).get("status") or "").lower()
-    reason_codes = {str(item) for item in row.get("reason_codes") or []}
-    if gate_status in {"unavailable", "unknown"}:
-        return "gate_unavailable"
+        statuses["selection"] = "unavailable"
+        return statuses, "temporal_unavailable"
+    if source.get("recommendation_generated") is not True:
+        statuses["selection"] = "rejected"
+        return statuses, "not_generated"
+
+    selection_status = str(source.get("selection_status") or "").strip().lower()
+    if not selection_status:
+        selection_status = (
+            "selected"
+            if source.get("selected_for_llm") is True
+            or source.get("decision_source") == "deterministic_capacity_fill"
+            else "not_selected"
+        )
+    if selection_status in {"unavailable", "ambiguous"}:
+        statuses["selection"] = "unavailable"
+        return statuses, "selection_unavailable"
+    if selection_status in {"not_selected", "not_generated"}:
+        statuses["selection"] = "rejected" if selection_status == "not_selected" else "not_generated"
+        return statuses, "not_selected" if selection_status == "not_selected" else "not_generated"
+    statuses["selection"] = "passed"
+
+    if source.get("capacity_exhausted") is True:
+        statuses["capacity"] = "rejected"
+        return statuses, "capacity_exhausted"
+    statuses["capacity"] = "passed"
+
+    gate_status = str(source.get("gate_status") or "").strip().lower()
+    if gate_status in {"unavailable", "unknown", ""}:
+        statuses["gates"] = "unavailable"
+        return statuses, "gate_unavailable"
     if gate_status in {"rejected", "failed"}:
-        return "gate_rejected"
-    if risk_status in {"unavailable", "unknown"}:
-        return "risk_rejected"
+        statuses["gates"] = "rejected"
+        return statuses, "gate_rejected"
+    statuses["gates"] = "passed"
+
+    risk_status = str(source.get("risk_status") or "").strip().lower()
+    if risk_status in {"unavailable", "unknown", ""}:
+        statuses["risk"] = "unavailable"
+        return statuses, "risk_unavailable"
     if risk_status in {"rejected", "failed"}:
-        return "risk_rejected"
+        statuses["risk"] = "rejected"
+        return statuses, "risk_rejected"
+    if risk_status != "approved":
+        statuses["risk"] = "unavailable"
+        return statuses, "risk_unavailable"
+    statuses["risk"] = "passed"
+
+    sizing_status = str(source.get("sizing_status") or "").strip().lower()
+    if sizing_status in {"unavailable", "unknown"}:
+        statuses["sizing"] = "unavailable"
+        return statuses, "sizing_unavailable"
+    if sizing_status == "zero":
+        statuses["sizing"] = "rejected"
+        return statuses, "sizing_zero"
+    if source.get("cap_limited") is True and not source.get("plan_id"):
+        statuses["sizing"] = "rejected"
+        return statuses, "cap_limited"
+    statuses["sizing"] = "passed"
+
+    if not source.get("plan_id"):
+        return statuses, "not_generated"
+    statuses["plans"] = "passed"
+
+    order = source.get("order") or {}
+    if not order.get("broker_order_id"):
+        return statuses, "not_generated"
+    statuses["orders"] = "passed"
+    order_status = str(order.get("status") or "").strip().lower()
     if order_status in {"rejected", "cancelled"}:
-        return "execution_rejected_cancelled"
-    if row.get("capacity_exhausted") is True:
-        return "capacity_exhausted"
-    if "duplicate_symbol_cycle_guard" in reason_codes or "quota" in reason_codes:
-        return "quota_duplicate_guard"
-    if row.get("recommendation_generated") is True and row.get("selected_for_llm") is False:
-        return "not_selected"
-    if row.get("sizing_status") == "zero":
-        return "sizing_zero"
-    if row.get("cap_limited") is True:
-        return "cap_limited"
-    if row.get("not_generated") is True:
-        return "not_generated"
-    if str(row.get("action") or "").lower() in {"sell", "exit", "reduce"}:
-        return "not_applicable_exit"
-    return None
+        statuses["fills"] = "rejected"
+        return statuses, "execution_rejected_cancelled"
+    if order_status in {"filled", "partially_filled"}:
+        statuses["fills"] = "passed"
+        return statuses, None
+    if order_status == "pending":
+        statuses["fills"] = "pending"
+        return statuses, None
+    statuses["fills"] = "unavailable"
+    return statuses, "execution_unavailable"
 
 
 def _normalise_row(row: dict[str, Any], *, as_of: datetime) -> dict[str, Any]:
@@ -168,6 +242,7 @@ def _normalise_row(row: dict[str, Any], *, as_of: datetime) -> dict[str, Any]:
         "decision_source": source.get("decision_source"),
         "technical_eligible": source.get("technical_eligible"),
         "recommendation_generated": source.get("recommendation_generated"),
+        "selection_status": source.get("selection_status"),
         "selected_for_llm": source.get("selected_for_llm"),
         "llm_considered": source.get("llm_considered"),
         "gate_status": source.get("gate_status"),
@@ -175,12 +250,15 @@ def _normalise_row(row: dict[str, Any], *, as_of: datetime) -> dict[str, Any]:
         "plan_id": source.get("plan_id"),
         "order": source.get("order"),
         "sizing": source.get("sizing") or {},
+        "sizing_status": source.get("sizing_status"),
         "reason_codes": sorted({str(item) for item in source.get("reason_codes") or []}),
         "warnings": sorted(set(warnings)),
     }
     for field in (
         "requested_notional",
+        "gate_eligible_notional",
         "risk_approved_notional",
+        "sizing_approved_notional",
         "planned_notional",
         "submitted_notional",
         "filled_notional",
@@ -192,11 +270,13 @@ def _normalise_row(row: dict[str, Any], *, as_of: datetime) -> dict[str, Any]:
     normalised["cap_limited"] = source.get("cap_limited") is True
     normalised["capacity_exhausted"] = source.get("capacity_exhausted") is True
     normalised["not_generated"] = source.get("not_generated") is True
-    normalised["primary_drop_reason"] = _primary_drop_reason(
+    stage_statuses, primary_drop_reason = _derive_stage_path(
         normalised,
         identity_status=normalised["identity_status"],
         temporal_status=temporal_status,
     )
+    normalised["stage_statuses"] = stage_statuses
+    normalised["primary_drop_reason"] = primary_drop_reason
     all_reasons = set(normalised["reason_codes"])
     if temporal_status:
         all_reasons.add(temporal_status)
@@ -206,6 +286,108 @@ def _normalise_row(row: dict[str, Any], *, as_of: datetime) -> dict[str, Any]:
         reason for reason in all_reasons if reason != normalised["primary_drop_reason"]
     )
     return normalised
+
+
+def _build_stage_counts(rows: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    buy_rows = [row for row in rows if row.get("action") == "buy"]
+    population_total = len(buy_rows)
+    identity_unavailable = sum(row["identity_status"] != "verified" for row in buy_rows)
+    output: dict[str, dict[str, int]] = {}
+    for stage in STAGE_ORDER:
+        statuses = [
+            row["stage_statuses"][stage]
+            for row in buy_rows
+            if row["identity_status"] == "verified"
+        ]
+        reached = sum(status != "not_generated" for status in statuses)
+        passed = sum(status == "passed" for status in statuses)
+        rejected = sum(status == "rejected" for status in statuses)
+        unavailable = sum(status == "unavailable" for status in statuses)
+        pending = sum(status == "pending" for status in statuses)
+        not_generated = sum(status == "not_generated" for status in statuses)
+        output[stage] = {
+            "population_total": population_total,
+            "reached_count": reached,
+            "evaluated_count": reached,
+            "passed_count": passed,
+            "approved_count": passed,
+            "passed_or_approved_count": passed,
+            "rejected_count": rejected,
+            "unavailable_count": unavailable,
+            "not_generated_count": not_generated,
+            "identity_unavailable_count": identity_unavailable,
+            "pending_count": pending,
+        }
+    return output
+
+
+def _evaluate_invariants(result: dict[str, Any]) -> dict[str, Any]:
+    errors: list[str] = []
+    stages = result["stages"]
+    population_total = result["denominators"]["buy_population_total"]
+    for index, stage in enumerate(STAGE_ORDER):
+        counts = stages[stage]
+        partition = (
+            counts["passed_or_approved_count"]
+            + counts["rejected_count"]
+            + counts["unavailable_count"]
+            + counts["pending_count"]
+            + counts["not_generated_count"]
+            + counts["identity_unavailable_count"]
+        )
+        if partition != population_total:
+            errors.append(f"{stage}:partition={partition}!={population_total}")
+        if index and counts["reached_count"] > stages[STAGE_ORDER[index - 1]]["passed_or_approved_count"]:
+            errors.append(f"{stage}:reached_exceeds_previous_passed")
+
+    buy_rows = [row for row in result["candidate_rows"] if row.get("action") == "buy"]
+    primary_counts = {reason: 0 for reason in DROP_REASONS}
+    success_count = 0
+    for row in buy_rows:
+        reason = row.get("primary_drop_reason")
+        if reason is None:
+            success_count += 1
+        elif reason in primary_counts:
+            primary_counts[reason] += 1
+        else:
+            errors.append(f"unknown_primary_reason:{reason}")
+        stage_values = list(row["stage_statuses"].values())
+        if sum(value == "rejected" for value in stage_values) > 1:
+            errors.append(f"multiple_rejected_stages:{row['identity_key']}")
+        if sum(value == "unavailable" for value in stage_values) > 1:
+            errors.append(f"multiple_unavailable_stages:{row['identity_key']}")
+        if (
+            sum(value == "not_generated" for value in stage_values) == 0
+            and reason is not None
+            and reason != "execution_rejected_cancelled"
+        ):
+            errors.append(f"drop_without_downstream_not_generated:{row['identity_key']}")
+
+    if success_count + sum(primary_counts.values()) != population_total:
+        errors.append("terminal_partition_does_not_close_buy_population")
+    denoms = result["denominators"]
+    if denoms["plans_generated"] > stages["risk"]["passed_or_approved_count"]:
+        errors.append("plans_exceed_risk_approved")
+    if denoms["orders_submitted"] > denoms["plans_generated"]:
+        errors.append("orders_exceed_plans")
+    order_partition = (
+        denoms["orders_filled"]
+        + denoms["orders_rejected"]
+        + denoms["orders_cancelled"]
+        + denoms["orders_pending"]
+        + denoms["orders_unavailable"]
+    )
+    if order_partition != denoms["orders_submitted"]:
+        errors.append("orders_are_not_partitioned")
+    return {
+        "valid": not errors,
+        "errors": errors,
+        "terminal_partition": {
+            "success_count": success_count,
+            "primary_drop_count": sum(primary_counts.values()),
+            "buy_population_total": population_total,
+        },
+    }
 
 
 def characterize_funnel(
@@ -223,28 +405,33 @@ def characterize_funnel(
         raise ValueError(f"invalid as_of: {as_of_reason}")
     normalised = [_normalise_row(row, as_of=as_of_dt) for row in rows]
     normalised.sort(key=lambda item: item.get("identity_key") or "")
+    buy_rows = [row for row in normalised if row.get("action") == "buy"]
+    stage_counts = _build_stage_counts(normalised)
     denoms = {
         "raw_count": raw_count if raw_count is not None else len(rows),
         "canonical_count": len([row for row in normalised if row["identity_status"] == "verified"]),
         "identity_unavailable": len([row for row in normalised if row["identity_status"] != "verified"]),
-        "technically_eligible": sum(row.get("technical_eligible") is True for row in normalised),
-        "recommendations_generated": sum(row.get("recommendation_generated") is True for row in normalised),
-        "llm_selected": sum(row.get("selected_for_llm") is True for row in normalised),
-        "llm_considered": sum(row.get("llm_considered") is True for row in normalised),
-        "deterministic_capacity_fill": sum(row.get("decision_source") == "deterministic_capacity_fill" for row in normalised),
-        "gates_evaluated": sum(str(row.get("gate_status") or "").lower() in {"passed", "rejected", "unavailable"} for row in normalised),
-        "gates_passed": sum(str(row.get("gate_status") or "").lower() == "passed" for row in normalised),
-        "gates_rejected": sum(str(row.get("gate_status") or "").lower() == "rejected" for row in normalised),
-        "gates_unavailable": sum(str(row.get("gate_status") or "").lower() == "unavailable" for row in normalised),
-        "risk_approved": sum(str(row.get("risk_status") or "").lower() == "approved" for row in normalised),
-        "risk_rejected": sum(str(row.get("risk_status") or "").lower() == "rejected" for row in normalised),
-        "risk_unavailable": sum(str(row.get("risk_status") or "").lower() == "unavailable" for row in normalised),
-        "plans_generated": sum(bool(row.get("plan_id")) for row in normalised),
-        "orders_submitted": sum(bool((row.get("order") or {}).get("broker_order_id")) for row in normalised),
-        "orders_filled": sum(str((row.get("order") or {}).get("status") or "").lower() in {"filled", "partially_filled"} for row in normalised),
-        "orders_rejected": sum(str((row.get("order") or {}).get("status") or "").lower() == "rejected" for row in normalised),
-        "orders_cancelled": sum(str((row.get("order") or {}).get("status") or "").lower() == "cancelled" for row in normalised),
-        "orders_pending": sum(str((row.get("order") or {}).get("status") or "").lower() == "pending" for row in normalised),
+        "buy_population_total": len(buy_rows),
+        "buy_identity_unavailable": sum(row["identity_status"] != "verified" for row in buy_rows),
+        "technically_eligible": sum(row.get("technical_eligible") is True for row in buy_rows),
+        "recommendations_generated": sum(row.get("recommendation_generated") is True for row in buy_rows),
+        "llm_selected": sum(row.get("selected_for_llm") is True for row in buy_rows),
+        "llm_considered": sum(row.get("llm_considered") is True for row in buy_rows),
+        "deterministic_capacity_fill": sum(row.get("decision_source") == "deterministic_capacity_fill" for row in buy_rows),
+        "gates_evaluated": stage_counts["gates"]["evaluated_count"],
+        "gates_passed": stage_counts["gates"]["passed_count"],
+        "gates_rejected": stage_counts["gates"]["rejected_count"],
+        "gates_unavailable": stage_counts["gates"]["unavailable_count"],
+        "risk_approved": stage_counts["risk"]["approved_count"],
+        "risk_rejected": stage_counts["risk"]["rejected_count"],
+        "risk_unavailable": stage_counts["risk"]["unavailable_count"],
+        "plans_generated": stage_counts["plans"]["passed_count"],
+        "orders_submitted": stage_counts["orders"]["passed_count"],
+        "orders_filled": stage_counts["fills"]["passed_count"],
+        "orders_rejected": sum((row.get("order") or {}).get("status") == "rejected" for row in buy_rows),
+        "orders_cancelled": sum((row.get("order") or {}).get("status") == "cancelled" for row in buy_rows),
+        "orders_pending": sum((row.get("order") or {}).get("status") == "pending" for row in buy_rows),
+        "orders_unavailable": stage_counts["fills"]["unavailable_count"],
     }
     reason_counts = {reason: 0 for reason in sorted(DROP_REASONS)}
     for row in normalised:
@@ -283,18 +470,46 @@ def characterize_funnel(
         },
         "denominators": denoms,
         "account": account_output,
-        "notional_waterfall": {field: _coverage_sum(normalised, field) for field in (
-            "requested_notional",
-            "risk_approved_notional",
-            "planned_notional",
-            "submitted_notional",
-            "filled_notional",
-        )},
+        "stages": stage_counts,
+        "notional_waterfall": {
+            "requested_notional": _coverage_sum(buy_rows, "requested_notional"),
+            "gate_eligible_notional": _coverage_sum(
+                buy_rows,
+                "gate_eligible_notional",
+                eligible=lambda row: row["stage_statuses"]["gates"] == "passed",
+            ),
+            "risk_approved_notional": _coverage_sum(
+                buy_rows,
+                "risk_approved_notional",
+                eligible=lambda row: row["stage_statuses"]["risk"] == "passed",
+            ),
+            "sizing_approved_notional": _coverage_sum(
+                buy_rows,
+                "sizing_approved_notional",
+                eligible=lambda row: row["stage_statuses"]["sizing"] == "passed",
+            ),
+            "planned_notional": _coverage_sum(
+                buy_rows,
+                "planned_notional",
+                eligible=lambda row: row["stage_statuses"]["plans"] == "passed",
+            ),
+            "submitted_notional": _coverage_sum(
+                buy_rows,
+                "submitted_notional",
+                eligible=lambda row: row["stage_statuses"]["orders"] == "passed",
+            ),
+            "filled_notional": _coverage_sum(
+                buy_rows,
+                "filled_notional",
+                eligible=lambda row: row["stage_statuses"]["fills"] == "passed",
+            ),
+        },
         "primary_drop_reason_counts": reason_counts,
         "candidate_rows": normalised,
         "warnings": sorted(set(warnings)),
         "reason_codes": sorted(set(warnings) | {"target_exposure_unavailable"} if account_output["target_account_exposure"] is None else set(warnings)),
     }
+    result["invariants"] = _evaluate_invariants(result)
     result["content_hash"] = _stable_hash(result)
     return result
 
@@ -326,6 +541,7 @@ def _row(index: int, *, action: str = "buy", planned: bool = False) -> dict[str,
         "decision_source": "llm" if index % 3 == 0 else "deterministic_capacity_fill",
         "technical_eligible": True,
         "recommendation_generated": True,
+        "selection_status": "selected",
         "selected_for_llm": index < 15,
         "llm_considered": index < 15,
         "gate_status": "passed" if planned else "rejected",
@@ -333,7 +549,9 @@ def _row(index: int, *, action: str = "buy", planned: bool = False) -> dict[str,
         "plan_id": plan_id,
         "order": {"broker_order_id": f"broker:{index}", "status": order_status} if planned else None,
         "requested_notional": 1500.0,
+        "gate_eligible_notional": 1500.0,
         "risk_approved_notional": 1000.0 if planned else None,
+        "sizing_approved_notional": 1000.0 if planned else None,
         "planned_notional": 1000.0 if planned else None,
         "submitted_notional": 1000.0 if planned else None,
         "filled_notional": 1000.0 if planned else None,
@@ -346,16 +564,16 @@ def _large_fixture() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     rows = []
     for index in range(376):
         row = _row(index, planned=index < 15)
-        if 15 <= index < 115:
-            row.update({"gate_status": "rejected", "risk_status": "unavailable", "reason_codes": ["gate_rejected"]})
-        elif 115 <= index < 195:
+        if 15 <= index < 85:
+            row.update({"selection_status": "not_selected", "gate_status": None, "risk_status": None, "reason_codes": ["not_selected"]})
+        elif 85 <= index < 135:
+            row.update({"capacity_exhausted": True, "gate_status": None, "risk_status": None, "reason_codes": ["quota"]})
+        elif 135 <= index < 196:
+            row.update({"gate_status": "unavailable", "risk_status": None, "reason_codes": ["gate_unavailable"]})
+        elif 196 <= index < 296:
+            row.update({"gate_status": "rejected", "risk_status": None, "reason_codes": ["gate_rejected"]})
+        elif index >= 296:
             row.update({"gate_status": "passed", "risk_status": "rejected", "reason_codes": ["risk_rejected"]})
-        elif 195 <= index < 265:
-            row.update({"gate_status": "passed", "risk_status": "approved", "selected_for_llm": False, "reason_codes": ["not_selected"]})
-        elif 265 <= index < 315:
-            row.update({"gate_status": "passed", "risk_status": "approved", "selected_for_llm": False, "capacity_exhausted": True, "reason_codes": ["quota"]})
-        elif index >= 315:
-            row.update({"gate_status": "unavailable", "risk_status": "unavailable", "reason_codes": ["gate_unavailable"]})
         rows.append(row)
     account = {
         "account_equity": 100000.0,
@@ -380,13 +598,129 @@ def test_376_recommendations_15_plans_15_fills_keep_denominators_and_target_null
     assert result["denominators"]["raw_count"] == 376
     assert result["denominators"]["canonical_count"] == 376
     assert result["denominators"]["recommendations_generated"] == 376
+    assert result["denominators"]["gates_evaluated"] == 256
+    assert result["denominators"]["gates_passed"] == 95
+    assert result["denominators"]["gates_rejected"] == 100
+    assert result["denominators"]["gates_unavailable"] == 61
+    assert result["denominators"]["risk_approved"] == 15
+    assert result["denominators"]["risk_rejected"] == 80
+    assert result["denominators"]["risk_unavailable"] == 0
     assert result["denominators"]["plans_generated"] == 15
     assert result["denominators"]["orders_submitted"] == 15
     assert result["denominators"]["orders_filled"] == 15
     assert result["account"]["gross_exposure_pct"] == 0.1085
     assert result["account"]["target_account_exposure"] is None
+    assert result["notional_waterfall"]["risk_approved_notional"]["value"] == 15000.0
+    assert result["notional_waterfall"]["risk_approved_notional"]["available_count"] == 15
+    assert result["notional_waterfall"]["risk_approved_notional"]["denominator_count"] == 15
     assert result["notional_waterfall"]["filled_notional"]["value"] == 15000.0
+    assert result["invariants"]["valid"] is True
+    assert result["invariants"]["terminal_partition"] == {
+        "success_count": 15,
+        "primary_drop_count": 361,
+        "buy_population_total": 376,
+    }
     assert "target_account_exposure_unavailable" in result["reason_codes"]
+
+
+def test_previous_p54b_snapshot_counts_are_rejected() -> None:
+    previous = {
+        "buy_population_total": 376,
+        "gates_passed": 135,
+        "risk_approved": 135,
+        "risk_rejected": 80,
+        "risk_unavailable": 0,
+        "risk_approved_notional_available_count": 135,
+        "plans_generated": 15,
+    }
+    with pytest.raises(AssertionError):
+        assert previous["risk_approved"] + previous["risk_rejected"] + previous["risk_unavailable"] <= previous["gates_passed"]
+    with pytest.raises(AssertionError):
+        assert previous["risk_approved_notional_available_count"] == previous["plans_generated"]
+
+
+def test_stage_transition_table_is_monotonic_and_closes_exactly() -> None:
+    rows, account = _large_fixture()
+    result = characterize_funnel(rows, cycle_id="cycle-capital", account=account, as_of="2026-07-21T20:00:00+00:00")
+    expected = {
+        "selection": (376, 306, 70, 0, 0),
+        "capacity": (306, 256, 50, 0, 70),
+        "gates": (256, 95, 100, 61, 120),
+        "risk": (95, 15, 80, 0, 281),
+        "sizing": (15, 15, 0, 0, 361),
+        "plans": (15, 15, 0, 0, 361),
+        "orders": (15, 15, 0, 0, 361),
+        "fills": (15, 15, 0, 0, 361),
+    }
+    for stage, (reached, passed, rejected, unavailable, not_generated) in expected.items():
+        counts = result["stages"][stage]
+        assert counts["reached_count"] == reached
+        assert counts["passed_or_approved_count"] == passed
+        assert counts["rejected_count"] == rejected
+        assert counts["unavailable_count"] == unavailable
+        assert counts["not_generated_count"] == not_generated
+    assert result["invariants"]["valid"] is True
+
+
+@pytest.mark.parametrize("terminal", [
+    "not_selected",
+    "capacity_exhausted",
+    "gate_rejected",
+    "gate_unavailable",
+    "risk_rejected",
+    "risk_unavailable",
+    "sizing_zero",
+    "cap_limited",
+    "not_generated",
+    "execution_rejected_cancelled",
+])
+def test_structured_terminal_paths_preserve_monotonicity(terminal: str) -> None:
+    row = _row(1, planned=terminal == "execution_rejected_cancelled")
+    if terminal == "not_selected":
+        row.update({"selection_status": "not_selected", "gate_status": None, "risk_status": None, "plan_id": None, "order": None})
+    elif terminal == "capacity_exhausted":
+        row.update({"capacity_exhausted": True, "gate_status": None, "risk_status": None, "plan_id": None, "order": None})
+    elif terminal == "gate_rejected":
+        row.update({"gate_status": "rejected", "risk_status": None, "plan_id": None, "order": None})
+    elif terminal == "gate_unavailable":
+        row.update({"gate_status": "unavailable", "risk_status": None, "plan_id": None, "order": None})
+    elif terminal == "risk_rejected":
+        row.update({"gate_status": "passed", "risk_status": "rejected", "plan_id": None, "order": None})
+    elif terminal == "risk_unavailable":
+        row.update({"gate_status": "passed", "risk_status": "unavailable", "plan_id": None, "order": None})
+    elif terminal == "sizing_zero":
+        row.update({"gate_status": "passed", "risk_status": "approved", "sizing_status": "zero", "plan_id": None, "order": None})
+    elif terminal == "cap_limited":
+        row.update({"gate_status": "passed", "risk_status": "approved", "cap_limited": True, "plan_id": None, "order": None})
+    elif terminal == "not_generated":
+        row.update({"recommendation_generated": False, "plan_id": None, "order": None})
+    elif terminal == "execution_rejected_cancelled":
+        row["order"]["status"] = "rejected"
+    result = characterize_funnel([row], cycle_id="cycle-capital", account={}, as_of="2026-07-21T20:00:00+00:00")
+    assert result["invariants"]["valid"] is True, result["invariants"]["errors"]
+    assert result["candidate_rows"][0]["primary_drop_reason"] == terminal
+
+
+def test_gate_passed_risk_unavailable_and_partial_notional_are_separate() -> None:
+    row = _row(1)
+    row.update({"gate_status": "passed", "risk_status": "unavailable", "plan_id": None, "order": None})
+    result = characterize_funnel([row], cycle_id="cycle-capital", account={}, as_of="2026-07-21T20:00:00+00:00")
+    assert result["denominators"]["gates_passed"] == 1
+    assert result["denominators"]["risk_unavailable"] == 1
+    assert result["denominators"]["plans_generated"] == 0
+    assert result["notional_waterfall"]["risk_approved_notional"]["status"] == "unavailable"
+    assert result["invariants"]["valid"] is True
+
+
+def test_identity_unavailable_is_not_an_evaluable_stage() -> None:
+    row = _row(1)
+    row["signal_capture_id"] = None
+    row["signal_id"] = None
+    result = characterize_funnel([row], cycle_id="cycle-capital", account={}, as_of="2026-07-21T20:00:00+00:00")
+    assert result["denominators"]["buy_identity_unavailable"] == 1
+    assert result["stages"]["gates"]["identity_unavailable_count"] == 1
+    assert result["stages"]["gates"]["reached_count"] == 0
+    assert result["invariants"]["valid"] is True
 
 
 def test_primary_reason_is_exclusive_and_secondary_reasons_do_not_double_count() -> None:
