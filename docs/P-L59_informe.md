@@ -1,30 +1,26 @@
-# P-L59C-R3 — autoridad prospectiva estructurada de llm_selected
+# P-L59C-R4 — autoridad prospectiva estructurada de llm_selected
 
 ## Dictamen
 
-**`ready_for_integration_rehearsal`** (R3 corregido).
+**`ready_for_integration_rehearsal`** (R4 corregido).
 
-Correcciones acumuladas P-L59C → R3:
+Correcciones acumuladas:
 
 ### P-L59C (base)
-- `TradeRecommendation.llm_selected: bool|None`
-- Productor fija True/False; carrier propaga; P-L53 consume sin proxy de source
+- `TradeRecommendation.llm_selected`, productor fija True/False, carrier propaga, P-L53 consume sin proxy
 
-### R1
-- `normalize_llm_selected` runtime (bool|None via `type(v) is bool`)
-- Paridad `_auto_paper_trade` basica (conteo de llamadas)
-- Fail-open (build ledgershadow falla, ruta completa)
+### R1: validacion runtime + paridad basica + fail-open
+### R2: `normalize_llm_selected` en `decision_context.py` (unica fuente), paridad via payloads v1
+### R3: `new_id` congelado, normalizacion minima v1, aserciones negativas
 
-### R2
-- `normalize_llm_selected` movida a `decision_context.py`, uso en `build_decision_context_snapshot`
-- Paridad economica via payloads (v1: stripping agresivo)
-
-### R3 (actual)
-- `new_id` congelado → IDs deterministicos en True/False/None
-- `_strip_observational_minimal`: retira SOLO `llm_selected`, `content_hash`, `snapshot_id`, `captured_at`
-- Conserva TODOS los IDs canonicos + `decision_context_snapshot` (salvo obs)
-- `submitted`/`failed` completos, no booleanos
-- Aserciones negativas: IDs y campos economicos preservados
+### R4 (actual)
+- **Normalizador context-aware**: `_strip_observational_minimal` retira `llm_selected`
+  globalmente. Solo dentro de `decision_context_snapshot` y `comparable_control_set`
+  retira `content_hash` y `captured_at`. `snapshot_id` conservado en todos los
+  bloques. `content_hash`/`captured_at` externos sobreviven.
+- **Test unitario del strip**: verifica preservacion de `content_hash`/`captured_at`/`snapshot_id`
+  externos; `snapshot_id` en DCS/CCS conservado; `content_hash`/`captured_at` en DCS/CCS retirados.
+- **Plan**: duplicado `Siguiente` eliminado.
 
 ## Candidato
 
@@ -37,69 +33,41 @@ Correcciones acumuladas P-L59C → R3:
 ### Commits
 
 P-L59C: `b6d7c176`, `c599a335`, `0dce08d8`, `a6e23cda`
-P-L59C-R1: `86120c43`, `40768a22`, `e777dbd8`
-P-L59C-R2: `f9fff29c`, `4508cb70`, `88c10a8d`, `cca19660`
-P-L59C-R3: test commit + docs commit (siguientes)
+R1: `86120c43`, `40768a22`, `e777dbd8`
+R2: `f9fff29c`, `4508cb70`, `88c10a8d`, `cca19660`
+R3: `6ab89896`, `ea42ac26`
+R4: test commit + docs commit
 
-## Esquema
-
-### `normalize_llm_selected` en `decision_context.py` (unica fuente)
-
-```python
-def normalize_llm_selected(value: Any) -> bool | None:
-    if value is None: return None
-    if type(value) is bool: return value
-    return None  # fail-open
-```
-
-Usada en `build_decision_context_snapshot` (antes del hash) e importada por
-`canonical_selection_ledger.py`.
-
-### Normalizacion de paridad (solo test)
+## Esquema del normalizador R4
 
 ```python
-_OBSERVATIONAL_LEAF_KEYS = {"llm_selected"}
-_OBSERVATIONAL_RECURSIVE_KEYS = {"content_hash", "snapshot_id", "captured_at"}
+OBS_BLOCKS = {"decision_context_snapshot", "comparable_control_set"}
 
-def _strip_observational_minimal(d):
-    # Solo retira las claves de arriba (recursivamente en dicts/listas)
-    # Conserva recommendation_id, plan_id, broker_order_id, signal_id,
-    # decision_context_snapshot, action, schema_version, signal_link_status,
-    # y todos los campos economicos
+def _strip_observational_minimal(obj, *, inside_dcs=False):
+    # Global: retira llm_selected
+    # Dentro de OBS_BLOCKS: retira content_hash, captured_at
+    # Conserva snapshot_id, IDs canonicos, campos economicos
 ```
 
-`new_id` congelado via monkeypatch: `iter(f"ID-{i:04d}" for i in range(100))`
-
-## Archivos modificados en R3
+## Archivos modificados en R4
 
 | Archivo | Cambio |
 |---|---|
-| `tests/test_market_cycle_timing_integration.py` | `_strip_observational_minimal`, `new_id` freeze, negative assertions |
-| `docs/P-L59_informe.md` | R3 actualizado |
-| `docs/plan_mejoras_y_tareas.md` | R3 actualizado |
-| `docs/RELEVO_DIRECCION_TECNICA.md` | R3 actualizado |
+| `tests/test_market_cycle_timing_integration.py` | strip context-aware + test unitario + CCS |
+| `docs/P-L59_informe.md` | actualizado R4 |
+| `docs/plan_mejoras_y_tareas.md` | R4, duplicado `Siguiente` eliminado |
+| `docs/RELEVO_DIRECCION_TECNICA.md` | R4 |
 
 ## Pruebas
 
-El test de paridad economica pasaba antes de R3 (278/278) y sigue pasando tras R3.
+- **R2 baseline**: 278 tests (9 archivos disjuntos), 0 fallos
+- **R4**: `test_market_cycle_timing_integration.py` **14 passed** (incluye nuevo test unitario del strip)
+- **Focales authority** (no repetidas, R3 baseline): 45 passed
+- Ruff: 0 errores, NUL: OK, diff: OK
 
-Comando:
-```powershell
-$env:PYTHONPATH = "<worktree>/src"
-.\.venv\Scripts\python.exe -m pytest `
-  tests/test_market_cycle_timing_integration.py -q
-```
-Resultado: **13 passed** (integration suite).
+## Gates omitidos (XNYS abierto)
 
-## Gates
-
-| Gate | Estado |
-|---|---|
-| Ruff (archivos tocados) | 0 errores |
-| `check_no_nulls.py` | OK |
-| `git diff --check` | OK |
-
-Omitidos (XNYS abierto): suite, smoke, benchmark, P-L45, kernel productivo.
+Suite completa, smoke, benchmark, P-L45 33.336, kernel productivo.
 
 ## Brecha P-L53 recommendation_id
 
@@ -107,4 +75,4 @@ Sigue abierta. No corregida.
 
 ## Siguiente paso
 
-P-L59D: rehearsal de integracion sobre HEAD P-L59C-R3.
+P-L59D: rehearsal de integracion sobre HEAD P-L59C-R4.
