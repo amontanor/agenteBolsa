@@ -2121,3 +2121,13 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
 - Cambio exclusivamente de presentacion y lectura. No altera trading,
   ranking, gates, sizing, planes, ordenes, stops, takes, exposicion, SQLite ni
   runtime state. P-L49 conserva `0.4.186`; este lote reserva `0.4.187`.
+
+## P-L46BR4 - filtro calendario del grafico de cartera (candidato 0.4.195)
+
+- Corregido el filtro para usar limites de fecha y no cantidad de filas; las
+  sesiones XNYS pueden dejar menos puntos que dias naturales.
+- Ventanas disponibles: 7, 15, 30, 90 y `Desde inicio`. La serie filtrada es
+  la unica fuente de grafica, Resultado del periodo, porcentaje y fechas.
+- Reproduccion y fix en worktree aislado; 75 pruebas UI verdes. Suite completa,
+  smoke y validacion cerrada siguen pendientes con XNYS abierto.
+- No cambia trading, riesgo, broker, persistencia ni consultas adicionales.

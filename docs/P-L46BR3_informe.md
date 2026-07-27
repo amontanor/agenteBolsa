@@ -28,3 +28,28 @@ rentabilidad neutral a flujos sin reinterpretar retrospectivamente esta serie.
 El cambio no escribe datos ni realiza una llamada adicional al broker. No toca
 senales, ranking, gates, sizing, planes, ordenes, stops, takes, exposicion,
 SQLite, scheduler ni politicas P-L43/P-L44/P-L48/P-L49.
+
+## P-L46BR4 - filtro calendario del grafico de cartera (candidato 0.4.195)
+
+La reproduccion contra `a0ab7ce4` mostro que el selector aplicaba `tail(days)`:
+interpretaba dias como numero de filas. Con snapshots de sesiones XNYS, 30
+filas podian abarcar mas de 30 dias naturales y hacer que el filtro pareciera
+ignorado.
+
+La correccion centraliza las ventanas 7, 15, 30, 90 y `Desde inicio`. Filtra
+por limites de fecha del ultimo snapshot disponible, ordena y deduplica fechas
+sin mutar la serie original. La misma serie visible alimenta la grafica y
+`Resultado del periodo`; `P/L abierto` continua usando las posiciones ya
+cargadas.
+
+QA del worktree aislado:
+
+- reproduccion negativa: el tail de 30 filas empezaba el 07-may para una
+  ventana calendario cuyo limite era 19-may;
+- `tests/test_web_app.py`: 75 passed;
+- cubiertos 7/15/30/90/Desde inicio, historico corto, duplicados, orden,
+  ventanas consecutivas y no mutacion;
+- suite completa, smoke y validacion cerrada quedan pendientes por XNYS abierto.
+
+El cambio es exclusivamente UI/lectura: no anade llamadas broker, escrituras,
+SQLite ni autoridad sobre trading. Commit funcional: `9ad9775c`.
