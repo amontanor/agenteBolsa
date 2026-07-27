@@ -344,6 +344,23 @@ def test_trim_portfolio_chart_range_keeps_latest_window():
     assert list(trimmed["valor_cartera"]) == [1002.0, 1003.0]
 
 
+def test_trim_portfolio_chart_range_uses_calendar_window_not_row_count():
+    dates = pd.bdate_range("2026-01-01", periods=120).strftime("%Y-%m-%d").tolist()
+    df = pd.DataFrame(
+        {
+            "fecha": dates,
+            "valor_cartera": list(range(1000, 1120)),
+        }
+    )
+
+    trimmed = _trim_portfolio_chart_range(df, days=30)
+
+    expected_start = pd.Timestamp(dates[-1]) - pd.Timedelta(days=29)
+    assert pd.Timestamp(trimmed["fecha"].iloc[0]) >= expected_start
+    assert pd.Timestamp(trimmed["fecha"].iloc[-1]) == pd.Timestamp(dates[-1])
+    assert len(trimmed) < 30
+
+
 def test_trim_portfolio_chart_range_none_keeps_full_history():
     df = _portfolio_value_series_from_alpaca(
         {
