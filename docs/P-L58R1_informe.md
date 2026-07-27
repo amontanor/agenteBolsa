@@ -131,7 +131,7 @@ WAL pico/final 0 bytes. Se observaron 109 eventos, conexiones y transacciones:
 100 ciclos de volumen y 9 casos de escala. No hubo `database is locked`.
 
 El tamaño por candidato fue aproximadamente constante: 250 = 375497 bytes,
-500 = 751173 y 1000 = 1500506. Proyeccion descriptiva, no capacidad
+500 = 751173 y 1000 = 1510506. Proyeccion descriptiva, no capacidad
 garantizada: a 26 ciclos de 500 candidatos son aproximadamente 19.7 MB de
 payload diario; a 100, 75.7 MB. El riesgo operativo se clasifica `medium`
 por tamaño de evento, memoria y latencia de shadow; la persistencia ocurre
