@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 from datetime import datetime, timezone
-from types import SimpleNamespace
 
 from agente_bolsa.config import Settings
 from agente_bolsa.continuous_improvement import promotion_readiness
@@ -160,7 +159,7 @@ def test_scoreboard_promotion_and_weekly_digest_survive_partial_rows(monkeypatch
     _seed(store, [{"session_date": "2026-07-24", "pnl_pct": None, "spy_pct": None, "max_dd": None}])
     _patch_scoreboard_dependencies(monkeypatch)
     monkeypatch.setattr(promotion_readiness, "_executed_rows", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(promotion_readiness, "_build_spy_forward_context", lambda **_kwargs: {"returns": {}})
+    monkeypatch.setattr(promotion_readiness, "_build_spy_forward_context", lambda *_args, **_kwargs: {"returns": {}})
 
     scoreboard = profitability_scoreboard.build_profitability_scoreboard(settings, store, since_date="2026-07-01")
     readiness = promotion_readiness.evaluate_promotion_readiness(settings, store, since_date="2026-07-01")
@@ -168,7 +167,20 @@ def test_scoreboard_promotion_and_weekly_digest_survive_partial_rows(monkeypatch
 
     assert scoreboard["performance"]["cumulative_pnl_pct"] is None
     assert readiness["scoreboard"]["performance"]["cumulative_alpha"] is None
-    assert digest["performance_benchmark"]["rows"] == 1
+    assert digest["performance_benchmark"]["freshness"]["status"] == "unavailable"
+
+
+def test_promotion_missing_metrics_remain_unavailable_not_zero() -> None:
+    decision = promotion_readiness._candidate_decision(
+        kind="setup",
+        key="orderly_breakout",
+        rows=[],
+        benchmark={},
+    )
+
+    assert decision["promotion_checks"]["positive_alpha_margin"] is False
+    assert decision["retire_checks"]["negative_alpha"] is False
+    assert "alpha_10d" in decision["unavailable_metrics"]
 
 
 def test_web_performance_series_preserves_missing_values() -> None:

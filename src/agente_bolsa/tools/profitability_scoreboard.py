@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from agente_bolsa.config import Settings
@@ -13,26 +14,40 @@ from .signal_learning import HORIZONS
 
 
 def _num(value: Any) -> float | None:
-    if value is None or value == "":
+    if value is None or value == "" or isinstance(value, bool):
         return None
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    return number if math.isfinite(number) else None
 
 
-def _max_drawdown_from_returns(values: list[float]) -> float | None:
-    if not values:
+def _max_drawdown_from_returns(values: list[Any]) -> float | None:
+    clean = [number for value in values if (number := _num(value)) is not None]
+    if not clean:
         return None
     equity = 1.0
     peak = 1.0
     max_dd = 0.0
-    for value in values:
+    for value in clean:
         equity *= 1.0 + value
         peak = max(peak, equity)
         if peak > 0:
             max_dd = max(max_dd, (peak - equity) / peak)
     return round(max_dd, 4)
+
+
+def _metric_coverage(values: list[float | None]) -> dict[str, int | str]:
+    total = len(values)
+    available = sum(value is not None for value in values)
+    status = "available" if available == total and total else "partial" if available else "unavailable"
+    return {"available": available, "total": total, "status": status}
+
+
+def _sum_or_none(values: list[float | None]) -> float | None:
+    clean = [value for value in values if value is not None]
+    return round(sum(clean), 6) if clean else None
 
 
 def _performance_summary(settings: Settings, store: Store, *, since_date: str) -> dict[str, Any]:
@@ -76,19 +91,9 @@ def _performance_summary(settings: Settings, store: Store, *, since_date: str) -
     alpha_values = [_num(row.get("alpha")) for row in rows]
     explicit_dd = [_num(row.get("max_dd")) for row in rows if _num(row.get("max_dd")) is not None]
     latest = rows[-1]
-    cumulative_pnl = round(sum(value for value in pnl_values if value is not None), 6)
-    cumulative_spy = (
-        round(sum(value for value in spy_values if value is not None), 6)
-        if any(value is not None for value in spy_values)
-        else None
-    )
-    cumulative_alpha = (
-        round(sum(value for value in alpha_values if value is not None), 6)
-        if any(value is not None for value in alpha_values)
-        else round(cumulative_pnl - cumulative_spy, 6)
-        if cumulative_spy is not None
-        else None
-    )
+    cumulative_pnl = _sum_or_none(pnl_values)
+    cumulative_spy = _sum_or_none(spy_values)
+    cumulative_alpha = _sum_or_none(alpha_values)
     return {
         "available": True,
         "rows": len(rows),
@@ -98,6 +103,12 @@ def _performance_summary(settings: Settings, store: Store, *, since_date: str) -
         "cumulative_pnl_pct": cumulative_pnl,
         "cumulative_spy_pct": cumulative_spy,
         "cumulative_alpha": cumulative_alpha,
+        "metric_coverage": {
+            "pnl_pct": _metric_coverage(pnl_values),
+            "spy_pct": _metric_coverage(spy_values),
+            "alpha": _metric_coverage(alpha_values),
+            "max_dd": _metric_coverage([_num(row.get("max_dd")) for row in rows]),
+        },
         "benchmark_coverage": {
             "available": sum(value is not None for value in spy_values),
             "total": len(rows),

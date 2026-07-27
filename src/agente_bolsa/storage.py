@@ -947,12 +947,13 @@ def _loads_list(value: str | None) -> list[Any]:
 
 
 def _num(value: Any) -> float | None:
-    if value is None or value == "":
+    if value is None or value == "" or isinstance(value, bool):
         return None
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    return number if math.isfinite(number) else None
 
 
 def _bullish_confirmed_count(features: dict[str, Any]) -> int:
