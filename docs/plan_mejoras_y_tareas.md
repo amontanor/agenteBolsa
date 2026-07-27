@@ -2549,3 +2549,50 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Brecha P-L53 recommendation_id sigue abierta.
 - Gates omitidos (XNYS abierto): suite, smoke, benchmark, P-L45 33.336, kernel.
 - Siguiente: P-L59E validacion cerrada completa (requiere XNYS cerrado).
+
+## P-L59F-T-R3 — caracterizacion final, contrato cerrado (27-jul-2026)
+
+- Dictamen: **`ready_for_implementation`**. XNYS cerrado (22:00 CEST),
+  pero postmarket no terminal y continuous_improvement running.
+  P-L59E bloqueado; no operacion cerrada.
+- Base: P-L59D-D `520559c6` (tree `e3c80ba`, v0.4.196).
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59ft_recommendation_identity_design`,
+  rama `codex/pl59ft-recommendation-identity-design`.
+- HEAD tests R3: `e14caa1e`. Solo tests/docs, sin cambios en src.
+- R3: lineage literal identico en rec1/rec2, adjuntos P-L53 (plans/plan_records)
+  y P-L54 (recommendations/plans) con IDs coherentes, stage P-L53<P-L54 explicito,
+  `_denominators` real en expansion con raw_count=1.
+- 17 tests pasan (0.90s). Ruff/NUL/diff verdes.
+- Contrato de implementacion completo en informe.
+- Siguiente: P-L59F-I (requiere verificar precondiciones XNYS antes de iniciar).
+
+## P-L59F-T-R4 — cierre de diseño. HECHO.
+
+- Dictamen de direccion: `ready_for_implementation`.
+- HEAD `224b4958`, tree `135df124`, v0.4.196, limpio.
+- 17 tests verdes. Contrato decision_rows completo en informe único.
+- P-L59E sigue bloqueado por precondiciones.
+
+## P-L59F-I-R1 — implementacion decision_rows v2 corregida. HECHO (v0.4.197).
+
+- El candidato inicial `305b56ee` quedo `needs_fix`; el worker fue
+  interrumpido durante R1 y sus cambios parciales se revisaron antes de
+  continuar.
+- Dictamen corregido: `ready_for_integration_rehearsal`.
+- Worktree/rama: `pl59fi_decision_rows`, `codex/pl59fi-decision-rows`.
+- Base `224b4958`, tree `135df124`, version `0.4.196`.
+- Candidato version `0.4.197`; correccion funcional/QA `1ce3c155`, tree
+  `ed1e6879`.
+- Solo `canonical_selection_ledger.py` (+449/-43) y `__init__.py`.
+  Sin cambios en cycle_runner, storage, protegidos, config, politica.
+- SCHEMA_VERSION `p-l53b.canonical-selection-ledger.v2`. candidate_rows
+  summary 8 estados. decision_rows por identidad exacta. Bounded 600.
+  Denominadores v2. Reader backward-compatible v1.
+- 169 passed en la bateria focal disjunta; Ruff completo, NUL y diff verdes.
+- Se separan conflictos de duplicados idempotentes, se cuentan denominadores
+  pre-truncado y se exigen candidato/linaje exactos para recomendaciones y
+  adjuntos.
+- Brecha P-L53 recommendation_id: CERRADA.
+- Gates omitidos: suite, smoke, benchmark, P-L45, kernel (precondiciones).
+- Siguiente: P-L59F-D rehearsal `--no-ff` y validacion cerrada completa; sin
+  despliegue automatico.

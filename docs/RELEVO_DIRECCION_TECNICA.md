@@ -620,3 +620,40 @@ cerrada.
 - Brecha P-L53 recommendation_id sigue abierta.
 - Gates omitidos: suite, smoke, benchmark, P-L45 33.336, kernel (XNYS abierto).
 - Siguiente: P-L59E validacion cerrada completa.
+
+## P-L59F-T-R3 — caracterizacion final, contrato cerrado (27-jul-2026)
+
+- Dictamen: **`ready_for_implementation`**. XNYS cerrado (~22:15 CEST),
+  postmarket no terminal, P-L59E bloqueado.
+- HEAD tests R3: `e14caa1e`. Solo tests/docs, sin src.
+- R3: lineage literal, adjuntos P-L53/P-L54 coherentes, stage explicito,
+  `_denominators` real en expansion.
+- 17 tests pasan (0.90s). Ruff/NUL/diff verdes.
+- Contrato de implementacion completo en informe.
+- Siguiente: P-L59F-I (requiere precondiciones XNYS verificadas).
+
+## P-L59F-T-R4 — cierre de diseño (27-jul-2026)
+
+- Dictamen: `ready_for_implementation`. HEAD `224b4958`, tree `135df124`, v0.4.196.
+- 17 tests verdes. Contrato decision_rows completo. P-L59E bloqueado.
+
+## P-L59F-I-R1 — implementacion decision_rows v2 corregida (27-jul-2026)
+
+- El candidato inicial `305b56ee` fue `needs_fix`; la correccion del worker se
+  interrumpio y direccion clasifico el diff antes de completarlo.
+- Dictamen final: **`ready_for_integration_rehearsal`**.
+- Worktree/rama: `pl59fi_decision_rows`, `codex/pl59fi-decision-rows`.
+- Base `224b4958`, tree `135df124`, version `0.4.196`.
+- Candidato v0.4.197. Commit correctivo `1ce3c155`, tree funcional
+  `ed1e6879`.
+- SCHEMA_VERSION v2. decision_rows por identidad exacta de recomendacion.
+  candidate_rows summary 8 estados. Bounded 600. Denominadores v2.
+  Reader backward-compatible v1. Sin cambios en cycle_runner/storage/protegidos.
+- 169 passed en la bateria focal disjunta; Ruff completo, NUL y diff verdes.
+- Recomendaciones fuera de Fase A/ciclo quedan unavailable; adjuntos exigen
+  IDs y linaje exactos; idempotencias y conflictos tienen denominadores
+  separados; el test fail-open fuerza un fallo real.
+- Brecha P-L53 recommendation_id: CERRADA.
+- Gates omitidos: suite, smoke, benchmark, P-L45, kernel (precondiciones
+  no terminales: postmarket no terminal, continuous_improvement running).
+- Siguiente: P-L59F-D rehearsal de integracion. P-L59E sigue bloqueado.

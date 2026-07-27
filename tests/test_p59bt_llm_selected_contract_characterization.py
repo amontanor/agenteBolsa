@@ -208,13 +208,10 @@ def test_source_unknown_without_authority_yields_none():
 # (B) Dos recs misma senal, distinto rec_id -> colision P-L53
 # ===================================================================
 
-def test_two_recommendations_same_signal_collision():
-    """P-L53: identidad primaria no incluye recommendation_id -> colision.
+def test_two_recommendations_same_signal_collision_v2():
+    """V2: dos recs misma senal, distinto rec_id → candidate ambiguous, 2 decision_rows.
 
-    Esto es un hecho del codigo P-L53. P-L54B maneja dominios separados
-    de decision_identity; si corrige o no la colision en su propio
-    ledger no esta demostrado aqui.
-    """
+    P-L53 colision ya no es last-wins. Ambos recommendations_id preservados."""
     c = _cand(0, action="buy", symbol="AAPL", selected_for_llm=True)
     r1 = {**c, "recommendation_id": "rec-aaa-111", "source": "llm",
           "decision_context_snapshot": {"llm_considered": True, "gate_frontier": "entry_eligibility_v1"},
@@ -226,7 +223,10 @@ def test_two_recommendations_same_signal_collision():
         "cycle-A", _phase([c]), recommendations=[r1, r2], captured_at=CAPTURED_AT,
     )
     assert len(result["candidate_rows"]) == 1
-    assert result["candidate_rows"][0]["recommendation_id"] == "rec-bbb-222"
+    # V2: ambiguous, ambos decision_ids preservados
+    assert result["candidate_rows"][0]["decision_summary_status"] == "ambiguous"
+    assert result["candidate_rows"][0]["recommendation_id"] is None
+    assert len(result["decision_rows"]) == 2
 
 
 # ===================================================================

@@ -175,20 +175,25 @@ def test_large_cycle_captures_full_universe_and_separate_stages() -> None:
     assert payload["schema_version"] == SCHEMA_VERSION
     assert payload["event_id"] == "canonical_selection_ledger:cycle-A"
     assert payload["status"] == "verified"
-    assert payload["denominators"] == {
-        "raw_count": 443,
-        "canonical_count": 443,
-        "eligible_count": 443,
-        "selected_count": 20,
-        "recommended_count": 5,
-        "planned_count": 3,
-        "ordered_count": 2,
-        "identity_unavailable": 0,
-        "identity_ambiguous": 0,
-        "shadow_inputs_unavailable": 0,
-        "conflict_count": 0,
-        "truncated_count": 0,
-    }
+    denom = payload["denominators"]
+    # v1 denominators preserved
+    assert denom["raw_count"] == 443
+    assert denom["canonical_count"] == 443
+    assert denom["eligible_count"] == 443
+    assert denom["selected_count"] == 20
+    assert denom["recommended_count"] == 5
+    assert denom["planned_count"] == 3
+    assert denom["ordered_count"] == 2
+    assert denom["identity_unavailable"] == 0
+    assert denom["identity_ambiguous"] == 0
+    assert denom["shadow_inputs_unavailable"] == 0
+    assert denom["conflict_count"] == 0
+    assert denom["truncated_count"] == 0
+    # v2 denominators present
+    assert denom["candidate_count"] == 443
+    assert denom["recommendation_observed"] == 5
+    assert denom["recommendation_canonical"] == 5
+    assert denom["recommendation_conflict"] == 0
     rows = {item["identity_key"]: item for item in payload["candidate_rows"]}
     selected = rows["cycle-A|buy|capture:cycle-A:buy:SYM005:5"]
     assert selected["selected_for_llm"] is True
