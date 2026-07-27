@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:  # pragma: no cover
     from ..storage import Store
 
+from .decision_context import normalize_llm_selected
 
 SCHEMA_VERSION = "p-l53b.canonical-selection-ledger.v1"
 EVENT_TYPE = "canonical_selection_ledger"
@@ -75,22 +76,6 @@ def stable_content_hash(payload: Mapping[str, Any]) -> str:
         allow_nan=False,
     )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-
-
-def normalize_llm_selected(value: Any) -> bool | None:
-    """Normalize llm_selected to bool or None only. Fail-open.
-
-    Only literal Python bool values (True/False) are accepted as structured
-    authority.  Any other type -- int (0, 1), str ('true', 'false'), list,
-    dict, float -- is degraded silently to None (unavailable/legacy).
-
-    This function must never raise; it is a fail-open telemetry guard.
-    """
-    if value is None:
-        return None
-    if type(value) is bool:
-        return value
-    return None
 
 
 def _mapping(value: Any) -> dict[str, Any]:

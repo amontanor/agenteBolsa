@@ -16,5 +16,5 @@ __all__ = ["__version__"]
 # P-L58R1: combined measurement-safety rehearsal (0.4.193).
 # P-L54B-W: fail-open capital deployment funnel shadow (0.4.194).
 # P-L46BR4: calendar-safe portfolio chart filter (0.4.195).
-# P-L59C-R1: normalize_llm_selected runtime validation (fail-open), parity, fail-open tests (0.4.196).
+# P-L59C-R2: normalize_llm_selected moved to decision_context, economic parity (0.4.196).
 __version__ = "0.4.196"
