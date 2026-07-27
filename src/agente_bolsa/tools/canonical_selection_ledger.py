@@ -375,12 +375,16 @@ def _attach_phase_b(
             raw = info["row"]
             snapshot = _mapping(raw.get("decision_context_snapshot"))
             source = info["decision_source"]
+            # P-L59C: llm_selected is now a structured authority set by the producer
+            # (True=LLM selected, False=not selected, None=legacy/unavailable).
+            # Consumed directly from decision_context_snapshot; never inferred from source.
+            snapshot_llm_selected = snapshot.get("llm_selected")
             target.update(
                 {
                     "recommended": True,
                     "recommendation_id": _text(raw.get("recommendation_id")),
                     "llm_considered": snapshot.get("llm_considered"),
-                    "llm_selected": True if source == "llm" else False if source else None,
+                    "llm_selected": snapshot_llm_selected,
                     "decision_source": source,
                     "gate_frontier": target.get("gate_frontier") or snapshot.get("gate_frontier"),
                     "source_stage": "decision",
