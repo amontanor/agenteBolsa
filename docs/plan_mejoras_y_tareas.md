@@ -2518,47 +2518,32 @@ de despliegue quedan pendientes con XNYS cerrado.
   suite completa, smoke y validacion cerrada; sin cambios de trading ni
   despliegue. Se conserva `unconfirmed_sqlite_mutation` como incertidumbre.
 
-## P-L59B-T (corregido) - caracterizacion del contrato llm_selected y controles (27-jul-2026)
+## P-L59B-T-R2 (corregido) - caracterizacion llm_selected y controles (27-jul-2026)
 
-- Dictamen: **`needs_redesign`** para llm_selected (proxy de source, no
-  seleccion causal); **`ready_for_implementation`** para controles elegibles.
-  XNYS abierto; solo tests y docs. Hora real: 19:05 CEST.
-- Base: `70de34011b74403281c32673c32947cab0ee0952` (candidato P-L60R1, v0.4.195).
-- Worktree: `pl59bt_llm_selection_contract`. Rama: `codex/pl59bt-llm-selection-contract`.
-- HEAD: `a169b2f2`. Tree: limpio. Version `0.4.195`.
+- Dictamen unico: **`needs_fix`**. XNYS abierto. Hora real: 19:20 CEST.
+- Base: `70de34011b74403281c32673c32947cab0ee0952` (P-L60R1, v0.4.195).
+- Worktree: `pl59bt_llm_selection_contract`, rama `codex/pl59bt-llm-selection-contract`.
+- HEAD R2: `06c95f02`. Tree limpio. Version `0.4.195`.
+- 28 tests con APIs reales (Store, TradeRecommendation, OrderPlan,
+  build_comparable_control_sets con lower_rank/capacity_limit/gate_blocked).
+  Ruff/NUL/diff verdes. Cero helpers duplicados.
 
-### Hallazgos corregidos
+### Hallazgos R2
 
-1. `llm_selected` se deriva exclusivamente de `decision_source`
-   (`source=="llm"` → True, resto → False, None → None). **No existe un
-   booleano independiente** sellado en la etapa de decision. Esto NO demuestra
-   seleccion LLM causal. Fuente desconocida → `"other"` → `False` (brecha:
-   deberia ser `None`).
-
-2. Dos recomendaciones con misma senal y distinto `recommendation_id` colisionan
-   en P-L53 (la identidad primaria no incluye `recommendation_id`). P-L54B-R1
-   lo corrige.
-
-3. **P-L31B (`comparable_controls.py`) SI esta desplegado** en produccion
-   `0.4.185` (cableado en `cycle_runner.py`, `main.py`, `storage.py`). El
-   informe anterior afirmaba incorrectamente que no lo estaba.
-
-4. **P-L53 y P-L54B NO estan desplegados**. Existen solo en el candidato
-   P-L60R1 como shadow. Sin ellos, `llm_selected` durable es `unavailable` en
-   produccion.
-
-### Validacion (corregida)
-
-- `tests/test_p59bt_llm_selected_contract_characterization.py`: **29 passed**
-  (reescrito: cero helpers duplicados, solo APIs reales del candidato,
-  Store(tmp_path), `build_canonical_selection_ledger`,
-  `match_same_cycle_controls`, `persist/read`, `build_comparable_control_sets`).
-- Ruff, check_no_nulls.py, git diff --check: verdes.
-- Sin suite completa, smoke, broker, red, LLM (XNYS abierto).
-- Informe unico: `docs/P-L59_informe.md` (corregido).
+1. `llm_selected` es proxy de `decision_source` en P-L53; no existe booleano
+   independiente de seleccion LLM. Source desconocida -> `other` -> False.
+2. P-L31B (`comparable_controls.py`) SI esta desplegado en prod 0.4.185.
+   P-L53/P-L54B NO. Working tree productivo: 0.4.186 (P-L61).
+3. 0 controles P-L59A: hecho observado, causa no demostrada. P-L31B es
+   independiente de P-L53/P-L54B. Posibles causas: sin planes finales,
+   estrategias pausadas, sin rechazos lower_rank/capacity_limit.
+4. Colision P-L53 con mismo signal_id: dos recs colisionan. P-L54B maneja
+   decision_identity propio; no demostrado que repare P-L53.
+5. Stage order real: phase A -> seleccion/gates -> P-L31B -> planes ->
+   P-L53 final -> P-L54B final (cycle_runner:1965-2276).
+6. Builders usan datos explicitos; `llm_considered` es parametro, no derivado.
+7. Tests de constantes/callable eliminados.
 
 ### Siguiente lote
 
-P-L59C: redisenar el productor para que `llm_selected` sea un booleano
-independiente sellado en la etapa de decision, no un proxy de source.
-Alternativa: aceptar la semantica actual y desplegar P-L60R1 para datos nuevos.
+P-L59C: rediseno de productor para llm_selected independiente. No se inicia.

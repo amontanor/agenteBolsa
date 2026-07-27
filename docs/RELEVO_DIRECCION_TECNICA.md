@@ -592,23 +592,21 @@ cerrada.
   SQLite productiva, despliegue ni push. La incertidumbre historica
   `unconfirmed_sqlite_mutation` y P-L54 se conservan sin declararlas resueltas.
 
-## P-L59B-T (corregido) - caracterizacion llm_selected y controles (27-jul-2026)
+## P-L59B-T-R2 (corregido) - caracterizacion llm_selected y controles (27-jul-2026)
 
-- Dictamen: **`needs_redesign`** (llm_selected es proxy de source, no seleccion
-  causal) + `ready_for_implementation` (controles via P-L31B). XNYS abierto.
-  Hora real: 19:05 CEST. Solo tests y docs.
+- Dictamen unico: **`needs_fix`**. XNYS abierto. Hora real: 19:20 CEST.
 - Worktree: `pl59bt_llm_selection_contract`, rama
-  `codex/pl59bt-llm-selection-contract`, base `70de3401`. HEAD `a169b2f2`.
-- 29 tests con APIs reales (Store, build_canonical_selection_ledger,
-  match_same_cycle_controls, build_comparable_control_sets); Ruff/NUL/diff
-  verdes. Cero helpers duplicados.
-- Hallazgo: `llm_selected` en `canonical_selection_ledger.py:383` se deriva de
-  `decision_source`. No existe booleano independiente de seleccion LLM.
-- **Correccion**: P-L31B SI esta desplegado en prod (cableado en cycle_runner,
-  main, storage). P-L53/P-L54B NO.
-- Informe: `docs/P-L59_informe.md` (corregido).
-- P-L59A sigue con `llm_selected=unavailable` y `controles=0` en produccion.
-  Sin P-L53/P-L54B no hay evento durable. No se autoriza reconstruir desde
-  fuentes textuales.
-- Siguiente lote: P-L59C (rediseno del productor para booleano independiente)
-  o despliegue de P-L60R1 para datos nuevos.
+  `codex/pl59bt-llm-selection-contract`, base `70de3401`. HEAD R2: `06c95f02`.
+- 28 tests con APIs reales (Store, TradeRecommendation/OrderPlan/RiskDecision,
+  build_comparable_control_sets lower_rank/capacity_limit/gate_blocked).
+  Ruff/NUL/diff verdes.
+- Hallazgo: `llm_selected` es proxy de `decision_source`, no booleano
+  independiente. Fuente desconocida -> False (brecha).
+- Controles: P-L31B desplegado e independiente de P-L53/P-L54B.
+  0 controles P-L59A = hecho observado, causa no demostrada.
+- Colision P-L53 sin recommendation_id; no afirmado que P-L54B repara.
+- Stage order: phase A -> seleccion -> P-L31B -> planes -> P-L53 final ->
+  P-L54B final (cycle_runner:1965-2276).
+- Produccion HEAD: 0.4.185; working tree: 0.4.186 (P-L61). Sin leer/modificar.
+- Informe unico: `docs/P-L59_informe.md`.
+- Siguiente lote: P-L59C (rediseno productor). No se inicia.
