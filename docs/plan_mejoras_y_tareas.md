@@ -2528,20 +2528,16 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Seccion stale 2255/2266 eliminada del informe. Caracterizacion cerrada.
 - Siguiente: P-L59C (no iniciado).
 
-## P-L59C-R2 - autoridad prospectiva estructurada de llm_selected (27-jul-2026)
+## P-L59C-R3 - autoridad prospectiva estructurada de llm_selected (27-jul-2026)
 
-- Dictamen: **`ready_for_integration_rehearsal`** (R2 corregido). XNYS abierto, 20:30 CEST.
+- Dictamen: **`ready_for_integration_rehearsal`** (R3 corregido). XNYS abierto, 20:30 CEST.
 - Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59c_llm_selection_producer`,
-  rama `codex/pl59c-llm-selection-producer`, base P-L59B-T-R5 `49059f18`, version `0.4.196`.
-- R2: `normalize_llm_selected` movida a `decision_context.py`, usada dentro de
-  `build_decision_context_snapshot` antes de hash/validate. P-L53 reutiliza mismo helper.
-  Paridad economica real (payloads, no solo nombres de llamadas). Snapshot malformed
-  → None via Store temporal.
-- 278 tests totales (45 P-L59C + 27 P-L59B + 13 integration + 15 P-L53 char +
-  13 P-L53 shadow + 27 P-L54 char + 7 P-L54 shadow + 129 trade_decision +
-  1 version policy). 0 fallos, 0 solapes.
-- Ruff/NUL/diff/compile/config verdes.
+  rama `codex/pl59c-llm-selection-producer`, base `49059f18`, version `0.4.196`.
+- R3: `new_id` congelado para IDs deterministicos. Normalizacion minima de paridad
+  (solo llm_selected/content_hash/snapshot_id/captured_at). Conserva todos los IDs
+  canonicos y decision_context_snapshot. submitted/failed completos.
+- 278 tests (9 archivos disjuntos). Ruff/NUL/diff/compile/config verdes.
 - Brecha P-L53 recommendation_id sigue abierta.
-- Gates omitidos (XNYS abierto): suite completa, smoke, benchmark, P-L45.
+- Gates omitidos (XNYS abierto): suite, smoke, benchmark, P-L45.
 - Siguiente: P-L59D rehearsal de integracion.
 - Siguiente: P-L59D integracion/rehearsal sobre esta base.

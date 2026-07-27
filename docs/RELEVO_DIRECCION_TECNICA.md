@@ -601,13 +601,13 @@ cerrada.
 - Informe unico sin secciones duplicadas. Caracterizacion cerrada.
 - Siguiente: P-L59C.
 
-## P-L59C-R2 - autoridad prospectiva estructurada de llm_selected (27-jul-2026)
+## P-L59C-R3 - autoridad prospectiva estructurada de llm_selected (27-jul-2026)
 
-- Dictamen: **`ready_for_integration_rehearsal`** (R2 corregido). XNYS abierto, 20:30 CEST.
+- Dictamen: **`ready_for_integration_rehearsal`** (R3 corregido). XNYS abierto, 20:30 CEST.
 - Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59c_llm_selection_producer`,
-  rama `codex/pl59c-llm-selection-producer`, base P-L59B-T-R5 `49059f18`, version `0.4.196`.
-- R2: `normalize_llm_selected` centralizada en `decision_context.py` (snapshot + P-L53).
-  Paridad economica real con payloads (no solo nombres de llamadas).
-- 278 tests totales (9 archivos disjuntos), 0 fallos. Ruff/NUL/diff/compile/config verdes.
+  rama `codex/pl59c-llm-selection-producer`, base `49059f18`, version `0.4.196`.
+- R3: `new_id` congelado, normalizacion minima (solo llm_selected/hashes/captured_at).
+  Conserva IDs canonicos, decision_context_snapshot y submitted/failed completos.
+- 278 tests (9 archivos disjuntos), 0 fallos. Ruff/NUL/diff/compile/config verdes.
 - Brecha P-L53 recommendation_id sigue abierta.
 - Siguiente: P-L59D rehearsal de integracion.

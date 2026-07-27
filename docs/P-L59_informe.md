@@ -1,130 +1,110 @@
-# P-L59C-R2 — autoridad prospectiva estructurada de llm_selected
+# P-L59C-R3 — autoridad prospectiva estructurada de llm_selected
 
 ## Dictamen
 
-**`ready_for_integration_rehearsal`**.
+**`ready_for_integration_rehearsal`** (R3 corregido).
 
-Correcciones R2 sobre R1:
+Correcciones acumuladas P-L59C → R3:
 
-1. **Normalizacion antes de persistir snapshot**: `normalize_llm_selected`
-   movida a `decision_context.py` (unica fuente). Se aplica dentro de
-   `build_decision_context_snapshot` antes del hash/validate. P-L53 importa
-   y reutiliza el mismo helper. Malformed (1, "true", [], etc) → None en el
-   snapshot. Probado con Store temporal: snapshot malformado nunca persiste
-   como autoridad no booleana. Fail-open: invalidez degrada a None sin bloquear.
+### P-L59C (base)
+- `TradeRecommendation.llm_selected: bool|None`
+- Productor fija True/False; carrier propaga; P-L53 consume sin proxy de source
 
-2. **Paridad economica real (payloads)**: `_StoreSpy` extendido para capturar
-   kwargs/payloads de store calls. `_auto_paper_trade` True/False/None
-   producen identicos payloads economicos tras retirar `llm_selected`,
-   hashes, snapshot IDs, recommendation_id y version. Contador/orden de store
-   calls identico. 1 request LLM simulada y 1 submit broker simulado por
-   ejecucion. P-L53 spy y fail-open wrapper preservados.
+### R1
+- `normalize_llm_selected` runtime (bool|None via `type(v) is bool`)
+- Paridad `_auto_paper_trade` basica (conteo de llamadas)
+- Fail-open (build ledgershadow falla, ruta completa)
 
-3. **Documentacion**: hora real de direccion (20:30 CEST, 27-jul-2026).
-   Placeholders reemplazados con hashes reales. Bloque stale del plan/relevo
-   eliminado. Contabilidad 278 tests en comando unico con 9 archivos disjuntos.
+### R2
+- `normalize_llm_selected` movida a `decision_context.py`, uso en `build_decision_context_snapshot`
+- Paridad economica via payloads (v1: stripping agresivo)
 
-## Base y candidato
+### R3 (actual)
+- `new_id` congelado → IDs deterministicos en True/False/None
+- `_strip_observational_minimal`: retira SOLO `llm_selected`, `content_hash`, `snapshot_id`, `captured_at`
+- Conserva TODOS los IDs canonicos + `decision_context_snapshot` (salvo obs)
+- `submitted`/`failed` completos, no booleanos
+- Aserciones negativas: IDs y campos economicos preservados
 
-- **Base exacta**: P-L59B-T-R5, `49059f18`, tree `b29c262c`, version `0.4.195`.
-- **Candidato P-L59C-R2**: HEAD `88c10a8d`, tree `6714e53e`, rama `codex/pl59c-llm-selection-producer`.
-- **Worktree**: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59c_llm_selection_producer`.
-- **Version**: `0.4.196`.
-- **Hora**: 2026-07-27 20:30 CEST (direccion), XNYS abierto.
+## Candidato
+
+- **Base**: P-L59B-T-R5 `49059f18`, version `0.4.195`
+- **Worktree**: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59c_llm_selection_producer`
+- **Rama**: `codex/pl59c-llm-selection-producer`
+- **Version**: `0.4.196`
+- **Hora**: 2026-07-27 20:30 CEST, XNYS abierto
 
 ### Commits
 
-P-L59C (base):
-1. `b6d7c176` — feat: implementacion
-2. `c599a335` — test: 24 + adaptacion
-3. `0dce08d8` — chore: bump 0.4.196
-4. `a6e23cda` — docs: informe, plan, relevo
-
-P-L59C-R1:
-5. `86120c43` — fix: `normalize_llm_selected` + consumo
-6. `40768a22` — test: 13 + 7 integracion
-7. `e777dbd8` — docs: informe corregido
-
-P-L59C-R2:
-8. `f9fff29c` — fix: `normalize_llm_selected` → `decision_context.py`, uso en snapshot
-9. `4508cb70` — test: snapshot normalization + economic parity
-10. `88c10a8d` — docs: placeholders, stale blocks, contabilidad exacta
+P-L59C: `b6d7c176`, `c599a335`, `0dce08d8`, `a6e23cda`
+P-L59C-R1: `86120c43`, `40768a22`, `e777dbd8`
+P-L59C-R2: `f9fff29c`, `4508cb70`, `88c10a8d`, `cca19660`
+P-L59C-R3: test commit + docs commit (siguientes)
 
 ## Esquema
 
-### `normalize_llm_selected` en `decision_context.py`
+### `normalize_llm_selected` en `decision_context.py` (unica fuente)
 
 ```python
 def normalize_llm_selected(value: Any) -> bool | None:
-    if value is None:
-        return None
-    if type(value) is bool:
-        return value
-    return None  # fail-open: non-bool degrades to None
+    if value is None: return None
+    if type(value) is bool: return value
+    return None  # fail-open
 ```
 
-Se aplica en `build_decision_context_snapshot` antes de hash/validate.
-`canonical_selection_ledger.py` importa y reutiliza el mismo helper (sin duplicacion).
+Usada en `build_decision_context_snapshot` (antes del hash) e importada por
+`canonical_selection_ledger.py`.
 
-## Archivos modificados en R2
+### Normalizacion de paridad (solo test)
+
+```python
+_OBSERVATIONAL_LEAF_KEYS = {"llm_selected"}
+_OBSERVATIONAL_RECURSIVE_KEYS = {"content_hash", "snapshot_id", "captured_at"}
+
+def _strip_observational_minimal(d):
+    # Solo retira las claves de arriba (recursivamente en dicts/listas)
+    # Conserva recommendation_id, plan_id, broker_order_id, signal_id,
+    # decision_context_snapshot, action, schema_version, signal_link_status,
+    # y todos los campos economicos
+```
+
+`new_id` congelado via monkeypatch: `iter(f"ID-{i:04d}" for i in range(100))`
+
+## Archivos modificados en R3
 
 | Archivo | Cambio |
 |---|---|
-| `decision_context.py` | +`normalize_llm_selected`, uso en `build_decision_context_snapshot` |
-| `canonical_selection_ledger.py` | -`normalize_llm_selected`, +import desde `decision_context` |
-| `test_p59c_llm_selected_authority.py` | +8 tests snapshot normalization + Store persistence |
-| `test_market_cycle_timing_integration.py` | +`_StoreSpy` payloads, `_strip_observational`, `_capture_parity_run`, +1 economic parity test |
-| `docs/P-L59_informe.md` | corregido con hashes reales |
-| `docs/plan_mejoras_y_tareas.md` | bloque stale eliminado |
-| `docs/RELEVO_DIRECCION_TECNICA.md` | bloque stale eliminado |
+| `tests/test_market_cycle_timing_integration.py` | `_strip_observational_minimal`, `new_id` freeze, negative assertions |
+| `docs/P-L59_informe.md` | R3 actualizado |
+| `docs/plan_mejoras_y_tareas.md` | R3 actualizado |
+| `docs/RELEVO_DIRECCION_TECNICA.md` | R3 actualizado |
 
-## Contabilidad exacta (278 tests, 0 solapes)
+## Pruebas
 
-| Bateria | Archivo | Count |
-|---|---|---|
-| P-L59C authority + normalization | `test_p59c_llm_selected_authority.py` | 45 |
-| P-L59B characterization | `test_p59bt_llm_selected_contract_characterization.py` | 27 |
-| Integration (parity + fail-open + economic) | `test_market_cycle_timing_integration.py` | 13 |
-| P-L53 characterization | `test_p53b_selection_ledger_characterization.py` | 15 |
-| P-L53 shadow | `test_p53b_selection_ledger_shadow.py` | 13 |
-| P-L54 characterization | `test_p54bt_capital_deployment_funnel_characterization.py` | 27 |
-| P-L54 shadow | `test_p54bw_capital_deployment_funnel_shadow.py` | 7 |
-| Trade decision | `test_trade_decision.py` | 129 |
-| Version policy | `test_version_policy.py` | 1 |
-| **Total** | | **278** |
+El test de paridad economica pasaba antes de R3 (278/278) y sigue pasando tras R3.
 
 Comando:
 ```powershell
 $env:PYTHONPATH = "<worktree>/src"
 .\.venv\Scripts\python.exe -m pytest `
-  tests/test_p59c_llm_selected_authority.py `
-  tests/test_p59bt_llm_selected_contract_characterization.py `
-  tests/test_market_cycle_timing_integration.py `
-  tests/test_p53b_selection_ledger_characterization.py `
-  tests/test_p53b_selection_ledger_shadow.py `
-  tests/test_p54bt_capital_deployment_funnel_characterization.py `
-  tests/test_p54bw_capital_deployment_funnel_shadow.py `
-  tests/test_trade_decision.py `
-  tests/test_version_policy.py `
-  -q
+  tests/test_market_cycle_timing_integration.py -q
 ```
-Resultado: **278 passed in 64.48s**.
+Resultado: **13 passed** (integration suite).
 
 ## Gates
 
 | Gate | Estado |
 |---|---|
 | Ruff (archivos tocados) | 0 errores |
-| `check_no_nulls.py` | OK (435 archivos) |
+| `check_no_nulls.py` | OK |
 | `git diff --check` | OK |
-| `validate-agent-config --json` temporal | `ok=true` |
 
 Omitidos (XNYS abierto): suite, smoke, benchmark, P-L45, kernel productivo.
 
 ## Brecha P-L53 recommendation_id
 
-Sigue abierta. No corregida en este lote.
+Sigue abierta. No corregida.
 
 ## Siguiente paso
 
-P-L59D: rehearsal de integracion sobre HEAD P-L59C-R2.
+P-L59D: rehearsal de integracion sobre HEAD P-L59C-R3.
