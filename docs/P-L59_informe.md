@@ -317,7 +317,7 @@ Nunca unir por simbolo o fecha.
 - `truncated_count`: `detail_total - detail_persisted`.
 - `conflict_count`: conflict rows (mismo ID, distinto hash).
 - Orden estable: por identity_key + decision_id.
-- Reutilizar DEFAULT_DETAIL_LIMIT (actualmente en P-L54, ~1000).
+- Reutilizar DEFAULT_DETAIL_LIMIT de P-L54 (valor real 600).
 - No backfill ni VACUUM.
 
 #### Denominadores separados (v2)
