@@ -1971,6 +1971,178 @@ class Store:
             )
         return conflicts
 
+    def record_capital_deployment_funnel_shadow(
+        self,
+        payload: dict[str, Any],
+        *,
+        event_id: str,
+    ) -> dict[str, Any]:
+        """Append one P-L54B event with idempotent/conflict-safe semantics."""
+
+        encoded = _dumps(payload)
+        candidate_hash = str(payload.get("content_hash") or "")
+        event_type = "capital_deployment_funnel_shadow"
+        cycle_id = payload.get("cycle_id")
+        now = _utc_iso()
+        conn = self.connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT payload_json FROM agent_events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+            if existing is not None:
+                try:
+                    existing_payload = json.loads(existing["payload_json"] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    existing_payload = {}
+                existing_hash = str(existing_payload.get("content_hash") or "")
+                if candidate_hash and existing_hash == candidate_hash:
+                    conn.commit()
+                    return {"status": "idempotent", "event_id": event_id, "content_hash": candidate_hash}
+                conflict_id = f"{event_id}:conflict:{candidate_hash or 'unknown'}"
+                conflict_payload = {
+                    "schema_version": payload.get("schema_version"),
+                    "event_id": event_id,
+                    "cycle_id": cycle_id,
+                    "existing_content_hash": existing_hash or None,
+                    "candidate_content_hash": candidate_hash or None,
+                    "status": "conflict",
+                }
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO agent_events (
+                            event_id, agent, event_type, cycle_id, payload_json, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            conflict_id,
+                            "risk_manager_shadow",
+                            f"{event_type}_conflict",
+                            cycle_id,
+                            _dumps(conflict_payload),
+                            now,
+                        ),
+                    )
+                except sqlite3.IntegrityError:
+                    pass
+                conn.commit()
+                return {
+                    "status": "conflict",
+                    "event_id": event_id,
+                    "conflict_event_id": conflict_id,
+                    "existing_content_hash": existing_hash or None,
+                    "candidate_content_hash": candidate_hash or None,
+                }
+            conn.execute(
+                """
+                INSERT INTO agent_events (
+                    event_id, agent, event_type, cycle_id, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (event_id, "risk_manager_shadow", event_type, cycle_id, encoded, now),
+            )
+            conn.commit()
+            return {"status": "inserted", "event_id": event_id, "content_hash": candidate_hash}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def capital_deployment_funnel_shadow_event(self, cycle_id: str) -> dict[str, Any] | None:
+        """Read one canonical P-L54B event without reconstruction."""
+
+        if not self.database_path.exists():
+            return None
+        event_id = f"capital_deployment_funnel_shadow:{cycle_id}"
+        try:
+            with self.read_connection() as conn:
+                row = conn.execute(
+                    "SELECT event_id, event_type, payload_json, created_at FROM agent_events WHERE event_id = ?",
+                    (event_id,),
+                ).fetchone()
+        finally:
+            self.close_read_connection()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        return {
+            "event_id": row["event_id"],
+            "event_type": row["event_type"],
+            "payload": payload,
+            "created_at": row["created_at"],
+        }
+
+    def latest_capital_deployment_funnel_shadow_event(self) -> dict[str, Any] | None:
+        if not self.database_path.exists():
+            return None
+        try:
+            with self.read_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT event_id, event_type, payload_json, created_at
+                    FROM agent_events
+                    WHERE event_type = ?
+                    ORDER BY created_at DESC, event_id DESC
+                    LIMIT 1
+                    """,
+                    ("capital_deployment_funnel_shadow",),
+                ).fetchone()
+        finally:
+            self.close_read_connection()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        return {
+            "event_id": row["event_id"],
+            "event_type": row["event_type"],
+            "payload": payload,
+            "created_at": row["created_at"],
+        }
+
+    def capital_deployment_funnel_shadow_conflicts(self, cycle_id: str | None = None) -> list[dict[str, Any]]:
+        if not self.database_path.exists():
+            return []
+        query = """
+            SELECT event_id, event_type, cycle_id, payload_json, created_at
+            FROM agent_events
+            WHERE event_type = ?
+        """
+        params: list[Any] = ["capital_deployment_funnel_shadow_conflict"]
+        if cycle_id is not None:
+            query += " AND cycle_id = ?"
+            params.append(cycle_id)
+        query += " ORDER BY created_at ASC, event_id ASC"
+        try:
+            with self.read_connection() as conn:
+                rows = conn.execute(query, tuple(params)).fetchall()
+        finally:
+            self.close_read_connection()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                payload = {}
+            result.append(
+                {
+                    "event_id": row["event_id"],
+                    "event_type": row["event_type"],
+                    "cycle_id": row["cycle_id"],
+                    "payload": payload,
+                    "created_at": row["created_at"],
+                }
+            )
+        return result
+
     def record_time_stop_shadow_observation(
         self,
         observation: dict[str, Any],

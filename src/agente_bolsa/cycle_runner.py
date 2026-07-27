@@ -29,6 +29,11 @@ from .tools.canonical_selection_ledger import (
     build_canonical_selection_ledger,
     persist_canonical_selection_ledger,
 )
+from .tools.capital_deployment_funnel_shadow import (
+    build_capital_deployment_funnel_shadow,
+    persist_capital_deployment_funnel_shadow,
+    unavailable_capital_deployment_funnel,
+)
 from .tools.comparable_controls import (
     build_comparable_control_sets,
     build_unavailable_control_set,
@@ -1407,6 +1412,75 @@ def _persist_selection_ledger_shadow(
         }
 
 
+def _persist_capital_deployment_funnel_shadow(
+    *,
+    store: Store,
+    reporter: EventReporter,
+    phase_a: dict[str, Any] | None,
+    run_id: str,
+    recommendations: list[Any] | None = None,
+    gated_recommendations: list[Any] | None = None,
+    plans: list[Any] | None = None,
+    rejected_order_plans: list[dict[str, Any]] | None = None,
+    submitted: list[dict[str, Any]] | None = None,
+    account: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Persist P-L54B after the active route; every failure is fail-open."""
+
+    try:
+        candidates = None
+        if isinstance(phase_a, dict):
+            candidates = phase_a.get("all_candidates", phase_a.get("ranked_candidates"))
+        payload = build_capital_deployment_funnel_shadow(
+            run_id,
+            candidates,
+            recommendations=recommendations,
+            gated_recommendations=gated_recommendations,
+            plans=plans,
+            rejected_order_plans=rejected_order_plans,
+            submitted=submitted,
+            account=account,
+        )
+        persisted = persist_capital_deployment_funnel_shadow(store, payload)
+        reporter.emit(
+            "risk_manager",
+            "capital_deployment_funnel_shadow",
+            run_id,
+            "Embudo de capital shadow capturado tras la ruta activa; sin autoridad sobre trading.",
+            {
+                "status": payload.get("status"),
+                "persist_status": persisted.get("status"),
+                "denominators": payload.get("denominators"),
+                "policy_mode": "shadow_only",
+            },
+        )
+        return {
+            "status": payload.get("status"),
+            "persist_status": persisted.get("status"),
+            "event_id": payload.get("event_id"),
+            "content_hash": payload.get("content_hash"),
+            "denominators": payload.get("denominators"),
+            "detail_total": payload.get("detail_total"),
+            "detail_persisted": payload.get("detail_persisted"),
+            "detail_omitted": payload.get("detail_omitted"),
+        }
+    except Exception as exc:  # noqa: BLE001 - shadow telemetry cannot alter trading.
+        reporter.emit(
+            "risk_manager",
+            "capital_deployment_funnel_shadow_failed",
+            run_id,
+            "No se pudo persistir el embudo shadow; la ruta activa continua sin cambios.",
+            {"error": repr(exc), "policy_mode": "shadow_only"},
+        )
+        unavailable = unavailable_capital_deployment_funnel(run_id, reason="persist_failed")
+        return {
+            "status": unavailable.get("status"),
+            "persist_status": "failed",
+            "event_id": unavailable.get("event_id"),
+            "error": repr(exc),
+        }
+
+
 def _auto_paper_trade(
     settings: Settings,
     store: Store,
@@ -2189,6 +2263,17 @@ def _auto_paper_trade(
                 rejected_order_plans=rejected_order_plans,
                 gate_snapshots=gate_snapshots,
             ),
+            "capital_funnel": _persist_capital_deployment_funnel_shadow(
+                store=store,
+                reporter=reporter,
+                phase_a=selection_ledger_phase_a,
+                run_id=run_id,
+                recommendations=reviewed_recommendations,
+                gated_recommendations=gated_recommendations,
+                plans=plan_records or plans,
+                rejected_order_plans=rejected_order_plans,
+                submitted=[],
+            ),
         }
 
     submitted = []
@@ -2216,6 +2301,9 @@ def _auto_paper_trade(
                     "action": str(plan.get("side") or "").lower(),
                     "plan_id": plan.get("plan_id"),
                     "broker_order_id": broker_order_id,
+                    "order_status": order.get("status"),
+                    "submitted_notional": plan.get("notional"),
+                    "submitted_at": order.get("submitted_at"),
                     "decision_lineage": copy.deepcopy(
                         plan.get("payload", {}).get("decision_lineage")
                         or recommendation.get("decision_lineage", {})
@@ -2320,6 +2408,17 @@ def _auto_paper_trade(
             ordered_records=ordered_records,
             failed_records=failed_records,
             gate_snapshots=gate_snapshots,
+        ),
+        "capital_funnel": _persist_capital_deployment_funnel_shadow(
+            store=store,
+            reporter=reporter,
+            phase_a=selection_ledger_phase_a,
+            run_id=run_id,
+            recommendations=reviewed_recommendations,
+            gated_recommendations=gated_recommendations,
+            plans=plan_records or plans,
+            rejected_order_plans=rejected_order_plans,
+            submitted=ordered_records,
         ),
     }
 
@@ -2618,6 +2717,17 @@ def run_observable_cycle(
             recommendations=(auto_result or {}).get("recommendations") if isinstance(auto_result, dict) else None,
             plans=(auto_result or {}).get("plans") if isinstance(auto_result, dict) else None,
             rejected_order_plans=(auto_result or {}).get("rejected_order_plans") if isinstance(auto_result, dict) else None,
+        )
+    if not isinstance(auto_result, dict) or "capital_funnel" not in auto_result:
+        _persist_capital_deployment_funnel_shadow(
+            store=store,
+            reporter=reporter,
+            phase_a=selection_ledger_phase_a,
+            run_id=run_id,
+            recommendations=(auto_result or {}).get("recommendations") if isinstance(auto_result, dict) else None,
+            plans=(auto_result or {}).get("plans") if isinstance(auto_result, dict) else None,
+            rejected_order_plans=(auto_result or {}).get("rejected_order_plans") if isinstance(auto_result, dict) else None,
+            submitted=(auto_result or {}).get("submitted") if isinstance(auto_result, dict) else None,
         )
     with timing.measure("persistence", "trade_summary"):
         _record_trade_summary(settings, store, reporter, run_id, auto_result)

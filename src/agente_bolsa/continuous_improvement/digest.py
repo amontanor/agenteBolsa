@@ -15,6 +15,7 @@ from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.adaptive_tuning import adaptive_governance_status
 from agente_bolsa.tools.canonical_operation_telemetry import canonical_operation_telemetry_digest
+from agente_bolsa.tools.capital_deployment_funnel_shadow import capital_deployment_funnel_digest
 from agente_bolsa.tools.comparable_controls import build_comparable_control_quality
 from agente_bolsa.tools.daily_learning import load_daily_learning_context
 from agente_bolsa.tools.decision_context import build_decision_context_quality
@@ -233,6 +234,7 @@ def build_lab_digest(
         "performance_benchmark": performance_benchmark,
         "learning_penalty_shadow": learning_penalty_shadow_digest(store),
         "canonical_operation_telemetry": canonical_operation_telemetry_digest(store),
+        "capital_deployment_funnel_shadow": capital_deployment_funnel_digest(store),
     }
 
 

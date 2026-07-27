@@ -4676,7 +4676,14 @@ def build_buy_order_plans(
             return
         row = dict(payload)
         lineage = dict(recommendation.decision_lineage or {})
-        for key in ("candidate_id", "signal_id", "cycle_id"):
+        for key in (
+            "candidate_id",
+            "signal_capture_id",
+            "signal_id",
+            "recommendation_id",
+            "cycle_id",
+            "action",
+        ):
             value = str(lineage.get(key) or "").strip()
             if value:
                 row[key] = value

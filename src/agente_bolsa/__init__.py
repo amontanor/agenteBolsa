@@ -14,4 +14,5 @@ __all__ = ["__version__"]
 # P-L43C-R1: broker order durability precedes shadow authority telemetry (0.4.192).
 # P-L57A: null-safe postmarket scoreboard continuity (0.4.193).
 # P-L58R1: combined measurement-safety rehearsal (0.4.193).
-__version__ = "0.4.193"
+# P-L54B-W: fail-open capital deployment funnel shadow (0.4.194).
+__version__ = "0.4.194"
