@@ -2536,3 +2536,16 @@ de despliegue quedan pendientes con XNYS cerrado.
   Ruff/NUL/diff verdes.
 - Brecha P-L53 recommendation_id sigue abierta.
 - Siguiente: P-L59D rehearsal de integracion.
+
+## P-L59D - rehearsal de integracion (27-jul-2026)
+
+- Dictamen: **`ready_for_closed_market_full_validation`**. XNYS abierto, ~21:15 CEST.
+- Merge `--no-ff` de P-L59C-R6D (`30b6b76b`, v0.4.196) sobre P-L60R1 (`70de3401`, v0.4.195).
+  Sin conflictos. HEAD `9009c7f2`, tree `ad69264e` (identico a P-L59C-R6D).
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59d_llm_selected_rehearsal`,
+  rama `codex/pl59d-llm-selected-rehearsal`.
+- 6 protegidos identicos contra base y produccion. Ruta activa P-L60R1 intacta.
+- QA focal: 300 passed (10 archivos) en 65.53s. Ruff/NUL/diff/py_compile/validate-config verdes.
+- Brecha P-L53 recommendation_id sigue abierta.
+- Gates omitidos (XNYS abierto): suite, smoke, benchmark, P-L45 33.336, kernel.
+- Siguiente: P-L59E validacion cerrada completa (requiere XNYS cerrado).
