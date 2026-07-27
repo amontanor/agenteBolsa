@@ -10,8 +10,9 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama de integracion desplegada: `codex/mejora_continua`
-- Version actual del candidato: **0.4.189** (P-L51BR1 en ensayo; producción permanece 0.4.185)
-- Ultima actualizacion: 2026-07-21
+- Version productiva estable: **0.4.185** (P-L48B desplegado en producción el 19-jul)
+- Candidato de integración aislado: **0.4.193** (P-L53BR2 + P-L43C-R1 + P-L57A; no desplegado)
+- Ultima actualizacion: 2026-07-27
 - Estado P-L50BR1: worktree combinado candidato **0.4.188**; secuencia
   P-L49B 0.4.186 -> P-L46BR3 0.4.187 -> P-L50B 0.4.188. La linea anterior
   conserva el estado historico del ensayo individual P-L49B.
@@ -2178,6 +2179,37 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Suite completa, smoke, jobs reales, prueba histórica de 33.336 filas y
   despliegue quedan pendientes para mercado cerrado. Dictamen:
   `ready_for_closed_market_full_validation`.
+## P-L57A - continuidad null-safe del cierre postmarket y scoreboard (0.4.193)
+
+- Base exacta: producción `24537e813ff0905696cda0b3925a212045ee7b09`, tree
+  `4747f27f3d5dc152410203bf089baee500440897`, versión `0.4.185`. Worktree
+  aislado `pl57a_pmr_null_safety`, rama `codex/pl57a-pmr-null-safety`.
+- La reproducción contra la base confirmó que `pmr_dbfa382016b8` del
+  23-jul terminó en `stage_postmarket_report_failed` por
+  `TypeError("'<' not supported between instances of 'NoneType' and 'int'")`:
+  `profitability_scoreboard._performance_summary` pasaba `pnl_pct=NULL` a la
+  reducción de drawdown. La fila incompleta no era una razón para abortar el
+  terminal del PMR.
+- El contrato corregido rechaza null, bool, strings no numéricos, NaN e
+  infinitos en métricas numéricas; reduce solo observaciones válidas; cuando
+  no hay valores devuelve `null` y cobertura `unavailable`, y cuando hay una
+  parte devuelve cobertura `partial`. No rellena `previous_equity`, retorno,
+  alpha, costes, flujos ni drawdown; tampoco reconstruye ni hace backfill del
+  23-jul. `result_metrics` del payload no sustituye columnas SQL ausentes.
+- `performance_daily`, `profitability_scoreboard`, `promotion_readiness`,
+  digest semanal y la serie read-only de web conservan filas válidas y
+  continúan con resultado parcial auditable. La ruta de trading, PMR activo,
+  reconciliación, ranking, gates, sizing, planes, órdenes, exits, exposición
+  y límites no cambia.
+- Commits: `5d05092c` reproducción; `12684790` corrección; `6ddf93da`
+  actualización de la expectativa de primera sesión; `ee9afee6` documentación.
+  La suite cerrada terminó `1698 passed, 1 skipped`; el único skip es el test
+  legado `test_score_study_regression_current_sqlite`, que requiere la SQLite
+  local ausente del worktree. Ruff, NUL, diff, configuración y version policy
+  pasan. El dictamen es `ready_for_integration_rehearsal`.
+- Siguiente paso único: ensayo de integración aislado P-L57A; no desplegar ni
+  hacer backfill hasta validar el candidato con las precondiciones de mercado
+  cerrado.
 
 ## P-L46B - orden cronologico de Cartera abierta (desplegado 0.4.178)
 

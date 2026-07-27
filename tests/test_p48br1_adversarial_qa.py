@@ -1045,18 +1045,15 @@ def test_qa7_consumers_survive_degraded_and_legacy_rows(tmp_path: Path) -> None:
     assert build_profitability_scoreboard(settings, store_legacy) is not None
 
 
-def test_qa7_preexisting_scoreboard_null_pnl_crash_is_documented(tmp_path: Path) -> None:
-    """Defecto PREEXISTENTE (reproducido contra acc6e29a, sin P-L48B): una fila
-    performance_daily con pnl_pct NULL y sin max_dd explícito rompe
-    ``_max_drawdown_from_returns``.  No lo causa ni lo agrava P-L48B; queda
-    registrado en el informe del ensayo para el backlog, fuera de este lote."""
+def test_qa7_scoreboard_null_pnl_is_null_safe_after_p57a(tmp_path: Path) -> None:
+    """Una fila performance_daily incompleta conserva el resultado parcial."""
 
     settings = _settings(tmp_path)
     store = _store(tmp_path)
     with store.connect() as conn:
         conn.execute(
-            "INSERT INTO performance_daily (session_date, payload_json, created_at) VALUES (?, ?, ?)",
-            ("2026-07-15", json.dumps({"pnl_pct": 0.1}), "2026-07-15T21:00:00+00:00"),
+            "INSERT INTO performance_daily (session_date, payload_json, pnl_pct, created_at) VALUES (?, ?, ?, ?)",
+            ("2026-07-15", json.dumps({"pnl_pct": 0.1}), 0.1, "2026-07-15T21:00:00+00:00"),
         )
         conn.execute(
             "INSERT INTO performance_daily (session_date, payload_json, created_at) VALUES (?, ?, ?)",
@@ -1064,8 +1061,14 @@ def test_qa7_preexisting_scoreboard_null_pnl_crash_is_documented(tmp_path: Path)
         )
     from agente_bolsa.tools.profitability_scoreboard import _performance_summary
 
-    with pytest.raises(TypeError):
-        _performance_summary(settings, store, since_date="2026-07-01")
+    summary = _performance_summary(settings, store, since_date="2026-07-01")
+    assert summary["cumulative_pnl_pct"] == 0.1
+    assert summary["max_drawdown"] == 0.0
+    assert summary["metric_coverage"]["pnl_pct"] == {
+        "available": 1,
+        "total": 2,
+        "status": "partial",
+    }
 
 
 # ---------------------------------------------------------------------------

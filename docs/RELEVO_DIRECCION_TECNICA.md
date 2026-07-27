@@ -1,7 +1,8 @@
 # Relevo de direccion tecnica — agenteBolsa
 
-> Actualizado: **20-jul-2026**. Produccion **0.4.185** (`8cfa0db3`, tree
-> `4c3636be`). P-L48B desplegado en mercado cerrado; P-L44B sigue en shadow.
+> Actualizado: **27-jul-2026**. Produccion estable **0.4.185** (`24537e81`,
+> tree `4747f27f`). P-L57A candidato **0.4.193** aislado y no desplegado;
+> P-L48B sigue desplegado y P-L44B sigue en shadow.
 
 > P-L50BR1: el worktree combinado queda en candidato **0.4.188**, con la
 > secuencia P-L49B 0.4.186 -> P-L46BR3 0.4.187 -> P-L50B 0.4.188. No es un
@@ -34,6 +35,12 @@ promociones siguen human-gated.
 - P-L48B desplegado (19-jul): telemetria canonica shadow `p-l48b.canonical-operation-telemetry.v1`
   unidad `broker_order_id`; consumo read-only en digest/health/CLI/performance_daily.
   Sin backfill, sin tablas/migraciones, sin autoridad sobre trading.
+- P-L57A corrige en candidato aislado la continuidad null-safe de
+  `postmarket_report`, `performance_daily`, `profitability_scoreboard`,
+  `promotion_readiness`, digest semanal y serie web read-only. La causa
+  reproducida es `pnl_pct=NULL` entrando en la reducción de drawdown; los
+  valores faltantes siguen `null/unavailable`, con cobertura parcial explícita.
+  No se ha desplegado ni se ha hecho backfill del PMR fallido del 23-jul.
 - P-L43: legacy gobierna time-stop; XNYS es exclusivamente shadow.
 - Cohortes P-L27/P-L29/P-L30/P-L31/P-L32/P-L33 siguen collecting.
 - Overrides adaptativos historicos permanecen; la frontera actual impide nuevas
@@ -86,6 +93,29 @@ suite verde, hash sensible intacto y rollback por revert.
 - No desplegar/reiniciar con XNYS abierto salvo emergencia expresa.
 - No servicios manuales: tareas y `scripts/stack_*.ps1`.
 - No ocultar suite roja con skip/xfail.
+
+## P-L57A — continuidad null-safe del cierre postmarket (candidato 0.4.193)
+
+- Base exacta: `24537e813ff0905696cda0b3925a212045ee7b09`, producción intacta
+  con su suciedad conocida. Worktree:
+  `C:\Antonio\Bref\agenteBolsa_worktrees\pl57a_pmr_null_safety`, rama
+  `codex/pl57a-pmr-null-safety`.
+- PMR `pmr_dbfa382016b8` del 23-jul: reconciliación completada, pero
+  `postmarket_report` falló con `stage_postmarket_report_failed` y el
+  `TypeError` de comparación/agregación causado por `pnl_pct=NULL` y ausencia
+  de drawdown numérico. El 24-jul conservó `pnl_pct`, `previous_equity` y
+  `alpha` como null cuando faltaba una sesión XNYS comparable; no se copió el
+  `result_metrics.pnl_pct` al ledger SQL.
+- Estado de commits: `5d05092c` test/reproducción, `12684790` fix,
+  `6ddf93da` expectativa null-safe de primera sesión y `ee9afee6` documentación.
+  La suite cerrada terminó `1698 passed, 1 skipped`; el skip preexistente es
+  `test_score_study_regression_current_sqlite` por ausencia de SQLite local.
+  Ruff, NUL, diff, configuración, kernel productivo sellado y version policy
+  pasan. No cambiar la secuencia PMR: solo se hace observacionalmente tolerante
+  a filas incompletas; no se reconstruyen datos ni se reejecutan sesiones.
+- Dictamen P-L57A: `ready_for_integration_rehearsal`. Próximo paso: ensayo de
+  integración aislado; la promoción a producción requiere otra precondición
+  cerrada, comparación de objetos protegidos y autorización explícita.
 
 ## Comandos
 

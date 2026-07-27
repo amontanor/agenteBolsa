@@ -26,6 +26,16 @@ HIT_RATE_WINDOW_SESSIONS = 20
 SHARPE_WINDOW_SESSIONS = 60
 
 
+def _finite(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
 def _is_matured(signal: dict[str, Any]) -> bool:
     verdict = str((signal.get("outcome") or {}).get("verdict", "") or "")
     return verdict not in {"", "pending"}
@@ -37,9 +47,7 @@ def _verdict(signal: dict[str, Any]) -> str:
 
 def _return_pct(signal: dict[str, Any]) -> float | None:
     value = (signal.get("outcome") or {}).get("return_pct")
-    if isinstance(value, (int, float)):
-        return float(value)
-    return None
+    return _finite(value)
 
 
 def _matured_window(
@@ -83,7 +91,7 @@ def _profit_factor(matured: list[dict[str, Any]]) -> float | None:
 
 
 def _sharpe(pnl_series: list[float]) -> float | None:
-    clean = [value for value in pnl_series if isinstance(value, (int, float))]
+    clean = [number for value in pnl_series if (number := _finite(value)) is not None]
     if len(clean) < 2:
         return None
     stdev = statistics.pstdev(clean)
@@ -94,7 +102,7 @@ def _sharpe(pnl_series: list[float]) -> float | None:
 
 
 def _max_drawdown(equity_series: list[float]) -> float | None:
-    clean = [value for value in equity_series if isinstance(value, (int, float)) and value > 0]
+    clean = [number for value in equity_series if (number := _finite(value)) is not None and number > 0]
     if len(clean) < 2:
         return None
     peak = clean[0]
@@ -145,19 +153,19 @@ def build_daily_performance(
 
     history = [row for row in store.performance_daily(limit=0) if row["session_date"] < session_date]
     prev_equity = None
-    cumulative_pnl_pct = 0.0
+    cumulative_pnl_pct: float | None = None
     for row in history:
-        if isinstance(row.get("equity"), (int, float)):
-            prev_equity = row["equity"]
-        if isinstance(row.get("pnl_pct"), (int, float)):
-            cumulative_pnl_pct += row["pnl_pct"]
+        row_equity = _finite(row.get("equity"))
+        if row_equity is not None:
+            prev_equity = row_equity
+        row_pnl = _finite(row.get("pnl_pct"))
+        if row_pnl is not None:
+            cumulative_pnl_pct = (cumulative_pnl_pct or 0.0) + row_pnl
 
     pnl_pct: float | None = None
     if equity is not None and prev_equity:
         pnl_pct = round((equity - prev_equity) / prev_equity, 6)
-        cumulative_pnl_pct += pnl_pct
-    elif equity is not None and prev_equity is None:
-        pnl_pct = 0.0
+        cumulative_pnl_pct = (cumulative_pnl_pct or 0.0) + pnl_pct
 
     if canonical_telemetry is None:
         counts = _count_signals(store, session_date)
@@ -190,25 +198,26 @@ def build_daily_performance(
     hit_rate_20 = _hit_rate(matured)
     profit_factor = _profit_factor(matured)
 
-    pnl_history = [row["pnl_pct"] for row in history[-(SHARPE_WINDOW_SESSIONS - 1):]]
+    pnl_history = [row.get("pnl_pct") for row in history[-(SHARPE_WINDOW_SESSIONS - 1):]]
     if pnl_pct is not None:
         pnl_history = pnl_history + [pnl_pct]
     sharpe_60 = _sharpe(pnl_history)
 
-    equity_history = [row["equity"] for row in history if isinstance(row.get("equity"), (int, float))]
+    equity_history = [row.get("equity") for row in history if _finite(row.get("equity")) is not None]
     if equity is not None:
         equity_history = equity_history + [equity]
     max_dd = _max_drawdown(equity_history)
 
     alpha = None
-    if pnl_pct is not None and isinstance(spy_pct, (int, float)):
-        alpha = round(pnl_pct - spy_pct, 6)
+    spy_value = _finite(spy_pct)
+    if pnl_pct is not None and spy_value is not None:
+        alpha = round(pnl_pct - spy_value, 6)
 
     payload: dict[str, Any] = {
         "session_date": session_date,
         "equity": equity,
         "pnl_pct": pnl_pct,
-        "cumulative_pnl_pct": round(cumulative_pnl_pct, 6),
+        "cumulative_pnl_pct": round(cumulative_pnl_pct, 6) if cumulative_pnl_pct is not None else None,
         "signals": counts["signals"],
         "buys": counts["buys"],
         "sells": counts["sells"],
@@ -222,7 +231,7 @@ def build_daily_performance(
         "sharpe_60": sharpe_60,
         "max_dd": max_dd,
         "avg_exposure": _avg_exposure(portfolio, equity),
-        "spy_pct": spy_pct if isinstance(spy_pct, (int, float)) else None,
+        "spy_pct": spy_value,
         "alpha_vs_spy": alpha,
     }
     # Separar resultado de proceso (T5.3): "el proceso no es el resultado".
@@ -304,14 +313,17 @@ def system_iq_score(
     if extra_today is not None:
         rows = rows + [extra_today]
 
-    alpha_values = [row["alpha_vs_spy"] if "alpha_vs_spy" in row else row.get("alpha") for row in rows]
-    alpha_values = [value for value in alpha_values if isinstance(value, (int, float))]
+    alpha_values = [
+        _finite(row["alpha_vs_spy"] if "alpha_vs_spy" in row else row.get("alpha"))
+        for row in rows
+    ]
+    alpha_values = [value for value in alpha_values if value is not None]
     alpha_component = _normalize_alpha(alpha_values)
 
-    hit_values = [row.get("hit_rate_20") for row in rows if isinstance(row.get("hit_rate_20"), (int, float))]
+    hit_values = [value for row in rows if (value := _finite(row.get("hit_rate_20"))) is not None]
     hit_component = statistics.fmean(hit_values) if hit_values else 0.5
 
-    pf_values = [row.get("profit_factor") for row in rows if isinstance(row.get("profit_factor"), (int, float))]
+    pf_values = [value for row in rows if (value := _finite(row.get("profit_factor"))) is not None]
     if pf_values:
         # profit factor 1.0 -> 0.5; 2.0 -> ~0.75; saturado en 3.0 -> 1.0.
         pf_norm = [max(0.0, min(1.0, (value - 1.0) / 2.0 + 0.5)) for value in pf_values]

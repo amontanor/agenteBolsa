@@ -106,7 +106,9 @@ def test_build_daily_performance_over_30_sessions(tmp_path):
     assert row["pnl_pct"] is not None
     assert abs(row["pnl_pct"] - 0.001) < 1e-4
     assert row["alpha_vs_spy"] is not None
-    assert row["sharpe_60"] is not None
+    # La primera sesion no tiene retorno comparable; las restantes son
+    # constantes y, por tanto, Sharpe queda unavailable sin inventar un cero.
+    assert row["sharpe_60"] is None
     assert row["max_dd"] is not None and row["max_dd"] >= 0
     assert 0.0 <= row["iq_score"] <= 100.0
 

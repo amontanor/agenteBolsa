@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import subprocess
 from contextlib import closing
@@ -305,9 +306,10 @@ def _today_pl_metric_payload(today_pl: Any, invested: Any, equity_pct: Any | Non
 
 def _num(value: Any) -> float | None:
     try:
-        if value is None or value == "":
+        if value is None or value == "" or isinstance(value, bool):
             return None
-        return float(value)
+        number = float(value)
+        return number if math.isfinite(number) else None
     except (TypeError, ValueError):
         return None
 
@@ -2816,6 +2818,30 @@ def _setup_page() -> None:
     )
 
 
+def _performance_baseline_series(
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], float | None, float | None]:
+    cumulative_pnl: float | None = None
+    cumulative_spy: float | None = None
+    chart_rows = []
+    for row in rows:
+        pnl = _num(row.get("pnl_pct"))
+        spy = _num(row.get("spy_pct"))
+        if pnl is not None:
+            cumulative_pnl = (cumulative_pnl or 0.0) + pnl
+        if spy is not None:
+            cumulative_spy = (cumulative_spy or 0.0) + spy
+        chart_rows.append(
+            {
+                "fecha": row.get("session_date"),
+                "Sistema": round(cumulative_pnl, 6) if pnl is not None and cumulative_pnl is not None else None,
+                "SPY": round(cumulative_spy, 6) if spy is not None and cumulative_spy is not None else None,
+                "iq_score": _num(row.get("iq_score")),
+            }
+        )
+    return chart_rows, cumulative_pnl, cumulative_spy
+
+
 def _render_performance_baseline(store: Any) -> None:
     """Grafico de equity vs SPY acumulado e iq_score (T0.2)."""
 
@@ -2832,29 +2858,15 @@ def _render_performance_baseline(store: Any) -> None:
             )
             return
 
-        cum_pnl = 0.0
-        cum_spy = 0.0
-        chart_rows = []
-        for row in rows:
-            pnl = row.get("pnl_pct") if isinstance(row.get("pnl_pct"), (int, float)) else 0.0
-            spy = row.get("spy_pct") if isinstance(row.get("spy_pct"), (int, float)) else 0.0
-            cum_pnl += pnl
-            cum_spy += spy
-            chart_rows.append(
-                {
-                    "fecha": row.get("session_date"),
-                    "Sistema": round(cum_pnl, 6),
-                    "SPY": round(cum_spy, 6),
-                    "iq_score": row.get("iq_score"),
-                }
-            )
+        chart_rows, cum_pnl, cum_spy = _performance_baseline_series(rows)
         frame = pd.DataFrame(chart_rows)
         latest = rows[-1]
         m1, m2, m3 = st.columns(3)
         with m1:
             _compact_metric("iq_score", latest.get("iq_score"))
         with m2:
-            _compact_metric("Alpha acumulado", _pct(round(cum_pnl - cum_spy, 6)))
+            cumulative_alpha = round(cum_pnl - cum_spy, 6) if cum_pnl is not None and cum_spy is not None else None
+            _compact_metric("Alpha acumulado", _pct(cumulative_alpha))
         with m3:
             _compact_metric("Sharpe 60", latest.get("sharpe_60"))
         if alt is None:
