@@ -1,8 +1,8 @@
-# P-L59C-R5 — autoridad prospectiva estructurada de llm_selected
+# P-L59C-R6 — autoridad prospectiva estructurada de llm_selected
 
 ## Dictamen
 
-**`ready_for_integration_rehearsal`** (R5 corregido).
+**`ready_for_integration_rehearsal`** (R6 corregido).
 
 Correcciones acumuladas:
 
@@ -12,17 +12,16 @@ Correcciones acumuladas:
 ### R1: validacion runtime + paridad basica + fail-open
 ### R2: `normalize_llm_selected` en `decision_context.py`
 ### R3: `new_id` congelado, normalizacion minima v1, aserciones negativas
-### R4: normalizador context-aware v1 (pero con propagacion recursiva incorrecta)
+### R4: normalizador context-aware con CCS (propagacion recursiva incorrecta corregida en R5)
+### R5: strip solo en raiz DCS/CCS (no propaga a subbloques nested)
 
-### R5 (actual)
-- **Strip solo en raiz DCS/CCS**: `_strip_observational_minimal` retira
-  `llm_selected` globalmente. Solo en el nivel raiz exacto de
-  `decision_context_snapshot` y `comparable_control_set` retira
-  `content_hash` y `captured_at`. Subbloques anidados dentro de DCS/CCS
-  (`market_state_ref`, `gate_evaluation`, etc.) conservan sus propios
-  `content_hash`/`captured_at` intactos.
-- **Test unitario ampliado**: `market_state_ref.content_hash`, `gate_evaluation`
-  nested, subbloque generico dentro de DCS/CCS — todos sobreviven.
+### R6 (actual)
+- **List branch `inside_dcs=False`**: items dict en listas anidadas dentro de
+  DCS/CCS conservan sus `content_hash`/`captured_at` intactos. `llm_selected`
+  global sigue retirandose. Test unitario explicito de listas (`controls`
+  dentro de DCS con items que tienen `content_hash`/`llm_selected`/`captured_at`).
+- **Docs**: titulo R6, commits reales R5 (`4b1c1982`, `c50f23ae`), archivos R6,
+  cifras R6 (15 integration), hora obtenida al ejecutar.
 
 ## Candidato
 
@@ -30,7 +29,7 @@ Correcciones acumuladas:
 - **Worktree**: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59c_llm_selection_producer`
 - **Rama**: `codex/pl59c-llm-selection-producer`
 - **Version**: `0.4.196`
-- **Hora**: 2026-07-27 20:30 CEST, XNYS abierto
+- **Hora**: 2026-07-27 CEST (20:30 direccion), XNYS abierto
 
 ### Commits
 
@@ -40,22 +39,22 @@ R2: `f9fff29c`, `4508cb70`, `88c10a8d`, `cca19660`
 R3: `6ab89896`, `ea42ac26`
 R4: `d4acf339`, `cad0592f`
 R5: `4b1c1982`, `c50f23ae`
-R6: test commit + docs commit
+R6: `26496ba2` (test), `e00dbb5a` (docs), R6D commit (docs final)
 
-## Archivos modificados en R5
+## Archivos modificados en R6
 
 | Archivo | Cambio |
 |---|---|
-| `tests/test_market_cycle_timing_integration.py` | strip root-only + test ampliado con nested blocks |
-| `docs/P-L59_informe.md` | R5 actualizado |
-| `docs/plan_mejoras_y_tareas.md` | R5 |
-| `docs/RELEVO_DIRECCION_TECNICA.md` | R5 |
+| `tests/test_market_cycle_timing_integration.py` | list branch `inside_dcs=False` + test unitario listas |
+| `docs/P-L59_informe.md` | R6 titulo, commits R5 reales, cifras R6 |
+| `docs/plan_mejoras_y_tareas.md` | R6 |
+| `docs/RELEVO_DIRECCION_TECNICA.md` | R6 |
 
 ## Pruebas
 
 - **R2 baseline**: 278 tests (9 archivos disjuntos), 0 fallos
-- **R5 post-cambio**: `test_market_cycle_timing_integration.py` **14 passed**
-  (incluye strip unitario con nested blocks + paridad economica completa)
+- **R6 post-cambio**: `test_market_cycle_timing_integration.py` **15 passed**
+  (incluye strip unitario dicts + nested blocks + listas + paridad completa)
 - Ruff: 0 errores, NUL: OK, diff: OK
 
 ## Gates omitidos (XNYS abierto)
@@ -68,4 +67,4 @@ Sigue abierta. No corregida.
 
 ## Siguiente paso
 
-P-L59D: rehearsal de integracion sobre HEAD P-L59C-R5.
+P-L59D: rehearsal de integracion (no iniciado).
