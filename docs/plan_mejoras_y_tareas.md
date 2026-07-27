@@ -2495,3 +2495,12 @@ de despliegue quedan pendientes con XNYS cerrado.
   exposure/undeployed notional siguen unavailable.
 - Suite completa, P-L45 33336, smoke y benchmark combinado quedan pendientes
   para mercado cerrado. Dictamen: `ready_for_closed_market_full_validation`.
+## P-L46BR4 - filtro calendario del grafico de cartera (candidato 0.4.195)
+
+- Corregido el filtro para usar limites de fecha y no cantidad de filas; las
+  sesiones XNYS pueden dejar menos puntos que dias naturales.
+- Ventanas disponibles: 7, 15, 30, 90 y `Desde inicio`. La serie filtrada es
+  la unica fuente de grafica, Resultado del periodo, porcentaje y fechas.
+- Reproduccion y fix en worktree aislado; 75 pruebas UI verdes. Suite completa,
+  smoke y validacion cerrada siguen pendientes con XNYS abierto.
+- No cambia trading, riesgo, broker, persistencia ni consultas adicionales.

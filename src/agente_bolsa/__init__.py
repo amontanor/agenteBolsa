@@ -15,4 +15,5 @@ __all__ = ["__version__"]
 # P-L57A: null-safe postmarket scoreboard continuity (0.4.193).
 # P-L58R1: combined measurement-safety rehearsal (0.4.193).
 # P-L54B-W: fail-open capital deployment funnel shadow (0.4.194).
-__version__ = "0.4.194"
+# P-L46BR4: calendar-safe portfolio chart filter (0.4.195).
+__version__ = "0.4.195"

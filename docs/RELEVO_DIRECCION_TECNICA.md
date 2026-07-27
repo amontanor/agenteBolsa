@@ -565,3 +565,13 @@ Siguiente lote único: P-L53BR1, ensayo integrado aislado desde el candidato
   repetir los gates cerrados, incluida suite/smoke/benchmark, sin desplegar
   automaticamente. El incidente previo queda documentado como
   `unconfirmed_sqlite_mutation`, sin limpieza.
+
+## P-L46BR4 - filtro calendario de cartera (candidato 0.4.195)
+
+P-L46BR4 corrige la interpretacion del selector del grafico: `days` ya no es
+un numero de filas sino una ventana calendario anclada al ultimo snapshot
+visible. Se conservan 7/15/30/90/`Desde inicio`, el orden y la deduplicacion
+de fechas, y la serie visible alimenta tanto grafica como Resultado del
+periodo. El cambio no toca trading ni broker. El worktree tiene 75 pruebas UI
+verdes; con XNYS abierto quedan pendientes suite completa, smoke y validacion
+cerrada.

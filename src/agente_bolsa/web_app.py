@@ -90,6 +90,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_START_DATE = "2026-04-01"
 PORTFOLIO_CHART_START_DATE = "2026-04-28"
 PORTFOLIO_HISTORY_PERIOD = "all"
+PORTFOLIO_CHART_WINDOWS: tuple[int | None, ...] = (7, 15, 30, 90, None)
 PRE_EARNINGS_CONFIDENCE_THRESHOLD = 0.80
 ENV_PATH = REPO_ROOT / ".env"
 LEADERBOARD_API_BASE_URL = os.getenv(
@@ -1733,12 +1734,29 @@ def _portfolio_value_series_from_alpaca(
 
 def _trim_portfolio_chart_range(df: pd.DataFrame, *, days: int | None) -> pd.DataFrame:
     if df.empty:
-        return df
-    if days is None:
-        return df.sort_values("fecha").reset_index(drop=True)
-    window = max(int(days), 1)
-    trimmed = df.sort_values("fecha").tail(window).reset_index(drop=True)
-    return trimmed
+        return df.copy()
+
+    # `days` es una ventana calendario, no un numero de filas. Las sesiones
+    # XNYS no ocurren todos los dias y, por tanto, tail(30) podia mostrar mas
+    # de 30 dias naturales y hacer que el selector pareciera ignorado.
+    normalized = df.copy()
+    normalized["_portfolio_chart_date"] = pd.to_datetime(
+        normalized["fecha"].astype("string").str.slice(0, 10),
+        errors="coerce",
+    )
+    normalized = normalized[normalized["_portfolio_chart_date"].notna()]
+    if normalized.empty:
+        return df.iloc[0:0].copy()
+    normalized = (
+        normalized.sort_values("_portfolio_chart_date", kind="stable")
+        .drop_duplicates("_portfolio_chart_date", keep="last")
+    )
+    if days is not None:
+        window = max(int(days), 1)
+        end_date = normalized["_portfolio_chart_date"].max()
+        start_date = end_date - pd.Timedelta(days=window - 1)
+        normalized = normalized[normalized["_portfolio_chart_date"].between(start_date, end_date)]
+    return normalized.drop(columns="_portfolio_chart_date").reset_index(drop=True)
 
 
 def _portfolio_chart_visible_summary(df: pd.DataFrame) -> dict[str, Any]:
@@ -3860,7 +3878,7 @@ def page_dashboard() -> None:
             with chart_control:
                 chart_days = st.selectbox(
                     "Rango",
-                    [7, 15, 30, None],
+                    list(PORTFOLIO_CHART_WINDOWS),
                     format_func=lambda value: "Desde inicio" if value is None else f"Ultimos {value} dias",
                     key="portfolio_chart_days",
                     label_visibility="collapsed",

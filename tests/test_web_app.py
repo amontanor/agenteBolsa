@@ -11,6 +11,7 @@ from agente_bolsa.llm_usage import usage_tokens
 from agente_bolsa.models import OrderSnapshot, PortfolioSnapshot, PositionSnapshot
 from agente_bolsa.storage import ORDER_PLAN_STATUS_PENDING, Store
 from agente_bolsa.web_app import (
+    PORTFOLIO_CHART_WINDOWS,
     PORTFOLIO_HISTORY_PERIOD,
     _ci_conversation_groups,
     _ci_global_export_payload,
@@ -342,6 +343,52 @@ def test_trim_portfolio_chart_range_keeps_latest_window():
 
     assert list(trimmed["fecha"]) == ["2026-05-08", "2026-05-09"]
     assert list(trimmed["valor_cartera"]) == [1002.0, 1003.0]
+
+
+def test_trim_portfolio_chart_range_uses_calendar_window_not_row_count():
+    dates = pd.bdate_range("2026-01-01", periods=120).strftime("%Y-%m-%d").tolist()
+    df = pd.DataFrame(
+        {
+            "fecha": dates,
+            "valor_cartera": list(range(1000, 1120)),
+        }
+    )
+
+    trimmed = _trim_portfolio_chart_range(df, days=30)
+
+    expected_start = pd.Timestamp(dates[-1]) - pd.Timedelta(days=29)
+    assert pd.Timestamp(trimmed["fecha"].iloc[0]) >= expected_start
+    assert pd.Timestamp(trimmed["fecha"].iloc[-1]) == pd.Timestamp(dates[-1])
+    assert len(trimmed) < 30
+
+
+def test_portfolio_chart_windows_cover_selector_and_consecutive_changes_without_mutation():
+    dates = pd.bdate_range("2026-01-01", periods=120).strftime("%Y-%m-%d").tolist()
+    df = pd.DataFrame({"fecha": dates, "valor_cartera": list(range(1000, 1120))})
+    original = df.copy(deep=True)
+
+    assert PORTFOLIO_CHART_WINDOWS == (7, 15, 30, 90, None)
+    visible = [_trim_portfolio_chart_range(df, days=days) for days in (30, 7, 90, None)]
+
+    assert pd.Timestamp(visible[0]["fecha"].iloc[0]) >= pd.Timestamp(dates[-1]) - pd.Timedelta(days=29)
+    assert pd.Timestamp(visible[1]["fecha"].iloc[0]) >= pd.Timestamp(dates[-1]) - pd.Timedelta(days=6)
+    assert pd.Timestamp(visible[2]["fecha"].iloc[0]) >= pd.Timestamp(dates[-1]) - pd.Timedelta(days=89)
+    assert len(visible[0]) < len(visible[2]) < len(visible[3])
+    pd.testing.assert_frame_equal(df, original)
+
+
+def test_trim_portfolio_chart_range_deduplicates_and_orders_dates():
+    df = pd.DataFrame(
+        {
+            "fecha": ["2026-05-03", "2026-05-01", "2026-05-02", "2026-05-01"],
+            "valor_cartera": [1030.0, 1010.0, 1020.0, 1011.0],
+        }
+    )
+
+    visible = _trim_portfolio_chart_range(df, days=None)
+
+    assert list(visible["fecha"]) == ["2026-05-01", "2026-05-02", "2026-05-03"]
+    assert list(visible["valor_cartera"]) == [1011.0, 1020.0, 1030.0]
 
 
 def test_trim_portfolio_chart_range_none_keeps_full_history():
