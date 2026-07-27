@@ -37,8 +37,8 @@ rechazadas por el contrato.
 
 La ruta observada es:
 
-`TradeRecommendation` y contexto de ciclo →
-`build_buy_order_plans` → guards/gates y sizing →
+`TradeRecommendation` y contexto de ciclo → selección y gates previos →
+`build_buy_order_plans` (capacity check, guards y sizing) →
 `RiskManager.validate_order` → `OrderPlan` con `decision_lineage` →
 `save_order_plan` → envío paper → `save_broker_order`.
 
@@ -124,7 +124,7 @@ La exposición observada es 0,1085 (10,85%); `target_account_exposure` y
 | recommendations generated | 376 | complete |
 | `llm_selected` / `llm_considered` | 15 / 15 | complete |
 | decision source LLM / deterministic capacity fill | 126 / 250 | descriptive |
-| gates evaluated / passed / rejected / unavailable | 256 / 95 / 100 / 61 | complete |
+| gates evaluated / passed / rejected / unavailable | 306 / 145 / 100 / 61 | complete |
 | risk approved / rejected / unavailable | 15 / 80 / 0 | complete |
 | plans generated | 15 | complete |
 | orders submitted / filled | 15 / 15 | complete |
@@ -135,9 +135,9 @@ La exposición observada es 0,1085 (10,85%); `target_account_exposure` y
 | Etapa | Notional USD | Cobertura |
 |---|---:|---|
 | candidate requested | 564.000 | 376/376, USD, complete |
-| gate eligible | 142.500 | 95/95, USD, complete |
+| gate eligible | 217.500 | 145/145, USD, complete |
 | risk approved | 15.000 | 15/15, USD, complete |
-| sizing approved | 15.000 | 15/15, USD, complete |
+| sizing approved | 95.000 | 95/95, USD, complete |
 | planned | 15.000 | 15/15, USD, complete |
 | submitted | 15.000 | 15/15, USD, complete |
 | filled | 15.000 | 15/15, USD, complete |
@@ -219,20 +219,20 @@ La tabla corregida es secuencial y sin doble conteo:
 | Etapa | Reached | Passed/approved | Rejected | Unavailable | Not generated |
 |---|---:|---:|---:|---:|---:|
 | selection | 376 | 306 | 70 | 0 | 0 |
-| capacity | 306 | 256 | 50 | 0 | 70 |
-| gates | 256 | 95 | 100 | 61 | 120 |
+| gates | 306 | 145 | 100 | 61 | 70 |
+| capacity | 145 | 95 | 50 | 0 | 231 |
+| sizing | 95 | 95 | 0 | 0 | 281 |
 | risk | 95 | 15 | 80 | 0 | 281 |
-| sizing | 15 | 15 | 0 | 0 | 361 |
 | plans | 15 | 15 | 0 | 0 | 361 |
 | orders | 15 | 15 | 0 | 0 | 361 |
 | fills | 15 | 15 | 0 | 0 | 361 |
 
-El orden caracterizado es selección → `capacity check` dentro de
-`build_buy_order_plans` → gates → `RiskManager` → sizing → plan. Una etapa
+El orden caracterizado es selección → gates → `capacity check` dentro de
+`build_buy_order_plans` → sizing → `RiskManager` → plan. Una etapa
 posterior a una caída primaria es `not_generated`, no `unavailable`.
 
 El waterfall corregido es: requested 564.000 USD (376/376), gate eligible
-142.500 USD (95/95), risk approved 15.000 USD (15/15), sizing approved 15.000,
+217.500 USD (145/145), sizing approved 95.000 USD (95/95), risk approved 15.000,
 planned 15.000, submitted 15.000 y filled 15.000. Cada importe lleva
 `available_count`, `unavailable_count`, `denominator_count`, moneda y estado.
 Target/min/max exposure y notional objetivo siguen `null/unavailable`.
