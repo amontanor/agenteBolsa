@@ -621,14 +621,13 @@ cerrada.
 - Gates omitidos: suite, smoke, benchmark, P-L45 33.336, kernel (XNYS abierto).
 - Siguiente: P-L59E validacion cerrada completa.
 
-## P-L59F-T-R2 — caracterizacion final y contrato de implementacion (27-jul-2026)
+## P-L59F-T-R3 — caracterizacion final, contrato cerrado (27-jul-2026)
 
-- Dictamen: **`ready_for_implementation`**. XNYS abierto, ~22:15 CEST.
-- HEAD tests R2: `7af01727`. Solo tests/docs, sin src.
-- 17 tests: colision, same-rec_id, BUY/EXIT, missing IDs, wiring real
-  `_auto_paper_trade` (sin rec_id preasignado, mismo lineage, orden),
-  P-L54 API, expansion misma identidad + match_same_cycle_controls.
-- Contrato de implementacion completo en informe (candidate_rows v2,
-  decision_rows con adjuntos, hash, bounded, readers, consumidores).
-- Ruff/NUL/diff verdes. Gates omitidos (XNYS abierto).
-- Siguiente: P-L59F-I implementacion de decision_rows en worktree aislado.
+- Dictamen: **`ready_for_implementation`**. XNYS cerrado (~22:15 CEST),
+  postmarket no terminal, P-L59E bloqueado.
+- HEAD tests R3: `e14caa1e`. Solo tests/docs, sin src.
+- R3: lineage literal, adjuntos P-L53/P-L54 coherentes, stage explicito,
+  `_denominators` real en expansion.
+- 17 tests pasan (0.90s). Ruff/NUL/diff verdes.
+- Contrato de implementacion completo en informe.
+- Siguiente: P-L59F-I (requiere precondiciones XNYS verificadas).

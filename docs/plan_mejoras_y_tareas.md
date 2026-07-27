@@ -2550,21 +2550,18 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Gates omitidos (XNYS abierto): suite, smoke, benchmark, P-L45 33.336, kernel.
 - Siguiente: P-L59E validacion cerrada completa (requiere XNYS cerrado).
 
-## P-L59F-T-R2 — caracterizacion final y contrato de implementacion (27-jul-2026)
+## P-L59F-T-R3 — caracterizacion final, contrato cerrado (27-jul-2026)
 
-- Dictamen: **`ready_for_implementation`**. XNYS abierto, ~22:15 CEST.
+- Dictamen: **`ready_for_implementation`**. XNYS cerrado (22:00 CEST),
+  pero postmarket no terminal y continuous_improvement running.
+  P-L59E bloqueado; no operacion cerrada.
 - Base: P-L59D-D `520559c6` (tree `e3c80ba`, v0.4.196).
 - Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59ft_recommendation_identity_design`,
   rama `codex/pl59ft-recommendation-identity-design`.
-- HEAD tests R2: `7af01727`. Solo tests/docs, sin cambios en src.
-- 17 tests: colision last-wins, same-rec_id in-memory y Store, BUY/EXIT,
-  missing IDs, wiring real `_auto_paper_trade` (sin rec_id preasignado,
-  mismo lineage, orden ejecucion registrado), P-L54 API real (distintos
-  rec_id 2 filas, same-ID same 1 fila, same-ID different ambiguous),
-  expansion con identidad duplicada + match_same_cycle_controls.
-- Ruff/NUL/diff verdes. Gates omitidos (XNYS abierto).
-- Contrato de implementacion completo: candidate_rows v2 summary (8 estados),
-  decision_rows con adjuntos plan/order/rejection, hash semantico, bounded
-  memory, denominadores separados, readers v1/v2, consumidores catalogados.
-- Siguiente: P-L59F-I implementacion de decision_rows en worktree aislado.
-  Version 0.4.197 propuesta sujeta a verificacion.
+- HEAD tests R3: `e14caa1e`. Solo tests/docs, sin cambios en src.
+- R3: lineage literal identico en rec1/rec2, adjuntos P-L53 (plans/plan_records)
+  y P-L54 (recommendations/plans) con IDs coherentes, stage P-L53<P-L54 explicito,
+  `_denominators` real en expansion con raw_count=1.
+- 17 tests pasan (0.90s). Ruff/NUL/diff verdes.
+- Contrato de implementacion completo en informe.
+- Siguiente: P-L59F-I (requiere verificar precondiciones XNYS antes de iniciar).

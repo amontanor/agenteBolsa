@@ -203,10 +203,12 @@ P-L59E: validacion cerrada completa de P-L59D. Requiere:
 - **Worktree**: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59ft_recommendation_identity_design`
 - **Rama**: `codex/pl59ft-recommendation-identity-design`
 - **HEAD R2 tests**: `7af01727`
+- **HEAD R3 tests**: `e14caa1e`; docs HEAD pendiente
 - **Version**: `0.4.196` (sin bump; solo tests/docs)
-- **Hora**: 2026-07-27 CEST, XNYS abierto
+- **Hora**: 2026-07-27 CEST. XNYS cerrado (22:00), pero postmarket no terminal,
+  continuous_improvement running. P-L59E bloqueado por precondiciones.
 
-## Correcciones acumuladas (R1 + R2)
+## Correcciones acumuladas (R1 + R2 + R3)
 
 ### 1. Same recommendation_id real
 4 tests: same/different-content dentro de un build, conflicto Store entre
@@ -233,6 +235,21 @@ test es la evidencia. Inventario en informe.
 candidate_row, duplica LA MISMA desde el resultado del ledger (misma identity_key,
 distinto recommendation_id). Demuestra recommended_count inflado (1 vs 2) y
 exclusion same_treatment en match_same_cycle_controls.
+
+### R3: Contradicciones corregidas
+- `test_wiring_two_recs_same_lineage_ids_assigned_ordered`: rec1/rec2 con MISMO
+  `decision_lineage` literal y completo (cycle_id=cycle-two-recs, action=buy,
+  signal_capture_id=signal_id=candidate_id fijos). Afirmada igualdad exacta
+  pre-ejecucion. Verificado que P-L53/P-L54 reciben lineage identico.
+- Adjuntos P-L53: plans (`recommendation.recommendation_id`), plan_records
+  (`recommendation.recommendation_id`). P-L54: recommendations, plans/plan_records.
+  Conjuntos de IDs coinciden entre gated, P-L53 y P-L54.
+- Stage: `assert p53_idx < p54_idx` explicito ademas de ambos tras submits.
+- `test_expansion_same_identity_duplicated_inflates_counters`: `_denominators`
+  REAL con raw_count=1 sobre lista expandida [original, duplicada] misma
+  identity_key. Demuestra canonical_count/recommended_count inflados (2 vs 1)
+  y recommended_count > raw_count (invariante roto). `match_same_cycle_controls`
+  real conservado.
 
 ### 6. Contrato de implementacion completo
 
@@ -340,27 +357,29 @@ Consumidores que **si requieren adaptacion** a v2:
 - Same-ID same-content: una fila (idempotente).
 - Same-ID different-content: dos filas identity_ambiguous.
 
-## Pruebas R2
+## Pruebas R3
 
-- **17 passed** en 0.92s (colision + same-rec_id + BUY/EXIT + missing IDs
-  + wiring real + P-L54 API + expansion)
+- **17 passed** en 0.90s (colision + same-rec_id + BUY/EXIT + missing IDs
+  + wiring real con lineage/adjuntos/stage + P-L54 API + expansion con
+  `_denominators` real)
 - Ruff: All checks passed
 - NUL: OK (436 archivos)
 - git diff --check: clean
 
-## Gates omitidos (XNYS abierto)
+## Gates omitidos (XNYS cerrado, precondiciones no terminales)
 
 Suite completa, smoke, benchmark, P-L45 33.336, kernel, validate-agent-config,
 py_compile. Sin cambios en src. Sin broker/red/LLM/SQLite productiva.
+Postmarket no terminal, continuous_improvement running: P-L59E bloqueado.
 
 ## Archivos modificados
 
-| Archivo | Cambio R2 |
+| Archivo | Cambio R3 |
 |---|---|
-| `tests/test_p59ft_recommendation_identity_design.py` | R2: wiring sin rec_id preasignado, expansion misma identidad, stage local eliminado |
-| `docs/P-L59_informe.md` | Contrato de implementacion completo (R2) |
-| `docs/plan_mejoras_y_tareas.md` | Limpiado (R2 final) |
-| `docs/RELEVO_DIRECCION_TECNICA.md` | Limpiado (R2 final) |
+| `tests/test_p59ft_recommendation_identity_design.py` | R3: lineage literal, adjuntos P-L53/P-L54, stage explicito, _denominators real |
+| `docs/P-L59_informe.md` | R3 corrections, estado XNYS cerrado no terminal |
+| `docs/plan_mejoras_y_tareas.md` | R3 actualizado |
+| `docs/RELEVO_DIRECCION_TECNICA.md` | R3 actualizado |
 | `docs/P-L59F-T_informe.md` | ELIMINADO (consolidado en R1) |
 
 ## Siguiente paso (sin ejecutar)
