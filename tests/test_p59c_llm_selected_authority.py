@@ -20,6 +20,7 @@ from agente_bolsa.models import TradeRecommendation
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.canonical_selection_ledger import (
     build_canonical_selection_ledger,
+    normalize_llm_selected,
     persist_canonical_selection_ledger,
     read_canonical_selection_ledger,
 )
@@ -508,7 +509,113 @@ def test_predecision_fields_exclude_outcomes():
 
 
 # ===================================================================
-# (J) Version policy
+# (J) P-L59C-R1: normalizacion runtime -- solo bool o None
+# ===================================================================
+
+def test_normalize_preserves_true():
+    assert normalize_llm_selected(True) is True
+
+
+def test_normalize_preserves_false():
+    assert normalize_llm_selected(False) is False
+
+
+def test_normalize_preserves_none():
+    assert normalize_llm_selected(None) is None
+
+
+def test_normalize_degrade_int_one_to_none():
+    """1 no es bool literal -> None (fail-open)."""
+    assert normalize_llm_selected(1) is None
+
+
+def test_normalize_degrade_int_zero_to_none():
+    """0 no es bool literal -> None."""
+    assert normalize_llm_selected(0) is None
+
+
+def test_normalize_degrade_string_true_to_none():
+    assert normalize_llm_selected("true") is None
+
+
+def test_normalize_degrade_string_false_to_none():
+    assert normalize_llm_selected("false") is None
+
+
+def test_normalize_degrade_list_to_none():
+    assert normalize_llm_selected([True]) is None
+
+
+def test_normalize_degrade_dict_to_none():
+    assert normalize_llm_selected({"value": True}) is None
+
+
+def test_normalize_degrade_float_to_none():
+    assert normalize_llm_selected(1.0) is None
+
+
+def test_normalize_never_raises_on_any_input():
+    """Fail-open: cualquier tipo no lanza excepcion."""
+    for value in [1, 0, -1, "true", "false", "", [], {}, (), set(), 1.5, object(), b"true"]:
+        result = normalize_llm_selected(value)
+        assert result is None, f"normalize_llm_selected({value!r}) -> {result!r}, expected None"
+
+
+def test_ledger_normalizes_int_one_to_none_via_fixture():
+    """Snapshot con llm_selected=1 (int) -> None en el ledger."""
+    c = _cand(0, selected_for_llm=True)
+    rec = TradeRecommendation(
+        symbol=c["symbol"], action=c["action"], confidence=0.9, reason="t",
+        source="llm", decision_lineage=_lineage(c),
+    )
+    snapshot = build_decision_context_snapshot(
+        rec, cycle_id=c["cycle_id"], source_run_id=c["source_run_id"],
+        market_state=_market_state(cycle_id=c["cycle_id"]),
+        captured_at=CAPTURED_AT,
+    )
+    # Malformado: inject 1 como llm_selected en el snapshot
+    snapshot["llm_selected"] = 1
+    r = {
+        "cycle_id": c["cycle_id"], "action": c["action"],
+        "source": "llm", "decision_origin": "llm",
+        "decision_lineage": _lineage(c),
+        "decision_context_snapshot": snapshot,
+        "recommendation_id": "rec:X",
+    }
+    result = build_canonical_selection_ledger(
+        "cycle-A", _phase([c]), recommendations=[r], captured_at=CAPTURED_AT,
+    )
+    assert result["candidate_rows"][0]["llm_selected"] is None
+
+
+def test_ledger_normalizes_string_true_to_none_via_fixture():
+    """Snapshot con llm_selected='true' (str) -> None en el ledger."""
+    c = _cand(0, selected_for_llm=True)
+    rec = TradeRecommendation(
+        symbol=c["symbol"], action=c["action"], confidence=0.9, reason="t",
+        source="llm", decision_lineage=_lineage(c),
+    )
+    snapshot = build_decision_context_snapshot(
+        rec, cycle_id=c["cycle_id"], source_run_id=c["source_run_id"],
+        market_state=_market_state(cycle_id=c["cycle_id"]),
+        captured_at=CAPTURED_AT,
+    )
+    snapshot["llm_selected"] = "true"
+    r = {
+        "cycle_id": c["cycle_id"], "action": c["action"],
+        "source": "llm", "decision_origin": "llm",
+        "decision_lineage": _lineage(c),
+        "decision_context_snapshot": snapshot,
+        "recommendation_id": "rec:X",
+    }
+    result = build_canonical_selection_ledger(
+        "cycle-A", _phase([c]), recommendations=[r], captured_at=CAPTURED_AT,
+    )
+    assert result["candidate_rows"][0]["llm_selected"] is None
+
+
+# ===================================================================
+# (K) Version policy
 # ===================================================================
 
 def test_version_policy_requires_bump():

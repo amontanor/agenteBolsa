@@ -35,11 +35,16 @@ class _Reporter:
         pass
 
 
-def _patch_trading_flow(monkeypatch, *, shadow: bool = False, fail_backtest: bool = False):
+def _patch_trading_flow(monkeypatch, *, shadow: bool = False, fail_backtest: bool = False,
+                       llm_selected: bool | None = None):
     import agente_bolsa.cycle_runner as runner
 
     calls: list[str] = []
-    recommendation = TradeRecommendation("AAPL", "buy", 0.9, "prueba", entry_price=100, stop_loss=95, take_profit=110)
+    rec_kwargs = {"symbol": "AAPL", "action": "buy", "confidence": 0.9, "reason": "prueba",
+                  "entry_price": 100, "stop_loss": 95, "take_profit": 110}
+    if llm_selected is not None:
+        rec_kwargs["llm_selected"] = llm_selected
+    recommendation = TradeRecommendation(**rec_kwargs)
     plan = OrderPlan("AAPL", "buy", 100.0, 1.0, 100.0, 95.0, 110.0, recommendation, RiskDecision(True, "ok", {}))
 
     monkeypatch.setattr(runner, "active_learning_mode", lambda _settings: {"shadow_first": True, "shadow_strategies": []} if shadow else None)
@@ -78,11 +83,20 @@ def _patch_trading_flow(monkeypatch, *, shadow: bool = False, fail_backtest: boo
     monkeypatch.setattr(runner, "update_signal_execution_status", lambda *_args, **_kwargs: calls.append("update_signal_execution_status") or 1)
     monkeypatch.setattr(runner, "submit_paper_order_plan", lambda *_args, **_kwargs: calls.append("submit_paper_order_plan") or {"id": "broker-1", "status": "accepted"})
     monkeypatch.setattr(runner, "_write_learning_mode_shadow_report", lambda *_args, **_kwargs: calls.append("_write_learning_mode_shadow_report") or "shadow.json")
+    # Shadow no-ops (overridden by P-L59C-R1 parity/fail-open tests)
+    monkeypatch.setattr(runner, "_persist_selection_ledger_shadow",
+                        lambda **kw: (calls.append("P-L53:selection_ledger_final"),
+                                      {"status": "verified", "persist_status": "inserted"})[-1])
+    monkeypatch.setattr(runner, "_persist_capital_deployment_funnel_shadow",
+                        lambda **kw: (calls.append("P-L54B:capital_funnel_final"),
+                                      {"status": "verified", "persist_status": "inserted"})[-1])
     return calls
 
 
-def _run(monkeypatch, tmp_path, *, timing, shadow: bool = False, fail_backtest: bool = False):
-    calls = _patch_trading_flow(monkeypatch, shadow=shadow, fail_backtest=fail_backtest)
+def _run(monkeypatch, tmp_path, *, timing, shadow: bool = False, fail_backtest: bool = False,
+         llm_selected: bool | None = None):
+    calls = _patch_trading_flow(monkeypatch, shadow=shadow, fail_backtest=fail_backtest,
+                                llm_selected=llm_selected)
     store = _StoreSpy()
     settings = Settings(DATA_DIR=tmp_path, AUTO_PAPER_TRADING=True, REQUIRE_HUMAN_APPROVAL=False)
     result = _auto_paper_trade(settings, store, _Reporter(), "cycle", {"run_id": "source"}, {}, {}, timing=timing)
@@ -316,3 +330,183 @@ def test_stage_order_full_flow_with_pl53_pl54_spies(monkeypatch, tmp_path):
 
     # ---- Trading activo intacto ----
     assert store.calls == ["save_trade_recommendation", "save_order_plan", "save_broker_order"]
+
+
+# ===================================================================
+# P-L59C-R1 Breach 2: paridad real _auto_paper_trade
+# ===================================================================
+
+def test_parity_auto_paper_trade_llm_selected_true(monkeypatch, tmp_path):
+    """Con llm_selected=True la ruta activa es identica; no hay llamadas extra."""
+    timing = MarketCycleTiming(tmp_path, "parity-true")
+    result, calls, store = _run(monkeypatch, tmp_path, timing=timing, llm_selected=True)
+
+    # Llamadas activas fijas
+    assert calls.count("request_trade_recommendations") == 1
+    assert calls.count("submit_paper_order_plan") == 1
+    assert store.calls == ["save_trade_recommendation", "save_order_plan", "save_broker_order"]
+
+    # P-L53 shadow esta presente (no-op mock)
+    assert "P-L53:selection_ledger_final" in calls
+
+    # Llamadas base de _patch_trading_flow
+    baseline_calls = [
+        "request_trade_recommendations", "review_recommendations",
+        "review_recommendations_adversarial", "_apply_entry_quality_gate",
+        "_apply_backtest_gate", "update_signal_decisions",
+        "build_order_plans", "_apply_daily_buy_limit",
+        "_apply_low_sample_daily_quota", "_separate_strategy_paused_plans",
+        "P-L53:selection_ledger_final", "P-L54B:capital_funnel_final",
+        "submit_paper_order_plan", "update_signal_execution_status",
+    ]
+    for baseline in baseline_calls:
+        assert baseline in calls, f"Llamada esperada {baseline} ausente"
+
+
+def test_parity_auto_paper_trade_llm_selected_false(monkeypatch, tmp_path):
+    """Con llm_selected=False la ruta activa es identica."""
+    timing = MarketCycleTiming(tmp_path, "parity-false")
+    result, calls, store = _run(monkeypatch, tmp_path, timing=timing, llm_selected=False)
+
+    assert calls.count("request_trade_recommendations") == 1
+    assert calls.count("submit_paper_order_plan") == 1
+    assert store.calls == ["save_trade_recommendation", "save_order_plan", "save_broker_order"]
+    assert "P-L53:selection_ledger_final" in calls
+
+
+def test_parity_auto_paper_trade_llm_selected_none(monkeypatch, tmp_path):
+    """Con llm_selected=None (legacy) la ruta activa es identica."""
+    timing = MarketCycleTiming(tmp_path, "parity-none")
+    result, calls, store = _run(monkeypatch, tmp_path, timing=timing, llm_selected=None)
+
+    assert calls.count("request_trade_recommendations") == 1
+    assert calls.count("submit_paper_order_plan") == 1
+    assert store.calls == ["save_trade_recommendation", "save_order_plan", "save_broker_order"]
+    assert "P-L53:selection_ledger_final" in calls
+
+
+def test_parity_p53_receives_llm_selected_true_from_real_route(monkeypatch, tmp_path):
+    """P-L53 recibe llm_selected=True por la ruta real de _auto_paper_trade."""
+    import agente_bolsa.cycle_runner as runner
+    captured_llm_sel: list = []
+
+    _patch_trading_flow(monkeypatch, llm_selected=True)
+    store = _StoreSpy()
+    settings = Settings(DATA_DIR=tmp_path, AUTO_PAPER_TRADING=True, REQUIRE_HUMAN_APPROVAL=False)
+
+    def spy_ledger(**kwargs):
+        recs = list(kwargs.get("recommendations", []))
+        for r in recs:
+            val = getattr(r, "llm_selected", None)
+            captured_llm_sel.append(val)
+        return {"status": "verified", "persist_status": "inserted"}
+
+    monkeypatch.setattr(runner, "_persist_selection_ledger_shadow", spy_ledger)
+    monkeypatch.setattr(runner, "_persist_capital_deployment_funnel_shadow",
+                        lambda **kw: {"status": "verified", "persist_status": "inserted"})
+
+    runner._auto_paper_trade(
+        settings, store, _Reporter(), "cycle", {"run_id": "source"}, {}, {},
+        selection_ledger_phase_a={"all_candidates": [], "selected_candidates": []},
+    )
+
+    assert len(captured_llm_sel) >= 1
+    assert captured_llm_sel[0] is True
+    assert store.calls == ["save_trade_recommendation", "save_order_plan", "save_broker_order"]
+
+
+def test_parity_p53_receives_llm_selected_false_from_real_route(monkeypatch, tmp_path):
+    """P-L53 recibe llm_selected=False por la ruta real."""
+    import agente_bolsa.cycle_runner as runner
+    captured_llm_sel: list = []
+
+    _patch_trading_flow(monkeypatch, llm_selected=False)
+    store = _StoreSpy()
+    settings = Settings(DATA_DIR=tmp_path, AUTO_PAPER_TRADING=True, REQUIRE_HUMAN_APPROVAL=False)
+
+    def spy_ledger(**kwargs):
+        recs = list(kwargs.get("recommendations", []))
+        for r in recs:
+            val = getattr(r, "llm_selected", None)
+            captured_llm_sel.append(val)
+        return {"status": "verified", "persist_status": "inserted"}
+
+    monkeypatch.setattr(runner, "_persist_selection_ledger_shadow", spy_ledger)
+    monkeypatch.setattr(runner, "_persist_capital_deployment_funnel_shadow",
+                        lambda **kw: {"status": "verified", "persist_status": "inserted"})
+
+    runner._auto_paper_trade(
+        settings, store, _Reporter(), "cycle", {"run_id": "source"}, {}, {},
+        selection_ledger_phase_a={"all_candidates": [], "selected_candidates": []},
+    )
+
+    assert len(captured_llm_sel) >= 1
+    assert captured_llm_sel[0] is False
+    assert store.calls == ["save_trade_recommendation", "save_order_plan", "save_broker_order"]
+
+
+def test_parity_all_three_yield_identical_calls_and_store(monkeypatch, tmp_path):
+    """True/False/None producen identicas llamadas activas y store."""
+    results: list[tuple] = []
+    labels = {True: "comp-true", False: "comp-false", None: "comp-none"}
+    for val in (True, False, None):
+        label = labels[val]
+        t = MarketCycleTiming(tmp_path, label)
+        result, calls, store = _run(monkeypatch, tmp_path,
+                                     timing=t, llm_selected=val)
+        results.append((calls, store.calls))
+
+    baseline = results[0]
+    for other in results[1:]:
+        assert other[0] == baseline[0], "calls difieren entre True/False/None"
+        assert other[1] == baseline[1], "store.calls difieren entre True/False/None"
+
+
+# ===================================================================
+# P-L59C-R1 Breach 3: fail-open en ruta real
+# ===================================================================
+
+def test_fail_open_selection_ledger_does_not_block_route(monkeypatch, tmp_path):
+    """Si build_canonical_selection_ledger lanza, la ruta activa completa sin cambios."""
+    import agente_bolsa.cycle_runner as runner
+
+    # Capture the real function before _patch_trading_flow replaces it
+    from agente_bolsa.cycle_runner import _persist_selection_ledger_shadow as real_persist_shadow
+
+    spy_calls: list[str] = []
+
+    def failing_build(*_args, **_kwargs):
+        spy_calls.append("build_attempted")
+        raise RuntimeError("forced_shadow_failure")
+
+    # Replace build_canonical_selection_ledger BEFORE _patch_trading_flow
+    # (it's NOT patched by _patch_trading_flow, so no conflict)
+    monkeypatch.setattr(runner, "build_canonical_selection_ledger", failing_build)
+
+    calls = _patch_trading_flow(monkeypatch)
+
+    # Restore the real _persist_selection_ledger_shadow so it actually
+    # calls build_canonical_selection_ledger (which now raises)
+    monkeypatch.setattr(runner, "_persist_selection_ledger_shadow", real_persist_shadow)
+
+    store = _StoreSpy()
+    settings = Settings(DATA_DIR=tmp_path, AUTO_PAPER_TRADING=True, REQUIRE_HUMAN_APPROVAL=False)
+
+    result = runner._auto_paper_trade(
+        settings, store, _Reporter(), "cycle",
+        {"run_id": "source"}, {}, {},
+        learning_penalty_shadow={"phase": "pre_decision"},
+        selection_ledger_phase_a={"all_candidates": [], "selected_candidates": []},
+    )
+
+    # El shadow intento construir (y fallo)
+    assert "build_attempted" in spy_calls
+
+    # La ruta activa se completo
+    assert "request_trade_recommendations" in calls
+    assert "submit_paper_order_plan" in calls
+    assert store.calls == ["save_trade_recommendation", "save_order_plan", "save_broker_order"]
+
+    # El resultado del ledger es unavailable
+    assert result["selection_ledger"]["status"] == "unavailable"
+    assert result["selection_ledger"]["persist_status"] == "failed"
