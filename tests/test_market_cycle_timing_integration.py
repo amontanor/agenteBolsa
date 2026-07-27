@@ -522,40 +522,52 @@ def test_fail_open_selection_ledger_does_not_block_route(monkeypatch, tmp_path):
 # P-L59C-R2: paridad economica real (payloads, no solo nombres)
 # ===================================================================
 
-def _strip_observational(d: dict) -> dict:
-    """Retira llm_selected, snapshot/hashes/IDs, y campos generados por ejecucion.
+# ===================================================================
+# P-L59C-R3: paridad economica con IDs deterministicos
+# ===================================================================
 
-    Conserva campos economicos: symbol/action/confidence/entry/stop/take/qty/
-    notional/side/dry_run/risk_decision/decision_lineage estructural.
+_OBSERVATIONAL_LEAF_KEYS = {
+    "llm_selected",
+}
+_OBSERVATIONAL_RECURSIVE_KEYS = {
+    "content_hash",
+    "snapshot_id",
+    "captured_at",
+}
+
+
+def _strip_observational_minimal(d: dict) -> dict:
+    """Retira SOLO llm_selected, content_hash, snapshot_id, captured_at.
+
+    Conserva TODOS los IDs canonicos (recommendation_id, plan_id,
+    broker_order_id, signal_id, signal_capture_id, candidate_id, cycle_id,
+    source_run_id), action, schema_version, signal_link_status, y el
+    decision_context_snapshot completo (salvo campos observacionales).
     """
-    OBSERVATIONAL_KEYS = {
-        "llm_selected", "content_hash", "snapshot_id", "event_id",
-        "captured_at", "schema_version", "signal_link_status",
-        "signal_capture_id", "source_run_id", "candidate_id",
-        "recommendation_id", "plan_id", "broker_order_id",
-        "decision_context_snapshot",
-    }
     out = {}
     for k, v in d.items():
-        if k in OBSERVATIONAL_KEYS:
+        if k in _OBSERVATIONAL_LEAF_KEYS:
+            continue
+        if k in _OBSERVATIONAL_RECURSIVE_KEYS:
             continue
         if isinstance(v, dict):
-            stripped = _strip_observational(v)
-            if stripped:
-                out[k] = stripped
+            out[k] = _strip_observational_minimal(v)
         elif isinstance(v, list):
-            stripped_list = [_strip_observational(i) if isinstance(i, dict) else i for i in v]
-            out[k] = stripped_list
+            out[k] = [_strip_observational_minimal(i) if isinstance(i, dict) else i for i in v]
         else:
             out[k] = v
     return out
 
 
 def _capture_parity_run(monkeypatch, tmp_path, llm_selected):
-    """Run _auto_paper_trade and return stripped store payloads."""
+    """Run _auto_paper_trade with frozen IDs and return minimal-stripped payloads."""
     from dataclasses import asdict, is_dataclass
 
     import agente_bolsa.cycle_runner as runner
+
+    # Freeze new_id so all three runs produce identical deterministic IDs
+    _id_seq = iter(f"ID-{i:04d}" for i in range(100))
+    monkeypatch.setattr(runner, "new_id", lambda prefix: next(_id_seq))
 
     _patch_trading_flow(monkeypatch, llm_selected=llm_selected)
     store = _StoreSpy()
@@ -569,7 +581,6 @@ def _capture_parity_run(monkeypatch, tmp_path, llm_selected):
     )
 
     def _as_dict_recursive(obj):
-        """Convert dataclasses to dicts recursively."""
         if is_dataclass(obj):
             return {k: _as_dict_recursive(v) for k, v in asdict(obj).items()}
         if isinstance(obj, dict):
@@ -580,28 +591,63 @@ def _capture_parity_run(monkeypatch, tmp_path, llm_selected):
 
     return {
         "calls": list(store.calls),
-        "rec_payloads": [_strip_observational(_as_dict_recursive(p)) for p in store.rec_payloads],
-        "plan_payloads": [_strip_observational(_as_dict_recursive(p)) for p in store.plan_payloads],
-        "broker_payloads": [_strip_observational(_as_dict_recursive(p)) for p in store.broker_payloads],
-        "submitted": bool(result.get("submitted")),
-        "failed": bool(result.get("failed")),
+        "rec_payloads": [_strip_observational_minimal(_as_dict_recursive(p)) for p in store.rec_payloads],
+        "plan_payloads": [_strip_observational_minimal(_as_dict_recursive(p)) for p in store.plan_payloads],
+        "broker_payloads": [_strip_observational_minimal(_as_dict_recursive(p)) for p in store.broker_payloads],
+        "submitted": result.get("submitted"),
+        "failed": result.get("failed"),
     }
 
 
 def test_economic_parity_true_false_none_identical_payloads(monkeypatch, tmp_path):
-    """Tras retirar llm_selected/hashes/snapshot IDs, los payloads son identicos."""
+    """Tras retirar solo llm_selected/hashes/captured_at, los payloads son identicos.
+
+    Conserva recommendation_id, plan_id, broker_order_id, signal_id,
+    decision_context_snapshot (salvo llm_selected y hashes), submitted/failed completos.
+    """
     true_run = _capture_parity_run(monkeypatch, tmp_path / "true", True)
     false_run = _capture_parity_run(monkeypatch, tmp_path / "false", False)
     none_run = _capture_parity_run(monkeypatch, tmp_path / "none", None)
 
-    # Submitted/failed identicos
+    # Submitted/failed identicos (full values, not booleans)
     assert true_run["submitted"] == false_run["submitted"] == none_run["submitted"]
     assert true_run["failed"] == false_run["failed"] == none_run["failed"]
 
     # Store call sequence identica
     assert true_run["calls"] == false_run["calls"] == none_run["calls"]
 
-    # Payloads identicos (sin campos observacionales)
+    # Rec payloads contienen IDs canonicos y decision_context_snapshot
     for key in ("rec_payloads", "plan_payloads", "broker_payloads"):
         assert true_run[key] == false_run[key], f"{key} difiere True vs False"
         assert true_run[key] == none_run[key], f"{key} difiere True vs None"
+
+        # Negative assertions: IDs canonicos y campos economicos preservados
+        for run in (true_run, false_run, none_run):
+            rp = run["rec_payloads"]
+            assert len(rp) >= 1, "Debe haber al menos un rec payload"
+            assert "recommendation_id" in rp[0], "recommendation_id debe conservarse"
+            assert isinstance(rp[0]["recommendation_id"], str), "recommendation_id str"
+            assert rp[0]["symbol"] == "AAPL", "symbol debe conservarse"
+            assert rp[0]["action"] == "buy", "action debe conservarse"
+            assert rp[0]["confidence"] == 0.9, "confidence debe conservarse"
+            # decision_context_snapshot conservado (salvo campos observacionales)
+            if "decision_context_snapshot" in rp[0]:
+                dcs = rp[0]["decision_context_snapshot"]
+                assert "cycle_id" in dcs, "cycle_id en snapshot"
+                assert "decision_source" in dcs, "decision_source en snapshot"
+                assert "llm_selected" not in dcs, "llm_selected retirado"
+                assert "content_hash" not in dcs, "content_hash retirado"
+                assert "captured_at" not in dcs, "captured_at retirado"
+
+            pp = run["plan_payloads"]
+            assert len(pp) >= 1, "Debe haber al menos un plan payload"
+            assert "plan_id" in pp[0], "plan_id debe conservarse"
+            assert isinstance(pp[0]["plan_id"], str), "plan_id str"
+            assert "symbol" in pp[0], "symbol en plan"
+            assert "side" in pp[0], "side en plan"
+
+            bp = run["broker_payloads"]
+            assert len(bp) >= 1, "Debe haber al menos un broker payload"
+            assert "broker_order_id" in bp[0], "broker_order_id debe conservarse"
+            assert isinstance(bp[0]["broker_order_id"], str), "broker_order_id str"
+            assert "symbol" in bp[0] or "order" in bp[0], "identidad en broker payload"
