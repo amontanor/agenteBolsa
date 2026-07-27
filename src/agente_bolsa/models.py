@@ -111,6 +111,7 @@ class TradeRecommendation:
     comparable_control_set: dict[str, Any] = field(default_factory=dict)
     gate_evaluation_snapshot: dict[str, Any] = field(default_factory=dict)
     recommendation_id: str | None = None
+    llm_selected: bool | None = None
 
 
 @dataclass(frozen=True)

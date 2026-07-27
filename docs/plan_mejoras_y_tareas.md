@@ -2517,3 +2517,22 @@ de despliegue quedan pendientes con XNYS cerrado.
   NUL, diff, py_compile y configuracion temporal verdes. XNYS abierto impide
   suite completa, smoke y validacion cerrada; sin cambios de trading ni
   despliegue. Se conserva `unconfirmed_sqlite_mutation` como incertidumbre.
+
+## P-L59B-T-R5 (final) - caracterizacion cerrada (27-jul-2026)
+
+- Dictamen: **`needs_fix`**. XNYS abierto. Hora real: 19:43 CEST. HEAD: `a48113fe`.
+- 27 tests P-L59 + 5 integracion (32 total). Ruff/NUL/diff verdes.
+- Stage order: rama 2399/2412 (con submit). plan_id nace en plan_records, no
+  en OrderPlan (modelo real). Identidades: symbol+side+decision_lineage.
+  Sin object.__setattr__ ni campos inventados.
+- Seccion stale 2255/2266 eliminada del informe. Caracterizacion cerrada.
+- Siguiente: P-L59C (no iniciado).
+
+## P-L59C-R6 - autoridad prospectiva estructurada de llm_selected (27-jul-2026)
+
+- Dictamen: **`ready_for_integration_rehearsal`** (R6 corregido). XNYS abierto, 20:30 CEST.
+- R6: list branch inside_dcs=False (items nested conservan hashes). Test unitario listas.
+  Docs con hashes R5 (`4b1c1982`, `c50f23ae`). R2 baseline 278. R6: 15 integration.
+  Ruff/NUL/diff verdes.
+- Brecha P-L53 recommendation_id sigue abierta.
+- Siguiente: P-L59D rehearsal de integracion.

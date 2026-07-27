@@ -3724,6 +3724,7 @@ def _recommendation_from_dict(item: dict[str, Any]) -> TradeRecommendation | Non
         size_multiplier=float(item.get("size_multiplier") or 1.0),
         backtest_soft_override=bool(item.get("backtest_soft_override")),
         soft_override_reasons=[str(value) for value in list(item.get("soft_override_reasons") or [])],
+        llm_selected=True,
     )
 
 
@@ -4427,6 +4428,7 @@ def deterministic_trade_fallback_recommendations(
             entry_price=_float(risk.get("entry_price")),
             stop_loss=_float(risk.get("stop_loss")),
             take_profit=_float(risk.get("take_profit")),
+            llm_selected=False,
             target_exposure_pct=float(settings.max_position_exposure),
             source="deterministic_fallback",
             cohort=LEARNING_EXPERIMENT_SOURCE if learning_mode else None,
@@ -4540,6 +4542,7 @@ def deterministic_trade_fallback_recommendations(
                 aggressiveness_profile=settings.trade_aggressiveness_profile,
                 cohort=LEARNING_EXPERIMENT_SOURCE if learning_mode else None,
                 decision_origin="deterministic_fallback_llm_failed" if llm_failed else "deterministic_fallback_augmented",
+                llm_selected=False,
             )
         )
     return recommendations

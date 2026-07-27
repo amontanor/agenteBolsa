@@ -591,3 +591,19 @@ cerrada.
   pendientes suite completa, smoke y validacion cerrada. No hubo broker, red,
   SQLite productiva, despliegue ni push. La incertidumbre historica
   `unconfirmed_sqlite_mutation` y P-L54 se conservan sin declararlas resueltas.
+
+## P-L59B-T-R5 (final) - caracterizacion cerrada (27-jul-2026)
+
+- Dictamen: **`needs_fix`**. XNYS abierto. Hora real: 19:43 CEST. HEAD: `a48113fe`.
+- 27 P-L59 + 5 integracion (32 total). Ruff/NUL/diff verdes.
+- Stage order: rama 2399/2412. plan_id nace en plan_records; identidades por
+  symbol+side+lineage reales del modelo. Sin object.__setattr__.
+- Informe unico sin secciones duplicadas. Caracterizacion cerrada.
+- Siguiente: P-L59C.
+
+## P-L59C-R6 - autoridad prospectiva estructurada de llm_selected (27-jul-2026)
+
+- Dictamen: **`ready_for_integration_rehearsal`** (R6 corregido). XNYS abierto, 20:30 CEST.
+- R6: list branch inside_dcs=False. Docs con hashes R5 reales. 15 integration.
+  Ruff/NUL/diff verdes. Brecha P-L53 abierta.
+- Siguiente: P-L59D rehearsal de integracion.

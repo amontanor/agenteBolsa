@@ -172,6 +172,22 @@ def _market_state_ref(
     return ref
 
 
+def normalize_llm_selected(value: Any) -> bool | None:
+    """Normalize llm_selected to bool or None only. Fail-open.
+
+    Only literal Python bool values (True/False) are accepted as structured
+    authority.  Any other type -- int (0, 1), str ('true', 'false'), list,
+    dict, float -- is degraded silently to None (unavailable/legacy).
+
+    This function must never raise; it is a fail-open telemetry guard.
+    """
+    if value is None:
+        return None
+    if type(value) is bool:
+        return value
+    return None
+
+
 def build_decision_context_snapshot(
     recommendation: Any,
     *,
@@ -184,6 +200,7 @@ def build_decision_context_snapshot(
     signal_link_status: str = "unavailable",
     captured_at: datetime | None = None,
     llm_considered: bool | None = None,
+    llm_selected: bool | None = None,
     llm_response_status: str | None = None,
     llm_model: str | None = None,
     fallback_reason: Any = None,
@@ -238,6 +255,7 @@ def build_decision_context_snapshot(
         "decision_source_raw": raw,
         "decision_origin": origin,
         "llm_considered": llm_considered,
+        "llm_selected": normalize_llm_selected(llm_selected),
         "llm_response_status": llm_response_status,
         "llm_model": llm_model,
         "fallback_reason": reason,

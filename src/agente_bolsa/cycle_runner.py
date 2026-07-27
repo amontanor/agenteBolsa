@@ -675,6 +675,7 @@ def _decision_context_snapshot_for_recommendation(
         llm_status = "unavailable"
     elif "deterministic" in raw_lower:
         llm_considered, llm_status = False, "unavailable"
+    llm_selected = getattr(recommendation, "llm_selected", None)
     snapshot = build_decision_context_snapshot(
         recommendation,
         cycle_id=cycle_id,
@@ -685,6 +686,7 @@ def _decision_context_snapshot_for_recommendation(
         signal_capture_id=signal_capture_id,
         signal_link_status=signal_link_status,
         llm_considered=llm_considered,
+        llm_selected=llm_selected,
         llm_response_status=llm_status,
         llm_model=llm_model,
         fallback_reason=fallback_error,
