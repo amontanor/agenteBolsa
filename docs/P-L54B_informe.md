@@ -246,3 +246,58 @@ Siguiente lote único: implementar el productor shadow en un worktree nuevo desd
 este commit, reutilizando los objetos reales del ciclo y dejando explícitos los
 campos de target/notional que siguen `unavailable`. No ejecutar esa
 implementación en P-L54B-T.
+
+## P-L54B-W - implementacion shadow del embudo de capital (0.4.194)
+
+Dictamen provisional: `ready_for_integration_rehearsal`.
+
+Worktree aislado: `C:\Antonio\Bref\agenteBolsa_worktrees\pl54bw_capital_funnel_shadow`;
+rama `codex/pl54bw-capital-funnel-shadow`; base
+`20e8be04d5d622dae441320c656d64a0c287e3ff`; tree base
+`226a6baea4454bb531792d9c07dbd91379aee77a`; version candidata 0.4.194.
+
+El productor `capital_deployment_funnel_shadow.py` solo proyecta observaciones
+estructuradas ya producidas por la ruta activa. La frontera es:
+
+`seleccion -> gates previos -> capacity check -> sizing/caps -> RiskManager ->`
+`OrderPlan -> filtros post-plan -> save plan -> envio/save broker_order ->`
+`persistencia P-L54B shadow`.
+
+La persistencia ocurre fuera del bucle de candidatos, no llama a gates,
+RiskManager, broker, red, LLM ni seleccion, y falla abierta. El evento canónico
+es `capital_deployment_funnel_shadow:<cycle_id>`, schema
+`p-l54b.capital-deployment-funnel-shadow.v1`. El hash excluye `captured_at`;
+repeticion identica es idempotente y contenido distinto crea conflicto separado
+sin reemplazar el original.
+
+La identidad es `cycle_id + action + signal_capture_id`, con fallback exclusivo
+a `signal_id`; `candidate_id` es auxiliar y recommendation/plan/order se anaden
+solo cuando el objeto activo cruza esa frontera. BUY y EXIT permanecen separados.
+No hay joins por simbolo, fecha, texto o `source_run_id+symbol`.
+
+La fixture cerrada conserva 376 candidatos, 306 que pasan seleccion, 145 gates,
+95 capacity/sizing, 15 risk-approved y 15 planes/ordenes/fills. Las caidas
+primarias son 361 y cada identidad tiene una sola razon. El waterfall de
+notional mantiene cobertura y moneda por etapa. `target_account_exposure`,
+min/max target, buying power y notional objetivo son `null/unavailable` si no
+los aporta un objeto estructurado; no se derivan de cash, SPY ni rendimiento.
+
+El evento es acotado: conserva denominadores completos y detalles compactos,
+publicando `detail_total`, `detail_persisted`, `detail_omitted` y `truncated`.
+La fixture de 500 candidatos exige menos de 350 KB y build/serialise menor de
+250 ms; una muestra truncada queda `partial` y no sustituye al universo.
+
+Se anadio lector read-only, CLI `capital-deployment-funnel --json` y resumen del
+digest. Sin evento, los denominadores son null y el estado es `collecting`.
+Los consumidores no reconstruyen ni alimentan learning/readiness/promotion.
+
+Validacion focal ejecutada: **33 passed** (P-L54B-T/R1 y P-L54B-W), Ruff de los
+archivos modificados y compilacion Python. Suite completa, smoke/run-once,
+P-L45 de 33.336 filas, `validate-agent-config`, jobs, postmarket,
+reconciliacion, broker, red y LLM quedan pendientes para P-L54BR1 y no se
+ejecutaron en este lote.
+
+No se modificaron `kernel.py`, `broker.py`, `execution.py`, `risk.py`,
+`config.py` ni `.env`; produccion, P-L54B-T-R1, P-L58R1 y SQLite productiva
+permanecen intactos. No hubo despliegue, reinicio ni push. Siguiente lote unico:
+ensayo integrado P-L54BR1 sobre este candidato.

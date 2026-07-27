@@ -519,3 +519,17 @@ Siguiente lote único: P-L53BR1, ensayo integrado aislado desde el candidato
   tres focales heredados y repetir suite/preflight cerrado. Producción,
   servicios, SQLite productiva, locks y candidatos originales permanecen
   intactos; no hubo reinicio, despliegue ni push.
+
+## P-L54B-W - relevo del candidato 0.4.194
+
+- Worktree aislado: `C:\Antonio\Bref\agenteBolsa_worktrees\pl54bw_capital_funnel_shadow`;
+  rama `codex/pl54bw-capital-funnel-shadow`; base `20e8be04`; version 0.4.194.
+- El productor shadow captura transiciones ya decididas y persiste un unico
+  evento por `cycle_id` despues de la ruta activa. No tiene autoridad sobre
+  seleccion, gates, sizing, RiskManager, planes, ordenes o exposicion.
+- Persistencia append-only, hash sin `captured_at`, idempotencia y conflictos
+  separados. Lector/CLI devuelven `collecting` con denominadores null cuando
+  no existe evento. Target exposure permanece unavailable sin autoridad.
+- QA focal P-L54B-T/R1/W: 33 passed; quedan pendientes suite completa, smoke,
+  prueba P-L45 larga y ensayo integrado cerrado P-L54BR1. No desplegar ni hacer
+  push desde este lote.

@@ -2458,3 +2458,16 @@ de despliegue quedan pendientes con XNYS cerrado.
   siguiente paso unico: preflight operativo y autorizacion humana.
   Siguiente lote único: corregir esos tres focales y repetir la suite cerrada;
   P-L53 permanece shadow y no se cambia política de trading.
+
+## P-L54B-W - embudo shadow de despliegue de capital
+
+- Candidato aislado 0.4.194 desde `20e8be04`; productor fail-open con evento
+  `capital_deployment_funnel_shadow:<cycle_id>` y persistencia append-only.
+- Observa la ruta activa sin recalcular selección, gates, capacity, sizing,
+  RiskManager, planes u órdenes. Identidad exacta por ciclo/señal/acción; no
+  joins por símbolo/fecha.
+- Denominadores y notional conservan cobertura, `null/unavailable`, razones
+  primarias exclusivas y estado de truncation. Target exposure queda
+  unavailable sin autoridad estructurada.
+- Focales P-L54B-T/R1/W: 33 passed; suite completa, smoke y prueba larga quedan
+  pendientes del ensayo integrado cerrado P-L54BR1.
