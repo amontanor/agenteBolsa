@@ -2565,11 +2565,15 @@ de despliegue quedan pendientes con XNYS cerrado.
   expansion vs sobrescritura, stage order.
 - Ruff/NUL/diff verdes. Gates omitidos (XNYS abierto): suite, smoke,
   benchmark, P-L45, kernel.
-- Diseno recomendado: Opcion B — `decision_rows` separado en CLS v2.
-  Schema v2 preserva candidate_rows candidato-centrico; nuevo array
-  decision_rows 1:1 con recommendation_id; denominadores separados
-  (candidate_count, recommendation_count, conflict_count).
-- Archivos potenciales: `canonical_selection_ledger.py` + tests.
-  Sin migracion, sin backfill, sin cambios en storage/cycle_runner/P-L54.
-  Version `0.4.197` reservada como propuesta (NO asignada).
+- Dictamen R1: **`ready_for_implementation`**. Defectos corregidos:
+  same-rec_id en un build, _auto_paper_trade con dos recomendaciones,
+  P-L54 API real con build_capital_deployment_funnel_shadow, tests
+  tautologicos eliminados, expansion con APIs reales.
+- Diseno B corregido: summary v2 (0/1/>1 decisiones), backward compat
+  (campos singulares conservados para 1 decision), decision_rows con
+  clave (cycle+action+canonical_signal+rec_id), bounded memory, denominadores
+  separados (candidate_count/recommendation_observed/canonical/conflict/
+  unavailable), readers v1/v2, cero migracion/backfill.
+- 18 tests pasan (0.94s). Ruff/NUL/diff verdes. XNYS abierto.
 - Siguiente: P-L59F-I implementacion de decision_rows en worktree aislado.
+  Version propuesta 0.4.197 sujeta a verificacion de disponibilidad.

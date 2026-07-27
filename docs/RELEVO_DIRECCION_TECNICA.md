@@ -637,8 +637,11 @@ cerrada.
   13 consumidores catalogados, impacto expansion, stage order.
 - Ruff/NUL/diff verdes. Gates omitidos: suite, smoke, benchmark, P-L45 33.336,
   kernel (XNYS abierto). Sin broker, red, LLM, SQLite productiva.
-- Diseno B recomendado: `decision_rows` separado en CLS v2.
-  `candidate_rows` preserva 1:1 candidato; `decision_rows` 1:1 decision.
-  Denominadores: candidate_count, recommendation_count, conflict_count.
-- Version 0.4.197 reservada como propuesta (NO asignada). Sin migracion/backfill.
+- Dictamen R1: **`ready_for_implementation`**. Correcciones: same-rec_id
+  en un build, _auto_paper_trade con dos recomendaciones, P-L54 API real,
+  tests tautologicos eliminados, expansion con APIs reales.
+- Diseno B corregido: summary v2 (0/1/>1 decisiones), backward compat,
+  decision_rows con clave exacta, bounded memory, denominadores separados,
+  readers v1/v2. Cero migracion/backfill.
+- 18 tests pasan (0.94s). Ruff/NUL/diff verdes. XNYS abierto.
 - Siguiente: P-L59F-I implementacion de decision_rows en worktree aislado.

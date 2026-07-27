@@ -188,3 +188,126 @@ P-L59E: validacion cerrada completa de P-L59D. Requiere:
 - Suite completa, smoke aislado, benchmark P-L53/P-L54, P-L45 33.336
 - Kernel productivo sellado
 - Sin despliegue aun (solo validacion)
+
+---
+
+# P-L59F-T-R1 — caracterizacion corregida y diseno B (27-jul-2026)
+
+## Dictamen
+
+**`ready_for_implementation`** (R1 corregido).
+
+## Candidato R1
+
+- **Base**: P-L59D-D `520559c6`, tree `e3c80ba`, v0.4.196
+- **Worktree**: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59ft_recommendation_identity_design`
+- **Rama**: `codex/pl59ft-recommendation-identity-design`
+- **Version**: `0.4.196` (sin bump; solo tests/docs)
+- **Hora**: 2026-07-27 CEST, XNYS abierto
+
+## Correcciones R1
+
+### 1. Same recommendation_id real
+- `test_same_rec_id_same_content_within_one_build_last_wins_silently`: mismo
+  rec_id + mismo contenido, un solo build -> segunda sobreescribe; sin dedup
+  explicita de recommendation_id.
+- `test_same_rec_id_different_content_within_one_build_last_wins`: mismo rec_id
+  + distinto confidence/source dentro de un build -> last-wins.
+- `test_same_rec_id_different_content_across_builds_store_conflict`: mismo
+  rec_id, distinto contenido global, dos builds (mismo event_id) -> conflicto
+  append-only en Store; original preservado.
+- `test_same_rec_id_same_content_across_builds_store_idempotent`: mismo contenido,
+  dos builds -> idempotente.
+
+### 2. Wiring real con _auto_paper_trade
+- `test_auto_paper_trade_two_recommendations_same_signal_p53_p54_spies`: ejecuta
+  `_auto_paper_trade` con DOS TradeRecommendation mismo symbol/action/signal.
+  Espia P-L53 y P-L54. Confirma IDs distintos asignados por `new_id("rec")`
+  antes de gates/ledger. P-L53 y P-L54 reciben 2 recomendaciones con IDs distintos.
+
+### 3. P-L54 API real
+- `test_p54_two_decisions_same_signal_distinct_rec_ids_produce_two_rows`: dos
+  decisiones mismo signal + distinto recommendation_id -> 2 filas en details.
+  P-L54 no sufre la colision porque decision_key incluye recommendation_id.
+- `test_p54_same_rec_id_true_identical_content_idempotent`: misma row -> 1 fila.
+- `test_p54_same_rec_id_different_content_becomes_ambiguous`: mismo decision_key
+  + distinto content -> ambas identity_ambiguous.
+
+### 4. Tests tautologicos eliminados
+- Inventario y diseno en informe, no en tests.
+- Stage order local sustituido por `_auto_paper_trade` real.
+- `test_expansion_impact_real_denominators`: APIs `build_canonical_selection_ledger`
+  + `match_same_cycle_controls` reales.
+
+### 5. Diseno B corregido con backward compatibility
+
+#### Summary v2 de candidate_rows
+- **0 decisiones**: campos singulares null/unavailable.
+- **Exactamente 1 decision canonica**: recommendation_id, llm_selected,
+  decision_source se conservan para compatibilidad v1.
+- **>1 decisiones**: `decision_summary_status="ambiguous"`, campos singulares
+  null (nunca last-wins), `decision_ids`, `decision_rows` completas.
+
+#### decision_rows
+- Una entrada por `(cycle_id, action, canonical_signal, recommendation_id)`.
+- Mismo rec_id + mismo contenido: idempotente, no duplicar.
+- Mismo rec_id + distinto contenido: conservar original, conflicto auditable.
+- Missing recommendation_id: identity_unavailable, sin inventar ID.
+
+#### Bounded memory
+- `observed_count`, `detail_persisted`, `truncated_count`, `conflict_count`.
+- Reutilizar DEFAULT_DETAIL_LIMIT de P-L54.
+
+#### Denominadores separados
+- `candidate_count`: identity_status=verified.
+- `recommendation_observed`: total recomendaciones procesadas.
+- `recommendation_canonical`: decision_identity=verified.
+- `recommendation_conflict`: same-rec_id different-content.
+- `recommendation_unavailable`: sin ID o identidad parcial.
+
+#### Readers v1/v2
+- **v1**: `candidate_rows[*]["recommendation_id"]` fallback a singular si
+  existe, null si ambiguous.
+- **v2**: `decision_rows` por recommendation_id.
+- Cero migracion ni backfill.
+
+#### Inventario de consumidores
+
+| Consumidor | Modulo | Adaptacion |
+|---|---|---|
+| `read_canonical_selection_ledger` | canonical_selection_ledger.py:653 | v2: decision_rows |
+| `canonical_selection_ledger_digest` | canonical_selection_ledger.py:666 | Sin cambio directo |
+| `match_same_cycle_controls` | canonical_selection_ledger.py:686 | Sin cambio |
+| `match_mature_forward_outcome` | canonical_selection_ledger.py:764 | Sin cambio |
+| P-L54 funnel shadow | capital_deployment_funnel_shadow.py:120 | YA independiente |
+| P-L48B operation telemetry | canonical_operation_telemetry.py:340 | Sin cambio |
+| Post-market review | post_market_review.py:541 | Sin cambio |
+| CLI canonical-selection-ledger | main.py:2563 | Transparente |
+
+## Pruebas
+
+- **18 passed** en 0.94s (colision, same-rec_id, BUY/EXIT, missing IDs,
+  _auto_paper_trade, P-L54, expansion, stage order)
+- Ruff: All checks passed
+- NUL: OK (436 archivos)
+- git diff --check: clean
+
+## Gates omitidos (XNYS abierto)
+
+Suite completa, smoke, benchmark, P-L45 33.336, kernel.
+
+## Archivos
+
+| Archivo | Cambio R1 |
+|---|---|
+| `tests/test_p59ft_recommendation_identity_design.py` | Reescrito: 18 tests |
+| `docs/P-L59_informe.md` | Seccion P-L59F-T-R1 agregada |
+| `docs/plan_mejoras_y_tareas.md` | Actualizado |
+| `docs/RELEVO_DIRECCION_TECNICA.md` | Actualizado |
+| `docs/P-L59F-T_informe.md` | ELIMINADO (consolidado) |
+
+## Siguiente paso (sin ejecutar)
+
+P-L59F-I: implementacion de `decision_rows` en `canonical_selection_ledger.py`
+segun diseno B corregido, worktree aislado. Version propuesta `0.4.197` sujeta
+a verificacion de disponibilidad.
