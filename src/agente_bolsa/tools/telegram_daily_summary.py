@@ -12,7 +12,19 @@ from urllib.request import Request, urlopen
 
 SCHEMA_VERSION = "p-l70.telegram-daily-summary.v2"
 EVENT_TYPE = "telegram_daily_summary_sent"
-MAX_TELEGRAM_MESSAGE_LENGTH = 4096
+TELEGRAM_MESSAGE_LIMIT_UNITS = 4096
+# Backwards-compatible name for callers/tests; enforcement uses UTF-16 units.
+MAX_TELEGRAM_MESSAGE_LENGTH = TELEGRAM_MESSAGE_LIMIT_UNITS
+
+
+def _telegram_utf16_units(text: str) -> int:
+    """Return the conservative Telegram length in UTF-16 code units."""
+
+    return len(text.encode("utf-16-le", errors="surrogatepass")) // 2
+
+
+def _rendered_text_sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _finite(value: Any) -> float | None:
@@ -83,7 +95,11 @@ def _comparison_contract(
         or ""
     ).strip().lower()
     basis = str(benchmark.get("price_basis") or "").strip().lower()
-    quality = str(benchmark.get("data_quality") or "").strip().lower()
+    raw_quality = benchmark.get("data_quality")
+    if isinstance(raw_quality, Mapping):
+        quality = str(raw_quality.get("status") or raw_quality.get("quality") or "").strip().lower()
+    else:
+        quality = str(raw_quality or "").strip().lower()
     previous_close = _finite(benchmark.get("previous_close"))
     close = _finite(benchmark.get("close"))
     reason_codes: list[str] = []
@@ -245,12 +261,20 @@ def format_daily_summary(payload: Mapping[str, Any]) -> str:
     total_coverage = _mapping(payload.get("open_total_pl_coverage"))
     today_coverage = _mapping(payload.get("open_today_pl_coverage"))
     total_count = len(list(payload.get("positions") or []))
+    equity_lines = [
+        f"• Variación de equity hoy: {_money(payload.get('equity_delta'))} ({_pct(payload.get('account_daily_return'))})"
+    ]
+    if payload.get("equity_delta") is None and payload.get("account_daily_return") is not None:
+        equity_lines = [
+            "• Variación de equity hoy: importe n/d",
+            f"• Porcentaje disponible (legacy): {_pct(payload.get('account_daily_return'))}",
+        ]
     base_lines = [
         f"📊 Cierre · {_date_label(payload.get('session_date'))}",
         "",
         "💼 Cuenta",
         f"• Equity: {_balance(payload.get('equity'))}",
-        f"• Variación de equity hoy: {_money(payload.get('equity_delta'))} ({_pct(payload.get('account_daily_return'))})",
+        *equity_lines,
         f"• SP500: {_pct(payload.get('spy_daily_return'))}{comparison_suffix}",
         f"• Diferencia: {_pp(payload.get('comparison_difference'))}{comparison_suffix}",
         "",
@@ -277,7 +301,7 @@ def format_daily_summary(payload: Mapping[str, Any]) -> str:
         full_lines.extend(["", f"{label} · {len(items)}"])
         full_lines.extend(_position_line(item) for item in items)
     full_text = "\n".join(full_lines)
-    if len(full_text) <= MAX_TELEGRAM_MESSAGE_LENGTH:
+    if _telegram_utf16_units(full_text) <= TELEGRAM_MESSAGE_LIMIT_UNITS:
         return full_text
 
     footer_template = "\n\n⚠️ Mensaje abreviado: se muestran {visible}/{total} posiciones; y {omitted} posiciones más."
@@ -286,18 +310,17 @@ def format_daily_summary(payload: Mapping[str, Any]) -> str:
     total = sum(len(items) for _key, _label, items in groups)
     for _key, label, items in groups:
         heading = f"{label} · {len(items)}"
-        candidate = "\n".join(visible_lines + ["", heading])
-        if len(candidate) + len(footer_template.format(visible=visible, total=total, omitted=total - visible)) > MAX_TELEGRAM_MESSAGE_LENGTH:
-            continue
-        visible_lines.extend(["", heading])
+        group_lines: list[str] = []
         for item in items:
             line = _position_line(item)
-            candidate = "\n".join(visible_lines + [line])
+            candidate = "\n".join(visible_lines + ["", heading, *group_lines, line])
             footer = footer_template.format(visible=visible + 1, total=total, omitted=total - visible - 1)
-            if len(candidate) + len(footer) > MAX_TELEGRAM_MESSAGE_LENGTH:
+            if _telegram_utf16_units(candidate + footer) > TELEGRAM_MESSAGE_LIMIT_UNITS:
                 break
-            visible_lines.append(line)
+            group_lines.append(line)
             visible += 1
+        if group_lines:
+            visible_lines.extend(["", heading, *group_lines])
     footer = footer_template.format(visible=visible, total=total, omitted=total - visible)
     return "\n".join(visible_lines) + footer
 
@@ -311,6 +334,9 @@ def send_telegram_message(
     opener: Callable[..., Any] = urlopen,
 ) -> dict[str, Any]:
     """Envía texto por HTTPS sin exponer el token en payloads o excepciones."""
+
+    if _telegram_utf16_units(text) > TELEGRAM_MESSAGE_LIMIT_UNITS:
+        raise ValueError("telegram_message_too_long")
 
     request = Request(
         f"https://api.telegram.org/bot{token}/sendMessage",
@@ -361,6 +387,9 @@ def publish_daily_summary(settings: Any, store: Any, *, session_date: str, perfo
         "content_hash": payload["content_hash"],
         "message_id": sent.get("message_id"),
         "message_length": len(text),
+        "message_utf16_units": _telegram_utf16_units(text),
+        "text": text,
+        "text_sha256": _rendered_text_sha256(text),
         "positions_total": len(payload.get("positions") or []),
         "truncated": "Mensaje abreviado:" in text,
         "status": "sent",
