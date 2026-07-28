@@ -94,3 +94,37 @@ Siguiente lote mínimo P-L69:
 - Producción, stack, SQLite, configuración y secretos no fueron modificados.
 - Sin despliegue, reinicio, broker, red, LLM ni push.
 
+## Despliegue productivo
+
+Dictamen final: `deployed`.
+
+- Fecha: 28-jul-2026, con XNYS cerrado y próxima apertura
+  29-jul-2026 15:30 Europe/Madrid.
+- Merge productivo `--no-ff`:
+  `18add12488cfb4179391d685540d65aac9f8870d`.
+- Árbol funcional:
+  `68a7b4c5d04d78a54df425ab15d9c13431d7bc13`, idéntico al candidato
+  `c4458a3d97fd77336abb7ece4827c919f4a336bf`.
+- Versión desplegada: `0.4.202`.
+- Suite productiva con el stack detenido: 2250 passed, una advertencia
+  preexistente de `websockets`.
+- Ruff, NUL (447 archivos), `git diff --check`, configuración y kernel:
+  verdes. El smoke CLI real se omitió por no garantizar aislamiento de
+  broker/red; la ruta está cubierta por pruebas aisladas con datos temporales.
+- Arranque realizado únicamente mediante `scripts\stack_up.ps1`.
+- Dos comprobaciones separadas más de 75 segundos: HTTP raíz y `/health` 200,
+  un único listener 8501, scheduler lógico único y lock v1 propiedad del
+  runtime PID 16736 con token de inicio exacto.
+- `post_market_coordination:active` vacío; bootstrap
+  `skipped/session_already_completed`; cero órdenes y cero eventos
+  `database is locked` desde el reinicio.
+- Kernel sellado, configuración válida y SHA-256 adaptativo intacto:
+  `60833B60F83EDB1B5ECBE0785BDACD68F58AF6D5DFB307649749A8DBF6C7F4D0`.
+
+La gráfica deja de aparecer vacía: las observaciones históricas numéricas se
+muestran como serie provisional discontinua. No se inventan comparables ni
+ganadores para datos cuyo `price_basis` histórico continúa siendo
+`unknown`; las nuevas capturas declaran la base ajustada y podrán ser
+comparables de forma canónica.
+
+No hubo backfill, jobs manuales, órdenes, modificación de política ni push.

@@ -2763,6 +2763,16 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Lote separado, con revisión de paridad y de protegidos si toca
   broker/execution. Sin cambio de política.
 
+## P-L68 - desplegado (28-jul-2026)
+
+- Producción `0.4.202`, merge `18add124`, árbol funcional `68a7b4c5`.
+- La gráfica Sistema vs SP500 muestra los valores históricos incompletos como
+  provisionales discontinuos; solo datos comparables deciden ganadores.
+- Nuevas capturas yfinance persisten `adjusted_ohlc`; no hubo backfill.
+- Validación productiva: 2250 passed; Ruff, NUL, diff, configuración y kernel
+  verdes; HTTP 200/200 en dos comprobaciones.
+- Siguiente lote funcional: P-L69, separado y sin cambio de política activa.
+
 ## P-L67R1 - ensayo final P-L65B/P-L63 + P-L62 + P-L66
 
 - Ensayo aislado `pl67_p65_p62_p66_deployment_rehearsal`, merge `d3a75c98`,

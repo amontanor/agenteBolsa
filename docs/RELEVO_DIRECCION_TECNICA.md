@@ -823,6 +823,21 @@ Siguiente secuencia:
 3. P-L69 separado para que Telegram detecte fills durante mercado abierto:
    persistencia local primero, envío idempotente después, nunca al submit.
 
+## P-L68 — desplegado (28-jul-2026)
+
+- Producción quedó en versión `0.4.202`, merge `18add12488cfb4179391d685540d65aac9f8870d`
+  y árbol funcional `68a7b4c5d04d78a54df425ab15d9c13431d7bc13`.
+- Suite productiva: 2250 passed; estáticos, configuración y kernel verdes.
+- Stack arriba mediante helpers gestionados; HTTP 200/200, listener único,
+  scheduler lógico único y lock/token coherentes en dos comprobaciones.
+- PMR 2026-07-28 permaneció terminal `completed`; bootstrap posterior
+  `session_already_completed`, lease vacío y cero órdenes nuevas.
+- Los históricos con base desconocida se dibujan como provisionales y no
+  cuentan como victorias. Las nuevas capturas pueden adquirir comparabilidad
+  canónica sin backfill.
+- P-L69 continúa como lote independiente para detectar y notificar fills
+  durante mercado abierto; no mezclarlo con cambios de política.
+
 ## P-L66 - siguiente paso
 
 El candidato 0.4.201 incluye resumen Telegram a las 22:05 y avisos de fills.
