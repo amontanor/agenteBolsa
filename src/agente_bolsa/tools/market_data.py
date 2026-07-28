@@ -340,6 +340,12 @@ def download_daily_prices_with_metadata(
                 "end": _date_text(end),
                 **validation,
             }
+            if selected_provider == "yfinance":
+                # yfinance was called with auto_adjust=True above. Persist that
+                # semantic fact so downstream benchmark readers do not have to
+                # infer the price basis from a column name.
+                meta["auto_adjust"] = True
+                meta["price_basis"] = "adjusted_ohlc"
             _write_cache(cache_root, cache_key, data, meta)
             _LAST_DOWNLOAD_METADATA = dict(meta)
             return data, meta

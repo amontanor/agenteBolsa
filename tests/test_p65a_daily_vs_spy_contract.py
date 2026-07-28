@@ -32,8 +32,8 @@ def _canonical_row(
     quality: str = "available",
     price_basis: str = "close_unadjusted",
     source: str | None = "persisted_p40b",
-    captured_at: str = "2026-07-28T12:00:00+00:00",
-    as_of: str | None = "2026-07-28T15:00:00+00:00",
+    captured_at: str = "2026-07-28T20:10:00+00:00",
+    as_of: str | None = "2026-07-28T20:00:00+00:00",
     avg_exposure: float | None = 0.25,
     interpolated: bool = False,
 ) -> dict:
@@ -49,6 +49,7 @@ def _canonical_row(
                 "price_basis": price_basis,
                 "source": source,
                 "as_of": as_of,
+                "data_quality": quality,
             },
             "data_quality": {"status": quality},
         },

@@ -802,6 +802,27 @@ cerrada.
   Versión 0.4.198; commits 12a6cb11, bef256d6, 031597c7, 89adde7f
   y fb2c47a7. Sin producción, broker, red, SQLite productiva, despliegue ni
   push.
+## P-L68 — corrección Sistema vs SP500 (28-jul-2026)
+
+- Worktree `pl68_benchmark_comparability_fix`, rama
+  `codex/pl68-benchmark-comparability-fix`, base productiva `f015428f`.
+- Versión candidata `0.4.202`.
+- Se corrige la base de precio yfinance, la dirección de la latencia
+  benchmark/captura y la visualización de históricos `pending`.
+- Línea continua = comparable; discontinua = provisional. Solo la primera
+  participa en ganadores. No hay backfill ni neutralización de flujos.
+- El baseline acumulado usa composición geométrica.
+- Suite completa 2249 passed, 1 skip y 1 warning preexistentes. Ruff, NUL,
+  diff, configuración y kernel productivo verdes.
+- Dictamen `ready_for_integration_rehearsal`; producción sigue en 0.4.201.
+
+Siguiente secuencia:
+
+1. ensayo `--no-ff` de P-L68 sobre producción exacta y QA visual aislada;
+2. despliegue solo con autorización humana y precondiciones cerradas;
+3. P-L69 separado para que Telegram detecte fills durante mercado abierto:
+   persistencia local primero, envío idempotente después, nunca al submit.
+
 ## P-L66 - siguiente paso
 
 El candidato 0.4.201 incluye resumen Telegram a las 22:05 y avisos de fills.
