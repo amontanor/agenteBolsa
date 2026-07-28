@@ -1,13 +1,14 @@
 from inspect import getsource
 
-import pandas as pd
-
 import agente_bolsa.web_app as web_app
 from agente_bolsa.web_app import (
     DEFAULT_START_DATE,
     PORTFOLIO_CHART_START_DATE,
     PORTFOLIO_HISTORY_PERIOD,
     _portfolio_chart_visible_summary,
+    _portfolio_equity_summary,
+    _portfolio_equity_summary_detail,
+    _portfolio_period_metric_payload,
     _portfolio_value_series_from_alpaca,
 )
 
@@ -39,7 +40,11 @@ def test_portfolio_history_request_is_single_and_covers_april_cutoff():
     assert PORTFOLIO_HISTORY_PERIOD == "all"
     source = getsource(web_app.page_dashboard)
     assert source.count("alpaca_portfolio_history(") == 1
-    assert "start_date=DEFAULT_START_DATE" in source
+    call_start = source.index("portfolio_history = BrokerClientFactory")
+    call_end = source.index("except Exception", call_start)
+    history_call = source[call_start:call_end]
+    assert "period=PORTFOLIO_HISTORY_PERIOD" in history_call
+    assert 'timeframe="1D"' in history_call
 
 
 def test_account_header_uses_equity_summary_not_trade_history_total_pl():
@@ -47,3 +52,73 @@ def test_account_header_uses_equity_summary_not_trade_history_total_pl():
 
     assert "full_equity_summary" in source
     assert 'stats.get("total_pl")' not in source
+
+
+def test_account_header_captures_equity_dates_source_and_coverage(monkeypatch):
+    df = _portfolio_value_series_from_alpaca(
+        _descending_equity_history(),
+        current_equity=70588.17,
+    )
+    summary = _portfolio_equity_summary(df)
+    captured: list[str] = []
+    monkeypatch.setattr(web_app.st, "markdown", lambda content, **_: captured.append(content))
+
+    web_app._account_group(
+        initial_equity=summary["start_value"],
+        current_equity=summary["end_value"],
+        cash=None,
+        exposure=None,
+        exposure_pct=None,
+        total_pl=summary["pl"],
+        total_pct=summary["pl_pct"],
+        today_pl=None,
+        today_pct=None,
+        positions_count=0,
+        orders_count=0,
+        equity_summary=summary,
+    )
+
+    rendered = captured[0]
+    assert "Cuenta · desde el 1 de abril" in rendered
+    assert "primer dato 01/04/2026" in rendered
+    assert "cobertura completa" in rendered
+    assert "$-961.83" in rendered
+    assert "$70,578.74" not in rendered
+
+
+def test_april_equity_result_is_negative_even_with_positive_trade_total():
+    df = _portfolio_value_series_from_alpaca(
+        _descending_equity_history(),
+        current_equity=70588.17,
+    )
+    summary = _portfolio_equity_summary(df)
+    metric = _portfolio_period_metric_payload(summary)
+
+    assert summary["pl"] == -961.83
+    assert metric["amount"] == "$-961.83"
+    assert "cobertura completa" in metric["detail"]
+    assert _portfolio_equity_summary_detail(summary).startswith("Desde 01/04/2026")
+
+
+def test_missing_april_equity_is_partial_or_unavailable_without_trade_reconstruction(monkeypatch):
+    later = {
+        "timestamp": ["2026-04-28T00:00:00Z", "2026-07-28T00:00:00Z"],
+        "equity": [71000.0, 70600.0],
+    }
+    partial = _portfolio_equity_summary(
+        _portfolio_value_series_from_alpaca(later, current_equity=None),
+    )
+    assert partial["coverage"] == "partial"
+    assert partial["start_date"] == "2026-04-28"
+
+    captured: list[str] = []
+    monkeypatch.setattr(web_app.st, "markdown", lambda content, **_: captured.append(content))
+    unavailable = web_app._portfolio_value_chart(
+        {"days": [{"date": "2026-04-01", "realized_pl": 9.43, "open_unrealized_pl": 0.0}]},
+        current_equity=70588.17,
+        portfolio_history={},
+        days=None,
+    )
+    assert unavailable["coverage"] == "unavailable"
+    assert unavailable["pl"] is None
+    assert "Sin datos suficientes" in captured[0]
