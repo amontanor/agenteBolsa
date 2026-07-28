@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from agente_bolsa import scheduler
 from agente_bolsa.models import PortfolioSnapshot, PositionSnapshot
 from agente_bolsa.tools import telegram_daily_summary as telegram
 
@@ -185,3 +186,71 @@ def test_publish_skips_session_with_durable_receipt(monkeypatch):
     )
 
     assert result["status"] == "idempotent"
+
+
+def test_scheduled_job_does_not_touch_broker_when_disabled(monkeypatch):
+    monkeypatch.setattr(
+        scheduler,
+        "BrokerClientFactory",
+        lambda _settings: pytest.fail("no debe consultar broker"),
+    )
+    recorded = {}
+    store = SimpleNamespace(set_runtime_value=lambda key, value: recorded.update({key: value}))
+    settings = SimpleNamespace(telegram_daily_summary_enabled=False)
+
+    result = scheduler.telegram_daily_summary_job(settings, store)
+
+    assert result == {"status": "disabled"}
+    assert recorded["scheduler_job_status:telegram_daily_summary"]["status"] == "skipped"
+
+
+def test_scheduled_job_reuses_one_portfolio_and_local_performance(monkeypatch):
+    portfolio = _portfolio()
+    calls = {"broker": 0, "performance": 0, "publish": 0}
+
+    class Calendar:
+        def __init__(self, *_args):
+            pass
+
+        def should_run_daily_study(self):
+            return True, SimpleNamespace(now_market="2026-07-28T16:05:00-04:00")
+
+    class Broker:
+        def alpaca_portfolio_snapshot(self):
+            calls["broker"] += 1
+            return portfolio
+
+    monkeypatch.setattr(scheduler, "MarketCalendar", Calendar)
+    monkeypatch.setattr(scheduler, "BrokerClientFactory", lambda _settings: Broker())
+
+    def build(_store, _settings, session_date, *, portfolio):
+        calls["performance"] += 1
+        assert session_date == "2026-07-28"
+        assert portfolio is globals_portfolio
+        return {"pnl_pct": 0.0027, "spy_pct": 0.005}
+
+    globals_portfolio = portfolio
+    monkeypatch.setattr(scheduler, "build_daily_performance_item", build)
+
+    def publish(_settings, _store, *, session_date, performance, portfolio):
+        calls["publish"] += 1
+        assert session_date == "2026-07-28"
+        assert performance["pnl_pct"] == pytest.approx(0.0027)
+        assert portfolio is globals_portfolio
+        return {"status": "sent"}
+
+    monkeypatch.setattr(scheduler, "publish_daily_summary", publish)
+    recorded = {}
+    store = SimpleNamespace(set_runtime_value=lambda key, value: recorded.update({key: value}))
+    settings = SimpleNamespace(
+        telegram_daily_summary_enabled=True,
+        market_calendar="XNYS",
+        local_timezone="Europe/Madrid",
+        logs_dir=None,
+    )
+
+    result = scheduler.telegram_daily_summary_job(settings, store)
+
+    assert result == {"status": "sent"}
+    assert calls == {"broker": 1, "performance": 1, "publish": 1}
+    assert recorded["scheduler_job_status:telegram_daily_summary"]["status"] == "completed"

@@ -3244,6 +3244,91 @@ def _daily_hour_minute(value: str) -> tuple[int, int]:
     return int(hour_text), int(minute_text)
 
 
+def telegram_daily_summary_job(
+    settings: Settings,
+    store: Store,
+    *,
+    verbose: bool = True,
+) -> dict[str, Any]:
+    """Publica a la hora configurada usando una única lectura de cartera.
+
+    El hook postmarket sigue siendo el fallback: el recibo append-only evita
+    duplicados si este job ya envió el resumen de la sesión.
+    """
+
+    run_id = new_id("telegram")
+    started_at = datetime.now(timezone.utc)
+    if not settings.telegram_daily_summary_enabled:
+        result = {"status": "disabled"}
+        _set_job_status(
+            store,
+            "telegram_daily_summary",
+            status="skipped",
+            run_id=run_id,
+            started_at=started_at,
+            detail="Telegram diario desactivado",
+        )
+        return result
+    calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
+    should_run, market_status = calendar.should_run_daily_study()
+    if not should_run:
+        result = {"status": "skipped", "reason": "market_not_ready"}
+        _set_job_status(
+            store,
+            "telegram_daily_summary",
+            status="skipped",
+            run_id=run_id,
+            started_at=started_at,
+            detail="sesión no apta para resumen Telegram",
+        )
+        return result
+    session_date = datetime.fromisoformat(market_status.now_market).date().isoformat()
+    try:
+        portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
+        performance = build_daily_performance_item(
+            store,
+            settings,
+            session_date,
+            portfolio=portfolio,
+        )
+        result = publish_daily_summary(
+            settings,
+            store,
+            session_date=session_date,
+            performance=performance,
+            portfolio=portfolio,
+        )
+        effective = result.get("status") in {"sent", "idempotent"}
+        _set_job_status(
+            store,
+            "telegram_daily_summary",
+            status="completed" if effective else "skipped",
+            run_id=run_id,
+            started_at=started_at,
+            detail="resumen Telegram enviado" if effective else str(result.get("reason") or result.get("status")),
+            extra={"session_date": session_date, "publish_status": result.get("status")},
+        )
+        return result
+    except Exception as exc:  # noqa: BLE001 - observabilidad externa fail-open.
+        result = {"status": "failed", "reason": f"telegram_daily_summary_failed:{type(exc).__name__}"}
+        log_system_event(
+            settings.logs_dir,
+            "telegram_daily_summary_failed",
+            {"error_type": type(exc).__name__, "session_date": session_date},
+        )
+        _set_job_status(
+            store,
+            "telegram_daily_summary",
+            status="failed",
+            run_id=run_id,
+            started_at=started_at,
+            detail=result["reason"],
+        )
+        if verbose:
+            LOGGER.warning("No se pudo enviar el resumen diario a Telegram (%s)", type(exc).__name__)
+        return result
+
+
 def continuous_improvement_job(
     settings: Settings,
     store: Store,
@@ -3969,6 +4054,18 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         coalesce=True,
         replace_existing=True,
     )
+    telegram_hour, telegram_minute = _daily_hour_minute(settings.telegram_daily_summary_time_local)
+    scheduler.add_job(
+        telegram_daily_summary_job,
+        trigger=CronTrigger(hour=telegram_hour, minute=telegram_minute, timezone=local_tz),
+        args=[settings, store],
+        kwargs={"verbose": verbose},
+        id="telegram_daily_summary",
+        name="Telegram daily portfolio summary",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
     if settings.continuous_improvement_schedule_enabled:
         scheduler.add_job(
             continuous_improvement_job,
@@ -4082,6 +4179,7 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
             "operational_health_refresh",
             "weekly_learning_review",
             "overnight_learning_heartbeat",
+            "telegram_daily_summary",
             "pre_earnings",
             "continuous_improvement",
             "agents_healthcheck",
@@ -4119,6 +4217,14 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
                 "id": "post_market_review",
                 "cadence": f"cada {settings.closed_market_study_interval_minutes} minutos como comprobador",
                 "market_behavior": "tras cierre, una vez por sesion, revisa compras/ventas y genera aprendizaje",
+            },
+            {
+                "id": "telegram_daily_summary",
+                "cadence": f"cada sesión a las {settings.telegram_daily_summary_time_local} {settings.local_timezone}",
+                "market_behavior": (
+                    "envía un resumen read-only de sistema, SP500 y cartera; "
+                    "postmarket actúa como fallback idempotente"
+                ),
             },
             {
                 "id": "broker_reconciliation",

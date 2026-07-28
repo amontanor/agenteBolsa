@@ -1362,6 +1362,10 @@ class Settings(BaseSettings):
         default=None,
         alias="TELEGRAM_DAILY_SUMMARY_CHAT_ID",
     )
+    telegram_daily_summary_time_local: str = Field(
+        default="22:05",
+        alias="TELEGRAM_DAILY_SUMMARY_TIME_LOCAL",
+    )
     telegram_timeout_seconds: int = Field(default=15, alias="TELEGRAM_TIMEOUT_SECONDS", ge=1, le=60)
     local_timezone: str = Field(default="Europe/Madrid", alias="LOCAL_TIMEZONE")
     market_calendar: str = Field(default="XNYS", alias="MARKET_CALENDAR")
