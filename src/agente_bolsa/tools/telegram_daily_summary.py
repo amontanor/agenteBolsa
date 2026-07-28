@@ -138,7 +138,7 @@ def publish_daily_summary(settings: Any, store: Any, *, session_date: str, perfo
     event_id = f"telegram_daily_summary:{session_date}"
     existing = [
         row
-        for row in store.recent_agent_events(event_type_prefix=EVENT_TYPE, limit=20)
+        for row in store.agent_events(event_type_prefix=EVENT_TYPE, limit=20)
         if row.get("event_id") == event_id
     ]
     if existing:

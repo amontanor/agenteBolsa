@@ -88,6 +88,7 @@ from .tools.rr_cohort import write_rr_cohort_report
 from .tools.signal_learning import record_signal_candidates
 from .tools.technical_study import build_closed_market_technical_study
 from .tools.telegram_daily_summary import publish_daily_summary
+from .tools.telegram_trade_notifications import publish_trade_fill_notifications
 from .tools.time_stop_policy import (
     POLICY_VERSION as TIME_STOP_POLICY_VERSION,
 )
@@ -3063,6 +3064,17 @@ def post_market_review_job(
         # ejecuta la actualización de outcomes; el resultado único se calcula
         # en el pipeline de aprendizaje.
         reconciliation = reconcile_broker_orders(settings, store, apply=True, limit=500, update_learning=False)
+        try:
+            reconciliation["telegram_trade_notifications"] = publish_trade_fill_notifications(
+                settings,
+                store,
+                reconciliation.get("changes", []),
+            )
+        except Exception as exc:  # noqa: BLE001 - Telegram nunca afecta al PMR.
+            reconciliation["telegram_trade_notifications"] = {
+                "status": "failed_open",
+                "reason": f"telegram_trade_fill_failed:{type(exc).__name__}",
+            }
         coordinator.stage(lease, current_stage, "completed")
         try:
             reporter.emit(
@@ -3781,6 +3793,17 @@ def broker_reconciliation_job(
     try:
         coordinator.stage(lease, "reconciliation", "started")
         result = reconcile_broker_orders(settings, store, apply=True, limit=500)
+        try:
+            result["telegram_trade_notifications"] = publish_trade_fill_notifications(
+                settings,
+                store,
+                result.get("changes", []),
+            )
+        except Exception as exc:  # noqa: BLE001 - Telegram nunca afecta reconciliación.
+            result["telegram_trade_notifications"] = {
+                "status": "failed_open",
+                "reason": f"telegram_trade_fill_failed:{type(exc).__name__}",
+            }
         coordinator.stage(lease, "reconciliation", "completed")
         try:
             reporter.emit(

@@ -1,5 +1,23 @@
 # P-L66 — resumen diario por Telegram
 
+## Addendum: avisos de operaciones ejecutadas
+
+El lote incorpora avisos opcionales por cada transicion reconciliada a
+`filled`. No se avisa una mera orden enviada porque todavia no existe un precio
+real de ejecucion.
+
+- BUY: simbolo, cantidad y `filled_avg_price` real.
+- SELL: cantidad y salida real; la entrada y el P/L bruto solo se publican si
+  `source_plan_id` enlaza exactamente una unica compra filled.
+- Nunca se reconstruye una entrada por simbolo o fecha. Enlace ausente o
+  ambiguo permanece `n/d`.
+- Recibo append-only `telegram_trade_fill:<broker_order_id>`.
+- El envio ocurre despues del commit local de reconciliacion y es fail-open.
+
+La prueba de aplicacion contra el grupo configurado fue satisfactoria
+(`message_id=6`) sin exponer el token. Tambien se corrigio el lector de recibos
+del resumen para usar el metodo real `Store.agent_events`.
+
 ## Dictamen
 
 `ready_for_integration_rehearsal`

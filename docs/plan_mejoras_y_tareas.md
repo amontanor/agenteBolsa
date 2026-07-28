@@ -2114,3 +2114,8 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
 - Secuencia desplegada: P-L45B2 `0.4.175`, P-L43BR5 `0.4.176`, P-L44B
   `0.4.177` y este cambio UI `0.4.178`. El merge productivo es `4158ac5f`;
   la verificación visual confirmó la versión y el orden descendente.
+## P-L66 - Telegram (candidato 0.4.201)
+
+- Resumen diario 22:05 Europe/Madrid y fallback postmarket, ambos idempotentes.
+- Avisos de BUY/SELL al fill reconciliado; P/L SELL solo con `source_plan_id`
+  exacto. Pendiente ensayo integrado y despliegue autorizado con XNYS cerrado.

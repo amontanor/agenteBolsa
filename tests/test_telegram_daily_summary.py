@@ -167,7 +167,7 @@ def test_publish_skips_session_with_durable_receipt(monkeypatch):
         lambda **_kwargs: pytest.fail("no debe reenviar"),
     )
     store = SimpleNamespace(
-        recent_agent_events=lambda **_kwargs: [
+        agent_events=lambda **_kwargs: [
             {"event_id": "telegram_daily_summary:2026-07-28", "event_type": telegram.EVENT_TYPE}
         ]
     )

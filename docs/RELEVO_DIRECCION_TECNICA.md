@@ -202,3 +202,8 @@ P-L43BR6 y P-L44BR3 permanecen fuera y conservan los slots `0.4.181` y
   denominadores null, 0 eventos canonicos, sin backfill.
 - Deuda `profitability_scoreboard` (`pnl_pct=NULL` sin `max_dd`) NO corregida
   (backlog). Sin push. Produccion `8cfa0db3` / tree `4c3636be` limpia.
+## P-L66 - siguiente paso
+
+El candidato 0.4.201 incluye resumen Telegram a las 22:05 y avisos de fills.
+Antes de desplegar requiere ensayo `--no-ff`, suite completa y smoke aislado
+con XNYS cerrado. No desplegar automaticamente.

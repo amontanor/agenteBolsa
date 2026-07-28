@@ -1357,6 +1357,10 @@ class Settings(BaseSettings):
     post_market_review_enabled: bool = Field(default=True, alias="POST_MARKET_REVIEW_ENABLED")
     post_market_review_use_llm: bool = Field(default=True, alias="POST_MARKET_REVIEW_USE_LLM")
     telegram_daily_summary_enabled: bool = Field(default=False, alias="TELEGRAM_DAILY_SUMMARY_ENABLED")
+    telegram_trade_notifications_enabled: bool = Field(
+        default=False,
+        alias="TELEGRAM_TRADE_NOTIFICATIONS_ENABLED",
+    )
     telegram_bot_token: str | None = Field(default=None, alias="TELEGRAM_BOT_TOKEN", repr=False)
     telegram_daily_summary_chat_id: str | None = Field(
         default=None,
