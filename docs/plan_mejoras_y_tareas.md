@@ -2693,3 +2693,18 @@ de despliegue quedan pendientes con XNYS cerrado.
   Suite completa, smoke y benchmark largo quedan pendientes por XNYS abierto.
   Versión 0.4.198; commits 12a6cb11, bef256d6, 031597c7, 89adde7f
   y fb2c47a7. Sin cambios de trading ni despliegue.
+
+### P-L65B — UI coherente Sistema vs SP500 (28-jul-2026)
+
+- Candidato aislado `0.4.200` sobre P-L65A-R1 `53b49f71`.
+- Implementa una fila diaria canónica desde `performance_benchmark`, con
+  equity primaria, SPY de dos cierres, source/basis/as_of/freshness y estados
+  pending/unavailable. El selector 7/15/30/90/Desde inicio recorta un único
+  rowset de sesiones para tabla, contadores y gráfico.
+- El 2,39% sobre exposición queda descriptivo; no decide el ganador. Sin
+  ledger de flujos el copy es variación de equity.
+- QA focal `128 passed`; no se ejecutaron suite completa, smoke o benchmark
+  largo por XNYS abierto. Sin producción, broker, red, SQLite productiva,
+  despliegue o push.
+- Dictamen provisional: `ready_for_integration_rehearsal`. Siguiente trabajo:
+  ensayo combinado aislado P-L63/P-L65B, con P-L66 fuera de este lote.

@@ -153,3 +153,113 @@ hacer llamadas adicionales al broker/red.
 - El registro documental se consolidó en `aa75e286`; el HEAD/tree final del
   worktree se entrega en el dictamen de este lote.
 - Árbol limpio al cierre; no push.
+
+## P-L65B — implementación aislada de composición coherente (28-jul-2026)
+
+### Dictamen
+
+`ready_for_integration_rehearsal`.
+
+La implementación queda limitada a presentación read-only en el worktree
+aislado. El panel diario ya no reproduce la semántica dirty de P-L61: usa el
+contrato persistido `p-l40b.performance-benchmark.v1`, una fila canónica por
+sesión y un único recorte visible compartido por contadores, tabla y gráfico.
+No es autorización de merge productivo ni despliegue.
+
+### Referencias y seguridad
+
+- Base exacta: P-L65A-R1 `53b49f71e3acedd9b5ed73f80ff8cb793221df8`, tree
+  `2b82824f60756c06a3dad40b05740810c0a1180c`, versión `0.4.199`.
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl65b_daily_vs_spy_consistency`.
+- Rama: `codex/pl65b-daily-vs-spy-consistency`.
+- Candidato: versión `0.4.200`.
+- Producción comprometida y checkout dirty permanecen sin modificar; no se
+  copió ni se integró manualmente `web_app.py` dirty. P-L61 se caracterizó a
+  través del diff/hashes documentados en P-L65A-R1 y se reconstruyó el contrato
+  sobre P-L63R1.
+- XNYS estaba abierto al trabajar. No se ejecutaron suite completa, smoke,
+  benchmark largo, broker, red, yfinance, LLM, SQLite productiva, jobs,
+  postmarket, reconciliación, despliegue o push.
+
+### Correcciones realizadas
+
+1. `_canonical_daily_vs_spy_row` exige equity y `previous_equity` explícitos;
+   SPY se calcula solo con `previous_close` y `close`, ambos positivos. Las
+   columnas legacy `pnl_pct`/`spy_pct` no pueden promover una fila a comparable.
+2. `source`, `price_basis`, `generated_at`/`captured_at`, `as_of`,
+   `consumer_read_at`, `freshness_status` y `freshness_age_seconds` se
+   conservan separados. `available` + basis conocido + timestamps válidos son
+   necesarios para ganar. `partial`, `stale`, interpolated, missing, futuro o
+   mismatch quedan `pending` con `reason_codes`.
+3. La freshness histórica se mide respecto a `as_of` y al momento de captura,
+   no como antigüedad frente al momento actual del dashboard. Así una fila
+   cerrada antigua no queda artificialmente stale solo por pertenecer a una
+   ventana de 90 días; una captura tardía respecto a su benchmark sí queda
+   pendiente.
+4. La métrica primaria es `equity_delta / previous_equity`. La equivalencia
+   sobre exposición, cuando existe `avg_exposure`, es secundaria y no entra en
+   `winner`. La UI declara `Variación de equity contra SPY comparable; sin
+   ajustes de flujos`.
+5. `_daily_vs_spy_window` toma las últimas N sesiones canónicas, no N días
+   naturales ni filas de gaps/interpolación. `visible_total` se calcula después
+   del recorte: `visible_total = comparable + pending` y
+   `comparable = system_wins + spy_wins + ties`.
+6. El panel utiliza una única lectura `store.performance_daily(limit=0,
+   readonly=True)`. No añade llamadas al broker, red ni fuentes fallback.
+7. Línea y puntos del panel diario comparten el campo `retorno` con tooltip
+   `Fecha`, `% ganancias`, `Serie` y formato `+.2%`. Fondos, conectores y cero
+   no tienen tooltip. El campo se mantiene decimal; no se multiplica por 100.
+8. P-L63R1 se preserva: el baseline de abril, Resultado del periodo, cabecera,
+   P/L hoy y P/L abierto siguen usando sus contratos separados; el nuevo panel
+   no lee `trade_history.total_pl` ni suma P/L abierto/hoy al equity.
+
+### Causa reproducida y denominadores
+
+La captura dirty mostraba `13/17/0/9 de 39` con selector 7 porque P-L61
+calculaba el total antes de recortar `body[:visible_days]` y después aplicaba un
+recorte diferente (`chart_rows[-visible_days:]`) tras insertar gaps. Además,
+usaba la equivalencia sobre invertido para `cmp_pct`, permitía filas
+interpoladas/partial y dejaba tooltip automático en puntos. P-L65B no reutiliza
+ninguno de esos contadores: reconstruye la población desde el contrato
+persistido y cuenta únicamente el rowset visible.
+
+| Denominador/estado | Contrato P-L65B |
+|---|---|
+| sesiones canónicas de entrada | una por `session_date`, deduplicada de forma estable |
+| ventana | 7, 15, 30, 90 o `Desde inicio`; huecos no consumen cupo |
+| comparables | filas con equity/SPY completos, basis/source/timestamps/calidad válidos |
+| pendientes | `partial`, `stale`, missing, interpolated, future o mismatch; no son cero |
+| Sistema superior/SP500 superior/empate | solo comparables de la ventana visible |
+| exposición-normalizada | secundaria descriptiva; nunca ganador |
+| flujo neutralizado | unavailable sin ledger exacto; copy es variación de equity |
+
+La fixture de aceptación usa `equity 71.550 -> 70.700` con agregado de trades
+`+106,83`: el resultado de equity permanece `-850,00` y tono negativo, nunca
+`+106,83` ni verde. La fixture de `$192,31`, equity previa `70.807,69` e
+invertido `$8.041,72` conserva aproximadamente `+0,27%` primario frente a
+`+2,39%` descriptivo; con SPY `+0,50%`, gana SPY.
+
+### QA ejecutada y gates omitidos
+
+- Focal integrado P-L65/P-L63/P-L46/UI/performance: `128 passed`.
+- Incluye selector/rowset, 39→7, ventanas 7/15/30/90/Desde inicio, gaps,
+  deduplicación/orden, dos cierres SPY, basis/source/as_of/freshness,
+  pending, falsa victoria normalizada, tooltips de línea/punto y ausencia de
+  tooltip en capas auxiliares.
+- Ruff focal: `All checks passed`; `py_compile`: OK; `git diff --check`: OK.
+- `scripts/check_no_nulls.py`, `validate-agent-config --json` y version policy
+  aislados quedan pendientes de ejecutar antes del ensayo cerrado; no se
+  ejecutó suite completa ni smoke por XNYS abierto.
+- No se modificaron `kernel.py`, `broker.py`, `execution.py`, `risk.py`,
+  `config.py` ni `.env`; no cambian trading, señales, ranking, gates, sizing,
+  planes, órdenes, riesgo, exposición, scheduler o persistencia.
+
+### Commits
+
+- `8d4deca6` — `feat: add coherent daily system spy UI`.
+- `0cb872a9` — `test: verify daily system spy consistency`.
+- Documentación P-L65B y registro maestro/relevo: commit posterior separado.
+
+Siguiente lote único: ensayo combinado aislado con P-L63/P-L65B y la referencia
+P-L66, verificando primero XNYS cerrado y todas las precondiciones de validación
+cerrada. P-L66 no se integra en este lote.

@@ -581,6 +581,23 @@ Siguiente lote único: P-L53BR1, ensayo integrado aislado desde el candidato
   suite completa y smoke siguen pendientes. Produccion intacta; sin deploy ni
   push.
 
+### P-L65B — implementación aislada (28-jul-2026)
+
+- Worktree `pl65b_daily_vs_spy_consistency`, rama
+  `codex/pl65b-daily-vs-spy-consistency`, base P-L65A-R1
+  `53b49f71e3acedd9b5ed73f80ff8cb793221df8`, candidato `0.4.200`.
+- La UI usa `performance_daily(readonly=True)` y un rowset canónico común para
+  selector, contadores, tabla y gráfico. Equity contra SPY es la comparación
+  primaria; exposición-normalizada es descriptiva; missing/partial/stale/
+  interpolated/future quedan pending.
+- Feature `8d4deca6`, QA `0cb872a9`; focales P-L65/P-L63/P-L46/UI: 128 passed.
+  Ruff, NUL, diff, py_compile, validate-agent-config y version policy aislados
+  deben cerrarse antes del ensayo integrado; suite completa y smoke se omiten
+  con XNYS abierto.
+- Producción dirty, P-L66 y archivos protegidos intactos. No despliegue.
+  Siguiente paso único: ensayo combinado aislado P-L63/P-L65B, revalidando
+  XNYS cerrado y precondiciones; P-L66 no se integra aquí.
+
 ## P-L54BR1-Retry - relevo (27-jul-2026)
 
 - Worktree `pl54br1_integration_rehearsal`, rama
