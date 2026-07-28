@@ -87,6 +87,7 @@ from .tools.retention import cleanup_runtime_data
 from .tools.rr_cohort import write_rr_cohort_report
 from .tools.signal_learning import record_signal_candidates
 from .tools.technical_study import build_closed_market_technical_study
+from .tools.telegram_daily_summary import publish_daily_summary
 from .tools.time_stop_policy import (
     POLICY_VERSION as TIME_STOP_POLICY_VERSION,
 )
@@ -292,7 +293,7 @@ def _persist_scheduler_lock_marker(
     *,
     payload: dict[str, Any],
     event_id: str,
-) -> None:
+) -> dict[str, Any] | None:
     if store is None:
         return
     marker = {"schema_version": SCHEDULER_LOCK_SCHEMA_VERSION, "event_type": event_type, **payload}
@@ -2722,8 +2723,10 @@ def _persist_daily_performance(
             ),
             {**payload, "persistence": result},
         )
+        return item
     except Exception as exc:  # noqa: BLE001 - el baseline no debe romper el review.
         log_system_event(settings.logs_dir, "performance_baseline_failed", {"error": repr(exc), "session_date": session_date})
+        return None
 
 
 def _run_change_watchdog(
@@ -3115,7 +3118,7 @@ def post_market_review_job(
         # resultado principal si la observabilidad no está disponible.
         current_stage = "performance"
         coordinator.stage(lease, current_stage, "started")
-        _persist_daily_performance(
+        daily_performance = _persist_daily_performance(
             settings,
             store,
             session_date,
@@ -3156,6 +3159,27 @@ def post_market_review_job(
             coordinator.advance_last_session(session_date)
         except Exception as exc:  # noqa: BLE001 - vista operativa fail-open.
             log_system_event(settings.logs_dir, "post_market_last_session_update_failed", {"error": repr(exc), "session_date": session_date})
+        # La notificacion es un consumidor externo fail-open. Solo se intenta
+        # despues del terminal durable y reutiliza portfolio/performance ya
+        # calculados; nunca consulta broker ni modifica el resultado del PMR.
+        try:
+            report["telegram_daily_summary"] = publish_daily_summary(
+                settings,
+                store,
+                session_date=session_date,
+                performance=daily_performance,
+                portfolio=portfolio,
+            )
+        except Exception as exc:  # noqa: BLE001 - Telegram nunca tumba postmarket.
+            report["telegram_daily_summary"] = {
+                "status": "failed",
+                "reason": f"telegram_publish_failed:{type(exc).__name__}",
+            }
+            log_system_event(
+                settings.logs_dir,
+                "telegram_daily_summary_failed",
+                {"error_type": type(exc).__name__, "session_date": session_date},
+            )
         try:
             reporter.emit(
                 "post_market_review_agent",

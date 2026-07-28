@@ -130,6 +130,7 @@ from .tools.signal_learning import (
 )
 from .tools.symbol_study import build_symbol_study
 from .tools.technical_study import build_closed_market_technical_study
+from .tools.telegram_daily_summary import send_telegram_message
 from .tools.trade_decision import (
     _annotate_technical_context_with_learning,
     build_order_plans,
@@ -3482,6 +3483,40 @@ def command_job_once(args: argparse.Namespace) -> None:
             _print_json({"ok": True, **report})
 
 
+def command_telegram_daily_summary(args: argparse.Namespace) -> None:
+    """Valida configuración o envía una prueba explícita sin tocar trading."""
+
+    settings = get_settings()
+    token = str(settings.telegram_bot_token or "").strip()
+    chat_id = str(settings.telegram_daily_summary_chat_id or "").strip()
+    result: dict[str, Any] = {
+        "ok": bool(token and chat_id),
+        "enabled": settings.telegram_daily_summary_enabled,
+        "token_configured": bool(token),
+        "chat_id_configured": bool(chat_id),
+    }
+    if args.send_test:
+        if not token or not chat_id:
+            raise SystemExit("Faltan TELEGRAM_BOT_TOKEN y/o TELEGRAM_DAILY_SUMMARY_CHAT_ID.")
+        sent = send_telegram_message(
+            token=token,
+            chat_id=chat_id,
+            text="✅ agenteBolsa: conexión de Telegram verificada.",
+            timeout_seconds=settings.telegram_timeout_seconds,
+        )
+        result.update({"test_sent": True, "message_id": sent.get("message_id")})
+    if args.json:
+        _print_json(result)
+    else:
+        print(
+            "Telegram diario: "
+            f"enabled={result['enabled']} token={'sí' if token else 'no'} "
+            f"chat_id={'sí' if chat_id else 'no'}"
+        )
+        if result.get("test_sent"):
+            print("Mensaje de prueba enviado.")
+
+
 def command_log(args: argparse.Namespace) -> None:
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
@@ -4757,6 +4792,18 @@ def build_parser() -> argparse.ArgumentParser:
     telegram_report.add_argument("--out", help="Ruta de salida markdown UTF-8. Si se omite, imprime por stdout.")
     telegram_report.add_argument("--json", action="store_true", help="Devuelve JSON con markdown incluido.")
     telegram_report.set_defaults(func=command_telegram_radar)
+
+    telegram_daily = subparsers.add_parser(
+        "telegram-daily-summary",
+        help="Valida o prueba el envío del resumen diario a Telegram.",
+    )
+    telegram_daily.add_argument(
+        "--send-test",
+        action="store_true",
+        help="Envía un mensaje de conectividad al chat configurado.",
+    )
+    telegram_daily.add_argument("--json", action="store_true", help="Devuelve estado JSON sin revelar secretos.")
+    telegram_daily.set_defaults(func=command_telegram_daily_summary)
 
     lab_book = subparsers.add_parser(
         "lab-book",
