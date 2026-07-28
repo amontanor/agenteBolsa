@@ -590,7 +590,8 @@ Siguiente lote único: P-L53BR1, ensayo integrado aislado desde el candidato
   selector, contadores, tabla y gráfico. Equity contra SPY es la comparación
   primaria; exposición-normalizada es descriptiva; missing/partial/stale/
   interpolated/future quedan pending.
-- Feature `8d4deca6`, QA `0cb872a9`; focales P-L65/P-L63/P-L46/UI: 128 passed.
+- Feature `8d4deca6`, tests `0cb872a9`, QA `02aee0c9`; focales
+  P-L65/P-L63/P-L46/UI: 129 passed.
   Ruff, NUL, diff, py_compile, validate-agent-config y version policy aislados
   deben cerrarse antes del ensayo integrado; suite completa y smoke se omiten
   con XNYS abierto.

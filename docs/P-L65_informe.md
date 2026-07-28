@@ -258,7 +258,8 @@ invertido `$8.041,72` conserva aproximadamente `+0,27%` primario frente a
 
 - `8d4deca6` — `feat: add coherent daily system spy UI`.
 - `0cb872a9` — `test: verify daily system spy consistency`.
-- Documentación P-L65B y registro maestro/relevo: commit posterior separado.
+- `02aee0c9` — `test: add daily system spy parity QA`.
+- Documentación P-L65B y registro maestro/relevo: commit separado posterior.
 
 Siguiente lote único: ensayo combinado aislado con P-L63/P-L65B y la referencia
 P-L66, verificando primero XNYS cerrado y todas las precondiciones de validación

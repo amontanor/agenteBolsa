@@ -2703,7 +2703,7 @@ de despliegue quedan pendientes con XNYS cerrado.
   rowset de sesiones para tabla, contadores y gráfico.
 - El 2,39% sobre exposición queda descriptivo; no decide el ganador. Sin
   ledger de flujos el copy es variación de equity.
-- QA focal `128 passed`; no se ejecutaron suite completa, smoke o benchmark
+- QA focal `129 passed`; no se ejecutaron suite completa, smoke o benchmark
   largo por XNYS abierto. Sin producción, broker, red, SQLite productiva,
   despliegue o push.
 - Dictamen provisional: `ready_for_integration_rehearsal`. Siguiente trabajo:
