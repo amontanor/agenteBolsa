@@ -791,3 +791,17 @@ cerrada.
 El candidato 0.4.201 incluye resumen Telegram a las 22:05 y avisos de fills.
 Antes de desplegar requiere ensayo `--no-ff`, suite completa y smoke aislado
 con XNYS cerrado. No desplegar automaticamente.
+
+## P-L67R1 — ensayo combinado final (28-jul-2026)
+
+- Worktree `pl67_p65_p62_p66_deployment_rehearsal`, HEAD `62de5525`, tree
+  `77ec5a4f`, versión 0.4.201. Merge P-L66 `--no-ff` conservado.
+- P-L62 freshness quedó subsumido sin copiar el panel P-L61 dirty; P-L65B
+  conserva la comparación canónica sin yfinance. P-L66 queda desactivado por
+  defecto y fail-open.
+- QA final: 2242 passed, 1 skip preexistente (`test_pre_earnings.py:1041`),
+  Ruff/NUL/diff/compile/config verdes. XNYS estaba abierto; no hubo despliegue.
+- Smoke CLI real queda pendiente por seguridad; el sustituto monkeypatched de
+  `run_observable_cycle(use_crew=False)` pasó en DATA_DIR temporal. Antes de
+  desplegar hay que repetir preflight cerrado y normalizar el checkout dirty
+  sin descartar cambios del operador.

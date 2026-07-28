@@ -2725,3 +2725,15 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Resumen diario 22:05 Europe/Madrid y fallback postmarket, ambos idempotentes.
 - Avisos de BUY/SELL al fill reconciliado; P/L SELL solo con `source_plan_id`
   exacto. Pendiente ensayo integrado y despliegue autorizado con XNYS cerrado.
+
+## P-L67R1 - ensayo final P-L65B/P-L63 + P-L62 + P-L66
+
+- Ensayo aislado `pl67_p65_p62_p66_deployment_rehearsal`, merge `d3a75c98`,
+  HEAD final `62de5525`, versión 0.4.201.
+- P-L62 fue preservado campo a campo; el panel dirty P-L61 no se copió porque
+  P-L65B lo sustituye por el rowset canónico Sistema/SP500. Producción dirty
+  permanece intacta y los untracked quedan fuera.
+- Suite final: 2242 passed, 1 skip preexistente en
+  `tests/test_pre_earnings.py:1041`; Ruff/NUL/diff/compile/config verdes.
+  Smoke CLI real queda `smoke_unavailable_by_safety`; sustituto aislado verde.
+- Dictamen `ready_for_deployment` sin autorización de despliegue en este lote.
