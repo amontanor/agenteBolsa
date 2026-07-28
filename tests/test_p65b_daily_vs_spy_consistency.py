@@ -20,7 +20,8 @@ def _row(
     quality: str = "available",
     price_basis: str | None = "close_unadjusted",
     source: str | None = "persisted_p40b",
-    captured_hour: int = 12,
+    captured_hour: int = 21,
+    captured_at: str | None = None,
     as_of: str | None = None,
     avg_exposure: float | None = 0.1,
     interpolated: bool = False,
@@ -29,7 +30,7 @@ def _row(
     payload = {
         "performance_benchmark": {
             "schema_version": "p-l40b.performance-benchmark.v1",
-            "captured_at": f"{session_date}T{captured_hour:02d}:00:00+00:00",
+            "captured_at": captured_at or f"{session_date}T{captured_hour:02d}:00:00+00:00",
             "account": {"equity": equity, "previous_equity": previous_equity},
             "benchmark": {
                 "symbol": "SPY",
@@ -38,6 +39,7 @@ def _row(
                 "price_basis": price_basis,
                 "source": source,
                 "as_of": as_of,
+                "data_quality": quality,
             },
             "data_quality": {"status": quality},
         },
@@ -92,8 +94,8 @@ def test_two_closes_and_contract_quality_are_required_for_winner():
     partial = web_app._canonical_daily_vs_spy_row(
         _row("2026-07-27", quality="partial"), consumer_read_at=CONSUMER_READ_AT
     )
-    stale = web_app._canonical_daily_vs_spy_row(
-        _row("2026-07-26", captured_hour=0, as_of="2026-07-26T20:00:00+00:00"),
+    after_capture = web_app._canonical_daily_vs_spy_row(
+        _row("2026-07-26", captured_hour=20, as_of="2026-07-26T21:00:00+00:00"),
         consumer_read_at=CONSUMER_READ_AT,
     )
     unknown_basis = web_app._canonical_daily_vs_spy_row(
@@ -103,7 +105,8 @@ def test_two_closes_and_contract_quality_are_required_for_winner():
     assert missing_close["comparison_status"] == "pending"
     assert "spy_close_pair_unavailable" in missing_close["reason_codes"]
     assert partial["comparison_status"] == "pending"
-    assert stale["comparison_status"] == "comparable"
+    assert after_capture["comparison_status"] == "pending"
+    assert "benchmark_as_of_after_generated_at" in after_capture["reason_codes"]
     assert unknown_basis["comparison_status"] == "pending"
     assert all(row["comparison_status"] != "comparable" for row in (missing_close, partial, unknown_basis))
 
@@ -160,6 +163,8 @@ def test_chart_data_layers_share_explicit_formatted_tooltip_and_aux_layers_do_no
         {"field": "fecha", "title": "Fecha", "type": "nominal"},
         {"field": "retorno", "format": "+.2%", "title": "% ganancias", "type": "quantitative"},
         {"field": "serie", "title": "Serie", "type": "nominal"},
+        {"field": "estado", "title": "Estado", "type": "nominal"},
+        {"field": "motivo", "title": "Motivo", "type": "nominal"},
     ]
     for layer in data_layers:
         assert layer["encoding"]["tooltip"] == expected
@@ -198,7 +203,11 @@ def test_freshness_is_contract_lag_not_historical_age():
         _row("2026-06-01"), consumer_read_at=CONSUMER_READ_AT
     )
     stale = web_app._canonical_daily_vs_spy_row(
-        _row("2026-06-01", captured_hour=0, as_of="2026-06-05T20:00:00+00:00"),
+        _row(
+            "2026-06-01",
+            captured_at="2026-06-05T20:00:01+00:00",
+            as_of="2026-06-01T20:00:00+00:00",
+        ),
         consumer_read_at=CONSUMER_READ_AT,
     )
 
