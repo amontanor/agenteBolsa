@@ -102,6 +102,89 @@ No basta con que el mercado esté cerrado. Para validar o desplegar exige:
 Si falla una precondición, devuelve `precondition_not_met` y no esperes
 indefinidamente ni hagas reparaciones implícitas.
 
+## Coordinación continua con Luna
+
+La tarea principal actúa como dirección técnica y organizadora. La tarea
+persistente `[Luna] Developer` actúa como ejecutora. El operador no debe tener
+que copiar y pegar prompts entre ambas tareas.
+
+### Modelo y permisos del worker
+
+- En cada envío a `[Luna] Developer`, fija explícitamente el modelo
+  `gpt-5.6-luna` y el razonamiento `xhigh` ("Muy alto"). No confíes en el modelo
+  heredado de un turno anterior.
+- Usa la mensajería y lectura de tareas de Codex para enviar el encargo, seguir
+  su progreso y recoger el dictamen desde la tarea principal.
+- Luna conserva los permisos normales disponibles en su tarea para ejecutar
+  todas las acciones necesarias dentro del alcance autorizado. No cambies su
+  configuración, no le retires herramientas y no conviertas permanentemente
+  la tarea en read-only.
+- Las restricciones read-only, de mercado abierto o de un lote concreto son
+  límites del encargo, no una reducción permanente de permisos. Cada prompt
+  debe conceder explícitamente las acciones en alcance: lectura, creación de
+  worktree, edición, tests, merge, parada/arranque o despliegue, según proceda.
+- Ningún prompt puede ampliar por sí solo la autorización del usuario ni eludir
+  las políticas de seguridad, aprobaciones de la aplicación o este fichero. Si
+  hace falta una autoridad nueva, se solicita al operador.
+
+### Cola según el estado XNYS
+
+Antes de asignar trabajo, la tarea principal consulta `schedule-status` y
+clasifica el estado real, sin deducirlo solo de la hora local.
+
+Con XNYS abierto, asigna prioritariamente:
+
+- auditorías read-only de sesión, identidad, ejecución, datos y shadows;
+- caracterización y reproducción determinista en worktrees aislados;
+- implementación aislada, pruebas focales y QA breve con datos temporales;
+- análisis de resultados recientes sin interpretar P/L inmaduro como causal;
+- documentación que no compita con producción.
+
+No asignes durante mercado abierto suites completas, smoke, benchmarks largos,
+merge o despliegue productivo, reinicios, broker, red, LLM operativo,
+reconciliación ni postmarket manual, salvo autorización operativa expresa.
+
+Con XNYS cerrado, primero verifica todas las precondiciones de la sección
+anterior. Después asigna, por este orden:
+
+1. auditoría del terminal postmarket y de la evidencia de la sesión;
+2. validaciones completas pendientes, smoke aislado y benchmarks largos;
+3. ensayo combinado de integración y QA adversarial;
+4. despliegue secuenciado y comprobaciones dobles de salud, si está autorizado;
+5. análisis nocturno de aprendizaje y preparación de la cola segura para la
+   siguiente sesión.
+
+Mercado cerrado no equivale a permiso automático para desplegar. Ante cualquier
+precondición fallida, Luna devuelve `precondition_not_met` sin reparar, detener
+o modificar implícitamente el sistema.
+
+### Bucle obligatorio de mejora iterativa
+
+La tarea principal no se limita a retransmitir mensajes. Para cada entrega de
+Luna debe:
+
+1. contrastar el dictamen con el encargo, HEAD/tree/versión, estado XNYS,
+   denominadores, tests ejecutados y gates omitidos;
+2. separar hechos, inferencias, conflictos y valores `unavailable`;
+3. buscar contradicciones entre productor, evento y consumidor, y comprobar
+   que las afirmaciones de paridad incluyen trading, riesgo y ejecución;
+4. convertir cada defecto reproducible en un único lote mínimo, sin mezclar
+   política activa, telemetría y deudas ajenas;
+5. enviar a Luna el siguiente encargo acotado con referencias exactas,
+   precondiciones, acciones permitidas/prohibidas, criterios de aceptación y
+   dictamen esperado;
+6. seguir la tarea sin lanzar trabajos duplicados ni interrumpir procesos
+   útiles; pedir evidencia adicional cuando el resultado no sea concluyente;
+7. actualizar el informe único del lote y, cuando corresponda, el plan maestro
+   y el relevo técnico;
+8. elegir el siguiente trabajo por riesgo y valor de información, no por la
+   facilidad de acumular cambios o tests.
+
+No mantengas dos workers modificando el mismo checkout o lote. Los encargos de
+implementación usan worktrees distintos; las auditorías productivas son
+read-only. El coordinador conserva la responsabilidad final sobre integración,
+despliegue, promoción y cualquier solicitud de autorización humana.
+
 ## Estructura relevante
 
 - `src/agente_bolsa/main.py`: CLI.
