@@ -306,7 +306,7 @@ def test_store_daily_llm_usage_counts_requests_and_tokens(tmp_path):
     assert rows[0]["total_tokens"] == 25
 
 
-def test_portfolio_value_series_from_alpaca_builds_daily_changes():
+def test_portfolio_value_series_from_alpaca_marks_first_daily_change_unavailable():
     payload = {
         "timestamp": [
             "2026-05-08T00:00:00Z",
@@ -320,7 +320,7 @@ def test_portfolio_value_series_from_alpaca_builds_daily_changes():
 
     assert list(df["fecha"]) == ["2026-05-08", "2026-05-09", "2026-05-10"]
     assert list(df["valor_cartera"]) == [1000.0, 1015.0, 1005.0]
-    assert list(df["P/L dia"]) == [0.0, 15.0, -10.0]
+    assert list(df["P/L dia"]) == [None, 15.0, -10.0]
     assert list(df["fuente"]) == ["Alpaca", "Alpaca", "Alpaca"]
 
 
@@ -794,13 +794,12 @@ def test_latest_daily_equity_change_falls_back_to_estimated_series():
     assert change["source"] == "estimado"
 
 
-def test_today_pl_display_uses_pct_over_invested_as_primary():
+def test_today_pl_display_uses_daily_equity_pct_as_primary():
     display = _today_pl_display(38.42, 5246.0, 0.0005)
 
     assert display == {
-        "primary_pct": "0.73%",
-        "invested_caption": "sobre invertido ($5,246.00)",
-        "equity_reference": "0.05% del equity total",
+        "primary_pct": "0.05%",
+        "period_caption": "Variación de equity desde el cierre anterior",
     }
 
 
@@ -808,9 +807,8 @@ def test_today_pl_display_returns_nd_when_invested_is_zero():
     display = _today_pl_display(38.42, 0.0, 0.0005)
 
     assert display == {
-        "primary_pct": "n/d",
-        "invested_caption": "sobre invertido ($0.00)",
-        "equity_reference": "0.05% del equity total",
+        "primary_pct": "0.05%",
+        "period_caption": "Variación de equity desde el cierre anterior",
     }
 
 
@@ -818,9 +816,8 @@ def test_today_pl_display_preserves_negative_pct_over_invested():
     display = _today_pl_display(-52.46, 5246.0, -0.0007)
 
     assert display == {
-        "primary_pct": "-1.00%",
-        "invested_caption": "sobre invertido ($5,246.00)",
-        "equity_reference": "-0.07% del equity total",
+        "primary_pct": "-0.07%",
+        "period_caption": "Variación de equity desde el cierre anterior",
     }
 
 
@@ -829,7 +826,7 @@ def test_today_pl_metric_payload_reuses_same_display_as_hero():
 
     assert payload["amount"] == "$38.42"
     assert payload["display"] == _today_pl_display(38.42, 5246.0, 0.0005)
-    assert payload["detail_html"] == "0.73% sobre invertido ($5,246.00)<br><small>0.05% del equity total</small>"
+    assert payload["detail_html"] == "0.05% Variación de equity desde el cierre anterior"
 
 
 def test_sidebar_version_label_uses_semantic_version():

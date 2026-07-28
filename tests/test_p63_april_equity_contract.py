@@ -12,6 +12,7 @@ from agente_bolsa.web_app import (
     _portfolio_equity_summary_detail,
     _portfolio_period_metric_payload,
     _portfolio_value_series_from_alpaca,
+    _latest_daily_equity_change,
 )
 
 
@@ -170,3 +171,33 @@ def test_explicit_june_window_has_date_authority_and_exact_visible_dates():
     assert summary["end_date"] == "2026-07-28"
     assert summary["pl"] == -500.0
     assert "01/06/2026" in metric["detail"]
+
+
+def test_today_percentage_uses_daily_equity_not_current_exposure():
+    display = web_app._today_pl_display(190.42, 9078.06, 0.002693)
+    same_equity_different_exposure = web_app._today_pl_display(190.42, 30000.0, 0.002693)
+    metric = web_app._today_pl_metric_payload(190.42, 9078.06, 0.002693)
+
+    assert display == same_equity_different_exposure
+    assert display["primary_pct"] == "0.27%"
+    assert "sobre invertido" not in metric["detail_html"]
+    assert "desde apertura" not in metric["detail_html"].lower()
+    assert "acciones subieron" not in metric["detail_html"].lower()
+    assert "cierre anterior" in metric["detail_html"]
+    assert metric["amount"] == "$190.42"
+
+
+def test_today_percentage_is_unavailable_without_previous_equity():
+    change = _latest_daily_equity_change(
+        history={},
+        current_equity=None,
+        portfolio_history={
+            "timestamp": ["2026-07-28T00:00:00Z"],
+            "equity": [70700.0],
+        },
+    )
+
+    assert change["pl"] is None
+    assert change["pl_pct"] is None
+    display = web_app._today_pl_display(change["pl"], 9078.06, change["pl_pct"])
+    assert display["primary_pct"] == "n/d"
