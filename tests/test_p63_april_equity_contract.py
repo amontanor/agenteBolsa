@@ -8,14 +8,14 @@ from agente_bolsa.web_app import (
     PORTFOLIO_CHART_START_DATE,
     PORTFOLIO_CHART_WINDOWS,
     PORTFOLIO_HISTORY_PERIOD,
+    _latest_daily_equity_change,
+    _performance_baseline_chart,
     _portfolio_chart_visible_summary,
     _portfolio_chart_window_label,
     _portfolio_equity_summary,
     _portfolio_equity_summary_detail,
     _portfolio_period_metric_payload,
     _portfolio_value_series_from_alpaca,
-    _latest_daily_equity_change,
-    _performance_baseline_chart,
 )
 
 
