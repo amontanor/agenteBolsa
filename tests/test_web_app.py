@@ -337,6 +337,40 @@ def test_trim_portfolio_chart_range_keeps_latest_window():
     assert list(trimmed["valor_cartera"]) == [1002.0, 1003.0]
 
 
+def test_trim_portfolio_chart_range_none_keeps_full_history():
+    df = _portfolio_value_series_from_alpaca(
+        {
+            "timestamp": [
+                "2026-05-06T00:00:00Z",
+                "2026-05-07T00:00:00Z",
+                "2026-05-08T00:00:00Z",
+                "2026-05-09T00:00:00Z",
+            ],
+            "equity": [1000.0, 1001.0, 1002.0, 1003.0],
+        },
+        current_equity=None,
+        start_date="2026-05-01",
+    )
+
+    full_history = _trim_portfolio_chart_range(df, days=None)
+
+    assert list(full_history["fecha"]) == ["2026-05-06", "2026-05-07", "2026-05-08", "2026-05-09"]
+
+
+def test_estimated_portfolio_value_series_none_uses_all_available_history():
+    history = {
+        "days": [
+            {"date": "2026-05-11", "realized_pl": 10.0, "open_unrealized_pl": 0.0},
+            {"date": "2026-05-12", "realized_pl": -5.0, "open_unrealized_pl": 0.0},
+        ]
+    }
+
+    df = _estimated_portfolio_value_series(history, current_equity=1005.0, days=None)
+
+    assert list(df["fecha"]) == ["2026-05-11", "2026-05-12"]
+    assert list(df["valor_cartera"]) == [1010.0, 1005.0]
+
+
 def test_estimated_portfolio_value_series_still_available_as_fallback():
     history = {
         "days": [

@@ -10,8 +10,8 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama de integracion desplegada: `codex/mejora_continua`
-- Version actual: **0.4.185** (P-L48B desplegado en producción el 19-jul; ensayo P-L48BR1)
-- Ultima actualizacion: 2026-07-19
+- Version actual: **0.4.187** (P-L61 + P-L62 en produccion unstaged; XNYS abierto, sin despliegue)
+- Ultima actualizacion: 2026-07-27
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
 
 ## Consolidacion operativa - 16-jul-2026

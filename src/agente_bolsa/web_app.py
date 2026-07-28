@@ -8,7 +8,7 @@ import os
 import subprocess
 from contextlib import closing
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -701,9 +701,54 @@ def _latest_report_json(filename: str) -> dict[str, Any]:
     if not path.exists():
         return {"available": False, "path": str(path)}
     try:
-        return {"available": True, "path": str(path), "payload": json.loads(path.read_text(encoding="utf-8"))}
+        generated_at = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
+        return {
+            "available": True,
+            "path": str(path),
+            "payload": json.loads(path.read_text(encoding="utf-8")),
+            "generated_at": generated_at,
+        }
     except (OSError, json.JSONDecodeError):
         return {"available": False, "path": str(path)}
+
+
+def _report_age_text(generated_at: str | None) -> str:
+    """Texto legible de antigüedad del informe: 'ahora', 'hace 3h', 'hace 2 días', 'hace 6 semanas'."""
+    if not generated_at:
+        return ""
+    try:
+        dt = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return ""
+    delta = datetime.now(timezone.utc) - dt
+    total_seconds = delta.total_seconds()
+    if total_seconds < 60:
+        return "ahora"
+    minutes = int(total_seconds // 60)
+    if minutes < 60:
+        return f"hace {minutes} min"
+    hours = minutes // 60
+    if hours < 24:
+        return f"hace {hours}h"
+    days = hours // 24
+    if days < 7:
+        return f"hace {days} d" if days == 1 else f"hace {days} días"
+    weeks = days // 7
+    if weeks < 4:
+        return f"hace {weeks} sem" if weeks == 1 else f"hace {weeks} semanas"
+    months = days // 30
+    return f"hace {months} mes" if months == 1 else f"hace {months} meses"
+
+
+def _report_age_days(generated_at: str | None) -> float | None:
+    """Antigüedad en días, o None si no disponible."""
+    if not generated_at:
+        return None
+    try:
+        dt = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return (datetime.now(timezone.utc) - dt).total_seconds() / 86400.0
 
 
 def _web_search_status(settings: Any, latest_report: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1728,9 +1773,11 @@ def _portfolio_value_series_from_alpaca(
     return pd.DataFrame(rows)
 
 
-def _trim_portfolio_chart_range(df: pd.DataFrame, *, days: int) -> pd.DataFrame:
+def _trim_portfolio_chart_range(df: pd.DataFrame, *, days: int | None) -> pd.DataFrame:
     if df.empty:
         return df
+    if days is None:
+        return df.sort_values("fecha").reset_index(drop=True)
     window = max(int(days), 1)
     trimmed = df.sort_values("fecha").tail(window).reset_index(drop=True)
     return trimmed
@@ -1774,7 +1821,7 @@ def _estimated_portfolio_value_series(
     history: dict[str, Any],
     current_equity: float | None,
     *,
-    days: int = 7,
+    days: int | None = 7,
 ) -> pd.DataFrame:
     if current_equity is None:
         return pd.DataFrame(columns=["fecha", "valor_cartera", "P/L dia", "% dia", "label", "fuente"])
@@ -1790,7 +1837,12 @@ def _estimated_portfolio_value_series(
         except ValueError:
             continue
     anchor = max((item for item in history_dates if item <= today), default=today)
-    start = anchor - pd.Timedelta(days=max(int(days), 1) - 1)
+    if days is None:
+        start = min((item for item in history_dates if item <= anchor), default=anchor)
+        day_count = max((anchor - start).days + 1, 1)
+    else:
+        day_count = max(int(days), 1)
+        start = anchor - pd.Timedelta(days=day_count - 1)
     daily_by_date: dict[str, dict[str, float]] = {}
     for day in history.get("days", []):
         date = str(day.get("date") or "")
@@ -1802,7 +1854,7 @@ def _estimated_portfolio_value_series(
         item["P/L dia"] = round(item["P/L dia"] + day_pl, 2)
         item["denominador"] = max(item["denominador"], float(denominator or 0.0))
     daily_rows = []
-    for offset in range(max(int(days), 1)):
+    for offset in range(day_count):
         date = (start + pd.Timedelta(days=offset)).isoformat()
         item = daily_by_date.get(date, {"P/L dia": 0.0, "denominador": 0.0})
         daily_rows.append({"fecha": date, **item})
@@ -1835,7 +1887,7 @@ def _portfolio_value_chart(
     current_equity: float | None,
     portfolio_history: dict[str, Any] | None = None,
     *,
-    days: int = 7,
+    days: int | None = 7,
 ) -> dict[str, float | int | None]:
     df = _portfolio_value_series_from_alpaca(portfolio_history or {}, current_equity)
     used_estimate = False
@@ -2743,6 +2795,411 @@ def _setup_page() -> None:
         """,
         unsafe_allow_html=True,
     )
+
+
+def _fetch_spy_today_return() -> float | None:
+    """Devuelve el retorno intradiario de SPY hoy, o None si falla."""
+    try:
+        import yfinance as yf  # noqa: PLC0415 - dashboard helper, lazy import.
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        hist = yf.Ticker("SPY").history(period="5d")
+        if hist is not None and len(hist) >= 2:
+            prev_close = float(hist["Close"].iloc[-2])
+            last = float(hist["Close"].iloc[-1])
+            if prev_close > 0:
+                return (last - prev_close) / prev_close
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _spy_historical_returns(session_dates: list[str]) -> dict[str, float]:
+    """Descarga precios historicos de SPY y devuelve retornos diarios claveados por fecha."""
+    if not session_dates:
+        return {}
+    try:
+        import yfinance as yf  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return {}
+    try:
+        start = session_dates[0]
+        end_dt = date.fromisoformat(session_dates[-1]) + timedelta(days=1)
+        end = end_dt.isoformat()
+        hist = yf.Ticker("SPY").history(start=start, end=end)
+        if hist is None or hist.empty:
+            return {}
+        closes = pd.to_numeric(hist["Close"], errors="coerce").dropna()
+        returns = closes.pct_change()
+        result: dict[str, float] = {}
+        for ts, val in returns.items():
+            if pd.notna(val):
+                result[str(ts.date())] = round(float(val), 6)
+        return result
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _render_daily_vs_spy_table(
+    store: Any,
+    current_equity: float | None = None,
+    market_is_open: bool = False,
+    spy_today_return: float | None = None,
+    portfolio_history: dict[str, Any] | None = None,
+) -> None:
+    """Tabla diaria: P/L sistema vs SP500 con indicador de superioridad.
+
+    Calcula el P/L del sistema como (equity_cierre - equity_apertura) / equity_apertura,
+    donde equity_apertura de un dia equivale al equity de cierre del dia anterior.
+    Para el dia en curso (mercado abierto) se usa el equity vivo de la cartera.
+    """
+
+    try:
+        db_rows = store.performance_daily(limit=0)
+    except Exception:  # noqa: BLE001 - vista degradable.
+        db_rows = []
+
+    with st.container(border=True):
+        title_col, control_col = st.columns([3, 1])
+        with title_col:
+            _section_title("Rendimiento diario: Sistema vs SP500", "% sobre capital invertido (linea secundaria: % sobre equity total).")
+        with control_col:
+            visible_days = st.selectbox(
+                "Dias",
+                [7, 15, 30, None],
+                index=0,
+                format_func=lambda v: "7 dias" if v == 7 else "15 dias" if v == 15 else "30 dias" if v == 30 else "Todos",
+                key="daily_vs_spy_days",
+                label_visibility="collapsed",
+            )
+
+        if not db_rows:
+            st.markdown(
+                "<div class='empty-box'>Sin datos diarios todavia. Se generan tras el review post-mercado.</div>",
+                unsafe_allow_html=True,
+            )
+            return
+
+        today_str = datetime.now(ZoneInfo("Europe/Madrid")).strftime("%Y-%m-%d")
+
+        # Rellenar huecos de spy_pct con yfinance
+        missing_spy_dates = [
+            r["session_date"] for r in db_rows
+            if not isinstance(r.get("spy_pct"), (int, float))
+        ]
+        spy_fallback: dict[str, float] = {}
+        if missing_spy_dates:
+            spy_fallback = _spy_historical_returns(missing_spy_dates)
+
+        # Construir filas con P/L calculado desde equity
+        enriched: list[dict[str, Any]] = []
+        prev_equity: float | None = None
+        prev_invested: float | None = None
+        for row in db_rows:
+            eq = row.get("equity")
+            eq_val = _num(eq)
+            payload = row.get("payload") or {}
+            avg_exp = _num(payload.get("avg_exposure"))
+            invested = round(avg_exp * eq_val, 2) if avg_exp is not None and eq_val is not None else None
+
+            pnl_equity_pct: float | None = None
+            pnl_dollar: float | None = None
+            pnl_invested_pct: float | None = None
+            if eq_val is not None and prev_equity is not None and prev_equity > 0:
+                pnl_equity_pct = (eq_val - prev_equity) / prev_equity
+                pnl_dollar = eq_val - prev_equity
+                if prev_invested is not None and prev_invested > 0:
+                    pnl_invested_pct = pnl_dollar / prev_invested
+
+            spy_val = row.get("spy_pct")
+            if isinstance(spy_val, (int, float)):
+                spy_pct = spy_val
+            else:
+                spy_pct = spy_fallback.get(row.get("session_date"))
+
+            enriched.append({
+                "session_date": row.get("session_date"),
+                "equity": eq_val,
+                "invested": invested,
+                "pnl_equity_pct": pnl_equity_pct,
+                "pnl_invested_pct": pnl_invested_pct,
+                "pnl_dollar": pnl_dollar,
+                "spy_pct": spy_pct,
+                "is_today": False,
+            })
+            if eq_val is not None:
+                prev_equity = eq_val
+            if invested is not None:
+                prev_invested = invested
+
+        # Rellenar huecos entre fechas consecutivas (sesiones sin datos)
+        alpaca_equity: dict[str, float] = {}
+        if portfolio_history:
+            try:
+                timestamps = portfolio_history.get("timestamp", [])
+                equities = portfolio_history.get("equity", [])
+                for ts, eq in zip(timestamps, equities, strict=False):
+                    if eq is not None:
+                        alpaca_equity[datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime("%Y-%m-%d")] = float(eq)
+            except Exception:  # noqa: BLE001
+                pass
+
+        if len(enriched) >= 2:
+            filled_enriched: list[dict[str, Any]] = [enriched[0]]
+            for i in range(1, len(enriched)):
+                d_prev = date.fromisoformat(enriched[i - 1]["session_date"])
+                d_curr = date.fromisoformat(enriched[i]["session_date"])
+                gap = (d_curr - d_prev).days
+                if gap > 1 and gap <= 4:
+                    missing_date = (d_prev + timedelta(days=1)).isoformat()
+                    eq_prev = enriched[i - 1]["equity"]
+                    eq_curr = enriched[i]["equity"]
+                    if eq_prev is not None and eq_curr is not None:
+                        # Usar equity real de Alpaca si esta disponible
+                        alp_eq = alpaca_equity.get(missing_date)
+                        from_alpaca = alp_eq is not None
+                        est_equity = round(alp_eq, 2) if from_alpaca else round((eq_prev + eq_curr) / 2, 2)
+                        est_pnl = est_equity - eq_prev
+                        est_equity_pct = est_pnl / eq_prev if eq_prev > 0 else None
+                        inv_prev = enriched[i - 1]["invested"]
+                        est_inv_pct = est_pnl / inv_prev if inv_prev and inv_prev > 0 else None
+                        missing_spy_ret = _spy_historical_returns([missing_date]).get(missing_date)
+                        filled_enriched.append({
+                            "session_date": missing_date,
+                            "equity": est_equity,
+                            "invested": inv_prev,
+                            "pnl_equity_pct": est_equity_pct,
+                            "pnl_invested_pct": est_inv_pct,
+                            "pnl_dollar": est_pnl,
+                            "spy_pct": missing_spy_ret,
+                            "is_today": False,
+                            "gap_filled": "alpaca" if from_alpaca else "interpolated",
+                        })
+                filled_enriched.append(enriched[i])
+            enriched = filled_enriched
+
+        # Fila virtual para el dia en curso (mercado abierto)
+        if market_is_open and current_equity is not None and prev_equity is not None and prev_equity > 0:
+            last_date = enriched[-1]["session_date"] if enriched else today_str
+            if last_date != today_str:
+                live_pnl_equity = (current_equity - prev_equity) / prev_equity
+                live_dollar = current_equity - prev_equity
+                live_invested_pct = (live_dollar / prev_invested) if prev_invested and prev_invested > 0 else None
+                enriched.append({
+                    "session_date": today_str,
+                    "equity": current_equity,
+                    "invested": prev_invested,
+                    "pnl_equity_pct": live_pnl_equity,
+                    "pnl_invested_pct": live_invested_pct,
+                    "pnl_dollar": live_dollar,
+                    "spy_pct": spy_today_return,
+                    "is_today": True,
+                })
+
+        body = []
+        wins_sistema = 0
+        wins_spy = 0
+        ties = 0
+        pending = 0
+
+        for row_entry in reversed(enriched):
+            invested_pct = row_entry["pnl_invested_pct"]
+            equity_pct = row_entry["pnl_equity_pct"]
+            spy = row_entry["spy_pct"]
+            has_invested = invested_pct is not None
+            has_equity = equity_pct is not None
+            has_spy = spy is not None
+
+            cmp_pct = invested_pct if has_invested else equity_pct
+            has_cmp = has_invested or has_equity
+
+            if has_cmp and has_spy:
+                if abs(cmp_pct - spy) < 0.00005:
+                    winner = "Empate"
+                    winner_tone = "flat"
+                    ties += 1
+                elif cmp_pct > spy:
+                    winner = "Sistema"
+                    winner_tone = "gain"
+                    wins_sistema += 1
+                else:
+                    winner = "SP500"
+                    winner_tone = "loss"
+                    wins_spy += 1
+            else:
+                winner = "—"
+                winner_tone = "flat"
+                pending += 1
+
+            if has_invested:
+                extra_parts = [_money(row_entry.get("pnl_dollar"))]
+                if has_equity:
+                    extra_parts.insert(0, f"{_pct_signed(equity_pct)} s/eq")
+                pnl_display = f"{_pct_signed(invested_pct)}<span>{' &middot; '.join(extra_parts)}</span>"
+                pnl_tone = "gain" if invested_pct > 0 else "loss" if invested_pct < 0 else "flat"
+            elif has_equity:
+                pnl_display = f"{_pct_signed(equity_pct)}<span>{_money(row_entry.get('pnl_dollar'))}</span>"
+                pnl_tone = "gain" if equity_pct > 0 else "loss" if equity_pct < 0 else "flat"
+            else:
+                pnl_display = "—"
+                pnl_tone = "flat"
+            spy_display = _pct_signed(spy) if has_spy else "—"
+            spy_tone = "gain" if has_spy and spy > 0 else "loss" if has_spy and spy < 0 else "flat"
+
+            date_label = row_entry["session_date"]
+            if row_entry.get("gap_filled") == "interpolated":
+                date_label += " (est)"
+            elif row_entry["is_today"]:
+                date_label += " (hoy)"
+            body.append(
+                "<tr>"
+                f"<td><strong>{date_label}</strong></td>"
+                f"<td><b class=\"pl-chip {pnl_tone}\">{pnl_display}</b></td>"
+                f"<td><b class=\"pl-chip {spy_tone}\">{spy_display}</b></td>"
+                f"<td><b class=\"pl-chip {winner_tone}\">{winner}</b></td>"
+                "</tr>"
+            )
+
+        if not body:
+            st.info("Sin datos disponibles.")
+            return
+
+        total = len(enriched)
+        visible = body[:visible_days] if visible_days is not None else body
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            _compact_metric("Dias sistema superior", wins_sistema, f"de {total}", "good")
+        with c2:
+            _compact_metric("Dias SP500 superior", wins_spy, f"de {total}", "bad")
+        with c3:
+            _compact_metric("Empates", ties, f"de {total}", "neutral")
+        with c4:
+            _compact_metric("Pendientes", pending, f"de {total}", "neutral")
+
+        # Grafico de lineas: evolucion diaria con indicadores de ganador
+        chart_rows = []
+        for row_entry in enriched:
+            sistema_val = row_entry["pnl_invested_pct"] if row_entry["pnl_invested_pct"] is not None else row_entry["pnl_equity_pct"]
+            if sistema_val is not None and row_entry["spy_pct"] is not None:
+                chart_rows.append({
+                    "fecha": row_entry["session_date"],
+                    "Sistema": sistema_val,
+                    "SP500": row_entry["spy_pct"],
+                })
+        # Insertar huecos NaN para dias sin datos (evita lineas falsas entre fechas no consecutivas)
+        if len(chart_rows) >= 2:
+            filled: list[dict[str, Any]] = [chart_rows[0]]
+            for i in range(1, len(chart_rows)):
+                prev_date = date.fromisoformat(chart_rows[i - 1]["fecha"])
+                curr_date = date.fromisoformat(chart_rows[i]["fecha"])
+                gap_days = (curr_date - prev_date).days
+                if gap_days > 1:
+                    filled.append({"fecha": None, "Sistema": None, "SP500": None})
+                filled.append(chart_rows[i])
+            chart_rows = filled
+
+        if chart_rows and alt is not None:
+            if visible_days is not None:
+                chart_rows = chart_rows[-visible_days:]
+            chart_frame = pd.DataFrame(chart_rows)
+
+            y_min_raw = min(chart_frame["Sistema"].min(), chart_frame["SP500"].min())
+            y_max_raw = max(chart_frame["Sistema"].max(), chart_frame["SP500"].max())
+            y_pad = max(abs(y_min_raw), abs(y_max_raw), 0.002) * 0.35
+            y_min = y_min_raw - y_pad
+            y_max = y_max_raw + y_pad
+
+            # Capa de fondo: verde sobre 0, rojo bajo 0
+            bg_green = alt.Chart(pd.DataFrame({"y0": [0], "y1": [y_max]}), height=240).mark_rect(
+                color="#dcfce7", opacity=0.35
+            ).encode(y="y0:Q", y2="y1:Q")
+            bg_red = alt.Chart(pd.DataFrame({"y0": [y_min], "y1": [0]}), height=240).mark_rect(
+                color="#fee2e2", opacity=0.35
+            ).encode(y="y0:Q", y2="y1:Q")
+
+            # Capa base: puntos y fechas (para dominio comun)
+            base = alt.Chart(chart_frame).encode(
+                x=alt.X("fecha:N", title=None, axis=alt.Axis(labelAngle=0, labelOverlap=True, tickCount=len(chart_frame))),
+            )
+
+            # Lineas
+            lines = base.transform_fold(
+                fold=["Sistema", "SP500"], as_=["serie", "retorno"]
+            ).mark_line(
+                strokeWidth=2.5, strokeCap="round"
+            ).encode(
+                y=alt.Y("retorno:Q", title=None, axis=alt.Axis(format="+.1%", grid=True, gridColor="#e5e7eb"), scale=alt.Scale(domain=[y_min, y_max])),
+                color=alt.Color("serie:N", title=None, scale=alt.Scale(domain=["Sistema", "SP500"], range=["#0e7a47", "#1e40af"])),
+                tooltip=[alt.Tooltip("fecha:N", title="Fecha"), alt.Tooltip("serie:N", title="Serie"), alt.Tooltip("retorno:Q", title="Retorno", format="+.2%")],
+            )
+
+            # Puntos
+            points = base.transform_fold(
+                fold=["Sistema", "SP500"], as_=["serie", "retorno"]
+            ).mark_point(
+                size=70, filled=True, strokeWidth=1.5, stroke="white"
+            ).encode(
+                y=alt.Y("retorno:Q", scale=alt.Scale(domain=[y_min, y_max])),
+                color=alt.Color("serie:N", scale=alt.Scale(domain=["Sistema", "SP500"], range=["#0e7a47", "#1e40af"]), legend=None),
+            )
+
+            # Conectores verticales: verde si Sistema gana, rojo si SP500 gana
+            connectors_df = chart_frame.copy()
+            connectors_df["ganador"] = connectors_df.apply(
+                lambda r: "Sistema" if r["Sistema"] > r["SP500"] else "SP500" if r["SP500"] > r["Sistema"] else "Empate",
+                axis=1,
+            )
+            connectors = (
+                alt.Chart(connectors_df)
+                .mark_rule(strokeWidth=2, opacity=0.55, strokeCap="round")
+                .encode(
+                    x="fecha:N",
+                    y="Sistema:Q",
+                    y2="SP500:Q",
+                    color=alt.Color(
+                        "ganador:N",
+                        scale=alt.Scale(domain=["Sistema", "SP500", "Empate"], range=["#0e7a47", "#b91c1c", "#9ca3af"]),
+                        legend=None,
+                    ),
+                )
+            )
+
+            # Coronas sobre los puntos del Sistema cuando gana al SP500
+            wins_df = connectors_df[connectors_df["ganador"] == "Sistema"].copy()
+            crowns = None
+            if not wins_df.empty:
+                crown_offset = (y_max - y_min) * 0.07
+                wins_df["corona_y"] = wins_df["Sistema"] + crown_offset
+                crowns = (
+                    alt.Chart(wins_df)
+                    .mark_text(text="👑", fontSize=16, dy=-2)
+                    .encode(
+                        x="fecha:N",
+                        y=alt.Y("corona_y:Q"),
+                    )
+                )
+
+            # Linea cero destacada
+            zero_line = (
+                alt.Chart(pd.DataFrame({"y": [0]}))
+                .mark_rule(color="#374151", strokeWidth=1.5, strokeDash=[4, 2])
+                .encode(y="y")
+            )
+
+            chart_layers = [bg_green, bg_red, lines, connectors, points]
+            if crowns is not None:
+                chart_layers.append(crowns)
+            chart_layers.append(zero_line)
+            chart = alt.layer(*chart_layers).properties(height=260)
+            st.altair_chart(chart, width="stretch")
+
+        html = (
+            "<table class=\"portfolio-table\">"
+            "<thead><tr><th>Fecha</th><th>Sistema</th><th>SP500</th><th>Superior</th></tr></thead>"
+            f"<tbody>{''.join(visible)}</tbody></table>"
+        )
+        st.markdown(html, unsafe_allow_html=True)
 
 
 def _render_performance_baseline(store: Any) -> None:
@@ -3768,8 +4225,8 @@ def page_dashboard() -> None:
             with chart_control:
                 chart_days = st.selectbox(
                     "Rango",
-                    [7, 15, 30],
-                    format_func=lambda value: f"Ultimos {value} dias",
+                    [7, 15, 30, None],
+                    format_func=lambda value: "Desde inicio" if value is None else f"Ultimos {value} dias",
                     key="portfolio_chart_days",
                     label_visibility="collapsed",
                 )
@@ -3777,7 +4234,7 @@ def page_dashboard() -> None:
                 history,
                 portfolio.portfolio_value if portfolio else None,
                 portfolio_history,
-                days=int(chart_days),
+                days=chart_days,
             )
             today_metric = _today_pl_metric_payload(today_total, exposure, today_pct)
             p1, p2, p3 = st.columns(3)
@@ -3826,6 +4283,30 @@ def page_dashboard() -> None:
                 )
                 st.dataframe(pd.DataFrame(relevant_events), width="stretch", hide_index=True)
 
+        # --- Estado operativo con indicadores de frescura ---
+        _QUALITY_STALE_DAYS = 7
+        _READINESS_STALE_DAYS = 3
+        _WEEKLY_STALE_DAYS = 7
+
+        def _metric_detail(age: str, stale: bool, extra: str) -> str:
+            parts = [age] if age else []
+            if stale:
+                parts.append("rancio")
+            if extra:
+                parts.append(extra)
+            return " · ".join(parts) if parts else extra
+
+        q_age = _report_age_text(latest_quality.get("generated_at"))
+        q_age_d = _report_age_days(latest_quality.get("generated_at"))
+        r_age = _report_age_text(latest_readiness.get("generated_at"))
+        r_age_d = _report_age_days(latest_readiness.get("generated_at"))
+        w_age = _report_age_text(latest_weekly.get("generated_at"))
+        w_age_d = _report_age_days(latest_weekly.get("generated_at"))
+
+        q_stale = not latest_quality.get("available") or (q_age_d is not None and q_age_d > _QUALITY_STALE_DAYS)
+        r_stale = not latest_readiness.get("available") or (r_age_d is not None and r_age_d > _READINESS_STALE_DAYS)
+        w_stale = not latest_weekly.get("available") or (w_age_d is not None and w_age_d > _WEEKLY_STALE_DAYS)
+
         st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
         with st.container(border=True):
             _section_title("Estado operativo", "Cobertura de datos, readiness y bloqueos de la semana.")
@@ -3835,25 +4316,39 @@ def page_dashboard() -> None:
             c1, c2, c3 = st.columns(3)
             with c1:
                 coverage = _num(q.get("coverage_ratio"))
+                q_tone = "bad" if q_stale else "good" if (coverage or 0.0) >= 0.95 else "bad" if coverage is not None else "neutral"
                 _compact_metric(
                     "Cobertura datos",
                     _pct(coverage) if coverage is not None else "-",
-                    str(q.get("provider_used") or "sin informe"),
-                    "good" if (coverage or 0.0) >= 0.95 else "bad" if coverage is not None else "neutral",
+                    _metric_detail(q_age, q_stale, str(q.get("provider_used") or "sin informe")),
+                    q_tone,
                 )
             with c2:
+                r_tone = "bad" if r_stale else "bad" if latest_readiness.get("available") and not r.get("ready_for_live") else "neutral"
                 _compact_metric(
                     "Live readiness",
                     "OK" if r.get("ready_for_live") else "BLOCK" if latest_readiness.get("available") else "-",
-                    f"{r.get('blocks', 0)} blocks",
-                    "bad" if latest_readiness.get("available") and not r.get("ready_for_live") else "neutral",
+                    _metric_detail(r_age, r_stale, f"{r.get('blocks', 0)} blocks"),
+                    r_tone,
                 )
             with c3:
+                w_tone = "bad" if w_stale else "neutral"
                 _compact_metric(
                     "Bloqueos semana",
                     int((w.get("blocked_entry_quality") or 0) + (w.get("blocked_backtest") or 0)) if w else "-",
-                    str(w.get("benchmark_symbol") or "-"),
+                    _metric_detail(w_age, w_stale, str(w.get("benchmark_symbol") or "-")),
+                    w_tone,
                 )
+
+    # ===== Tabla diaria Sistema vs SP500 =====
+    st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+    _render_daily_vs_spy_table(
+        store,
+        current_equity=current_equity,
+        market_is_open=market.get("is_open", False),
+        spy_today_return=_fetch_spy_today_return() if market.get("is_open") else None,
+        portfolio_history=portfolio_history,
+    )
 
     # ===== Detalle avanzado: progressive disclosure (plegado por defecto) =====
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
