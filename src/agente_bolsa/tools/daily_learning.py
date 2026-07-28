@@ -1488,6 +1488,12 @@ def build_learning_daily_run(
     digest["rr_cohort"] = rr_cohort_digest_summary(store)
     digest["execution_quality"] = execution_quality_digest_summary(store)
     digest["time_stop_shadow"] = shadow_time_stop_digest_summary(store)
+    try:
+        from .data_quality_decision_shadow import data_quality_decision_shadow_digest
+
+        digest["data_quality_decision_shadow"] = data_quality_decision_shadow_digest(store)
+    except Exception:  # noqa: BLE001 - shadow telemetry is fail-open.
+        digest["data_quality_decision_shadow"] = {"status": "unavailable", "denominators": None}
     comparison = _compare_policy_rows(rows, "proposed") if rows else {}
     summary_payload = {
         "session_date": session_date,
@@ -1583,6 +1589,12 @@ def build_learning_digest_report(
     digest["rr_cohort"] = rr_cohort_digest_summary(store)
     digest["execution_quality"] = execution_quality_digest_summary(store)
     digest["time_stop_shadow"] = shadow_time_stop_digest_summary(store)
+    try:
+        from .data_quality_decision_shadow import data_quality_decision_shadow_digest
+
+        digest["data_quality_decision_shadow"] = data_quality_decision_shadow_digest(store)
+    except Exception:  # noqa: BLE001 - shadow telemetry is fail-open.
+        digest["data_quality_decision_shadow"] = {"status": "unavailable", "denominators": None}
     report = {
         "run_id": run_id,
         "as_of": datetime.now(timezone.utc).isoformat(),

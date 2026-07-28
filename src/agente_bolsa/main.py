@@ -130,6 +130,7 @@ from .tools.signal_learning import (
 )
 from .tools.symbol_study import build_symbol_study
 from .tools.technical_study import build_closed_market_technical_study
+from .tools.telegram_daily_summary import send_telegram_message
 from .tools.trade_decision import (
     _annotate_technical_context_with_learning,
     build_order_plans,
@@ -2336,6 +2337,126 @@ def command_canonical_operation_telemetry(args: argparse.Namespace) -> None:
     print(f"denominators={report.get('denominators')}")
 
 
+def command_data_quality_decision_shadow_report(args: argparse.Namespace) -> None:
+    """Read the P-L49B ledger; never reconstruct or apply a quality gate."""
+
+    settings = get_settings()
+    try:
+        from .tools.data_quality_decision_shadow import data_quality_decision_shadow_digest
+
+        store = Store(settings.database_path, settings.agent_logs_dir)
+        report = data_quality_decision_shadow_digest(store, getattr(args, "cycle_id", None))
+        ok = report.get("status") not in {"legacy_without_shadow", "unavailable"}
+    except Exception as exc:  # noqa: BLE001 - telemetry CLI is fail-open.
+        report = {
+            "status": "collecting",
+            "cycle_id": getattr(args, "cycle_id", None),
+            "denominators": None,
+            "details_included": None,
+            "details_omitted": None,
+            "warnings": [f"read_failed:{type(exc).__name__}"],
+        }
+        ok = False
+    if args.json:
+        _print_json({"ok": ok, **report})
+        return
+    print("DATA QUALITY DECISION SHADOW")
+    print(f"status={report.get('status')} | cycle_id={report.get('cycle_id')}")
+    print(f"denominators={report.get('denominators')}")
+    print(f"details={report.get('details_included')} included / {report.get('details_omitted')} omitted")
+
+
+def command_time_stop_exit_authority(args: argparse.Namespace) -> None:
+    """Read exact P-L43C authority/link events without reconstructing orders."""
+
+    settings = get_settings()
+    try:
+        from .tools.time_stop_exit_authority import time_stop_exit_authority_digest
+
+        store = Store(settings.database_path, settings.agent_logs_dir)
+        report = time_stop_exit_authority_digest(store)
+        ok = report.get("status") not in {"unavailable", "degraded_observability"}
+    except Exception as exc:  # noqa: BLE001 - a missing ledger is collecting.
+        report = {
+            "status": "collecting",
+            "canonical_decisions": None,
+            "linked_orders": None,
+            "conflicts": None,
+            "error": f"read_failed:{type(exc).__name__}",
+        }
+        ok = False
+    if args.json:
+        _print_json({"ok": ok, **report})
+        return
+    print("TIME-STOP EXIT AUTHORITY")
+    print(f"status={report.get('status')}")
+    print(
+        "decisions="
+        f"{report.get('canonical_decisions')} | linked_orders={report.get('linked_orders')} | "
+        f"conflicts={report.get('conflicts')}"
+    )
+
+
+def command_canonical_trade_attribution(args: argparse.Namespace) -> None:
+    """Read one persisted P-L51B snapshot; never reconstructs attribution."""
+
+    settings = get_settings()
+    try:
+        from .tools.canonical_trade_attribution import read_canonical_trade_attribution
+
+        store = Store(settings.database_path, settings.agent_logs_dir)
+        report = read_canonical_trade_attribution(store, args.session)
+        ok = report.get("status") not in {
+            "unavailable",
+            "collecting",
+            "legacy_without_canonical_trade_attribution",
+        }
+    except Exception as exc:  # noqa: BLE001 - read-only CLI remains informative.
+        report = {
+            "status": "collecting",
+            "session_date": args.session,
+            "denominators": None,
+            "coverage": None,
+            "metrics": None,
+            "operations": [],
+            "warnings": [f"read_failed:{type(exc).__name__}"],
+        }
+        ok = False
+    if args.json:
+        _print_json({"ok": ok, **report})
+        return
+    print("CANONICAL TRADE ATTRIBUTION")
+    print(f"session={args.session} | status={report.get('status')}")
+    print(f"denominators={report.get('denominators')}")
+
+
+def command_canonical_eod_account_snapshot(args: argparse.Namespace) -> None:
+    """Lee el snapshot contable P-L52B; nunca reconstruye ni consulta fuentes."""
+
+    settings = get_settings()
+    try:
+        from .tools.canonical_eod_account_snapshot import read_canonical_eod_account_snapshot
+
+        store = Store(settings.database_path, settings.agent_logs_dir)
+        report = read_canonical_eod_account_snapshot(store, args.session)
+        ok = report.get("status") not in {"collecting", "unavailable", "legacy_without_canonical_eod_account_snapshot"}
+    except Exception as exc:  # noqa: BLE001 - CLI de observabilidad fail-open.
+        report = {
+            "status": "collecting",
+            "session_date": args.session,
+            "coverage": None,
+            "result": None,
+            "warnings": [f"read_failed:{type(exc).__name__}"],
+        }
+        ok = False
+    if args.json:
+        _print_json({"ok": ok, **report})
+        return
+    print("CANONICAL EOD ACCOUNT SNAPSHOT")
+    print(f"session={args.session} | status={report.get('status')}")
+    print(f"coverage={report.get('coverage')}")
+
+
 def command_policy_candidates(args: argparse.Namespace) -> None:
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
@@ -2436,6 +2557,36 @@ def command_comparable_control_quality(args: argparse.Namespace) -> None:
     )
     if args.json:
         _print_json({"ok": True, **report})
+        return
+    print(json.dumps(report, indent=2, ensure_ascii=True, default=str))
+
+
+def command_canonical_selection_ledger(args: argparse.Namespace) -> None:
+    """Read the canonical P-L53B selection ledger without reconstruction."""
+
+    from .tools.canonical_selection_ledger import canonical_selection_ledger_digest
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    report = canonical_selection_ledger_digest(store, cycle_id=args.cycle_id)
+    if args.json:
+        _print_json({"ok": report.get("status") in {"verified", "partial"}, **report})
+        return
+    print(json.dumps(report, indent=2, ensure_ascii=True, default=str))
+
+
+def command_capital_deployment_funnel(args: argparse.Namespace) -> None:
+    """Read the canonical P-L54B capital funnel without reconstruction."""
+
+    from .tools.capital_deployment_funnel_shadow import capital_deployment_funnel_digest
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    report = capital_deployment_funnel_digest(store, cycle_id=args.cycle_id)
+    if args.json:
+        _print_json({"ok": report.get("status") in {"verified", "partial"}, **report})
         return
     print(json.dumps(report, indent=2, ensure_ascii=True, default=str))
 
@@ -3482,6 +3633,40 @@ def command_job_once(args: argparse.Namespace) -> None:
             _print_json({"ok": True, **report})
 
 
+def command_telegram_daily_summary(args: argparse.Namespace) -> None:
+    """Valida configuración o envía una prueba explícita sin tocar trading."""
+
+    settings = get_settings()
+    token = str(settings.telegram_bot_token or "").strip()
+    chat_id = str(settings.telegram_daily_summary_chat_id or "").strip()
+    result: dict[str, Any] = {
+        "ok": bool(token and chat_id),
+        "enabled": settings.telegram_daily_summary_enabled,
+        "token_configured": bool(token),
+        "chat_id_configured": bool(chat_id),
+    }
+    if args.send_test:
+        if not token or not chat_id:
+            raise SystemExit("Faltan TELEGRAM_BOT_TOKEN y/o TELEGRAM_DAILY_SUMMARY_CHAT_ID.")
+        sent = send_telegram_message(
+            token=token,
+            chat_id=chat_id,
+            text="✅ agenteBolsa: conexión de Telegram verificada.",
+            timeout_seconds=settings.telegram_timeout_seconds,
+        )
+        result.update({"test_sent": True, "message_id": sent.get("message_id")})
+    if args.json:
+        _print_json(result)
+    else:
+        print(
+            "Telegram diario: "
+            f"enabled={result['enabled']} token={'sí' if token else 'no'} "
+            f"chat_id={'sí' if chat_id else 'no'}"
+        )
+        if result.get("test_sent"):
+            print("Mensaje de prueba enviado.")
+
+
 def command_log(args: argparse.Namespace) -> None:
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
@@ -3775,6 +3960,35 @@ def build_parser() -> argparse.ArgumentParser:
     canonical_operation_telemetry.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     canonical_operation_telemetry.set_defaults(func=command_canonical_operation_telemetry)
 
+    data_quality_shadow = subparsers.add_parser(
+        "data-quality-decision-shadow-report",
+        help="Lee el shadow P-L49B sin activar gates ni reconstruir decisiones.",
+    )
+    data_quality_shadow.add_argument("--cycle-id", help="Ciclo exacto a consultar.")
+    data_quality_shadow.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    data_quality_shadow.set_defaults(func=command_data_quality_decision_shadow_report)
+    canonical_trade_attribution = subparsers.add_parser(
+        "canonical-trade-attribution",
+        help="Lee el snapshot canónico P-L51B de una sesión sin reconstruir lotes.",
+    )
+    canonical_trade_attribution.add_argument("--session", required=True, help="Sesión YYYY-MM-DD.")
+    canonical_trade_attribution.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    canonical_trade_attribution.set_defaults(func=command_canonical_trade_attribution)
+
+    canonical_eod_account_snapshot = subparsers.add_parser(
+        "canonical-eod-account-snapshot",
+        help="Lee el snapshot contable canónico P-L52B de una sesión sin reconstruirlo.",
+    )
+    canonical_eod_account_snapshot.add_argument("--session", required=True, help="Sesión YYYY-MM-DD.")
+    canonical_eod_account_snapshot.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    canonical_eod_account_snapshot.set_defaults(func=command_canonical_eod_account_snapshot)
+    time_stop_exit_authority = subparsers.add_parser(
+        "time-stop-exit-authority",
+        help="Lee autoridad causal shadow P-L43C sin reconstruir órdenes.",
+    )
+    time_stop_exit_authority.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    time_stop_exit_authority.set_defaults(func=command_time_stop_exit_authority)
+
     policy_candidates = subparsers.add_parser(
         "policy-candidates",
         help="Lista reglas shadow/candidate/guarded-active/active y su evidencia.",
@@ -3841,6 +4055,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     comparable_controls.add_argument("--json", action="store_true", help="Devuelve el diagnostico en JSON.")
     comparable_controls.set_defaults(func=command_comparable_control_quality)
+
+    selection_ledger = subparsers.add_parser(
+        "canonical-selection-ledger",
+        help="Lee el ledger shadow canónico de selección por ciclo (P-L53B).",
+    )
+    selection_ledger.add_argument("--cycle-id", help="Filtra por cycle_id exacto.")
+    selection_ledger.add_argument("--json", action="store_true", help="Devuelve el ledger en JSON.")
+    selection_ledger.set_defaults(func=command_canonical_selection_ledger)
+
+    capital_funnel = subparsers.add_parser(
+        "capital-deployment-funnel",
+        help="Lee el embudo shadow canonico de despliegue de capital (P-L54B).",
+    )
+    capital_funnel.add_argument("--cycle-id", help="Filtra por cycle_id exacto.")
+    capital_funnel.add_argument("--json", action="store_true", help="Devuelve el embudo en JSON.")
+    capital_funnel.set_defaults(func=command_capital_deployment_funnel)
 
     gate_effectiveness = subparsers.add_parser(
         "gate-effectiveness-quality",
@@ -4757,6 +4987,18 @@ def build_parser() -> argparse.ArgumentParser:
     telegram_report.add_argument("--out", help="Ruta de salida markdown UTF-8. Si se omite, imprime por stdout.")
     telegram_report.add_argument("--json", action="store_true", help="Devuelve JSON con markdown incluido.")
     telegram_report.set_defaults(func=command_telegram_radar)
+
+    telegram_daily = subparsers.add_parser(
+        "telegram-daily-summary",
+        help="Valida o prueba el envío del resumen diario a Telegram.",
+    )
+    telegram_daily.add_argument(
+        "--send-test",
+        action="store_true",
+        help="Envía un mensaje de conectividad al chat configurado.",
+    )
+    telegram_daily.add_argument("--json", action="store_true", help="Devuelve estado JSON sin revelar secretos.")
+    telegram_daily.set_defaults(func=command_telegram_daily_summary)
 
     lab_book = subparsers.add_parser(
         "lab-book",

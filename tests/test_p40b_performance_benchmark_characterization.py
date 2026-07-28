@@ -264,10 +264,11 @@ def _spy_frame(kind: str, *, include_future: bool = False) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def test_current_behavior_loses_alpha_column(tmp_path):
+def test_missing_previous_session_keeps_alpha_unavailable(tmp_path):
     store = _store(tmp_path)
     row = build_daily_performance(store, _settings(tmp_path), "2026-07-07", equity=101.0, spy_pct=0.01)
-    assert row["alpha_vs_spy"] == pytest.approx(-0.01)
+    assert row["pnl_pct"] is None
+    assert row["alpha_vs_spy"] is None
     store.upsert_performance_daily(row)
     persisted = _read_raw_performance(store)
     assert persisted["alpha"] is None

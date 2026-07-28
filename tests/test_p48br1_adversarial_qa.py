@@ -263,6 +263,8 @@ def _job_harness(monkeypatch: pytest.MonkeyPatch, store: Store, *, counts: dict[
 
     real_build = scheduler.build_canonical_operation_telemetry
     real_persist = scheduler.persist_canonical_operation_telemetry
+    real_attribution_build = scheduler.build_canonical_trade_attribution
+    real_attribution_persist = scheduler.persist_canonical_trade_attribution
 
     def _build_spy(*args: Any, **kwargs: Any) -> dict[str, Any]:
         counts["build_calls"] += 1
@@ -274,8 +276,21 @@ def _job_harness(monkeypatch: pytest.MonkeyPatch, store: Store, *, counts: dict[
         counts["persist_calls"] += 1
         return real_persist(*args, **kwargs)
 
+    def _attribution_build_spy(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        counts["attribution_build_calls"] += 1
+        snapshot = real_attribution_build(*args, **kwargs)
+        counts.setdefault("attribution_snapshots", []).append(snapshot)
+        return snapshot
+
+    def _attribution_persist_spy(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        counts["attribution_persist_calls"] += 1
+        counts.setdefault("attribution_persist_snapshots", []).append(args[1])
+        return real_attribution_persist(*args, **kwargs)
+
     monkeypatch.setattr(scheduler, "build_canonical_operation_telemetry", _build_spy)
     monkeypatch.setattr(scheduler, "persist_canonical_operation_telemetry", _persist_spy)
+    monkeypatch.setattr(scheduler, "build_canonical_trade_attribution", _attribution_build_spy)
+    monkeypatch.setattr(scheduler, "persist_canonical_trade_attribution", _attribution_persist_spy)
 
     real_performance = scheduler._persist_daily_performance
 
@@ -299,6 +314,8 @@ def test_qa1_qa2_single_snapshot_and_postmarket_order(monkeypatch: pytest.Monkey
     counts: dict[str, int] = {
         "build_calls": 0,
         "persist_calls": 0,
+        "attribution_build_calls": 0,
+        "attribution_persist_calls": 0,
         "reconcile_calls": 0,
         "outcome_updates": 0,
         "portfolio_snapshots": 0,
@@ -312,6 +329,8 @@ def test_qa1_qa2_single_snapshot_and_postmarket_order(monkeypatch: pytest.Monkey
     # Fuente única: una construcción y una persistencia por PMR efectivo.
     assert counts["build_calls"] == 1
     assert counts["persist_calls"] == 1
+    assert counts["attribution_build_calls"] == 1
+    assert counts["attribution_persist_calls"] == 1
     # Cero segunda reconciliación / outcomes / captura de cartera.
     assert counts["reconcile_calls"] == 1
     assert counts["outcome_updates"] == 1
@@ -323,6 +342,10 @@ def test_qa1_qa2_single_snapshot_and_postmarket_order(monkeypatch: pytest.Monkey
     assert report["canonical_operation_telemetry"] is snapshot
     # Persistencia canónica insertada una vez.
     assert snapshot["persistence"]["status"] == "inserted"
+    attribution_snapshot = counts["attribution_snapshots"][0]
+    assert counts["attribution_persist_snapshots"][0] is attribution_snapshot
+    assert report["canonical_trade_attribution"] is attribution_snapshot
+    assert report["canonical_trade_attribution_persistence"]["status"] == "inserted"
     events = store.agent_events(event_type_prefix="canonical_operation_telemetry", limit=20)
     assert len([item for item in events if item["event_type"] == "canonical_operation_telemetry"]) == 1
     # Orden efectivo de stages P-L47 (secuencia exacta de hitos).
@@ -340,6 +363,10 @@ def test_qa1_qa2_single_snapshot_and_postmarket_order(monkeypatch: pytest.Monkey
         ("postmarket_report", "completed"),
         ("canonical_operation_telemetry", "started"),
         ("canonical_operation_telemetry", "completed"),
+        ("canonical_trade_attribution", "started"),
+        ("canonical_trade_attribution", "completed"),
+        ("canonical_eod_account_snapshot", "started"),
+        ("canonical_eod_account_snapshot", "completed"),
         ("performance", "started"),
         ("performance", "completed"),
         ("measurement_pipeline", "started"),
@@ -371,7 +398,7 @@ def test_qa2_second_run_after_terminal_completed_is_noop(monkeypatch: pytest.Mon
     settings = _settings(tmp_path)
     store = _store(tmp_path)
     _seed_store_from_fixture(store, SESSION, _seeded_fixture())
-    counts: dict[str, int] = {"build_calls": 0, "persist_calls": 0, "reconcile_calls": 0, "outcome_updates": 0, "portfolio_snapshots": 0, "performance_calls": 0}
+    counts: dict[str, int] = {"build_calls": 0, "persist_calls": 0, "attribution_build_calls": 0, "attribution_persist_calls": 0, "reconcile_calls": 0, "outcome_updates": 0, "portfolio_snapshots": 0, "performance_calls": 0}
     _job_harness(monkeypatch, store, counts=counts)
     first = scheduler.post_market_review_job(settings, store, use_llm=False, verbose=False, force=True, trigger="bootstrap")
     second = scheduler.post_market_review_job(settings, store, use_llm=False, verbose=False, force=True, trigger="scheduled")
@@ -379,9 +406,13 @@ def test_qa2_second_run_after_terminal_completed_is_noop(monkeypatch: pytest.Mon
     assert second is None  # session_already_completed, sin reconstruir telemetría.
     assert counts["build_calls"] == 1
     assert counts["persist_calls"] == 1
+    assert counts["attribution_build_calls"] == 1
+    assert counts["attribution_persist_calls"] == 1
     assert counts["reconcile_calls"] == 1
     events = store.agent_events(event_type_prefix="canonical_operation_telemetry", limit=20)
     assert len(events) == 1
+    attribution_events = store.agent_events(event_type_prefix="canonical_trade_attribution", limit=20)
+    assert len(attribution_events) == 1
 
 
 def test_qa1_consumers_never_rebuild(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -441,7 +472,7 @@ def test_qa3_persistence_failure_is_fail_open_and_terminal_is_recorded(monkeypat
     settings = _settings(tmp_path)
     store = _store(tmp_path)
     _seed_store_from_fixture(store, SESSION, _seeded_fixture())
-    counts: dict[str, int] = {"build_calls": 0, "persist_calls": 0, "reconcile_calls": 0, "outcome_updates": 0, "portfolio_snapshots": 0, "performance_calls": 0}
+    counts: dict[str, int] = {"build_calls": 0, "persist_calls": 0, "attribution_build_calls": 0, "attribution_persist_calls": 0, "reconcile_calls": 0, "outcome_updates": 0, "portfolio_snapshots": 0, "performance_calls": 0}
     _job_harness(monkeypatch, store, counts=counts)
 
     def _failing_persist(*_args: Any, **_kwargs: Any) -> None:
@@ -1014,18 +1045,15 @@ def test_qa7_consumers_survive_degraded_and_legacy_rows(tmp_path: Path) -> None:
     assert build_profitability_scoreboard(settings, store_legacy) is not None
 
 
-def test_qa7_preexisting_scoreboard_null_pnl_crash_is_documented(tmp_path: Path) -> None:
-    """Defecto PREEXISTENTE (reproducido contra acc6e29a, sin P-L48B): una fila
-    performance_daily con pnl_pct NULL y sin max_dd explícito rompe
-    ``_max_drawdown_from_returns``.  No lo causa ni lo agrava P-L48B; queda
-    registrado en el informe del ensayo para el backlog, fuera de este lote."""
+def test_qa7_scoreboard_null_pnl_is_null_safe_after_p57a(tmp_path: Path) -> None:
+    """Una fila performance_daily incompleta conserva el resultado parcial."""
 
     settings = _settings(tmp_path)
     store = _store(tmp_path)
     with store.connect() as conn:
         conn.execute(
-            "INSERT INTO performance_daily (session_date, payload_json, created_at) VALUES (?, ?, ?)",
-            ("2026-07-15", json.dumps({"pnl_pct": 0.1}), "2026-07-15T21:00:00+00:00"),
+            "INSERT INTO performance_daily (session_date, payload_json, pnl_pct, created_at) VALUES (?, ?, ?, ?)",
+            ("2026-07-15", json.dumps({"pnl_pct": 0.1}), 0.1, "2026-07-15T21:00:00+00:00"),
         )
         conn.execute(
             "INSERT INTO performance_daily (session_date, payload_json, created_at) VALUES (?, ?, ?)",
@@ -1033,8 +1061,14 @@ def test_qa7_preexisting_scoreboard_null_pnl_crash_is_documented(tmp_path: Path)
         )
     from agente_bolsa.tools.profitability_scoreboard import _performance_summary
 
-    with pytest.raises(TypeError):
-        _performance_summary(settings, store, since_date="2026-07-01")
+    summary = _performance_summary(settings, store, since_date="2026-07-01")
+    assert summary["cumulative_pnl_pct"] == 0.1
+    assert summary["max_drawdown"] == 0.0
+    assert summary["metric_coverage"]["pnl_pct"] == {
+        "available": 1,
+        "total": 2,
+        "status": "partial",
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,8 @@ from agente_bolsa.llm_usage import usage_tokens
 from agente_bolsa.models import OrderSnapshot, PortfolioSnapshot, PositionSnapshot
 from agente_bolsa.storage import ORDER_PLAN_STATUS_PENDING, Store
 from agente_bolsa.web_app import (
+    PORTFOLIO_CHART_WINDOWS,
+    PORTFOLIO_HISTORY_PERIOD,
     _ci_conversation_groups,
     _ci_global_export_payload,
     _ci_runtime_alert,
@@ -39,6 +41,8 @@ from agente_bolsa.web_app import (
     _opportunity_risk_plan,
     _opportunity_status,
     _portfolio_chart_visible_summary,
+    _portfolio_open_pl,
+    _portfolio_period_metric_payload,
     _portfolio_value_series_from_alpaca,
     _position_chart_start_date,
     _position_entry_date,
@@ -55,6 +59,10 @@ from agente_bolsa.web_app import (
     _web_search_status,
     update_env_file,
 )
+
+
+def test_portfolio_history_period_keeps_all_available_data():
+    assert PORTFOLIO_HISTORY_PERIOD == "all"
 
 
 class _FakeHttpResponse:
@@ -298,7 +306,7 @@ def test_store_daily_llm_usage_counts_requests_and_tokens(tmp_path):
     assert rows[0]["total_tokens"] == 25
 
 
-def test_portfolio_value_series_from_alpaca_builds_daily_changes():
+def test_portfolio_value_series_from_alpaca_marks_first_daily_change_unavailable():
     payload = {
         "timestamp": [
             "2026-05-08T00:00:00Z",
@@ -312,7 +320,8 @@ def test_portfolio_value_series_from_alpaca_builds_daily_changes():
 
     assert list(df["fecha"]) == ["2026-05-08", "2026-05-09", "2026-05-10"]
     assert list(df["valor_cartera"]) == [1000.0, 1015.0, 1005.0]
-    assert list(df["P/L dia"]) == [0.0, 15.0, -10.0]
+    assert pd.isna(df["P/L dia"].iloc[0])
+    assert list(df["P/L dia"].iloc[1:]) == [15.0, -10.0]
     assert list(df["fuente"]) == ["Alpaca", "Alpaca", "Alpaca"]
 
 
@@ -335,6 +344,78 @@ def test_trim_portfolio_chart_range_keeps_latest_window():
 
     assert list(trimmed["fecha"]) == ["2026-05-08", "2026-05-09"]
     assert list(trimmed["valor_cartera"]) == [1002.0, 1003.0]
+
+
+def test_trim_portfolio_chart_range_uses_calendar_window_not_row_count():
+    dates = pd.bdate_range("2026-01-01", periods=120).strftime("%Y-%m-%d").tolist()
+    df = pd.DataFrame(
+        {
+            "fecha": dates,
+            "valor_cartera": list(range(1000, 1120)),
+        }
+    )
+
+    trimmed = _trim_portfolio_chart_range(df, days=30)
+
+    expected_start = pd.Timestamp(dates[-1]) - pd.Timedelta(days=29)
+    assert pd.Timestamp(trimmed["fecha"].iloc[0]) >= expected_start
+    assert pd.Timestamp(trimmed["fecha"].iloc[-1]) == pd.Timestamp(dates[-1])
+    assert len(trimmed) < 30
+
+
+def test_portfolio_chart_windows_cover_selector_and_consecutive_changes_without_mutation():
+    dates = pd.bdate_range("2026-01-01", periods=120).strftime("%Y-%m-%d").tolist()
+    df = pd.DataFrame({"fecha": dates, "valor_cartera": list(range(1000, 1120))})
+    original = df.copy(deep=True)
+
+    assert PORTFOLIO_CHART_WINDOWS == (7, 15, 30, 90, "2026-06-01", None)
+    visible = [_trim_portfolio_chart_range(df, days=days) for days in (30, 7, 90, None)]
+
+    assert pd.Timestamp(visible[0]["fecha"].iloc[0]) >= pd.Timestamp(dates[-1]) - pd.Timedelta(days=29)
+    assert pd.Timestamp(visible[1]["fecha"].iloc[0]) >= pd.Timestamp(dates[-1]) - pd.Timedelta(days=6)
+    assert pd.Timestamp(visible[2]["fecha"].iloc[0]) >= pd.Timestamp(dates[-1]) - pd.Timedelta(days=89)
+    assert len(visible[0]) < len(visible[2]) < len(visible[3])
+    pd.testing.assert_frame_equal(df, original)
+
+
+def test_portfolio_chart_all_public_windows_share_visible_series_and_period_summary():
+    dates = pd.bdate_range("2026-01-01", periods=120).strftime("%Y-%m-%d").tolist()
+    df = pd.DataFrame({"fecha": dates, "valor_cartera": list(range(1000, 1120))})
+    original = df.copy(deep=True)
+
+    for days in PORTFOLIO_CHART_WINDOWS:
+        visible = _trim_portfolio_chart_range(df, days=days)
+        summary = _portfolio_chart_visible_summary(visible)
+
+        assert summary["start_date"] == visible["fecha"].iloc[0]
+        assert summary["end_date"] == visible["fecha"].iloc[-1]
+        if days is None:
+            assert len(visible) == len(df)
+        elif isinstance(days, str):
+            assert visible["fecha"].iloc[0] == days
+        else:
+            cutoff = pd.Timestamp(dates[-1]) - pd.Timedelta(days=days - 1)
+            assert pd.Timestamp(visible["fecha"].iloc[0]) >= cutoff
+        assert summary["pl"] == round(
+            visible["valor_cartera"].iloc[-1] - visible["valor_cartera"].iloc[0],
+            2,
+        )
+
+    pd.testing.assert_frame_equal(df, original)
+
+
+def test_trim_portfolio_chart_range_deduplicates_and_orders_dates():
+    df = pd.DataFrame(
+        {
+            "fecha": ["2026-05-03", "2026-05-01", "2026-05-02", "2026-05-01"],
+            "valor_cartera": [1030.0, 1010.0, 1020.0, 1011.0],
+        }
+    )
+
+    visible = _trim_portfolio_chart_range(df, days=None)
+
+    assert list(visible["fecha"]) == ["2026-05-01", "2026-05-02", "2026-05-03"]
+    assert list(visible["valor_cartera"]) == [1011.0, 1020.0, 1030.0]
 
 
 def test_trim_portfolio_chart_range_none_keeps_full_history():
@@ -407,6 +488,51 @@ def test_portfolio_chart_visible_summary_uses_visible_window_change():
     assert summary["days"] == 3
     assert summary["pl"] == 15.0
     assert summary["pl_pct"] == 0.014706
+    assert summary["start_date"] == "2026-05-07"
+    assert summary["end_date"] == "2026-05-09"
+    assert summary["start_value"] == 1020.0
+    assert summary["end_value"] == 1035.0
+
+
+def test_portfolio_period_metric_uses_same_negative_change_as_chart():
+    summary = {
+        "pl": -1080.0,
+        "pl_pct": -0.015102,
+        "start_date": "2026-04-28",
+        "end_date": "2026-07-20",
+        "source": "Alpaca",
+    }
+
+    metric = _portfolio_period_metric_payload(summary)
+
+    assert metric == {
+        "amount": "$-1,080.00",
+        "detail": "Variación de equity · -1.51% · 28/04/2026 → 20/07/2026",
+        "tone": "bad",
+    }
+
+
+def test_portfolio_period_metric_reports_unavailable_instead_of_zero():
+    assert _portfolio_period_metric_payload({"pl": None, "pl_pct": None}) == {
+        "amount": "-",
+        "detail": "Sin datos suficientes en el periodo",
+        "tone": "neutral",
+    }
+
+
+def test_portfolio_open_pl_prefers_current_portfolio_positions():
+    portfolio = SimpleNamespace(
+        positions=[
+            SimpleNamespace(unrealized_pl=-50.0),
+            SimpleNamespace(unrealized_pl=12.5),
+        ]
+    )
+
+    assert _portfolio_open_pl(portfolio, fallback=999.0) == -37.5
+
+
+def test_portfolio_open_pl_uses_fallback_only_without_portfolio():
+    assert _portfolio_open_pl(None, fallback=12.25) == 12.25
 
 
 def test_position_entry_date_prefers_saved_risk_order_time():
@@ -669,13 +795,12 @@ def test_latest_daily_equity_change_falls_back_to_estimated_series():
     assert change["source"] == "estimado"
 
 
-def test_today_pl_display_uses_pct_over_invested_as_primary():
+def test_today_pl_display_uses_daily_equity_pct_as_primary():
     display = _today_pl_display(38.42, 5246.0, 0.0005)
 
     assert display == {
-        "primary_pct": "0.73%",
-        "invested_caption": "sobre invertido ($5,246.00)",
-        "equity_reference": "0.05% del equity total",
+        "primary_pct": "0.05%",
+        "period_caption": "Variación de equity desde el cierre anterior",
     }
 
 
@@ -683,9 +808,8 @@ def test_today_pl_display_returns_nd_when_invested_is_zero():
     display = _today_pl_display(38.42, 0.0, 0.0005)
 
     assert display == {
-        "primary_pct": "n/d",
-        "invested_caption": "sobre invertido ($0.00)",
-        "equity_reference": "0.05% del equity total",
+        "primary_pct": "0.05%",
+        "period_caption": "Variación de equity desde el cierre anterior",
     }
 
 
@@ -693,9 +817,8 @@ def test_today_pl_display_preserves_negative_pct_over_invested():
     display = _today_pl_display(-52.46, 5246.0, -0.0007)
 
     assert display == {
-        "primary_pct": "-1.00%",
-        "invested_caption": "sobre invertido ($5,246.00)",
-        "equity_reference": "-0.07% del equity total",
+        "primary_pct": "-0.07%",
+        "period_caption": "Variación de equity desde el cierre anterior",
     }
 
 
@@ -704,7 +827,7 @@ def test_today_pl_metric_payload_reuses_same_display_as_hero():
 
     assert payload["amount"] == "$38.42"
     assert payload["display"] == _today_pl_display(38.42, 5246.0, 0.0005)
-    assert payload["detail_html"] == "0.73% sobre invertido ($5,246.00)<br><small>0.05% del equity total</small>"
+    assert payload["detail_html"] == "0.05% · Variación de equity desde el cierre anterior"
 
 
 def test_sidebar_version_label_uses_semantic_version():

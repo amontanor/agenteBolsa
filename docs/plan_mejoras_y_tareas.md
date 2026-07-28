@@ -1,8 +1,58 @@
 # Plan maestro de mejoras y tareas — agenteBolsa
 
+## P-L66 — Resumen diario por Telegram (0.4.201, candidato aislado)
+
+- Primer intento a las 22:05 Europe/Madrid y fallback idempotente después del
+  terminal durable del postmarket.
+- Reutiliza la misma foto de cartera y la fila `performance_daily`; no añade
+  llamadas al broker.
+- Publica variación diaria de equity, SP500 y P/L total/diario por posición.
+- Token y `chat_id` solo mediante entorno local; desactivado por defecto.
+- Recibo append-only por sesión evita reenvíos después de un éxito confirmado.
+- Pendiente de integración, validación completa con XNYS cerrado y despliegue
+  autorizado.
+
 > **Este documento es la fuente unica de verdad de la mejora del sistema.**
 > Contiene la vision, lo ya ejecutado, el diagnostico vigente, las tareas con su
 > estado (terminado / no terminado) y las propuestas siguientes.
+
+### P-L65A — contrato diario Sistema vs SP500 (28-jul-2026)
+
+- Caracterización aislada en `pl65a_daily_vs_spy_contract`, versión `0.4.198`;
+  XNYS abierto, sin cambios en `src` ni producción.
+- La métrica primaria es variación de equity sobre cierre anterior. El
+  porcentaje sobre invertido es secundario y no decide el ganador. SPY exige
+  misma ventana, source, basis, as_of y calidad.
+- Se reprodujo que `_performance_baseline_series` consume columnas legacy sin
+  validar el bloque canónico, y que el selector de cartera usa días naturales:
+  siete días pueden contener menos de siete sesiones XNYS. La cifra 13/17/0/9
+  de 39 no existe en este árbol y queda sin atribución.
+- Tooltip Sistema/SP500 verificado declarativamente: Fecha, `% ganancias`,
+  Serie, `+.2%`, idéntico en línea/puntos, sin `y0`/`y1`.
+- Dictamen: `ready_for_p65b_implementation`. Siguiente: implementar el
+- Version policy required candidate `0.4.199`; no production logic changed.
+  rowset canónico y contadores por sesiones, sin cambiar trading ni hacer
+  llamadas adicionales al broker/red.
+
+### P-L65A-R1 — alcance real del panel dirty (28-jul-2026)
+
+- El checkout productivo dirty contiene P-L61/P-L62 que no están en P-L63R1:
+  `web_app.py` SHA-256 `FC6ABAD9D799077D402866194A93D939657CC16CAC6943BC40B139A608D8205A`;
+  `test_web_app.py` SHA-256
+  `9580147B3E0C8F0E264A1721AA95D13C5EFF3E14F75634517E25C1C551EA1E1B`.
+- P-L63R1/P-L65A comparten `web_app.py` SHA-256
+  `33E5DE1F223080872F734CE389B8164409E99EDF4B29095E4164AC9BA1CC5FD1` y
+  no tienen `_render_daily_vs_spy_table`; por tanto la captura `13/17/0/9 de
+  39` solo puede atribuirse al objeto dirty, no a esa base.
+- Caracterización aislada: `pl65a_r1_actual_ui_characterization`, 22 tests
+  verdes. Se reproduce el contador global previo al recorte, el ganador por
+  exposición frente a SPY y la divergencia tabla/gráfico por huecos. No se
+  modificó `src` ni producción. Dictamen: `ready_for_p65b_implementation`
+  condicionado a componer P-L63R1 con el diff dirty exacto documentado en
+  `docs/P-L65A-R1_informe.md`.
+- P-L65B conserva la reserva `0.4.200`; la prueba de version policy queda
+  pendiente de ese bump en implementación, no se consume en esta
+  caracterización tests/docs.
 > **Toda mejora futura se gestiona anadiendo pasos AQUI** (no en hilos sueltos ni
 > en otros documentos). Cada entrega debe: (1) anadir/actualizar su paso en este
 > fichero con su estado, (2) subir la version en `src/agente_bolsa/__init__.py`
@@ -10,9 +60,96 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama de integracion desplegada: `codex/mejora_continua`
-- Version actual: **0.4.187** (P-L61 + P-L62 en produccion unstaged; XNYS abierto, sin despliegue)
+- Version productiva estable: **0.4.185** (P-L48B desplegado en producción el 19-jul)
+- Candidato de integración aislado: **0.4.193** (P-L53BR2 + P-L43C-R1 + P-L57A; no desplegado)
 - Ultima actualizacion: 2026-07-27
+- Estado P-L50BR1: worktree combinado candidato **0.4.188**; secuencia
+  P-L49B 0.4.186 -> P-L46BR3 0.4.187 -> P-L50B 0.4.188. La linea anterior
+  conserva el estado historico del ensayo individual P-L49B.
 - Modo operativo: paper (Alpaca paper). Live trading bloqueado por diseno.
+
+## P-L54B-T - caracterizacion del embudo shadow de capital (27-jul-2026)
+
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl54bt_capital_funnel_characterization`,
+  rama `codex/pl54bt-capital-funnel-characterization`, base P-L58R1 exacta,
+  version conservada `0.4.193`.
+- Dictamen: `ready_for_p54b_implementation`. Tests y documentacion solamente;
+  no hay productor shadow ni wiring productivo.
+- La fixture canonica separa 376 recomendaciones BUY, 15 planes y 15
+  ordenes/fills. Exposicion observada 10,85%; target y notional objetivo
+  permanecen `unavailable` si no existe autoridad estructurada.
+- Siguiente paso unico: implementacion shadow aislada del contrato
+  `p-l54b.capital-deployment-funnel-shadow.v1`; no desplegar ni cambiar
+  politica con esta caracterizacion.
+
+## P-L54B-T-R1 - invariantes de alcance y notional (27-jul-2026)
+
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl54btr1_funnel_invariants`,
+  rama `codex/pl54btr1-funnel-invariants`, desde `b99d6fc4`, version 0.4.193.
+- Se reproduce y corrige el snapshot no secuencial: la tabla valida queda
+  selection 376 -> gates 306 -> capacity 145 -> sizing 95 -> risk/plans 15.
+  Caidas primarias exactas: 361; planes/ordenes/fills: 15.
+- El notional risk-approved queda en 15.000 USD con cobertura 15/15; target
+  exposure y notional objetivo siguen unavailable. No se modifica src ni
+  productor.
+- Siguiente paso unico: P-L54B-W sobre este contrato cerrado, en otro lote.
+
+## P-L58R1 - ensayo combinado de seguridad de medicion (27-jul-2026)
+
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl58r1_measurement_safety_rehearsal`,
+  rama `codex/pl58r1-measurement-safety-rehearsal`, version 0.4.193.
+- Merges `--no-ff` en orden P-L53BR2 -> P-L43C-R1 -> P-L57A:
+  `01c2c5644d449b235c594e79032b5260c8a82fe1`,
+  `b61a3036ee05bfa8a6fd2edef90a34e548e9aa73`,
+  `e0e1962534e0877fa96fcfd80c524f000a58dafe`.
+- QA combinada: `b066b65c50d0a43713bbcd899304e5b3202753ec`.
+- Resultado: `ready_for_closed_market_full_validation`. Suite cerrada:
+  1987 passed, 1 skip preexistente; Ruff, NUL, diff, configuracion y version
+  policy verdes. Smoke CLI no ejecutado por seguridad (`smoke_unavailable_by_safety`).
+- No cambia trading: P-L53 queda fuera del PMR; P-L43C conserva
+  submit -> save_broker_order -> telemetria fail-open; P-L57A solo hace
+  null-safe a los consumidores observacionales.
+- El perfil P-L53 de 500 candidatos registra evento de 757177 bytes y 17 MB
+  de memoria pico; riesgo operativo medio, sin locks y con persistencia despues
+  del envio. No se promociona ni despliega en este lote.
+
+## P-L51C-T - carrier de provenance BUY -> SELL (21-jul-2026)
+
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl51c_provenance_carrier_tests`,
+  rama `codex/pl51c-provenance-carrier-tests`, base `adf9a5c4`.
+- Se caracteriza como frontera minima viable el metadata del `order_plan`
+  transportado al payload local de `broker_order`; no cambia el request al
+  broker y sobrevive la reconciliacion.
+- La proyeccion actual P-L48 pierde el carrier arbitrario. Dictamen:
+  `ready_for_p51c_implementation`; falta implementar solo esa proyeccion
+  acotada y volver a demostrar captura futura real.
+- Commit de tests: `9b12b07e`; no hay bump de version ni cambios en `src`.
+
+## P-L51BR1 - ensayo combinado (21-jul-2026)
+
+- Worktree candidato: `C:\Antonio\Bref\agenteBolsa_worktrees\pl49_pl46_pl50_pl51_combined_rehearsal`,
+  rama `codex/pl49-pl46-pl50-pl51-combined-rehearsal`, version `0.4.189`.
+- Merge `--no-ff` P-L51B-W: `5e3d2887aaa4f65ad67cda26885de9c09148af6d`.
+- QA focal: `991cd95d`; 219 pruebas pasaron. Ruff, NUL, diff y
+  `validate-agent-config --json` temporal pasaron.
+- Dictamen: `needs_redesign`. Los objetos persistidos reales no contienen aun
+  provenance BUY->SELL suficiente (`buy_broker_order_id`, allocations y fill
+  fragments canonicos); el contrato responde unavailable/ambiguous y net null.
+- No se toca produccion ni se ejecutan suite completa, smoke, servicios, broker,
+  red, postmarket, reconciliacion ni validacion de mercado cerrado. El siguiente
+  lote minimo debe rediseñar esa frontera y volver a demostrar captura futura
+  real antes de cualquier integracion.
+
+### P-L49B — shadow de calidad de datos por candidato (**ENSAYO 0.4.186**)
+
+Fase A captura en memoria la observación de mercado exacta disponible en el
+ciclo y Fase B la sella tras la ruta activa, antes de registrar/enviar planes.
+El evento `data_quality_decision_shadow:<cycle_id>` es append-only, idempotente,
+conflict-safe y fail-open. `blocked_exact_quality` exige identidad de observación,
+identidad de candidato y temporalidad verificables; una anomalía posterior o no
+enlazada no gobierna retroactivamente una decisión. SELL y salidas protectoras
+permanecen fuera del shadow. Estado: `ready_for_integration_rehearsal`; no hay
+activación de gate ni despliegue en este lote.
 
 ## Consolidacion operativa - 16-jul-2026
 
@@ -2018,6 +2155,32 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
 - Ambos shadows siguen `collecting`/`partial`; no hay backfill ni autoridad
   sobre trading.
 
+## P-L43C-W - carrier shadow de autoridad causal time-stop (candidato 0.4.192)
+
+- Implementacion aislada en el worktree P-L43C-W desde la base de
+  caracterizacion e0ba03ff; `legacy_calendar_days` sigue activa y XNYS sigue
+  shadow-only.
+- La captura predecisional se conserva en memoria antes del envio y los
+  eventos decision/link se persisten despues, en una transaccion append-only
+  fail-open. No se toca `execution.py` ni la llamada `close_position`.
+- La identidad exige cycle/watch, position_identity, plan y BUY broker order
+  exactos; multilote, recompra ambigua, fill no autorizado y version de
+  politica ausente quedan unavailable/ambiguous. No hay join por simbolo/fecha.
+- QA del worktree: P-L43C-T 29, P-L43C-W 40, focales relacionadas 178; Ruff,
+  NUL, diff y validate-agent-config verdes. No desplegado. Siguiente paso:
+  validacion cerrada integrada.
+
+### P-L43C-R1 - prioridad durable de la orden local (candidato 0.4.192)
+
+- Reproduccion contra la base P-L43C-W: `submit` persistia P-L43C antes de
+  `save_broker_order`.
+- Correccion aislada: `submit activo -> save_broker_order local -> P-L43C
+  decision/link fail-open -> reconciliacion`; no cambia request, resultado,
+  excepciones, politica, plan, orden ni reconciliacion.
+- QA focal: 44 pruebas P-L43C/R1 verdes; no se ejecutan suite completa, smoke
+  ni validacion cerrada con XNYS abierto. Produccion intacta y sin despliegue.
+- Siguiente paso unico: validacion cerrada integrada del candidato exacto.
+
 ## P-L48B-W - telemetria canonica de operaciones (candidato 0.4.184)
 
 - Implementado en shadow un productor unico `p-l48b.canonical-operation-telemetry.v1`.
@@ -2089,6 +2252,60 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
   lock/lease v1 con token coherente. Deuda `profitability_scoreboard` no
   corregida (backlog). Detalle en `docs/P-L48_informe.md`. Dictamen: `deployed`.
 
+## P-L50BR1 - ensayo combinado secuenciado (pendiente de validacion cerrada)
+
+Secuencia del worktree: P-L49B `0.4.186`, P-L46BR3 `0.4.187`, P-L50B
+`0.4.188`. QA focal: 675 passed; interacción nueva: 10 passed. Ambos shadows
+son fail-open, append-only e independientes. Suite completa, smoke y validación
+de despliegue quedan pendientes con XNYS cerrado.
+
+### Cierre QA P-L50BR1 (20-jul-2026)
+
+- Base y aislamiento: `24537e81`; worktree `pl49_pl46_pl50_combined_rehearsal`;
+  rama `codex/pl49-pl46-pl50-combined-rehearsal`.
+- Merges `--no-ff`: `0f5a26a0` <- `753136fc`, `17b5fbc7` <- `a0ab7ce4`,
+  `045288dd` <- `8ebac5f2`, en ese orden. QA: `c99cd318`.
+- Baterías permitidas: 90 + 84 + 211 + 290 = **675 passed**. Ruff completo,
+  `check_no_nulls.py` (405 archivos), `git diff --check` y
+  `validate-agent-config --json` aislado (`ok=true`) verdes.
+- P-L49/P-L50 no comparten identidad ni autoridad; los planes, controles,
+  gates, cantidades, precios, stops/takes, órdenes, exposición y límites del
+  camino activo permanecen sin mutación. P-L46BR3 es solo lectura.
+- Suite completa, smoke, jobs reales, prueba histórica de 33.336 filas y
+  despliegue quedan pendientes para mercado cerrado. Dictamen:
+  `ready_for_closed_market_full_validation`.
+## P-L57A - continuidad null-safe del cierre postmarket y scoreboard (0.4.193)
+
+- Base exacta: producción `24537e813ff0905696cda0b3925a212045ee7b09`, tree
+  `4747f27f3d5dc152410203bf089baee500440897`, versión `0.4.185`. Worktree
+  aislado `pl57a_pmr_null_safety`, rama `codex/pl57a-pmr-null-safety`.
+- La reproducción contra la base confirmó que `pmr_dbfa382016b8` del
+  23-jul terminó en `stage_postmarket_report_failed` por
+  `TypeError("'<' not supported between instances of 'NoneType' and 'int'")`:
+  `profitability_scoreboard._performance_summary` pasaba `pnl_pct=NULL` a la
+  reducción de drawdown. La fila incompleta no era una razón para abortar el
+  terminal del PMR.
+- El contrato corregido rechaza null, bool, strings no numéricos, NaN e
+  infinitos en métricas numéricas; reduce solo observaciones válidas; cuando
+  no hay valores devuelve `null` y cobertura `unavailable`, y cuando hay una
+  parte devuelve cobertura `partial`. No rellena `previous_equity`, retorno,
+  alpha, costes, flujos ni drawdown; tampoco reconstruye ni hace backfill del
+  23-jul. `result_metrics` del payload no sustituye columnas SQL ausentes.
+- `performance_daily`, `profitability_scoreboard`, `promotion_readiness`,
+  digest semanal y la serie read-only de web conservan filas válidas y
+  continúan con resultado parcial auditable. La ruta de trading, PMR activo,
+  reconciliación, ranking, gates, sizing, planes, órdenes, exits, exposición
+  y límites no cambia.
+- Commits: `5d05092c` reproducción; `12684790` corrección; `6ddf93da`
+  actualización de la expectativa de primera sesión; `ee9afee6` documentación.
+  La suite cerrada terminó `1698 passed, 1 skipped`; el único skip es el test
+  legado `test_score_study_regression_current_sqlite`, que requiere la SQLite
+  local ausente del worktree. Ruff, NUL, diff, configuración y version policy
+  pasan. El dictamen es `ready_for_integration_rehearsal`.
+- Siguiente paso único: ensayo de integración aislado P-L57A; no desplegar ni
+  hacer backfill hasta validar el candidato con las precondiciones de mercado
+  cerrado.
+
 ## P-L46B - orden cronologico de Cartera abierta (desplegado 0.4.178)
 
 - El orden anterior mostraba primero las posiciones con mayor valor absoluto de
@@ -2099,6 +2316,424 @@ P-L44BR3 el `0.4.182`; ninguno se integra en este lote.
   `Fecha de compra no disponible`; no se usa la fecha de creacion de una orden como sustituto.
 - Es un cambio exclusivamente visual. No altera posiciones, trading, ranking,
   gates, stops, takes, cantidades ni ordenes.
+- P-L50T (20-jul, caracterizacion aislada): worktree sobre produccion 0.4.185,
+  solo fixtures/pruebas e informe, sin cambios en `src/` ni politicas activas.
+- Dictamen tecnico: `mixed_contract_gap`; P-L44 fase A recibe un contexto sin
+  IDs mientras la ruta de recomendacion los completa despues, con scores/prior
+  y controles no uniformes.
+- P-L50B queda reservado como shadow-only, minimo 0.4.188; P-L50T no cambia
+  version ni autoriza activacion de aprendizaje.
+- P-L50B implementado en candidato `0.4.188`: la identidad se prepara antes de
+  ranking y la fase A consume una proyección inmutable del mismo contexto
+  enriquecido. El contrato P-L44 v2 separa identidad, inputs, decisiones,
+  controles, rechazos y freshness sin modificar el camino activo. Estado:
+  `ready_for_integration_rehearsal`; queda pendiente la validación completa fuera
+  de mercado. P-L49B conserva `0.4.186` y P-L46BR3 conserva `0.4.187`.
 - Secuencia desplegada: P-L45B2 `0.4.175`, P-L43BR5 `0.4.176`, P-L44B
   `0.4.177` y este cambio UI `0.4.178`. El merge productivo es `4158ac5f`;
   la verificación visual confirmó la versión y el orden descendente.
+
+## P-L49BR1 — estado del ensayo (0.4.186)
+
+- Ensayo aislado fusionado desde `24537e81` con candidato `938580b7`:
+  merge `2ea57983`; QA adicional `b8aee78a` y `db6577b2`.
+- La captura de calidad sigue siendo observabilidad shadow. Sin provenance OHLC
+  exacta en el objeto que alimentó features, los candidatos identificados se
+  clasifican `unavailable_temporal`/`partial`; no se aplican informes
+  posteriores ni bloqueos retroactivos.
+- Pendiente: suite completa, smoke y validación de 33.336 observaciones con
+  XNYS cerrado. No habilitar gates ni iniciar P-L48C.
+## P-L46BR3 - resultado de cartera coherente con el rango visible (candidato 0.4.187)
+
+- Causa: la tarjeta `P/L desde abril` procedia del historial de operaciones,
+  mientras la grafica representa equity de cuenta. La mezcla podia publicar
+  una ganancia positiva sobre una curva descendente.
+- La tarjeta pasa a llamarse `Resultado del periodo` y se calcula como ultimo
+  equity menos primer equity del rango seleccionado; muestra porcentaje y
+  fechas de ambos extremos. `Desde inicio` solicita todo el historial
+  disponible y conserva el corte operativo del 28-abr-2026.
+- Se elimina de este bloque el duplicado `P/L hoy`; permanece en la cabecera.
+  El segundo y unico KPI del bloque es `P/L abierto`, sumado desde las
+  posiciones actuales ya cargadas, sin otra consulta al broker.
+- La cabecera `Cuenta · desde inicio` y el control externo usan la misma
+  variacion de equity completa. Sin datos suficientes se muestra `-`, nunca
+  un cero inventado.
+- Cambio exclusivamente de presentacion y lectura. No altera trading,
+  ranking, gates, sizing, planes, ordenes, stops, takes, exposicion, SQLite ni
+  runtime state. P-L49 conserva `0.4.186`; este lote reserva `0.4.187`.
+
+## P-L51C-W - carrier futuro BUY -> SELL (candidato 0.4.189)
+
+- Implementada en worktree aislado la frontera `P-L43BR6 open lots -> order_plan
+  metadata -> broker_order local -> reconciliation -> P-L48/P-L51`.
+- El carrier `p-l51c.exit-lot-provenance.v1` usa solo IDs y cantidades exactas,
+  es append-only/idempotente/conflict-safe y fail-open; no entra en el request
+  del broker ni en autoridad de riesgo o ejecucion.
+- Evidencia Store temporal: BUY/SELL exactos, un lote cerrado, atribucion 1,
+  gross 100.0 y net 98.5 con costes completos; costes parciales dejan net
+  null; historicos sin carrier permanecen unavailable.
+- Commits separados: `c86917ee` funcional y `5c0077d9` pruebas. La
+  documentacion de este estado queda en `docs/P-L51_informe.md` y en este
+  plan; la validacion completa, suite, smoke y despliegue esperan XNYS cerrado.
+## P-L51CV2 - validacion completa nocturna del candidato 0.4.189 (21-jul-2026)
+
+- Con XNYS cerrado, PMR `pmr_7a4f5b7f8f4b` terminal y lease vacio, la suite
+  completa paso `1864 passed, 1 skipped` y las focales/regresiones pasaron
+  `364 passed`. P-L45B2 de 33.336 filas paso `1 passed`.
+- Ruff, NUL, diff y `validate-agent-config --json` temporal quedaron verdes.
+  El smoke real `run-once` queda `smoke_unavailable_by_safety`; el sustituto
+  aislado paso 8 pruebas. No se anadio skip/xfail.
+- Dictamen: `ready_for_closed_market_deployment`. No hubo despliegue ni push;
+  la promocion requiere una tarea separada y autorizacion operativa.
+## P-L52B-T — snapshot EOD contable y benchmark comparable (21-jul-2026)
+
+- Worktree de tests: `C:\Antonio\Bref\agenteBolsa_worktrees\pl52b_eod_snapshot_tests`,
+  rama `codex/pl52b-eod-snapshot-tests`, base P-L51CV2
+  `7638149610060153dfe8a8edf2037ad9dab028a3`.
+- Contrato caracterizado: `p-l52b.canonical-eod-account-snapshot.v1`.
+  Separa equity, flujos, realized neto, open P/L, costes, exposición, cash,
+  benchmark SPY comparable y residual; missing permanece null/unavailable.
+- Tests P-L52B-T `21 passed`; focales `248 passed`; Ruff/NUL/diff/configuración
+  verdes. Sin cambios en `src` ni bump de versión.
+- Dictamen: `ready_for_p52b_implementation`. Siguiente lote mínimo: productor
+  shadow fail-open del snapshot con ledger de flujos y benchmark autorizados;
+  no cambiar trading, política, UI ni producción.
+
+## P-L52B-W — implementación shadow EOD contable (candidato 0.4.190)
+
+- Worktree aislado: `C:\Antonio\Bref\agenteBolsa_worktrees\pl52b_eod_snapshot_impl`;
+  rama `codex/pl52b-eod-snapshot-impl`; base P-L52B-T `609183e1`.
+- Implementados el módulo `canonical_eod_account_snapshot`, evento
+  `canonical_eod_account_snapshot:<session_date>`, persistencia append-only,
+  lector/digest/health/CLI y stage PMR después de P-L48/P-L51 y antes de
+  performance. La ruta activa y los archivos protegidos permanecen intactos.
+- Commits: `57ec7b7f` feature, `eb17d582` tests, `4e868109` QA de freshness.
+  Las 32 pruebas del lote pasan y Ruff/diff también.
+- Dictamen: `ready_for_integration_rehearsal`. Antes de cualquier promoción
+  deben verificarse con XNYS cerrado el PMR terminal, suite completa, P-L45B2,
+  smoke aislado seguro, configuración/kernel y paridad final. No cambiar
+  thresholds, sizing, ranking, gates, stops, política ni producción.
+
+## P-L52BR1 — ensayo integrado P-L51C + P-L52B (candidato 0.4.190)
+
+- Worktree/rama: `C:\Antonio\Bref\agenteBolsa_worktrees\pl52br1_integration_rehearsal`,
+  `codex/pl52br1-integration-rehearsal`, base `76381496`.
+- Merge `--no-ff` P-L52B-W: `36bdd366`; correccion QA separada: `932c648a`.
+- Se verifico reconciliation -> P-L48 -> P-L51 -> P-L52 -> performance ->
+  measurement -> thesis -> terminal, con una sola construccion/persistencia y
+  reutilizacion del objeto P-L52.
+- La QA E2E corrigio la perdida de allocations exactas P-L51 en P-L52. El fix
+  conserva IDs de lote y deja null cualquier importe que no sea explicito;
+  multi-lote no se prorratea. No cambia trading ni request broker.
+- Resultado: `1899 passed, 1 skipped, 1 warning`; P-L45B2 33.336 incluido y
+  pasado; QA nueva 3 y volumen 100 sesiones/1000 operaciones sin locks. Ruff,
+  NUL, diff y config verdes. Smoke CLI queda `smoke_unavailable_by_safety`;
+  sustituto PMR aislado verde.
+- Dictamen: `ready_for_closed_market_deployment`, sin despliegue ni push. La
+  promocion requiere tarea operativa separada, preflight nuevo y autorizacion
+  humana; produccion/candidatos originales permanecen intactos.
+## P-L51CR2 - correccion de regresiones temporales de provenance (22-jul-2026)
+
+- Worktree aislado desde P-L52BR1: `pl51cr2_exact_provenance_fix`, rama
+  `codex/pl51cr2-exact-provenance-fix`, base `134ec525`, version conservada
+  `0.4.190` porque no hubo cambio en `src/`.
+- Los tres fallos heredados compartian una fixture sin reloj congelado:
+  `created_at` caia el 22-jul mientras la sesion consultada era 21-jul. El
+  productor P-L48 filtraba correctamente; no se perdio carrier en produccion.
+- Commits separados: `9a7b46d2` caracterizacion y `494e6515` correccion de las
+  fixtures. Los tres tests pasan; focales `239 passed`; suite segura
+  `1900 passed, 1 deselected`.
+- Ruff/NUL/diff/configuracion/kernel productivo y P-L45B2 verdes. No se
+  modificaron archivos protegidos, produccion, servicios, SQLite productiva ni
+  candidatos. No hubo despliegue ni push.
+- Dictamen: `ready_for_reintegration`. Siguiente lote unico: reintentar
+  P-L53BR1 sobre este fix como candidato posterior 0.4.192.
+
+## P-L53B-W - ledger canónico shadow de selección por ciclo (candidato 0.4.191)
+
+- Implementado en `pl53b_selection_ledger_impl`, rama
+  `codex/pl53b-selection-ledger-impl`, desde la base exacta P-L53B-T
+  `4ec81a0c`. Reserva funcional `0.4.191`.
+- Captura el universo completo de fase A y los objetos exactos de
+  recomendaciones, gates, planes y órdenes de fase B. `signal_capture_id`
+  prevalece sobre `signal_id`; símbolo/fecha y `source_run_id + symbol` no son
+  identidad.
+- Persistencia append-only en `agent_events`, hash estable sin `captured_at`,
+  `BEGIN IMMEDIATE` corto, idempotencia y conflictos separados. Fail-open y
+  sin autoridad sobre trading.
+- Commits: `e5ace319` feature y `eea3794a` tests/paridad. Documentación
+  consolidada pendiente del commit documental P-L53B-W.
+- QA focal P-L53B-T/W: 28 passed; suite completa y smoke quedan pendientes
+  para mercado cerrado con precondiciones operativas verificadas. Siguiente
+  lote único: ensayo integrado P-L53BR1 aislado.
+
+## P-L53BR1 - ensayo integrado P-L53B-W sobre P-L52BR1 (22-jul-2026)
+
+- Worktree `pl53br1_integration_rehearsal`, rama
+  `codex/pl53br1-integration-rehearsal`, base exacta `134ec525`; merge
+  `fc4eb767` con `--no-ff`, versión final `0.4.191`.
+- Se comprobó la ruta de mercado P-L49/P-L50/P-L53 y el PMR P-L48/P-L51/P-L52.
+  P-L53 reutiliza el contexto rankeado y finaliza después del envío activo,
+  sin autoridad sobre trading ni entrada en el pipeline PMR.
+- QA integrada y volumen 100x500 verdes; la suite segura final obtuvo
+  `1928 passed, 4 deselected`. Las cuatro exclusiones son el test de SQLite
+  productiva y tres fallos heredados reproducidos en el padre P-L52BR1; no se
+  añadieron skips/xfails.
+- Ruff, NUL, diff, versión, configuración y kernel productivo sellado verdes.
+  Producción, SQLite productiva, servicios y candidatos originales intactos;
+  no hubo despliegue ni push.
+- Dictamen del ensayo: `needs_fix` por la deuda heredada P-L51/P-L51C.
+
+## P-L53BR2 - reensayo limpio de P-L53 sobre P-L51CR2 (22-jul-2026)
+
+- Base `2da5ccda`, tree `cdf34263`; merge `--no-ff` `3b2ae0bf` desde P-L53BR1.
+  Worktree `pl53br2_integration_rehearsal`, rama
+  `codex/pl53br2-integration-rehearsal`, version final `0.4.191`.
+- Gate de las tres fixtures temporales: `3 passed`. QA adicional
+  `2bb92a4b`/`165ad748`; fixture concurrente estabilizada en `ff6267a0`, sin
+  cambio en src.
+- P-L53 conserva la ruta shadow y queda fuera del PMR; identidades, cap,
+  truncation/maturity, fail-open y paridad verificados.
+- BR2: 100x500 mas escalas 250/500/1000; 109 eventos/conexiones/transacciones,
+  uno por ciclo; evento p50/max `757177`, memoria pico `17066653`, WAL `0`,
+  shadow p50 `511.6280 ms`. Riesgo `medium` por tamano/latencia, con
+  persistencia despues del envio y sin locks.
+- Suite final: `1933 passed, 1 deselected, 1 warning` en 753.78 s, incluyendo
+  P-L45 de 33.336 filas. Unico deselect:
+  `tests/test_pre_earnings.py::test_score_study_regression_current_sqlite`,
+  que abre SQLite productiva; no se anadieron skips/xfails.
+- Smoke real queda `smoke_unavailable_by_safety`. Sin produccion, SQLite
+  productiva, servicios, reinicio, despliegue ni push.
+- Dictamen: `ready_for_closed_market_deployment` como candidato no desplegado;
+  siguiente paso unico: preflight operativo y autorizacion humana.
+  Siguiente lote único: corregir esos tres focales y repetir la suite cerrada;
+  P-L53 permanece shadow y no se cambia política de trading.
+
+## P-L54B-W - embudo shadow de despliegue de capital
+
+- Candidato aislado 0.4.194 desde `20e8be04`; productor fail-open con evento
+  `capital_deployment_funnel_shadow:<cycle_id>` y persistencia append-only.
+- Observa la ruta activa sin recalcular selección, gates, capacity, sizing,
+  RiskManager, planes u órdenes. Identidad exacta por ciclo/señal/acción; no
+  joins por símbolo/fecha.
+- Denominadores y notional conservan cobertura, `null/unavailable`, razones
+  primarias exclusivas y estado de truncation. Target exposure queda
+  unavailable sin autoridad estructurada.
+- Focales P-L54B-T/R1/W: 33 passed; suite completa, smoke y prueba larga quedan
+  pendientes del ensayo integrado cerrado P-L54BR1.
+
+## P-L54B-R1 - correccion de identidad de decision (0.4.194)
+
+- La colision `cycle + signal + action` se reprodujo contra P-L54B-W y se
+  corrigio incorporando `recommendation_id` cuando existe.
+- Decision parcial, ambigua, conflicto de contenido y ciclo inconsistente
+  quedan separados de stages/notional evaluables; no se usa `candidate_id` ni
+  symbol/date como sustituto.
+- Worktree `pl54br1_decision_identity`, rama
+  `codex/pl54br1-decision-identity`; commits `de08b9fd`, `8d814934` y
+  `3f85071f`; version `0.4.194`.
+- QA focal verde; suite completa, smoke y ensayo P-L54BR1 quedan pendientes con
+  XNYS cerrado y precondiciones operativas comprobadas. No desplegar.
+
+## P-L54BR1-Retry - estado del ensayo integrado (27-jul-2026)
+
+- Merge aislado `8574a227` sobre P-L58R1, version final `0.4.194`, tree
+  `ff42c750`; produccion permanece en `0.4.185`.
+- XNYS estaba abierto al iniciar la QA; se ejecutaron solo focales y gates
+  estaticos: `330 passed`, Ruff/NUL/diff/configuracion verdes.
+- La ruta, identidades, fail-open y denominadores P-L54 se mantienen; target
+  exposure/undeployed notional siguen unavailable.
+- Suite completa, P-L45 33336, smoke y benchmark combinado quedan pendientes
+  para mercado cerrado. Dictamen: `ready_for_closed_market_full_validation`.
+## P-L46BR4 - filtro calendario del grafico de cartera (candidato 0.4.195)
+
+- Corregido el filtro para usar limites de fecha y no cantidad de filas; las
+  sesiones XNYS pueden dejar menos puntos que dias naturales.
+- Ventanas disponibles: 7, 15, 30, 90 y `Desde inicio`. La serie filtrada es
+  la unica fuente de grafica, Resultado del periodo, porcentaje y fechas.
+- Reproduccion y fix en worktree aislado; 75 pruebas UI verdes. Suite completa,
+  smoke y validacion cerrada siguen pendientes con XNYS abierto.
+- No cambia trading, riesgo, broker, persistencia ni consultas adicionales.
+
+## P-L60R1 - ensayo integrado UI sobre P-L54BR1 (27-jul-2026)
+
+- Merge aislado `489b229f` en `pl60r1_ui_measurement_integration`, version
+  final `0.4.195`, tree `5f3afdc7`. P-L46BR3 ya estaba en la base y no se
+  duplicaron helpers ni widgets.
+- El selector unico ofrece 7/15/30/90/`Desde inicio`; la serie calendario
+  filtrada se reutiliza para grafica, Resultado del periodo, porcentaje y
+  fechas. P/L abierto mantiene las posiciones cargadas y no hay broker extra.
+- QA: `83 passed` UI/version y `159 passed, 1 warning` relacionados. Ruff,
+  NUL, diff, py_compile y configuracion temporal verdes. XNYS abierto impide
+  suite completa, smoke y validacion cerrada; sin cambios de trading ni
+  despliegue. Se conserva `unconfirmed_sqlite_mutation` como incertidumbre.
+
+## P-L59B-T-R5 (final) - caracterizacion cerrada (27-jul-2026)
+
+- Dictamen: **`needs_fix`**. XNYS abierto. Hora real: 19:43 CEST. HEAD: `a48113fe`.
+- 27 tests P-L59 + 5 integracion (32 total). Ruff/NUL/diff verdes.
+- Stage order: rama 2399/2412 (con submit). plan_id nace en plan_records, no
+  en OrderPlan (modelo real). Identidades: symbol+side+decision_lineage.
+  Sin object.__setattr__ ni campos inventados.
+- Seccion stale 2255/2266 eliminada del informe. Caracterizacion cerrada.
+- Siguiente: P-L59C (no iniciado).
+
+## P-L59C-R6 - autoridad prospectiva estructurada de llm_selected (27-jul-2026)
+
+- Dictamen: **`ready_for_integration_rehearsal`** (R6 corregido). XNYS abierto, 20:30 CEST.
+- R6: list branch inside_dcs=False (items nested conservan hashes). Test unitario listas.
+  Docs con hashes R5 (`4b1c1982`, `c50f23ae`). R2 baseline 278. R6: 15 integration.
+  Ruff/NUL/diff verdes.
+- Brecha P-L53 recommendation_id sigue abierta.
+- Siguiente: P-L59D rehearsal de integracion.
+
+## P-L59D - rehearsal de integracion (27-jul-2026)
+
+- Dictamen: **`ready_for_closed_market_full_validation`**. XNYS abierto, ~21:32 CEST.
+- Merge `--no-ff` de P-L59C-R6D (`30b6b76b`, v0.4.196) sobre P-L60R1 (`70de3401`, v0.4.195).
+  Sin conflictos. HEAD final `4524cbe3` (tree `661216b3`); merge `9009c7f2` (tree `ad69264e`, identico a P-L59C-R6D).
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59d_llm_selected_rehearsal`,
+  rama `codex/pl59d-llm-selected-rehearsal`.
+- 5 protegidos versionados identicos contra base y produccion; .env no modificado (hash unavailable). Ruta activa P-L60R1 intacta.
+- QA focal: 300 passed (10 archivos) en 65.53s. Ruff/NUL/diff/py_compile/validate-config verdes.
+- Brecha P-L53 recommendation_id sigue abierta.
+- Gates omitidos (XNYS abierto): suite, smoke, benchmark, P-L45 33.336, kernel.
+- Siguiente: P-L59E validacion cerrada completa (requiere XNYS cerrado).
+
+## P-L59F-T-R3 — caracterizacion final, contrato cerrado (27-jul-2026)
+
+- Dictamen: **`ready_for_implementation`**. XNYS cerrado (22:00 CEST),
+  pero postmarket no terminal y continuous_improvement running.
+  P-L59E bloqueado; no operacion cerrada.
+- Base: P-L59D-D `520559c6` (tree `e3c80ba`, v0.4.196).
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl59ft_recommendation_identity_design`,
+  rama `codex/pl59ft-recommendation-identity-design`.
+- HEAD tests R3: `e14caa1e`. Solo tests/docs, sin cambios en src.
+- R3: lineage literal identico en rec1/rec2, adjuntos P-L53 (plans/plan_records)
+  y P-L54 (recommendations/plans) con IDs coherentes, stage P-L53<P-L54 explicito,
+  `_denominators` real en expansion con raw_count=1.
+- 17 tests pasan (0.90s). Ruff/NUL/diff verdes.
+- Contrato de implementacion completo en informe.
+- Siguiente: P-L59F-I (requiere verificar precondiciones XNYS antes de iniciar).
+
+## P-L59F-T-R4 — cierre de diseño. HECHO.
+
+- Dictamen de direccion: `ready_for_implementation`.
+- HEAD `224b4958`, tree `135df124`, v0.4.196, limpio.
+- 17 tests verdes. Contrato decision_rows completo en informe único.
+- P-L59E sigue bloqueado por precondiciones.
+
+## P-L59F-I-R1 — implementacion decision_rows v2 corregida. HECHO (v0.4.197).
+
+- El candidato inicial `305b56ee` quedo `needs_fix`; el worker fue
+  interrumpido durante R1 y sus cambios parciales se revisaron antes de
+  continuar.
+- Dictamen corregido: `ready_for_integration_rehearsal`.
+- Worktree/rama: `pl59fi_decision_rows`, `codex/pl59fi-decision-rows`.
+- Base `224b4958`, tree `135df124`, version `0.4.196`.
+- Candidato version `0.4.197`; correccion funcional/QA `1ce3c155`, tree
+  `ed1e6879`.
+- Solo `canonical_selection_ledger.py` (+449/-43) y `__init__.py`.
+  Sin cambios en cycle_runner, storage, protegidos, config, politica.
+- SCHEMA_VERSION `p-l53b.canonical-selection-ledger.v2`. candidate_rows
+  summary 8 estados. decision_rows por identidad exacta. Bounded 600.
+  Denominadores v2. Reader backward-compatible v1.
+- 169 passed en la bateria focal disjunta; Ruff completo, NUL y diff verdes.
+- Se separan conflictos de duplicados idempotentes, se cuentan denominadores
+  pre-truncado y se exigen candidato/linaje exactos para recomendaciones y
+  adjuntos.
+- Brecha P-L53 recommendation_id: CERRADA.
+- Gates omitidos: suite, smoke, benchmark, P-L45, kernel (precondiciones).
+- Siguiente: P-L59F-D rehearsal `--no-ff` y validacion cerrada completa; sin
+  despliegue automatico.
+
+## P-L59F-D — ensayo integrado cerrado. HECHO (v0.4.197).
+
+- Merge `--no-ff` `f535923f` sobre P-L59D-D; QA `e0290762` y `2f156eb8`;
+  tree funcional `f8193f6d`.
+- Suite completa: 2184 passed, 1 skip y 1 warning preexistentes. Ruff, NUL,
+  diff y configuracion verdes; kernel productivo sellado y protegidos iguales.
+- Benchmark v2: 500 candidatos, p95 total 649.32 ms, 840,943 bytes/evento,
+  memoria pico 17.2 MB. Riesgo de volumen medio; shadow/fail-open.
+- Dictamen: `ready_for_closed_market_deployment`, pero el despliegue no esta
+  autorizado. Smoke real omitido por seguridad al no existir proveedor
+  sintetico CLI garantizado.
+
+## P-L63 - baseline de equity desde el 1 de abril. HECHO (v0.4.198)
+
+- Base `8c66f966`, worktree `pl63_portfolio_april_baseline`, rama
+  `codex/pl63-portfolio-april-baseline`. Reproduccion `2d17df99`, pruebas de
+  aceptacion `0728a113`, fix `cad229af`.
+- Se elimina la divergencia 28-abr frente a `DEFAULT_START_DATE=2026-04-01`.
+  La unica llamada de portfolio history usa `period="all"`; Cuenta, grafica y
+  Resultado usan equity real, primer/ultimo punto, porcentaje, fechas, source
+  y coverage coherentes. No se reconstruye desde realized/unrealized trades.
+- Falta el punto del 1-abr: `partial` con primera fecha real o `unavailable`.
+  P/L hoy y P/L abierto siguen separados del baseline historico.
+- QA focal `101 passed`; Ruff/NUL/diff/py_compile/config temporal verdes.
+  Suite completa, smoke y validacion cerrada quedan pendientes fuera de esta
+  ventana. No cambiar trading ni desplegar.
+
+### P-L63 — semántica UX de equity y ventana desde junio (28-jul-2026)
+
+- Se reprodujo la segunda manifestación: equity `71.550 -> 70.700` junto a
+  `trade_history.total_pl=+106,83` producía una tarjeta verde incorrecta.
+  El resultado visible ahora es `-850,00`, aproximadamente `-1,19%` sobre el
+  primer equity, y el tono depende solo de ese signo.
+- La tarjeta y la cabecera usan `Resultado del periodo`/`Variación de equity`,
+  las fechas reales y la misma serie filtrada que la gráfica. P/L hoy y P/L
+  abierto permanecen fuera del baseline histórico. Se añadió la ventana
+  explícita `Desde 01/06/2026`; no se infiere “desde junio” desde trades.
+- Commits del incremento: `50976dfe` y `22609ba3`; versión permanece
+  `0.4.198`. QA focal `103 passed`; Ruff, NUL, diff, py_compile y config
+  temporal verdes. Suite completa, smoke y validación cerrada pendientes por
+  premarket/XNYS. Sin cambio de trading ni despliegue.
+
+### P-L63R1 — corrección diaria y tooltip del gráfico (28-jul-2026)
+
+- El porcentaje 2,10% sobre exposición (190,42 / 9.078,06) se eliminó
+  como métrica principal. La cuenta publica la variación diaria de equity
+  sobre el cierre anterior (0,27% en la evidencia), independiente de la
+  exposición. Sin equity previo queda n/d; no se reconstruye con exposición.
+- El copy es Variación de equity hoy y variación de equity desde el cierre
+  anterior; no se afirma rentabilidad desde apertura ni se presenta la serie
+  diaria como intradía. P/L abierto y resultado histórico siguen separados.
+- El tooltip del baseline Sistema/SP500 está explícito en línea y puntos:
+  Fecha, % ganancias, Serie, mismo campo retorno_acumulado y formato +.2%.
+  No cambia el eje, los valores, la fuente ni los indicadores.
+- QA focal 106 passed; Ruff, NUL, diff, py_compile y config temporal verdes.
+  Suite completa, smoke y benchmark largo quedan pendientes por XNYS abierto.
+  Versión 0.4.198; commits 12a6cb11, bef256d6, 031597c7, 89adde7f
+  y fb2c47a7. Sin cambios de trading ni despliegue.
+
+### P-L65B — UI coherente Sistema vs SP500 (28-jul-2026)
+
+- Candidato aislado `0.4.200` sobre P-L65A-R1 `53b49f71`.
+- Implementa una fila diaria canónica desde `performance_benchmark`, con
+  equity primaria, SPY de dos cierres, source/basis/as_of/freshness y estados
+  pending/unavailable. El selector 7/15/30/90/Desde inicio recorta un único
+  rowset de sesiones para tabla, contadores y gráfico.
+- El 2,39% sobre exposición queda descriptivo; no decide el ganador. Sin
+  ledger de flujos el copy es variación de equity.
+- QA focal `129 passed`; no se ejecutaron suite completa, smoke o benchmark
+  largo por XNYS abierto. Sin producción, broker, red, SQLite productiva,
+  despliegue o push.
+- Dictamen provisional: `ready_for_integration_rehearsal`. Siguiente trabajo:
+  ensayo combinado aislado P-L63/P-L65B, con P-L66 fuera de este lote.
+## P-L66 - Telegram (candidato 0.4.201)
+
+- Resumen diario 22:05 Europe/Madrid y fallback postmarket, ambos idempotentes.
+- Avisos de BUY/SELL al fill reconciliado; P/L SELL solo con `source_plan_id`
+  exacto. Pendiente ensayo integrado y despliegue autorizado con XNYS cerrado.
+
+## P-L67R1 - ensayo final P-L65B/P-L63 + P-L62 + P-L66
+
+- Ensayo aislado `pl67_p65_p62_p66_deployment_rehearsal`, merge `d3a75c98`,
+  HEAD final `62de5525`, versión 0.4.201.
+- P-L62 fue preservado campo a campo; el panel dirty P-L61 no se copió porque
+  P-L65B lo sustituye por el rowset canónico Sistema/SP500. Producción dirty
+  permanece intacta y los untracked quedan fuera.
+- Suite final: 2242 passed, 1 skip preexistente en
+  `tests/test_pre_earnings.py:1041`; Ruff/NUL/diff/compile/config verdes.
+  Smoke CLI real queda `smoke_unavailable_by_safety`; sustituto aislado verde.
+- Dictamen `ready_for_deployment` sin autorización de despliegue en este lote.

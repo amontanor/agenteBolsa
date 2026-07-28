@@ -57,6 +57,8 @@ class PositionSnapshot:
     unrealized_pl: float
     unrealized_plpc: float
     side: str = "long"
+    unrealized_intraday_pl: float | None = None
+    unrealized_intraday_plpc: float | None = None
 
 
 @dataclass(frozen=True)
@@ -111,6 +113,7 @@ class TradeRecommendation:
     comparable_control_set: dict[str, Any] = field(default_factory=dict)
     gate_evaluation_snapshot: dict[str, Any] = field(default_factory=dict)
     recommendation_id: str | None = None
+    llm_selected: bool | None = None
 
 
 @dataclass(frozen=True)

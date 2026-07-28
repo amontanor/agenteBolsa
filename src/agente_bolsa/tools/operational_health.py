@@ -1189,6 +1189,51 @@ def build_operational_health_report(
             "exits": None,
             "freshness": None,
         }
+    try:
+        from .capital_deployment_funnel_shadow import capital_deployment_funnel_digest
+
+        report_health["capital_deployment_funnel_shadow"] = capital_deployment_funnel_digest(store)
+    except Exception:  # noqa: BLE001 - capital telemetry is observability only.
+        report_health["capital_deployment_funnel_shadow"] = {
+            "status": "unavailable",
+            "shadow_only": True,
+            "denominators": None,
+            "warnings": ["read_failed"],
+        }
+    try:
+        from .data_quality_decision_shadow import data_quality_decision_shadow_digest
+
+        # Read-only consumer: it never evaluates a gate and never derives
+        # missing denominators from symbols or reports generated later.
+        report_health["data_quality_decision_shadow"] = data_quality_decision_shadow_digest(store)
+    except Exception:  # noqa: BLE001 - a telemetry failure is fail-open.
+        report_health["data_quality_decision_shadow"] = {
+            "status": "unavailable",
+            "shadow_only": True,
+            "denominators": None,
+            "warnings": ["read_failed"],
+        }
+    try:
+        from .canonical_trade_attribution import canonical_trade_attribution_digest
+
+        report_health["canonical_trade_attribution"] = canonical_trade_attribution_digest(store)
+    except Exception:  # noqa: BLE001 - attribution is observability only.
+        report_health["canonical_trade_attribution"] = {
+            "status": "degraded_observability",
+            "denominators": None,
+            "coverage": None,
+            "metrics": None,
+        }
+    try:
+        from .canonical_eod_account_snapshot import canonical_eod_account_snapshot_digest
+
+        report_health["canonical_eod_account_snapshot"] = canonical_eod_account_snapshot_digest(store)
+    except Exception:  # noqa: BLE001 - accounting shadow is observability only.
+        report_health["canonical_eod_account_snapshot"] = {
+            "status": "degraded_observability",
+            "coverage": None,
+            "result": None,
+        }
     if adaptive_governance["status"] == "critical":
         report_alerts.append(
             {

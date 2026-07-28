@@ -521,6 +521,7 @@ def build_daily_performance_item(
     now: datetime | None = None,
     spy_observation: dict[str, Any] | None = None,
     canonical_telemetry: Mapping[str, Any] | None = None,
+    canonical_eod_snapshot: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Combina el payload legacy con el bloque P-L40B sin llamadas externas."""
 
@@ -551,6 +552,10 @@ def build_daily_performance_item(
     legacy["alpha"] = contract["comparison"].get("excess_return_total")
     legacy["avg_exposure"] = account.get("gross_exposure_eod_pct")
     legacy["performance_benchmark"] = contract
+    if canonical_eod_snapshot is not None:
+        # Consumer-only projection: the PMR passes the already-built object;
+        # performance does not rebuild the accounting snapshot.
+        legacy["canonical_eod_account_snapshot"] = canonical_eod_snapshot
     payload = dict(legacy)
     payload.pop("payload", None)
     return {

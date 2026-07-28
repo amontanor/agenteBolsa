@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
@@ -32,12 +33,13 @@ RETIRE_ACTIONABLE_KEYS = {
 
 
 def _num(value: Any) -> float | None:
-    if value is None or value == "":
+    if value is None or value == "" or isinstance(value, bool):
         return None
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    return number if math.isfinite(number) else None
 
 
 def _loads(raw: str | None) -> dict[str, Any]:
@@ -115,8 +117,12 @@ def _walk_forward_ok(rows: list[dict[str, Any]], benchmark: dict[tuple[str, int]
                 "matured": metrics.get(f"matured_{horizon}d"),
                 "expectancy": metrics.get(f"expectancy_{horizon}d"),
                 "alpha": metrics.get(f"alpha_{horizon}d"),
-                "ok": (_num(metrics.get(f"expectancy_{horizon}d")) or 0.0) >= PROMOTION_MIN_EXPECTANCY
-                and (_num(metrics.get(f"alpha_{horizon}d")) or 0.0) >= PROMOTION_MIN_ALPHA,
+                "ok": (
+                    (expectancy := _num(metrics.get(f"expectancy_{horizon}d"))) is not None
+                    and expectancy >= PROMOTION_MIN_EXPECTANCY
+                    and (alpha := _num(metrics.get(f"alpha_{horizon}d"))) is not None
+                    and alpha >= PROMOTION_MIN_ALPHA
+                ),
             }
         )
     return {"ok": all(item["ok"] for item in checks), "windows": checks}
@@ -149,12 +155,16 @@ def _candidate_decision(
     }
     alpha_5d = _num(metrics.get("alpha_5d"))
     profit_factor_5d = _num(metrics.get("profit_factor_5d"))
+    unavailable_metrics = sorted(
+        key
+        for key in ("expectancy_10d", "alpha_10d", "alpha_5d", "profit_factor_5d")
+        if _num(metrics.get(key)) is None
+    )
     retire_checks = {
         "actionable_scope": (kind, key) in RETIRE_ACTIONABLE_KEYS,
         "matured_sample": int(metrics.get("matured_5d") or 0) >= RETIRE_MIN_MATURED,
-        "negative_alpha": (alpha_5d if alpha_5d is not None else 0.0) <= RETIRE_MAX_ALPHA_5D,
-        "weak_profit_factor": (profit_factor_5d if profit_factor_5d is not None else 999.0)
-        <= RETIRE_MAX_PROFIT_FACTOR_5D,
+        "negative_alpha": alpha_5d is not None and alpha_5d <= RETIRE_MAX_ALPHA_5D,
+        "weak_profit_factor": profit_factor_5d is not None and profit_factor_5d <= RETIRE_MAX_PROFIT_FACTOR_5D,
     }
     if all(promote_checks.values()):
         verdict = "PROMOTE_CANDIDATE"
@@ -175,6 +185,7 @@ def _candidate_decision(
         "regimes": dict(regimes),
         "stable_regime_count": stable_regimes,
         "turnover_per_session": turnover,
+        "unavailable_metrics": unavailable_metrics,
         "promotion_checks": promote_checks,
         "retire_checks": retire_checks,
         "walk_forward": walk_forward,
@@ -239,7 +250,9 @@ def evaluate_promotion_readiness(
     evaluations.sort(
         key=lambda item: (
             {"PROMOTE_CANDIDATE": 2, "RETIRE_CANDIDATE": 1, "HOLD": 0}.get(str(item.get("verdict")), 0),
-            item.get("metrics", {}).get("alpha_10d") or -999,
+            _num(item.get("metrics", {}).get("alpha_10d"))
+            if _num(item.get("metrics", {}).get("alpha_10d")) is not None
+            else float("-inf"),
         ),
         reverse=True,
     )

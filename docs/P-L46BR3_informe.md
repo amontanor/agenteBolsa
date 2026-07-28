@@ -1,0 +1,160 @@
+# P-L46BR3 - resultado de cartera por periodo
+
+## Diagnostico
+
+La grafica `Valor de cartera` representa la evolucion del equity de la cuenta.
+La tarjeta `P/L desde abril` mostraba en cambio `trade_history.total_pl`, suma
+operativa de resultados realizados y abiertos. Al comparar magnitudes con
+origen y denominador distintos, la interfaz podia afirmar que la cuenta ganaba
+aunque el equity visible hubiese bajado.
+
+## Contrato visual corregido
+
+- `Resultado del periodo = ultimo equity visible - primer equity visible`.
+- El porcentaje usa el primer equity visible como denominador.
+- La tarjeta publica las fechas inicial y final del filtro.
+- `Desde inicio` conserva todos los puntos disponibles desde el corte
+  configurado del 28-abr-2026.
+- `P/L abierto` suma el P/L no realizado de las posiciones del snapshot actual.
+- `P/L hoy` se elimina del bloque porque ya se publica en la cabecera.
+- Cuando falta autoridad suficiente se muestra `-`; no se inventa cero.
+
+La cifra es variacion de equity, no rentabilidad ajustada por flujos. Si en el
+futuro hubiera depositos o retiradas, deberan persistirse para calcular una
+rentabilidad neutral a flujos sin reinterpretar retrospectivamente esta serie.
+
+## Seguridad
+
+El cambio no escribe datos ni realiza una llamada adicional al broker. No toca
+senales, ranking, gates, sizing, planes, ordenes, stops, takes, exposicion,
+SQLite, scheduler ni politicas P-L43/P-L44/P-L48/P-L49.
+
+## P-L50BR1 - convivencia secuenciada
+
+La integración con P-L49B y P-L50B conserva el cambio exclusivamente visual:
+la serie completa de equity y el filtro `Desde inicio` no añaden llamadas al
+broker ni escrituras. La batería combinada pasó 675 pruebas focales y no alteró
+trading, posiciones, planes, órdenes, exposición ni límites. La validación
+completa queda reservada a una ventana con XNYS cerrado.
+
+## P-L50BR1 - verificación final de la UI
+
+`Resultado del periodo` usa el último equity visible menos el primero y calcula
+el porcentaje sobre el primer equity del rango; publica las fechas inicial y
+final. `Desde inicio` pide todo el histórico disponible desde el corte
+configurado. El bloque contiene solo `Resultado del periodo` y `P/L abierto`;
+`P/L hoy` queda fuera, en la cabecera. El abierto usa las posiciones ya
+cargadas, sin llamada adicional al broker ni escrituras. La cabecera y el
+control externo reutilizan la misma serie completa de equity. La prueba
+descendente confirma una pérdida aunque `trade_history.total_pl` sea positivo.
+
+QA UI final: **84 passed** (`test_web_app.py` + compra/fecha); la UI no cambia
+trading, ranking, gates, sizing, planes, órdenes, stops, takes, exposición ni
+límites.
+## P-L46BR4 - filtro calendario del grafico de cartera (candidato 0.4.195)
+
+La reproduccion contra `a0ab7ce4` mostro que el selector aplicaba `tail(days)`:
+interpretaba dias como numero de filas. Con snapshots de sesiones XNYS, 30
+filas podian abarcar mas de 30 dias naturales y hacer que el filtro pareciera
+ignorado.
+
+La correccion centraliza las ventanas 7, 15, 30, 90 y `Desde inicio`. Filtra
+por limites de fecha del ultimo snapshot disponible, ordena y deduplica fechas
+sin mutar la serie original. La misma serie visible alimenta la grafica y
+`Resultado del periodo`; `P/L abierto` continua usando las posiciones ya
+cargadas.
+
+QA del worktree aislado:
+
+- reproduccion negativa: el tail de 30 filas empezaba el 07-may para una
+  ventana calendario cuyo limite era 19-may;
+- `tests/test_web_app.py`: 75 passed;
+- cubiertos 7/15/30/90/Desde inicio, historico corto, duplicados, orden,
+  ventanas consecutivas y no mutacion;
+- suite completa, smoke y validacion cerrada quedan pendientes por XNYS abierto.
+
+El cambio es exclusivamente UI/lectura: no anade llamadas broker, escrituras,
+SQLite ni autoridad sobre trading. Commit funcional: `9ad9775c`.
+
+## P-L60R1 - ensayo integrado P-L46BR4 sobre P-L54BR1 (27-jul-2026)
+
+- Worktree aislado: `pl60r1_ui_measurement_integration`, rama
+  `codex/pl60r1-ui-measurement-integration`. Merge `--no-ff`:
+  `489b229f`; version final `0.4.195`, tree `5f3afdc793f60875420f3ea883dc75b7fc073100`.
+- P-L46BR3 ya estaba presente; la integracion no duplica helpers ni widgets.
+  El selector unico ofrece 7/15/30/90/`Desde inicio`; el filtro usa fechas
+  calendario del ultimo snapshot, con orden estable y deduplicacion sin mutar
+  la serie original. La misma serie visible alimenta grafica y resultado del
+  periodo; P/L abierto usa las posiciones ya cargadas.
+- QA focal UI/versionado: `83 passed`; bateria relacionada P-L43/P-L48--P-L54/
+  P-L57 y helpers de presentacion: `159 passed, 1 warning`. Ruff, NUL,
+  `git diff --check`, py_compile y `validate-agent-config --json` temporal
+  pasaron. No se anadieron pruebas redundantes, skips ni xfails.
+- Con XNYS abierto quedan pendientes suite completa, smoke y validacion cerrada.
+  No hubo broker, red, SQLite productiva, servicios, despliegue ni push. P-L54
+  y la incertidumbre historica `unconfirmed_sqlite_mutation` se conservan.
+
+## P-L63 - contrato de equity desde el 1 de abril (candidato 0.4.198)
+
+- Base exacta: `8c66f966`, tree `fb96f589`, version `0.4.197`. Worktree
+  `pl63_portfolio_april_baseline`, rama `codex/pl63-portfolio-april-baseline`.
+- La reproduccion confirmo que `PORTFOLIO_CHART_START_DATE=2026-04-28`
+  excluia el primer punto real del contrato `DEFAULT_START_DATE=2026-04-01`.
+  La cabecera ya contenia la correccion P-L60 de no leer `stats.total_pl`,
+  pero quedaba con la ventana divergente; se anadio una prueba de captura de
+  la cabecera para conservar esa garantia.
+- El fix `cad229af` mantiene una sola llamada `alpaca_portfolio_history` con
+  `period="all"`, usa solo equity real, elimina la reconstruccion estimada de
+  la grafica y comparte el resumen de equity con la cabecera. La variacion es
+  `ultimo - primero`, el porcentaje usa el primer equity y las fechas/source/
+  coverage se publican. Falta de 1-abr produce `partial` o `unavailable`, nunca
+  suma fills ni usa `current_equity - total_pl`.
+- Pruebas: reproduccion base `1 failed, 2 passed`; aceptacion P-L63 `6 passed`;
+  UI/portfolio/version `101 passed`. Ruff, NUL, diff, py_compile y
+  `validate-agent-config --json` temporal pasaron. No se ejecutaron suite,
+  smoke, broker, red ni SQLite productiva por la ventana premarket.
+
+### P-L63R1 — semántica diaria y tooltip del baseline (28-jul-2026)
+
+- La reproducción confirmó que today_pl / exposición producía 2,10%
+  (190,42 / 9.078,06) aunque la variación diaria de equity era 0,27%.
+  El porcentaje principal ahora usa únicamente today_equity_change /
+  previous_equity, recibido de la misma serie diaria. Cambiar la exposición
+  no cambia ese porcentaje; la equivalencia sobre invertido se elimina.
+- La cabecera muestra Variación de equity hoy y variación de equity desde
+  el cierre anterior. No afirma desde apertura, no interpreta el gráfico
+  diario como intradía y un único punto sin cierre anterior deja importe/
+  porcentaje no disponibles según corresponda. P/L abierto continúa separado.
+- El gráfico Sistema/SP500 mantiene los valores y el eje, pero sus capas de
+  línea y puntos comparten tooltip explícito y ordenado: Fecha, % ganancias
+  y Serie. Ambos usan retorno_acumulado con formato +.2%; no hay tooltip
+  automático con valor decimal crudo ni cálculo duplicado.
+- QA focal UI/portfolio/version: 106 passed. Ruff, NUL, git diff
+  --check, py_compile y validate-agent-config --json temporal pasaron.
+  Con XNYS abierto quedan omitidos suite completa, smoke y benchmark largo.
+  No hubo broker, red, SQLite productiva, despliegue ni push. Commits:
+  12a6cb11, bef256d6, 031597c7, 89adde7f y fb2c47a7.
+
+### P-L63 — semántica UX de resultado y ventanas explícitas (28-jul-2026)
+
+- La reproducción adicional confirmó una segunda manifestación del mismo
+  contrato roto: con equity visible `71.550 -> 70.700` y
+  `trade_history.total_pl=+106,83`, la interfaz publicaba una tarjeta verde
+  positiva. El resultado correcto es `-850,00` (aprox. `-1,19%` sobre
+  `71.550`), con tono negativo. `total_pl` no vuelve a participar en la
+  cabecera, la gráfica ni el resultado del periodo.
+- La tarjeta se presenta como `Resultado del periodo` y el detalle usa el
+  copy `Variación de equity`, con fechas inicial/final exactas y estado de
+  cobertura. El color/tone deriva únicamente del signo de esa variación.
+  P/L hoy y P/L abierto siguen siendo snapshots separados y no forman el
+  baseline histórico.
+- El selector conserva 7/15/30/90 y añade una ventana explícita `Desde
+  01/06/2026`; cada ventana filtra la misma serie de equity que alimenta la
+  gráfica, importe, porcentaje y fechas. No se interpreta una pregunta
+  “desde junio” a partir de realized/unrealized ni de una ventana implícita.
+- QA de este incremento: `103 passed` en UI/portfolio/version; Ruff, NUL,
+  `git diff --check`, py_compile y `validate-agent-config --json` temporal
+  pasaron. Suite completa, smoke y validación cerrada siguen pendientes por
+  la ventana premarket/XNYS; no hubo broker, red, SQLite productiva,
+  despliegue ni push. Commits: `50976dfe` (reproducción/criterios) y
+  `22609ba3` (fix UX).
