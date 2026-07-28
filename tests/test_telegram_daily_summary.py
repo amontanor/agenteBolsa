@@ -6,7 +6,9 @@ from types import SimpleNamespace
 import pytest
 
 from agente_bolsa import scheduler
+from agente_bolsa.config import Settings
 from agente_bolsa.models import PortfolioSnapshot, PositionSnapshot
+from agente_bolsa.storage import Store
 from agente_bolsa.tools import telegram_daily_summary as telegram
 
 
@@ -186,6 +188,48 @@ def test_publish_skips_session_with_durable_receipt(monkeypatch):
     )
 
     assert result["status"] == "idempotent"
+
+
+def test_publish_uses_real_store_receipt_and_is_idempotent(tmp_path, monkeypatch):
+    settings = Settings(DATA_DIR=tmp_path, _env_file=None)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    telegram_settings = SimpleNamespace(
+        telegram_daily_summary_enabled=True,
+        telegram_bot_token="secret-token",
+        telegram_daily_summary_chat_id="-100123",
+        telegram_timeout_seconds=15,
+    )
+    calls = []
+    monkeypatch.setattr(
+        telegram,
+        "send_telegram_message",
+        lambda **kwargs: calls.append(kwargs) or {"ok": True, "message_id": 99},
+    )
+
+    first = telegram.publish_daily_summary(
+        telegram_settings,
+        store,
+        session_date="2026-07-28",
+        performance={"pnl_pct": 0.0027, "spy_pct": 0.005, "equity": 10_000},
+        portfolio=_portfolio(),
+    )
+    second = telegram.publish_daily_summary(
+        telegram_settings,
+        store,
+        session_date="2026-07-28",
+        performance={"pnl_pct": 0.0027, "spy_pct": 0.005, "equity": 10_000},
+        portfolio=_portfolio(),
+    )
+
+    assert first["status"] == "sent"
+    assert second["status"] == "idempotent"
+    assert len(calls) == 1
+    events = store.agent_events(event_type_prefix=telegram.EVENT_TYPE, limit=20)
+    assert len(events) == 1
+    assert events[0]["event_id"] == "telegram_daily_summary:2026-07-28"
+    assert events[0]["payload"]["status"] == "sent"
+    assert "secret-token" not in json.dumps(events[0])
 
 
 def test_scheduled_job_does_not_touch_broker_when_disabled(monkeypatch):
