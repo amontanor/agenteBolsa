@@ -21,6 +21,26 @@
 - Version policy required candidate `0.4.199`; no production logic changed.
   rowset canónico y contadores por sesiones, sin cambiar trading ni hacer
   llamadas adicionales al broker/red.
+
+### P-L65A-R1 — alcance real del panel dirty (28-jul-2026)
+
+- El checkout productivo dirty contiene P-L61/P-L62 que no están en P-L63R1:
+  `web_app.py` SHA-256 `FC6ABAD9D799077D402866194A93D939657CC16CAC6943BC40B139A608D8205A`;
+  `test_web_app.py` SHA-256
+  `9580147B3E0C8F0E264A1721AA95D13C5EFF3E14F75634517E25C1C551EA1E1B`.
+- P-L63R1/P-L65A comparten `web_app.py` SHA-256
+  `33E5DE1F223080872F734CE389B8164409E99EDF4B29095E4164AC9BA1CC5FD1` y
+  no tienen `_render_daily_vs_spy_table`; por tanto la captura `13/17/0/9 de
+  39` solo puede atribuirse al objeto dirty, no a esa base.
+- Caracterización aislada: `pl65a_r1_actual_ui_characterization`, 22 tests
+  verdes. Se reproduce el contador global previo al recorte, el ganador por
+  exposición frente a SPY y la divergencia tabla/gráfico por huecos. No se
+  modificó `src` ni producción. Dictamen: `ready_for_p65b_implementation`
+  condicionado a componer P-L63R1 con el diff dirty exacto documentado en
+  `docs/P-L65A-R1_informe.md`.
+- P-L65B conserva la reserva `0.4.200`; la prueba de version policy queda
+  pendiente de ese bump en implementación, no se consume en esta
+  caracterización tests/docs.
 > **Toda mejora futura se gestiona anadiendo pasos AQUI** (no en hilos sueltos ni
 > en otros documentos). Cada entrega debe: (1) anadir/actualizar su paso en este
 > fichero con su estado, (2) subir la version en `src/agente_bolsa/__init__.py`

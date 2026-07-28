@@ -24,6 +24,19 @@
 P-L65A version policy required candidate `0.4.199`; no production logic
 changed. The next lot is P-L65B after closed-market validation gates.
 
+> P-L65A-R1 (28-jul-2026): se corrigió el alcance de la caracterización. El
+> checkout productivo dirty sí contiene `_render_daily_vs_spy_table` P-L61 y
+> P-L62, pero P-L63R1/P-L65A no lo contienen. Hashes dirty:
+> `web_app.py` `FC6ABAD9D799077D402866194A93D939657CC16CAC6943BC40B139A608D8205A`,
+> `test_web_app.py`
+> `9580147B3E0C8F0E264A1721AA95D13C5EFF3E14F75634517E25C1C551EA1E1B`.
+> El panel dirty explica `13/17/0/9 de 39`: cuenta antes del filtro, prioriza
+> `pnl_invested_pct`, recorta tabla y gráfico sobre rowsets distintos y deja
+> interpolados/parciales en la comparación. 22 pruebas aisladas pasan; no hubo
+> cambios en src ni producción. Dictamen `ready_for_p65b_implementation`
+> condicionado a componer el diff exacto, manteniendo `0.4.200` reservado
+> para P-L65B.
+
 > P-L54B-T (27-jul-2026): caracterizacion aislada completada en
 > `C:\Antonio\Bref\agenteBolsa_worktrees\pl54bt_capital_funnel_characterization`,
 > rama `codex/pl54bt-capital-funnel-characterization`, desde P-L58R1 exacto.
