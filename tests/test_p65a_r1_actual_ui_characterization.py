@@ -94,10 +94,12 @@ def test_exact_object_is_dirty_p61_and_absent_from_p63r1():
     assert "def _render_daily_vs_spy_table" in DIRTY_P_L61_EXCERPT
     assert "daily_vs_spy_days" in DIRTY_P_L61_EXCERPT
 
-    # P-L63R1/P-L65A are the committed characterization base, not the dirty
-    # checkout seen by the operator.
-    assert not hasattr(web_app, "_render_daily_vs_spy_table")
-    assert "daily_vs_spy_days" not in getsource(web_app.page_dashboard)
+    # P-L65B now implements the contract over the same real UI composition;
+    # the dirty excerpt remains evidence of the pre-fix producer only.
+    assert hasattr(web_app, "_render_daily_vs_spy_table")
+    panel_source = getsource(web_app._render_daily_vs_spy_table)
+    assert "readonly=True" in panel_source
+    assert "daily_vs_spy_days" in panel_source
 
 
 def test_dirty_selector_reproduces_13_17_0_9_of_39_with_seven_visible():
@@ -199,4 +201,4 @@ def test_p63_composition_is_required_before_p65b_implementation():
     assert "full_equity_summary" in page_source
     assert 'stats.get("total_pl")' not in page_source
     assert "_portfolio_value_chart" in page_source
-    assert "Rendimiento diario: Sistema vs SP500" not in page_source
+    assert "_render_daily_vs_spy_table" in page_source

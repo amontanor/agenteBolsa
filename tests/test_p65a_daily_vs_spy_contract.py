@@ -22,6 +22,44 @@ from agente_bolsa.web_app import (
 )
 
 
+def _canonical_row(
+    session_date: str = "2026-07-28",
+    *,
+    equity: float = 71_000.0,
+    previous_equity: float = 70_807.69,
+    spy_previous: float = 100.0,
+    spy_close: float = 100.5,
+    quality: str = "available",
+    price_basis: str = "close_unadjusted",
+    source: str | None = "persisted_p40b",
+    captured_at: str = "2026-07-28T12:00:00+00:00",
+    as_of: str | None = "2026-07-28T15:00:00+00:00",
+    avg_exposure: float | None = 0.25,
+    interpolated: bool = False,
+) -> dict:
+    payload = {
+        "performance_benchmark": {
+            "schema_version": "p-l40b.performance-benchmark.v1",
+            "captured_at": captured_at,
+            "account": {"equity": equity, "previous_equity": previous_equity},
+            "benchmark": {
+                "symbol": "SPY",
+                "previous_close": spy_previous,
+                "close": spy_close,
+                "price_basis": price_basis,
+                "source": source,
+                "as_of": as_of,
+            },
+            "data_quality": {"status": quality},
+        },
+    }
+    if avg_exposure is not None:
+        payload["avg_exposure"] = avg_exposure
+    if interpolated:
+        payload["interpolated"] = True
+    return {"session_date": session_date, "payload": payload}
+
+
 def _equity_return(current: float | None, previous: float | None) -> float | None:
     if current is None or previous is None or previous <= 0:
         return None
@@ -91,14 +129,12 @@ def test_normalized_system_return_cannot_win_against_raw_spy_return():
     assert system_equity_return < spy_return
     assert max((system_equity_return, spy_return)) == spy_return
 
-    rows, _, _ = _performance_baseline_series(
-        [{"session_date": "2026-07-28", "pnl_pct": system_equity_return, "spy_pct": spy_return}]
-    )
-    assert rows[0]["Sistema"] == system_equity_return
+    rows, _, _ = _performance_baseline_series([_canonical_row(spy_close=100.5)])
+    assert rows[0]["Sistema"] == round((71_000.0 - 70_807.69) / 70_807.69, 6)
     assert rows[0]["SPY"] == spy_return
 
 
-def test_current_baseline_uses_legacy_values_without_comparability_gate():
+def test_baseline_requires_canonical_pair_and_comparability_gate():
     row = {
         "session_date": "2026-07-28",
         "pnl_pct": 0.0027,
@@ -117,11 +153,11 @@ def test_current_baseline_uses_legacy_values_without_comparability_gate():
 
     # Caracterización: el lector actual no consulta el bloque canónico y
     # dibuja valores aun cuando la fila declara basis/fuente no comparables.
-    assert chart_rows[0]["Sistema"] == 0.0027
-    assert chart_rows[0]["SPY"] == 0.005
-    assert cumulative_system == 0.0027
-    assert cumulative_spy == 0.005
-    assert "performance_benchmark" not in getsource(_performance_baseline_series)
+    assert chart_rows[0]["Sistema"] is None
+    assert chart_rows[0]["SPY"] is None
+    assert cumulative_system is None
+    assert cumulative_spy is None
+    assert "_canonical_daily_vs_spy_row" in getsource(_performance_baseline_series)
 
 
 def test_visible_contract_closes_39_rows_as_7_visible_plus_pending():
@@ -154,18 +190,18 @@ def test_current_portfolio_selector_uses_calendar_days_not_last_real_sessions():
     assert len(dates[-7:]) == 7
 
 
-def test_current_daily_vs_spy_panel_has_no_visible_window_selector_or_counts():
-    source = getsource(web_app._render_performance_baseline)
+def test_daily_vs_spy_panel_uses_one_readonly_rowset_and_visible_window_counts():
+    source = getsource(web_app._render_daily_vs_spy_table)
 
-    assert "performance_daily(limit=0)" in source
-    assert "visible_days" not in source
-    assert "system_wins" not in source
-    assert "spy_wins" not in source
-    assert "pending" not in source
+    assert "performance_daily(limit=0, readonly=True)" in source
+    assert "daily_vs_spy_days" in source
+    assert "_daily_vs_spy_summary" in source
+    assert "visible_rows" in source
+    assert "BrokerClientFactory" not in source
+    assert "yfinance" not in source.lower()
     # La selectbox de P-L63R1 pertenece al gráfico Valor de cartera, no a este
     # baseline diario; por tanto el caso observado 13/17/0/9 de 39 no se puede
     # atribuir a un selector implementado en este árbol.
-    assert "st.selectbox" not in source
 
 
 def test_missing_or_estimated_rows_are_pending_not_zero_or_winner():
@@ -194,7 +230,7 @@ def test_first_equity_without_previous_close_is_unavailable_not_zero():
     assert summary["tone"] == "neutral"
 
 
-def test_performance_baseline_keeps_missing_values_and_does_not_mark_them_pending():
+def test_performance_baseline_keeps_missing_values_pending_and_never_zero():
     rows = [
         {"session_date": "2026-07-27", "pnl_pct": None, "spy_pct": 0.005},
         {"session_date": "2026-07-28", "pnl_pct": 0.0027, "spy_pct": None},
@@ -203,14 +239,11 @@ def test_performance_baseline_keeps_missing_values_and_does_not_mark_them_pendin
     chart_rows, system_total, spy_total = _performance_baseline_series(rows)
 
     assert chart_rows == [
-        {"fecha": "2026-07-27", "Sistema": None, "SPY": 0.005, "iq_score": None},
-        {"fecha": "2026-07-28", "Sistema": 0.0027, "SPY": None, "iq_score": None},
+        {"fecha": "2026-07-27", "Sistema": None, "SPY": None, "iq_score": None},
+        {"fecha": "2026-07-28", "Sistema": None, "SPY": None, "iq_score": None},
     ]
-    assert system_total == 0.0027
-    assert spy_total == 0.005
-    assert "status" not in chart_rows[0]
-    assert "source" not in chart_rows[0]
-    assert "as_of" not in chart_rows[0]
+    assert system_total is None
+    assert spy_total is None
 
 
 def test_system_spy_tooltip_is_explicit_and_auxiliary_raw_fields_are_absent():
@@ -250,7 +283,7 @@ def test_baseline_render_is_single_store_read_and_no_broker_network_call():
     assert "download_daily_prices" not in source
     # Gap for P-L65B: the Store API supports a readonly connection but this UI
     # reader does not request it explicitly.
-    assert "readonly=True" not in source
+    assert "readonly=True" in source
 
 
 def test_p63_header_and_period_metric_remain_equity_authority():
