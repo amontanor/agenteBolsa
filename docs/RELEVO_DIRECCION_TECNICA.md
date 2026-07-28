@@ -675,3 +675,19 @@ cerrada.
 - Smoke real no ejecutado por seguridad; sin proveedor CLI sintetico que
   garantice cero red/broker/LLM.
 - Produccion y servicios intactos; sin SQLite productiva, despliegue ni push.
+
+## P-L63 - contrato de equity desde el 1 de abril (28-jul-2026)
+
+- Worktree/rama: `pl63_portfolio_april_baseline`,
+  `codex/pl63-portfolio-april-baseline`; base `8c66f966`/tree `fb96f589`/
+  v0.4.197. Fix `cad229af`, candidato v0.4.198.
+- La causa fue la constante divergente `PORTFOLIO_CHART_START_DATE=2026-04-28`.
+  Se alinea con `DEFAULT_START_DATE=2026-04-01`; la historia se solicita una
+  sola vez con `period="all"`. La cabecera ya no usa `current_statistics.total_pl`
+  como baseline y captura el resumen real de equity.
+- Cuenta, grafica y Resultado comparten fuente/ventana/primer y ultimo equity;
+  fechas, source y coverage se muestran. Sin punto de abril: partial/unavailable,
+  sin reconstruccion desde trades. P/L hoy y P/L abierto permanecen separados.
+- `101 passed` focales UI/portfolio/version; Ruff, NUL, diff, py_compile y
+  configuracion temporal verdes. Con XNYS cerrado se requieren suite completa,
+  smoke aislado y validacion cerrada; no se ejecutaron ni hubo despliegue.

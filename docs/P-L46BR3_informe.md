@@ -93,3 +93,23 @@ SQLite ni autoridad sobre trading. Commit funcional: `9ad9775c`.
 - Con XNYS abierto quedan pendientes suite completa, smoke y validacion cerrada.
   No hubo broker, red, SQLite productiva, servicios, despliegue ni push. P-L54
   y la incertidumbre historica `unconfirmed_sqlite_mutation` se conservan.
+
+## P-L63 - contrato de equity desde el 1 de abril (candidato 0.4.198)
+
+- Base exacta: `8c66f966`, tree `fb96f589`, version `0.4.197`. Worktree
+  `pl63_portfolio_april_baseline`, rama `codex/pl63-portfolio-april-baseline`.
+- La reproduccion confirmo que `PORTFOLIO_CHART_START_DATE=2026-04-28`
+  excluia el primer punto real del contrato `DEFAULT_START_DATE=2026-04-01`.
+  La cabecera ya contenia la correccion P-L60 de no leer `stats.total_pl`,
+  pero quedaba con la ventana divergente; se anadio una prueba de captura de
+  la cabecera para conservar esa garantia.
+- El fix `cad229af` mantiene una sola llamada `alpaca_portfolio_history` con
+  `period="all"`, usa solo equity real, elimina la reconstruccion estimada de
+  la grafica y comparte el resumen de equity con la cabecera. La variacion es
+  `ultimo - primero`, el porcentaje usa el primer equity y las fechas/source/
+  coverage se publican. Falta de 1-abr produce `partial` o `unavailable`, nunca
+  suma fills ni usa `current_equity - total_pl`.
+- Pruebas: reproduccion base `1 failed, 2 passed`; aceptacion P-L63 `6 passed`;
+  UI/portfolio/version `101 passed`. Ruff, NUL, diff, py_compile y
+  `validate-agent-config --json` temporal pasaron. No se ejecutaron suite,
+  smoke, broker, red ni SQLite productiva por la ventana premarket.

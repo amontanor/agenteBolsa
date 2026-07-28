@@ -2608,3 +2608,18 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Dictamen: `ready_for_closed_market_deployment`, pero el despliegue no esta
   autorizado. Smoke real omitido por seguridad al no existir proveedor
   sintetico CLI garantizado.
+
+## P-L63 - baseline de equity desde el 1 de abril. HECHO (v0.4.198)
+
+- Base `8c66f966`, worktree `pl63_portfolio_april_baseline`, rama
+  `codex/pl63-portfolio-april-baseline`. Reproduccion `2d17df99`, pruebas de
+  aceptacion `0728a113`, fix `cad229af`.
+- Se elimina la divergencia 28-abr frente a `DEFAULT_START_DATE=2026-04-01`.
+  La unica llamada de portfolio history usa `period="all"`; Cuenta, grafica y
+  Resultado usan equity real, primer/ultimo punto, porcentaje, fechas, source
+  y coverage coherentes. No se reconstruye desde realized/unrealized trades.
+- Falta el punto del 1-abr: `partial` con primera fecha real o `unavailable`.
+  P/L hoy y P/L abierto siguen separados del baseline historico.
+- QA focal `101 passed`; Ruff/NUL/diff/py_compile/config temporal verdes.
+  Suite completa, smoke y validacion cerrada quedan pendientes fuera de esta
+  ventana. No cambiar trading ni desplegar.
