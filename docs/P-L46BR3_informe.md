@@ -113,3 +113,27 @@ SQLite ni autoridad sobre trading. Commit funcional: `9ad9775c`.
   UI/portfolio/version `101 passed`. Ruff, NUL, diff, py_compile y
   `validate-agent-config --json` temporal pasaron. No se ejecutaron suite,
   smoke, broker, red ni SQLite productiva por la ventana premarket.
+
+### P-L63 — semántica UX de resultado y ventanas explícitas (28-jul-2026)
+
+- La reproducción adicional confirmó una segunda manifestación del mismo
+  contrato roto: con equity visible `71.550 -> 70.700` y
+  `trade_history.total_pl=+106,83`, la interfaz publicaba una tarjeta verde
+  positiva. El resultado correcto es `-850,00` (aprox. `-1,19%` sobre
+  `71.550`), con tono negativo. `total_pl` no vuelve a participar en la
+  cabecera, la gráfica ni el resultado del periodo.
+- La tarjeta se presenta como `Resultado del periodo` y el detalle usa el
+  copy `Variación de equity`, con fechas inicial/final exactas y estado de
+  cobertura. El color/tone deriva únicamente del signo de esa variación.
+  P/L hoy y P/L abierto siguen siendo snapshots separados y no forman el
+  baseline histórico.
+- El selector conserva 7/15/30/90 y añade una ventana explícita `Desde
+  01/06/2026`; cada ventana filtra la misma serie de equity que alimenta la
+  gráfica, importe, porcentaje y fechas. No se interpreta una pregunta
+  “desde junio” a partir de realized/unrealized ni de una ventana implícita.
+- QA de este incremento: `103 passed` en UI/portfolio/version; Ruff, NUL,
+  `git diff --check`, py_compile y `validate-agent-config --json` temporal
+  pasaron. Suite completa, smoke y validación cerrada siguen pendientes por
+  la ventana premarket/XNYS; no hubo broker, red, SQLite productiva,
+  despliegue ni push. Commits: `50976dfe` (reproducción/criterios) y
+  `22609ba3` (fix UX).

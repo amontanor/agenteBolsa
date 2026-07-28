@@ -691,3 +691,20 @@ cerrada.
 - `101 passed` focales UI/portfolio/version; Ruff, NUL, diff, py_compile y
   configuracion temporal verdes. Con XNYS cerrado se requieren suite completa,
   smoke aislado y validacion cerrada; no se ejecutaron ni hubo despliegue.
+
+### P-L63 — corrección semántica UX de equity (28-jul-2026)
+
+- La reproducción adicional mostró que `equity 71.550 -> 70.700` con
+  `trade_history.total_pl=+106,83` podía producir una tarjeta verde. El
+  resultado correcto es `-850,00` (aprox. `-1,19%`), calculado solo como
+  último menos primer equity visible; `total_pl` queda fuera de la cabecera y
+  del baseline.
+- El copy es `Resultado del periodo`/`Variación de equity`, con fechas exactas
+  y tone derivado del signo. P/L hoy y P/L abierto son snapshots separados.
+  Se añade ventana explícita `Desde 01/06/2026`; la misma serie filtrada
+  alimenta gráfica, importe, porcentaje y fechas.
+- Commits: `50976dfe` (tests/reproducción) y `22609ba3` (fix). Versión
+  `0.4.198` sin cambio. QA focal `103 passed`; estáticos y configuración
+  temporal verdes. Suite completa, smoke y validación cerrada quedan
+  pendientes con XNYS abierto/premarket. No producción, broker, red, SQLite
+  productiva, despliegue ni push.

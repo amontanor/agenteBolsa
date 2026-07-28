@@ -2623,3 +2623,18 @@ de despliegue quedan pendientes con XNYS cerrado.
 - QA focal `101 passed`; Ruff/NUL/diff/py_compile/config temporal verdes.
   Suite completa, smoke y validacion cerrada quedan pendientes fuera de esta
   ventana. No cambiar trading ni desplegar.
+
+### P-L63 — semántica UX de equity y ventana desde junio (28-jul-2026)
+
+- Se reprodujo la segunda manifestación: equity `71.550 -> 70.700` junto a
+  `trade_history.total_pl=+106,83` producía una tarjeta verde incorrecta.
+  El resultado visible ahora es `-850,00`, aproximadamente `-1,19%` sobre el
+  primer equity, y el tono depende solo de ese signo.
+- La tarjeta y la cabecera usan `Resultado del periodo`/`Variación de equity`,
+  las fechas reales y la misma serie filtrada que la gráfica. P/L hoy y P/L
+  abierto permanecen fuera del baseline histórico. Se añadió la ventana
+  explícita `Desde 01/06/2026`; no se infiere “desde junio” desde trades.
+- Commits del incremento: `50976dfe` y `22609ba3`; versión permanece
+  `0.4.198`. QA focal `103 passed`; Ruff, NUL, diff, py_compile y config
+  temporal verdes. Suite completa, smoke y validación cerrada pendientes por
+  premarket/XNYS. Sin cambio de trading ni despliegue.
