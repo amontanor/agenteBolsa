@@ -697,9 +697,52 @@ def _latest_report_json(filename: str) -> dict[str, Any]:
     if not path.exists():
         return {"available": False, "path": str(path)}
     try:
-        return {"available": True, "path": str(path), "payload": json.loads(path.read_text(encoding="utf-8"))}
+        generated_at = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
+        return {
+            "available": True,
+            "path": str(path),
+            "payload": json.loads(path.read_text(encoding="utf-8")),
+            "generated_at": generated_at,
+        }
     except (OSError, json.JSONDecodeError):
         return {"available": False, "path": str(path)}
+
+
+def _report_age_text(generated_at: str | None) -> str:
+    """Devuelve una edad legible sin convertir timestamps inválidos en frescos."""
+
+    parsed = _parse_utc_timestamp(generated_at)
+    if parsed is None:
+        return "n/d"
+    total_seconds = (datetime.now(timezone.utc) - parsed).total_seconds()
+    if total_seconds < 0:
+        return "futuro"
+    if total_seconds < 60:
+        return "ahora"
+    minutes = int(total_seconds // 60)
+    if minutes < 60:
+        return f"hace {minutes} min"
+    hours = minutes // 60
+    if hours < 24:
+        return f"hace {hours}h"
+    days = hours // 24
+    if days < 7:
+        return f"hace {days} d" if days == 1 else f"hace {days} dias"
+    weeks = days // 7
+    if weeks < 4:
+        return f"hace {weeks} sem" if weeks == 1 else f"hace {weeks} semanas"
+    months = days // 30
+    return f"hace {months} mes" if months == 1 else f"hace {months} meses"
+
+
+def _report_age_days(generated_at: str | None) -> float | None:
+    """Devuelve edad en días; inválido/futuro permanece unavailable."""
+
+    parsed = _parse_utc_timestamp(generated_at)
+    if parsed is None:
+        return None
+    age_days = (datetime.now(timezone.utc) - parsed).total_seconds() / 86400.0
+    return age_days if age_days >= 0 else None
 
 
 def _web_search_status(settings: Any, latest_report: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -4322,6 +4365,30 @@ def page_dashboard() -> None:
                 )
                 st.dataframe(pd.DataFrame(relevant_events), width="stretch", hide_index=True)
 
+        # P-L62: freshness is visible context only; it is not a trading gate.
+        _QUALITY_STALE_DAYS = 7
+        _READINESS_STALE_DAYS = 3
+        _WEEKLY_STALE_DAYS = 7
+
+        def _metric_detail(age: str, stale: bool, extra: str) -> str:
+            parts = [age] if age else []
+            if stale:
+                parts.append("rancio")
+            if extra:
+                parts.append(extra)
+            return " · ".join(parts) if parts else extra
+
+        q_age = _report_age_text(latest_quality.get("generated_at"))
+        q_age_d = _report_age_days(latest_quality.get("generated_at"))
+        r_age = _report_age_text(latest_readiness.get("generated_at"))
+        r_age_d = _report_age_days(latest_readiness.get("generated_at"))
+        w_age = _report_age_text(latest_weekly.get("generated_at"))
+        w_age_d = _report_age_days(latest_weekly.get("generated_at"))
+
+        q_stale = not latest_quality.get("available") or q_age_d is None or q_age_d > _QUALITY_STALE_DAYS
+        r_stale = not latest_readiness.get("available") or r_age_d is None or r_age_d > _READINESS_STALE_DAYS
+        w_stale = not latest_weekly.get("available") or w_age_d is None or w_age_d > _WEEKLY_STALE_DAYS
+
         st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
         with st.container(border=True):
             _section_title("Estado operativo", "Cobertura de datos, readiness y bloqueos de la semana.")
@@ -4331,24 +4398,28 @@ def page_dashboard() -> None:
             c1, c2, c3 = st.columns(3)
             with c1:
                 coverage = _num(q.get("coverage_ratio"))
+                q_tone = "bad" if q_stale else "good" if (coverage or 0.0) >= 0.95 else "bad" if coverage is not None else "neutral"
                 _compact_metric(
                     "Cobertura datos",
                     _pct(coverage) if coverage is not None else "-",
-                    str(q.get("provider_used") or "sin informe"),
-                    "good" if (coverage or 0.0) >= 0.95 else "bad" if coverage is not None else "neutral",
+                    _metric_detail(q_age, q_stale, str(q.get("provider_used") or "sin informe")),
+                    q_tone,
                 )
             with c2:
+                r_tone = "bad" if r_stale else "bad" if latest_readiness.get("available") and not r.get("ready_for_live") else "neutral"
                 _compact_metric(
                     "Live readiness",
                     "OK" if r.get("ready_for_live") else "BLOCK" if latest_readiness.get("available") else "-",
-                    f"{r.get('blocks', 0)} blocks",
-                    "bad" if latest_readiness.get("available") and not r.get("ready_for_live") else "neutral",
+                    _metric_detail(r_age, r_stale, f"{r.get('blocks', 0)} blocks"),
+                    r_tone,
                 )
             with c3:
+                w_tone = "bad" if w_stale else "neutral"
                 _compact_metric(
                     "Bloqueos semana",
                     int((w.get("blocked_entry_quality") or 0) + (w.get("blocked_backtest") or 0)) if w else "-",
-                    str(w.get("benchmark_symbol") or "-"),
+                    _metric_detail(w_age, w_stale, str(w.get("benchmark_symbol") or "-")),
+                    w_tone,
                 )
 
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
