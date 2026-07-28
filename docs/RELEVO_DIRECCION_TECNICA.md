@@ -1,5 +1,14 @@
 # Relevo de direccion tecnica — agenteBolsa
 
+## P-L66 — candidato Telegram
+
+El candidato 0.4.200 añade un consumidor externo post-terminal para el resumen
+diario. Debe integrarse después de P-L65 para preservar la secuencia de
+versiones. Está desactivado por defecto y requiere
+`TELEGRAM_BOT_TOKEN`, `TELEGRAM_DAILY_SUMMARY_CHAT_ID` y
+`TELEGRAM_DAILY_SUMMARY_ENABLED=true` únicamente en el entorno productivo.
+No desplegar con XNYS abierto.
+
 > Actualizado: **19-jul-2026**. Produccion **0.4.185** (`8cfa0db3`, tree
 > `4c3636be`). P-L48B desplegado en mercado cerrado; P-L44B sigue en shadow.
 
