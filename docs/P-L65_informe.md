@@ -150,6 +150,6 @@ hacer llamadas adicionales al broker/red.
   SP500 contract`).
 - Commit documentación: `aa75e286` (`docs: record P-L65A daily versus SP500
   contract`).
-- HEAD final: `aa75e286a6c8a1c44f812582cbac2795b18f366b`.
-- Tree final: `262fc6d9b0daba4e1aeb62b5e0aceeed48b4e576`.
+- El registro documental se consolidó en `aa75e286`; el HEAD/tree final del
+  worktree se entrega en el dictamen de este lote.
 - Árbol limpio al cierre; no push.
