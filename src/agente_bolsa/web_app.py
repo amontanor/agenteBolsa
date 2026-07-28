@@ -88,7 +88,7 @@ from agente_bolsa.tools.web_research import build_web_research_report
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_START_DATE = "2026-04-01"
-PORTFOLIO_CHART_START_DATE = "2026-04-28"
+PORTFOLIO_CHART_START_DATE = DEFAULT_START_DATE
 PORTFOLIO_HISTORY_PERIOD = "all"
 PORTFOLIO_CHART_WINDOWS: tuple[int | None, ...] = (7, 15, 30, 90, None)
 PRE_EARNINGS_CONFIDENCE_THRESHOLD = 0.80
@@ -1145,22 +1145,27 @@ def _account_group(
     today_pct: float | None,
     positions_count: int,
     orders_count: int,
+    equity_summary: dict[str, Any] | None = None,
 ) -> None:
+    equity_summary = equity_summary or {}
     total_tone = "good" if (total_pl or 0.0) > 0 else "bad" if (total_pl or 0.0) < 0 else "neutral"
     today_tone = "good" if (today_pl or 0.0) > 0 else "bad" if (today_pl or 0.0) < 0 else "neutral"
     today_metric = _today_pl_metric_payload(today_pl, exposure, today_pct)
     today_display = today_metric["display"]
     tone_class = f"account-pl {total_tone}"
     today_class = f"account-kpi {today_tone}"
+    equity_detail = _portfolio_equity_summary_detail(equity_summary)
+    equity_start_label = _portfolio_display_date(equity_summary.get("start_date"))
     st.markdown(
         f"""
         <div class="account-strip">
             <div class="account-title">
-                <span>Cuenta · desde inicio</span>
+                <span>Cuenta · desde el 1 de abril</span>
                 <strong class="{tone_class}">{_money(total_pl)} {_pct_signed(total_pct)}</strong>
+                <em>{escape(equity_detail)}</em>
             </div>
             <div class="account-items">
-                <div><span>Equity inicial</span><strong>{_money(initial_equity)}</strong></div>
+                <div><span>Equity inicial</span><strong>{_money(initial_equity)}</strong><em>{equity_start_label}</em></div>
                 <div><span>Equity actual</span><strong>{_money(current_equity)}</strong></div>
                 <div><span>Cash</span><strong>{_money(cash)}</strong></div>
                 <div><span>Invertido</span><strong>{_money(exposure)}</strong><em>{_pct(exposure_pct)}</em></div>
@@ -1799,6 +1804,43 @@ def _portfolio_chart_visible_summary(df: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+def _portfolio_display_date(value: Any) -> str:
+    try:
+        return datetime.fromisoformat(str(value)[:10]).strftime("%d/%m/%Y")
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _portfolio_equity_summary(
+    df: pd.DataFrame,
+    *,
+    requested_start_date: str = DEFAULT_START_DATE,
+) -> dict[str, Any]:
+    summary = _portfolio_chart_visible_summary(df)
+    summary["requested_start_date"] = requested_start_date
+    if df.empty:
+        summary["coverage"] = "unavailable"
+    else:
+        summary["coverage"] = "full" if summary.get("start_date") == requested_start_date else "partial"
+    return summary
+
+
+def _portfolio_equity_summary_detail(summary: dict[str, Any]) -> str:
+    coverage = str(summary.get("coverage") or "unavailable")
+    coverage_label = {
+        "full": "cobertura completa",
+        "partial": "cobertura parcial",
+        "unavailable": "equity historico no disponible",
+    }.get(coverage, "cobertura no disponible")
+    requested = _portfolio_display_date(summary.get("requested_start_date") or DEFAULT_START_DATE)
+    first = _portfolio_display_date(summary.get("start_date"))
+    last = _portfolio_display_date(summary.get("end_date"))
+    source = str(summary.get("source") or "fuente no disponible")
+    if summary.get("start_date"):
+        return f"Desde {requested} · primer dato {first} · ultimo {last} · {source} · {coverage_label}"
+    return f"Desde {requested} · {source} · {coverage_label}"
+
+
 def _portfolio_period_metric_payload(summary: dict[str, Any]) -> dict[str, str]:
     pl = _num(summary.get("pl"))
     pl_pct = _num(summary.get("pl_pct"))
@@ -1809,19 +1851,16 @@ def _portfolio_period_metric_payload(summary: dict[str, Any]) -> dict[str, str]:
             "tone": "neutral",
         }
 
-    def _display_date(value: Any) -> str:
-        try:
-            return datetime.fromisoformat(str(value)[:10]).strftime("%d/%m/%Y")
-        except (TypeError, ValueError):
-            return "-"
-
-    start_date = _display_date(summary.get("start_date"))
-    end_date = _display_date(summary.get("end_date"))
+    start_date = _portfolio_display_date(summary.get("start_date"))
+    end_date = _portfolio_display_date(summary.get("end_date"))
     source_note = " · estimado" if str(summary.get("source") or "").lower() == "estimado" else ""
     tone = "good" if pl > 0 else "bad" if pl < 0 else "neutral"
+    detail = f"{_pct_signed(pl_pct)} · {start_date} → {end_date}{source_note}"
+    if summary.get("coverage"):
+        detail = f"{detail} · {_portfolio_equity_summary_detail(summary)}"
     return {
         "amount": _money(pl),
-        "detail": f"{_pct_signed(pl_pct)} · {start_date} → {end_date}{source_note}",
+        "detail": detail,
         "tone": tone,
     }
 
@@ -1927,19 +1966,24 @@ def _portfolio_value_chart(
     portfolio_history: dict[str, Any] | None = None,
     *,
     days: int | None = 7,
+    equity_df: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
-    df = _portfolio_value_series_from_alpaca(portfolio_history or {}, current_equity)
-    used_estimate = False
+    df = (
+        equity_df.copy(deep=True)
+        if equity_df is not None
+        else _portfolio_value_series_from_alpaca(portfolio_history or {}, current_equity)
+    )
     if not df.empty:
         df = _trim_portfolio_chart_range(df, days=days)
     if df.empty:
-        df = _estimated_portfolio_value_series(history, current_equity, days=days)
-        used_estimate = not df.empty
-    if df.empty:
         st.markdown("<div class='empty-box'>Sin datos suficientes para graficar la cartera.</div>", unsafe_allow_html=True)
-        return {"days": 0, "pl": None, "pl_pct": None}
+        return _portfolio_equity_summary(df)
     chart_df = df.copy()
-    visible_summary = _portfolio_chart_visible_summary(chart_df)
+    visible_summary = (
+        _portfolio_equity_summary(chart_df)
+        if days is None
+        else _portfolio_chart_visible_summary(chart_df)
+    )
     if alt is None:
         _streamlit_fallback_notice(
             "portfolio_chart_runtime_fallback",
@@ -1950,8 +1994,6 @@ def _portfolio_value_chart(
             width="stretch",
             hide_index=True,
         )
-        if used_estimate:
-            st.caption("Grafico estimado desde operaciones/P/L del agente para cuadrar con los valores de cabecera.")
         return visible_summary
     min_value = float(chart_df["valor_cartera"].min())
     max_value = float(chart_df["valor_cartera"].max())
@@ -1988,8 +2030,6 @@ def _portfolio_value_chart(
         .encode(x=date_axis, y="valor_cartera:Q")
     )
     st.altair_chart((line + points).properties(height=292), width="stretch")
-    if used_estimate:
-        st.caption("Grafico estimado desde operaciones/P/L del agente para cuadrar con los valores de cabecera.")
     return visible_summary
 
 
@@ -3818,9 +3858,7 @@ def page_dashboard() -> None:
     today_total = _num(today_change.get("pl")) or 0.0
     today_pct = _num(today_change.get("pl_pct")) or 0.0
     full_equity_df = _portfolio_value_series_from_alpaca(portfolio_history, current_equity)
-    if full_equity_df.empty:
-        full_equity_df = _estimated_portfolio_value_series(history, current_equity, days=None)
-    full_equity_summary = _portfolio_chart_visible_summary(full_equity_df)
+    full_equity_summary = _portfolio_equity_summary(full_equity_df)
     account_total_pl = _num(full_equity_summary.get("pl"))
     account_total_pct = _num(full_equity_summary.get("pl_pct"))
     account_initial_equity = _num(full_equity_summary.get("start_value"))
@@ -3858,6 +3896,7 @@ def page_dashboard() -> None:
         today_pct=today_pct,
         positions_count=len(portfolio.positions) if portfolio else 0,
         orders_count=len(portfolio.open_orders) if portfolio else 0,
+        equity_summary=full_equity_summary,
     )
 
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
@@ -3888,6 +3927,7 @@ def page_dashboard() -> None:
                 portfolio.portfolio_value if portfolio else None,
                 portfolio_history,
                 days=chart_days,
+                equity_df=full_equity_df,
             )
             period_metric = _portfolio_period_metric_payload(period_summary)
             p1, p2 = st.columns(2)
