@@ -1,5 +1,18 @@
 # Plan maestro de mejoras y tareas — agenteBolsa
 
+## P-L70 — rediseño UX del resumen diario Telegram (candidato 0.4.203)
+
+- Worktree aislado `pl70_telegram_summary_ux`, rama
+  `codex/pl70-telegram-summary-ux`, desde `87d29018`/árbol `fd690a93`.
+- Caracterización `b5b3fec4`, implementación `f78de077` y QA focal
+  `0a18924c`; dictamen provisional `ready_for_integration_rehearsal`.
+- Cambia el resumen a `p-l70.telegram-daily-summary.v2`: equity sin signo,
+  importe solo desde el par equity actual/anterior, comparación SP500
+  provisional cuando P-L68 no permite comparabilidad, cobertura de posiciones,
+  grupos deterministas y límite Telegram 4096 con truncado explícito.
+- `telegram_trade_notifications.py`, reconciliación, PMR, scheduler cadence y
+  trading permanecen sin cambios. Suite completa/smoke aislado pendientes.
+
 ## P-L67R1 — Despliegue combinado 0.4.201 (28-jul-2026)
 
 - Dictamen: `deployed`. Merge productivo `915481ab325d46c81a92986bfd603f13c5134dd9`;
