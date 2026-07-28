@@ -179,6 +179,20 @@ def test_dashboard_wiring_is_readonly_and_does_not_add_operational_sources():
     assert "_render_daily_vs_spy_table(store)" in page_source
 
 
+def test_daily_panel_is_presentation_only_and_has_no_trading_authority():
+    source = getsource(web_app._render_daily_vs_spy_table)
+
+    for forbidden in (
+        "build_buy_order_plans",
+        "RiskManager",
+        "save_order_plan",
+        "submit_order",
+        "close_position",
+        "BrokerClientFactory",
+    ):
+        assert forbidden not in source
+
+
 def test_freshness_is_contract_lag_not_historical_age():
     fresh = web_app._canonical_daily_vs_spy_row(
         _row("2026-06-01"), consumer_read_at=CONSUMER_READ_AT
