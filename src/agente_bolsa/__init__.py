@@ -20,4 +20,5 @@ __all__ = ["__version__"]
 # P-L59F-I: decision_rows v2 in canonical selection ledger, candidate summary, bounded 600 (0.4.197).
 # P-L59F-I-R1: identity-key 4-tuple, missing-ID in decision_rows, hash-after-attachments, any-aggregation, client_order_id, denominador pre-truncation.
 # P-L63: April equity baseline shared by account header and portfolio chart (0.4.198).
-__version__ = "0.4.198"
+# P-L65A: daily System versus SP500 contract characterization (0.4.199).
+__version__ = "0.4.199"
