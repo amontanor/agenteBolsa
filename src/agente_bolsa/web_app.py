@@ -2986,11 +2986,36 @@ def _canonical_daily_vs_spy_row(
     if not source:
         reasons.append("benchmark_source_unavailable")
 
-    generated_at_source = "generated_at" if contract.get("generated_at") else "captured_at" if contract.get("captured_at") else "created_at"
+    generated_at_source = (
+        "generated_at"
+        if contract.get("generated_at")
+        else "captured_at"
+        if contract.get("captured_at")
+        else "created_at"
+    )
     generated_at = _parse_utc_timestamp(
         contract.get("generated_at") or contract.get("captured_at") or row.get("created_at")
     )
-    as_of = _parse_utc_timestamp(benchmark.get("as_of"))
+    as_of_raw = benchmark.get("as_of")
+    as_of = _parse_utc_timestamp(as_of_raw)
+    as_of_text = str(as_of_raw or "").strip()
+    benchmark_as_of_precision = "unavailable"
+    if as_of is not None:
+        parsed_as_of = pd.Timestamp(as_of_raw)
+        benchmark_as_of_precision = (
+            "date"
+            if (
+                len(as_of_text) == 10
+                or (
+                    parsed_as_of.tzinfo is None
+                    and parsed_as_of.hour == 0
+                    and parsed_as_of.minute == 0
+                    and parsed_as_of.second == 0
+                    and parsed_as_of.microsecond == 0
+                )
+            )
+            else "instant"
+        )
     observed_at = consumer_read_at or datetime.now(timezone.utc)
     freshness_status = "fresh"
     if generated_at is None:
@@ -3001,16 +3026,20 @@ def _canonical_daily_vs_spy_row(
         freshness_status = "unavailable"
     if as_of is None:
         reasons.append("benchmark_as_of_unavailable")
-    elif as_of > observed_at:
+    elif benchmark_as_of_precision == "instant" and as_of > observed_at:
         reasons.append("benchmark_as_of_future")
         freshness_status = "unavailable"
-    elif session_date and as_of.date().isoformat() < session_date:
-        reasons.append("benchmark_as_of_before_session")
+    elif session_date and as_of.date().isoformat() != session_date:
+        reasons.append("benchmark_as_of_session_mismatch")
         freshness_status = "unavailable"
-    if generated_at is not None and as_of is not None:
-        freshness_age_seconds = (as_of - generated_at).total_seconds()
+    if (
+        generated_at is not None
+        and as_of is not None
+        and benchmark_as_of_precision == "instant"
+    ):
+        freshness_age_seconds = (generated_at - as_of).total_seconds()
         if freshness_age_seconds < 0:
-            reasons.append("generated_at_after_benchmark_as_of")
+            reasons.append("benchmark_as_of_after_generated_at")
             freshness_status = "unavailable"
         elif freshness_age_seconds > _DAILY_VS_SPY_STALE_SECONDS:
             reasons.append("generated_at_stale")
@@ -3018,8 +3047,32 @@ def _canonical_daily_vs_spy_row(
     else:
         freshness_age_seconds = None
 
-    quality = str((contract.get("data_quality") or {}).get("status") or "").lower()
-    if quality != "available":
+    contract_quality = contract.get("data_quality") or {}
+    quality = str(contract_quality.get("status") or "").lower()
+    benchmark_quality_raw = benchmark.get("data_quality")
+    benchmark_quality = str(
+        benchmark_quality_raw.get("status")
+        if isinstance(benchmark_quality_raw, dict)
+        else benchmark_quality_raw or ("available" if quality == "available" else "")
+    ).lower()
+    contract_warnings = {
+        str(item).strip().lower()
+        for item in contract_quality.get("warnings", [])
+        if str(item).strip()
+    }
+    comparison_warnings = {
+        warning
+        for warning in contract_warnings
+        if (
+            "benchmark" in warning
+            or "spy" in warning
+            or "price_basis" in warning
+            or "equity" in warning
+        )
+    }
+    if benchmark_quality != "available":
+        reasons.append(f"benchmark_data_quality_{benchmark_quality or 'unavailable'}")
+    if quality != "available" and (benchmark_quality != "available" or comparison_warnings):
         reasons.append(f"data_quality_{quality or 'unavailable'}")
         if quality in {"partial", "stale"} and freshness_status == "fresh":
             freshness_status = quality
@@ -3054,9 +3107,12 @@ def _canonical_daily_vs_spy_row(
         "generated_at_source": generated_at_source,
         "generated_at": generated_at.isoformat() if generated_at else None,
         "as_of": as_of.isoformat() if as_of else None,
+        "benchmark_as_of_precision": benchmark_as_of_precision,
         "consumer_read_at": observed_at.isoformat(),
         "freshness_status": freshness_status,
         "freshness_age_seconds": round(freshness_age_seconds, 3) if freshness_age_seconds is not None else None,
+        "contract_quality_status": quality or "unavailable",
+        "benchmark_quality_status": benchmark_quality or "unavailable",
         "comparison_status": status,
         "reason_codes": sorted(set(reasons)),
     }
@@ -3115,8 +3171,10 @@ def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
     chart_rows = [
         {
             "fecha": row["session_date"],
-            "Sistema": row["system_pct"] if row["comparison_status"] == "comparable" else None,
-            "SP500": row["spy_pct"] if row["comparison_status"] == "comparable" else None,
+            "Sistema": row["system_pct"],
+            "SP500": row["spy_pct"],
+            "estado": "Comparable" if row["comparison_status"] == "comparable" else "Provisional",
+            "motivo": ", ".join(row["reason_codes"]) if row["reason_codes"] else "",
         }
         for row in rows
     ]
@@ -3131,6 +3189,8 @@ def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
         alt.Tooltip("fecha:N", title="Fecha"),
         alt.Tooltip("retorno:Q", title="% ganancias", format="+.2%"),
         alt.Tooltip("serie:N", title="Serie"),
+        alt.Tooltip("estado:N", title="Estado"),
+        alt.Tooltip("motivo:N", title="Motivo"),
     ]
     base = alt.Chart(chart_frame).encode(
         x=alt.X("fecha:N", title=None, axis=alt.Axis(labelAngle=0, labelOverlap=True)),
@@ -3141,6 +3201,14 @@ def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
         .encode(
             y=alt.Y("retorno:Q", title="% ganancias", axis=alt.Axis(format="+.1%"), scale=alt.Scale(domain=[y_min, y_max])),
             color=alt.Color("serie:N", title=None, scale=alt.Scale(domain=["Sistema", "SP500"], range=["#0e7a47", "#1e40af"])),
+            strokeDash=alt.StrokeDash(
+                "estado:N",
+                title=None,
+                scale=alt.Scale(
+                    domain=["Comparable", "Provisional"],
+                    range=[[1, 0], [6, 4]],
+                ),
+            ),
             tooltip=tooltip,
         )
     )
@@ -3150,10 +3218,25 @@ def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
         .encode(
             y=alt.Y("retorno:Q", title="% ganancias", scale=alt.Scale(domain=[y_min, y_max])),
             color=alt.Color("serie:N", title=None, scale=alt.Scale(domain=["Sistema", "SP500"], range=["#0e7a47", "#1e40af"]), legend=None),
+            strokeDash=alt.StrokeDash(
+                "estado:N",
+                title=None,
+                scale=alt.Scale(
+                    domain=["Comparable", "Provisional"],
+                    range=[[1, 0], [6, 4]],
+                ),
+                legend=None,
+            ),
             tooltip=tooltip,
         )
     )
-    comparable_rows = [row for row in chart_rows if row["Sistema"] is not None and row["SP500"] is not None]
+    comparable_rows = [
+        row
+        for row in chart_rows
+        if row["estado"] == "Comparable"
+        and row["Sistema"] is not None
+        and row["SP500"] is not None
+    ]
     connectors = None
     if comparable_rows:
         connectors_df = pd.DataFrame(comparable_rows)
@@ -3200,7 +3283,11 @@ def _render_daily_vs_spy_table(store: Any) -> None:
     with st.container(border=True):
         title_col, control_col = st.columns([3, 1])
         with title_col:
-            _section_title("Rendimiento diario: Sistema vs SP500", "Variacion de equity contra SPY comparable; sin ajustes de flujos.")
+            _section_title(
+                "Rendimiento diario: Sistema vs SP500",
+                "Variacion de equity contra SPY, sin ajustes de flujos. "
+                "Linea continua: comparable; discontinua: provisional.",
+            )
         with control_col:
             visible_days = st.selectbox(
                 "Dias",
@@ -3228,8 +3315,13 @@ def _render_daily_vs_spy_table(store: Any) -> None:
         chart = _daily_vs_spy_chart(visible_rows)
         if chart is not None:
             st.altair_chart(chart, width="stretch")
+            if summary["comparable"] == 0:
+                st.info(
+                    "La serie discontinua es provisional: muestra los valores "
+                    "persistidos, pero no decide qué sistema fue superior."
+                )
         else:
-            st.info("Sin puntos comparables suficientes para dibujar la serie.")
+            st.info("Sin valores suficientes para dibujar la serie.")
         html_rows = []
         for row in visible_rows:
             if row["comparison_status"] == "comparable":
@@ -3249,8 +3341,18 @@ def _render_daily_vs_spy_table(store: Any) -> None:
                 )
                 system_text = f"{system_text}<span>{_money(row['equity_delta'])}{secondary}</span>"
             else:
-                system_text, spy_text, winner = "Pendiente", "Pendiente", "Pendiente"
-                system_text += f"<span>{', '.join(row['reason_codes']) or 'datos incompletos'}</span>"
+                reasons = ", ".join(row["reason_codes"]) or "datos incompletos"
+                system_text = (
+                    f"{_pct_signed(row['system_pct'])}<span>Provisional Â· {reasons}</span>"
+                    if row["system_pct"] is not None
+                    else f"Pendiente<span>{reasons}</span>"
+                )
+                spy_text = (
+                    f"{_pct_signed(row['spy_pct'])}<span>Provisional</span>"
+                    if row["spy_pct"] is not None
+                    else "Pendiente"
+                )
+                winner = "Pendiente"
             html_rows.append(
                 "<tr>"
                 f"<td><strong>{row['session_date']}</strong></td>"
@@ -3276,9 +3378,9 @@ def _performance_baseline_series(
         pnl = canonical["system_pct"] if canonical["comparison_status"] == "comparable" else None
         spy = canonical["spy_pct"] if canonical["comparison_status"] == "comparable" else None
         if pnl is not None:
-            cumulative_pnl = (cumulative_pnl or 0.0) + pnl
+            cumulative_pnl = (1.0 + (cumulative_pnl or 0.0)) * (1.0 + pnl) - 1.0
         if spy is not None:
-            cumulative_spy = (cumulative_spy or 0.0) + spy
+            cumulative_spy = (1.0 + (cumulative_spy or 0.0)) * (1.0 + spy) - 1.0
         chart_rows.append(
             {
                 "fecha": row.get("session_date"),
