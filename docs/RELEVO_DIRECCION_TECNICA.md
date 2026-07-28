@@ -10,10 +10,15 @@
   `performance_benchmark`; SP500 conserva valor provisional sin declarar
   ganador si P-L68 no confirma comparabilidad; posiciones llevan cobertura y
   grupos deterministas.
-- Implementación `f78de077` y QA `0a18924c`, `b3c4d1c2`, `7e96191a`.
-  Ruff/NUL/diff/compile/config verdes. La suite aislada obtuvo `1618 passed,
-  1 failed, 1 warning` por el fallo de fecha dinámica P-L63 reproducido contra
-  base; no pertenece a este lote. No se ejecutó smoke real ni hubo mensajes.
+- Implementación `f78de077` y QA `0a18924c`, `b3c4d1c2`, `7e96191a`,
+  `12de9be5`, `1b64dc5a`. La regresión de fecha dinámica P-L63 quedó congelada
+  en el test, sin tocar comportamiento. El recibo v2 conserva texto exacto,
+  `text_sha256` y unidades UTF-16; `content_hash` sigue siendo el hash del
+  payload canónico. La suite aislada final obtuvo `2261 passed, 1 skipped, 1
+  warning`; el skip es el test condicional preexistente
+  `test_score_study_regression_current_sqlite` por historia local insuficiente
+  o no disponible. Ruff/NUL/diff/compile/config verdes. No se ejecutó smoke real
+  ni se enviaron mensajes.
 
 > Actualizado: **28-jul-2026**. Producción estable **0.4.201**
 > (`915481ab325d46c81a92986bfd603f13c5134dd9`, árbol funcional

@@ -20,6 +20,8 @@ validación cerrada con precondiciones operativas verificadas.
 - Implementación: `f78de077` (`feat: redesign Telegram daily summary UX`).
 - QA focal: `0a18924c` (`test: verify Telegram summary UX contract`).
 - QA de versión: `b3c4d1c2` y `7e96191a`.
+- Implementación de auditoría: `12de9be5` (`feat: audit Telegram summary receipt and UTF-16 limit`).
+- QA y regresión determinista: `1b64dc5a` (`test: close P-L70 audit and P-L63 date regression`).
 - Versión candidata: `0.4.203`.
 
 La caracterización contra la base demostró el saldo absoluto con signo y la
@@ -49,9 +51,13 @@ descendente y símbolo como desempate. Los totales incluyen cobertura
 
 Para superar el límite de Telegram se conserva un único mensaje con truncado
 determinista y explícito: el payload conserva todas las posiciones y el texto
-indica cuántas se muestran y cuántas quedan resumidas. Esto evita mensajes
-multipartiales y conserva un único recibo/idempotencia por sesión. El recibo
-v2 incluye longitud, total de posiciones y si hubo truncado.
+indica cuántas se muestran y cuántas quedan resumidas. El límite se valida en
+unidades UTF-16 conservadoras (`4096`); no se cortan caracteres ni se emiten
+encabezados de grupo sin filas. El recibo v2 conserva, además de los metadatos,
+el texto renderizado exacto (`text`) y su SHA-256 (`text_sha256`). Este hash es
+distinto de `content_hash`, que identifica el payload canónico antes del
+renderizado. No se incluyen token ni `chat_id`; los recibos v1 existentes siguen
+siendo idempotentes y no se reenvían.
 
 ## Fixture de aceptación
 
@@ -66,24 +72,60 @@ La fixture reproduce exactamente:
   comparables.
 
 También cubre cartera vacía, cero válido, `NaN`/`Infinity`, valores faltantes,
-Unicode y 100 posiciones con mensaje de longitud máxima 4096.
+Unicode y 100 posiciones con mensaje de longitud máxima 4096. La fixture
+anonimizada con la forma de `performance_daily.payload_json` del 28-jul fija
+equity `70,634.91`, `previous_equity` `70,534.69`, delta `+100.22`, retorno
+`+0.142086%` y SP500 `-0.304428%`; con `price_basis=unknown` y calidad
+`partial` queda `Provisional`, aunque calidad se reciba como string o mapping.
+Con fuente/as-of y base comparable explícitos, el test permite `comparable`.
+
+Mensaje exacto de aceptación (8/8 posiciones, ordenado por impacto absoluto):
+
+```text
+📊 Cierre · 28 jul 2026
+
+💼 Cuenta
+• Equity: 70,634.91 USD
+• Variación de equity hoy: +100.22 USD (+0.14%)
+• SP500: -0.30% · Provisional
+• Diferencia: +0.45 pp · Provisional
+
+📈 Posiciones abiertas · 8
+• P/L abierto total (8/8): +85.54 USD
+• Variación abierta hoy (8/8): +73.87 USD
+
+⚠️ Comparación provisional: SP500 no tiene base histórica plenamente comparable.
+
+🟢 En beneficio · 6
+• KHC  Total +42.94 USD (+4.32%) · Hoy +40.28 USD (+4.04%)
+• CPAY  Total +24.90 USD (+3.35%) · Hoy +9.22 USD (+1.21%)
+• AAPL  Total +21.27 USD (+2.13%) · Hoy +10.05 USD (+0.99%)
+• TMO  Total +17.96 USD (+3.21%) · Hoy +17.27 USD (+3.09%)
+• PRU  Total +17.20 USD (+1.76%) · Hoy +16.32 USD (+1.67%)
+• GD  Total +16.72 USD (+2.17%) · Hoy +9.78 USD (+1.26%)
+
+🔴 En pérdida · 2
+• UNP  Total -37.25 USD (-4.02%) · Hoy -9.35 USD (-1.04%)
+• VTR  Total -18.20 USD (-1.82%) · Hoy -19.70 USD (-1.97%)
+```
 
 ## Validación
 
-- `tests/test_telegram_daily_summary.py`: 16 verdes.
-- Telegram daily summary + trade notifications + P-L68/P-L63/P-L65:
-  46 verdes y un fallo preexistente de fecha dinámica en
-  `test_explicit_june_window_has_date_authority_and_exact_visible_dates`.
-- El fallo se reprodujo contra la base exacta 87d29018: devuelve `2026-07-29`
-  frente a una aserción fija `2026-07-28`; queda fuera de P-L70.
-- Ruff completo, `check_no_nulls.py` (`447 archivos`), `git diff --check`,
-  compilación y `validate-agent-config --json` aislado: verdes.
-- Suite completa aislada: `1618 passed, 1 failed, 1 warning` en 696,99 s; el
-  único fallo es el mismo test preexistente de P-L63, reproducido contra la
-  base exacta, por `2026-07-29` frente a una aserción fija `2026-07-28`.
-- Smoke real no ejecutado: habría requerido una ruta de ejecución y no se
-  autoriza ningún mensaje Telegram real. El envío queda cubierto con sender
-  monkeypatched y Store temporal.
+- Reproducción inicial de P-L63: el test esperaba `2026-07-28` y la ruta
+  devolvía `2026-07-29`; la fecha se congela en el test, sin tocar la lógica
+  funcional.
+- Focales P-L70/P-L63 y resumen Telegram: `22 passed`.
+- Suite completa aislada final: `2261 passed, 1 skipped, 1 warning` en
+  `772,83 s`. El único skip es condicional y preexistente en
+  `test_score_study_regression_current_sqlite`, cuando la historia local no
+  está disponible o no alcanza el mínimo de eventos; no se añadió skip/xfail.
+  La única advertencia es la deprecación `websockets.legacy` en un test de
+  wiring existente.
+- Ruff completo, `check_no_nulls.py`, `git diff --check`, compilación y
+  `validate-agent-config --json` aislado: verdes.
+- El sender y Store se probaron con dobles/SQLite temporal, incluyendo retry,
+  idempotencia v1/v2, fallo, texto Unicode en frontera UTF-16 y ausencia de
+  secretos. Smoke real y envío Telegram real no ejecutados por seguridad.
 
 No se enviaron mensajes reales, no se leyó token/chat_id, no se usó red ni
 SQLite productiva.

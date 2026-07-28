@@ -6,14 +6,19 @@
   `codex/pl70-telegram-summary-ux`, desde `87d29018`/árbol `fd690a93`.
 - Caracterización `b5b3fec4`, implementación `f78de077` y QA focal
   `0a18924c`; dictamen `ready_for_integration_rehearsal`; no despliegue.
+- QA R1: `12de9be5` y `1b64dc5a`; la regresión de fecha P-L63 quedó
+  determinista con reloj congelado. El recibo conserva texto exacto y
+  `text_sha256` separado de `content_hash`; el límite se valida en 4096
+  unidades UTF-16 y el truncado reconcilia visibles/omitidas.
 - Cambia el resumen a `p-l70.telegram-daily-summary.v2`: equity sin signo,
   importe solo desde el par equity actual/anterior, comparación SP500
   provisional cuando P-L68 no permite comparabilidad, cobertura de posiciones,
   grupos deterministas y límite Telegram 4096 con truncado explícito.
 - `telegram_trade_notifications.py`, reconciliación, PMR, scheduler cadence y
-  trading permanecen sin cambios. La suite aislada obtuvo `1618 passed, 1
-  failed, 1 warning` por el test de fecha dinámica P-L63 reproducido contra la
-  base; smoke real no ejecutado.
+  trading permanecen sin cambios. Suite final aislada: `2261 passed, 1
+  skipped, 1 warning`; el skip es el test condicional preexistente de historia
+  SQLite local (`test_score_study_regression_current_sqlite`). Smoke real y
+  mensaje Telegram no ejecutados.
 
 ## P-L67R1 — Despliegue combinado 0.4.201 (28-jul-2026)
 
