@@ -65,6 +65,24 @@ def test_build_and_format_daily_summary_keeps_denominators_separate():
     assert "AAA: total +100.00 USD (+11.11%); hoy +25.00 USD (+2.50%)" in text
 
 
+def test_p70_characterizes_base_summary_ux_defects_before_redesign():
+    payload = telegram.build_daily_summary(
+        session_date="2026-07-28",
+        performance={"pnl_pct": 0.0014, "spy_pct": -0.003, "equity": 70_638.81},
+        portfolio=_portfolio(),
+    )
+
+    text = telegram.format_daily_summary(payload)
+
+    # Reproducción contra 0.4.202: un saldo absoluto se presenta con signo y
+    # el mensaje carece de jerarquía/agrupación de posiciones.
+    assert "Equity: +70,638.81 USD" in text
+    assert "Cartera abierta:" in text
+    assert "En beneficio" not in text
+    assert "En pérdida" not in text
+    assert "P/L abierto total (2/2)" not in text
+
+
 def test_missing_intraday_values_are_unavailable_not_zero():
     position = PositionSnapshot(
         symbol="AAA",
