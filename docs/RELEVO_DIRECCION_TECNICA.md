@@ -1,8 +1,24 @@
 # Relevo de direccion tecnica — agenteBolsa
 
-> Actualizado: **27-jul-2026**. Produccion estable **0.4.185** (`24537e81`,
-> tree `4747f27f`). Candidato integrado P-L58R1 **0.4.193** aislado y no
-> desplegado; P-L57A queda conservado dentro del historial.
+> Actualizado: **28-jul-2026**. Producción estable **0.4.201**
+> (`915481ab325d46c81a92986bfd603f13c5134dd9`, árbol funcional
+> `f3a2eda76f3c317d68d8679ce00a7ea43a6aa023`). P-L67R1 desplegado y
+> validado con dos comprobaciones; candidato final `b25c9603` conservado.
+
+### P-L67R1 — despliegue productivo 0.4.201
+
+- Se preservaron los cambios productivos previos en `b2d7c5c6`; el merge
+  `--no-ff` `915481ab` resolvió versión, plan y UI campo a campo.
+- El árbol funcional coincide exactamente con el candidato final. La suite
+  productiva pasó `2243` pruebas; Ruff, NUL, diff, configuración y kernel
+  quedaron verdes.
+- Stack gestionado arriba: HTTP raíz y `/health` 200, scheduler
+  launcher→runtime único, lock v1 PID 18888/token coherente, lease PMR vacío.
+- Tras la parada apareció una alerta transitoria de datos >30 min; el ciclo
+  natural `mkt_2fe0c3db689e` terminó en 598,277 s y la salud regenerada quedó
+  `warning` con `0 critical`. Cero órdenes fueron creadas desde el reinicio.
+- Telegram diario está programado a las 22:05 Europe/Madrid y los avisos de
+  fills están activos. No hubo push.
 
 ### P-L65A — caracterización diaria Sistema vs SP500 (28-jul-2026)
 

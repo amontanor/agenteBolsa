@@ -1,6 +1,20 @@
 # Plan maestro de mejoras y tareas — agenteBolsa
 
-## P-L66 — Resumen diario por Telegram (0.4.201, candidato aislado)
+## P-L67R1 — Despliegue combinado 0.4.201 (28-jul-2026)
+
+- Dictamen: `deployed`. Merge productivo `915481ab325d46c81a92986bfd603f13c5134dd9`;
+  árbol funcional `f3a2eda76f3c317d68d8679ce00a7ea43a6aa023`, idéntico al
+  candidato final `b25c9603`.
+- Integra P-L63/P-L65B, P-L62 y P-L66. Suite productiva:
+  `2243 passed, 1 warning`; Ruff, NUL, diff, configuración y kernel verdes.
+- Dos comprobaciones postarranque: HTTP 200/200, scheduler único lógico,
+  lock/token coherentes, cero órdenes desde el reinicio y lease postmarket
+  vacío. El ciclo natural `mkt_2fe0c3db689e` terminó `completed`.
+- Salud final `warning`, con cero alertas críticas. El resumen Telegram queda
+  programado una vez por sesión a las 22:05 Europe/Madrid y los avisos de fills
+  están activos mediante configuración local.
+
+## P-L66 — Resumen diario por Telegram (0.4.201, desplegado)
 
 - Primer intento a las 22:05 Europe/Madrid y fallback idempotente después del
   terminal durable del postmarket.
@@ -9,8 +23,7 @@
 - Publica variación diaria de equity, SP500 y P/L total/diario por posición.
 - Token y `chat_id` solo mediante entorno local; desactivado por defecto.
 - Recibo append-only por sesión evita reenvíos después de un éxito confirmado.
-- Pendiente de integración, validación completa con XNYS cerrado y despliegue
-  autorizado.
+- Integrado y desplegado dentro de P-L67R1.
 
 > **Este documento es la fuente unica de verdad de la mejora del sistema.**
 > Contiene la vision, lo ya ejecutado, el diagnostico vigente, las tareas con su
@@ -60,9 +73,9 @@
 > con los cambios cargados (ver seccion 7).
 
 - Rama de integracion desplegada: `codex/mejora_continua`
-- Version productiva estable: **0.4.185** (P-L48B desplegado en producción el 19-jul)
-- Candidato de integración aislado: **0.4.193** (P-L53BR2 + P-L43C-R1 + P-L57A; no desplegado)
-- Ultima actualizacion: 2026-07-27
+- Version productiva estable: **0.4.201** (P-L67R1 desplegado el 28-jul)
+- Candidato final conservado: **0.4.201**, HEAD `b25c9603`, tree `f3a2eda7`
+- Ultima actualizacion: 2026-07-28
 - Estado P-L50BR1: worktree combinado candidato **0.4.188**; secuencia
   P-L49B 0.4.186 -> P-L46BR3 0.4.187 -> P-L50B 0.4.188. La linea anterior
   conserva el estado historico del ensayo individual P-L49B.

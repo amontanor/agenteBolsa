@@ -138,3 +138,30 @@ No hubo despliegue ni push. El candidato quedó limpio tras la documentación;
 el siguiente paso autorizado es un preflight de mercado cerrado y la
 normalización controlada del checkout dirty, preservando los untracked y sin
 descartar hunks del operador.
+
+## Addendum de despliegue productivo — 28-jul-2026
+
+Dictamen final: `deployed`.
+
+- Producción se normalizó de forma auditable en `b2d7c5c6` y fusionó este
+  candidato con `--no-ff` en `915481ab325d46c81a92986bfd603f13c5134dd9`.
+  El árbol funcional `f3a2eda76f3c317d68d8679ce00a7ea43a6aa023` coincide
+  exactamente con el candidato final `b25c9603`.
+- Suite productiva con stack detenido: `2243 passed, 1 warning` en 915,36 s.
+  Ruff completo, `check_no_nulls.py` (446), `git diff --check`,
+  `validate-agent-config --json` y kernel quedaron verdes.
+- El sello kernel se actualizó únicamente después de revisar los cambios
+  autorizados: `broker.py` añade dos campos intradía opcionales sin cambiar
+  requests; `.env` contiene una sola copia de cada clave Telegram.
+- Arranque gestionado y dos comprobaciones separadas: HTTP raíz y `/health`
+  200; cadena scheduler única, lock v1 PID 18888 y token
+  `134297337742205338` coherentes; configuración válida y kernel sin
+  violaciones.
+- La alerta transitoria `data_pipeline_down` causada por la parada desapareció
+  tras el ciclo natural `mkt_2fe0c3db689e`, completado en 598,277 s. Salud
+  final: `warning`, cinco warnings preexistentes y cero críticos.
+- SQLite se leyó con `mode=ro` y `query_only=ON`: cero órdenes desde el
+  reinicio y `post_market_coordination:active = null`.
+- `adaptive_config.json` conservó SHA-256
+  `60833B60F83EDB1B5ECBE0785BDACD68F58AF6D5DFB307649749A8DBF6C7F4D0`.
+  No hubo push ni jobs manuales de mercado, postmarket o reconciliación.
