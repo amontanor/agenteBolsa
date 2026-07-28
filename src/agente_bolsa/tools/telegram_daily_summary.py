@@ -6,11 +6,13 @@ import hashlib
 import json
 import math
 from collections.abc import Callable, Mapping
+from datetime import date
 from typing import Any
 from urllib.request import Request, urlopen
 
-SCHEMA_VERSION = "p-l66.telegram-daily-summary.v1"
+SCHEMA_VERSION = "p-l70.telegram-daily-summary.v2"
 EVENT_TYPE = "telegram_daily_summary_sent"
+MAX_TELEGRAM_MESSAGE_LENGTH = 4096
 
 
 def _finite(value: Any) -> float | None:
@@ -28,9 +30,129 @@ def _money(value: Any) -> str:
     return "n/d" if number is None else f"{number:+,.2f} USD"
 
 
+def _balance(value: Any) -> str:
+    number = _finite(value)
+    return "n/d" if number is None else f"{number:,.2f} USD"
+
+
 def _pct(value: Any) -> str:
     number = _finite(value)
     return "n/d" if number is None else f"{number:+.2%}"
+
+
+def _pp(value: Any) -> str:
+    number = _finite(value)
+    return "n/d" if number is None else f"{number * 100:+.2f} pp"
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _performance_contract(row: Mapping[str, Any]) -> Mapping[str, Any]:
+    contract = row.get("performance_benchmark")
+    if isinstance(contract, Mapping):
+        return contract
+    nested = _mapping(row.get("payload")).get("performance_benchmark")
+    return nested if isinstance(nested, Mapping) else {}
+
+
+def _coverage(values: list[float | None]) -> tuple[float | None, dict[str, Any]]:
+    total = len(values)
+    known = [value for value in values if value is not None]
+    if total == 0:
+        return 0.0, {"known": 0, "total": 0, "status": "not_applicable"}
+    if not known:
+        return None, {"known": 0, "total": total, "status": "unavailable"}
+    status = "complete" if len(known) == total else "partial"
+    return sum(known), {"known": len(known), "total": total, "status": status}
+
+
+def _comparison_contract(
+    *,
+    row: Mapping[str, Any],
+    contract: Mapping[str, Any],
+    account_daily_return: float | None,
+    spy_daily_return: float | None,
+) -> tuple[str, list[str], float | None]:
+    benchmark = _mapping(contract.get("benchmark"))
+    explicit_status = str(
+        row.get("comparison_status")
+        or contract.get("comparison_status")
+        or _mapping(contract.get("comparison")).get("comparison_status")
+        or ""
+    ).strip().lower()
+    basis = str(benchmark.get("price_basis") or "").strip().lower()
+    quality = str(benchmark.get("data_quality") or "").strip().lower()
+    previous_close = _finite(benchmark.get("previous_close"))
+    close = _finite(benchmark.get("close"))
+    reason_codes: list[str] = []
+    if account_daily_return is None:
+        reason_codes.append("account_daily_return_unavailable")
+    if spy_daily_return is None:
+        reason_codes.append("spy_daily_return_unavailable")
+    if previous_close is None or previous_close <= 0 or close is None or close <= 0:
+        reason_codes.append("benchmark_pair_unavailable")
+    if basis not in {"adjusted_ohlc", "close_unadjusted"}:
+        reason_codes.append("benchmark_price_basis_not_comparable")
+    if quality not in {"available", "complete"}:
+        reason_codes.append("benchmark_quality_not_comparable")
+    if not benchmark.get("source"):
+        reason_codes.append("benchmark_source_unavailable")
+    if not benchmark.get("as_of"):
+        reason_codes.append("benchmark_as_of_unavailable")
+    numeric = account_daily_return is not None and spy_daily_return is not None
+    comparable_inputs = numeric and not reason_codes
+    comparable = comparable_inputs and explicit_status not in {"pending", "partial", "unavailable", "conflict"}
+    status = "comparable" if comparable else "provisional" if numeric else "unavailable"
+    difference = account_daily_return - spy_daily_return if numeric else None
+    return status, sorted(set(reason_codes)), difference
+
+
+def _position_group(total_pl: float | None) -> str:
+    if total_pl is None:
+        return "incomplete"
+    if total_pl > 0:
+        return "profit"
+    if total_pl < 0:
+        return "loss"
+    return "unchanged"
+
+
+def _position_sort_key(item: Mapping[str, Any]) -> tuple[float, str]:
+    total_pl = _finite(item.get("total_pl"))
+    return (-(abs(total_pl) if total_pl is not None else 0.0), str(item.get("symbol") or ""))
+
+
+def _grouped_positions(payload: Mapping[str, Any]) -> list[tuple[str, str, list[dict[str, Any]]]]:
+    labels = (
+        ("profit", "🟢 En beneficio"),
+        ("loss", "🔴 En pérdida"),
+        ("unchanged", "⚪ Sin cambio"),
+        ("incomplete", "⚠️ Datos incompletos"),
+    )
+    groups = {key: [] for key, _label in labels}
+    for item in payload.get("positions") or []:
+        if isinstance(item, Mapping):
+            groups[_position_group(_finite(item.get("total_pl")))].append(dict(item))
+    return [(key, label, sorted(groups[key], key=_position_sort_key)) for key, label in labels if groups[key]]
+
+
+def _position_line(item: Mapping[str, Any]) -> str:
+    return (
+        f"• {item.get('symbol') or '-'}  Total {_money(item.get('total_pl'))} "
+        f"({_pct(item.get('total_pl_pct'))}) · Hoy {_money(item.get('today_pl'))} "
+        f"({_pct(item.get('today_pl_pct'))})"
+    )
+
+
+def _date_label(session_date: Any) -> str:
+    try:
+        value = date.fromisoformat(str(session_date))
+    except (TypeError, ValueError):
+        return str(session_date or "n/d")
+    months = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
+    return f"{value.day:02d} {months[value.month - 1]} {value.year}"
 
 
 def build_daily_summary(
@@ -41,7 +163,33 @@ def build_daily_summary(
 ) -> dict[str, Any]:
     """Construye el mensaje únicamente desde objetos ya obtenidos por PMR."""
 
-    row = dict(performance or {})
+    row = dict(performance) if isinstance(performance, Mapping) else {}
+    contract = _performance_contract(row)
+    account = _mapping(contract.get("account"))
+    benchmark = _mapping(contract.get("benchmark"))
+    equity = _finite(account.get("equity"))
+    if equity is None:
+        equity = _finite(row.get("equity"))
+    if equity is None:
+        equity = _finite(getattr(portfolio, "portfolio_value", None))
+    previous_equity = _finite(account.get("previous_equity"))
+    exact_daily_return = (
+        equity / previous_equity - 1.0
+        if equity is not None and previous_equity is not None and previous_equity > 0
+        else None
+    )
+    legacy_daily_return = _finite(row.get("pnl_pct"))
+    account_daily_return = exact_daily_return if exact_daily_return is not None else legacy_daily_return
+    equity_delta = equity - previous_equity if exact_daily_return is not None else None
+    spy_daily_return = _finite(benchmark.get("daily_return"))
+    if spy_daily_return is None:
+        spy_daily_return = _finite(row.get("spy_pct"))
+    comparison_status, comparison_reasons, difference = _comparison_contract(
+        row=row,
+        contract=contract,
+        account_daily_return=account_daily_return,
+        spy_daily_return=spy_daily_return,
+    )
     positions: list[dict[str, Any]] = []
     for position in getattr(portfolio, "positions", None) or []:
         positions.append(
@@ -54,19 +202,36 @@ def build_daily_summary(
                 "today_pl_pct": _finite(getattr(position, "unrealized_intraday_plpc", None)),
             }
         )
-    positions.sort(key=lambda item: item["symbol"])
+    positions.sort(key=lambda item: (_position_group(item.get("total_pl")), _position_sort_key(item)))
+    open_total_pl, open_total_coverage = _coverage([item["total_pl"] for item in positions])
+    open_today_pl, open_today_coverage = _coverage([item["today_pl"] for item in positions])
+    groups = _grouped_positions({"positions": positions})
     payload = {
         "schema_version": SCHEMA_VERSION,
         "session_date": session_date,
-        "account_daily_return": _finite(row.get("pnl_pct")),
-        "spy_daily_return": _finite(row.get("spy_pct")),
-        "equity": _finite(row.get("equity")) or _finite(getattr(portfolio, "portfolio_value", None)),
-        "open_total_pl": sum(item["total_pl"] for item in positions if item["total_pl"] is not None)
-        if any(item["total_pl"] is not None for item in positions)
-        else None,
-        "open_today_pl": sum(item["today_pl"] for item in positions if item["today_pl"] is not None)
-        if any(item["today_pl"] is not None for item in positions)
-        else None,
+        "account_daily_return": account_daily_return,
+        "account_daily_return_source": (
+            "performance_benchmark.account_equity_pair"
+            if exact_daily_return is not None
+            else "legacy_percentage"
+            if legacy_daily_return is not None
+            else "unavailable"
+        ),
+        "equity": equity,
+        "previous_equity": previous_equity,
+        "equity_delta": equity_delta,
+        "spy_daily_return": spy_daily_return,
+        "comparison_status": comparison_status,
+        "comparison_reason_codes": comparison_reasons,
+        "comparison_difference": difference,
+        "benchmark_source": benchmark.get("source"),
+        "benchmark_price_basis": benchmark.get("price_basis"),
+        "benchmark_as_of": benchmark.get("as_of"),
+        "open_total_pl": open_total_pl,
+        "open_total_pl_coverage": open_total_coverage,
+        "open_today_pl": open_today_pl,
+        "open_today_pl_coverage": open_today_coverage,
+        "position_groups": {key: len(items) for key, _label, items in groups},
         "positions": positions,
     }
     canonical = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"), allow_nan=False)
@@ -75,27 +240,66 @@ def build_daily_summary(
 
 
 def format_daily_summary(payload: Mapping[str, Any]) -> str:
-    lines = [
-        f"📊 Resumen agenteBolsa — {payload['session_date']}",
+    comparison_status = str(payload.get("comparison_status") or "unavailable")
+    comparison_suffix = "" if comparison_status == "comparable" else " · Provisional" if comparison_status == "provisional" else ""
+    total_coverage = _mapping(payload.get("open_total_pl_coverage"))
+    today_coverage = _mapping(payload.get("open_today_pl_coverage"))
+    total_count = len(list(payload.get("positions") or []))
+    base_lines = [
+        f"📊 Cierre · {_date_label(payload.get('session_date'))}",
         "",
-        f"Sistema (variación diaria de equity): {_pct(payload.get('account_daily_return'))}",
-        f"SP500: {_pct(payload.get('spy_daily_return'))}",
-        f"Equity: {_money(payload.get('equity'))}",
-        f"P/L abierto total: {_money(payload.get('open_total_pl'))}",
-        f"P/L abierto hoy: {_money(payload.get('open_today_pl'))}",
+        "💼 Cuenta",
+        f"• Equity: {_balance(payload.get('equity'))}",
+        f"• Variación de equity hoy: {_money(payload.get('equity_delta'))} ({_pct(payload.get('account_daily_return'))})",
+        f"• SP500: {_pct(payload.get('spy_daily_return'))}{comparison_suffix}",
+        f"• Diferencia: {_pp(payload.get('comparison_difference'))}{comparison_suffix}",
         "",
-        "Cartera abierta:",
+        f"📈 Posiciones abiertas · {total_count}",
+        f"• P/L abierto total ({total_coverage.get('known', 0)}/{total_coverage.get('total', total_count)}): "
+        f"{_money(payload.get('open_total_pl'))}"
+        f"{' · parcial' if total_coverage.get('status') == 'partial' else ''}",
+        f"• Variación abierta hoy ({today_coverage.get('known', 0)}/{today_coverage.get('total', total_count)}): "
+        f"{_money(payload.get('open_today_pl'))}"
+        f"{' · parcial' if today_coverage.get('status') == 'partial' else ''}",
     ]
-    positions = list(payload.get("positions") or [])
-    if not positions:
-        lines.append("• Sin posiciones")
-    for item in positions:
-        lines.append(
-            f"• {item['symbol']}: total {_money(item.get('total_pl'))} "
-            f"({_pct(item.get('total_pl_pct'))}); hoy {_money(item.get('today_pl'))} "
-            f"({_pct(item.get('today_pl_pct'))})"
-        )
-    return "\n".join(lines)
+    groups = _grouped_positions(payload)
+    if not groups:
+        base_lines.extend(["", "Sin posiciones abiertas."])
+    warning = None
+    if comparison_status == "provisional":
+        warning = "⚠️ Comparación provisional: SP500 no tiene base histórica plenamente comparable."
+    elif comparison_status == "unavailable":
+        warning = "⚠️ Comparación SP500: n/d por falta de datos comparables."
+    if warning:
+        base_lines.extend(["", warning])
+    full_lines = list(base_lines)
+    for _key, label, items in groups:
+        full_lines.extend(["", f"{label} · {len(items)}"])
+        full_lines.extend(_position_line(item) for item in items)
+    full_text = "\n".join(full_lines)
+    if len(full_text) <= MAX_TELEGRAM_MESSAGE_LENGTH:
+        return full_text
+
+    footer_template = "\n\n⚠️ Mensaje abreviado: se muestran {visible}/{total} posiciones; y {omitted} posiciones más."
+    visible_lines = list(base_lines)
+    visible = 0
+    total = sum(len(items) for _key, _label, items in groups)
+    for _key, label, items in groups:
+        heading = f"{label} · {len(items)}"
+        candidate = "\n".join(visible_lines + ["", heading])
+        if len(candidate) + len(footer_template.format(visible=visible, total=total, omitted=total - visible)) > MAX_TELEGRAM_MESSAGE_LENGTH:
+            continue
+        visible_lines.extend(["", heading])
+        for item in items:
+            line = _position_line(item)
+            candidate = "\n".join(visible_lines + [line])
+            footer = footer_template.format(visible=visible + 1, total=total, omitted=total - visible - 1)
+            if len(candidate) + len(footer) > MAX_TELEGRAM_MESSAGE_LENGTH:
+                break
+            visible_lines.append(line)
+            visible += 1
+    footer = footer_template.format(visible=visible, total=total, omitted=total - visible)
+    return "\n".join(visible_lines) + footer
 
 
 def send_telegram_message(
@@ -144,10 +348,11 @@ def publish_daily_summary(settings: Any, store: Any, *, session_date: str, perfo
     if existing:
         return {"status": "idempotent", "event_id": event_id}
     payload = build_daily_summary(session_date=session_date, performance=performance, portfolio=portfolio)
+    text = format_daily_summary(payload)
     sent = send_telegram_message(
         token=token,
         chat_id=chat_id,
-        text=format_daily_summary(payload),
+        text=text,
         timeout_seconds=int(getattr(settings, "telegram_timeout_seconds", 15)),
     )
     receipt = {
@@ -155,6 +360,9 @@ def publish_daily_summary(settings: Any, store: Any, *, session_date: str, perfo
         "session_date": session_date,
         "content_hash": payload["content_hash"],
         "message_id": sent.get("message_id"),
+        "message_length": len(text),
+        "positions_total": len(payload.get("positions") or []),
+        "truncated": "Mensaje abreviado:" in text,
         "status": "sent",
     }
     persisted = store.record_append_only_event(
