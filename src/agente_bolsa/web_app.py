@@ -90,7 +90,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_START_DATE = "2026-04-01"
 PORTFOLIO_CHART_START_DATE = DEFAULT_START_DATE
 PORTFOLIO_HISTORY_PERIOD = "all"
-PORTFOLIO_CHART_WINDOWS: tuple[int | None, ...] = (7, 15, 30, 90, None)
+PORTFOLIO_CHART_WINDOWS: tuple[int | str | None, ...] = (7, 15, 30, 90, "2026-06-01", None)
 PRE_EARNINGS_CONFIDENCE_THRESHOLD = 0.80
 ENV_PATH = REPO_ROOT / ".env"
 LEADERBOARD_API_BASE_URL = os.getenv(
@@ -1737,7 +1737,7 @@ def _portfolio_value_series_from_alpaca(
     return pd.DataFrame(rows)
 
 
-def _trim_portfolio_chart_range(df: pd.DataFrame, *, days: int | None) -> pd.DataFrame:
+def _trim_portfolio_chart_range(df: pd.DataFrame, *, days: int | str | None) -> pd.DataFrame:
     if df.empty:
         return df.copy()
 
@@ -1757,9 +1757,15 @@ def _trim_portfolio_chart_range(df: pd.DataFrame, *, days: int | None) -> pd.Dat
         .drop_duplicates("_portfolio_chart_date", keep="last")
     )
     if days is not None:
-        window = max(int(days), 1)
         end_date = normalized["_portfolio_chart_date"].max()
-        start_date = end_date - pd.Timedelta(days=window - 1)
+        if isinstance(days, str):
+            start_date = pd.to_datetime(days, errors="coerce")
+            if pd.isna(start_date):
+                return df.iloc[0:0].copy()
+            start_date = pd.Timestamp(start_date).normalize()
+        else:
+            window = max(int(days), 1)
+            start_date = end_date - pd.Timedelta(days=window - 1)
         normalized = normalized[normalized["_portfolio_chart_date"].between(start_date, end_date)]
     return normalized.drop(columns="_portfolio_chart_date").reset_index(drop=True)
 
@@ -1811,6 +1817,14 @@ def _portfolio_display_date(value: Any) -> str:
         return "-"
 
 
+def _portfolio_chart_window_label(value: int | str | None) -> str:
+    if value is None:
+        return f"Desde el 1 de abril ({_portfolio_display_date(DEFAULT_START_DATE)})"
+    if isinstance(value, str):
+        return f"Desde {_portfolio_display_date(value)}"
+    return f"Ultimos {value} dias"
+
+
 def _portfolio_equity_summary(
     df: pd.DataFrame,
     *,
@@ -1837,8 +1851,8 @@ def _portfolio_equity_summary_detail(summary: dict[str, Any]) -> str:
     last = _portfolio_display_date(summary.get("end_date"))
     source = str(summary.get("source") or "fuente no disponible")
     if summary.get("start_date"):
-        return f"Desde {requested} · primer dato {first} · ultimo {last} · {source} · {coverage_label}"
-    return f"Desde {requested} · {source} · {coverage_label}"
+        return f"Variaci\u00f3n de equity \u00b7 Desde {requested} \u00b7 primer dato {first} \u00b7 ultimo {last} \u00b7 {source} \u00b7 {coverage_label}"
+    return f"Variaci\u00f3n de equity \u00b7 Desde {requested} \u00b7 {source} \u00b7 {coverage_label}"
 
 
 def _portfolio_period_metric_payload(summary: dict[str, Any]) -> dict[str, str]:
@@ -1855,7 +1869,7 @@ def _portfolio_period_metric_payload(summary: dict[str, Any]) -> dict[str, str]:
     end_date = _portfolio_display_date(summary.get("end_date"))
     source_note = " · estimado" if str(summary.get("source") or "").lower() == "estimado" else ""
     tone = "good" if pl > 0 else "bad" if pl < 0 else "neutral"
-    detail = f"{_pct_signed(pl_pct)} · {start_date} → {end_date}{source_note}"
+    detail = f"Variaci\u00f3n de equity \u00b7 {_pct_signed(pl_pct)} \u00b7 {start_date} \u2192 {end_date}{source_note}"
     if summary.get("coverage"):
         detail = f"{detail} · {_portfolio_equity_summary_detail(summary)}"
     return {
@@ -3918,7 +3932,7 @@ def page_dashboard() -> None:
                 chart_days = st.selectbox(
                     "Rango",
                     list(PORTFOLIO_CHART_WINDOWS),
-                    format_func=lambda value: "Desde inicio" if value is None else f"Ultimos {value} dias",
+                    format_func=_portfolio_chart_window_label,
                     key="portfolio_chart_days",
                     label_visibility="collapsed",
                 )

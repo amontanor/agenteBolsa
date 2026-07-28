@@ -7,9 +7,9 @@ from agente_bolsa.web_app import (
     PORTFOLIO_CHART_WINDOWS,
     PORTFOLIO_HISTORY_PERIOD,
     _portfolio_chart_visible_summary,
+    _portfolio_chart_window_label,
     _portfolio_equity_summary,
     _portfolio_equity_summary_detail,
-    _portfolio_chart_window_label,
     _portfolio_period_metric_payload,
     _portfolio_value_series_from_alpaca,
 )
