@@ -9,7 +9,7 @@ import os
 import subprocess
 from contextlib import closing
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -2882,15 +2882,356 @@ def _setup_page() -> None:
     )
 
 
+_DAILY_VS_SPY_WINDOWS: tuple[int | None, ...] = (7, 15, 30, 90, None)
+_DAILY_VS_SPY_STALE_SECONDS = 3 * 24 * 60 * 60
+
+
+def _parse_utc_timestamp(value: Any) -> datetime | None:
+    if value is None or value == "":
+        return None
+    try:
+        parsed = pd.Timestamp(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.tz_localize(timezone.utc)
+        else:
+            parsed = parsed.tz_convert(timezone.utc)
+        return parsed.to_pydatetime()
+    except (TypeError, ValueError):
+        return None
+
+
+def _canonical_daily_vs_spy_row(
+    row: dict[str, Any],
+    *,
+    consumer_read_at: datetime | None = None,
+) -> dict[str, Any]:
+    payload = row.get("payload") or {}
+    contract = payload.get("performance_benchmark") or {}
+    account = contract.get("account") or {}
+    benchmark = contract.get("benchmark") or {}
+    session_date = str(row.get("session_date") or "")[:10]
+    reasons: list[str] = []
+
+    try:
+        date.fromisoformat(session_date)
+    except ValueError:
+        reasons.append("invalid_session_date")
+
+    equity = _num(account.get("equity"))
+    if equity is None:
+        equity = _num(row.get("equity"))
+    previous_equity = _num(account.get("previous_equity"))
+    equity_delta = None
+    system_pct = None
+    if equity is None or previous_equity is None or previous_equity <= 0:
+        reasons.append("equity_pair_unavailable")
+    else:
+        equity_delta = round(equity - previous_equity, 2)
+        system_pct = equity_delta / previous_equity
+
+    previous_close = _num(benchmark.get("previous_close"))
+    close = _num(benchmark.get("close"))
+    price_basis = str(benchmark.get("price_basis") or "").strip().lower() or None
+    source = str(benchmark.get("source") or "").strip() or None
+    spy_pct = None
+    if previous_close is None or previous_close <= 0 or close is None or close <= 0:
+        reasons.append("spy_close_pair_unavailable")
+    else:
+        spy_pct = (close - previous_close) / previous_close
+    if price_basis not in {"adjusted_ohlc", "close_unadjusted"}:
+        reasons.append("price_basis_unknown")
+    if not source:
+        reasons.append("benchmark_source_unavailable")
+
+    generated_at_source = "generated_at" if contract.get("generated_at") else "captured_at" if contract.get("captured_at") else "created_at"
+    generated_at = _parse_utc_timestamp(
+        contract.get("generated_at") or contract.get("captured_at") or row.get("created_at")
+    )
+    as_of = _parse_utc_timestamp(benchmark.get("as_of"))
+    observed_at = consumer_read_at or datetime.now(timezone.utc)
+    freshness_status = "fresh"
+    if generated_at is None:
+        reasons.append("generated_at_unavailable")
+        freshness_status = "unavailable"
+    elif generated_at > observed_at:
+        reasons.append("generated_at_future")
+        freshness_status = "unavailable"
+    if as_of is None:
+        reasons.append("benchmark_as_of_unavailable")
+    elif as_of > observed_at:
+        reasons.append("benchmark_as_of_future")
+        freshness_status = "unavailable"
+    elif session_date and as_of.date().isoformat() < session_date:
+        reasons.append("benchmark_as_of_before_session")
+        freshness_status = "unavailable"
+    if generated_at is not None and as_of is not None:
+        freshness_age_seconds = (as_of - generated_at).total_seconds()
+        if freshness_age_seconds < 0:
+            reasons.append("generated_at_after_benchmark_as_of")
+            freshness_status = "unavailable"
+        elif freshness_age_seconds > _DAILY_VS_SPY_STALE_SECONDS:
+            reasons.append("generated_at_stale")
+            freshness_status = "stale"
+    else:
+        freshness_age_seconds = None
+
+    quality = str((contract.get("data_quality") or {}).get("status") or "").lower()
+    if quality != "available":
+        reasons.append(f"data_quality_{quality or 'unavailable'}")
+        if quality in {"partial", "stale"} and freshness_status == "fresh":
+            freshness_status = quality
+        elif freshness_status == "fresh":
+            freshness_status = "unavailable"
+    if contract.get("schema_version") != "p-l40b.performance-benchmark.v1":
+        reasons.append("benchmark_contract_unavailable")
+    if payload.get("gap_filled") or payload.get("interpolated"):
+        reasons.append("estimated_or_interpolated")
+
+    # Descriptive only: it never enters the winner comparison.
+    avg_exposure = _num(payload.get("avg_exposure"))
+    exposure_basis = None
+    exposure_pct = None
+    if avg_exposure is not None and previous_equity is not None and avg_exposure > 0:
+        exposure_basis = round(previous_equity * avg_exposure, 2)
+        if exposure_basis > 0 and equity_delta is not None:
+            exposure_pct = equity_delta / exposure_basis
+
+    status = "comparable" if not reasons and system_pct is not None and spy_pct is not None else "pending"
+    return {
+        "session_date": session_date,
+        "equity": equity,
+        "previous_equity": previous_equity,
+        "equity_delta": equity_delta,
+        "system_pct": system_pct,
+        "spy_pct": spy_pct,
+        "exposure_pct": exposure_pct,
+        "exposure_basis": exposure_basis,
+        "source": source,
+        "price_basis": price_basis,
+        "generated_at_source": generated_at_source,
+        "generated_at": generated_at.isoformat() if generated_at else None,
+        "as_of": as_of.isoformat() if as_of else None,
+        "consumer_read_at": observed_at.isoformat(),
+        "freshness_status": freshness_status,
+        "freshness_age_seconds": round(freshness_age_seconds, 3) if freshness_age_seconds is not None else None,
+        "comparison_status": status,
+        "reason_codes": sorted(set(reasons)),
+    }
+
+
+def _canonical_daily_vs_spy_rows(
+    rows: list[dict[str, Any]],
+    *,
+    consumer_read_at: datetime | None = None,
+) -> list[dict[str, Any]]:
+    by_date: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        normalized = _canonical_daily_vs_spy_row(row, consumer_read_at=consumer_read_at)
+        session_date = normalized["session_date"]
+        if session_date:
+            # Store returns ASC; keep the last exact row on a duplicate date.
+            by_date[session_date] = normalized
+    return [by_date[key] for key in sorted(by_date)]
+
+
+def _daily_vs_spy_window(
+    rows: list[dict[str, Any]],
+    visible_days: int | None,
+) -> list[dict[str, Any]]:
+    if visible_days is None:
+        return list(rows)
+    return list(rows[-max(int(visible_days), 1) :])
+
+
+def _daily_vs_spy_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    comparable = [row for row in rows if row["comparison_status"] == "comparable"]
+    system_wins = sum(row["system_pct"] > row["spy_pct"] for row in comparable)
+    spy_wins = sum(row["spy_pct"] > row["system_pct"] for row in comparable)
+    ties = sum(abs(row["system_pct"] - row["spy_pct"]) < 0.00005 for row in comparable)
+    return {
+        "visible_total": len(rows),
+        "comparable": len(comparable),
+        "pending": len(rows) - len(comparable),
+        "system_wins": system_wins,
+        "spy_wins": spy_wins,
+        "ties": ties,
+        "start_date": rows[0]["session_date"] if rows else None,
+        "end_date": rows[-1]["session_date"] if rows else None,
+    }
+
+
+def _daily_vs_spy_window_label(value: int | None) -> str:
+    if value is None:
+        return "Desde inicio"
+    return f"Ultimos {value} dias"
+
+
+def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
+    if alt is None:
+        return None
+    chart_rows = [
+        {
+            "fecha": row["session_date"],
+            "Sistema": row["system_pct"] if row["comparison_status"] == "comparable" else None,
+            "SP500": row["spy_pct"] if row["comparison_status"] == "comparable" else None,
+        }
+        for row in rows
+    ]
+    values = [value for row in chart_rows for value in (row["Sistema"], row["SP500"]) if value is not None]
+    if not values:
+        return None
+    chart_frame = pd.DataFrame(chart_rows)
+    y_min_raw, y_max_raw = min(values), max(values)
+    y_pad = max(abs(y_min_raw), abs(y_max_raw), 0.002) * 0.35
+    y_min, y_max = y_min_raw - y_pad, y_max_raw + y_pad
+    tooltip = [
+        alt.Tooltip("fecha:N", title="Fecha"),
+        alt.Tooltip("retorno:Q", title="% ganancias", format="+.2%"),
+        alt.Tooltip("serie:N", title="Serie"),
+    ]
+    base = alt.Chart(chart_frame).encode(
+        x=alt.X("fecha:N", title=None, axis=alt.Axis(labelAngle=0, labelOverlap=True)),
+    )
+    lines = (
+        base.transform_fold(fold=["Sistema", "SP500"], as_=["serie", "retorno"])
+        .mark_line(strokeWidth=2.5, strokeCap="round")
+        .encode(
+            y=alt.Y("retorno:Q", title="% ganancias", axis=alt.Axis(format="+.1%"), scale=alt.Scale(domain=[y_min, y_max])),
+            color=alt.Color("serie:N", title=None, scale=alt.Scale(domain=["Sistema", "SP500"], range=["#0e7a47", "#1e40af"])),
+            tooltip=tooltip,
+        )
+    )
+    points = (
+        base.transform_fold(fold=["Sistema", "SP500"], as_=["serie", "retorno"])
+        .mark_point(size=70, filled=True, strokeWidth=1.5, stroke="white")
+        .encode(
+            y=alt.Y("retorno:Q", title="% ganancias", scale=alt.Scale(domain=[y_min, y_max])),
+            color=alt.Color("serie:N", title=None, scale=alt.Scale(domain=["Sistema", "SP500"], range=["#0e7a47", "#1e40af"]), legend=None),
+            tooltip=tooltip,
+        )
+    )
+    comparable_rows = [row for row in chart_rows if row["Sistema"] is not None and row["SP500"] is not None]
+    connectors = None
+    if comparable_rows:
+        connectors_df = pd.DataFrame(comparable_rows)
+        connectors_df["ganador"] = connectors_df.apply(
+            lambda row: (
+                "Empate"
+                if abs(row["Sistema"] - row["SP500"]) < 0.00005
+                else "Sistema"
+                if row["Sistema"] > row["SP500"]
+                else "SP500"
+            ),
+            axis=1,
+        )
+        connectors = (
+            alt.Chart(connectors_df)
+            .mark_rule(strokeWidth=2, opacity=0.55, strokeCap="round")
+            .encode(
+                x="fecha:N",
+                y="Sistema:Q",
+                y2="SP500:Q",
+                color=alt.Color("ganador:N", legend=None),
+            )
+        )
+    background = alt.Chart(pd.DataFrame({"y0": [0], "y1": [y_max], "y2": [y_min]}))
+    bg_green = background.mark_rect(color="#dcfce7", opacity=0.35).encode(y="y0:Q", y2="y1:Q")
+    bg_red = background.mark_rect(color="#fee2e2", opacity=0.35).encode(y="y2:Q", y2="y0:Q")
+    zero_line = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="#374151", strokeWidth=1.5, strokeDash=[4, 2]).encode(y="y:Q")
+    layers = [bg_green, bg_red, lines, points]
+    if connectors is not None:
+        layers.append(connectors)
+    layers.append(zero_line)
+    return alt.layer(*layers).properties(height=260)
+
+
+def _render_daily_vs_spy_table(store: Any) -> None:
+    """Panel diario basado solo en el contrato persistido P-L40B."""
+
+    consumer_read_at = datetime.now(timezone.utc)
+    try:
+        rows = store.performance_daily(limit=0, readonly=True)
+    except Exception:  # noqa: BLE001 - presentacion degradable.
+        rows = []
+    canonical_rows = _canonical_daily_vs_spy_rows(rows, consumer_read_at=consumer_read_at)
+    with st.container(border=True):
+        title_col, control_col = st.columns([3, 1])
+        with title_col:
+            _section_title("Rendimiento diario: Sistema vs SP500", "Variacion de equity contra SPY comparable; sin ajustes de flujos.")
+        with control_col:
+            visible_days = st.selectbox(
+                "Dias",
+                list(_DAILY_VS_SPY_WINDOWS),
+                index=0,
+                format_func=_daily_vs_spy_window_label,
+                key="daily_vs_spy_days",
+                label_visibility="collapsed",
+            )
+        visible_rows = _daily_vs_spy_window(canonical_rows, visible_days)
+        if not visible_rows:
+            st.markdown("<div class='empty-box'>Sin sesiones diarias comparables todavia.</div>", unsafe_allow_html=True)
+            return
+        summary = _daily_vs_spy_summary(visible_rows)
+        c1, c2, c3, c4 = st.columns(4)
+        suffix = f"de {summary['visible_total']} visibles · {summary['comparable']} comparables"
+        with c1:
+            _compact_metric("Dias sistema superior", summary["system_wins"], suffix, "good")
+        with c2:
+            _compact_metric("Dias SP500 superior", summary["spy_wins"], suffix, "bad")
+        with c3:
+            _compact_metric("Empates", summary["ties"], suffix, "neutral")
+        with c4:
+            _compact_metric("Pendientes", summary["pending"], suffix, "neutral")
+        chart = _daily_vs_spy_chart(visible_rows)
+        if chart is not None:
+            st.altair_chart(chart, width="stretch")
+        else:
+            st.info("Sin puntos comparables suficientes para dibujar la serie.")
+        html_rows = []
+        for row in visible_rows:
+            if row["comparison_status"] == "comparable":
+                system_text = _pct_signed(row["system_pct"])
+                spy_text = _pct_signed(row["spy_pct"])
+                winner = (
+                    "Empate"
+                    if abs(row["system_pct"] - row["spy_pct"]) < 0.00005
+                    else "Sistema"
+                    if row["system_pct"] > row["spy_pct"]
+                    else "SP500"
+                )
+                secondary = (
+                    f" · exposición descriptiva {_pct_signed(row['exposure_pct'])}"
+                    if row["exposure_pct"] is not None
+                    else ""
+                )
+                system_text = f"{system_text}<span>{_money(row['equity_delta'])}{secondary}</span>"
+            else:
+                system_text, spy_text, winner = "Pendiente", "Pendiente", "Pendiente"
+                system_text += f"<span>{', '.join(row['reason_codes']) or 'datos incompletos'}</span>"
+            html_rows.append(
+                "<tr>"
+                f"<td><strong>{row['session_date']}</strong></td>"
+                f"<td>{system_text}</td><td>{spy_text}</td><td>{winner}</td>"
+                "</tr>"
+            )
+        st.markdown(
+            "<table class='portfolio-table'><thead><tr><th>Fecha</th><th>Sistema</th><th>SP500</th><th>Superior</th></tr></thead>"
+            f"<tbody>{''.join(html_rows)}</tbody></table>",
+            unsafe_allow_html=True,
+        )
+
+
 def _performance_baseline_series(
     rows: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], float | None, float | None]:
     cumulative_pnl: float | None = None
     cumulative_spy: float | None = None
     chart_rows = []
+    consumer_read_at = datetime.now(timezone.utc)
     for row in rows:
-        pnl = _num(row.get("pnl_pct"))
-        spy = _num(row.get("spy_pct"))
+        canonical = _canonical_daily_vs_spy_row(row, consumer_read_at=consumer_read_at)
+        pnl = canonical["system_pct"] if canonical["comparison_status"] == "comparable" else None
+        spy = canonical["spy_pct"] if canonical["comparison_status"] == "comparable" else None
         if pnl is not None:
             cumulative_pnl = (cumulative_pnl or 0.0) + pnl
         if spy is not None:
@@ -2924,7 +3265,7 @@ def _render_performance_baseline(store: Any) -> None:
     """Grafico de equity vs SPY acumulado e iq_score (T0.2)."""
 
     try:
-        rows = store.performance_daily(limit=0)
+        rows = store.performance_daily(limit=0, readonly=True)
     except Exception:  # noqa: BLE001 - vista degradable.
         rows = []
     with st.container(border=True):
@@ -4009,6 +4350,9 @@ def page_dashboard() -> None:
                     int((w.get("blocked_entry_quality") or 0) + (w.get("blocked_backtest") or 0)) if w else "-",
                     str(w.get("benchmark_symbol") or "-"),
                 )
+
+    st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+    _render_daily_vs_spy_table(store)
 
     # ===== Detalle avanzado: progressive disclosure (plegado por defecto) =====
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
