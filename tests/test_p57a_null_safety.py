@@ -183,7 +183,7 @@ def test_promotion_missing_metrics_remain_unavailable_not_zero() -> None:
     assert "alpha_10d" in decision["unavailable_metrics"]
 
 
-def test_web_performance_series_preserves_missing_values() -> None:
+def test_web_performance_series_marks_incomplete_pair_pending() -> None:
     from agente_bolsa import web_app
 
     rows = [
@@ -194,8 +194,10 @@ def test_web_performance_series_preserves_missing_values() -> None:
     chart_rows, cumulative_pnl, cumulative_spy = web_app._performance_baseline_series(rows)
 
     assert chart_rows[0]["Sistema"] is None
-    assert chart_rows[0]["SPY"] == 0.004
-    assert chart_rows[1]["Sistema"] == 0.002
+    # P-L65B makes the comparison atomic: an isolated benchmark value cannot
+    # be presented as a comparable series when the account leg is missing.
+    assert chart_rows[0]["SPY"] is None
+    assert chart_rows[1]["Sistema"] is None
     assert chart_rows[1]["SPY"] is None
-    assert cumulative_pnl == 0.002
-    assert cumulative_spy == 0.004
+    assert cumulative_pnl is None
+    assert cumulative_spy is None
