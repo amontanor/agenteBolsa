@@ -1,8 +1,9 @@
 # Plan maestro de mejoras y tareas — agenteBolsa
 
-## P-L66 — Resumen diario por Telegram (0.4.200, candidato aislado)
+## P-L66 — Resumen diario por Telegram (0.4.201, candidato aislado)
 
-- Envío opcional y fail-open después del terminal durable del postmarket.
+- Primer intento a las 22:05 Europe/Madrid y fallback idempotente después del
+  terminal durable del postmarket.
 - Reutiliza la misma foto de cartera y la fila `performance_daily`; no añade
   llamadas al broker.
 - Publica variación diaria de equity, SP500 y P/L total/diario por posición.

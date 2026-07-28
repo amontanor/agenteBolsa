@@ -2,9 +2,10 @@
 
 ## P-L66 — candidato Telegram
 
-El candidato 0.4.200 añade un consumidor externo post-terminal para el resumen
+El candidato 0.4.201 añade un consumidor externo para el resumen
 diario. Debe integrarse después de P-L65 para preservar la secuencia de
-versiones. Está desactivado por defecto y requiere
+versiones. Hace el primer intento a las 22:05 Europe/Madrid y conserva el hook
+postmarket como fallback idempotente. Está desactivado por defecto y requiere
 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_DAILY_SUMMARY_CHAT_ID` y
 `TELEGRAM_DAILY_SUMMARY_ENABLED=true` únicamente en el entorno productivo.
 No desplegar con XNYS abierto.

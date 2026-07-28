@@ -4,10 +4,14 @@
 
 `ready_for_integration_rehearsal`
 
+Versión reservada: `0.4.201`, posterior a P-L65B (`0.4.200`).
+
 ## Contrato
 
-El envío ocurre una sola vez por sesión efectiva, después de que
-`post_market_review` tenga terminal durable `completed`. Telegram es
+El primer intento ocurre a las 22:05 Europe/Madrid. Usa una única lectura
+read-only de cartera y los datos locales del benchmark. Si falla o no alcanza a
+confirmarse, `post_market_review` actúa como fallback después de su terminal
+durable `completed`. Telegram es
 observabilidad fail-open: una configuración incompleta, timeout o rechazo de la
 API no cambia el resultado del postmarket ni trading.
 
@@ -32,6 +36,7 @@ petición. Si faltan permanecen `n/d`, nunca cero.
 TELEGRAM_DAILY_SUMMARY_ENABLED=false
 TELEGRAM_BOT_TOKEN=<token de BotFather>
 TELEGRAM_DAILY_SUMMARY_CHAT_ID=<chat_id de Bot API>
+TELEGRAM_DAILY_SUMMARY_TIME_LOCAL=22:05
 TELEGRAM_TIMEOUT_SECONDS=15
 ```
 
