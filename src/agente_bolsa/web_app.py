@@ -280,27 +280,19 @@ def _pct_signed(value: Any) -> str:
     return f"{sign}{amount:.2f}%"
 
 
-def _today_pl_display(today_pl: Any, invested: Any, equity_pct: Any | None) -> dict[str, str | None]:
-    invested_amount = _num(invested)
-    today_amount = _num(today_pl)
-    invested_pct = None
-    if invested_amount is not None and invested_amount > 0 and today_amount is not None:
-        invested_pct = today_amount / invested_amount
+def _today_pl_display(today_pl: Any, _invested: Any, equity_pct: Any | None) -> dict[str, str | None]:
+    del today_pl
     return {
-        "primary_pct": _pct(invested_pct) if invested_pct is not None else "n/d",
-        "invested_caption": f"sobre invertido ({_money(invested_amount)})",
-        "equity_reference": f"{_pct(equity_pct)} del equity total" if equity_pct is not None else None,
+        "primary_pct": _pct(equity_pct) if equity_pct is not None else "n/d",
+        "period_caption": "Variaci\u00f3n de equity desde el cierre anterior",
     }
 
 
 def _today_pl_metric_payload(today_pl: Any, invested: Any, equity_pct: Any | None) -> dict[str, Any]:
     display = _today_pl_display(today_pl, invested, equity_pct)
-    detail_parts = [f"{display['primary_pct']} {display['invested_caption']}"]
-    if display.get("equity_reference"):
-        detail_parts.append(f"<small>{display['equity_reference']}</small>")
     return {
         "amount": _money(today_pl),
-        "detail_html": "<br>".join(detail_parts),
+        "detail_html": f"{display['primary_pct']} \u00b7 {display['period_caption']}",
         "display": display,
     }
 
@@ -1172,11 +1164,11 @@ def _account_group(
             </div>
             <div class="account-kpis">
                 <div class="{today_class}">
-                    <span>P/L hoy</span>
+                    <span>Variación de equity hoy</span>
                     <strong>{today_metric["amount"]}</strong>
                     <em>
-                        <span>{today_display["primary_pct"]} {today_display["invested_caption"]}</span>
-                        <small>{today_display["equity_reference"] or "&nbsp;"}</small>
+                        <span>{today_display["primary_pct"]} {today_display["period_caption"]}</span>
+                        <small>&nbsp;</small>
                     </em>
                 </div>
                 <div class="account-kpi"><span>Posiciones</span><strong>{positions_count}</strong><em>&nbsp;</em></div>
@@ -1718,8 +1710,8 @@ def _portfolio_value_series_from_alpaca(
     previous_equity: float | None = None
     for date, equity in sorted(by_date.items(), key=lambda item: item[0]):
         if previous_equity is None:
-            day_pl = 0.0
-            day_pct = 0.0
+            day_pl = None
+            day_pct = None
         else:
             day_pl = round(equity - previous_equity, 2)
             day_pct = round(day_pl / previous_equity, 6) if previous_equity else 0.0
@@ -2914,6 +2906,20 @@ def _performance_baseline_series(
     return chart_rows, cumulative_pnl, cumulative_spy
 
 
+def _performance_baseline_chart(frame: pd.DataFrame) -> Any:
+    tooltip = [
+        alt.Tooltip("fecha:N", title="Fecha"),
+        alt.Tooltip("retorno_acumulado:Q", title="% ganancias", format="+.2%"),
+        alt.Tooltip("serie:N", title="Serie"),
+    ]
+    x = alt.X("fecha:N", title=None, axis=alt.Axis(labelAngle=0, labelOverlap=True))
+    y = alt.Y("retorno_acumulado:Q", title="% ganancias", axis=alt.Axis(format="+.1%"))
+    color = alt.Color("serie:N", title=None)
+    line = alt.Chart(frame).mark_line(strokeWidth=2.5).encode(x=x, y=y, color=color, tooltip=tooltip)
+    points = alt.Chart(frame).mark_point(size=70, filled=True).encode(x=x, y=y, color=color, tooltip=tooltip)
+    return line + points
+
+
 def _render_performance_baseline(store: Any) -> None:
     """Grafico de equity vs SPY acumulado e iq_score (T0.2)."""
 
@@ -2950,20 +2956,7 @@ def _render_performance_baseline(store: Any) -> None:
             var_name="serie",
             value_name="retorno_acumulado",
         )
-        equity_chart = (
-            alt.Chart(long_frame)
-            .mark_line(strokeWidth=2.5)
-            .encode(
-                x=alt.X("fecha:N", title=None, axis=alt.Axis(labelAngle=0, labelOverlap=True)),
-                y=alt.Y("retorno_acumulado:Q", title="Retorno acumulado", axis=alt.Axis(format="+.1%")),
-                color=alt.Color("serie:N", title=None),
-                tooltip=[
-                    alt.Tooltip("fecha:N", title="Fecha"),
-                    alt.Tooltip("serie:N", title="Serie"),
-                    alt.Tooltip("retorno_acumulado:Q", title="Acumulado", format="+.2%"),
-                ],
-            )
-        )
+        equity_chart = _performance_baseline_chart(long_frame)
         st.altair_chart(equity_chart.properties(height=240), width="stretch")
         iq_chart = (
             alt.Chart(frame)
