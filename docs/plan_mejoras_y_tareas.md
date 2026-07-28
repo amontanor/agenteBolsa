@@ -2739,6 +2739,30 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Avisos de BUY/SELL al fill reconciliado; P/L SELL solo con `source_plan_id`
   exacto. Pendiente ensayo integrado y despliegue autorizado con XNYS cerrado.
 
+## P-L68 - gráfica Sistema vs SP500 visible y comparable (v0.4.202)
+
+- Causa raíz: yfinance usaba `auto_adjust=True` sin persistir la base de
+  precio; el lector invertía la latencia de una barra diaria y descartaba
+  todos los valores cuando las filas eran `pending`.
+- Las nuevas capturas declaran `adjusted_ohlc`; `as_of` diferencia precisión
+  diaria e instantánea. Los históricos incompletos se dibujan como
+  provisionales, pero no deciden ganadores.
+- El acumulado compone retornos diarios en lugar de sumarlos.
+- Suite completa: 2249 passed, 1 skip y 1 warning preexistentes; estáticos,
+  configuración y kernel verdes.
+- Dictamen: `ready_for_integration_rehearsal`. Sin despliegue.
+
+## P-L69 - avisos Telegram de fills durante mercado abierto. EN COLA
+
+- P-L66 actual avisa cuando la reconciliación detecta `filled`; no garantiza
+  el instante real del fill.
+- Diseñar un detector canónico durante sesión que persista primero el fill y
+  publique después, fail-open e idempotente por `broker_order_id`.
+- No enviar al mero submit. BUY incluye entrada real; SELL exige
+  `source_plan_id` exacto para entrada, salida y P/L bruto.
+- Lote separado, con revisión de paridad y de protegidos si toca
+  broker/execution. Sin cambio de política.
+
 ## P-L67R1 - ensayo final P-L65B/P-L63 + P-L62 + P-L66
 
 - Ensayo aislado `pl67_p65_p62_p66_deployment_rehearsal`, merge `d3a75c98`,
