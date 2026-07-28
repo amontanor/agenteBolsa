@@ -4,10 +4,12 @@ import agente_bolsa.web_app as web_app
 from agente_bolsa.web_app import (
     DEFAULT_START_DATE,
     PORTFOLIO_CHART_START_DATE,
+    PORTFOLIO_CHART_WINDOWS,
     PORTFOLIO_HISTORY_PERIOD,
     _portfolio_chart_visible_summary,
     _portfolio_equity_summary,
     _portfolio_equity_summary_detail,
+    _portfolio_chart_window_label,
     _portfolio_period_metric_payload,
     _portfolio_value_series_from_alpaca,
 )
@@ -97,7 +99,7 @@ def test_april_equity_result_is_negative_even_with_positive_trade_total():
     assert summary["pl"] == -961.83
     assert metric["amount"] == "$-961.83"
     assert "cobertura completa" in metric["detail"]
-    assert _portfolio_equity_summary_detail(summary).startswith("Desde 01/04/2026")
+    assert _portfolio_equity_summary_detail(summary).startswith("Variación de equity · Desde 01/04/2026")
 
 
 def test_missing_april_equity_is_partial_or_unavailable_without_trade_reconstruction(monkeypatch):
@@ -122,3 +124,49 @@ def test_missing_april_equity_is_partial_or_unavailable_without_trade_reconstruc
     assert unavailable["coverage"] == "unavailable"
     assert unavailable["pl"] is None
     assert "Sin datos suficientes" in captured[0]
+
+
+def test_descending_equity_cannot_render_positive_trade_total_as_green_result():
+    payload = {
+        "timestamp": ["2026-04-01T00:00:00Z", "2026-07-28T00:00:00Z"],
+        "equity": [71550.0, 70700.0],
+    }
+    summary = _portfolio_equity_summary(
+        _portfolio_value_series_from_alpaca(payload, current_equity=70700.0),
+    )
+    metric = _portfolio_period_metric_payload(summary)
+
+    trade_total_pl = 106.83
+    assert trade_total_pl > 0
+    assert summary["pl"] == -850.0
+    assert metric["amount"] == "$-850.00"
+    assert metric["tone"] == "bad"
+    assert "Variación de equity" in metric["detail"]
+    assert "+$106.83" not in metric["detail"]
+    assert "P/L hoy" not in metric["detail"]
+    assert "P/L abierto" not in metric["detail"]
+
+
+def test_explicit_june_window_has_date_authority_and_exact_visible_dates():
+    assert "2026-06-01" in PORTFOLIO_CHART_WINDOWS
+    assert _portfolio_chart_window_label("2026-06-01") == "Desde 01/06/2026"
+    assert _portfolio_chart_window_label(None) == "Desde el 1 de abril (01/04/2026)"
+    df = _portfolio_value_series_from_alpaca(
+        {
+            "timestamp": [
+                "2026-04-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+                "2026-07-28T00:00:00Z",
+            ],
+            "equity": [71550.0, 71200.0, 70700.0],
+        },
+        current_equity=70700.0,
+    )
+    june = web_app._trim_portfolio_chart_range(df, days="2026-06-01")
+    summary = _portfolio_equity_summary(june, requested_start_date="2026-06-01")
+    metric = _portfolio_period_metric_payload(summary)
+
+    assert summary["start_date"] == "2026-06-01"
+    assert summary["end_date"] == "2026-07-28"
+    assert summary["pl"] == -500.0
+    assert "01/06/2026" in metric["detail"]

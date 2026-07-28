@@ -367,7 +367,7 @@ def test_portfolio_chart_windows_cover_selector_and_consecutive_changes_without_
     df = pd.DataFrame({"fecha": dates, "valor_cartera": list(range(1000, 1120))})
     original = df.copy(deep=True)
 
-    assert PORTFOLIO_CHART_WINDOWS == (7, 15, 30, 90, None)
+    assert PORTFOLIO_CHART_WINDOWS == (7, 15, 30, 90, "2026-06-01", None)
     visible = [_trim_portfolio_chart_range(df, days=days) for days in (30, 7, 90, None)]
 
     assert pd.Timestamp(visible[0]["fecha"].iloc[0]) >= pd.Timestamp(dates[-1]) - pd.Timedelta(days=29)
@@ -390,6 +390,8 @@ def test_portfolio_chart_all_public_windows_share_visible_series_and_period_summ
         assert summary["end_date"] == visible["fecha"].iloc[-1]
         if days is None:
             assert len(visible) == len(df)
+        elif isinstance(days, str):
+            assert visible["fecha"].iloc[0] == days
         else:
             cutoff = pd.Timestamp(dates[-1]) - pd.Timedelta(days=days - 1)
             assert pd.Timestamp(visible["fecha"].iloc[0]) >= cutoff
@@ -504,7 +506,7 @@ def test_portfolio_period_metric_uses_same_negative_change_as_chart():
 
     assert metric == {
         "amount": "$-1,080.00",
-        "detail": "-1.51% · 28/04/2026 → 20/07/2026",
+        "detail": "Variación de equity · -1.51% · 28/04/2026 → 20/07/2026",
         "tone": "bad",
     }
 
