@@ -320,7 +320,8 @@ def test_portfolio_value_series_from_alpaca_marks_first_daily_change_unavailable
 
     assert list(df["fecha"]) == ["2026-05-08", "2026-05-09", "2026-05-10"]
     assert list(df["valor_cartera"]) == [1000.0, 1015.0, 1005.0]
-    assert list(df["P/L dia"]) == [None, 15.0, -10.0]
+    assert pd.isna(df["P/L dia"].iloc[0])
+    assert list(df["P/L dia"].iloc[1:]) == [15.0, -10.0]
     assert list(df["fuente"]) == ["Alpaca", "Alpaca", "Alpaca"]
 
 
@@ -826,7 +827,7 @@ def test_today_pl_metric_payload_reuses_same_display_as_hero():
 
     assert payload["amount"] == "$38.42"
     assert payload["display"] == _today_pl_display(38.42, 5246.0, 0.0005)
-    assert payload["detail_html"] == "0.05% Variación de equity desde el cierre anterior"
+    assert payload["detail_html"] == "0.05% · Variación de equity desde el cierre anterior"
 
 
 def test_sidebar_version_label_uses_semantic_version():

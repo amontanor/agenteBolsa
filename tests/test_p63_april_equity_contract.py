@@ -226,11 +226,11 @@ def test_performance_baseline_tooltip_is_explicit_in_line_and_point_layers():
         {"field": "serie", "title": "Serie", "type": "nominal"},
     ]
     for layer in layers:
-        assert layer["encoding"]["y"] == {
-            "field": "retorno_acumulado",
-            "title": "% ganancias",
-            "type": "quantitative",
-        }
+        y_encoding = layer["encoding"]["y"]
+        assert y_encoding["field"] == "retorno_acumulado"
+        assert y_encoding["title"] == "% ganancias"
+        assert y_encoding["type"] == "quantitative"
+        assert y_encoding["axis"]["format"] == "+.1%"
         assert layer["encoding"]["tooltip"] == expected_tooltip
         assert "tooltip" not in layer.get("mark", {})
     assert spec["layer"][0]["encoding"]["tooltip"][1]["format"] == "+.2%"
