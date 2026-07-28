@@ -2638,3 +2638,20 @@ de despliegue quedan pendientes con XNYS cerrado.
   `0.4.198`. QA focal `103 passed`; Ruff, NUL, diff, py_compile y config
   temporal verdes. Suite completa, smoke y validación cerrada pendientes por
   premarket/XNYS. Sin cambio de trading ni despliegue.
+
+### P-L63R1 — corrección diaria y tooltip del gráfico (28-jul-2026)
+
+- El porcentaje 2,10% sobre exposición (190,42 / 9.078,06) se eliminó
+  como métrica principal. La cuenta publica la variación diaria de equity
+  sobre el cierre anterior (0,27% en la evidencia), independiente de la
+  exposición. Sin equity previo queda n/d; no se reconstruye con exposición.
+- El copy es Variación de equity hoy y variación de equity desde el cierre
+  anterior; no se afirma rentabilidad desde apertura ni se presenta la serie
+  diaria como intradía. P/L abierto y resultado histórico siguen separados.
+- El tooltip del baseline Sistema/SP500 está explícito en línea y puntos:
+  Fecha, % ganancias, Serie, mismo campo retorno_acumulado y formato +.2%.
+  No cambia el eje, los valores, la fuente ni los indicadores.
+- QA focal 106 passed; Ruff, NUL, diff, py_compile y config temporal verdes.
+  Suite completa, smoke y benchmark largo quedan pendientes por XNYS abierto.
+  Versión 0.4.198; commits 12a6cb11, bef256d6, 031597c7, 89adde7f
+  y fb2c47a7. Sin cambios de trading ni despliegue.

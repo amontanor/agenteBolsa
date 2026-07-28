@@ -708,3 +708,22 @@ cerrada.
   temporal verdes. Suite completa, smoke y validación cerrada quedan
   pendientes con XNYS abierto/premarket. No producción, broker, red, SQLite
   productiva, despliegue ni push.
+
+### P-L63R1 — semántica diaria y tooltip del baseline (28-jul-2026)
+
+- 2,10% sobre exposición no es el retorno diario de la cuenta. La cabecera
+  usa ahora today_equity_change / previous_equity, con copy Variación de
+  equity hoy y desde el cierre anterior; cambios de exposición no alteran
+  el porcentaje. Sin cierre previo: n/d, nunca sustitución por exposición.
+- No se publica desde apertura ni se interpreta la curva diaria como
+  intradía. P/L abierto, variación diaria y resultado histórico son métricas
+  separadas.
+- Sistema/SP500: línea y puntos comparten tooltip explícito Fecha, %
+  ganancias, Serie, el campo retorno_acumulado y formato +.2%. La fuente,
+  el eje y los valores no cambian; desaparece el tooltip automático con
+  decimal crudo.
+- QA focal 106 passed; Ruff, NUL, diff, py_compile y config temporal
+  verdes. Suite completa, smoke y benchmark largo pendientes por XNYS abierto.
+  Versión 0.4.198; commits 12a6cb11, bef256d6, 031597c7, 89adde7f
+  y fb2c47a7. Sin producción, broker, red, SQLite productiva, despliegue ni
+  push.

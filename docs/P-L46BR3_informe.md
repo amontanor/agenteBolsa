@@ -114,6 +114,27 @@ SQLite ni autoridad sobre trading. Commit funcional: `9ad9775c`.
   `validate-agent-config --json` temporal pasaron. No se ejecutaron suite,
   smoke, broker, red ni SQLite productiva por la ventana premarket.
 
+### P-L63R1 — semántica diaria y tooltip del baseline (28-jul-2026)
+
+- La reproducción confirmó que today_pl / exposición producía 2,10%
+  (190,42 / 9.078,06) aunque la variación diaria de equity era 0,27%.
+  El porcentaje principal ahora usa únicamente today_equity_change /
+  previous_equity, recibido de la misma serie diaria. Cambiar la exposición
+  no cambia ese porcentaje; la equivalencia sobre invertido se elimina.
+- La cabecera muestra Variación de equity hoy y variación de equity desde
+  el cierre anterior. No afirma desde apertura, no interpreta el gráfico
+  diario como intradía y un único punto sin cierre anterior deja importe/
+  porcentaje no disponibles según corresponda. P/L abierto continúa separado.
+- El gráfico Sistema/SP500 mantiene los valores y el eje, pero sus capas de
+  línea y puntos comparten tooltip explícito y ordenado: Fecha, % ganancias
+  y Serie. Ambos usan retorno_acumulado con formato +.2%; no hay tooltip
+  automático con valor decimal crudo ni cálculo duplicado.
+- QA focal UI/portfolio/version: 106 passed. Ruff, NUL, git diff
+  --check, py_compile y validate-agent-config --json temporal pasaron.
+  Con XNYS abierto quedan omitidos suite completa, smoke y benchmark largo.
+  No hubo broker, red, SQLite productiva, despliegue ni push. Commits:
+  12a6cb11, bef256d6, 031597c7, 89adde7f y fb2c47a7.
+
 ### P-L63 — semántica UX de resultado y ventanas explícitas (28-jul-2026)
 
 - La reproducción adicional confirmó una segunda manifestación del mismo
