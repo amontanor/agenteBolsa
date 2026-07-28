@@ -143,3 +143,13 @@ diario canónico Sistema/SPY con autoridad de equity y benchmark, ventana por
 sesiones XNYS, estados pending/unavailable y contadores cerrados; deberá
 solicitar `performance_daily(readonly=True)` o una frontera equivalente y no
 hacer llamadas adicionales al broker/red.
+
+## Cierre Git
+
+- Commit tests/version: `fe25d05f` (`test: characterize daily system versus
+  SP500 contract`).
+- Commit documentación: `aa75e286` (`docs: record P-L65A daily versus SP500
+  contract`).
+- HEAD final: `aa75e286a6c8a1c44f812582cbac2795b18f366b`.
+- Tree final: `262fc6d9b0daba4e1aeb62b5e0aceeed48b4e576`.
+- Árbol limpio al cierre; no push.
