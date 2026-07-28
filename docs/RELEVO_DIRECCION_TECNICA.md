@@ -3,7 +3,26 @@
 > Actualizado: **27-jul-2026**. Produccion estable **0.4.185** (`24537e81`,
 > tree `4747f27f`). Candidato integrado P-L58R1 **0.4.193** aislado y no
 > desplegado; P-L57A queda conservado dentro del historial.
+
+### P-L65A — caracterización diaria Sistema vs SP500 (28-jul-2026)
+
+- Dictamen: `ready_for_p65b_implementation`; worktree aislado y versión
+  `0.4.198` preservada. XNYS abierto.
+- Equity diaria (`equity_t - equity_prev_close`) es la autoridad primaria;
+  invertido queda como métrica secundaria. El consumidor baseline actual usa
+  `pnl_pct`/`spy_pct` legacy sin exigir comparabilidad del payload canónico.
+- El selector existente de `Valor de cartera` es calendario: con huecos puede
+  mostrar menos de 7 sesiones. El baseline Sistema/SP500 no tiene selector ni
+  contadores en este árbol; la observación `13/17/0/9 de 39` queda
+  `unavailable`, no se atribuye por nombre.
+- 12 tests P-L65A pasan. Suite completa, smoke, benchmark largo y validación
+  cerrada pendientes por XNYS abierto. Siguiente único lote: P-L65B, rowset
+  canónico read-only por sesiones con estados pending/unavailable y cierre
+  aritmético de contadores.
 > P-L48B sigue desplegado y P-L44B sigue en shadow.
+
+P-L65A version policy required candidate `0.4.199`; no production logic
+changed. The next lot is P-L65B after closed-market validation gates.
 
 > P-L54B-T (27-jul-2026): caracterizacion aislada completada en
 > `C:\Antonio\Bref\agenteBolsa_worktrees\pl54bt_capital_funnel_characterization`,

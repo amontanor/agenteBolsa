@@ -3,6 +3,24 @@
 > **Este documento es la fuente unica de verdad de la mejora del sistema.**
 > Contiene la vision, lo ya ejecutado, el diagnostico vigente, las tareas con su
 > estado (terminado / no terminado) y las propuestas siguientes.
+
+### P-L65A — contrato diario Sistema vs SP500 (28-jul-2026)
+
+- Caracterización aislada en `pl65a_daily_vs_spy_contract`, versión `0.4.198`;
+  XNYS abierto, sin cambios en `src` ni producción.
+- La métrica primaria es variación de equity sobre cierre anterior. El
+  porcentaje sobre invertido es secundario y no decide el ganador. SPY exige
+  misma ventana, source, basis, as_of y calidad.
+- Se reprodujo que `_performance_baseline_series` consume columnas legacy sin
+  validar el bloque canónico, y que el selector de cartera usa días naturales:
+  siete días pueden contener menos de siete sesiones XNYS. La cifra 13/17/0/9
+  de 39 no existe en este árbol y queda sin atribución.
+- Tooltip Sistema/SP500 verificado declarativamente: Fecha, `% ganancias`,
+  Serie, `+.2%`, idéntico en línea/puntos, sin `y0`/`y1`.
+- Dictamen: `ready_for_p65b_implementation`. Siguiente: implementar el
+- Version policy required candidate `0.4.199`; no production logic changed.
+  rowset canónico y contadores por sesiones, sin cambiar trading ni hacer
+  llamadas adicionales al broker/red.
 > **Toda mejora futura se gestiona anadiendo pasos AQUI** (no en hilos sueltos ni
 > en otros documentos). Cada entrega debe: (1) anadir/actualizar su paso en este
 > fichero con su estado, (2) subir la version en `src/agente_bolsa/__init__.py`
