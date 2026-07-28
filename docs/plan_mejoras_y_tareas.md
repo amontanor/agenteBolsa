@@ -5,13 +5,15 @@
 - Worktree aislado `pl70_telegram_summary_ux`, rama
   `codex/pl70-telegram-summary-ux`, desde `87d29018`/árbol `fd690a93`.
 - Caracterización `b5b3fec4`, implementación `f78de077` y QA focal
-  `0a18924c`; dictamen provisional `ready_for_integration_rehearsal`.
+  `0a18924c`; dictamen `ready_for_integration_rehearsal`; no despliegue.
 - Cambia el resumen a `p-l70.telegram-daily-summary.v2`: equity sin signo,
   importe solo desde el par equity actual/anterior, comparación SP500
   provisional cuando P-L68 no permite comparabilidad, cobertura de posiciones,
   grupos deterministas y límite Telegram 4096 con truncado explícito.
 - `telegram_trade_notifications.py`, reconciliación, PMR, scheduler cadence y
-  trading permanecen sin cambios. Suite completa/smoke aislado pendientes.
+  trading permanecen sin cambios. La suite aislada obtuvo `1618 passed, 1
+  failed, 1 warning` por el test de fecha dinámica P-L63 reproducido contra la
+  base; smoke real no ejecutado.
 
 ## P-L67R1 — Despliegue combinado 0.4.201 (28-jul-2026)
 

@@ -10,9 +10,10 @@
   `performance_benchmark`; SP500 conserva valor provisional sin declarar
   ganador si P-L68 no confirma comparabilidad; posiciones llevan cobertura y
   grupos deterministas.
-- Implementación `f78de077` y QA `0a18924c`; suite completa/smoke aislado
-  pendientes. Un fallo de fecha dinámica de P-L63 se reprodujo contra base y
-  no pertenece a este lote.
+- Implementación `f78de077` y QA `0a18924c`, `b3c4d1c2`, `7e96191a`.
+  Ruff/NUL/diff/compile/config verdes. La suite aislada obtuvo `1618 passed,
+  1 failed, 1 warning` por el fallo de fecha dinámica P-L63 reproducido contra
+  base; no pertenece a este lote. No se ejecutó smoke real ni hubo mensajes.
 
 > Actualizado: **28-jul-2026**. Producción estable **0.4.201**
 > (`915481ab325d46c81a92986bfd603f13c5134dd9`, árbol funcional

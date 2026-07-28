@@ -1,6 +1,6 @@
 # P-L70 — rediseño UX del resumen diario Telegram
 
-## Dictamen provisional
+## Dictamen
 
 `ready_for_integration_rehearsal`.
 
@@ -19,6 +19,7 @@ validación cerrada con precondiciones operativas verificadas.
 - Caracterización: `b5b3fec4` (`test: characterize Telegram summary UX`).
 - Implementación: `f78de077` (`feat: redesign Telegram daily summary UX`).
 - QA focal: `0a18924c` (`test: verify Telegram summary UX contract`).
+- QA de versión: `b3c4d1c2` y `7e96191a`.
 - Versión candidata: `0.4.203`.
 
 La caracterización contra la base demostró el saldo absoluto con signo y la
@@ -69,16 +70,20 @@ Unicode y 100 posiciones con mensaje de longitud máxima 4096.
 
 ## Validación
 
-- `tests/test_telegram_daily_summary.py`: 15 verdes.
+- `tests/test_telegram_daily_summary.py`: 16 verdes.
 - Telegram daily summary + trade notifications + P-L68/P-L63/P-L65:
   46 verdes y un fallo preexistente de fecha dinámica en
   `test_explicit_june_window_has_date_authority_and_exact_visible_dates`.
 - El fallo se reprodujo contra la base exacta 87d29018: devuelve `2026-07-29`
   frente a una aserción fija `2026-07-28`; queda fuera de P-L70.
-- Ruff focal: verde.
-- `git diff --check`: verde.
-- Suite completa, `check_no_nulls.py`, `validate-agent-config` y smoke aislado:
-  pendientes de validación cerrada.
+- Ruff completo, `check_no_nulls.py` (`447 archivos`), `git diff --check`,
+  compilación y `validate-agent-config --json` aislado: verdes.
+- Suite completa aislada: `1618 passed, 1 failed, 1 warning` en 696,99 s; el
+  único fallo es el mismo test preexistente de P-L63, reproducido contra la
+  base exacta, por `2026-07-29` frente a una aserción fija `2026-07-28`.
+- Smoke real no ejecutado: habría requerido una ruta de ejecución y no se
+  autoriza ningún mensaje Telegram real. El envío queda cubierto con sender
+  monkeypatched y Store temporal.
 
 No se enviaron mensajes reales, no se leyó token/chat_id, no se usó red ni
 SQLite productiva.
