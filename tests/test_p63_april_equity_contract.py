@@ -1,5 +1,7 @@
 from inspect import getsource
 
+import pandas as pd
+
 import agente_bolsa.web_app as web_app
 from agente_bolsa.web_app import (
     DEFAULT_START_DATE,
@@ -13,6 +15,7 @@ from agente_bolsa.web_app import (
     _portfolio_period_metric_payload,
     _portfolio_value_series_from_alpaca,
     _latest_daily_equity_change,
+    _performance_baseline_chart,
 )
 
 
@@ -201,3 +204,33 @@ def test_today_percentage_is_unavailable_without_previous_equity():
     assert change["pl_pct"] is None
     display = web_app._today_pl_display(change["pl"], 9078.06, change["pl_pct"])
     assert display["primary_pct"] == "n/d"
+
+
+def test_performance_baseline_tooltip_is_explicit_in_line_and_point_layers():
+    chart = _performance_baseline_chart(
+        pd.DataFrame(
+            {
+                "fecha": ["2026-07-27"],
+                "serie": ["Sistema"],
+                "retorno_acumulado": [0.013208],
+            }
+        )
+    )
+    spec = chart.to_dict()
+    layers = spec["layer"]
+
+    assert len(layers) == 2
+    expected_tooltip = [
+        {"field": "fecha", "title": "Fecha", "type": "nominal"},
+        {"field": "retorno_acumulado", "format": "+.2%", "title": "% ganancias", "type": "quantitative"},
+        {"field": "serie", "title": "Serie", "type": "nominal"},
+    ]
+    for layer in layers:
+        assert layer["encoding"]["y"] == {
+            "field": "retorno_acumulado",
+            "title": "% ganancias",
+            "type": "quantitative",
+        }
+        assert layer["encoding"]["tooltip"] == expected_tooltip
+        assert "tooltip" not in layer.get("mark", {})
+    assert spec["layer"][0]["encoding"]["tooltip"][1]["format"] == "+.2%"
