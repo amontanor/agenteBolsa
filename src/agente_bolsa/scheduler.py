@@ -109,6 +109,8 @@ from .tools.time_stop_exit_authority import (
     persist_time_stop_exit_authority_after_order,
     persist_time_stop_exit_authority_submission_failure,
 )
+from .tools.telegram_daily_summary import publish_daily_summary
+from .tools.telegram_trade_notifications import publish_trade_fill_notifications
 from .tools.time_stop_policy import (
     POLICY_VERSION as TIME_STOP_POLICY_VERSION,
 )
@@ -314,7 +316,7 @@ def _persist_scheduler_lock_marker(
     *,
     payload: dict[str, Any],
     event_id: str,
-) -> None:
+) -> dict[str, Any] | None:
     if store is None:
         return
     marker = {"schema_version": SCHEDULER_LOCK_SCHEMA_VERSION, "event_type": event_type, **payload}
@@ -2846,8 +2848,10 @@ def _persist_daily_performance(
             ),
             {**payload, "persistence": result},
         )
+        return item
     except Exception as exc:  # noqa: BLE001 - el baseline no debe romper el review.
         log_system_event(settings.logs_dir, "performance_baseline_failed", {"error": repr(exc), "session_date": session_date})
+        return None
 
 
 def _run_change_watchdog(
@@ -3184,6 +3188,17 @@ def post_market_review_job(
         # ejecuta la actualización de outcomes; el resultado único se calcula
         # en el pipeline de aprendizaje.
         reconciliation = reconcile_broker_orders(settings, store, apply=True, limit=500, update_learning=False)
+        try:
+            reconciliation["telegram_trade_notifications"] = publish_trade_fill_notifications(
+                settings,
+                store,
+                reconciliation.get("changes", []),
+            )
+        except Exception as exc:  # noqa: BLE001 - Telegram nunca afecta al PMR.
+            reconciliation["telegram_trade_notifications"] = {
+                "status": "failed_open",
+                "reason": f"telegram_trade_fill_failed:{type(exc).__name__}",
+            }
         coordinator.stage(lease, current_stage, "completed")
         try:
             reporter.emit(
@@ -3312,7 +3327,7 @@ def post_market_review_job(
         # resultado principal si la observabilidad no está disponible.
         current_stage = "performance"
         coordinator.stage(lease, current_stage, "started")
-        _persist_daily_performance(
+        daily_performance = _persist_daily_performance(
             settings,
             store,
             session_date,
@@ -3354,6 +3369,27 @@ def post_market_review_job(
             coordinator.advance_last_session(session_date)
         except Exception as exc:  # noqa: BLE001 - vista operativa fail-open.
             log_system_event(settings.logs_dir, "post_market_last_session_update_failed", {"error": repr(exc), "session_date": session_date})
+        # La notificacion es un consumidor externo fail-open. Solo se intenta
+        # despues del terminal durable y reutiliza portfolio/performance ya
+        # calculados; nunca consulta broker ni modifica el resultado del PMR.
+        try:
+            report["telegram_daily_summary"] = publish_daily_summary(
+                settings,
+                store,
+                session_date=session_date,
+                performance=daily_performance,
+                portfolio=portfolio,
+            )
+        except Exception as exc:  # noqa: BLE001 - Telegram nunca tumba postmarket.
+            report["telegram_daily_summary"] = {
+                "status": "failed",
+                "reason": f"telegram_publish_failed:{type(exc).__name__}",
+            }
+            log_system_event(
+                settings.logs_dir,
+                "telegram_daily_summary_failed",
+                {"error_type": type(exc).__name__, "session_date": session_date},
+            )
         try:
             reporter.emit(
                 "post_market_review_agent",
@@ -3416,6 +3452,91 @@ def post_market_review_job(
 def _daily_hour_minute(value: str) -> tuple[int, int]:
     hour_text, minute_text = value.split(":", maxsplit=1)
     return int(hour_text), int(minute_text)
+
+
+def telegram_daily_summary_job(
+    settings: Settings,
+    store: Store,
+    *,
+    verbose: bool = True,
+) -> dict[str, Any]:
+    """Publica a la hora configurada usando una única lectura de cartera.
+
+    El hook postmarket sigue siendo el fallback: el recibo append-only evita
+    duplicados si este job ya envió el resumen de la sesión.
+    """
+
+    run_id = new_id("telegram")
+    started_at = datetime.now(timezone.utc)
+    if not settings.telegram_daily_summary_enabled:
+        result = {"status": "disabled"}
+        _set_job_status(
+            store,
+            "telegram_daily_summary",
+            status="skipped",
+            run_id=run_id,
+            started_at=started_at,
+            detail="Telegram diario desactivado",
+        )
+        return result
+    calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
+    should_run, market_status = calendar.should_run_daily_study()
+    if not should_run:
+        result = {"status": "skipped", "reason": "market_not_ready"}
+        _set_job_status(
+            store,
+            "telegram_daily_summary",
+            status="skipped",
+            run_id=run_id,
+            started_at=started_at,
+            detail="sesión no apta para resumen Telegram",
+        )
+        return result
+    session_date = datetime.fromisoformat(market_status.now_market).date().isoformat()
+    try:
+        portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
+        performance = build_daily_performance_item(
+            store,
+            settings,
+            session_date,
+            portfolio=portfolio,
+        )
+        result = publish_daily_summary(
+            settings,
+            store,
+            session_date=session_date,
+            performance=performance,
+            portfolio=portfolio,
+        )
+        effective = result.get("status") in {"sent", "idempotent"}
+        _set_job_status(
+            store,
+            "telegram_daily_summary",
+            status="completed" if effective else "skipped",
+            run_id=run_id,
+            started_at=started_at,
+            detail="resumen Telegram enviado" if effective else str(result.get("reason") or result.get("status")),
+            extra={"session_date": session_date, "publish_status": result.get("status")},
+        )
+        return result
+    except Exception as exc:  # noqa: BLE001 - observabilidad externa fail-open.
+        result = {"status": "failed", "reason": f"telegram_daily_summary_failed:{type(exc).__name__}"}
+        log_system_event(
+            settings.logs_dir,
+            "telegram_daily_summary_failed",
+            {"error_type": type(exc).__name__, "session_date": session_date},
+        )
+        _set_job_status(
+            store,
+            "telegram_daily_summary",
+            status="failed",
+            run_id=run_id,
+            started_at=started_at,
+            detail=result["reason"],
+        )
+        if verbose:
+            LOGGER.warning("No se pudo enviar el resumen diario a Telegram (%s)", type(exc).__name__)
+        return result
 
 
 def continuous_improvement_job(
@@ -3870,6 +3991,17 @@ def broker_reconciliation_job(
     try:
         coordinator.stage(lease, "reconciliation", "started")
         result = reconcile_broker_orders(settings, store, apply=True, limit=500)
+        try:
+            result["telegram_trade_notifications"] = publish_trade_fill_notifications(
+                settings,
+                store,
+                result.get("changes", []),
+            )
+        except Exception as exc:  # noqa: BLE001 - Telegram nunca afecta reconciliación.
+            result["telegram_trade_notifications"] = {
+                "status": "failed_open",
+                "reason": f"telegram_trade_fill_failed:{type(exc).__name__}",
+            }
         coordinator.stage(lease, "reconciliation", "completed")
         try:
             reporter.emit(
@@ -4143,6 +4275,18 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         coalesce=True,
         replace_existing=True,
     )
+    telegram_hour, telegram_minute = _daily_hour_minute(settings.telegram_daily_summary_time_local)
+    scheduler.add_job(
+        telegram_daily_summary_job,
+        trigger=CronTrigger(hour=telegram_hour, minute=telegram_minute, timezone=local_tz),
+        args=[settings, store],
+        kwargs={"verbose": verbose},
+        id="telegram_daily_summary",
+        name="Telegram daily portfolio summary",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
     if settings.continuous_improvement_schedule_enabled:
         scheduler.add_job(
             continuous_improvement_job,
@@ -4256,6 +4400,7 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
             "operational_health_refresh",
             "weekly_learning_review",
             "overnight_learning_heartbeat",
+            "telegram_daily_summary",
             "pre_earnings",
             "continuous_improvement",
             "agents_healthcheck",
@@ -4293,6 +4438,14 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
                 "id": "post_market_review",
                 "cadence": f"cada {settings.closed_market_study_interval_minutes} minutos como comprobador",
                 "market_behavior": "tras cierre, una vez por sesion, revisa compras/ventas y genera aprendizaje",
+            },
+            {
+                "id": "telegram_daily_summary",
+                "cadence": f"cada sesión a las {settings.telegram_daily_summary_time_local} {settings.local_timezone}",
+                "market_behavior": (
+                    "envía un resumen read-only de sistema, SP500 y cartera; "
+                    "postmarket actúa como fallback idempotente"
+                ),
             },
             {
                 "id": "broker_reconciliation",

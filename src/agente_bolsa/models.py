@@ -57,6 +57,8 @@ class PositionSnapshot:
     unrealized_pl: float
     unrealized_plpc: float
     side: str = "long"
+    unrealized_intraday_pl: float | None = None
+    unrealized_intraday_plpc: float | None = None
 
 
 @dataclass(frozen=True)

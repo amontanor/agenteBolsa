@@ -1,5 +1,17 @@
 # Plan maestro de mejoras y tareas — agenteBolsa
 
+## P-L66 — Resumen diario por Telegram (0.4.201, candidato aislado)
+
+- Primer intento a las 22:05 Europe/Madrid y fallback idempotente después del
+  terminal durable del postmarket.
+- Reutiliza la misma foto de cartera y la fila `performance_daily`; no añade
+  llamadas al broker.
+- Publica variación diaria de equity, SP500 y P/L total/diario por posición.
+- Token y `chat_id` solo mediante entorno local; desactivado por defecto.
+- Recibo append-only por sesión evita reenvíos después de un éxito confirmado.
+- Pendiente de integración, validación completa con XNYS cerrado y despliegue
+  autorizado.
+
 > **Este documento es la fuente unica de verdad de la mejora del sistema.**
 > Contiene la vision, lo ya ejecutado, el diagnostico vigente, las tareas con su
 > estado (terminado / no terminado) y las propuestas siguientes.
@@ -2708,3 +2720,8 @@ de despliegue quedan pendientes con XNYS cerrado.
   despliegue o push.
 - Dictamen provisional: `ready_for_integration_rehearsal`. Siguiente trabajo:
   ensayo combinado aislado P-L63/P-L65B, con P-L66 fuera de este lote.
+## P-L66 - Telegram (candidato 0.4.201)
+
+- Resumen diario 22:05 Europe/Madrid y fallback postmarket, ambos idempotentes.
+- Avisos de BUY/SELL al fill reconciliado; P/L SELL solo con `source_plan_id`
+  exacto. Pendiente ensayo integrado y despliegue autorizado con XNYS cerrado.

@@ -78,6 +78,15 @@ changed. The next lot is P-L65B after closed-market validation gates.
 > broker. P-L48 aun lo descarta al proyectar operaciones. Siguiente lote:
 > implementar esa proyeccion acotada sin tocar kernel/broker/execution/risk/config.
 > Dictamen: `ready_for_p51c_implementation`.
+## P-L66 — candidato Telegram
+
+El candidato 0.4.201 añade un consumidor externo para el resumen
+diario. Debe integrarse después de P-L65 para preservar la secuencia de
+versiones. Hace el primer intento a las 22:05 Europe/Madrid y conserva el hook
+postmarket como fallback idempotente. Está desactivado por defecto y requiere
+`TELEGRAM_BOT_TOKEN`, `TELEGRAM_DAILY_SUMMARY_CHAT_ID` y
+`TELEGRAM_DAILY_SUMMARY_ENABLED=true` únicamente en el entorno productivo.
+No desplegar con XNYS abierto.
 
 ## Objetivo
 
@@ -777,3 +786,8 @@ cerrada.
   Versión 0.4.198; commits 12a6cb11, bef256d6, 031597c7, 89adde7f
   y fb2c47a7. Sin producción, broker, red, SQLite productiva, despliegue ni
   push.
+## P-L66 - siguiente paso
+
+El candidato 0.4.201 incluye resumen Telegram a las 22:05 y avisos de fills.
+Antes de desplegar requiere ensayo `--no-ff`, suite completa y smoke aislado
+con XNYS cerrado. No desplegar automaticamente.

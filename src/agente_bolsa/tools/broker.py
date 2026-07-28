@@ -154,6 +154,8 @@ class BrokerClientFactory:
                 unrealized_pl=_float_attr(position, "unrealized_pl"),
                 unrealized_plpc=_float_attr(position, "unrealized_plpc"),
                 side=_str_attr(position, "side", "long"),
+                unrealized_intraday_pl=_optional_float_attr(position, "unrealized_intraday_pl"),
+                unrealized_intraday_plpc=_optional_float_attr(position, "unrealized_intraday_plpc"),
             )
             for position in positions
         ]
@@ -210,6 +212,8 @@ class BrokerClientFactory:
                     unrealized_pl=_float_attr(position, "unrealized_pl"),
                     unrealized_plpc=_float_attr(position, "unrealized_plpc"),
                     side=_str_attr(position, "side", "long"),
+                    unrealized_intraday_pl=_optional_float_attr(position, "unrealized_intraday_pl"),
+                    unrealized_intraday_plpc=_optional_float_attr(position, "unrealized_intraday_plpc"),
                 )
                 for position in positions
             ],

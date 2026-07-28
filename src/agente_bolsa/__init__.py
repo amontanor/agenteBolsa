@@ -22,4 +22,5 @@ __all__ = ["__version__"]
 # P-L63: April equity baseline shared by account header and portfolio chart (0.4.198).
 # P-L65A: daily System versus SP500 contract characterization (0.4.199).
 # P-L65B: coherent daily System versus SP500 UI contract (0.4.200).
-__version__ = "0.4.200"
+# P-L66: optional Telegram daily summary (0.4.201).
+__version__ = "0.4.201"
