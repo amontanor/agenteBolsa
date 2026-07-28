@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -61,7 +63,8 @@ def test_build_and_format_daily_summary_keeps_denominators_separate():
     assert payload["open_today_pl"] == pytest.approx(15)
     text = telegram.format_daily_summary(payload)
     assert "Equity: 10,000.00 USD" in text
-    assert "Variación de equity hoy: n/d (+0.27%)" in text
+    assert "Variación de equity hoy: importe n/d" in text
+    assert "Porcentaje disponible (legacy): +0.27%" in text
     assert "SP500: +0.50% · Provisional" in text
     assert "🟢 En beneficio · 1" in text
     assert "• AAA  Total +100.00 USD (+11.11%) · Hoy +25.00 USD (+2.50%)" in text
@@ -130,6 +133,75 @@ def _comparable_performance(*, equity: float = 70_638.81, previous_equity: float
     }
 
 
+def _operator_performance_daily_row(*, quality: object = "partial", include_source_as_of: bool = False):
+    benchmark = {
+        "daily_return": -0.00304428,
+        "previous_close": 100.0,
+        "close": 99.695572,
+        "price_basis": "unknown",
+        "data_quality": quality,
+    }
+    if include_source_as_of:
+        benchmark.update(source="persisted_local_snapshot", as_of="2026-07-28T20:00:00+00:00")
+    payload_json = json.dumps(
+        {
+            "performance_benchmark": {
+                "account": {
+                    "equity": 70_634.91,
+                    "previous_equity": 70_534.69,
+                },
+                "benchmark": benchmark,
+                "comparison_status": "provisional",
+            }
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+    )
+    return {"payload_json": payload_json, "payload": json.loads(payload_json)}
+
+
+@pytest.mark.parametrize("quality", ["partial", {"status": "partial"}])
+def test_p70_reads_anonymized_performance_daily_payload_without_promoting_provisional_data(quality):
+    row = _operator_performance_daily_row(quality=quality)
+    payload = telegram.build_daily_summary(
+        session_date="2026-07-28",
+        performance=row,
+        portfolio=_acceptance_portfolio(),
+    )
+    text = telegram.format_daily_summary(payload)
+
+    assert payload["equity"] == pytest.approx(70_634.91)
+    assert payload["previous_equity"] == pytest.approx(70_534.69)
+    assert payload["equity_delta"] == pytest.approx(100.22)
+    assert payload["account_daily_return"] == pytest.approx(100.22 / 70_534.69)
+    assert payload["spy_daily_return"] == pytest.approx(-0.00304428)
+    assert payload["comparison_status"] == "provisional"
+    assert payload["benchmark_source"] is None
+    assert payload["benchmark_as_of"] is None
+    assert "benchmark_source_unavailable" in payload["comparison_reason_codes"]
+    assert "benchmark_as_of_unavailable" in payload["comparison_reason_codes"]
+    assert "SP500: -0.30% · Provisional" in text
+    assert "Comparación provisional:" in text
+    assert "ganador" not in text.lower()
+
+
+def test_p70_comparison_requires_explicit_comparable_source_and_as_of():
+    row = _operator_performance_daily_row(quality="available", include_source_as_of=True)
+    row["payload"]["performance_benchmark"]["benchmark"].update(
+        price_basis="adjusted_ohlc",
+        daily_return=-0.00304428,
+        comparison_status="comparable",
+    )
+    row["payload"]["performance_benchmark"]["comparison_status"] = "comparable"
+    payload = telegram.build_daily_summary(
+        session_date="2026-07-28", performance=row, portfolio=_acceptance_portfolio()
+    )
+
+    assert payload["comparison_status"] == "comparable"
+    assert payload["benchmark_source"] == "persisted_local_snapshot"
+    assert payload["benchmark_as_of"] == "2026-07-28T20:00:00+00:00"
+
+
 def test_p70_acceptance_contract_reconciles_account_and_all_positions():
     payload = telegram.build_daily_summary(
         session_date="2026-07-28",
@@ -196,7 +268,9 @@ def test_p70_missing_equity_pair_keeps_legacy_percentage_but_not_amount():
 
     assert payload["equity_delta"] is None
     assert payload["account_daily_return_source"] == "legacy_percentage"
-    assert "Variación de equity hoy: n/d (+0.27%)" in telegram.format_daily_summary(payload)
+    text = telegram.format_daily_summary(payload)
+    assert "Variación de equity hoy: importe n/d" in text
+    assert "Porcentaje disponible (legacy): +0.27%" in text
 
 
 def test_p70_partial_position_coverage_does_not_turn_missing_into_zero():
@@ -260,9 +334,64 @@ def test_p70_large_portfolio_is_explicitly_bounded_without_losing_payload_positi
     text = telegram.format_daily_summary(payload)
 
     assert len(payload["positions"]) == 100
-    assert len(text) <= telegram.MAX_TELEGRAM_MESSAGE_LENGTH
+    assert telegram._telegram_utf16_units(text) <= telegram.TELEGRAM_MESSAGE_LIMIT_UNITS
     assert "Mensaje abreviado:" in text
     assert "posiciones más" in text
+    match = re.search(r"se muestran (\d+)/(\d+) posiciones; y (\d+) posiciones más", text)
+    assert match
+    visible, total, omitted = (int(value) for value in match.groups())
+    assert total == 100
+    assert visible + omitted == total
+
+
+def test_p70_telegram_limit_uses_utf16_units_and_never_emits_empty_group_heading():
+    exact = "🧪" * 2048
+    assert len(exact) == 2048
+    assert telegram._telegram_utf16_units(exact) == 4096
+    assert telegram._telegram_utf16_units(exact + "a") == 4097
+
+    positions = [
+        PositionSnapshot(
+            symbol=f"🧪{index:03d}",
+            qty=1,
+            market_value=100,
+            avg_entry_price=100,
+            current_price=100,
+            unrealized_pl=float(index + 1),
+            unrealized_plpc=0.01,
+            unrealized_intraday_pl=float(index) / 10,
+            unrealized_intraday_plpc=0.001,
+        )
+        for index in range(120)
+    ]
+    payload = telegram.build_daily_summary(
+        session_date="2026-07-28",
+        performance=None,
+        portfolio=PortfolioSnapshot("paper", "ACTIVE", "USD", 0, 10_000, 0, positions, []),
+    )
+    text = telegram.format_daily_summary(payload)
+
+    assert telegram._telegram_utf16_units(text) <= telegram.TELEGRAM_MESSAGE_LIMIT_UNITS
+    match = re.search(r"se muestran (\d+)/(\d+) posiciones; y (\d+) posiciones más", text)
+    assert match
+    visible, total, omitted = (int(value) for value in match.groups())
+    assert total == 120
+    assert visible + omitted == total
+    for heading in ("🟢 En beneficio", "🔴 En pérdida", "⚪ Sin cambio", "⚠️ Datos incompletos"):
+        for line_number, line in enumerate(text.splitlines()):
+            if line.startswith(heading):
+                assert text.splitlines()[line_number + 1].startswith("• ")
+
+
+def test_p70_sender_rejects_text_over_utf16_limit_before_transport():
+    with pytest.raises(ValueError, match="telegram_message_too_long"):
+        telegram.send_telegram_message(
+            token="secret-token",
+            chat_id="-100123",
+            text="🧪" * 2048 + "a",
+            timeout_seconds=7,
+            opener=lambda *_args, **_kwargs: pytest.fail("no debe transportar texto inválido"),
+        )
 
 
 def test_p70_empty_unicode_and_non_finite_values_are_explicitly_unavailable():
@@ -466,6 +595,10 @@ def test_publish_uses_real_store_receipt_and_is_idempotent(tmp_path, monkeypatch
     assert events[0]["payload"]["status"] == "sent"
     assert events[0]["payload"]["schema_version"] == "p-l70.telegram-daily-summary.v2"
     assert events[0]["payload"]["message_length"] <= telegram.MAX_TELEGRAM_MESSAGE_LENGTH
+    assert events[0]["payload"]["text"] == calls[0]["text"]
+    assert events[0]["payload"]["text_sha256"] == hashlib.sha256(calls[0]["text"].encode("utf-8")).hexdigest()
+    assert events[0]["payload"]["message_utf16_units"] == telegram._telegram_utf16_units(calls[0]["text"])
+    assert events[0]["payload"]["message_utf16_units"] <= telegram.TELEGRAM_MESSAGE_LIMIT_UNITS
     assert "secret-token" not in json.dumps(events[0])
 
 
