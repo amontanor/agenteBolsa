@@ -39,6 +39,18 @@
 - Recibo append-only por sesión evita reenvíos después de un éxito confirmado.
 - Integrado y desplegado dentro de P-L67R1.
 
+## P-L71-R1 - wiring EOD comun para Telegram (0.4.205)
+
+- Reproducido contra `7beeb135`: Telegram publicaba el `spy_pct` legacy
+  `-0,304428%` aunque el benchmark proyectado EOD era `+0,250308%` y
+  comparable.
+- `publish_daily_summary` aplica ahora el mismo overlay read-only que la UI;
+  job 22:05 y fallback PMR comparten esta frontera. Sin cache posterior con
+  autoridad EOD se publica `n/d`, nunca el valor same-day persistido.
+- No hay backfill, reenvio posterior automatico, cambio de instrumento,
+  cambio de trading ni modificacion productiva. Candidato listo para ensayo
+  de integracion cerrado; P-L70BR1 queda paralelo.
+
 > **Este documento es la fuente unica de verdad de la mejora del sistema.**
 > Contiene la vision, lo ya ejecutado, el diagnostico vigente, las tareas con su
 > estado (terminado / no terminado) y las propuestas siguientes.

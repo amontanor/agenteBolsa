@@ -69,9 +69,9 @@ La UI usa el rowset proyectado para tabla, contadores y gráfica. La cabecera
 de cartera live conserva su propia serie y muestra `cartera actual
 (estimación del panel)` junto a su `as_of`; el panel diario se rotula como
 cierre EOD y muestra fuente, basis y `as_of`. Telegram consume el mismo bloque
-de benchmark, etiqueta `SPY (ETF S&P 500)` y marca `Provisional` o `n/d` si
-no hay comparabilidad completa. SPX queda como futura fuente/configuración,
-no se simula.
+de benchmark, etiqueta `SPY (ETF S&P 500)` y marca `n/d` si no existe una
+proyección EOD comparable; no reutiliza el escalar legacy `spy_pct`. SPX
+queda como futura fuente/configuración y no se simula.
 
 ## Paridad y seguridad
 
@@ -112,6 +112,34 @@ reescribió ni backfilleó.
 Commits separados: `6e3fe35c` (caracterización/tests), `2dc59c7e`
 (implementación), `39e9cc89` (QA de version policy) y el commit documental de
 este informe/plan/relevo.
+
+## P-L71-R1 - wiring Telegram corregido
+
+La reproduccion contra `7beeb135` fue concluyente: `build_daily_summary`
+tomaba el escalar legacy `row['spy_pct']` (-0,30 %) aunque el bloque
+`performance_benchmark.benchmark` ya contenia el overlay EOD autoritativo
+(+0,25 %, `post_session_cache`). El mensaje resultante etiquetaba el valor
+falso como comparable.
+
+La frontera comun ahora es `publish_daily_summary`: proyecta
+`overlay_eod_benchmark` antes de construir el payload. El job de las 22:05 y
+el fallback posterior al PMR llaman a esa misma funcion; no dependen de que
+el caller copie `spy_pct`. `build_daily_summary` ignora siempre el escalar
+legacy y solo publica `benchmark.daily_return` cuando existe un overlay
+proyectado con estado comparable, autoridad EOD, source, as_of, price_basis y
+quality validos. En cualquier otro caso publica `n/d/unavailable`.
+
+La limitacion de las 22:05 queda documentada: caches same-day sin finality
+durable producen `n/d`; el recibo idempotente de la sesion no se actualiza
+despues ni se reenvia automaticamente cuando aparece un cache posterior. No
+se inventa finality, no se hace backfill ni se reescribe `performance_daily`.
+
+P-L70BR1 (`973d50d6`, schema v2) sigue siendo un candidato paralelo y no se
+mezcla en este lote. Un futuro ensayo P-L70+P-L71 debe resolver conflictos
+campo a campo y conservar UX, schema e idempotencia de P-L70.
+
+Commits P-L71-R1: `f5095e60` reproduccion, `cad86726` fix y `76dee578`
+pruebas de wiring.
 
 ## Estado externo y siguiente paso
 

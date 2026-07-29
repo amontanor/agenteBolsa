@@ -49,6 +49,17 @@
   cerrada pendientes por XNYS abierto. Siguiente único lote: P-L65B, rowset
   canónico read-only por sesiones con estados pending/unavailable y cierre
   aritmético de contadores.
+### P-L71-R1 - wiring EOD comun para Telegram
+
+- La reproduccion contra `7beeb135` demostro que Telegram ignoraba el overlay
+  EOD y usaba `row['spy_pct']` stale: `-0,30%` en lugar de `+0,25%`.
+- `publish_daily_summary` es ahora la frontera comun de proyeccion para el job
+  22:05 y el fallback PMR. `build_daily_summary` solo acepta benchmark
+  proyectado/comparable con autoridad EOD completa; sin cache posterior queda
+  `n/d`, incluso si existe un scalar legacy.
+- P-L70BR1 permanece paralelo y no se mezcla. Siguiente lote: ensayo cerrado
+  P-L71; no backfill, no reenvio automatico de sesiones ya recibidas.
+
 > P-L48B sigue desplegado y P-L44B sigue en shadow.
 
 P-L65A version policy required candidate `0.4.199`; no production logic
