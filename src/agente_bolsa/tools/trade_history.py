@@ -219,6 +219,16 @@ def _open_positions_summary(portfolio: PortfolioSnapshot) -> list[dict[str, Any]
             "current_price": round(position.current_price, 4),
             "unrealized_pl": round(position.unrealized_pl, 2),
             "unrealized_plpc": round(position.unrealized_plpc, 4),
+            "unrealized_intraday_pl": (
+                round(position.unrealized_intraday_pl, 2)
+                if position.unrealized_intraday_pl is not None
+                else None
+            ),
+            "unrealized_intraday_plpc": (
+                round(position.unrealized_intraday_plpc, 4)
+                if position.unrealized_intraday_plpc is not None
+                else None
+            ),
         }
         for position in portfolio.positions
     ]
