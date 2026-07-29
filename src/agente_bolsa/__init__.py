@@ -27,4 +27,5 @@ __all__ = ["__version__"]
 # P-L71: EOD benchmark authority and temporal-consistent consumer overlay.
 # P-L70: Telegram daily summary UX and coverage contract (0.4.203).
 # P-L72: opening-to-opening account and SPY performance, shared by UI and Telegram (0.4.206).
-__version__ = "0.4.206"
+# P-L74: deterministic SPY opening authority and explicit session interval UX (0.4.208).
+__version__ = "0.4.208"

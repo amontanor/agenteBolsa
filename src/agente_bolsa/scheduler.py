@@ -74,6 +74,7 @@ from .tools.market_cycle_timing import MarketCycleTiming
 from .tools.news_sentiment import analyze_news_sentiment_for_candidates
 from .tools.opening_performance import (
     build_session_open_snapshot,
+    capture_authoritative_spy_open_cache,
     extract_exact_open_snapshots,
     persist_session_open_snapshot,
     read_session_open_snapshots,
@@ -2096,6 +2097,36 @@ def portfolio_watch_job(
     )
 
 
+def _attempt_authoritative_spy_open_capture(
+    settings: Settings,
+    store: Store,
+    *,
+    session_date: str | None,
+) -> dict[str, Any] | None:
+    """Retry the dedicated SPY-open capture only on natural market cycles."""
+
+    if not session_date:
+        return None
+    state_key = f"market_cycle_spy_open_capture:{session_date}"
+    state = store.get_runtime_value(state_key) or {}
+    if not isinstance(state, dict):
+        state = {}
+    if state.get("status") in {"inserted", "available", "idempotent", "recovered"}:
+        return state
+    attempts = int(state.get("attempts") or 0)
+    result = capture_authoritative_spy_open_cache(settings, session_date)
+    next_state = {
+        "attempts": attempts + 1,
+        "attempted_at": datetime.now(timezone.utc).isoformat(),
+        "status": result.get("status"),
+        "cache_id": result.get("cache_id"),
+        "reason": result.get("reason"),
+        "retry_on_next_market_cycle": result.get("status") not in {"inserted", "available", "idempotent", "recovered"},
+    }
+    store.set_runtime_value(state_key, next_state)
+    return next_state
+
+
 def market_cycle_job(
     settings: Settings,
     store: Store,
@@ -2336,6 +2367,18 @@ def market_cycle_job(
                 "technical_report": technical_context.get("path") if technical_context else None,
             },
         )
+        try:
+            # This happens after the active cycle has produced its decisions
+            # and orders.  It is observational/fail-open and reuses the
+            # existing 15-minute market-cycle cadence; it never polls from
+            # portfolio_watch or from presentation.
+            _attempt_authoritative_spy_open_capture(
+                settings,
+                store,
+                session_date=str(status.session_date or ""),
+            )
+        except Exception as exc:  # noqa: BLE001 - benchmark capture is fail-open.
+            log_swallow(LOGGER, "capturar apertura autorizada de SPY", exc)
     except Exception as exc:
         _persist_learning_penalty_cycle_shadow_partial(store, reporter, learning_penalty_shadow, run_id)
         timing.finalize("failed", error=exc)

@@ -3201,12 +3201,21 @@ def _daily_vs_spy_window_label(value: int | None) -> str:
     return f"Ultimos {value} dias"
 
 
+def _opening_interval_label(row: dict[str, Any]) -> str:
+    """Show the exact opening interval in Europe/Madrid."""
+
+    start = _local_datetime(row.get("system_start_at"), "Europe/Madrid")
+    end = _local_datetime(row.get("system_end_at"), "Europe/Madrid")
+    return f"{start} -> {end if end != 'n/d' else 'ahora'}"
+
+
 def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
     if alt is None:
         return None
     chart_rows = [
         {
             "fecha": row["session_date"],
+            "sesion_iniciada": row["session_date"],
             "Sistema": row["system_pct"],
             "SP500": row["spy_pct"],
             "estado": (
@@ -3214,7 +3223,7 @@ def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
                 if row.get("status") == "final" or row.get("comparison_status") == "comparable"
                 else "En curso"
             ),
-            "periodo": f"{row.get('system_start_at') or 'n/d'} → {row.get('system_end_at') or 'ahora'}",
+            "periodo": _opening_interval_label(row),
         }
         for row in rows
     ]
@@ -3226,11 +3235,11 @@ def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
     y_pad = max(abs(y_min_raw), abs(y_max_raw), 0.002) * 0.35
     y_min, y_max = y_min_raw - y_pad, y_max_raw + y_pad
     tooltip = [
-        alt.Tooltip("fecha:N", title="Fecha"),
+        alt.Tooltip("sesion_iniciada:N", title="Sesión iniciada"),
         alt.Tooltip("retorno:Q", title="% ganancias", format="+.2%"),
         alt.Tooltip("serie:N", title="Serie"),
         alt.Tooltip("estado:N", title="Estado"),
-        alt.Tooltip("periodo:N", title="Ventana"),
+        alt.Tooltip("periodo:N", title="Intervalo"),
     ]
     base = alt.Chart(chart_frame).encode(
         x=alt.X("fecha:N", title=None, axis=alt.Axis(labelAngle=0, labelOverlap=True)),
@@ -3319,9 +3328,9 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
         title_col, control_col = st.columns([3, 1])
         with title_col:
             _section_title(
-                "Rendimiento diario: Sistema vs SP500",
-                "Apertura XNYS → siguiente apertura; la sesión vigente compara la última apertura con ahora. "
-                "Sistema = variación de equity; SP500 = SPY ajustado. Sin ajustes de flujos.",
+                "Rendimiento desde apertura: Sistema vs SPY",
+                "Sesión iniciada en apertura XNYS → siguiente apertura; la sesión vigente compara la última apertura con ahora. "
+                "Sistema = variación de equity; SPY = ETF S&P 500 ajustado. Sin ajustes de flujos.",
             )
         with control_col:
             visible_days = st.selectbox(
@@ -3382,14 +3391,15 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
             )
             spy_text = f"{spy_text}<span>{escape(source_detail)}</span>"
             state = "Final" if row["status"] == "final" else "En curso"
+            interval = escape(_opening_interval_label(row))
             html_rows.append(
                 "<tr>"
-                f"<td><strong>{row['session_date']}</strong></td>"
+                f"<td><strong>{row['session_date']}</strong></td><td>{interval}</td>"
                 f"<td>{system_text}</td><td>{spy_text}</td><td>{state}</td><td>{winner}</td>"
                 "</tr>"
             )
         st.markdown(
-            "<table class='portfolio-table'><thead><tr><th>Fecha</th><th>Sistema</th>"
+            "<table class='portfolio-table'><thead><tr><th>Sesión iniciada</th><th>Intervalo</th><th>Sistema</th>"
             "<th>SPY (ETF S&amp;P 500)</th><th>Estado</th><th>Superior</th></tr></thead>"
             f"<tbody>{''.join(html_rows)}</tbody></table>",
             unsafe_allow_html=True,
