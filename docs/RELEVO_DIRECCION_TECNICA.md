@@ -57,6 +57,22 @@
   aritmético de contadores.
 > P-L48B sigue desplegado y P-L44B sigue en shadow.
 
+### P-L70BR1 — ensayo integrado cerrado
+
+- Merge `--no-ff` `0083f414` desde producción documental exacta; tree funcional
+  resultante igual al candidato P-L70R1. QA adicional `a64c493a` conserva la
+  separación del evento de resumen frente a notificaciones de fills.
+- Suite integrada `2261 passed, 1 skipped, 1 warning`; focales `86 passed` y
+  QA integrada `1 passed`. El skip es únicamente el test condicional
+  `test_score_study_regression_current_sqlite` por historia local insuficiente
+  o no disponible. No se añadió skip/xfail.
+- `telegram_daily_summary.py` es la única lógica funcional modificada; el
+  recibo v2 guarda texto exacto, `text_sha256`, `content_hash` independiente y
+  unidades UTF-16. Fills, scheduler, Store, PMR y trading permanecen iguales.
+- Dictamen `ready_for_closed_market_deployment`, sin despliegue, reinicio,
+  push ni mensaje real. El siguiente lote mínimo es el preflight/normalización
+  productiva autorizado para despliegue; no iniciar P-L69 en paralelo.
+
 P-L65A version policy required candidate `0.4.199`; no production logic
 changed. The next lot is P-L65B after closed-market validation gates.
 

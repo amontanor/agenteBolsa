@@ -19,6 +19,10 @@
   skipped, 1 warning`; el skip es el test condicional preexistente de historia
   SQLite local (`test_score_study_regression_current_sqlite`). Smoke real y
   mensaje Telegram no ejecutados.
+- P-L70BR1 integrado sobre producción documental mediante merge `0083f414`, con
+  QA `a64c493a`: `2261 passed`, focales `86 passed` y QA de integración `1
+  passed`. Dictamen `ready_for_closed_market_deployment`; despliegue sigue
+  pendiente y requiere sus precondiciones operativas habituales.
 
 ## P-L67R1 — Despliegue combinado 0.4.201 (28-jul-2026)
 

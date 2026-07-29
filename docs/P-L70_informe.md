@@ -129,3 +129,58 @@ Mensaje exacto de aceptación (8/8 posiciones, ordenado por impacto absoluto):
 
 No se enviaron mensajes reales, no se leyó token/chat_id, no se usó red ni
 SQLite productiva.
+
+## P-L70BR1 — ensayo integrado cerrado
+
+### Dictamen
+
+`ready_for_closed_market_deployment`.
+
+Este dictamen solo autoriza el siguiente paso de despliegue; no se ha hecho
+despliegue, reinicio, push ni envío Telegram desde este ensayo.
+
+### Merge y paridad
+
+- Base documental: `87d2901894ed9f3b31000b31ba1cfb974b7c9b88`, árbol
+  `fd690a939c9f887fc6929a8badfc1d1b79f76260`, versión `0.4.202`.
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl70br1_telegram_summary_rehearsal`.
+- Rama: `codex/pl70br1-telegram-summary-rehearsal`.
+- Merge `--no-ff`: `0083f414dd235d4b75fb207365702f1c06090d01`; su tree funcional
+  coincidió exactamente con `53b8daa68994ad26f68a1b9cc625d7a5c2c211a9`.
+- QA integrada: `a64c493a`.
+- Versión final: `0.4.203`.
+
+El diff funcional respecto a producción queda limitado a
+`telegram_daily_summary.py` y `__init__.py`; el resto son tests y
+documentación. `telegram_trade_notifications.py`, scheduler, Store,
+reconciliación, PMR y las rutas de trading no cambian. `kernel.py`, broker,
+execution, risk, config y `.env` permanecen idénticos a producción.
+
+### Preflight y validación
+
+El 29-jul-2026 a las 02:23 CEST XNYS estaba cerrado y abría a las 15:30 CEST.
+El PMR del 28-jul estaba en `terminal/completed` con razón
+`pipeline_completed`, la lease estaba liberada y el intento posterior era
+`session_already_completed`. No había pytest ni despliegue activo; el scheduler
+residente y `continuous_improvement` dry-run no bloquearon el ensayo.
+
+- Suite integrada: `2261 passed, 1 skipped, 1 warning` en `775,52 s`.
+- Skip único, condicional y preexistente: `test_score_study_regression_current_sqlite`
+  cuando la historia SQLite local no está disponible o no alcanza el mínimo.
+- Warning único: deprecación existente de `websockets.legacy`.
+- Focales Telegram/P-L63/P-L65/P-L68/config/version: `86 passed`.
+- QA específica P-L70BR1: `1 passed`.
+- Ruff completo, `check_no_nulls.py`, `git diff --check`, compilación y
+  `validate-agent-config --json` temporal: verdes.
+- `kernel-status` temporal: `unsealed` esperado por ausencia de manifiesto;
+  `kernel-status` productivo: `ok`, sellado y hashes coincidentes.
+- Smoke real y Telegram real: omitidos deliberadamente; sender monkeypatched y
+  Store temporal cubren publicación, rechazo, idempotencia, recibo, Unicode y
+  ausencia de secretos.
+
+La fixture productiva anonimizada conserva equity `70,634.91`, previous equity
+`70,534.69`, delta `+100.22`, SP500 `-0.304428%`, `price_basis=unknown` y
+calidad `partial`; el estado es inequívocamente `Provisional`, sin ganador.
+El recibo v2 contiene texto exacto, `text_sha256`, `content_hash` separado,
+unidades UTF-16, total y truncado. Las sesiones v1/v2 previas permanecen
+idempotentes y no se reenvían.
