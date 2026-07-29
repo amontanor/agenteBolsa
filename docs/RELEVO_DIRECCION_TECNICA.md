@@ -918,3 +918,18 @@ con XNYS cerrado. No desplegar automaticamente.
   `run_observable_cycle(use_crew=False)` pasó en DATA_DIR temporal. Antes de
   desplegar hay que repetir preflight cerrado y normalizar el checkout dirty
   sin descartar cambios del operador.
+
+## P-L72 — siguiente integración (29-jul-2026)
+
+- Worktree `pl72_open_to_open_performance`, rama
+  `codex/pl72-open-to-open-performance`, versión `0.4.206`.
+- Integra P-L70 y P-L71 y corrige la frontera diaria con aperturas exactas
+  Alpaca 15 minutos y Open ajustado de SPY.
+- Semántica única: T open → next T open; para la sesión vigente, open → now.
+  No utilizar `performance_daily`, timestamps midnight de 1D ni exposición
+  actual como denominador.
+- La UI muestra las últimas sesiones completas, tabla descendente y cero
+  `pending`. Telegram comparte el intervalo cuando existe evidencia exacta.
+- Suite completa `2283 passed, 1 skipped`; gates estáticos/configuración
+  verdes. Siguiente paso: preflight cerrado, merge `--no-ff`, validación
+  productiva con stack detenido, arranque gestionado y doble salud.

@@ -2834,3 +2834,17 @@ de despliegue quedan pendientes con XNYS cerrado.
   `tests/test_pre_earnings.py:1041`; Ruff/NUL/diff/compile/config verdes.
   Smoke CLI real queda `smoke_unavailable_by_safety`; sustituto aislado verde.
 - Dictamen `ready_for_deployment` sin autorización de despliegue en este lote.
+
+## P-L72 - rendimiento apertura a apertura (29-jul-2026)
+
+- Candidato `0.4.206` listo para despliegue cerrado.
+- Sustituye el panel provisional P-L65/P-L68 por intervalos exactos:
+  apertura XNYS T → apertura siguiente; sesión vigente → ahora.
+- Cabecera, gráfica, contadores, tabla y Telegram comparten ventana y
+  denominadores. La tabla queda ordenada de más reciente a más antigua y no
+  muestra filas vacías o pendientes.
+- Evidencia real: 27→28 cuenta +0,1569% frente a SPY -0,7679%; 28→preapertura
+  29 cuenta aproximadamente -0,043% frente a SPY +0,2259%.
+- Suite completa `2283 passed, 1 skipped`; Ruff/NUL/diff/config verdes.
+- No cambia política ni rutas de trading. Pendiente despliegue autorizado y
+  doble comprobación operativa.
