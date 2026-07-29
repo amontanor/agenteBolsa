@@ -35,6 +35,8 @@ def _row(
                     "price_basis": price_basis,
                     "source": "yfinance",
                     "as_of": as_of,
+                    "eod_authority": "post_session_cache",
+                    "comparison_status": "comparable",
                     "data_quality": "available",
                 },
                 "data_quality": {

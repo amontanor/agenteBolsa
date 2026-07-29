@@ -10,6 +10,8 @@ from datetime import date
 from typing import Any
 from urllib.request import Request, urlopen
 
+from .performance_benchmark import overlay_eod_benchmark
+
 SCHEMA_VERSION = "p-l70.telegram-daily-summary.v2"
 EVENT_TYPE = "telegram_daily_summary_sent"
 TELEGRAM_MESSAGE_LIMIT_UNITS = 4096
@@ -25,6 +27,14 @@ def _telegram_utf16_units(text: str) -> int:
 
 def _rendered_text_sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+_EOD_AUTHORITIES = {
+    "confirmed",
+    "eod_final",
+    "next_session_confirmed",
+    "post_session_cache",
+}
 
 
 def _finite(value: Any) -> float | None:
@@ -169,6 +179,41 @@ def _date_label(session_date: Any) -> str:
         return str(session_date or "n/d")
     months = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
     return f"{value.day:02d} {months[value.month - 1]} {value.year}"
+def _canonical_eod_benchmark(row: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Devuelve solo el benchmark EOD ya proyectado y autoritativo.
+
+    Los escalares legacy del nivel superior son deliberadamente ignorados:
+    pueden pertenecer a una captura distinta o a un cache same-day mutable.
+    ``eod_overlay`` prueba que el consumidor pasó por la frontera común de
+    proyección antes de construir el mensaje.
+    """
+
+    contract = _performance_contract(row)
+    if not isinstance(contract, Mapping):
+        return None
+    overlay = contract.get("eod_overlay") or {}
+    benchmark = contract.get("benchmark") or {}
+    if not isinstance(overlay, Mapping) or not isinstance(benchmark, Mapping):
+        return None
+    if str(overlay.get("status") or "").lower() not in {"available", "comparable"}:
+        return None
+    if str(benchmark.get("comparison_status") or "").lower() != "comparable":
+        return None
+    if str(benchmark.get("eod_authority") or "").lower() not in _EOD_AUTHORITIES:
+        return None
+    quality = benchmark.get("data_quality")
+    if isinstance(quality, Mapping):
+        quality = quality.get("status")
+    if str(quality or "").lower() != "available":
+        return None
+    if benchmark.get("price_basis") not in {"adjusted_ohlc", "close_unadjusted"}:
+        return None
+    if not str(benchmark.get("source") or "").strip() or not str(benchmark.get("as_of") or "").strip():
+        return None
+    daily_return = _finite(benchmark.get("daily_return"))
+    if daily_return is None:
+        return None
+    return dict(benchmark)
 
 
 def build_daily_summary(
@@ -182,7 +227,9 @@ def build_daily_summary(
     row = dict(performance) if isinstance(performance, Mapping) else {}
     contract = _performance_contract(row)
     account = _mapping(contract.get("account"))
-    benchmark = _mapping(contract.get("benchmark"))
+    raw_benchmark = _mapping(contract.get("benchmark"))
+    canonical_benchmark = _canonical_eod_benchmark(row)
+    benchmark = canonical_benchmark or raw_benchmark
     equity = _finite(account.get("equity"))
     if equity is None:
         equity = _finite(row.get("equity"))
@@ -197,9 +244,7 @@ def build_daily_summary(
     legacy_daily_return = _finite(row.get("pnl_pct"))
     account_daily_return = exact_daily_return if exact_daily_return is not None else legacy_daily_return
     equity_delta = equity - previous_equity if exact_daily_return is not None else None
-    spy_daily_return = _finite(benchmark.get("daily_return"))
-    if spy_daily_return is None:
-        spy_daily_return = _finite(row.get("spy_pct"))
+    spy_daily_return = _finite(canonical_benchmark.get("daily_return")) if canonical_benchmark else None
     comparison_status, comparison_reasons, difference = _comparison_contract(
         row=row,
         contract=contract,
@@ -373,7 +418,17 @@ def publish_daily_summary(settings: Any, store: Any, *, session_date: str, perfo
     ]
     if existing:
         return {"status": "idempotent", "event_id": event_id}
-    payload = build_daily_summary(session_date=session_date, performance=performance, portfolio=portfolio)
+    projected_performance = performance
+    if isinstance(performance, Mapping):
+        # Both the 22:05 job and the PMR fallback call this same boundary.
+        # Projection is local/read-only; failure must not make a stale scalar
+        # authoritative, so the builder degrades to unavailable.
+        projected_performance = overlay_eod_benchmark(performance, settings)
+    payload = build_daily_summary(
+        session_date=session_date,
+        performance=projected_performance,
+        portfolio=portfolio,
+    )
     text = format_daily_summary(payload)
     sent = send_telegram_message(
         token=token,

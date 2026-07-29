@@ -262,6 +262,23 @@ def _bar_by_date(series: pd.Series, wanted: str) -> tuple[float | None, str | No
     return None, None
 
 
+def _future_bar_present(series: pd.Series, session_date: str) -> bool:
+    target = date.fromisoformat(session_date)
+    for timestamp in series.index:
+        try:
+            parsed = pd.Timestamp(timestamp)
+            bar_date = (
+                parsed.tz_convert(ZoneInfo("America/New_York")).date()
+                if parsed.tzinfo is not None
+                else parsed.date()
+            )
+        except (TypeError, ValueError):
+            continue
+        if bar_date > target:
+            return True
+    return False
+
+
 def _price_basis(meta: dict[str, Any], selected_name: str | None) -> str:
     explicit = str(meta.get("price_basis") or "").strip().lower()
     if explicit in {"adjusted_ohlc", "close_unadjusted", UNKNOWN_PRICE_BASIS}:
@@ -286,17 +303,23 @@ def _cache_candidates(settings: Settings, previous: str, session_date: str) -> l
     if requested == "auto":
         providers.extend(["fmp" if getattr(settings, "fmp_api_key", None) else "yfinance", "yfinance", "fmp"])
     candidates: list[tuple[Path, dict[str, Any]]] = []
+    seen_paths: set[Path] = set()
+
+    def add_candidate(data_path: Path, meta: dict[str, Any]) -> None:
+        if data_path in seen_paths:
+            return
+        seen_paths.add(data_path)
+        candidates.append((data_path, meta))
+
     for provider in dict.fromkeys(providers):
         key = _request_key([getattr(settings, "benchmark_symbol", "SPY")], start, end, provider=provider)
         data_path, meta_path = _cache_paths(cache_root, key)
         if data_path.exists() and meta_path.exists():
             try:
-                candidates.append((data_path, json.loads(meta_path.read_text(encoding="utf-8"))))
+                add_candidate(data_path, json.loads(meta_path.read_text(encoding="utf-8")))
             except (OSError, json.JSONDecodeError):
                 pass
-    if candidates:
-        return candidates
-    for meta_path in sorted(cache_root.glob("market_data_*.json")):
+    for meta_path in cache_root.glob("market_data_*.json"):
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -306,19 +329,114 @@ def _cache_candidates(settings: Settings, previous: str, session_date: str) -> l
             continue
         data_path = meta_path.with_suffix(".pkl")
         if data_path.exists():
-            candidates.append((data_path, meta))
-    return candidates
+            add_candidate(data_path, meta)
+
+    def created_sort_key(item: tuple[Path, dict[str, Any]]) -> tuple[float, str]:
+        created = _metadata_timestamp(item[1].get("created_at"))
+        return (created.timestamp() if created is not None else float("-inf"), item[0].name)
+
+    # The filename/hash is only a deterministic tie-breaker.  It is never the
+    # authority for choosing a mutable same-day bar.
+    return sorted(candidates, key=created_sort_key, reverse=True)
+
+
+def _metadata_timestamp(value: Any) -> datetime | None:
+    try:
+        parsed = pd.Timestamp(value)
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(parsed):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.tz_localize(timezone.utc)
+    else:
+        parsed = parsed.tz_convert(timezone.utc)
+    return parsed.to_pydatetime()
+
+
+def _canonical_cache_metadata(
+    meta: dict[str, Any],
+    *,
+    previous: str,
+    session_date: str,
+    now: datetime,
+    selected_name: str | None,
+) -> tuple[bool, str | None, list[str], datetime | None]:
+    """Valida autoridad temporal y semántica sin inferir un cierre por el nombre."""
+
+    warnings: list[str] = []
+    symbol = str(meta.get("symbol") or "").upper()
+    requested_symbols = {str(item).upper() for item in meta.get("requested_symbols", [])}
+    if symbol and symbol != "SPY":
+        warnings.append("benchmark_symbol_mismatch")
+    if requested_symbols and "SPY" not in requested_symbols:
+        warnings.append("benchmark_symbol_not_requested")
+    if not symbol and not requested_symbols:
+        warnings.append("benchmark_symbol_unavailable")
+    if not str(meta.get("source") or "").strip():
+        warnings.append("benchmark_source_unavailable")
+    interval = str(meta.get("interval") or meta.get("timeframe") or "").strip().lower()
+    if interval not in {"1d", "daily", "day"}:
+        warnings.append("daily_interval_unavailable")
+    try:
+        start = date.fromisoformat(str(meta.get("start") or ""))
+        end = date.fromisoformat(str(meta.get("end") or ""))
+        if start > date.fromisoformat(previous) or end < date.fromisoformat(session_date):
+            warnings.append("cache_range_does_not_cover_session")
+    except ValueError:
+        warnings.append("cache_range_unavailable")
+
+    created_at = _metadata_timestamp(meta.get("created_at"))
+    if created_at is None:
+        warnings.append("cache_created_at_unavailable")
+    elif created_at > now:
+        warnings.append("cache_created_at_future")
+
+    basis = _price_basis(meta, selected_name)
+    if basis not in {"adjusted_ohlc", "close_unadjusted"}:
+        warnings.append("price_basis_unknown")
+    elif basis == "close_unadjusted" and selected_name != "Close":
+        warnings.append("price_basis_field_mismatch")
+
+    authority = str(meta.get("eod_authority") or meta.get("eod_finality") or "").strip().lower()
+    explicit_finality = authority in {
+        "confirmed",
+        "eod_final",
+        "next_session_confirmed",
+        "post_session_final",
+    }
+    if created_at is not None and created_at <= now:
+        # A post-session UTC date is a conservative temporal boundary, not a
+        # guessed market-close hour. Same-day caches remain provisional unless
+        # durable finality is explicitly supplied.
+        if created_at.date() > date.fromisoformat(session_date):
+            authority = authority or "post_session_cache"
+        elif not explicit_finality:
+            warnings.append("same_day_cache_not_eod")
+    if not authority:
+        warnings.append("eod_authority_unavailable")
+
+    return not warnings, authority or None, sorted(set(warnings)), created_at
 
 
 def load_cached_spy_observation(settings: Settings, session_date: str, *, now: datetime | None = None) -> dict[str, Any]:
-    previous = previous_xnys_session(session_date)
+    try:
+        previous = previous_xnys_session(session_date)
+    except (TypeError, ValueError):
+        return {"status": "unavailable", "warnings": ["invalid_session_date"]}
     if previous is None:
         return {"status": "unavailable", "warnings": ["missing_previous_xnys_session"]}
     status, status_warnings = session_status(session_date, now=now)
     if status != "closed":
         return {"status": "unavailable", "warnings": status_warnings}
     symbol = str(getattr(settings, "benchmark_symbol", "SPY") or "SPY").upper()
-    incomplete: dict[str, Any] | None = None
+    captured_now = now or datetime.now(timezone.utc)
+    captured_now = (
+        captured_now.replace(tzinfo=timezone.utc)
+        if captured_now.tzinfo is None
+        else captured_now.astimezone(timezone.utc)
+    )
+    rejected_reasons: set[str] = set()
     for data_path, meta in _cache_candidates(settings, previous, session_date):
         try:
             frame = pd.read_pickle(data_path)
@@ -330,31 +448,151 @@ def load_cached_spy_observation(settings: Settings, session_date: str, *, now: d
         previous_close, previous_as_of = _bar_by_date(series, previous)
         close, as_of = _bar_by_date(series, session_date)
         warnings = list(status_warnings)
+        if _future_bar_present(series, session_date):
+            warnings.append("future_spy_bar")
         if previous_close is None:
             warnings.append("missing_previous_spy_session")
         if close is None:
             warnings.append("missing_spy_session")
-        daily_return = close / previous_close - 1.0 if close is not None and previous_close else None
         basis = _price_basis(meta, selected_name)
-        if basis == UNKNOWN_PRICE_BASIS:
-            warnings.append("price_basis_unknown")
-        observation = {
-            "status": "available" if daily_return is not None else "unavailable",
+        valid_meta, eod_authority, meta_warnings, created_at = _canonical_cache_metadata(
+            meta,
+            previous=previous,
+            session_date=session_date,
+            now=captured_now,
+            selected_name=selected_name,
+        )
+        warnings.extend(meta_warnings)
+        valid_meta = valid_meta and not warnings
+        daily_return = close / previous_close - 1.0 if close is not None and previous_close else None
+        if daily_return is None:
+            warnings.append("spy_close_pair_unavailable")
+        if not valid_meta or daily_return is None:
+            rejected_reasons.update(warnings)
+            continue
+        return {
+            "status": "available",
             "previous_close": previous_close,
             "close": close,
             "daily_return": daily_return,
             "price_basis": basis,
             "source": meta.get("source"),
+            "instrument_label": "SPY (ETF S&P 500)",
             "as_of": as_of or previous_as_of,
-            "data_quality": "available" if daily_return is not None and basis != UNKNOWN_PRICE_BASIS else "partial",
+            "cache_created_at": created_at.isoformat() if created_at else None,
+            "eod_authority": eod_authority,
+            "interval": str(meta.get("interval") or meta.get("timeframe") or "1d"),
+            "data_quality": "available",
             "warnings": sorted(set(warnings)),
         }
-        if daily_return is not None:
-            return observation
-        incomplete = incomplete or observation
-    if incomplete is not None:
-        return incomplete
-    return {"status": "unavailable", "warnings": ["spy_cache_unavailable"]}
+    return {
+        "status": "unavailable",
+        "previous_close": None,
+        "close": None,
+        "daily_return": None,
+        "price_basis": None,
+        "source": None,
+        "instrument_label": "SPY (ETF S&P 500)",
+        "as_of": None,
+        "cache_created_at": None,
+        "eod_authority": None,
+        "data_quality": "unavailable",
+        "warnings": sorted(rejected_reasons or {"spy_cache_unavailable"}),
+    }
+
+
+def overlay_eod_benchmark(
+    row: Mapping[str, Any],
+    settings: Settings,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Proyecta una observación EOD posterior sin mutar ni reescribir el row.
+
+    El benchmark almacenado se conserva bajo ``stored_benchmark`` para
+    auditoría. La proyección solo puede mejorar la vista si la caché pasa la
+    autoridad EOD; de lo contrario elimina el precio no verificable y deja la
+    comparación pendiente.
+    """
+
+    projected = deepcopy(dict(row))
+    payload = deepcopy(projected.get("payload") or {})
+    contract = deepcopy(payload.get("performance_benchmark") or {})
+    if not contract:
+        return projected
+    session_date = str(projected.get("session_date") or contract.get("session_date") or "")[:10]
+    stored_benchmark = deepcopy(contract.get("benchmark") or {})
+    observation = load_cached_spy_observation(settings, session_date, now=now)
+    read_at = now or datetime.now(timezone.utc)
+    read_at = read_at.astimezone(timezone.utc) if read_at.tzinfo else read_at.replace(tzinfo=timezone.utc)
+    account = contract.get("account") or {}
+    equity = _finite(account.get("equity"))
+    previous_equity = _finite(account.get("previous_equity"))
+    account_return = equity / previous_equity - 1.0 if equity is not None and previous_equity and previous_equity > 0 else None
+    warnings = list(observation.get("warnings") or [])
+    if observation.get("status") == "available":
+        spy_return = _finite(observation.get("daily_return"))
+        benchmark = {
+            **stored_benchmark,
+            "symbol": str(getattr(settings, "benchmark_symbol", "SPY") or "SPY").upper(),
+            "instrument_label": observation.get("instrument_label") or "SPY (ETF S&P 500)",
+            "previous_close": _finite(observation.get("previous_close")),
+            "close": _finite(observation.get("close")),
+            "daily_return": spy_return,
+            "price_basis": observation.get("price_basis"),
+            "source": observation.get("source"),
+            "as_of": observation.get("as_of"),
+            "cache_created_at": observation.get("cache_created_at"),
+            "eod_authority": observation.get("eod_authority"),
+            "interval": observation.get("interval"),
+            "comparison_status": "comparable",
+            "data_quality": "available",
+        }
+        comparison_status = "available" if account_return is not None and spy_return is not None else "partial"
+        comparison = {
+            **(contract.get("comparison") or {}),
+            "excess_return_total": (
+                account_return - spy_return
+                if account_return is not None and spy_return is not None
+                else None
+            ),
+        }
+    else:
+        spy_return = None
+        benchmark = {
+            **stored_benchmark,
+            "instrument_label": "SPY (ETF S&P 500)",
+            "previous_close": None,
+            "close": None,
+            "daily_return": None,
+            "price_basis": None,
+            "source": None,
+            "as_of": None,
+            "cache_created_at": None,
+            "eod_authority": None,
+            "comparison_status": "unavailable",
+            "data_quality": "unavailable",
+        }
+        comparison_status = "unavailable"
+        comparison = {**(contract.get("comparison") or {}), "excess_return_total": None}
+    contract["benchmark"] = benchmark
+    contract["comparison"] = comparison
+    contract["eod_overlay"] = {
+        "status": "available" if comparison_status == "available" else comparison_status,
+        "stored_benchmark": stored_benchmark,
+        "warnings": sorted(set(warnings)),
+        "consumer_read_at": read_at.isoformat(),
+    }
+    contract["data_quality"] = {
+        "status": "available" if comparison_status == "available" else "partial" if account_return is not None else "unavailable",
+        "warnings": sorted(set(warnings)),
+    }
+    payload["performance_benchmark"] = contract
+    projected["payload"] = payload
+    projected["performance_benchmark"] = contract
+    projected["eod_overlay_status"] = comparison_status
+    projected["eod_overlay_spy_return"] = spy_return
+    return projected
 
 
 def _previous_equity(store: Store, session_date: str) -> tuple[str | None, float | None]:
@@ -429,6 +667,23 @@ def build_performance_benchmark(
                 spy = {"status": "unavailable", "warnings": ["spy_observation_after_capture"]}
         except Exception:
             warnings.append("spy_observation_timestamp_invalid")
+    if spy.get("status") == "available" and not spy.get("eod_authority"):
+        warnings.append("eod_authority_unavailable")
+        spy = {
+            "status": "unavailable",
+            "warnings": ["eod_authority_unavailable"],
+        }
+    if spy.get("status") == "available":
+        invalid_authority_fields: list[str] = []
+        if spy.get("price_basis") not in {"adjusted_ohlc", "close_unadjusted"}:
+            invalid_authority_fields.append("price_basis_unknown")
+        if not str(spy.get("source") or "").strip():
+            invalid_authority_fields.append("benchmark_source_unavailable")
+        if not spy.get("as_of"):
+            invalid_authority_fields.append("benchmark_as_of_unavailable")
+        if invalid_authority_fields:
+            warnings.extend(invalid_authority_fields)
+            spy = {"status": "unavailable", "warnings": invalid_authority_fields}
     warnings.extend(list(spy.get("warnings") or []))
     account_daily_return = None
     if _finite(account.get("equity")) is not None and previous_equity and previous_equity > 0:
@@ -445,12 +700,19 @@ def build_performance_benchmark(
     excess = account_daily_return - spy_daily_return if account_daily_return is not None and spy_daily_return is not None else None
     benchmark = {
         "symbol": str(getattr(settings, "benchmark_symbol", "SPY") or "SPY").upper(),
+        "instrument_label": spy.get("instrument_label") or "SPY (ETF S&P 500)",
         "previous_close": _finite(spy.get("previous_close")),
         "close": _finite(spy.get("close")),
         "daily_return": spy_daily_return,
         "price_basis": spy.get("price_basis"),
         "source": spy.get("source"),
         "as_of": spy.get("as_of"),
+        "cache_created_at": spy.get("cache_created_at"),
+        "eod_authority": spy.get("eod_authority"),
+        "interval": spy.get("interval"),
+        "comparison_status": "comparable"
+        if spy.get("status") == "available" and spy.get("eod_authority")
+        else "unavailable",
         "data_quality": spy.get("data_quality") or "unavailable",
     }
     account["daily_return"] = account_daily_return

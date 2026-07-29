@@ -24,6 +24,20 @@
   passed`. Dictamen `ready_for_closed_market_deployment`; despliegue sigue
   pendiente y requiere sus precondiciones operativas habituales.
 
+## P-L71 — autoridad EOD y coherencia temporal Sistema vs benchmark (0.4.205)
+
+- Implementación aislada en `pl71_eod_authority`, rama
+  `codex/pl71-eod-authority`; la base productiva `0.4.202` no se modificó.
+- Se reprodujo la selección lexicográfica del cache SPY que publicaba
+  `-0,304428%` desde una barra same-day mutable. El productor exige intervalo,
+  rango, basis, fuente y autoridad temporal; same-day sin finality queda
+  `unavailable` y un cache posterior puede proyectarse como
+  `post_session_cache`.
+- UI y Telegram consumen un overlay read-only que conserva el benchmark
+  almacenado y declara `source`, `price_basis`, `generated_at/as_of` y estado.
+  No hay backfill ni cambio de trading. Suite cerrada: 2260 passed, 1 skip
+  preexistente y 1 warning; smoke real omitido por seguridad.
+
 ## P-L67R1 — Despliegue combinado 0.4.201 (28-jul-2026)
 
 - Dictamen: `deployed`. Merge productivo `915481ab325d46c81a92986bfd603f13c5134dd9`;
@@ -48,6 +62,18 @@
 - Token y `chat_id` solo mediante entorno local; desactivado por defecto.
 - Recibo append-only por sesión evita reenvíos después de un éxito confirmado.
 - Integrado y desplegado dentro de P-L67R1.
+
+## P-L71-R1 - wiring EOD comun para Telegram (0.4.205)
+
+- Reproducido contra `7beeb135`: Telegram publicaba el `spy_pct` legacy
+  `-0,304428%` aunque el benchmark proyectado EOD era `+0,250308%` y
+  comparable.
+- `publish_daily_summary` aplica ahora el mismo overlay read-only que la UI;
+  job 22:05 y fallback PMR comparten esta frontera. Sin cache posterior con
+  autoridad EOD se publica `n/d`, nunca el valor same-day persistido.
+- No hay backfill, reenvio posterior automatico, cambio de instrumento,
+  cambio de trading ni modificacion productiva. Candidato listo para ensayo
+  de integracion cerrado; P-L70BR1 queda paralelo.
 
 > **Este documento es la fuente unica de verdad de la mejora del sistema.**
 > Contiene la vision, lo ya ejecutado, el diagnostico vigente, las tareas con su

@@ -24,5 +24,7 @@ __all__ = ["__version__"]
 # P-L65B: coherent daily System versus SP500 UI contract (0.4.200).
 # P-L66: optional Telegram daily summary (0.4.201).
 # P-L68: explicit benchmark basis, correct daily freshness and provisional chart.
+# P-L71: EOD benchmark authority and temporal-consistent consumer overlay.
 # P-L70: Telegram daily summary UX and coverage contract (0.4.203).
-__version__ = "0.4.203"
+# P-L72: opening-to-opening account and SPY performance (0.4.206).
+__version__ = "0.4.206"

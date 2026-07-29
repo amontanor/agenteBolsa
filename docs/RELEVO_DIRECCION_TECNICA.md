@@ -25,6 +25,20 @@
 > `f3a2eda76f3c317d68d8679ce00a7ea43a6aa023`). P-L67R1 desplegado y
 > validado con dos comprobaciones; candidato final `b25c9603` conservado.
 
+### P-L71 — autoridad EOD y coherencia temporal Sistema vs benchmark
+
+- Candidato aislado `pl71_eod_authority`, versión `0.4.205`. La base de
+  producción `0.4.202` conserva el SPY 28-jul incorrecto en storage; no se
+  reescribió ni se hizo backfill.
+- El bug era la elección por nombre/hash de caches mutables same-day. Ahora se
+  exige metadata diaria, rango, fuente, basis explícita, par de cierres y
+  autoridad temporal; la vista puede usar solo un cache posterior validado.
+- La cabecera live muestra su propia captura/as_of y el panel diario/Telegram
+  rotulan `SPY (ETF S&P 500)` y `Provisional`/`n/d` cuando corresponde. No hay
+  cambios de trading ni despliegue. Siguiente: ensayo cerrado P-L71 con suite
+  completa verde (2260 passed, 1 skip preexistente) y smoke temporal pendiente
+  de un ensayo posterior sin servicios reales.
+
 ### P-L67R1 — despliegue productivo 0.4.201
 
 - Se preservaron los cambios productivos previos en `b2d7c5c6`; el merge
@@ -55,6 +69,17 @@
   cerrada pendientes por XNYS abierto. Siguiente único lote: P-L65B, rowset
   canónico read-only por sesiones con estados pending/unavailable y cierre
   aritmético de contadores.
+### P-L71-R1 - wiring EOD comun para Telegram
+
+- La reproduccion contra `7beeb135` demostro que Telegram ignoraba el overlay
+  EOD y usaba `row['spy_pct']` stale: `-0,30%` en lugar de `+0,25%`.
+- `publish_daily_summary` es ahora la frontera comun de proyeccion para el job
+  22:05 y el fallback PMR. `build_daily_summary` solo acepta benchmark
+  proyectado/comparable con autoridad EOD completa; sin cache posterior queda
+  `n/d`, incluso si existe un scalar legacy.
+- P-L70BR1 permanece paralelo y no se mezcla. Siguiente lote: ensayo cerrado
+  P-L71; no backfill, no reenvio automatico de sesiones ya recibidas.
+
 > P-L48B sigue desplegado y P-L44B sigue en shadow.
 
 ### P-L70BR1 — ensayo integrado cerrado

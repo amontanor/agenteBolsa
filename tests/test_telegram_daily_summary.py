@@ -53,7 +53,26 @@ def _portfolio() -> PortfolioSnapshot:
 def test_build_and_format_daily_summary_keeps_denominators_separate():
     payload = telegram.build_daily_summary(
         session_date="2026-07-28",
-        performance={"pnl_pct": 0.0027, "spy_pct": 0.005, "equity": 10_000},
+        performance={
+            "pnl_pct": 0.0027,
+            "spy_pct": -0.003,
+            "equity": 10_000,
+            "performance_benchmark": {
+                "captured_at": "2026-07-29T04:40:00+00:00",
+                "benchmark": {
+                    "symbol": "SPY",
+                    "instrument_label": "SPY (ETF S&P 500)",
+                    "daily_return": 0.005,
+                    "price_basis": "adjusted_ohlc",
+                    "source": "synthetic",
+                    "as_of": "2026-07-29T04:37:00+00:00",
+                    "eod_authority": "post_session_cache",
+                    "comparison_status": "comparable",
+                    "data_quality": "available",
+                },
+                "eod_overlay": {"status": "available"},
+            },
+        },
         portfolio=_portfolio(),
     )
 
