@@ -2822,7 +2822,12 @@ class Store:
             latest = max(candidates, key=lambda item: item[:3])[3] if candidates else None
             if latest and str(latest.get("status") or "") == "claimed":
                 return {"status": "busy", "broker_order_id": order_id, "attempt": latest.get("attempt")}
-            next_attempt = int(attempt or 0) or int(latest.get("attempt") or 0) + 1 if latest else int(attempt or 1)
+            if attempt is not None:
+                next_attempt = max(1, int(attempt))
+            elif latest:
+                next_attempt = int(latest.get("attempt") or 0) + 1
+            else:
+                next_attempt = 1
             claim_id = f"{prefix}{next_attempt}"
             payload = {
                 "schema_version": "p-l69.telegram-trade-fill-claim.v1",
