@@ -771,5 +771,5 @@ def test_version_policy_requires_bump():
     if dist:
         # Con PYTHONPATH al src del worktree, leemos __init__.py
         import agente_bolsa
-        # P-L72 integrates P-L70/P-L71 and the opening-to-opening contract.
-        assert agente_bolsa.__version__ == "0.4.206"
+        # P-L73 adds canonical total/day P/L fields to the open-position UI.
+        assert agente_bolsa.__version__ == "0.4.207"
