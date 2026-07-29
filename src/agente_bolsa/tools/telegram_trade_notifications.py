@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from collections.abc import Mapping
@@ -172,14 +173,27 @@ def publish_trade_fill_notifications(settings: Any, store: Any, changes: list[di
         ]
         if existing:
             continue
+        text = format_trade_fill(payload)
+        content_hash = hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        ).hexdigest()
+        claim = store.claim_trade_fill_notification(
+            broker_order_id=str(payload["broker_order_id"]),
+            content_hash=content_hash,
+            cycle_id=str(payload.get("cycle_id") or ""),
+        )
+        if claim.get("status") != "acquired":
+            continue
+        send_accepted = False
         try:
             response = send_telegram_message(
                 token=token,
                 chat_id=chat_id,
-                text=format_trade_fill(payload),
+                text=text,
                 timeout_seconds=int(getattr(settings, "telegram_timeout_seconds", 15)),
             )
-            store.record_append_only_event(
+            send_accepted = True
+            receipt = store.record_append_only_event(
                 event_id=event_id,
                 event_type=EVENT_TYPE,
                 cycle_id=str(payload.get("cycle_id") or ""),
@@ -188,14 +202,32 @@ def publish_trade_fill_notifications(settings: Any, store: Any, changes: list[di
                     "broker_order_id": payload["broker_order_id"],
                     "message_id": response.get("message_id"),
                     "status": "sent",
+                    "content_hash": content_hash,
                 },
             )
+            if receipt.get("status") == "conflict":
+                raise RuntimeError("telegram_trade_fill_receipt_conflict")
             sent += 1
         except Exception as exc:  # noqa: BLE001 - Telegram nunca afecta trading.
+            # A failure known to have occurred before acceptance is retryable.
+            # If receipt persistence failed after an accepted send, keeping the
+            # claim avoids promising exactly-once or sending an automatic duplicate.
+            reason = f"telegram_trade_fill_failed:{type(exc).__name__}"
+            if not send_accepted:
+                try:
+                    store.release_trade_fill_notification_claim(
+                        claim_id=str(claim.get("claim_id") or ""),
+                        broker_order_id=str(payload["broker_order_id"]),
+                        content_hash=content_hash,
+                        cycle_id=str(payload.get("cycle_id") or ""),
+                        reason=reason,
+                    )
+                except Exception as release_exc:  # noqa: BLE001 - preserve fail-open outcome.
+                    reason = f"{reason}:release_{type(release_exc).__name__}"
             errors.append(
                 {
                     "broker_order_id": str(payload["broker_order_id"]),
-                    "reason": f"telegram_trade_fill_failed:{type(exc).__name__}",
+                    "reason": reason,
                 }
             )
     return {"status": "sent" if sent else "noop", "sent": sent, "errors": errors}

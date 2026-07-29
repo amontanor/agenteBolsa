@@ -181,6 +181,170 @@ def merge_account_open_snapshots(*sources: list[dict[str, Any]]) -> list[dict[st
     return [merged[key] for key in sorted(merged)]
 
 
+def capture_authoritative_spy_open_cache(
+    settings: Settings,
+    session_date: str,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Capture one dedicated SPY-open artifact outside presentation.
+
+    The caller is responsible for a once-per-session guard.  The producer
+    uses the existing market-data downloader in an isolated subdirectory and
+    promotes only a valid ``SPY`` daily Open into a root cache artifact with
+    explicit authority metadata.  It never edits an existing generic cache.
+    """
+
+    session = date.fromisoformat(str(session_date))
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    if current < _session_open_at(session.isoformat()):
+        return {"status": "unavailable", "reason": "session_open_not_reached"}
+    cache_root = Path(settings.data_dir) / "cache" / "market_data"
+
+    def _readable_authoritative_payload(meta_path: Path, meta: Mapping[str, Any]) -> bool:
+        data_path = meta_path.with_suffix(".pkl")
+        if not data_path.exists():
+            return False
+        try:
+            frame = pd.read_pickle(data_path)
+        except Exception:
+            return False
+        expected = _finite(meta.get("open_price"))
+        series = _field_series(frame, "SPY", "Open")
+        for raw_index, raw_value in series.items():
+            try:
+                index = pd.Timestamp(raw_index)
+            except Exception:
+                continue
+            candidate_date = index.tz_convert(MARKET_TIMEZONE).date().isoformat() if index.tzinfo is not None else index.date().isoformat()
+            value = _finite(raw_value)
+            if candidate_date == str(meta.get("session_date")) and value is not None and value > 0 and (expected is None or abs(value - expected) <= 1e-10):
+                return True
+        return False
+
+    for meta_path in cache_root.glob("market_data_*.json") if cache_root.exists() else []:
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        requested = sorted(str(item).upper() for item in meta.get("requested_symbols", []))
+        purpose = str(meta.get("purpose") or meta.get("observation_kind") or "").strip().lower()
+        if requested == ["SPY"] and purpose in {"benchmark_open", "spy_open", "session_open", "opening_benchmark"} and str(meta.get("session_date")) == str(session_date) and _readable_authoritative_payload(meta_path, meta):
+            return {
+                "status": "available",
+                "event": "existing_authoritative_cache",
+                "cache_id": meta_path.stem.removeprefix("market_data_"),
+            }
+
+    # Import lazily so UI/read-only consumers never acquire a network-capable
+    # market-data dependency merely by rendering the panel.
+    from . import market_data
+
+    staging = cache_root / "_benchmark_open_capture" / str(session_date)
+    try:
+        frame, source_meta = market_data.download_daily_prices_with_metadata(
+            ["SPY"],
+            str(session_date),
+            (session + timedelta(days=1)).isoformat(),
+            cache_dir=staging,
+            provider=getattr(settings, "market_data_provider", None),
+            fmp_api_key=getattr(settings, "fmp_api_key", None),
+        )
+    except Exception as exc:  # noqa: BLE001 - producer is observational/fail-open.
+        return {"status": "unavailable", "reason": "benchmark_capture_failed", "error_type": type(exc).__name__}
+    open_series = _field_series(frame, "SPY", "Open")
+    exact_value: float | None = None
+    for raw_index, raw_value in open_series.items():
+        try:
+            index = pd.Timestamp(raw_index)
+        except Exception:
+            continue
+        candidate_date = index.tz_convert(MARKET_TIMEZONE).date().isoformat() if index.tzinfo is not None else index.date().isoformat()
+        value = _finite(raw_value)
+        if candidate_date == str(session_date) and value is not None and value > 0:
+            exact_value = value
+            break
+    basis = str(source_meta.get("price_basis") or "").lower()
+    if exact_value is None or basis != "adjusted_ohlc":
+        return {"status": "unavailable", "reason": "benchmark_open_missing_or_basis_unknown"}
+    source = str(source_meta.get("source") or source_meta.get("provider") or "")
+    created_at = current.isoformat()
+    semantic = {
+        "symbol": "SPY",
+        "session_date": str(session_date),
+        "open_price": exact_value,
+        "source": source,
+        "price_basis": basis,
+        "open_time_basis": "XNYS_session_open_field",
+        "open_observed_at": _session_open_at(str(session_date)).isoformat(),
+    }
+    content_hash = hashlib.sha256(
+        json.dumps(semantic, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    artifact_basis = {
+        "schema_version": "p-l74.spy-open-authority.v1",
+        **semantic,
+        "content_hash": content_hash,
+        "created_at": created_at,
+        "captured_at": created_at,
+        "source": source,
+        "purpose": "benchmark_open",
+        "observation_kind": "spy_open",
+        "requested_symbols": ["SPY"],
+        "interval": "1d",
+        "price_basis": basis,
+        "source_created_at": source_meta.get("created_at"),
+    }
+    identity_hash = hashlib.sha256(
+        json.dumps(
+            {"symbol": "SPY", "session_date": str(session_date), "price_basis": basis},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:12]
+    cache_id = "spy_open_{}_{}".format(
+        str(session_date).replace("-", ""),
+        identity_hash,
+    )
+    cache_root.mkdir(parents=True, exist_ok=True)
+    data_path = cache_root / f"market_data_{cache_id}.pkl"
+    meta_path = cache_root / f"market_data_{cache_id}.json"
+    if meta_path.exists():
+        try:
+            existing = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = {}
+        if existing.get("content_hash") == content_hash:
+            if not _readable_authoritative_payload(meta_path, existing):
+                frame.to_pickle(data_path)
+                return {"status": "recovered", "cache_id": cache_id, "open_price": exact_value}
+            return {"status": "idempotent", "cache_id": cache_id, "open_price": exact_value}
+        conflict_id = f"spy_open_conflict_{str(session_date).replace('-', '')}_{content_hash[:12]}"
+        (cache_root / f"{conflict_id}.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "p-l74.spy-open-authority.v1",
+                    "status": "conflict",
+                    "canonical_cache_id": cache_id,
+                    "candidate": artifact_basis,
+                    "content_hash": content_hash,
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        return {"status": "conflict", "cache_id": cache_id, "conflict_id": conflict_id}
+    # Write data first.  A crash leaves an orphan .pkl which the reader
+    # ignores; a metadata file is only published after the payload is ready.
+    frame.to_pickle(data_path)
+    meta_path.write_text(
+        json.dumps(artifact_basis, ensure_ascii=True, sort_keys=True),
+        encoding="utf-8",
+    )
+    return {"status": "inserted", "cache_id": cache_id, "open_price": exact_value}
+
+
 def _meta_time(value: Any) -> datetime | None:
     parsed = _timestamp(value)
     return parsed
@@ -210,13 +374,72 @@ def load_cached_spy_open_observations(
     *,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Read exact adjusted SPY opens and the newest local price, without network."""
+    """Read authoritative local SPY opening observations without network.
+
+    A cache timestamp is provenance, not an authority rule.  When two valid
+    artifacts disagree for the same session, the session is explicitly
+    unavailable instead of allowing a late or narrow cache to overwrite a
+    broad one.  The current price is resolved from the same artifact that
+    supplied its session opening; open/current values are never mixed across
+    artifacts.
+    """
 
     cache_root = Path(settings.data_dir) / "cache" / "market_data"
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     symbol = str(getattr(settings, "benchmark_symbol", "SPY") or "SPY").upper()
-    opens: dict[str, dict[str, Any]] = {}
-    current_price: dict[str, Any] | None = None
+    open_candidates: dict[str, list[dict[str, Any]]] = {}
+    current_candidates: dict[str, list[dict[str, Any]]] = {}
+
+    def _cache_provenance(
+        meta_path: Path,
+        meta: Mapping[str, Any],
+        created_at: datetime,
+        source: str,
+        basis: str,
+        interval: str,
+    ) -> dict[str, Any]:
+        return {
+            "cache_id": meta_path.stem,
+            "cache_created_at": created_at.isoformat(),
+            "source": source,
+            "price_basis": basis,
+            "interval": interval or "inferred_daily",
+            "requested_symbols": sorted(str(item).upper() for item in meta.get("requested_symbols", [])),
+            "range_start": meta.get("start"),
+            "range_end": meta.get("end"),
+            "authority": (
+                "explicit_benchmark_open"
+                if str(meta.get("purpose") or meta.get("observation_kind") or meta.get("cache_purpose") or "")
+                .strip()
+                .lower()
+                in {"benchmark_open", "spy_open", "session_open", "opening_benchmark"}
+                and sorted(str(item).upper() for item in meta.get("requested_symbols", [])) == [symbol]
+                else None
+            ),
+        }
+
+    def _append_candidate(
+        target: dict[str, list[dict[str, Any]]],
+        session_date: str,
+        price: float,
+        *,
+        observed_at: str,
+        provenance: Mapping[str, Any],
+        paired_open_price: float | None = None,
+    ) -> None:
+        target.setdefault(session_date, []).append(
+            {
+                "session_date": session_date,
+                "price": price,
+                "observed_at": observed_at,
+                "source": provenance.get("source"),
+                "price_basis": provenance.get("price_basis"),
+                "cache_created_at": provenance.get("cache_created_at"),
+                "provenance": dict(provenance),
+                "paired_open_price": paired_open_price,
+            }
+        )
+
     for meta_path in cache_root.glob("market_data_*.json") if cache_root.exists() else []:
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -255,9 +478,12 @@ def load_cached_spy_open_observations(
             basis = "adjusted_ohlc"
         if basis != "adjusted_ohlc":
             continue
+        source = str(meta.get("source") or "")
+        provenance = _cache_provenance(meta_path, meta, created_at, source, basis, interval)
         open_series = _field_series(frame, symbol, "Open")
         close_series = _field_series(frame, symbol, "Close")
-        source = str(meta.get("source") or "")
+        artifact_open_sessions: set[str] = set()
+        artifact_open_prices: dict[str, float] = {}
         for raw_index, raw_value in open_series.items():
             value = _finite(raw_value)
             try:
@@ -271,17 +497,15 @@ def load_cached_spy_open_observations(
                 if index.tzinfo is not None
                 else index.date().isoformat()
             )
-            candidate = {
-                "session_date": session_date,
-                "price": value,
-                "observed_at": _session_open_at(session_date).isoformat(),
-                "source": source,
-                "price_basis": basis,
-                "cache_created_at": created_at.isoformat(),
-            }
-            previous = opens.get(session_date)
-            if previous is None or str(candidate["cache_created_at"]) > str(previous["cache_created_at"]):
-                opens[session_date] = candidate
+            _append_candidate(
+                open_candidates,
+                session_date,
+                value,
+                observed_at=_session_open_at(session_date).isoformat(),
+                provenance=provenance,
+            )
+            artifact_open_sessions.add(session_date)
+            artifact_open_prices.setdefault(session_date, value)
         for raw_index, raw_value in close_series.items():
             value = _finite(raw_value)
             try:
@@ -293,27 +517,122 @@ def load_cached_spy_open_observations(
             # A daily cache row is indexed at the civil session date.  Its
             # actual observation time is the cache capture, not midnight.
             observed_at = created_at.isoformat()
-            candidate = {
-                "price": value,
-                "observed_at": observed_at,
-                "session_date": (
-                    index.tz_convert(MARKET_TIMEZONE).date().isoformat()
-                    if index.tzinfo is not None
-                    else index.date().isoformat()
+            session_date = (
+                index.tz_convert(MARKET_TIMEZONE).date().isoformat()
+                if index.tzinfo is not None
+                else index.date().isoformat()
+            )
+            if session_date not in artifact_open_sessions:
+                continue
+            _append_candidate(
+                current_candidates,
+                session_date,
+                value,
+                observed_at=observed_at,
+                provenance=provenance,
+                paired_open_price=artifact_open_prices.get(session_date),
+            )
+
+    def _resolve_open(
+        candidates_by_session: Mapping[str, list[dict[str, Any]]],
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, list[dict[str, Any]]]]:
+        resolved: dict[str, dict[str, Any]] = {}
+        conflicts: dict[str, list[dict[str, Any]]] = {}
+        for session_date, candidates in candidates_by_session.items():
+            unique: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+            for candidate in candidates:
+                signature = (
+                    candidate.get("price"),
+                    candidate.get("price_basis"),
+                )
+                unique.setdefault(signature, []).append(candidate)
+            if len(unique) > 1:
+                authoritative = [
+                    group[0]
+                    for group in unique.values()
+                    if group[0].get("provenance", {}).get("authority") == "explicit_benchmark_open"
+                ]
+                if len(authoritative) != 1:
+                    conflicts[session_date] = sorted(
+                        [candidate for group in unique.values() for candidate in group],
+                        key=lambda item: (
+                            str(item.get("cache_created_at") or ""),
+                            str((item.get("provenance") or {}).get("cache_id") or ""),
+                        ),
+                    )
+                    continue
+                resolved[session_date] = authoritative[0]
+                continue
+            group = next(iter(unique.values()))
+            # Equivalent opening observations are idempotent.  Pick an
+            # explicitly authoritative artifact first, otherwise the oldest
+            # artifact, so a late duplicate cannot change the value.
+            resolved[session_date] = min(
+                group,
+                key=lambda item: (
+                    0 if (item.get("provenance") or {}).get("authority") else 1,
+                    str(item.get("cache_created_at") or ""),
+                    str((item.get("provenance") or {}).get("cache_id") or ""),
                 ),
-                "source": source,
-                "price_basis": basis,
-                "cache_created_at": created_at.isoformat(),
-            }
-            if current_price is None or (str(candidate["session_date"]), str(candidate["cache_created_at"])) > (
-                str(current_price["session_date"]),
-                str(current_price["cache_created_at"]),
-            ):
-                current_price = candidate
+            )
+        return resolved, conflicts
+
+    def _resolve_current(
+        candidates_by_session: Mapping[str, list[dict[str, Any]]],
+        opens_by_session: Mapping[str, dict[str, Any]],
+    ) -> tuple[dict[str, dict[str, Any]], list[str]]:
+        resolved: dict[str, dict[str, Any]] = {}
+        warnings: list[str] = []
+        for session_date, candidates in candidates_by_session.items():
+            opening = opens_by_session.get(session_date)
+            if opening is None:
+                continue
+            opening_provenance = opening.get("provenance") or {}
+            opening_is_authoritative = opening_provenance.get("authority") == "explicit_benchmark_open"
+            eligible = [
+                candidate
+                for candidate in candidates
+                if candidate.get("price_basis") == opening.get("price_basis")
+                and (
+                    opening_is_authoritative
+                    or candidate.get("paired_open_price") == opening.get("price")
+                )
+            ]
+            if not eligible:
+                warnings.append("current_open_provenance_mismatch")
+                continue
+            # Current prices are mutable observations: the freshest valid
+            # artifact wins.  This is intentionally different from opening
+            # authority, which is immutable for a session.
+            resolved[session_date] = max(
+                eligible,
+                key=lambda item: (
+                    str(item.get("cache_created_at") or ""),
+                    str((item.get("provenance") or {}).get("cache_id") or ""),
+                ),
+            )
+        return resolved, warnings
+
+    opens, open_conflicts = _resolve_open(open_candidates)
+    currents, current_warnings = _resolve_current(current_candidates, opens)
+    conflicts = open_conflicts
+    warnings: list[str] = []
+    if open_conflicts:
+        warnings.append("conflicting_session_open_observations")
+    warnings.extend(current_warnings)
+    expected_session = _expected_open_session(current)
+    current_price = currents.get(expected_session or "")
+    current_session_conflict = expected_session in open_conflicts
+    if open_conflicts and not current_session_conflict:
+        warnings.append("historical_open_conflict_outside_current_session")
+    status = "conflict" if current_session_conflict else "available" if opens or current_price else "unavailable"
     return {
         "opens": [opens[key] for key in sorted(opens)],
         "current": current_price,
         "instrument": "SPY (ETF S&P 500)",
+        "status": status,
+        "warnings": warnings,
+        "conflicts": conflicts,
     }
 
 
@@ -352,6 +671,8 @@ def build_open_to_open_rows(
                 "system_end_at": account[end].get("observed_at"),
                 "spy_start_at": spy[start].get("observed_at"),
                 "spy_end_at": spy[end].get("observed_at"),
+                "spy_start_provenance": spy[start].get("provenance"),
+                "spy_end_provenance": spy[end].get("provenance"),
                 "system_source": account[start].get("source"),
                 "spy_source": spy[start].get("source"),
                 "price_basis": spy[start].get("price_basis"),
@@ -389,6 +710,8 @@ def build_open_to_open_rows(
                 "system_end_at": current_at.isoformat(),
                 "spy_start_at": spy[latest_session].get("observed_at"),
                 "spy_end_at": current_spy.get("observed_at"),
+                "spy_start_provenance": spy[latest_session].get("provenance"),
+                "spy_current_provenance": current_spy.get("provenance"),
                 "system_source": account[latest_session].get("source"),
                 "spy_source": current_spy.get("source"),
                 "price_basis": current_spy.get("price_basis"),
@@ -457,6 +780,9 @@ def opening_performance_context(
         "rows": rows,
         "account_open_count": len(account_opens),
         "spy_open_count": len(spy_market.get("opens") or []),
+        "spy_status": spy_market.get("status"),
+        "spy_warnings": list(spy_market.get("warnings") or []),
+        "spy_conflicts": dict(spy_market.get("conflicts") or {}),
         "exact_comparison_count": len(rows),
         "final_comparison_count": final_count,
         "omitted_session_count": max(expected_final_count - final_count, 0),

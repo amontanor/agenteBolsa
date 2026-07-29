@@ -1361,6 +1361,37 @@ class Settings(BaseSettings):
         default=False,
         alias="TELEGRAM_TRADE_NOTIFICATIONS_ENABLED",
     )
+    trade_fill_watch_enabled: bool = Field(default=False, alias="TRADE_FILL_WATCH_ENABLED")
+    trade_fill_watch_cadence_seconds: int = Field(
+        default=30,
+        alias="TRADE_FILL_WATCH_CADENCE_SECONDS",
+        ge=5,
+        le=300,
+    )
+    trade_fill_watch_max_pending_per_run: int = Field(
+        default=25,
+        alias="TRADE_FILL_WATCH_MAX_PENDING_PER_RUN",
+        ge=1,
+        le=500,
+    )
+    trade_fill_watch_request_timeout_seconds: int = Field(
+        default=5,
+        alias="TRADE_FILL_WATCH_REQUEST_TIMEOUT_SECONDS",
+        ge=1,
+        le=60,
+    )
+    trade_fill_watch_backoff_seconds: int = Field(
+        default=30,
+        alias="TRADE_FILL_WATCH_BACKOFF_SECONDS",
+        ge=1,
+        le=3600,
+    )
+    trade_fill_watch_max_backoff_seconds: int = Field(
+        default=300,
+        alias="TRADE_FILL_WATCH_MAX_BACKOFF_SECONDS",
+        ge=1,
+        le=3600,
+    )
     telegram_bot_token: str | None = Field(default=None, alias="TELEGRAM_BOT_TOKEN", repr=False)
     telegram_daily_summary_chat_id: str | None = Field(
         default=None,

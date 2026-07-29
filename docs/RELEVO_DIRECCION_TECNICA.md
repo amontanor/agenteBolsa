@@ -948,4 +948,89 @@ con XNYS cerrado. No desplegar automaticamente.
 - La próxima apertura XNYS es 29-jul a las 15:30 Europe/Madrid. Desde ese
   instante el intervalo vigente cambia automáticamente a apertura 29-jul →
   ahora.
+
+## P-L74 - siguiente lote
+
+- Candidato 0.4.208 con productor dedicado de apertura SPY y lector
+  conflict-safe. La cache `market_data` no es autoridad por recencia: se
+  requiere provenance explicita para resolver aperturas distintas.
+- La captura corre al final del ciclo natural, no en `portfolio_watch`; no
+  hay limite artificial de tres intentos. `inserted/available/idempotent/
+  recovered` detienen el guard; metadata sin `.pkl` recuperable no lo detiene.
+- Siguiente paso: ensayo `--no-ff` cerrado y suite completa aislada; mantener
+  produccion 0.4.206 intacta hasta superar precondiciones y paridad.
 - No hubo push ni cambio de política activa.
+
+## P-L73 — cartera abierta con P/L total y diario
+
+- Worktree `pl73_position_daily_pl`, rama
+  `codex/pl73-position-daily-pl`, base productiva `36077a06`.
+- Versión candidata `0.4.207`.
+- `trade_history` conserva los campos total e intradía del mismo
+  `PositionSnapshot` ya cargado por la UI.
+- Dashboard y página Cartera muestran USD y porcentaje para `P/L total` y
+  `P/L día`; missing se publica `n/d`.
+- No se añade una llamada al broker y no se unen posiciones con otra fuente por
+  símbolo. P-L72 conserva por separado la métrica de apertura a apertura.
+- Focales `129 passed`; suite completa `2289 passed, 1 skipped`; Ruff, NUL,
+  diff y configuración temporal verdes. Smoke sustituto aislado verde; CLI
+  real omitido por seguridad de proveedores.
+
+## P-L69-W - watcher intradia de fills confirmados
+
+- Candidato aislado 0.4.209 en `pl69_fill_watch_impl`, rama
+  `codex/pl69-fill-watch-impl`, base P-L75 `08e8f8fa`.
+- El contrato consulta un `OrderStatusProvider` por `broker_order_id`; el
+  adaptador del proveedor esta confinado en `tools/fill_provider.py`. La
+  secuencia segura es snapshot remoto, commit local filled, claim, Telegram
+  fail-open y recibo `telegram_trade_fill:<broker_order_id>`.
+- Job separado, `max_instances=1`, cap 25, cadence 30 s por defecto y backoff
+  acotado 30->300 s. Esta desactivado por defecto. Fills parciales/pending no
+  avisan; SELL requiere `source_plan_id` exacto y compra unica filled.
+- Commits: caracterizacion `581f6bfc`, implementacion `6bffedf2`, QA
+  `9a689153`, fixes QA `fc9f7206`/`8e8da2c1`; documentacion `5c87cdd2`.
+- XNYS abierto: no se ejecutaron suite completa, smoke, broker, red, Telegram
+  real, SQLite productiva ni despliegue. Dictamen provisional
+  `ready_for_closed_market_full_validation`; siguiente paso unico: ensayo
+  cerrado con las precondiciones operativas completas.
+
+## P-L75 - siguiente paso
+
+- Ensayo combinado P-L73 + P-L74 integrado con `--no-ff` en version 0.4.208.
+- P-L73 conserva el carrier de posicion; P-L74 conserva autoridad SPY,
+  recovery de `.pkl` y retry por ciclo natural de mercado.
+- Focales combinadas verdes; con XNYS abierto quedan pendientes suite completa
+  y smoke. Repetir validacion cerrada antes de cualquier despliegue.
+- Dictamen `ready_for_integration_rehearsal`. Sin despliegue, reinicio, push o
+  cambios de política.
+
+## P-L69-R1 - finalización downstream tras fill intradía
+
+- En `pl69_fill_watch_impl`, `31560cfb` reprodujo que una orden terminalizada
+  por el watcher desaparecía de `_pending_orders` y no alcanzaba la
+  finalización postmarket. El recibo Telegram estaba presente, pero signal,
+  learning y execution quality quedaban sin el paso posterior.
+- `584575c1` añade el marcador durable `reconciliation_finalization` al payload
+  de `broker_orders` y hace que PMR procese esos terminales con el snapshot
+  local exacto. Claim transaccional `pending -> processing -> applied`, sin
+  reabrir orden ni consultar otra transición remota; efectos y attach se
+  confirman en la misma transacción. `0c121836`/`86b653ce`/`0909ea4b` cubren
+  restart, idempotencia, carrera, SELL/rejected/cancelled y fallback SDK.
+- Estado: `ready_for_closed_market_full_validation`, versión 0.4.209. Focales
+  `133 passed` y R1 `18 passed`; suite completa/smoke y proveedor real siguen
+  pendientes por XNYS abierto. Siguiente lote único: validación cerrada del
+  candidato, sin despliegue automático.
+
+## P-L69-R2 - endpoint provider y rollback de finalización
+
+- `dac98d0b` reprodujo con el `TradingClient` real que `_base_url` enum se
+  serializaba como `BaseURL.TRADING_PAPER`, generando URL inválida.
+- `de8b250e` usa `.value` cuando existe, valida HTTP(S) y conserva el endpoint
+  paper/live de la instancia; mantiene timeout, headers, redirects y fallback
+  exacto por client ID. Endpoint inválido queda fail-open y no altera la orden.
+- `f6c82f85`/`b819c540` cubren rollback transaccional del marcador R1, GET,
+  fallback, live y ausencia de Telegram/transición en error. Batería final:
+  `138 passed`; Ruff/NUL/compile/diff/config verdes.
+- Dictamen: `ready_for_closed_market_full_validation`, versión 0.4.209.
+  XNYS abierto; pendiente solo la validación cerrada antes de reintegrar o
+  desplegar.

@@ -818,6 +818,11 @@ def _dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=True, default=str)
 
 
+def _snapshot_content_hash(snapshot: dict[str, Any]) -> str:
+    encoded = json.dumps(snapshot, ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 def _count_non_strict_json_values(value: Any) -> int:
     if isinstance(value, float) and not math.isfinite(value):
         return 1
@@ -2126,8 +2131,12 @@ class Store:
                 rows = conn.execute(query, tuple(params)).fetchall()
         finally:
             self.close_read_connection()
+        from .tools.fill_provider import TERMINAL_STATUSES, normalize_order_status
+
         result: list[dict[str, Any]] = []
         for row in rows:
+            if normalize_order_status(row["status"]) in TERMINAL_STATUSES:
+                continue
             try:
                 payload = json.loads(row["payload_json"] or "{}")
             except (TypeError, json.JSONDecodeError):
@@ -2562,6 +2571,338 @@ class Store:
             for row in rows
         ]))
 
+    def pending_broker_orders(self, *, limit: int = 25) -> list[dict[str, Any]]:
+        """Read the bounded local order set eligible for an intraday poll.
+
+        The provider is queried only with the exact broker order identity.  A
+        symbol, date or position is deliberately not part of this boundary.
+        """
+
+        terminal = (
+            "filled",
+            "canceled",
+            "cancelled",
+            "expired",
+            "rejected",
+            "done_for_day",
+            "replaced",
+            "stopped",
+        )
+        placeholders = ",".join("?" for _ in terminal)
+        query = f"""
+            SELECT broker_order_id, plan_id, cycle_id, symbol, side, status,
+                   payload_json, created_at
+            FROM broker_orders
+            WHERE lower(status) NOT IN ({placeholders})
+            ORDER BY created_at ASC, broker_order_id ASC
+            LIMIT ?
+        """
+        with self.connect() as conn:
+            rows = conn.execute(query, (*terminal, max(1, int(limit)))).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                payload = {}
+            result.append(
+                {
+                    "broker_order_id": str(row["broker_order_id"]),
+                    "plan_id": str(row["plan_id"]),
+                    "cycle_id": str(row["cycle_id"]),
+                    "symbol": str(row["symbol"]),
+                    "side": str(row["side"]),
+                    "status": str(row["status"]),
+                    "payload": payload if isinstance(payload, dict) else {},
+                    "created_at": row["created_at"],
+                }
+            )
+        return result
+
+    def retryable_trade_fill_changes(self, *, limit: int = 25) -> list[dict[str, Any]]:
+        """Return exact locally filled orders whose known Telegram send failed."""
+
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT broker_order_id, plan_id, cycle_id, symbol, side, payload_json, created_at
+                FROM broker_orders
+                WHERE lower(status) = 'filled'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM agent_events receipt
+                      WHERE receipt.event_id = 'telegram_trade_fill:' || broker_orders.broker_order_id
+                  )
+                  AND EXISTS (
+                      SELECT 1 FROM agent_events failed
+                      WHERE failed.event_type = 'telegram_trade_fill_claim_failed'
+                        AND json_extract(failed.payload_json, '$.broker_order_id') = broker_orders.broker_order_id
+                  )
+                ORDER BY created_at ASC, broker_order_id ASC
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
+        changes: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                payload = {}
+            reconciled = payload.get("broker_order_reconciled") if isinstance(payload, dict) else {}
+            changes.append(
+                {
+                    "broker_order_id": str(row["broker_order_id"]),
+                    "plan_id": str(row["plan_id"]),
+                    "cycle_id": str(row["cycle_id"]),
+                    "symbol": str(row["symbol"]),
+                    "side": str(row["side"]),
+                    "old": "filled",
+                    "new": "filled",
+                    "fill": dict(reconciled) if isinstance(reconciled, dict) else {},
+                    "payload": payload if isinstance(payload, dict) else {},
+                    "created_at": row["created_at"],
+                }
+            )
+        return changes
+
+    def apply_broker_order_snapshot(
+        self,
+        broker_order_id: str,
+        snapshot: dict[str, Any],
+        *,
+        observed_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Commit one provider snapshot and return an exact state transition.
+
+        The transaction is intentionally short and guarded by the local order
+        identity.  A concurrent watcher/PMR writer cannot manufacture a
+        second transition or erase the provenance already stored on the row.
+        """
+
+        from .tools.fill_provider import normalize_order_status
+
+        order_id = str(broker_order_id or "").strip()
+        new_status = normalize_order_status(snapshot.get("status"))
+        if not order_id or not new_status:
+            return {"status": "unavailable", "reason": "snapshot_identity_or_status_missing"}
+        observed = observed_at or _utc_iso()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT broker_order_id, plan_id, cycle_id, symbol, side,
+                       status, payload_json, created_at
+                FROM broker_orders
+                WHERE broker_order_id = ?
+                """,
+                (order_id,),
+            ).fetchone()
+            if row is None:
+                return {"status": "unavailable", "reason": "local_order_missing", "broker_order_id": order_id}
+            old_status = normalize_order_status(row["status"])
+            if old_status == new_status:
+                return {
+                    "status": "unchanged",
+                    "broker_order_id": order_id,
+                    "old": old_status,
+                    "new": new_status,
+                }
+            if old_status in {
+                "filled",
+                "canceled",
+                "cancelled",
+                "expired",
+                "rejected",
+                "done_for_day",
+                "replaced",
+                "stopped",
+            }:
+                return {
+                    "status": "already_terminal",
+                    "broker_order_id": order_id,
+                    "old": old_status,
+                    "new": new_status,
+                }
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            history = list(payload.get("reconciliation_history") or [])[-4:]
+            history.append({"at": observed, "status": new_status})
+            merged = {
+                **payload,
+                "broker_order_reconciled": dict(snapshot),
+                "reconciliation_history": history,
+            }
+            terminal_statuses = {
+                "filled",
+                "canceled",
+                "cancelled",
+                "expired",
+                "rejected",
+                "done_for_day",
+                "replaced",
+                "stopped",
+            }
+            if new_status in terminal_statuses:
+                merged["reconciliation_finalization"] = {
+                    "status": "pending",
+                    "source": "intraday_fill_watch",
+                    "marked_at": observed,
+                    "snapshot_content_hash": _snapshot_content_hash(dict(snapshot)),
+                }
+                merged["reconciliation_finalization_pending"] = True
+                merged["reconciliation_finalization_applied"] = False
+            execution_snapshot = dict(payload.get("execution_quality_snapshot") or {})
+            if execution_snapshot:
+                try:
+                    from .tools.execution_quality import reconciled_snapshot
+
+                    merged["execution_quality_snapshot"] = reconciled_snapshot(
+                        execution_snapshot,
+                        broker_snapshot=dict(snapshot),
+                        observed_at=observed,
+                    )
+                except Exception:  # noqa: BLE001 - fill commit remains authoritative.
+                    merged["execution_quality_snapshot"] = execution_snapshot
+            conn.execute(
+                """
+                UPDATE broker_orders
+                SET status = ?, payload_json = ?
+                WHERE broker_order_id = ?
+                """,
+                (new_status, _dumps(merged), order_id),
+            )
+        return {
+            "status": "transitioned",
+            "broker_order_id": order_id,
+            "plan_id": row["plan_id"],
+            "cycle_id": row["cycle_id"],
+            "symbol": row["symbol"],
+            "side": row["side"],
+            "old": old_status,
+            "new": new_status,
+            "fill": dict(snapshot),
+            "payload": merged,
+            "created_at": row["created_at"],
+        }
+
+    def claim_trade_fill_notification(
+        self,
+        *,
+        broker_order_id: str,
+        content_hash: str,
+        cycle_id: str | None,
+        attempt: int | None = None,
+    ) -> dict[str, Any]:
+        """Atomically claim a fill before sending Telegram.
+
+        A live claim is deliberately not auto-expired: after a crash between
+        an accepted send and receipt persistence, retrying blindly could
+        duplicate a real message.  Known send failures release a retryable
+        claim through the append-only failure event.
+        """
+
+        order_id = str(broker_order_id or "").strip()
+        receipt_id = f"telegram_trade_fill:{order_id}"
+        prefix = f"telegram_trade_fill_claim:{order_id}:"
+        now = _utc_iso()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            receipt = conn.execute(
+                "SELECT 1 FROM agent_events WHERE event_id = ?",
+                (receipt_id,),
+            ).fetchone()
+            if receipt is not None:
+                return {"status": "already_sent", "broker_order_id": order_id}
+            rows = conn.execute(
+                """
+                SELECT event_id, payload_json, created_at
+                FROM agent_events
+                WHERE event_id LIKE ?
+                ORDER BY created_at DESC
+                """,
+                (f"{prefix}%",),
+            ).fetchall()
+            candidates: list[tuple[int, int, str, dict[str, Any]]] = []
+            for row in rows:
+                try:
+                    candidate = json.loads(row["payload_json"] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    candidate = {}
+                if not isinstance(candidate, dict):
+                    continue
+                status_priority = 1 if str(candidate.get("status") or "") == "failed" else 0
+                candidates.append(
+                    (
+                        int(candidate.get("attempt") or 0),
+                        status_priority,
+                        str(row["created_at"] or ""),
+                        candidate,
+                    )
+                )
+            latest = max(candidates, key=lambda item: item[:3])[3] if candidates else None
+            if latest and str(latest.get("status") or "") == "claimed":
+                return {"status": "busy", "broker_order_id": order_id, "attempt": latest.get("attempt")}
+            if attempt is not None:
+                next_attempt = max(1, int(attempt))
+            elif latest:
+                next_attempt = int(latest.get("attempt") or 0) + 1
+            else:
+                next_attempt = 1
+            claim_id = f"{prefix}{next_attempt}"
+            payload = {
+                "schema_version": "p-l69.telegram-trade-fill-claim.v1",
+                "broker_order_id": order_id,
+                "status": "claimed",
+                "attempt": next_attempt,
+                "content_hash": content_hash,
+                "claimed_at": now,
+            }
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO agent_events (event_id, agent, event_type, cycle_id, payload_json, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (claim_id, "trade_fill_watch", "telegram_trade_fill_claim", cycle_id, _dumps(payload), now),
+                )
+            except sqlite3.IntegrityError:
+                return {"status": "busy", "broker_order_id": order_id, "attempt": next_attempt}
+        return {"status": "acquired", "broker_order_id": order_id, "claim_id": claim_id, "attempt": next_attempt}
+
+    def release_trade_fill_notification_claim(
+        self,
+        *,
+        claim_id: str,
+        broker_order_id: str,
+        content_hash: str,
+        cycle_id: str | None,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Record a known send failure and make the next attempt auditable."""
+
+        event_id = f"{claim_id}:failed"
+        payload = {
+            "schema_version": "p-l69.telegram-trade-fill-claim.v1",
+            "broker_order_id": broker_order_id,
+            "status": "failed",
+            "content_hash": content_hash,
+            "reason": reason[:240],
+        }
+        try:
+            payload["attempt"] = int(str(claim_id).rsplit(":", 1)[-1])
+        except (TypeError, ValueError):
+            payload["attempt"] = 0
+        return self.record_append_only_event(
+            event_id=event_id,
+            event_type="telegram_trade_fill_claim_failed",
+            cycle_id=cycle_id,
+            payload=payload,
+        )
+
     def save_hypothesis(self, hypothesis: Hypothesis) -> None:
         now = _utc_iso()
         with self.connect() as conn:
@@ -2676,6 +3017,40 @@ class Store:
                     updated_at=excluded.updated_at
                 """,
                 (key, _dumps(value), _utc_iso()),
+            )
+
+    def runtime_values_by_prefix(self, prefix: str) -> dict[str, Any]:
+        """Read a bounded watcher state view with one connection."""
+
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT key, value_json FROM runtime_state WHERE key LIKE ?",
+                (f"{prefix}%",),
+            ).fetchall()
+        result: dict[str, Any] = {}
+        for row in rows:
+            try:
+                result[str(row["key"])] = json.loads(row["value_json"] or "null")
+            except (TypeError, json.JSONDecodeError):
+                result[str(row["key"])] = None
+        return result
+
+    def set_runtime_values(self, values: dict[str, Any]) -> None:
+        """Persist a small latest-state batch in one short transaction."""
+
+        if not values:
+            return
+        now = _utc_iso()
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO runtime_state (key, value_json, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value_json=excluded.value_json,
+                    updated_at=excluded.updated_at
+                """,
+                [(str(key), _dumps(value), now) for key, value in values.items()],
             )
 
     def save_trade_recommendation(
@@ -2865,31 +3240,47 @@ class Store:
             )
             return "attached"
 
-    def attach_execution_quality_snapshot(self, signal_id: str, snapshot: dict[str, Any]) -> str:
+    def attach_execution_quality_snapshot(
+        self,
+        signal_id: str,
+        snapshot: dict[str, Any],
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> str:
         """Attach or compatibly advance execution telemetry for one exact signal."""
 
+        if connection is not None:
+            return self._attach_execution_quality_snapshot_on_connection(connection, signal_id, snapshot)
         with self.connect() as conn:
-            row = conn.execute(
-                "SELECT features_json FROM signal_outcomes WHERE signal_id = ?",
-                (signal_id,),
-            ).fetchone()
-            if not row:
-                return "unavailable"
-            features = json.loads(row["features_json"] or "{}")
-            existing = dict(features.get("execution_quality_snapshot") or {})
-            if existing:
-                if existing.get("content_hash") == snapshot.get("content_hash"):
-                    return "idempotent"
-                old_history = {item.get("content_hash") for item in existing.get("stage_history", [])}
-                new_history = {item.get("content_hash") for item in snapshot.get("stage_history", [])}
-                if existing.get("snapshot_id") != snapshot.get("snapshot_id") or not old_history.issubset(new_history):
-                    return "conflict"
-            features["execution_quality_snapshot"] = json.loads(json.dumps(snapshot))
-            conn.execute(
-                "UPDATE signal_outcomes SET features_json = ?, updated_at = ? WHERE signal_id = ?",
-                (_dumps(features), _utc_iso(), signal_id),
-            )
-            return "idempotent" if existing else "attached"
+            return self._attach_execution_quality_snapshot_on_connection(conn, signal_id, snapshot)
+
+    @staticmethod
+    def _attach_execution_quality_snapshot_on_connection(
+        conn: sqlite3.Connection,
+        signal_id: str,
+        snapshot: dict[str, Any],
+    ) -> str:
+        row = conn.execute(
+            "SELECT features_json FROM signal_outcomes WHERE signal_id = ?",
+            (signal_id,),
+        ).fetchone()
+        if not row:
+            return "unavailable"
+        features = json.loads(row["features_json"] or "{}")
+        existing = dict(features.get("execution_quality_snapshot") or {})
+        if existing:
+            if existing.get("content_hash") == snapshot.get("content_hash"):
+                return "idempotent"
+            old_history = {item.get("content_hash") for item in existing.get("stage_history", [])}
+            new_history = {item.get("content_hash") for item in snapshot.get("stage_history", [])}
+            if existing.get("snapshot_id") != snapshot.get("snapshot_id") or not old_history.issubset(new_history):
+                return "conflict"
+        features["execution_quality_snapshot"] = json.loads(json.dumps(snapshot))
+        conn.execute(
+            "UPDATE signal_outcomes SET features_json = ?, updated_at = ? WHERE signal_id = ?",
+            (_dumps(features), _utc_iso(), signal_id),
+        )
+        return "idempotent" if existing else "attached"
 
     def save_order_plan(
         self,

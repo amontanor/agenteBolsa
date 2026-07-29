@@ -2858,3 +2858,82 @@ de despliegue quedan pendientes con XNYS cerrado.
   única sesión vigente etiquetada `En curso`.
 - Stack sano en dos comprobaciones; cero órdenes inesperadas y cero locks de
   SQLite. P-L72 queda cerrado.
+
+## P-L73 - P/L total y diario en cartera abierta
+
+- Candidato `0.4.207` en worktree aislado.
+- La tabla muestra por posición `P/L total` y `P/L día`, cada uno en USD y
+  porcentaje.
+- Los cuatro valores proceden del mismo `PositionSnapshot` de Alpaca ya cargado;
+  no hay segunda lectura de posiciones ni reconstrucción por símbolo.
+- Missing intradía permanece `n/d`. El P/L diario de Alpaca no se confunde con
+  el contrato apertura a apertura de P-L72.
+- Focales relacionados: `129 passed`.
+- Suite completa `2289 passed, 1 skipped`; Ruff, NUL, diff y configuración
+  temporal verdes. Smoke sustituto aislado verde; CLI real no ejecutado por
+  seguridad de proveedores.
+- Dictamen: `ready_for_integration_rehearsal`; sin despliegue.
+
+## P-L74 - autoridad de apertura SPY (candidato 0.4.208)
+
+- Implementacion aislada: apertura incompatible = `conflict`; el current
+  mutable usa la observacion valida mas fresca con provenance compatible.
+- Productor dedicado fuera de UI, al final fail-open de `market_cycle_job`.
+  Estados terminales: `inserted`, `available`, `idempotent`, `recovered`.
+  Metadata sin `.pkl` legible sigue reintentable.
+- Focales 17/17 y regresiones 131/131 verdes; suite completa y smoke quedan
+  pendientes porque XNYS estaba abierto. No desplegar hasta ensayo cerrado.
+
+## P-L69-W - avisos intradia de fills confirmados (candidato 0.4.209)
+
+- Worktree `pl69_fill_watch_impl`, rama `codex/pl69-fill-watch-impl`, sobre
+  P-L75 `08e8f8fa`/arbol `86a8b4d7`.
+- Contrato provider-neutral: snapshot remoto por `broker_order_id` exacto,
+  commit local `filled` y despues Telegram fail-open con claim/receipt
+  append-only. El adaptador especifico queda confinado en `fill_provider.py`.
+- Job separado `trade_fill_watch`, desactivado por defecto, cap 25, cadence 30
+  s y backoff 30->300 s. No bloquea market_cycle/portfolio_watch ni cambia
+  trading. Rejected/partial/pending no notifican; BUY/SELL exigen identidad y
+  provenance exactas.
+- Caracterizacion `581f6bfc`, implementacion `6bffedf2`, QA `9a689153` y fixes
+  QA `fc9f7206`/`8e8da2c1`.
+  Focales P-L69/Telegram/reconciliacion/scheduler/storage/P-L72-P-L75:
+  115 pruebas verdes acumuladas. Suite completa y smoke quedan pendientes por
+  XNYS abierto; no hubo broker, red, SQLite productiva ni mensaje real.
+- Dictamen: `ready_for_closed_market_full_validation`. Siguiente paso: ensayo
+  cerrado aislado y revision de paridad antes de cualquier integracion.
+
+## P-L75 - ensayo combinado P-L73 + P-L74
+
+- Merge `--no-ff` de P-L73 y P-L74 sobre producción 0.4.206, versión final
+  0.4.208. Conflictos solo en versión/documentación, resueltos campo a campo.
+- QA focal combinada verde; suite completa y smoke pendientes por XNYS abierto.
+- Dictamen: `ready_for_closed_market_full_validation`. No desplegar todavía.
+
+## P-L69-R1 - finalización downstream tras fill intradía (0.4.209)
+
+- Reproducción contra `ca691275`: el watcher dejaba BUY terminal `filled` fuera
+  de `_pending_orders`, por lo que PMR no aplicaba signal/learning ni attach de
+  execution quality. El recibo Telegram no sustituye esa finalización.
+- Fix `584575c1`: marcador durable `reconciliation_finalization` junto al
+  snapshot local; terminales watcher pendientes se finalizan en PMR con
+  `pending -> processing -> applied`, transacción corta e idempotencia frente a
+  retry/restart/carrera. No se reabre el terminal ni se consulta otra transición
+  remota.
+- Tests R1 `31560cfb`, `0c121836`, `86b653ce`, `0909ea4b`; focales `133 passed`
+  y R1 ampliado `18 passed`. Ruff/NUL/diff/py_compile/config aislado verdes.
+- XNYS abierto: no suite completa, smoke, proveedor/red/Telegram real ni
+  despliegue. Dictamen: `ready_for_closed_market_full_validation`.
+
+## P-L69-R2 - endpoint proveedor y rollback de finalización (0.4.209)
+
+- Reproducido contra `ce6f86af`: el SDK real entregaba enum
+  `BaseURL.TRADING_PAPER` y el adaptador construía una URL inválida por usar
+  `str(enum)` en vez de `.value`.
+- Fix `de8b250e`: normalización y validación HTTP(S), preservando paper/live,
+  timeout, headers, fallback por `client_order_id` y frontera provider-neutral.
+- QA `f6c82f85`/`b819c540`: endpoint inválido fail-open sin transición ni
+  Telegram; rollback de `processing` a `pending`; GET, fallback y live reales
+  con sesión stub. Batería final `138 passed`; gates estáticos verdes.
+- XNYS abierto: suite completa/smoke/operación real omitidos. Dictamen:
+  `ready_for_closed_market_full_validation`.

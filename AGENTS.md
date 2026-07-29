@@ -217,6 +217,10 @@ Busca primero con `rg`/`rg --files`. No dupliques contratos o helpers existentes
 - Telemetría puede ser fail-open; kernel, riesgo, kill switch y gates de
   seguridad conservan su semántica fail-closed.
 - Una ruta shadow no puede crear, bloquear, retrasar o cambiar órdenes.
+- Toda integración nueva debe depender de interfaces y snapshots canónicos del
+  dominio; SDKs y payloads específicos de un proveedor quedan confinados en
+  adaptadores, de modo que añadir o sustituir un proveedor no cambie trading,
+  riesgo ni consumidores.
 
 ## Archivos protegidos
 
