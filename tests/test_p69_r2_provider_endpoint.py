@@ -85,6 +85,20 @@ def test_real_trading_client_enum_base_url_is_normalized_for_client_id_fallback(
     assert requests[1][1]["timeout"] == 9
 
 
+def test_real_trading_client_live_enum_preserves_live_endpoint():
+    requests = []
+    client = TradingClient("fake-key", "fake-secret", paper=False)
+    client._session = SimpleNamespace(
+        request=lambda *args, **kwargs: requests.append((args, kwargs))
+        or _Response({"id": "broker-live", "status": "pending_new"})
+    )
+
+    snapshot = AlpacaOrderStatusProvider(client).snapshot_order("broker-live", timeout_seconds=3)
+
+    assert snapshot.status == "pending_new"
+    assert requests[0][0][1] == "https://api.alpaca.markets/v2/orders/broker-live"
+
+
 def test_invalid_endpoint_fails_open_without_local_transition_or_telegram(tmp_path, monkeypatch):
     settings = Settings(
         DATA_DIR=tmp_path,
