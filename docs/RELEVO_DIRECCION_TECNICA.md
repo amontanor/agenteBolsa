@@ -988,7 +988,7 @@ con XNYS cerrado. No desplegar automaticamente.
   acotado 30->300 s. Esta desactivado por defecto. Fills parciales/pending no
   avisan; SELL requiere `source_plan_id` exacto y compra unica filled.
 - Commits: caracterizacion `581f6bfc`, implementacion `6bffedf2`, QA
-  `9a689153`; documentacion pendiente de commit en el cierre del lote.
+  `9a689153`, fix QA `fc9f7206`; documentacion `5c87cdd2`.
 - XNYS abierto: no se ejecutaron suite completa, smoke, broker, red, Telegram
   real, SQLite productiva ni despliegue. Dictamen provisional
   `ready_for_closed_market_full_validation`; siguiente paso unico: ensayo

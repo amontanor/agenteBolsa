@@ -2895,7 +2895,8 @@ de despliegue quedan pendientes con XNYS cerrado.
   s y backoff 30->300 s. No bloquea market_cycle/portfolio_watch ni cambia
   trading. Rejected/partial/pending no notifican; BUY/SELL exigen identidad y
   provenance exactas.
-- Caracterizacion `581f6bfc`, implementacion `6bffedf2`, QA `9a689153`.
+- Caracterizacion `581f6bfc`, implementacion `6bffedf2`, QA `9a689153` y fix
+  QA `fc9f7206`.
   Focales P-L69/Telegram/reconciliacion/scheduler/storage/P-L72-P-L75:
   115 pruebas verdes acumuladas. Suite completa y smoke quedan pendientes por
   XNYS abierto; no hubo broker, red, SQLite productiva ni mensaje real.

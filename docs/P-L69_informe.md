@@ -16,7 +16,8 @@ con proveedor real quedan pendientes de una ventana cerrada segura.
 - Rama: `codex/pl69-fill-watch-impl`.
 - P-L69-T (`be48b57a`) no era ancestro de P-L75; su contrato se portó mediante
   la caracterización explícita `581f6bfc`, sin cherry-pick oculto.
-- Implementación: `6bffedf2`; QA focal: `9a689153`.
+- Implementación: `6bffedf2`; QA focal: `9a689153`; corrección QA de
+  ordinales de retry: `fc9f7206`.
 - Versión candidata: 0.4.209.
 
 ## Frontera canónica
@@ -86,7 +87,8 @@ proveedor y publica `collecting` si todavía no existe una ejecución.
 - Telegram existente: 4 pruebas.
 - Focales P-L73/P-L74/P-L72/web/Telegram/reconciliación/scheduler/storage:
   92 pruebas verdes.
-- Ruff focal, compilación Python y `git diff --check`: verdes.
+- Ruff completo (`src tests`), NUL, compilación Python, `git diff --check` y
+  `validate-agent-config --json` aislado: verdes. Version policy: verde.
 
 Los tests cubren pending/partial/filled/rejected/cancelled, proveedor fake no
 Alpaca, timeout/malformed, cap y backoff, commit antes de Telegram, retry de
