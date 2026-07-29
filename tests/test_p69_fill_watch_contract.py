@@ -31,12 +31,12 @@ def test_existing_reconciliation_is_the_canonical_postmarket_consumer() -> None:
     assert "telegram" not in source
 
 
-def test_scheduler_has_postmarket_reconciliation_but_no_intraday_fill_watcher_yet() -> None:
+def test_scheduler_has_separate_postmarket_reconciliation_and_intraday_watcher() -> None:
     source = inspect.getsource(broker_reconciliation_job)
     scheduler_source = inspect.getsource(__import__("agente_bolsa.scheduler", fromlist=["build_scheduler"]).build_scheduler)
 
     assert "reconcile_broker_orders" in source
-    assert "trade_fill_watch" not in scheduler_source
+    assert "trade_fill_watch" in scheduler_source
 
 
 def test_submit_and_pending_states_are_not_fill_notifications() -> None:
