@@ -9,8 +9,16 @@ from collections.abc import Callable, Mapping
 from typing import Any
 from urllib.request import Request, urlopen
 
+from .performance_benchmark import overlay_eod_benchmark
+
 SCHEMA_VERSION = "p-l71.telegram-daily-summary.v1"
 EVENT_TYPE = "telegram_daily_summary_sent"
+_EOD_AUTHORITIES = {
+    "confirmed",
+    "eod_final",
+    "next_session_confirmed",
+    "post_session_cache",
+}
 
 
 def _finite(value: Any) -> float | None:
@@ -33,6 +41,44 @@ def _pct(value: Any) -> str:
     return "n/d" if number is None else f"{number:+.2%}"
 
 
+def _canonical_eod_benchmark(row: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Devuelve solo el benchmark EOD ya proyectado y autoritativo.
+
+    Los escalares legacy del nivel superior son deliberadamente ignorados:
+    pueden pertenecer a una captura distinta o a un cache same-day mutable.
+    ``eod_overlay`` prueba que el consumidor pasó por la frontera común de
+    proyección antes de construir el mensaje.
+    """
+
+    payload = row.get("payload") or {}
+    contract = row.get("performance_benchmark") or payload.get("performance_benchmark") or {}
+    if not isinstance(contract, Mapping):
+        return None
+    overlay = contract.get("eod_overlay") or {}
+    benchmark = contract.get("benchmark") or {}
+    if not isinstance(overlay, Mapping) or not isinstance(benchmark, Mapping):
+        return None
+    if str(overlay.get("status") or "").lower() not in {"available", "comparable"}:
+        return None
+    if str(benchmark.get("comparison_status") or "").lower() != "comparable":
+        return None
+    if str(benchmark.get("eod_authority") or "").lower() not in _EOD_AUTHORITIES:
+        return None
+    quality = benchmark.get("data_quality")
+    if isinstance(quality, Mapping):
+        quality = quality.get("status")
+    if str(quality or "").lower() != "available":
+        return None
+    if benchmark.get("price_basis") not in {"adjusted_ohlc", "close_unadjusted"}:
+        return None
+    if not str(benchmark.get("source") or "").strip() or not str(benchmark.get("as_of") or "").strip():
+        return None
+    daily_return = _finite(benchmark.get("daily_return"))
+    if daily_return is None:
+        return None
+    return dict(benchmark)
+
+
 def build_daily_summary(
     *,
     session_date: str,
@@ -42,35 +88,21 @@ def build_daily_summary(
     """Construye el mensaje únicamente desde objetos ya obtenidos por PMR."""
 
     row = dict(performance or {})
-    contract = row.get("performance_benchmark") or {}
+    contract = row.get("performance_benchmark") or (row.get("payload") or {}).get("performance_benchmark") or {}
     benchmark = contract.get("benchmark") or {}
-    benchmark_quality = benchmark.get("data_quality")
-    if isinstance(benchmark_quality, Mapping):
-        benchmark_quality = benchmark_quality.get("status")
-    benchmark_status = str(benchmark.get("comparison_status") or "").lower()
-    if benchmark_status not in {"comparable", "provisional", "unavailable"}:
-        benchmark_status = (
-            "comparable"
-            if benchmark_quality == "available"
-            and benchmark.get("price_basis") in {"adjusted_ohlc", "close_unadjusted"}
-            and benchmark.get("source")
-            and benchmark.get("as_of")
-            and benchmark.get("eod_authority")
-            else "provisional"
-            if _finite(row.get("spy_pct")) is not None
-            else "unavailable"
-        )
-    spy_return = _finite(row.get("spy_pct"))
+    canonical_benchmark = _canonical_eod_benchmark(row)
+    benchmark_status = "comparable" if canonical_benchmark is not None else "unavailable"
+    spy_return = _finite(canonical_benchmark.get("daily_return")) if canonical_benchmark else None
     benchmark_payload = {
-        "symbol": str(benchmark.get("symbol") or "SPY").upper(),
-        "instrument_label": benchmark.get("instrument_label") or "SPY (ETF S&P 500)",
+        "symbol": str((canonical_benchmark or benchmark).get("symbol") or "SPY").upper(),
+        "instrument_label": (canonical_benchmark or benchmark).get("instrument_label") or "SPY (ETF S&P 500)",
         "daily_return": spy_return,
         "status": benchmark_status,
-        "source": benchmark.get("source"),
-        "price_basis": benchmark.get("price_basis"),
+        "source": (canonical_benchmark or benchmark).get("source"),
+        "price_basis": (canonical_benchmark or benchmark).get("price_basis"),
         "generated_at": contract.get("generated_at") or contract.get("captured_at"),
-        "as_of": benchmark.get("as_of"),
-        "eod_authority": benchmark.get("eod_authority"),
+        "as_of": (canonical_benchmark or benchmark).get("as_of"),
+        "eod_authority": (canonical_benchmark or benchmark).get("eod_authority"),
     }
     positions: list[dict[str, Any]] = []
     for position in getattr(portfolio, "positions", None) or []:
@@ -183,7 +215,17 @@ def publish_daily_summary(settings: Any, store: Any, *, session_date: str, perfo
     ]
     if existing:
         return {"status": "idempotent", "event_id": event_id}
-    payload = build_daily_summary(session_date=session_date, performance=performance, portfolio=portfolio)
+    projected_performance = performance
+    if isinstance(performance, Mapping):
+        # Both the 22:05 job and the PMR fallback call this same boundary.
+        # Projection is local/read-only; failure must not make a stale scalar
+        # authoritative, so the builder degrades to unavailable.
+        projected_performance = overlay_eod_benchmark(performance, settings)
+    payload = build_daily_summary(
+        session_date=session_date,
+        performance=projected_performance,
+        portfolio=portfolio,
+    )
     sent = send_telegram_message(
         token=token,
         chat_id=chat_id,
