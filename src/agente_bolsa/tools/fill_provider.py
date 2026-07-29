@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
+from urllib.parse import urlparse
 
 TERMINAL_STATUSES = frozenset(
     {
@@ -40,6 +41,18 @@ def _timestamp(value: Any) -> str | None:
         return value.isoformat()
     text = str(value).strip()
     return text or None
+
+
+def _normalize_base_url(value: Any) -> str:
+    """Resolve SDK enum values while rejecting non-HTTP provider endpoints."""
+
+    raw = getattr(value, "value", value)
+    raw = getattr(raw, "value", raw)
+    text = str(raw or "").strip().rstrip("/")
+    parsed = urlparse(text)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("provider_endpoint_invalid")
+    return text
 
 
 @dataclass(frozen=True)
@@ -150,7 +163,7 @@ class AlpacaOrderStatusProvider:
             if path.startswith("/orders:by_client_order_id"):
                 return self._client.get_order_by_client_id(str((params or {}).get("client_order_id") or ""))
             return self._client.get_order_by_id(path.rsplit("/", 1)[-1])
-        base_url = str(getattr(self._client, "_base_url", "")).rstrip("/")
+        base_url = _normalize_base_url(getattr(self._client, "_base_url", ""))
         api_version = str(getattr(self._client, "_api_version", "v2")).strip("/")
         url = f"{base_url}/{api_version}{path}"
         headers = self._client._get_default_headers()
