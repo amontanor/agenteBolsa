@@ -948,6 +948,17 @@ con XNYS cerrado. No desplegar automaticamente.
 - La próxima apertura XNYS es 29-jul a las 15:30 Europe/Madrid. Desde ese
   instante el intervalo vigente cambia automáticamente a apertura 29-jul →
   ahora.
+
+## P-L74 - siguiente lote
+
+- Candidato 0.4.208 con productor dedicado de apertura SPY y lector
+  conflict-safe. La cache `market_data` no es autoridad por recencia: se
+  requiere provenance explicita para resolver aperturas distintas.
+- La captura corre al final del ciclo natural, no en `portfolio_watch`; no
+  hay limite artificial de tres intentos. `inserted/available/idempotent/
+  recovered` detienen el guard; metadata sin `.pkl` recuperable no lo detiene.
+- Siguiente paso: ensayo `--no-ff` cerrado y suite completa aislada; mantener
+  produccion 0.4.206 intacta hasta superar precondiciones y paridad.
 - No hubo push ni cambio de política activa.
 
 ## P-L73 — cartera abierta con P/L total y diario

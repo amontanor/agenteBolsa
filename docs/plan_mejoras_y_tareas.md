@@ -2873,3 +2873,13 @@ de despliegue quedan pendientes con XNYS cerrado.
   temporal verdes. Smoke sustituto aislado verde; CLI real no ejecutado por
   seguridad de proveedores.
 - Dictamen: `ready_for_integration_rehearsal`; sin despliegue.
+
+## P-L74 - autoridad de apertura SPY (candidato 0.4.208)
+
+- Implementacion aislada: apertura incompatible = `conflict`; el current
+  mutable usa la observacion valida mas fresca con provenance compatible.
+- Productor dedicado fuera de UI, al final fail-open de `market_cycle_job`.
+  Estados terminales: `inserted`, `available`, `idempotent`, `recovered`.
+  Metadata sin `.pkl` legible sigue reintentable.
+- Focales 17/17 y regresiones 131/131 verdes; suite completa y smoke quedan
+  pendientes porque XNYS estaba abierto. No desplegar hasta ensayo cerrado.
