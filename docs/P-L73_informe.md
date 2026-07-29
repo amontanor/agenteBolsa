@@ -2,7 +2,7 @@
 
 ## Dictamen
 
-`ready_for_closed_market_full_validation`
+`ready_for_integration_rehearsal`
 
 La cartera abierta solo publicaba el P/L no realizado acumulado desde la
 entrada. El `PortfolioSnapshot` de Alpaca ya transportaba, en la misma respuesta
@@ -53,7 +53,15 @@ Sistema/SP500 P-L72 mantiene su contrato separado de apertura a apertura.
 
 - Focales de P-L73, UI, cartera, Telegram, P-L72 y trade history:
   `129 passed`.
-- Ruff focal: correcto.
+- Suite completa: `2289 passed, 1 skipped`; un warning de deprecación
+  preexistente.
+- Ruff completo: correcto.
+- `check_no_nulls.py`: correcto, 452 archivos.
+- `validate-agent-config --json` con `DATA_DIR` temporal: `ok=true`, sin errores
+  ni warnings.
 - `git diff --check`: correcto.
-- Suite completa, smoke y gates globales: pendientes de validación cerrada.
-
+- El smoke CLI real permanece `smoke_unavailable_by_safety` porque construiría
+  proveedores configurados sin garantizar ausencia de broker/red. El sustituto
+  aislado del entrypoint pasó con `DATA_DIR` temporal, proveedores
+  monkeypatched y `use_crew=False`.
+- Archivos protegidos idénticos a la base productiva.

@@ -961,5 +961,8 @@ con XNYS cerrado. No desplegar automaticamente.
   `P/L día`; missing se publica `n/d`.
 - No se añade una llamada al broker y no se unen posiciones con otra fuente por
   símbolo. P-L72 conserva por separado la métrica de apertura a apertura.
-- Focales `129 passed`; falta validación cerrada completa. Sin despliegue,
-  reinicio, push o cambios de política.
+- Focales `129 passed`; suite completa `2289 passed, 1 skipped`; Ruff, NUL,
+  diff y configuración temporal verdes. Smoke sustituto aislado verde; CLI
+  real omitido por seguridad de proveedores.
+- Dictamen `ready_for_integration_rehearsal`. Sin despliegue, reinicio, push o
+  cambios de política.
