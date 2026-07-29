@@ -10,7 +10,6 @@ from agente_bolsa.tools import fill_watch, telegram_trade_notifications
 from agente_bolsa.tools.broker_reconciliation import reconcile_broker_orders
 from agente_bolsa.tools.execution_quality import build_planned_snapshot
 
-
 NOW = datetime(2026, 7, 28, 20, 0, tzinfo=timezone.utc)
 SESSION_DATE = "2026-07-28"
 
