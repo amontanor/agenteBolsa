@@ -147,3 +147,40 @@ adelantar aprendizaje u outcomes.
 El dictamen de este lote permanece `ready_for_closed_market_full_validation`;
 la validación cerrada debe comprobar el terminal postmarket y la paridad antes
 de cualquier reintegración o despliegue.
+
+## P-L69-R2 — normalización del endpoint Alpaca y rollback de finalización
+
+### Hallazgo y causa
+
+Contra `ce6f86af0db87b043a5251eb355135f9ab2264ff`, el `TradingClient` real
+instalado (`alpaca-py 0.43.4`) expone `_base_url` como el enum
+`BaseURL.TRADING_PAPER`. Su representación textual era
+`BaseURL.TRADING_PAPER/v2/orders/...`, aunque `.value` contenía el endpoint
+HTTPS correcto. Los dobles previos con string no cubrían esta frontera.
+
+### Corrección
+
+`de8b250e` normaliza `.value` de enums o strings, exige esquema `http/https` y
+conserva el endpoint paper/live de la instancia sin hardcodearlo. Mantiene
+headers del SDK, timeout, `allow_redirects=False` y fallback exacto por
+`client_order_id`. Un endpoint inválido lanza un error auditable que el watcher
+trata fail-open: no cambia la orden, no marca fill y no envía Telegram.
+
+La prueba R1 añadida en `f6c82f85` verifica que una excepción antes del commit
+revierte `processing` a `pending`; un retry recupera la finalización. Esto
+preserva la transacción única del marcador.
+
+### Evidencia y QA
+
+- `dac98d0b`: reproducción contra la base, dos fallos con URL
+  `BaseURL.TRADING_PAPER/v2/...`.
+- `de8b250e`: fix del adaptador proveedor-neutral.
+- `f6c82f85`, `b819c540`: endpoint inválido fail-open, rollback, GET exacto,
+  fallback `client_order_id`, timeout/headers y endpoint live.
+- Batería final focal: `138 passed`, una advertencia externa deprecación de
+  `websockets`; Ruff, NUL, py_compile, diff-check y validate-config temporal:
+  verdes.
+- XNYS abierto: sin broker/red/Telegram real, SQLite productiva, suite
+  completa, smoke, despliegue o push.
+
+Dictamen R2: `ready_for_closed_market_full_validation`.

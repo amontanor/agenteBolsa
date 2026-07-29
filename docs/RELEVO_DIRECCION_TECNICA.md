@@ -1020,3 +1020,17 @@ con XNYS cerrado. No desplegar automaticamente.
   `133 passed` y R1 `18 passed`; suite completa/smoke y proveedor real siguen
   pendientes por XNYS abierto. Siguiente lote único: validación cerrada del
   candidato, sin despliegue automático.
+
+## P-L69-R2 - endpoint provider y rollback de finalización
+
+- `dac98d0b` reprodujo con el `TradingClient` real que `_base_url` enum se
+  serializaba como `BaseURL.TRADING_PAPER`, generando URL inválida.
+- `de8b250e` usa `.value` cuando existe, valida HTTP(S) y conserva el endpoint
+  paper/live de la instancia; mantiene timeout, headers, redirects y fallback
+  exacto por client ID. Endpoint inválido queda fail-open y no altera la orden.
+- `f6c82f85`/`b819c540` cubren rollback transaccional del marcador R1, GET,
+  fallback, live y ausencia de Telegram/transición en error. Batería final:
+  `138 passed`; Ruff/NUL/compile/diff/config verdes.
+- Dictamen: `ready_for_closed_market_full_validation`, versión 0.4.209.
+  XNYS abierto; pendiente solo la validación cerrada antes de reintegrar o
+  desplegar.

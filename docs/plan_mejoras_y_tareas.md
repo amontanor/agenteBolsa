@@ -2924,3 +2924,16 @@ de despliegue quedan pendientes con XNYS cerrado.
   y R1 ampliado `18 passed`. Ruff/NUL/diff/py_compile/config aislado verdes.
 - XNYS abierto: no suite completa, smoke, proveedor/red/Telegram real ni
   despliegue. Dictamen: `ready_for_closed_market_full_validation`.
+
+## P-L69-R2 - endpoint proveedor y rollback de finalización (0.4.209)
+
+- Reproducido contra `ce6f86af`: el SDK real entregaba enum
+  `BaseURL.TRADING_PAPER` y el adaptador construía una URL inválida por usar
+  `str(enum)` en vez de `.value`.
+- Fix `de8b250e`: normalización y validación HTTP(S), preservando paper/live,
+  timeout, headers, fallback por `client_order_id` y frontera provider-neutral.
+- QA `f6c82f85`/`b819c540`: endpoint inválido fail-open sin transición ni
+  Telegram; rollback de `processing` a `pending`; GET, fallback y live reales
+  con sesión stub. Batería final `138 passed`; gates estáticos verdes.
+- XNYS abierto: suite completa/smoke/operación real omitidos. Dictamen:
+  `ready_for_closed_market_full_validation`.
