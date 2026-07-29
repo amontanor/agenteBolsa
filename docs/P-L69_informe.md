@@ -302,5 +302,6 @@ despliegue.
 ### Commits P-L76
 
 - Merge: `faccc5de` — `merge: rehearse P-L69-R2 over P-L75`.
-- QA: `deca1285` — `test: verify P-L76 fill watcher boundaries`.
+- QA: `deca1285` — `test: verify P-L76 fill watcher boundaries`; aislamiento
+  de settings: `aca9cc73`.
 - Documentación: commit siguiente de este cierre.
