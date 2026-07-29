@@ -9,7 +9,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 from urllib.request import Request, urlopen
 
-SCHEMA_VERSION = "p-l66.telegram-daily-summary.v1"
+SCHEMA_VERSION = "p-l71.telegram-daily-summary.v1"
 EVENT_TYPE = "telegram_daily_summary_sent"
 
 
@@ -42,6 +42,36 @@ def build_daily_summary(
     """Construye el mensaje únicamente desde objetos ya obtenidos por PMR."""
 
     row = dict(performance or {})
+    contract = row.get("performance_benchmark") or {}
+    benchmark = contract.get("benchmark") or {}
+    benchmark_quality = benchmark.get("data_quality")
+    if isinstance(benchmark_quality, Mapping):
+        benchmark_quality = benchmark_quality.get("status")
+    benchmark_status = str(benchmark.get("comparison_status") or "").lower()
+    if benchmark_status not in {"comparable", "provisional", "unavailable"}:
+        benchmark_status = (
+            "comparable"
+            if benchmark_quality == "available"
+            and benchmark.get("price_basis") in {"adjusted_ohlc", "close_unadjusted"}
+            and benchmark.get("source")
+            and benchmark.get("as_of")
+            and benchmark.get("eod_authority")
+            else "provisional"
+            if _finite(row.get("spy_pct")) is not None
+            else "unavailable"
+        )
+    spy_return = _finite(row.get("spy_pct"))
+    benchmark_payload = {
+        "symbol": str(benchmark.get("symbol") or "SPY").upper(),
+        "instrument_label": benchmark.get("instrument_label") or "SPY (ETF S&P 500)",
+        "daily_return": spy_return,
+        "status": benchmark_status,
+        "source": benchmark.get("source"),
+        "price_basis": benchmark.get("price_basis"),
+        "generated_at": contract.get("generated_at") or contract.get("captured_at"),
+        "as_of": benchmark.get("as_of"),
+        "eod_authority": benchmark.get("eod_authority"),
+    }
     positions: list[dict[str, Any]] = []
     for position in getattr(portfolio, "positions", None) or []:
         positions.append(
@@ -59,7 +89,8 @@ def build_daily_summary(
         "schema_version": SCHEMA_VERSION,
         "session_date": session_date,
         "account_daily_return": _finite(row.get("pnl_pct")),
-        "spy_daily_return": _finite(row.get("spy_pct")),
+        "spy_daily_return": spy_return,
+        "benchmark": benchmark_payload,
         "equity": _finite(row.get("equity")) or _finite(getattr(portfolio, "portfolio_value", None)),
         "open_total_pl": sum(item["total_pl"] for item in positions if item["total_pl"] is not None)
         if any(item["total_pl"] is not None for item in positions)
@@ -75,11 +106,20 @@ def build_daily_summary(
 
 
 def format_daily_summary(payload: Mapping[str, Any]) -> str:
+    benchmark = payload.get("benchmark") or {}
+    benchmark_status = str(benchmark.get("status") or "unavailable")
+    benchmark_value = _pct(benchmark.get("daily_return"))
+    benchmark_suffix = ""
+    if benchmark_status == "provisional":
+        benchmark_suffix = " · Provisional"
+    elif benchmark_status == "unavailable":
+        benchmark_suffix = " · n/d"
+    benchmark_label = str(benchmark.get("instrument_label") or "SPY (ETF S&P 500)")
     lines = [
         f"📊 Resumen agenteBolsa — {payload['session_date']}",
         "",
         f"Sistema (variación diaria de equity): {_pct(payload.get('account_daily_return'))}",
-        f"SP500: {_pct(payload.get('spy_daily_return'))}",
+        f"{benchmark_label}: {benchmark_value}{benchmark_suffix}",
         f"Equity: {_money(payload.get('equity'))}",
         f"P/L abierto total: {_money(payload.get('open_total_pl'))}",
         f"P/L abierto hoy: {_money(payload.get('open_today_pl'))}",

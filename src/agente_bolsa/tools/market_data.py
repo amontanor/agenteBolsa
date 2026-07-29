@@ -334,6 +334,8 @@ def download_daily_prices_with_metadata(
                 "source": selected_provider,
                 "provider_requested": provider or "default",
                 "cache_key": cache_key,
+                "interval": "1d",
+                "timeframe": "1D",
                 "cache_hit": False,
                 "attempt": attempt,
                 "start": _date_text(start),

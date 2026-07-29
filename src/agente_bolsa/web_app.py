@@ -53,6 +53,7 @@ from agente_bolsa.tools.daily_learning import (
     load_daily_learning_context,
 )
 from agente_bolsa.tools.news_sentiment import fetch_symbol_news
+from agente_bolsa.tools.performance_benchmark import overlay_eod_benchmark
 from agente_bolsa.tools.portfolio_insights import (
     latest_analyzed_news as build_latest_analyzed_news,
 )
@@ -1181,6 +1182,8 @@ def _account_group(
     positions_count: int,
     orders_count: int,
     equity_summary: dict[str, Any] | None = None,
+    equity_source: str | None = None,
+    equity_as_of: str | None = None,
 ) -> None:
     equity_summary = equity_summary or {}
     total_tone = "good" if (total_pl or 0.0) > 0 else "bad" if (total_pl or 0.0) < 0 else "neutral"
@@ -1190,6 +1193,15 @@ def _account_group(
     tone_class = f"account-pl {total_tone}"
     today_class = f"account-kpi {today_tone}"
     equity_detail = _portfolio_equity_summary_detail(equity_summary)
+    source_detail = " · ".join(
+        item
+        for item in (
+            equity_source or "fuente n/d",
+            f"as_of {equity_as_of}" if equity_as_of else "as_of n/d",
+        )
+        if item
+    )
+    equity_detail = f"{equity_detail} · {source_detail}" if equity_detail else source_detail
     equity_start_label = _portfolio_display_date(equity_summary.get("start_date"))
     st.markdown(
         f"""
@@ -2985,6 +2997,11 @@ def _canonical_daily_vs_spy_row(
         reasons.append("price_basis_unknown")
     if not source:
         reasons.append("benchmark_source_unavailable")
+    eod_authority = str(benchmark.get("eod_authority") or "").strip().lower()
+    if not eod_authority:
+        reasons.append("eod_authority_unavailable")
+    elif benchmark.get("comparison_status") == "unavailable":
+        reasons.append("benchmark_comparison_unavailable")
 
     generated_at_source = (
         "generated_at"
@@ -3113,6 +3130,10 @@ def _canonical_daily_vs_spy_row(
         "freshness_age_seconds": round(freshness_age_seconds, 3) if freshness_age_seconds is not None else None,
         "contract_quality_status": quality or "unavailable",
         "benchmark_quality_status": benchmark_quality or "unavailable",
+        "instrument_label": benchmark.get("instrument_label") or "SPY (ETF S&P 500)",
+        "eod_authority": eod_authority or None,
+        "cache_created_at": benchmark.get("cache_created_at"),
+        "eod_overlay_status": (contract.get("eod_overlay") or {}).get("status"),
         "comparison_status": status,
         "reason_codes": sorted(set(reasons)),
     }
@@ -3279,14 +3300,19 @@ def _render_daily_vs_spy_table(store: Any) -> None:
         rows = store.performance_daily(limit=0, readonly=True)
     except Exception:  # noqa: BLE001 - presentacion degradable.
         rows = []
-    canonical_rows = _canonical_daily_vs_spy_rows(rows, consumer_read_at=consumer_read_at)
+    settings = _settings()
+    projected_rows = [
+        overlay_eod_benchmark(row, settings, now=consumer_read_at)
+        for row in rows
+    ]
+    canonical_rows = _canonical_daily_vs_spy_rows(projected_rows, consumer_read_at=consumer_read_at)
     with st.container(border=True):
         title_col, control_col = st.columns([3, 1])
         with title_col:
             _section_title(
-                "Rendimiento diario: Sistema vs SP500",
-                "Variacion de equity contra SPY, sin ajustes de flujos. "
-                "Linea continua: comparable; discontinua: provisional.",
+                "Rendimiento diario: Sistema vs SPY (ETF S&P 500)",
+                "Cierre EOD canónico: variación de equity contra SPY, sin ajustes de flujos. "
+                "La fuente, basis y as_of se conservan por sesión.",
             )
         with control_col:
             visible_days = st.selectbox(
@@ -3353,6 +3379,16 @@ def _render_daily_vs_spy_table(store: Any) -> None:
                     else "Pendiente"
                 )
                 winner = "Pendiente"
+            source_detail = " · ".join(
+                item
+                for item in (
+                    row.get("source") or "fuente n/d",
+                    row.get("price_basis") or "basis n/d",
+                    f"as_of {row['as_of']}" if row.get("as_of") else "as_of n/d",
+                )
+                if item
+            )
+            spy_text = f"{spy_text}<span>{escape(source_detail)}</span>"
             html_rows.append(
                 "<tr>"
                 f"<td><strong>{row['session_date']}</strong></td>"
@@ -3360,7 +3396,7 @@ def _render_daily_vs_spy_table(store: Any) -> None:
                 "</tr>"
             )
         st.markdown(
-            "<table class='portfolio-table'><thead><tr><th>Fecha</th><th>Sistema</th><th>SP500</th><th>Superior</th></tr></thead>"
+            "<table class='portfolio-table'><thead><tr><th>Fecha</th><th>Sistema</th><th>SPY (ETF S&amp;P 500)</th><th>Superior</th></tr></thead>"
             f"<tbody>{''.join(html_rows)}</tbody></table>",
             unsafe_allow_html=True,
         )
@@ -4314,6 +4350,7 @@ def page_dashboard() -> None:
 
     portfolio = None
     portfolio_error = None
+    account_read_at = datetime.now(timezone.utc)
     try:
         portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
     except Exception as exc:  # noqa: BLE001
@@ -4390,6 +4427,8 @@ def page_dashboard() -> None:
         positions_count=len(portfolio.positions) if portfolio else 0,
         orders_count=len(portfolio.open_orders) if portfolio else 0,
         equity_summary=full_equity_summary,
+        equity_source="cartera actual (estimación del panel)",
+        equity_as_of=account_read_at.isoformat(),
     )
 
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
