@@ -818,6 +818,11 @@ def _dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=True, default=str)
 
 
+def _snapshot_content_hash(snapshot: dict[str, Any]) -> str:
+    encoded = json.dumps(snapshot, ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 def _count_non_strict_json_values(value: Any) -> int:
     if isinstance(value, float) and not math.isfinite(value):
         return 1
@@ -2731,6 +2736,25 @@ class Store:
                 "broker_order_reconciled": dict(snapshot),
                 "reconciliation_history": history,
             }
+            terminal_statuses = {
+                "filled",
+                "canceled",
+                "cancelled",
+                "expired",
+                "rejected",
+                "done_for_day",
+                "replaced",
+                "stopped",
+            }
+            if new_status in terminal_statuses:
+                merged["reconciliation_finalization"] = {
+                    "status": "pending",
+                    "source": "intraday_fill_watch",
+                    "marked_at": observed,
+                    "snapshot_content_hash": _snapshot_content_hash(dict(snapshot)),
+                }
+                merged["reconciliation_finalization_pending"] = True
+                merged["reconciliation_finalization_applied"] = False
             execution_snapshot = dict(payload.get("execution_quality_snapshot") or {})
             if execution_snapshot:
                 try:
@@ -3216,31 +3240,47 @@ class Store:
             )
             return "attached"
 
-    def attach_execution_quality_snapshot(self, signal_id: str, snapshot: dict[str, Any]) -> str:
+    def attach_execution_quality_snapshot(
+        self,
+        signal_id: str,
+        snapshot: dict[str, Any],
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> str:
         """Attach or compatibly advance execution telemetry for one exact signal."""
 
+        if connection is not None:
+            return self._attach_execution_quality_snapshot_on_connection(connection, signal_id, snapshot)
         with self.connect() as conn:
-            row = conn.execute(
-                "SELECT features_json FROM signal_outcomes WHERE signal_id = ?",
-                (signal_id,),
-            ).fetchone()
-            if not row:
-                return "unavailable"
-            features = json.loads(row["features_json"] or "{}")
-            existing = dict(features.get("execution_quality_snapshot") or {})
-            if existing:
-                if existing.get("content_hash") == snapshot.get("content_hash"):
-                    return "idempotent"
-                old_history = {item.get("content_hash") for item in existing.get("stage_history", [])}
-                new_history = {item.get("content_hash") for item in snapshot.get("stage_history", [])}
-                if existing.get("snapshot_id") != snapshot.get("snapshot_id") or not old_history.issubset(new_history):
-                    return "conflict"
-            features["execution_quality_snapshot"] = json.loads(json.dumps(snapshot))
-            conn.execute(
-                "UPDATE signal_outcomes SET features_json = ?, updated_at = ? WHERE signal_id = ?",
-                (_dumps(features), _utc_iso(), signal_id),
-            )
-            return "idempotent" if existing else "attached"
+            return self._attach_execution_quality_snapshot_on_connection(conn, signal_id, snapshot)
+
+    @staticmethod
+    def _attach_execution_quality_snapshot_on_connection(
+        conn: sqlite3.Connection,
+        signal_id: str,
+        snapshot: dict[str, Any],
+    ) -> str:
+        row = conn.execute(
+            "SELECT features_json FROM signal_outcomes WHERE signal_id = ?",
+            (signal_id,),
+        ).fetchone()
+        if not row:
+            return "unavailable"
+        features = json.loads(row["features_json"] or "{}")
+        existing = dict(features.get("execution_quality_snapshot") or {})
+        if existing:
+            if existing.get("content_hash") == snapshot.get("content_hash"):
+                return "idempotent"
+            old_history = {item.get("content_hash") for item in existing.get("stage_history", [])}
+            new_history = {item.get("content_hash") for item in snapshot.get("stage_history", [])}
+            if existing.get("snapshot_id") != snapshot.get("snapshot_id") or not old_history.issubset(new_history):
+                return "conflict"
+        features["execution_quality_snapshot"] = json.loads(json.dumps(snapshot))
+        conn.execute(
+            "UPDATE signal_outcomes SET features_json = ?, updated_at = ? WHERE signal_id = ?",
+            (_dumps(features), _utc_iso(), signal_id),
+        )
+        return "idempotent" if existing else "attached"
 
     def save_order_plan(
         self,
