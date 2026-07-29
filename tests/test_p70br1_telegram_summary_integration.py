@@ -58,4 +58,3 @@ def test_p70br1_summary_receipt_is_idempotent_and_separate_from_fill_events(tmp_
     assert receipt["message_utf16_units"] <= 4096
     assert daily.EVENT_TYPE != fills.EVENT_TYPE
     assert "test-token" not in str(receipt)
-
