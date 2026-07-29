@@ -184,3 +184,123 @@ preserva la transacción única del marcador.
   completa, smoke, despliegue o push.
 
 Dictamen R2: `ready_for_closed_market_full_validation`.
+
+## P-L76-PRECLOSE — ensayo previo a validación cerrada (29-jul-2026)
+
+### Dictamen
+
+`ready_for_closed_market_full_validation`.
+
+XNYS estaba abierto (`17:42 CEST`, cierre previsto `22:00 CEST`). Se preparó
+el ensayo aislado y se ejecutó únicamente QA focal; suite canónica, smoke y
+promoción productiva quedan para una ventana cerrada. No hubo broker, red,
+yfinance, LLM, Telegram real, servicios ni SQLite productiva.
+
+### Procedencia y merge
+
+| Referencia | HEAD | tree | versión | estado |
+|---|---|---|---|---|
+| Producción/base | `36077a0681d3a2bdd487e395052766d8daa5985a` | `b15ac3a28e12dd98fce0f6afe959d7b6c14a88bb` | 0.4.206 | tracked limpio; untracked preservados |
+| P-L75 | `08e8f8fab5430008c3c27a7f0412650bd6b728e4` | `86a8b4d77f57692c3fdafd101b41cc7578a8a48a` | 0.4.208 | ancestro de P-L69-R2 |
+| P-L69-R2 | `4c3ed11d462a62580fced6e67bc7b0586e46e972` | `f2b5a7728b04e73916c95fec02c5ea1bb0c0bc18` | 0.4.209 | candidato limpio |
+| P-L76 merge | `faccc5de42064211276b449d3cc78ebb6c022212` | `f2b5a7728b04e73916c95fec02c5ea1bb0c0bc18` | 0.4.209 | worktree aislado |
+
+Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl76_p69_predeployment_rehearsal`.
+Rama: `codex/pl76-p69-predeployment-rehearsal`.
+El merge fue un único `--no-ff`, sin conflictos, squash, rebase,
+cherry-pick ni amend. El tree resultante coincide con P-L69-R2. Producción,
+P-L75 y P-L69-R2 permanecen intactos.
+
+### Revisión adversarial
+
+La frontera durable verificada es:
+
+`snapshot remoto por broker_order_id → commit local de broker_order terminal → Telegram fail-open → recibo append-only`.
+
+El watcher conoce únicamente `CanonicalOrderSnapshot` y
+`OrderStatusProvider`; los tipos/payloads específicos de Alpaca quedan en
+`tools/fill_provider.py`. R2 admite endpoint SDK enum mediante `.value` o URL
+string, valida `http/https`, conserva paper/live, timeout, headers,
+`allow_redirects=False` y fallback exacto por `client_order_id`. No hay joins
+por símbolo/fecha.
+
+`pending_new`, `accepted`, `new`, `submitted` y `partially_filled` no notifican.
+Solo una transición exacta a `filled` genera el aviso final; rejected,
+cancelled y expired no generan aviso. Un fill intradía persiste
+`reconciliation_finalization` pendiente junto al snapshot. La reconciliación
+postmarket vuelve a incluir ese terminal, reclama `pending → processing →
+applied` en transacción corta y reutiliza el snapshot local exacto para
+signal, learning y execution quality una sola vez. El recibo Telegram no
+sustituye la finalización downstream.
+
+El job `trade_fill_watch` está desactivado por defecto, separado de
+`market_cycle`/`portfolio_watch`, con `max_instances=1`, `coalesce=True`, cap
+25, cadencia 30 s, timeout 5 s y backoff 30→300 s. No retrasa órdenes ni
+cambia señales, gates, capacity, sizing, RiskManager, planes, requests,
+cantidades, precios, stops/takes, exposición o límites.
+
+`config.py` difiere de producción únicamente por los settings neutrales y
+autorizados de P-L69-W y coincide exactamente con el candidato R2. No hay
+diferencias en `kernel.py`, `tools/broker.py`, `tools/execution.py`,
+`tools/risk.py` ni `.env`. El código desplegado y el watcher activo son
+estados distintos: activar el watcher requerirá una configuración explícita
+(`TRADE_FILL_WATCH_ENABLED=true` y límites/cadencia/timeout/backoff revisados);
+este lote no la activa ni lee secretos de `.env`.
+
+### QA ejecutada con XNYS abierto
+
+- Focal integrada P-L69/R1/R2, Telegram, reconciliación, scheduler, storage,
+  P-L72/P-L73/P-L74/P-L75, configuración y version policy: `145 passed`,
+  1 warning externo de `websockets.legacy`.
+- QA específica de P-L76: `2 passed`.
+- Ruff completo: OK.
+- `scripts/check_no_nulls.py`: OK, 460 archivos.
+- `py_compile` de storage, reconciliación y adaptador: OK.
+- `git diff --check`: OK.
+- `validate-agent-config --json` con `DATA_DIR` temporal: `ok=true`, sin
+  errores ni warnings.
+- No se ejecutaron suite completa, smoke, jobs, reconciliación, postmarket,
+  proveedor/red/Telegram real ni SQLite productiva por XNYS abierto.
+
+### Matriz exacta para la ventana cerrada
+
+No se ejecuta ahora. Antes de una validación larga debe demostrarse, por rutas
+read-only, XNYS cerrado con margen, postmarket terminal, lease vacío, ausencia
+de `market_cycle`, `portfolio_watch`, reconciliación, postmarket, pytest y
+despliegue efectivos, producción tracked limpia con sus untracked intactos,
+paper activo, live y auto-apply desactivados, kernel/config válidos y
+referencias exactas.
+
+Secuencia documentada, no ejecutada en P-L76:
+
+1. Preflight read-only con HEAD/tree/version/limpieza.
+2. `scripts/stack_down.ps1 -IncludeScheduled` mediante la ruta gestionada.
+3. Normalización autorizada del checkout solo si el candidato subsume
+   exactamente los cambios tracked del operador; nunca reset, clean, stash o
+   checkout destructivo y los untracked quedan fuera.
+4. Verificación del merge exacto `faccc5de42064211276b449d3cc78ebb6c022212`.
+5. Con `DATA_DIR` temporal y proveedores monkeypatched: `python -m pytest
+   tests/ -x -q`, Ruff, `check_no_nulls.py`, `git diff --check`,
+   `validate-agent-config --json`, version policy y `kernel-status --json`
+   interpretado desde el entorno correcto.
+6. Smoke solo si se demuestra que `run-once --skip-crew` usa Store/proveedores
+   temporales y no puede tocar red, broker, LLM ni SQLite productiva; en caso
+   contrario, `smoke_unavailable_by_safety`.
+7. `scripts/stack_up.ps1` y primera comprobación de salud.
+8. Segunda comprobación al menos 75 segundos después: HTTP raíz/health 200,
+   un scheduler lógico, lock/token/heartbeat coherentes, listener único,
+   lease vacío o terminal recuperado por ruta normal, cero alertas críticas,
+   cero órdenes inesperadas y cero `database is locked`.
+
+Criterios de aborto: precondición no demostrada, diff tracked no subsumido,
+hash protegido distinto, fallo de test/gate, smoke no aislado, `live` o
+`auto_apply` activo, duplicación de scheduler/listener, HTTP no 200, alerta
+crítica, orden inesperada o lock de SQLite. El rollback autorizado es un
+`git revert` auditable, nunca reset/clean; P-L76 no ejecuta rollback ni
+despliegue.
+
+### Commits P-L76
+
+- Merge: `faccc5de` — `merge: rehearse P-L69-R2 over P-L75`.
+- QA: `deca1285` — `test: verify P-L76 fill watcher boundaries`.
+- Documentación: commit siguiente de este cierre.

@@ -2937,3 +2937,19 @@ de despliegue quedan pendientes con XNYS cerrado.
   con sesión stub. Batería final `138 passed`; gates estáticos verdes.
 - XNYS abierto: suite completa/smoke/operación real omitidos. Dictamen:
   `ready_for_closed_market_full_validation`.
+
+## P-L76-PRECLOSE - ensayo previo de P-L69-R2 sobre P-L75
+
+- Worktree aislado `pl76_p69_predeployment_rehearsal`, rama
+  `codex/pl76-p69-predeployment-rehearsal`.
+- Merge único `--no-ff` `faccc5de42064211276b449d3cc78ebb6c022212` desde la base
+  productiva exacta y P-L69-R2; tree `f2b5a772` coincide con el candidato y la
+  versión final es `0.4.209`.
+- P-L73/P-L74/P-L69/R1/R2 conservan sus fronteras: snapshot provider-neutral,
+  commit local, Telegram fail-open y finalización postmarket idempotente.
+- QA focal `145 passed` + QA P-L76 `2 passed`; Ruff, NUL, py_compile,
+  diff-check y configuración temporal verdes. XNYS abierto: suite completa,
+  smoke y validación operativa pendientes.
+- Dictamen: `ready_for_closed_market_full_validation`, sin despliegue ni
+  cambios en producción. Siguiente paso mínimo: preflight cerrado y ejecutar
+  la matriz de `P-L69_informe.md` antes de cualquier promoción.

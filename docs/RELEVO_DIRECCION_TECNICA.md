@@ -1034,3 +1034,24 @@ con XNYS cerrado. No desplegar automaticamente.
 - Dictamen: `ready_for_closed_market_full_validation`, versión 0.4.209.
   XNYS abierto; pendiente solo la validación cerrada antes de reintegrar o
   desplegar.
+
+## P-L76-PRECLOSE - relevo para validación cerrada
+
+- Ensayo aislado: `pl76_p69_predeployment_rehearsal`, rama
+  `codex/pl76-p69-predeployment-rehearsal`.
+- Merge `faccc5de42064211276b449d3cc78ebb6c022212`, tree
+  `f2b5a7728b04e73916c95fec02c5ea1bb0c0bc18`, versión `0.4.209`.
+- Producción base `36077a06`/tree `b15ac3a2`, P-L69-R2
+  `4c3ed11d`/tree `f2b5a772`; referencias/tracked limpios y untracked del
+  operador fuera del ensayo.
+- QA focal `145 passed` + `2 passed`; Ruff/NUL/py_compile/diff/config verdes.
+  XNYS abierto impidió suite completa, smoke y operación real.
+- Contrato: snapshot provider-neutral por `broker_order_id` → commit local
+  terminal → Telegram fail-open → recibo; PMR aplica
+  `reconciliation_finalization` pendiente una sola vez. Watcher disabled por
+  defecto y separado del ciclo activo.
+- Antes de promover: XNYS cerrado, PMR terminal/lease vacío, sin jobs/test/
+  deploy activos, paper/live/auto-apply seguros, suite `tests/ -x -q`, smoke
+  temporal o `smoke_unavailable_by_safety`, doble salud >=75 s tras
+  `stack_up`, cero órdenes inesperadas y cero locks. No desplegar desde este
+  relevo sin esos gates.
