@@ -35,4 +35,4 @@ def test_fill_watch_provider_and_scheduler_boundaries_are_explicit() -> None:
     assert "max_instances=1" in scheduler_source
     assert "coalesce=True" in scheduler_source
     assert "trade_fill_watch_enabled" in job_source
-    assert Settings().trade_fill_watch_enabled is False
+    assert Settings(_env_file=None).trade_fill_watch_enabled is False
