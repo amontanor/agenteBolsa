@@ -95,10 +95,11 @@ def test_exact_object_is_dirty_p61_and_absent_from_p63r1():
     assert "daily_vs_spy_days" in DIRTY_P_L61_EXCERPT
 
     # P-L65B now implements the contract over the same real UI composition;
-    # the dirty excerpt remains evidence of the pre-fix producer only.
+    # P-L72 replaces the provisional producer with exact XNYS openings.
     assert hasattr(web_app, "_render_daily_vs_spy_table")
     panel_source = getsource(web_app._render_daily_vs_spy_table)
-    assert "readonly=True" in panel_source
+    assert "opening_context" in panel_source
+    assert "performance_daily" not in panel_source
     assert "daily_vs_spy_days" in panel_source
 
 

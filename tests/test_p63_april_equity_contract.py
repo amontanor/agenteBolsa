@@ -43,15 +43,14 @@ def test_p63_reproduces_april_baseline_exclusion_on_base():
     assert _portfolio_chart_visible_summary(df)["start_value"] == 71550.0
 
 
-def test_portfolio_history_request_is_single_and_covers_april_cutoff():
+def test_portfolio_history_requests_keep_april_and_opening_contracts_separate():
     assert PORTFOLIO_HISTORY_PERIOD == "all"
     source = getsource(web_app.page_dashboard)
-    assert source.count("alpaca_portfolio_history(") == 1
-    call_start = source.index("portfolio_history = BrokerClientFactory")
-    call_end = source.index("except Exception", call_start)
-    history_call = source[call_start:call_end]
-    assert "period=PORTFOLIO_HISTORY_PERIOD" in history_call
-    assert 'timeframe="1D"' in history_call
+    assert source.count("alpaca_portfolio_history(") == 2
+    assert "period=PORTFOLIO_HISTORY_PERIOD" in source
+    assert 'period="2W"' in source
+    assert 'timeframe="1D"' in source
+    assert 'timeframe="15Min"' in source
 
 
 def test_account_header_uses_equity_summary_not_trade_history_total_pl():
@@ -191,9 +190,8 @@ def test_today_percentage_uses_daily_equity_not_current_exposure():
     assert display == same_equity_different_exposure
     assert display["primary_pct"] == "0.27%"
     assert "sobre invertido" not in metric["detail_html"]
-    assert "desde apertura" not in metric["detail_html"].lower()
+    assert "última apertura xnys" in metric["detail_html"].lower()
     assert "acciones subieron" not in metric["detail_html"].lower()
-    assert "cierre anterior" in metric["detail_html"]
     assert metric["amount"] == "$190.42"
 
 
