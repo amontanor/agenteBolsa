@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import inspect
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -11,8 +11,7 @@ import pandas as pd
 import pytest
 
 import agente_bolsa.tools.performance_benchmark as performance_benchmark
-from agente_bolsa import web_app
-from agente_bolsa import scheduler
+from agente_bolsa import scheduler, web_app
 from agente_bolsa.tools import telegram_daily_summary as telegram
 
 
