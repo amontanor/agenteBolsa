@@ -333,6 +333,69 @@ def test_ui_and_telegram_use_same_eod_overlay_contract(tmp_path, monkeypatch):
     assert "SPY (ETF S&P 500)" in telegram.format_daily_summary(payload)
 
 
+def test_telegram_publish_projects_eod_overlay_in_real_consumer_boundary(tmp_path, monkeypatch):
+    """La ruta real de publicación no puede confiar en ``row['spy_pct']`` stale."""
+
+    cache_root = tmp_path / "cache" / "market_data"
+    _write_cache(
+        cache_root,
+        "999_final",
+        740.9400024414062,
+        "2026-07-29T04:37:00+00:00",
+        price_basis="adjusted_ohlc",
+    )
+    monkeypatch.setattr(performance_benchmark, "previous_xnys_session", lambda _value: "2026-07-27")
+    monkeypatch.setattr(performance_benchmark, "session_status", lambda _value, now=None: ("closed", []))
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        telegram,
+        "send_telegram_message",
+        lambda **kwargs: sent.append(kwargs) or {"ok": True, "message_id": 7},
+    )
+    recorded: list[dict] = []
+    store = SimpleNamespace(
+        agent_events=lambda **_kwargs: [],
+        record_append_only_event=lambda **kwargs: recorded.append(kwargs) or {"status": "inserted"},
+    )
+    settings = SimpleNamespace(
+        data_dir=tmp_path,
+        benchmark_symbol="SPY",
+        telegram_daily_summary_enabled=True,
+        telegram_bot_token="test-token",
+        telegram_daily_summary_chat_id="-100123",
+        telegram_timeout_seconds=15,
+    )
+    performance = _stored_performance_row()
+    performance.update(
+        {
+            "pnl_pct": 0.00142086,
+            "spy_pct": -0.003044284077,
+            "equity": 70634.91,
+        }
+    )
+    performance["payload"]["performance_benchmark"]["benchmark"].update(
+        {
+            "daily_return": 0.00250308,
+            "comparison_status": "comparable",
+            "eod_authority": "post_session_cache",
+        }
+    )
+
+    result = telegram.publish_daily_summary(
+        settings,
+        store,
+        session_date="2026-07-28",
+        performance=performance,
+        portfolio=SimpleNamespace(positions=[], portfolio_value=70634.91),
+    )
+
+    assert result["status"] == "sent"
+    assert len(sent) == 1
+    assert "+0.25%" in sent[0]["text"]
+    assert "-0.30%" not in sent[0]["text"]
+    assert recorded[0]["payload"]["content_hash"]
+
+
 def test_exact_direction_fixture_keeps_live_and_eod_measurements_separate():
     persisted_equity = 70634.91
     previous_equity = 70534.69
