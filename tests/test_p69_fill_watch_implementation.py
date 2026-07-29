@@ -118,6 +118,26 @@ def test_provider_adapter_applies_request_timeout_without_network():
     assert "paper.example/v2/orders/bo-1" in requests[0][0][1]
 
 
+def test_provider_adapter_uses_public_sdk_fallback_when_private_session_is_absent():
+    calls = []
+
+    class Client:
+        def get_order_by_id(self, order_id):
+            calls.append(order_id)
+            return {
+                "id": order_id,
+                "client_order_id": "client-bo-1",
+                "status": "filled",
+                "filled_qty": "3",
+                "filled_avg_price": "27.2",
+            }
+
+    snapshot = fill_provider.AlpacaOrderStatusProvider(Client()).snapshot_order("bo-1", timeout_seconds=5)
+
+    assert snapshot.status == "filled"
+    assert calls == ["bo-1"]
+
+
 def test_pending_submit_is_polled_by_exact_id_and_never_notifies(tmp_path, monkeypatch):
     settings = _settings(tmp_path)
     store = _store(settings)

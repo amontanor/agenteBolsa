@@ -142,7 +142,8 @@ def test_watcher_terminal_order_is_finalized_by_postmarket_exactly_once(tmp_path
     assert order["status"] == "filled"
     assert "broker_order_reconciled" in order["payload_json"]
 
-    postmarket = reconcile_broker_orders(settings, store, apply=True, update_learning=False)
+    restarted = Store(settings.database_path, settings.agent_logs_dir)
+    postmarket = reconcile_broker_orders(settings, restarted, apply=True, update_learning=False)
 
     assert postmarket["pending"] == 1
     assert postmarket["changes"][0]["finalization_pending"] is True
@@ -172,7 +173,7 @@ def test_watcher_terminal_order_is_finalized_by_postmarket_exactly_once(tmp_path
     assert marker["snapshot_content_hash"]
     assert json.loads(order["payload_json"])["reconciliation_finalization_pending"] is False
 
-    repeated = reconcile_broker_orders(settings, store, apply=True, update_learning=False)
+    repeated = reconcile_broker_orders(settings, restarted, apply=True, update_learning=False)
     assert repeated["pending"] == 0
     assert repeated["signal_execution_updates"] == 0
     assert repeated["learning_execution_updates"] == 0
