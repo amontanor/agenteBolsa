@@ -975,5 +975,13 @@ con XNYS cerrado. No desplegar automaticamente.
 - Focales `129 passed`; suite completa `2289 passed, 1 skipped`; Ruff, NUL,
   diff y configuración temporal verdes. Smoke sustituto aislado verde; CLI
   real omitido por seguridad de proveedores.
+
+## P-L75 - siguiente paso
+
+- Ensayo combinado P-L73 + P-L74 integrado con `--no-ff` en version 0.4.208.
+- P-L73 conserva el carrier de posicion; P-L74 conserva autoridad SPY,
+  recovery de `.pkl` y retry por ciclo natural de mercado.
+- Focales combinadas verdes; con XNYS abierto quedan pendientes suite completa
+  y smoke. Repetir validacion cerrada antes de cualquier despliegue.
 - Dictamen `ready_for_integration_rehearsal`. Sin despliegue, reinicio, push o
   cambios de política.

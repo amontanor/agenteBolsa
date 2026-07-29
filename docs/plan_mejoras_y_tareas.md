@@ -2883,3 +2883,10 @@ de despliegue quedan pendientes con XNYS cerrado.
   Metadata sin `.pkl` legible sigue reintentable.
 - Focales 17/17 y regresiones 131/131 verdes; suite completa y smoke quedan
   pendientes porque XNYS estaba abierto. No desplegar hasta ensayo cerrado.
+
+## P-L75 - ensayo combinado P-L73 + P-L74
+
+- Merge `--no-ff` de P-L73 y P-L74 sobre producción 0.4.206, versión final
+  0.4.208. Conflictos solo en versión/documentación, resueltos campo a campo.
+- QA focal combinada verde; suite completa y smoke pendientes por XNYS abierto.
+- Dictamen: `ready_for_closed_market_full_validation`. No desplegar todavía.
