@@ -1,6 +1,6 @@
 # P-L69-W — avisos intradía de fills confirmados
 
-## Dictamen provisional
+## Dictamen P-L69-R1
 
 `ready_for_closed_market_full_validation`.
 
@@ -110,3 +110,40 @@ event ID de recibo.
 Pendiente único: ensayo cerrado completo con DATA_DIR temporal, suite canónica,
 Ruff/NUL/diff/config/kernel y smoke completamente aislado antes de cualquier
 reintegración o despliegue.
+
+## P-L69-R1 — finalización downstream tras fill intradía
+
+### Causa reproducida y corrección
+
+Contra `ca6912758b0887dbb7f1a039c34756d33dfa2c36`, la prueba de reproducción
+mostró la pérdida exacta: una BUY `PENDING_NEW` pasó por el watcher a
+`filled`, generó su recibo Telegram y la reconciliación equivalente devolvió
+`pending=0` y `changes=[]`. Quedaron en cero las actualizaciones de signal y
+learning y no se volvió a adjuntar execution quality. SELL filled y BUY
+rejected/cancelled quedaron fuera como terminales sin efectos BUY.
+
+La corrección `584575c1` conserva junto al snapshot exacto la marca
+`reconciliation_finalization` con hash, `pending=true` y `applied=false`.
+Postmarket incluye esos terminales, usa el snapshot local sin transición remota
+adicional y reclama `pending -> processing -> applied` dentro de
+`BEGIN IMMEDIATE`. Signal, learning, execution quality y la marca aplicada se
+confirman juntos; retries y carreras no duplican efectos. El orden operativo
+sigue siendo snapshot remoto -> commit local -> Telegram fail-open, sin
+adelantar aprendizaje u outcomes.
+
+### QA R1
+
+- `31560cfb`: reproducción negativa contra el candidato previo.
+- `584575c1`: fix de marcador y finalización postmarket.
+- `0c121836`, `86b653ce`, `0909ea4b`: BUY, SELL, rejected/cancelled, reinicio,
+  attach exacto, carrera concurrente, ausencia de consulta remota terminal y
+  fallback público del SDK instalado.
+- Focales relacionadas: `133 passed`; focal R1 ampliado: `18 passed`.
+- Ruff, `check_no_nulls.py`, `py_compile`, `git diff --check` y
+  `validate-agent-config --json` con DATA_DIR temporal: verdes.
+- XNYS abierto: suite completa, smoke, proveedor/red/Telegram real, SQLite
+  productiva y despliegue permanecen omitidos por seguridad.
+
+El dictamen de este lote permanece `ready_for_closed_market_full_validation`;
+la validación cerrada debe comprobar el terminal postmarket y la paridad antes
+de cualquier reintegración o despliegue.

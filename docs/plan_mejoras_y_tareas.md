@@ -2909,3 +2909,18 @@ de despliegue quedan pendientes con XNYS cerrado.
   0.4.208. Conflictos solo en versión/documentación, resueltos campo a campo.
 - QA focal combinada verde; suite completa y smoke pendientes por XNYS abierto.
 - Dictamen: `ready_for_closed_market_full_validation`. No desplegar todavía.
+
+## P-L69-R1 - finalización downstream tras fill intradía (0.4.209)
+
+- Reproducción contra `ca691275`: el watcher dejaba BUY terminal `filled` fuera
+  de `_pending_orders`, por lo que PMR no aplicaba signal/learning ni attach de
+  execution quality. El recibo Telegram no sustituye esa finalización.
+- Fix `584575c1`: marcador durable `reconciliation_finalization` junto al
+  snapshot local; terminales watcher pendientes se finalizan en PMR con
+  `pending -> processing -> applied`, transacción corta e idempotencia frente a
+  retry/restart/carrera. No se reabre el terminal ni se consulta otra transición
+  remota.
+- Tests R1 `31560cfb`, `0c121836`, `86b653ce`, `0909ea4b`; focales `133 passed`
+  y R1 ampliado `18 passed`. Ruff/NUL/diff/py_compile/config aislado verdes.
+- XNYS abierto: no suite completa, smoke, proveedor/red/Telegram real ni
+  despliegue. Dictamen: `ready_for_closed_market_full_validation`.

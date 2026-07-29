@@ -1003,3 +1003,20 @@ con XNYS cerrado. No desplegar automaticamente.
   y smoke. Repetir validacion cerrada antes de cualquier despliegue.
 - Dictamen `ready_for_integration_rehearsal`. Sin despliegue, reinicio, push o
   cambios de política.
+
+## P-L69-R1 - finalización downstream tras fill intradía
+
+- En `pl69_fill_watch_impl`, `31560cfb` reprodujo que una orden terminalizada
+  por el watcher desaparecía de `_pending_orders` y no alcanzaba la
+  finalización postmarket. El recibo Telegram estaba presente, pero signal,
+  learning y execution quality quedaban sin el paso posterior.
+- `584575c1` añade el marcador durable `reconciliation_finalization` al payload
+  de `broker_orders` y hace que PMR procese esos terminales con el snapshot
+  local exacto. Claim transaccional `pending -> processing -> applied`, sin
+  reabrir orden ni consultar otra transición remota; efectos y attach se
+  confirman en la misma transacción. `0c121836`/`86b653ce`/`0909ea4b` cubren
+  restart, idempotencia, carrera, SELL/rejected/cancelled y fallback SDK.
+- Estado: `ready_for_closed_market_full_validation`, versión 0.4.209. Focales
+  `133 passed` y R1 `18 passed`; suite completa/smoke y proveedor real siguen
+  pendientes por XNYS abierto. Siguiente lote único: validación cerrada del
+  candidato, sin despliegue automático.
