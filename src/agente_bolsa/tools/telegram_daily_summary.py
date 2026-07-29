@@ -10,9 +10,11 @@ from datetime import date
 from typing import Any
 from urllib.request import Request, urlopen
 
+from .opening_performance import opening_performance_context
 from .performance_benchmark import overlay_eod_benchmark
 
 SCHEMA_VERSION = "p-l70.telegram-daily-summary.v2"
+OPENING_SCHEMA_VERSION = "p-l72.telegram-daily-summary.v3"
 EVENT_TYPE = "telegram_daily_summary_sent"
 TELEGRAM_MESSAGE_LIMIT_UNITS = 4096
 # Backwards-compatible name for callers/tests; enforcement uses UTF-16 units.
@@ -221,6 +223,7 @@ def build_daily_summary(
     session_date: str,
     performance: Mapping[str, Any] | None,
     portfolio: Any,
+    opening_performance: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Construye el mensaje únicamente desde objetos ya obtenidos por PMR."""
 
@@ -230,27 +233,81 @@ def build_daily_summary(
     raw_benchmark = _mapping(contract.get("benchmark"))
     canonical_benchmark = _canonical_eod_benchmark(row)
     benchmark = canonical_benchmark or raw_benchmark
-    equity = _finite(account.get("equity"))
+    overlay_present = isinstance(contract.get("eod_overlay"), Mapping)
+    opening = _mapping(opening_performance)
+    opening_account = _mapping(opening.get("account_current"))
+    opening_comparison = _mapping(opening.get("current"))
+    opening_available = _finite(opening_account.get("system_pct")) is not None
+    equity = _finite(opening_account.get("current_equity")) if opening_available else None
+    if equity is None:
+        equity = _finite(account.get("equity"))
     if equity is None:
         equity = _finite(row.get("equity"))
     if equity is None:
         equity = _finite(getattr(portfolio, "portfolio_value", None))
-    previous_equity = _finite(account.get("previous_equity"))
+    previous_equity = _finite(opening_account.get("opening_equity")) if opening_available else None
+    if previous_equity is None:
+        previous_equity = _finite(account.get("previous_equity"))
     exact_daily_return = (
         equity / previous_equity - 1.0
         if equity is not None and previous_equity is not None and previous_equity > 0
         else None
     )
     legacy_daily_return = _finite(row.get("pnl_pct"))
-    account_daily_return = exact_daily_return if exact_daily_return is not None else legacy_daily_return
-    equity_delta = equity - previous_equity if exact_daily_return is not None else None
-    spy_daily_return = _finite(canonical_benchmark.get("daily_return")) if canonical_benchmark else None
-    comparison_status, comparison_reasons, difference = _comparison_contract(
-        row=row,
-        contract=contract,
-        account_daily_return=account_daily_return,
-        spy_daily_return=spy_daily_return,
+    account_daily_return = (
+        _finite(opening_account.get("system_pct"))
+        if opening_available
+        else exact_daily_return
+        if exact_daily_return is not None
+        else legacy_daily_return
     )
+    equity_delta = equity - previous_equity if exact_daily_return is not None else None
+    spy_daily_return = (
+        _finite(opening_comparison.get("spy_pct"))
+        if opening_available
+        else _finite(canonical_benchmark.get("daily_return"))
+        if canonical_benchmark
+        else None
+        if overlay_present
+        else _finite(raw_benchmark.get("daily_return"))
+    )
+    if opening_available:
+        comparison_reasons = [] if spy_daily_return is not None else ["spy_opening_interval_unavailable"]
+        comparison_status = "in_progress" if spy_daily_return is not None else "unavailable"
+        difference = account_daily_return - spy_daily_return if spy_daily_return is not None else None
+    else:
+        comparison_status, comparison_reasons, difference = _comparison_contract(
+            row=row,
+            contract=contract,
+            account_daily_return=account_daily_return,
+            spy_daily_return=spy_daily_return,
+        )
+    benchmark_status = (
+        "in_progress"
+        if opening_available and spy_daily_return is not None
+        else "comparable"
+        if canonical_benchmark is not None
+        else comparison_status
+        if not overlay_present
+        else "unavailable"
+    )
+    benchmark_payload = {
+        "symbol": str(benchmark.get("symbol") or "SPY").upper(),
+        "instrument_label": benchmark.get("instrument_label") or "SPY (ETF S&P 500)",
+        "daily_return": spy_daily_return,
+        "status": benchmark_status,
+        "source": (
+            opening_comparison.get("spy_source") if opening_available else benchmark.get("source")
+        ),
+        "price_basis": (
+            opening_comparison.get("price_basis") if opening_available else benchmark.get("price_basis")
+        ),
+        "generated_at": contract.get("generated_at") or contract.get("captured_at"),
+        "as_of": (
+            opening_comparison.get("spy_end_at") if opening_available else benchmark.get("as_of")
+        ),
+        "eod_authority": benchmark.get("eod_authority"),
+    }
     positions: list[dict[str, Any]] = []
     for position in getattr(portfolio, "positions", None) or []:
         positions.append(
@@ -268,11 +325,13 @@ def build_daily_summary(
     open_today_pl, open_today_coverage = _coverage([item["today_pl"] for item in positions])
     groups = _grouped_positions({"positions": positions})
     payload = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": OPENING_SCHEMA_VERSION if opening_available else SCHEMA_VERSION,
         "session_date": session_date,
         "account_daily_return": account_daily_return,
         "account_daily_return_source": (
-            "performance_benchmark.account_equity_pair"
+            "session_open_snapshot"
+            if opening_available
+            else "performance_benchmark.account_equity_pair"
             if exact_daily_return is not None
             else "legacy_percentage"
             if legacy_daily_return is not None
@@ -282,12 +341,21 @@ def build_daily_summary(
         "previous_equity": previous_equity,
         "equity_delta": equity_delta,
         "spy_daily_return": spy_daily_return,
+        "benchmark": benchmark_payload,
         "comparison_status": comparison_status,
         "comparison_reason_codes": comparison_reasons,
         "comparison_difference": difference,
-        "benchmark_source": benchmark.get("source"),
-        "benchmark_price_basis": benchmark.get("price_basis"),
-        "benchmark_as_of": benchmark.get("as_of"),
+        "benchmark_source": (
+            opening_comparison.get("spy_source") if opening_available else benchmark.get("source")
+        ),
+        "benchmark_price_basis": (
+            opening_comparison.get("price_basis") if opening_available else benchmark.get("price_basis")
+        ),
+        "benchmark_as_of": (
+            opening_comparison.get("spy_end_at") if opening_available else benchmark.get("as_of")
+        ),
+        "interval_start_at": opening_account.get("system_start_at") if opening_available else None,
+        "interval_end_at": opening_account.get("system_end_at") if opening_available else None,
         "open_total_pl": open_total_pl,
         "open_total_pl_coverage": open_total_coverage,
         "open_today_pl": open_today_pl,
@@ -302,26 +370,43 @@ def build_daily_summary(
 
 def format_daily_summary(payload: Mapping[str, Any]) -> str:
     comparison_status = str(payload.get("comparison_status") or "unavailable")
-    comparison_suffix = "" if comparison_status == "comparable" else " · Provisional" if comparison_status == "provisional" else ""
+    comparison_suffix = (
+        ""
+        if comparison_status == "comparable"
+        else " · En curso"
+        if comparison_status == "in_progress"
+        else " · Provisional"
+        if comparison_status == "provisional"
+        else ""
+    )
     total_coverage = _mapping(payload.get("open_total_pl_coverage"))
     today_coverage = _mapping(payload.get("open_today_pl_coverage"))
     total_count = len(list(payload.get("positions") or []))
+    opening_contract = payload.get("schema_version") == OPENING_SCHEMA_VERSION
+    variation_label = "Variación desde apertura XNYS" if opening_contract else "Variación de equity hoy"
+    benchmark_label = (
+        str(_mapping(payload.get("benchmark")).get("instrument_label") or "SPY (ETF S&P 500)")
+        if comparison_status == "unavailable"
+        else "SP500"
+    )
     equity_lines = [
-        f"• Variación de equity hoy: {_money(payload.get('equity_delta'))} ({_pct(payload.get('account_daily_return'))})"
+        f"• {variation_label}: {_money(payload.get('equity_delta'))} "
+        f"({_pct(payload.get('account_daily_return'))})"
     ]
     if payload.get("equity_delta") is None and payload.get("account_daily_return") is not None:
         equity_lines = [
-            "• Variación de equity hoy: importe n/d",
+            f"• {variation_label}: importe n/d",
             f"• Porcentaje disponible (legacy): {_pct(payload.get('account_daily_return'))}",
         ]
     base_lines = [
-        f"📊 Cierre · {_date_label(payload.get('session_date'))}",
+        f"📊 Resumen · {_date_label(payload.get('session_date'))}",
         "",
         "💼 Cuenta",
         f"• Equity: {_balance(payload.get('equity'))}",
         *equity_lines,
-        f"• SP500: {_pct(payload.get('spy_daily_return'))}{comparison_suffix}",
+        f"• {benchmark_label}: {_pct(payload.get('spy_daily_return'))}{comparison_suffix}",
         f"• Diferencia: {_pp(payload.get('comparison_difference'))}{comparison_suffix}",
+        "• Referencia: SPY (ETF S&P 500)",
         "",
         f"📈 Posiciones abiertas · {total_count}",
         f"• P/L abierto total ({total_coverage.get('known', 0)}/{total_coverage.get('total', total_count)}): "
@@ -335,7 +420,9 @@ def format_daily_summary(payload: Mapping[str, Any]) -> str:
     if not groups:
         base_lines.extend(["", "Sin posiciones abiertas."])
     warning = None
-    if comparison_status == "provisional":
+    if comparison_status == "in_progress":
+        warning = "⏳ Intervalo en curso: apertura XNYS → observación más reciente."
+    elif comparison_status == "provisional":
         warning = "⚠️ Comparación provisional: SP500 no tiene base histórica plenamente comparable."
     elif comparison_status == "unavailable":
         warning = "⚠️ Comparación SP500: n/d por falta de datos comparables."
@@ -424,10 +511,19 @@ def publish_daily_summary(settings: Any, store: Any, *, session_date: str, perfo
         # Projection is local/read-only; failure must not make a stale scalar
         # authoritative, so the builder degrades to unavailable.
         projected_performance = overlay_eod_benchmark(performance, settings)
+    try:
+        opening = opening_performance_context(
+            settings,
+            store,
+            current_equity=getattr(portfolio, "portfolio_value", None),
+        )
+    except Exception:
+        opening = {}
     payload = build_daily_summary(
         session_date=session_date,
         performance=projected_performance,
         portfolio=portfolio,
+        opening_performance=opening,
     )
     text = format_daily_summary(payload)
     sent = send_telegram_message(
@@ -437,7 +533,7 @@ def publish_daily_summary(settings: Any, store: Any, *, session_date: str, perfo
         timeout_seconds=int(getattr(settings, "telegram_timeout_seconds", 15)),
     )
     receipt = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": payload["schema_version"],
         "session_date": session_date,
         "content_hash": payload["content_hash"],
         "message_id": sent.get("message_id"),

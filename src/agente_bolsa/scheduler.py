@@ -72,6 +72,12 @@ from .tools.learning_penalty_cycle_shadow import (
 from .tools.learning_scoreboard import build_learning_scoreboard
 from .tools.market_cycle_timing import MarketCycleTiming
 from .tools.news_sentiment import analyze_news_sentiment_for_candidates
+from .tools.opening_performance import (
+    build_session_open_snapshot,
+    extract_exact_open_snapshots,
+    persist_session_open_snapshot,
+    read_session_open_snapshots,
+)
 from .tools.operational_health import (
     activate_persistent_kill_switch,
     build_operational_health_report,
@@ -1980,8 +1986,32 @@ def portfolio_watch_job(
     watch_payload: dict[str, Any] = status.as_dict()
     has_activity = False
     try:
-        portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
+        broker_client = BrokerClientFactory(settings)
+        portfolio = broker_client.alpaca_portfolio_snapshot()
         has_activity = bool(portfolio.positions or portfolio.open_orders)
+        try:
+            session_date = str(status.session_date or "")
+            known_open_sessions = {
+                str(item.get("session_date") or "")
+                for item in read_session_open_snapshots(store)
+            }
+            if session_date and session_date not in known_open_sessions:
+                intraday_history = broker_client.alpaca_portfolio_history(period="5D", timeframe="15Min")
+                exact_open = next(
+                    (
+                        item
+                        for item in extract_exact_open_snapshots(intraday_history)
+                        if item.get("session_date") == session_date
+                    ),
+                    None,
+                )
+                if exact_open is not None:
+                    persist_session_open_snapshot(
+                        store,
+                        build_session_open_snapshot(exact_open),
+                    )
+        except Exception as exc:  # noqa: BLE001 - observational capture is fail-open.
+            log_swallow(LOGGER, "capturar equity exacta de apertura XNYS", exc)
         _earnings_hold_guard(settings, store, portfolio, reporter, run_id)  # T5.10
         watch_payload.update(
             {
