@@ -36,6 +36,12 @@ Un stack sano tiene un scheduler logico, PID/lock vivo, heartbeat fresco y HTTP
 Decision context, gate path, comparable controls y execution quality no cambian
 ranking, gates, cantidades ni ordenes.
 
+Las integraciones externas deben exponer interfaces y snapshots canónicos del
+dominio. Los SDK y payloads propios de cada proveedor quedan confinados en
+adaptadores; reconciliación, eventos y notificaciones no importan tipos del
+proveedor. Así se puede sustituir el proveedor sin tocar trading, riesgo ni
+consumidores.
+
 ## Portfolio watch y salidas
 
 `portfolio_watch` revisa posiciones durante XNYS abierto. Stop-loss, take-profit

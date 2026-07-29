@@ -2884,6 +2884,24 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Focales 17/17 y regresiones 131/131 verdes; suite completa y smoke quedan
   pendientes porque XNYS estaba abierto. No desplegar hasta ensayo cerrado.
 
+## P-L69-W - avisos intradia de fills confirmados (candidato 0.4.209)
+
+- Worktree `pl69_fill_watch_impl`, rama `codex/pl69-fill-watch-impl`, sobre
+  P-L75 `08e8f8fa`/arbol `86a8b4d7`.
+- Contrato provider-neutral: snapshot remoto por `broker_order_id` exacto,
+  commit local `filled` y despues Telegram fail-open con claim/receipt
+  append-only. El adaptador especifico queda confinado en `fill_provider.py`.
+- Job separado `trade_fill_watch`, desactivado por defecto, cap 25, cadence 30
+  s y backoff 30->300 s. No bloquea market_cycle/portfolio_watch ni cambia
+  trading. Rejected/partial/pending no notifican; BUY/SELL exigen identidad y
+  provenance exactas.
+- Caracterizacion `581f6bfc`, implementacion `6bffedf2`, QA `9a689153`.
+  Focales P-L69/Telegram/reconciliacion/scheduler/storage/P-L72-P-L75:
+  115 pruebas verdes acumuladas. Suite completa y smoke quedan pendientes por
+  XNYS abierto; no hubo broker, red, SQLite productiva ni mensaje real.
+- Dictamen: `ready_for_closed_market_full_validation`. Siguiente paso: ensayo
+  cerrado aislado y revision de paridad antes de cualquier integracion.
+
 ## P-L75 - ensayo combinado P-L73 + P-L74
 
 - Merge `--no-ff` de P-L73 y P-L74 sobre producción 0.4.206, versión final
