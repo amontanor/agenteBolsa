@@ -2858,3 +2858,18 @@ de despliegue quedan pendientes con XNYS cerrado.
   única sesión vigente etiquetada `En curso`.
 - Stack sano en dos comprobaciones; cero órdenes inesperadas y cero locks de
   SQLite. P-L72 queda cerrado.
+
+## P-L73 - P/L total y diario en cartera abierta
+
+- Candidato `0.4.207` en worktree aislado.
+- La tabla muestra por posición `P/L total` y `P/L día`, cada uno en USD y
+  porcentaje.
+- Los cuatro valores proceden del mismo `PositionSnapshot` de Alpaca ya cargado;
+  no hay segunda lectura de posiciones ni reconstrucción por símbolo.
+- Missing intradía permanece `n/d`. El P/L diario de Alpaca no se confunde con
+  el contrato apertura a apertura de P-L72.
+- Focales relacionados: `129 passed`.
+- Suite completa `2289 passed, 1 skipped`; Ruff, NUL, diff y configuración
+  temporal verdes. Smoke sustituto aislado verde; CLI real no ejecutado por
+  seguridad de proveedores.
+- Dictamen: `ready_for_integration_rehearsal`; sin despliegue.

@@ -949,3 +949,20 @@ con XNYS cerrado. No desplegar automaticamente.
   instante el intervalo vigente cambia automáticamente a apertura 29-jul →
   ahora.
 - No hubo push ni cambio de política activa.
+
+## P-L73 — cartera abierta con P/L total y diario
+
+- Worktree `pl73_position_daily_pl`, rama
+  `codex/pl73-position-daily-pl`, base productiva `36077a06`.
+- Versión candidata `0.4.207`.
+- `trade_history` conserva los campos total e intradía del mismo
+  `PositionSnapshot` ya cargado por la UI.
+- Dashboard y página Cartera muestran USD y porcentaje para `P/L total` y
+  `P/L día`; missing se publica `n/d`.
+- No se añade una llamada al broker y no se unen posiciones con otra fuente por
+  símbolo. P-L72 conserva por separado la métrica de apertura a apertura.
+- Focales `129 passed`; suite completa `2289 passed, 1 skipped`; Ruff, NUL,
+  diff y configuración temporal verdes. Smoke sustituto aislado verde; CLI
+  real omitido por seguridad de proveedores.
+- Dictamen `ready_for_integration_rehearsal`. Sin despliegue, reinicio, push o
+  cambios de política.
