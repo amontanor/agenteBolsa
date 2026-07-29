@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ import pytest
 
 import agente_bolsa.tools.performance_benchmark as performance_benchmark
 from agente_bolsa import web_app
+from agente_bolsa import scheduler
 from agente_bolsa.tools import telegram_daily_summary as telegram
 
 
@@ -315,14 +317,11 @@ def test_ui_and_telegram_use_same_eod_overlay_contract(tmp_path, monkeypatch):
         projected,
         consumer_read_at=datetime(2026, 7, 29, 5, 0, tzinfo=timezone.utc),
     )
+    projected_for_telegram = dict(projected)
+    projected_for_telegram.update({"pnl_pct": 0.00142086, "equity": 70634.91})
     payload = telegram.build_daily_summary(
         session_date="2026-07-28",
-        performance={
-            "pnl_pct": 0.00142086,
-            "spy_pct": projected["payload"]["performance_benchmark"]["benchmark"]["daily_return"],
-            "equity": 70634.91,
-            "performance_benchmark": projected["payload"]["performance_benchmark"],
-        },
+        performance=projected_for_telegram,
         portfolio=SimpleNamespace(positions=[], portfolio_value=70634.91),
     )
 
@@ -394,6 +393,65 @@ def test_telegram_publish_projects_eod_overlay_in_real_consumer_boundary(tmp_pat
     assert "+0.25%" in sent[0]["text"]
     assert "-0.30%" not in sent[0]["text"]
     assert recorded[0]["payload"]["content_hash"]
+
+
+def test_telegram_publish_without_authoritative_cache_never_falls_back_to_stale_scalar(tmp_path, monkeypatch):
+    monkeypatch.setattr(performance_benchmark, "previous_xnys_session", lambda _value: "2026-07-27")
+    monkeypatch.setattr(performance_benchmark, "session_status", lambda _value, now=None: ("closed", []))
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        telegram,
+        "send_telegram_message",
+        lambda **kwargs: sent.append(kwargs) or {"ok": True, "message_id": 8},
+    )
+    events: list[dict] = []
+    store = SimpleNamespace(
+        agent_events=lambda **_kwargs: list(events),
+        record_append_only_event=lambda **kwargs: events.append(
+            {"event_id": kwargs["event_id"], "event_type": kwargs["event_type"]}
+        )
+        or {"status": "inserted"},
+    )
+    settings = SimpleNamespace(
+        data_dir=tmp_path,
+        benchmark_symbol="SPY",
+        telegram_daily_summary_enabled=True,
+        telegram_bot_token="test-token",
+        telegram_daily_summary_chat_id="-100123",
+        telegram_timeout_seconds=15,
+    )
+    performance = _stored_performance_row()
+    performance.update({"pnl_pct": 0.00142086, "spy_pct": -0.003044284077, "equity": 70634.91})
+
+    first = telegram.publish_daily_summary(
+        settings,
+        store,
+        session_date="2026-07-28",
+        performance=performance,
+        portfolio=SimpleNamespace(positions=[], portfolio_value=70634.91),
+    )
+    second = telegram.publish_daily_summary(
+        settings,
+        store,
+        session_date="2026-07-28",
+        performance=performance,
+        portfolio=SimpleNamespace(positions=[], portfolio_value=70634.91),
+    )
+
+    assert first["status"] == "sent"
+    assert second["status"] == "idempotent"
+    assert len(sent) == 1
+    assert "SPY (ETF S&P 500): n/d" in sent[0]["text"]
+    assert "-0.30%" not in sent[0]["text"]
+
+
+def test_telegram_job_and_pmr_fallback_share_the_same_publish_boundary():
+    job_source = inspect.getsource(scheduler.telegram_daily_summary_job)
+    pmr_source = inspect.getsource(scheduler.post_market_review_job)
+
+    assert scheduler.publish_daily_summary is telegram.publish_daily_summary
+    assert job_source.count("publish_daily_summary(") == 1
+    assert pmr_source.count("publish_daily_summary(") == 1
 
 
 def test_exact_direction_fixture_keeps_live_and_eod_measurements_separate():
