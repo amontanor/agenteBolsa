@@ -1,3 +1,4 @@
+from datetime import datetime
 from inspect import getsource
 
 import pandas as pd
@@ -151,7 +152,13 @@ def test_descending_equity_cannot_render_positive_trade_total_as_green_result():
     assert "P/L abierto" not in metric["detail"]
 
 
-def test_explicit_june_window_has_date_authority_and_exact_visible_dates():
+def test_explicit_june_window_has_date_authority_and_exact_visible_dates(monkeypatch):
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 7, 28, 22, 30, tzinfo=tz)
+
+    monkeypatch.setattr(web_app, "datetime", FrozenDateTime)
     assert "2026-06-01" in PORTFOLIO_CHART_WINDOWS
     assert _portfolio_chart_window_label("2026-06-01") == "Desde 01/06/2026"
     assert _portfolio_chart_window_label(None) == "Desde el 1 de abril (01/04/2026)"

@@ -1,5 +1,25 @@
 # Relevo de direccion tecnica — agenteBolsa
 
+### P-L70 — resumen diario Telegram UX (candidato 0.4.203)
+
+- Base `87d29018`/árbol `fd690a93`; worktree aislado
+  `pl70_telegram_summary_ux`; rama `codex/pl70-telegram-summary-ux`.
+- El resumen usa `p-l70.telegram-daily-summary.v2`, conserva idempotencia por
+  `session_date`, no toca fills y no envía mensajes durante pruebas.
+- El saldo es absoluto; la variación monetaria exige el par equity de
+  `performance_benchmark`; SP500 conserva valor provisional sin declarar
+  ganador si P-L68 no confirma comparabilidad; posiciones llevan cobertura y
+  grupos deterministas.
+- Implementación `f78de077` y QA `0a18924c`, `b3c4d1c2`, `7e96191a`,
+  `12de9be5`, `1b64dc5a`. La regresión de fecha dinámica P-L63 quedó congelada
+  en el test, sin tocar comportamiento. El recibo v2 conserva texto exacto,
+  `text_sha256` y unidades UTF-16; `content_hash` sigue siendo el hash del
+  payload canónico. La suite aislada final obtuvo `2261 passed, 1 skipped, 1
+  warning`; el skip es el test condicional preexistente
+  `test_score_study_regression_current_sqlite` por historia local insuficiente
+  o no disponible. Ruff/NUL/diff/compile/config verdes. No se ejecutó smoke real
+  ni se enviaron mensajes.
+
 > Actualizado: **28-jul-2026**. Producción estable **0.4.201**
 > (`915481ab325d46c81a92986bfd603f13c5134dd9`, árbol funcional
 > `f3a2eda76f3c317d68d8679ce00a7ea43a6aa023`). P-L67R1 desplegado y
@@ -36,6 +56,22 @@
   canónico read-only por sesiones con estados pending/unavailable y cierre
   aritmético de contadores.
 > P-L48B sigue desplegado y P-L44B sigue en shadow.
+
+### P-L70BR1 — ensayo integrado cerrado
+
+- Merge `--no-ff` `0083f414` desde producción documental exacta; tree funcional
+  resultante igual al candidato P-L70R1. QA adicional `a64c493a` conserva la
+  separación del evento de resumen frente a notificaciones de fills.
+- Suite integrada `2261 passed, 1 skipped, 1 warning`; focales `86 passed` y
+  QA integrada `1 passed`. El skip es únicamente el test condicional
+  `test_score_study_regression_current_sqlite` por historia local insuficiente
+  o no disponible. No se añadió skip/xfail.
+- `telegram_daily_summary.py` es la única lógica funcional modificada; el
+  recibo v2 guarda texto exacto, `text_sha256`, `content_hash` independiente y
+  unidades UTF-16. Fills, scheduler, Store, PMR y trading permanecen iguales.
+- Dictamen `ready_for_closed_market_deployment`, sin despliegue, reinicio,
+  push ni mensaje real. El siguiente lote mínimo es el preflight/normalización
+  productiva autorizado para despliegue; no iniciar P-L69 en paralelo.
 
 P-L65A version policy required candidate `0.4.199`; no production logic
 changed. The next lot is P-L65B after closed-market validation gates.
