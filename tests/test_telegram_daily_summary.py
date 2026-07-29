@@ -61,7 +61,7 @@ def test_build_and_format_daily_summary_keeps_denominators_separate():
     assert payload["open_today_pl"] == pytest.approx(15)
     text = telegram.format_daily_summary(payload)
     assert "variación diaria de equity): +0.27%" in text
-    assert "SP500: +0.50%" in text
+    assert "SPY (ETF S&P 500): +0.50% · Provisional" in text
     assert "AAA: total +100.00 USD (+11.11%); hoy +25.00 USD (+2.50%)" in text
 
 

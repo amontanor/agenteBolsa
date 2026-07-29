@@ -164,7 +164,7 @@ def test_explicit_june_window_has_date_authority_and_exact_visible_dates():
             ],
             "equity": [71550.0, 71200.0, 70700.0],
         },
-        current_equity=70700.0,
+        current_equity=None,
     )
     june = web_app._trim_portfolio_chart_range(df, days="2026-06-01")
     summary = _portfolio_equity_summary(june, requested_start_date="2026-06-01")
