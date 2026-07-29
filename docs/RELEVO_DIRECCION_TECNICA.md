@@ -933,3 +933,19 @@ con XNYS cerrado. No desplegar automaticamente.
 - Suite completa `2283 passed, 1 skipped`; gates estáticos/configuración
   verdes. Siguiente paso: preflight cerrado, merge `--no-ff`, validación
   productiva con stack detenido, arranque gestionado y doble salud.
+
+## P-L72 — desplegado (29-jul-2026)
+
+- Producción `0.4.206`, merge funcional
+  `50d959d76de113da40067dfbb3a03973d5635d2f`, árbol
+  `b7eb971fc7fa8733706a6eef826ba5750e1aa267`.
+- Suite sobre producción detenida: `2284 passed`; Ruff, NUL, diff,
+  configuración, kernel y smoke aislado verdes.
+- Doble comprobación: HTTP 200/200, scheduler único lógico, lock del runtime
+  con token exacto, kernel sellado, lease PMR vacío y cero órdenes nuevas.
+- UI productiva comprobada: siete filas completas y descendentes; seis
+  intervalos finales y uno `En curso`, sin `Pendiente`.
+- La próxima apertura XNYS es 29-jul a las 15:30 Europe/Madrid. Desde ese
+  instante el intervalo vigente cambia automáticamente a apertura 29-jul →
+  ahora.
+- No hubo push ni cambio de política activa.

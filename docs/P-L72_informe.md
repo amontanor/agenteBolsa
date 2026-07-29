@@ -66,3 +66,25 @@ siete filas completas en el selector de siete días.
 
 No hubo escritura SQLite productiva, órdenes, reconciliación, postmarket,
 reinicio, despliegue ni push durante la construcción y QA del candidato.
+
+## Despliegue productivo — 29-jul-2026
+
+`deployed`
+
+- Merge `--no-ff`: `50d959d76de113da40067dfbb3a03973d5635d2f`.
+- Árbol funcional: `b7eb971fc7fa8733706a6eef826ba5750e1aa267`.
+- Versión productiva: `0.4.206`.
+- Suite sobre el merge con el stack detenido: `2284 passed`, sin fallos; un
+  warning de deprecación preexistente.
+- Ruff, `check_no_nulls.py` (451 archivos), `git diff --check`,
+  configuración, kernel y smoke aislado: verdes.
+- Stack arrancado con helpers gestionados. Dos comprobaciones separadas
+  confirmaron HTTP raíz y `/health` 200, una cadena lógica de scheduler,
+  PID/token de lock coherentes, kernel sellado, lease postmarket vacío, cero
+  órdenes nuevas y cero eventos `database is locked`.
+- Validación visual productiva: siete filas con valores, seis finales y una en
+  curso, orden descendente en la tabla y el mismo rowset en gráfica,
+  contadores y tabla.
+- En la preapertura del 29-jul, el intervalo vigente 28-jul apertura → ahora
+  mostró cuenta `-0,05%` (`-$38,05`) y SPY ajustado `+0,23%`.
+- No hubo push ni cambio de política de trading.

@@ -2848,3 +2848,13 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Suite completa `2283 passed, 1 skipped`; Ruff/NUL/diff/config verdes.
 - No cambia política ni rutas de trading. Pendiente despliegue autorizado y
   doble comprobación operativa.
+
+### Estado final P-L72
+
+- Desplegado en producción `0.4.206` mediante merge `50d959d7`, árbol funcional
+  `b7eb971f`.
+- Suite productiva `2284 passed`; Ruff/NUL/diff/config/kernel/smoke verdes.
+- UI comprobada con siete valores visibles completos, tabla descendente y una
+  única sesión vigente etiquetada `En curso`.
+- Stack sano en dos comprobaciones; cero órdenes inesperadas y cero locks de
+  SQLite. P-L72 queda cerrado.
