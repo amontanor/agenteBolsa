@@ -4,6 +4,9 @@ from types import SimpleNamespace
 
 from alpaca.trading.client import TradingClient
 
+from agente_bolsa.config import Settings
+from agente_bolsa.storage import Store
+from agente_bolsa.tools import fill_watch, telegram_trade_notifications
 from agente_bolsa.tools.fill_provider import AlpacaOrderStatusProvider
 
 
@@ -80,3 +83,48 @@ def test_real_trading_client_enum_base_url_is_normalized_for_client_id_fallback(
     assert requests[1][0][1] == "https://paper-api.alpaca.markets/v2/orders:by_client_order_id"
     assert requests[1][1]["params"] == {"client_order_id": "client-2"}
     assert requests[1][1]["timeout"] == 9
+
+
+def test_invalid_endpoint_fails_open_without_local_transition_or_telegram(tmp_path, monkeypatch):
+    settings = Settings(
+        DATA_DIR=tmp_path,
+        TRADE_FILL_WATCH_ENABLED=True,
+        TELEGRAM_TRADE_NOTIFICATIONS_ENABLED=True,
+        TELEGRAM_BOT_TOKEN="test-token",
+        TELEGRAM_DAILY_SUMMARY_CHAT_ID="test-chat",
+    )
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    store.save_broker_order(
+        broker_order_id="broker-invalid-endpoint",
+        plan_id="plan-invalid-endpoint",
+        cycle_id="cycle-invalid-endpoint",
+        symbol="AAPL",
+        side="buy",
+        status="PENDING_NEW",
+        payload={
+            "broker_order": {"client_order_id": "client-invalid-endpoint", "qty": 1},
+            "plan": {"plan_id": "plan-invalid-endpoint", "payload": {}},
+        },
+    )
+    client = TradingClient("fake-key", "fake-secret", paper=True)
+    client._base_url = "not-an-http-url"
+    client._session = SimpleNamespace(request=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("network")))
+    sent = []
+    monkeypatch.setattr(
+        telegram_trade_notifications,
+        "send_telegram_message",
+        lambda **kwargs: sent.append(kwargs) or {"ok": True, "message_id": 1},
+    )
+
+    result = fill_watch.run_trade_fill_watch(
+        settings,
+        store,
+        provider=AlpacaOrderStatusProvider(client),
+    )
+
+    assert result["provider_unavailable"] == 1
+    assert result["filled_transitions"] == 0
+    assert result["sent"] == 0
+    assert sent == []
+    assert store.pending_broker_orders()[0]["status"] == "PENDING_NEW"

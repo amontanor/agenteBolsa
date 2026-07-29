@@ -4,6 +4,8 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
+import pytest
+
 from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
 from agente_bolsa.tools import fill_watch, telegram_trade_notifications
@@ -252,3 +254,36 @@ def test_two_postmarket_finalizers_claim_one_marker_and_preserve_exact_ids(tmp_p
     assert payload["reconciliation_finalization"]["status"] == "applied"
     assert json.loads(signal["gate_json"])["broker_order_id"] == "broker-buy-1"
     assert json.loads(signal["features_json"])["execution_quality_snapshot"]["broker_order_id"] == "broker-buy-1"
+
+
+def test_finalization_exception_rolls_back_marker_to_pending(tmp_path, monkeypatch):
+    settings = _settings(tmp_path, telegram=False)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    _seed_buy(store)
+    fill_watch.run_trade_fill_watch(settings, store, provider=_FilledProvider(), now=NOW)
+
+    def fail_learning(*_args, **_kwargs):
+        raise RuntimeError("downstream_failure")
+
+    monkeypatch.setattr(
+        "agente_bolsa.tools.broker_reconciliation._mark_learning_execution",
+        fail_learning,
+    )
+    with pytest.raises(RuntimeError, match="downstream_failure"):
+        reconcile_broker_orders(settings, store, apply=True, update_learning=False)
+
+    with store.connect() as conn:
+        failed = conn.execute(
+            "SELECT status, payload_json FROM broker_orders WHERE broker_order_id = ?",
+            ("broker-buy-1",),
+        ).fetchone()
+    failed_payload = json.loads(failed["payload_json"])
+    assert failed["status"] == "filled"
+    assert failed_payload["reconciliation_finalization"]["status"] == "pending"
+    assert failed_payload["reconciliation_finalization_pending"] is True
+    assert failed_payload["reconciliation_finalization_applied"] is False
+
+    monkeypatch.undo()
+    recovered = reconcile_broker_orders(settings, store, apply=True, update_learning=False)
+    assert recovered["finalization_applied"] == 1
