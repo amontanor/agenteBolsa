@@ -1,5 +1,19 @@
 # Plan maestro de mejoras y tareas — agenteBolsa
 
+## P-L71 — autoridad EOD y coherencia temporal Sistema vs benchmark (0.4.205)
+
+- Implementación aislada en `pl71_eod_authority`, rama
+  `codex/pl71-eod-authority`; la base productiva `0.4.202` no se modificó.
+- Se reprodujo la selección lexicográfica del cache SPY que publicaba
+  `-0,304428%` desde una barra same-day mutable. El productor exige intervalo,
+  rango, basis, fuente y autoridad temporal; same-day sin finality queda
+  `unavailable` y un cache posterior puede proyectarse como
+  `post_session_cache`.
+- UI y Telegram consumen un overlay read-only que conserva el benchmark
+  almacenado y declara `source`, `price_basis`, `generated_at/as_of` y estado.
+  No hay backfill ni cambio de trading. Suite cerrada: 2260 passed, 1 skip
+  preexistente y 1 warning; smoke real omitido por seguridad.
+
 ## P-L67R1 — Despliegue combinado 0.4.201 (28-jul-2026)
 
 - Dictamen: `deployed`. Merge productivo `915481ab325d46c81a92986bfd603f13c5134dd9`;

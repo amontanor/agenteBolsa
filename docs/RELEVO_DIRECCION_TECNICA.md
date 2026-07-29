@@ -5,6 +5,20 @@
 > `f3a2eda76f3c317d68d8679ce00a7ea43a6aa023`). P-L67R1 desplegado y
 > validado con dos comprobaciones; candidato final `b25c9603` conservado.
 
+### P-L71 — autoridad EOD y coherencia temporal Sistema vs benchmark
+
+- Candidato aislado `pl71_eod_authority`, versión `0.4.205`. La base de
+  producción `0.4.202` conserva el SPY 28-jul incorrecto en storage; no se
+  reescribió ni se hizo backfill.
+- El bug era la elección por nombre/hash de caches mutables same-day. Ahora se
+  exige metadata diaria, rango, fuente, basis explícita, par de cierres y
+  autoridad temporal; la vista puede usar solo un cache posterior validado.
+- La cabecera live muestra su propia captura/as_of y el panel diario/Telegram
+  rotulan `SPY (ETF S&P 500)` y `Provisional`/`n/d` cuando corresponde. No hay
+  cambios de trading ni despliegue. Siguiente: ensayo cerrado P-L71 con suite
+  completa verde (2260 passed, 1 skip preexistente) y smoke temporal pendiente
+  de un ensayo posterior sin servicios reales.
+
 ### P-L67R1 — despliegue productivo 0.4.201
 
 - Se preservaron los cambios productivos previos en `b2d7c5c6`; el merge
