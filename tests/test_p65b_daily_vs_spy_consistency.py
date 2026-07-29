@@ -39,6 +39,8 @@ def _row(
                 "price_basis": price_basis,
                 "source": source,
                 "as_of": as_of,
+                "eod_authority": "post_session_cache",
+                "comparison_status": "comparable",
                 "data_quality": quality,
             },
             "data_quality": {"status": quality},
@@ -164,7 +166,7 @@ def test_chart_data_layers_share_explicit_formatted_tooltip_and_aux_layers_do_no
         {"field": "retorno", "format": "+.2%", "title": "% ganancias", "type": "quantitative"},
         {"field": "serie", "title": "Serie", "type": "nominal"},
         {"field": "estado", "title": "Estado", "type": "nominal"},
-        {"field": "motivo", "title": "Motivo", "type": "nominal"},
+        {"field": "periodo", "title": "Ventana", "type": "nominal"},
     ]
     for layer in data_layers:
         assert layer["encoding"]["tooltip"] == expected
@@ -178,10 +180,11 @@ def test_dashboard_wiring_is_readonly_and_does_not_add_operational_sources():
     panel_source = getsource(web_app._render_daily_vs_spy_table)
     page_source = getsource(web_app.page_dashboard)
 
-    assert "performance_daily(limit=0, readonly=True)" in panel_source
+    assert "opening_context" in panel_source
+    assert "performance_daily" not in panel_source
     assert "BrokerClientFactory" not in panel_source
     assert "yfinance" not in panel_source.lower()
-    assert "_render_daily_vs_spy_table(store)" in page_source
+    assert "_render_daily_vs_spy_table(opening_context)" in page_source
 
 
 def test_daily_panel_is_presentation_only_and_has_no_trading_authority():

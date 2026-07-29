@@ -53,6 +53,7 @@ from agente_bolsa.tools.daily_learning import (
     load_daily_learning_context,
 )
 from agente_bolsa.tools.news_sentiment import fetch_symbol_news
+from agente_bolsa.tools.opening_performance import opening_performance_context
 from agente_bolsa.tools.portfolio_insights import (
     latest_analyzed_news as build_latest_analyzed_news,
 )
@@ -284,7 +285,7 @@ def _today_pl_display(today_pl: Any, _invested: Any, equity_pct: Any | None) -> 
     del today_pl
     return {
         "primary_pct": _pct(equity_pct) if equity_pct is not None else "n/d",
-        "period_caption": "Variaci\u00f3n de equity desde el cierre anterior",
+        "period_caption": "Variaci\u00f3n de equity desde la última apertura XNYS",
     }
 
 
@@ -1181,6 +1182,8 @@ def _account_group(
     positions_count: int,
     orders_count: int,
     equity_summary: dict[str, Any] | None = None,
+    equity_source: str | None = None,
+    equity_as_of: str | None = None,
 ) -> None:
     equity_summary = equity_summary or {}
     total_tone = "good" if (total_pl or 0.0) > 0 else "bad" if (total_pl or 0.0) < 0 else "neutral"
@@ -1190,6 +1193,15 @@ def _account_group(
     tone_class = f"account-pl {total_tone}"
     today_class = f"account-kpi {today_tone}"
     equity_detail = _portfolio_equity_summary_detail(equity_summary)
+    source_detail = " · ".join(
+        item
+        for item in (
+            equity_source or "fuente n/d",
+            f"as_of {equity_as_of}" if equity_as_of else "as_of n/d",
+        )
+        if item
+    )
+    equity_detail = f"{equity_detail} · {source_detail}" if equity_detail else source_detail
     equity_start_label = _portfolio_display_date(equity_summary.get("start_date"))
     st.markdown(
         f"""
@@ -2985,6 +2997,11 @@ def _canonical_daily_vs_spy_row(
         reasons.append("price_basis_unknown")
     if not source:
         reasons.append("benchmark_source_unavailable")
+    eod_authority = str(benchmark.get("eod_authority") or "").strip().lower()
+    if not eod_authority:
+        reasons.append("eod_authority_unavailable")
+    elif benchmark.get("comparison_status") == "unavailable":
+        reasons.append("benchmark_comparison_unavailable")
 
     generated_at_source = (
         "generated_at"
@@ -3113,6 +3130,10 @@ def _canonical_daily_vs_spy_row(
         "freshness_age_seconds": round(freshness_age_seconds, 3) if freshness_age_seconds is not None else None,
         "contract_quality_status": quality or "unavailable",
         "benchmark_quality_status": benchmark_quality or "unavailable",
+        "instrument_label": benchmark.get("instrument_label") or "SPY (ETF S&P 500)",
+        "eod_authority": eod_authority or None,
+        "cache_created_at": benchmark.get("cache_created_at"),
+        "eod_overlay_status": (contract.get("eod_overlay") or {}).get("status"),
         "comparison_status": status,
         "reason_codes": sorted(set(reasons)),
     }
@@ -3143,14 +3164,29 @@ def _daily_vs_spy_window(
 
 
 def _daily_vs_spy_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    comparable = [row for row in rows if row["comparison_status"] == "comparable"]
-    system_wins = sum(row["system_pct"] > row["spy_pct"] for row in comparable)
-    spy_wins = sum(row["spy_pct"] > row["system_pct"] for row in comparable)
-    ties = sum(abs(row["system_pct"] - row["spy_pct"]) < 0.00005 for row in comparable)
+    if rows and "status" not in rows[0]:
+        comparable = [row for row in rows if row["comparison_status"] == "comparable"]
+        system_wins = sum(row["system_pct"] > row["spy_pct"] for row in comparable)
+        spy_wins = sum(row["spy_pct"] > row["system_pct"] for row in comparable)
+        ties = sum(abs(row["system_pct"] - row["spy_pct"]) < 0.00005 for row in comparable)
+        return {
+            "visible_total": len(rows),
+            "comparable": len(comparable),
+            "pending": len(rows) - len(comparable),
+            "system_wins": system_wins,
+            "spy_wins": spy_wins,
+            "ties": ties,
+            "start_date": rows[0]["session_date"] if rows else None,
+            "end_date": rows[-1]["session_date"] if rows else None,
+        }
+    final_rows = [row for row in rows if row["status"] == "final"]
+    ties = sum(abs(row["system_pct"] - row["spy_pct"]) < 0.00005 for row in final_rows)
+    system_wins = sum(row["system_pct"] - row["spy_pct"] >= 0.00005 for row in final_rows)
+    spy_wins = sum(row["spy_pct"] - row["system_pct"] >= 0.00005 for row in final_rows)
     return {
         "visible_total": len(rows),
-        "comparable": len(comparable),
-        "pending": len(rows) - len(comparable),
+        "final": len(final_rows),
+        "in_progress": len(rows) - len(final_rows),
         "system_wins": system_wins,
         "spy_wins": spy_wins,
         "ties": ties,
@@ -3173,8 +3209,12 @@ def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
             "fecha": row["session_date"],
             "Sistema": row["system_pct"],
             "SP500": row["spy_pct"],
-            "estado": "Comparable" if row["comparison_status"] == "comparable" else "Provisional",
-            "motivo": ", ".join(row["reason_codes"]) if row["reason_codes"] else "",
+            "estado": (
+                "Final"
+                if row.get("status") == "final" or row.get("comparison_status") == "comparable"
+                else "En curso"
+            ),
+            "periodo": f"{row.get('system_start_at') or 'n/d'} → {row.get('system_end_at') or 'ahora'}",
         }
         for row in rows
     ]
@@ -3190,7 +3230,7 @@ def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
         alt.Tooltip("retorno:Q", title="% ganancias", format="+.2%"),
         alt.Tooltip("serie:N", title="Serie"),
         alt.Tooltip("estado:N", title="Estado"),
-        alt.Tooltip("motivo:N", title="Motivo"),
+        alt.Tooltip("periodo:N", title="Ventana"),
     ]
     base = alt.Chart(chart_frame).encode(
         x=alt.X("fecha:N", title=None, axis=alt.Axis(labelAngle=0, labelOverlap=True)),
@@ -3205,7 +3245,7 @@ def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
                 "estado:N",
                 title=None,
                 scale=alt.Scale(
-                    domain=["Comparable", "Provisional"],
+                    domain=["Final", "En curso"],
                     range=[[1, 0], [6, 4]],
                 ),
             ),
@@ -3222,7 +3262,7 @@ def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
                 "estado:N",
                 title=None,
                 scale=alt.Scale(
-                    domain=["Comparable", "Provisional"],
+                    domain=["Final", "En curso"],
                     range=[[1, 0], [6, 4]],
                 ),
                 legend=None,
@@ -3233,7 +3273,7 @@ def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
     comparable_rows = [
         row
         for row in chart_rows
-        if row["estado"] == "Comparable"
+        if row["estado"] == "Final"
         and row["Sistema"] is not None
         and row["SP500"] is not None
     ]
@@ -3271,22 +3311,17 @@ def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
     return alt.layer(*layers).properties(height=260)
 
 
-def _render_daily_vs_spy_table(store: Any) -> None:
-    """Panel diario basado solo en el contrato persistido P-L40B."""
+def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
+    """Render one exact opening-to-opening rowset without pending rows."""
 
-    consumer_read_at = datetime.now(timezone.utc)
-    try:
-        rows = store.performance_daily(limit=0, readonly=True)
-    except Exception:  # noqa: BLE001 - presentacion degradable.
-        rows = []
-    canonical_rows = _canonical_daily_vs_spy_rows(rows, consumer_read_at=consumer_read_at)
+    canonical_rows = list(opening_context.get("rows") or [])
     with st.container(border=True):
         title_col, control_col = st.columns([3, 1])
         with title_col:
             _section_title(
                 "Rendimiento diario: Sistema vs SP500",
-                "Variacion de equity contra SPY, sin ajustes de flujos. "
-                "Linea continua: comparable; discontinua: provisional.",
+                "Apertura XNYS → siguiente apertura; la sesión vigente compara la última apertura con ahora. "
+                "Sistema = variación de equity; SP500 = SPY ajustado. Sin ajustes de flujos.",
             )
         with control_col:
             visible_days = st.selectbox(
@@ -3299,11 +3334,15 @@ def _render_daily_vs_spy_table(store: Any) -> None:
             )
         visible_rows = _daily_vs_spy_window(canonical_rows, visible_days)
         if not visible_rows:
-            st.markdown("<div class='empty-box'>Sin sesiones diarias comparables todavia.</div>", unsafe_allow_html=True)
+            st.markdown(
+                "<div class='empty-box'>Sin pares exactos de apertura disponibles todavía. "
+                "No se muestran aproximaciones ni filas pendientes.</div>",
+                unsafe_allow_html=True,
+            )
             return
         summary = _daily_vs_spy_summary(visible_rows)
         c1, c2, c3, c4 = st.columns(4)
-        suffix = f"de {summary['visible_total']} visibles · {summary['comparable']} comparables"
+        suffix = f"{summary['final']} finales · {summary['visible_total']} visibles"
         with c1:
             _compact_metric("Dias sistema superior", summary["system_wins"], suffix, "good")
         with c2:
@@ -3311,56 +3350,47 @@ def _render_daily_vs_spy_table(store: Any) -> None:
         with c3:
             _compact_metric("Empates", summary["ties"], suffix, "neutral")
         with c4:
-            _compact_metric("Pendientes", summary["pending"], suffix, "neutral")
+            _compact_metric("En curso", summary["in_progress"], suffix, "neutral")
         chart = _daily_vs_spy_chart(visible_rows)
         if chart is not None:
             st.altair_chart(chart, width="stretch")
-            if summary["comparable"] == 0:
-                st.info(
-                    "La serie discontinua es provisional: muestra los valores "
-                    "persistidos, pero no decide qué sistema fue superior."
-                )
         else:
             st.info("Sin valores suficientes para dibujar la serie.")
+        st.caption(
+            f"Cobertura exacta: {opening_context.get('exact_comparison_count', 0)} comparaciones; "
+            f"{opening_context.get('omitted_session_count', 0)} sesiones omitidas por falta de una apertura exacta."
+        )
         html_rows = []
-        for row in visible_rows:
-            if row["comparison_status"] == "comparable":
-                system_text = _pct_signed(row["system_pct"])
-                spy_text = _pct_signed(row["spy_pct"])
-                winner = (
-                    "Empate"
-                    if abs(row["system_pct"] - row["spy_pct"]) < 0.00005
-                    else "Sistema"
-                    if row["system_pct"] > row["spy_pct"]
-                    else "SP500"
+        for row in reversed(visible_rows):
+            system_text = f"{_pct_signed(row['system_pct'])}<span>{_money(row['system_delta'])}</span>"
+            spy_text = _pct_signed(row["spy_pct"])
+            winner = (
+                "Empate"
+                if abs(row["system_pct"] - row["spy_pct"]) < 0.00005
+                else "Sistema"
+                if row["system_pct"] > row["spy_pct"]
+                else "SPY"
+            )
+            source_detail = " · ".join(
+                item
+                for item in (
+                    row.get("spy_source") or "fuente n/d",
+                    row.get("price_basis") or "basis n/d",
+                    f"as_of {row['spy_end_at']}" if row.get("spy_end_at") else "as_of n/d",
                 )
-                secondary = (
-                    f" · exposición descriptiva {_pct_signed(row['exposure_pct'])}"
-                    if row["exposure_pct"] is not None
-                    else ""
-                )
-                system_text = f"{system_text}<span>{_money(row['equity_delta'])}{secondary}</span>"
-            else:
-                reasons = ", ".join(row["reason_codes"]) or "datos incompletos"
-                system_text = (
-                    f"{_pct_signed(row['system_pct'])}<span>Provisional Â· {reasons}</span>"
-                    if row["system_pct"] is not None
-                    else f"Pendiente<span>{reasons}</span>"
-                )
-                spy_text = (
-                    f"{_pct_signed(row['spy_pct'])}<span>Provisional</span>"
-                    if row["spy_pct"] is not None
-                    else "Pendiente"
-                )
-                winner = "Pendiente"
+                if item
+            )
+            spy_text = f"{spy_text}<span>{escape(source_detail)}</span>"
+            state = "Final" if row["status"] == "final" else "En curso"
             html_rows.append(
                 "<tr>"
                 f"<td><strong>{row['session_date']}</strong></td>"
-                f"<td>{system_text}</td><td>{spy_text}</td><td>{winner}</td>"
+                f"<td>{system_text}</td><td>{spy_text}</td><td>{state}</td><td>{winner}</td>"
                 "</tr>"
             )
         st.markdown(
-            "<table class='portfolio-table'><thead><tr><th>Fecha</th><th>Sistema</th><th>SP500</th><th>Superior</th></tr></thead>"
+            "<table class='portfolio-table'><thead><tr><th>Fecha</th><th>Sistema</th>"
+            "<th>SPY (ETF S&amp;P 500)</th><th>Estado</th><th>Superior</th></tr></thead>"
             f"<tbody>{''.join(html_rows)}</tbody></table>",
             unsafe_allow_html=True,
         )
@@ -4314,8 +4344,10 @@ def page_dashboard() -> None:
 
     portfolio = None
     portfolio_error = None
+    broker_client = BrokerClientFactory(settings)
+    account_read_at = datetime.now(timezone.utc)
     try:
-        portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
+        portfolio = broker_client.alpaca_portfolio_snapshot()
     except Exception as exc:  # noqa: BLE001
         portfolio_error = str(exc)
     db_status = store.status()
@@ -4323,6 +4355,7 @@ def page_dashboard() -> None:
     stats: dict[str, Any] = {}
     position_rows: list[dict[str, Any]] = []
     portfolio_history: dict[str, Any] = {}
+    intraday_portfolio_history: dict[str, Any] = {}
     try:
         history = build_trade_history(settings, limit=1000, start_date=DEFAULT_START_DATE)
         # The UI uses local, filled BUY lots as its only purchase-date source.
@@ -4333,12 +4366,19 @@ def page_dashboard() -> None:
     except Exception as exc:  # noqa: BLE001
         st.warning(f"No se pudo leer historico/P/L: {exc}")
     try:
-        portfolio_history = BrokerClientFactory(settings).alpaca_portfolio_history(
+        portfolio_history = broker_client.alpaca_portfolio_history(
             period=PORTFOLIO_HISTORY_PERIOD,
             timeframe="1D",
         )
     except Exception as exc:  # noqa: BLE001
         st.warning(f"No se pudo leer portfolio history de Alpaca para el grafico: {exc}")
+    try:
+        intraday_portfolio_history = broker_client.alpaca_portfolio_history(
+            period="2W",
+            timeframe="15Min",
+        )
+    except Exception as exc:  # noqa: BLE001
+        st.warning(f"No se pudo leer la apertura exacta XNYS: {exc}")
 
     if portfolio_error:
         st.warning(f"No se pudo leer cartera Alpaca: {portfolio_error}")
@@ -4347,9 +4387,16 @@ def page_dashboard() -> None:
     exposure_pct = stats.get("exposure_pct") if stats else None
     current_equity = _num(portfolio.portfolio_value) if portfolio else _num(stats.get("equity"))
     current_cash = _num(portfolio.cash) if portfolio else _num(stats.get("cash"))
-    today_change = _latest_daily_equity_change(history, current_equity, portfolio_history)
-    today_total = _num(today_change.get("pl")) or 0.0
-    today_pct = _num(today_change.get("pl_pct")) or 0.0
+    opening_context = opening_performance_context(
+        settings,
+        store,
+        intraday_history=intraday_portfolio_history,
+        current_equity=current_equity,
+        now=account_read_at,
+    )
+    account_current = opening_context.get("account_current") or {}
+    today_total = _num(account_current.get("system_delta"))
+    today_pct = _num(account_current.get("system_pct"))
     full_equity_df = _portfolio_value_series_from_alpaca(portfolio_history, current_equity)
     full_equity_summary = _portfolio_equity_summary(full_equity_df)
     account_total_pl = _num(full_equity_summary.get("pl"))
@@ -4390,6 +4437,8 @@ def page_dashboard() -> None:
         positions_count=len(portfolio.positions) if portfolio else 0,
         orders_count=len(portfolio.open_orders) if portfolio else 0,
         equity_summary=full_equity_summary,
+        equity_source=str(account_current.get("system_source") or "apertura exacta no disponible"),
+        equity_as_of=str(account_current.get("system_end_at") or account_read_at.isoformat()),
     )
 
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
@@ -4525,7 +4574,7 @@ def page_dashboard() -> None:
                 )
 
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
-    _render_daily_vs_spy_table(store)
+    _render_daily_vs_spy_table(opening_context)
 
     # ===== Detalle avanzado: progressive disclosure (plegado por defecto) =====
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)

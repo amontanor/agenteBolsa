@@ -1,9 +1,43 @@
 # Relevo de direccion tecnica — agenteBolsa
 
+### P-L70 — resumen diario Telegram UX (candidato 0.4.203)
+
+- Base `87d29018`/árbol `fd690a93`; worktree aislado
+  `pl70_telegram_summary_ux`; rama `codex/pl70-telegram-summary-ux`.
+- El resumen usa `p-l70.telegram-daily-summary.v2`, conserva idempotencia por
+  `session_date`, no toca fills y no envía mensajes durante pruebas.
+- El saldo es absoluto; la variación monetaria exige el par equity de
+  `performance_benchmark`; SP500 conserva valor provisional sin declarar
+  ganador si P-L68 no confirma comparabilidad; posiciones llevan cobertura y
+  grupos deterministas.
+- Implementación `f78de077` y QA `0a18924c`, `b3c4d1c2`, `7e96191a`,
+  `12de9be5`, `1b64dc5a`. La regresión de fecha dinámica P-L63 quedó congelada
+  en el test, sin tocar comportamiento. El recibo v2 conserva texto exacto,
+  `text_sha256` y unidades UTF-16; `content_hash` sigue siendo el hash del
+  payload canónico. La suite aislada final obtuvo `2261 passed, 1 skipped, 1
+  warning`; el skip es el test condicional preexistente
+  `test_score_study_regression_current_sqlite` por historia local insuficiente
+  o no disponible. Ruff/NUL/diff/compile/config verdes. No se ejecutó smoke real
+  ni se enviaron mensajes.
+
 > Actualizado: **28-jul-2026**. Producción estable **0.4.201**
 > (`915481ab325d46c81a92986bfd603f13c5134dd9`, árbol funcional
 > `f3a2eda76f3c317d68d8679ce00a7ea43a6aa023`). P-L67R1 desplegado y
 > validado con dos comprobaciones; candidato final `b25c9603` conservado.
+
+### P-L71 — autoridad EOD y coherencia temporal Sistema vs benchmark
+
+- Candidato aislado `pl71_eod_authority`, versión `0.4.205`. La base de
+  producción `0.4.202` conserva el SPY 28-jul incorrecto en storage; no se
+  reescribió ni se hizo backfill.
+- El bug era la elección por nombre/hash de caches mutables same-day. Ahora se
+  exige metadata diaria, rango, fuente, basis explícita, par de cierres y
+  autoridad temporal; la vista puede usar solo un cache posterior validado.
+- La cabecera live muestra su propia captura/as_of y el panel diario/Telegram
+  rotulan `SPY (ETF S&P 500)` y `Provisional`/`n/d` cuando corresponde. No hay
+  cambios de trading ni despliegue. Siguiente: ensayo cerrado P-L71 con suite
+  completa verde (2260 passed, 1 skip preexistente) y smoke temporal pendiente
+  de un ensayo posterior sin servicios reales.
 
 ### P-L67R1 — despliegue productivo 0.4.201
 
@@ -35,7 +69,34 @@
   cerrada pendientes por XNYS abierto. Siguiente único lote: P-L65B, rowset
   canónico read-only por sesiones con estados pending/unavailable y cierre
   aritmético de contadores.
+### P-L71-R1 - wiring EOD comun para Telegram
+
+- La reproduccion contra `7beeb135` demostro que Telegram ignoraba el overlay
+  EOD y usaba `row['spy_pct']` stale: `-0,30%` en lugar de `+0,25%`.
+- `publish_daily_summary` es ahora la frontera comun de proyeccion para el job
+  22:05 y el fallback PMR. `build_daily_summary` solo acepta benchmark
+  proyectado/comparable con autoridad EOD completa; sin cache posterior queda
+  `n/d`, incluso si existe un scalar legacy.
+- P-L70BR1 permanece paralelo y no se mezcla. Siguiente lote: ensayo cerrado
+  P-L71; no backfill, no reenvio automatico de sesiones ya recibidas.
+
 > P-L48B sigue desplegado y P-L44B sigue en shadow.
+
+### P-L70BR1 — ensayo integrado cerrado
+
+- Merge `--no-ff` `0083f414` desde producción documental exacta; tree funcional
+  resultante igual al candidato P-L70R1. QA adicional `a64c493a` conserva la
+  separación del evento de resumen frente a notificaciones de fills.
+- Suite integrada `2261 passed, 1 skipped, 1 warning`; focales `86 passed` y
+  QA integrada `1 passed`. El skip es únicamente el test condicional
+  `test_score_study_regression_current_sqlite` por historia local insuficiente
+  o no disponible. No se añadió skip/xfail.
+- `telegram_daily_summary.py` es la única lógica funcional modificada; el
+  recibo v2 guarda texto exacto, `text_sha256`, `content_hash` independiente y
+  unidades UTF-16. Fills, scheduler, Store, PMR y trading permanecen iguales.
+- Dictamen `ready_for_closed_market_deployment`, sin despliegue, reinicio,
+  push ni mensaje real. El siguiente lote mínimo es el preflight/normalización
+  productiva autorizado para despliegue; no iniciar P-L69 en paralelo.
 
 P-L65A version policy required candidate `0.4.199`; no production logic
 changed. The next lot is P-L65B after closed-market validation gates.
@@ -857,3 +918,18 @@ con XNYS cerrado. No desplegar automaticamente.
   `run_observable_cycle(use_crew=False)` pasó en DATA_DIR temporal. Antes de
   desplegar hay que repetir preflight cerrado y normalizar el checkout dirty
   sin descartar cambios del operador.
+
+## P-L72 — siguiente integración (29-jul-2026)
+
+- Worktree `pl72_open_to_open_performance`, rama
+  `codex/pl72-open-to-open-performance`, versión `0.4.206`.
+- Integra P-L70 y P-L71 y corrige la frontera diaria con aperturas exactas
+  Alpaca 15 minutos y Open ajustado de SPY.
+- Semántica única: T open → next T open; para la sesión vigente, open → now.
+  No utilizar `performance_daily`, timestamps midnight de 1D ni exposición
+  actual como denominador.
+- La UI muestra las últimas sesiones completas, tabla descendente y cero
+  `pending`. Telegram comparte el intervalo cuando existe evidencia exacta.
+- Suite completa `2283 passed, 1 skipped`; gates estáticos/configuración
+  verdes. Siguiente paso: preflight cerrado, merge `--no-ff`, validación
+  productiva con stack detenido, arranque gestionado y doble salud.

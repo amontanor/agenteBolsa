@@ -49,6 +49,8 @@ def _canonical_row(
                 "price_basis": price_basis,
                 "source": source,
                 "as_of": as_of,
+                "eod_authority": "post_session_cache",
+                "comparison_status": "comparable",
                 "data_quality": quality,
             },
             "data_quality": {"status": quality},
@@ -194,10 +196,12 @@ def test_current_portfolio_selector_uses_calendar_days_not_last_real_sessions():
 def test_daily_vs_spy_panel_uses_one_readonly_rowset_and_visible_window_counts():
     source = getsource(web_app._render_daily_vs_spy_table)
 
-    assert "performance_daily(limit=0, readonly=True)" in source
+    assert "opening_context" in source
+    assert "performance_daily" not in source
     assert "daily_vs_spy_days" in source
     assert "_daily_vs_spy_summary" in source
     assert "visible_rows" in source
+    assert "reversed(visible_rows)" in source
     assert "BrokerClientFactory" not in source
     assert "yfinance" not in source.lower()
     # La selectbox de P-L63R1 pertenece al gráfico Valor de cartera, no a este

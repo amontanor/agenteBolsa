@@ -1,5 +1,43 @@
 # Plan maestro de mejoras y tareas — agenteBolsa
 
+## P-L70 — rediseño UX del resumen diario Telegram (candidato 0.4.203)
+
+- Worktree aislado `pl70_telegram_summary_ux`, rama
+  `codex/pl70-telegram-summary-ux`, desde `87d29018`/árbol `fd690a93`.
+- Caracterización `b5b3fec4`, implementación `f78de077` y QA focal
+  `0a18924c`; dictamen `ready_for_integration_rehearsal`; no despliegue.
+- QA R1: `12de9be5` y `1b64dc5a`; la regresión de fecha P-L63 quedó
+  determinista con reloj congelado. El recibo conserva texto exacto y
+  `text_sha256` separado de `content_hash`; el límite se valida en 4096
+  unidades UTF-16 y el truncado reconcilia visibles/omitidas.
+- Cambia el resumen a `p-l70.telegram-daily-summary.v2`: equity sin signo,
+  importe solo desde el par equity actual/anterior, comparación SP500
+  provisional cuando P-L68 no permite comparabilidad, cobertura de posiciones,
+  grupos deterministas y límite Telegram 4096 con truncado explícito.
+- `telegram_trade_notifications.py`, reconciliación, PMR, scheduler cadence y
+  trading permanecen sin cambios. Suite final aislada: `2261 passed, 1
+  skipped, 1 warning`; el skip es el test condicional preexistente de historia
+  SQLite local (`test_score_study_regression_current_sqlite`). Smoke real y
+  mensaje Telegram no ejecutados.
+- P-L70BR1 integrado sobre producción documental mediante merge `0083f414`, con
+  QA `a64c493a`: `2261 passed`, focales `86 passed` y QA de integración `1
+  passed`. Dictamen `ready_for_closed_market_deployment`; despliegue sigue
+  pendiente y requiere sus precondiciones operativas habituales.
+
+## P-L71 — autoridad EOD y coherencia temporal Sistema vs benchmark (0.4.205)
+
+- Implementación aislada en `pl71_eod_authority`, rama
+  `codex/pl71-eod-authority`; la base productiva `0.4.202` no se modificó.
+- Se reprodujo la selección lexicográfica del cache SPY que publicaba
+  `-0,304428%` desde una barra same-day mutable. El productor exige intervalo,
+  rango, basis, fuente y autoridad temporal; same-day sin finality queda
+  `unavailable` y un cache posterior puede proyectarse como
+  `post_session_cache`.
+- UI y Telegram consumen un overlay read-only que conserva el benchmark
+  almacenado y declara `source`, `price_basis`, `generated_at/as_of` y estado.
+  No hay backfill ni cambio de trading. Suite cerrada: 2260 passed, 1 skip
+  preexistente y 1 warning; smoke real omitido por seguridad.
+
 ## P-L67R1 — Despliegue combinado 0.4.201 (28-jul-2026)
 
 - Dictamen: `deployed`. Merge productivo `915481ab325d46c81a92986bfd603f13c5134dd9`;
@@ -24,6 +62,18 @@
 - Token y `chat_id` solo mediante entorno local; desactivado por defecto.
 - Recibo append-only por sesión evita reenvíos después de un éxito confirmado.
 - Integrado y desplegado dentro de P-L67R1.
+
+## P-L71-R1 - wiring EOD comun para Telegram (0.4.205)
+
+- Reproducido contra `7beeb135`: Telegram publicaba el `spy_pct` legacy
+  `-0,304428%` aunque el benchmark proyectado EOD era `+0,250308%` y
+  comparable.
+- `publish_daily_summary` aplica ahora el mismo overlay read-only que la UI;
+  job 22:05 y fallback PMR comparten esta frontera. Sin cache posterior con
+  autoridad EOD se publica `n/d`, nunca el valor same-day persistido.
+- No hay backfill, reenvio posterior automatico, cambio de instrumento,
+  cambio de trading ni modificacion productiva. Candidato listo para ensayo
+  de integracion cerrado; P-L70BR1 queda paralelo.
 
 > **Este documento es la fuente unica de verdad de la mejora del sistema.**
 > Contiene la vision, lo ya ejecutado, el diagnostico vigente, las tareas con su
@@ -2784,3 +2834,17 @@ de despliegue quedan pendientes con XNYS cerrado.
   `tests/test_pre_earnings.py:1041`; Ruff/NUL/diff/compile/config verdes.
   Smoke CLI real queda `smoke_unavailable_by_safety`; sustituto aislado verde.
 - Dictamen `ready_for_deployment` sin autorización de despliegue en este lote.
+
+## P-L72 - rendimiento apertura a apertura (29-jul-2026)
+
+- Candidato `0.4.206` listo para despliegue cerrado.
+- Sustituye el panel provisional P-L65/P-L68 por intervalos exactos:
+  apertura XNYS T → apertura siguiente; sesión vigente → ahora.
+- Cabecera, gráfica, contadores, tabla y Telegram comparten ventana y
+  denominadores. La tabla queda ordenada de más reciente a más antigua y no
+  muestra filas vacías o pendientes.
+- Evidencia real: 27→28 cuenta +0,1569% frente a SPY -0,7679%; 28→preapertura
+  29 cuenta aproximadamente -0,043% frente a SPY +0,2259%.
+- Suite completa `2283 passed, 1 skipped`; Ruff/NUL/diff/config verdes.
+- No cambia política ni rutas de trading. Pendiente despliegue autorizado y
+  doble comprobación operativa.
