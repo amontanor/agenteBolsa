@@ -116,14 +116,54 @@ class AlpacaOrderStatusProvider:
         client_order_id: str | None = None,
         timeout_seconds: int | None = None,
     ) -> CanonicalOrderSnapshot:
-        del timeout_seconds  # The existing SDK client owns its request timeout.
         try:
-            order = self._client.get_order_by_id(broker_order_id)
+            order = self._request(
+                f"/orders/{broker_order_id}",
+                timeout_seconds=timeout_seconds,
+            )
         except Exception:
             if not client_order_id:
                 raise
-            order = self._client.get_order_by_client_id(client_order_id)
+            order = self._request(
+                "/orders:by_client_order_id",
+                params={"client_order_id": client_order_id},
+                timeout_seconds=timeout_seconds,
+            )
         return canonical_order_snapshot(order, requested_id=broker_order_id)
+
+    def _request(
+        self,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+        timeout_seconds: int | None,
+    ) -> Any:
+        """Use the SDK session only inside the provider adapter.
+
+        The public SDK order methods do not expose a timeout.  Its session and
+        URL construction are provider details, so the bounded request remains
+        isolated here; test doubles without that session use the public methods.
+        """
+
+        session = getattr(self._client, "_session", None)
+        if session is None or timeout_seconds is None:
+            if path.startswith("/orders:by_client_order_id"):
+                return self._client.get_order_by_client_id(str((params or {}).get("client_order_id") or ""))
+            return self._client.get_order_by_id(path.rsplit("/", 1)[-1])
+        base_url = str(getattr(self._client, "_base_url", "")).rstrip("/")
+        api_version = str(getattr(self._client, "_api_version", "v2")).strip("/")
+        url = f"{base_url}/{api_version}{path}"
+        headers = self._client._get_default_headers()
+        response = session.request(
+            "GET",
+            url,
+            headers=headers,
+            params=params,
+            allow_redirects=False,
+            timeout=int(timeout_seconds),
+        )
+        response.raise_for_status()
+        return response.json()
 
 
 def build_order_status_provider(settings: Any) -> OrderStatusProvider:
@@ -135,4 +175,3 @@ def build_order_status_provider(settings: Any) -> OrderStatusProvider:
     from .broker import BrokerClientFactory
 
     return AlpacaOrderStatusProvider(BrokerClientFactory(settings).alpaca_trading_client())
-

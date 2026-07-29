@@ -84,6 +84,40 @@ def test_fake_provider_is_canonical_and_alpaca_adapter_is_confined() -> None:
     assert "Alpaca" not in __import__("inspect").getsource(fill_watch)
 
 
+def test_provider_adapter_applies_request_timeout_without_network():
+    requests = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "id": "bo-1",
+                "client_order_id": "client-bo-1",
+                "status": "filled",
+                "filled_qty": "3",
+                "filled_avg_price": "27.2",
+            }
+
+    class Session:
+        def request(self, *args, **kwargs):
+            requests.append((args, kwargs))
+            return Response()
+
+    client = SimpleNamespace(
+        _session=Session(),
+        _base_url="https://paper.example",
+        _api_version="v2",
+        _get_default_headers=lambda: {"Authorization": "test"},
+    )
+    snapshot = fill_provider.AlpacaOrderStatusProvider(client).snapshot_order("bo-1", timeout_seconds=5)
+
+    assert snapshot.status == "filled"
+    assert requests[0][1]["timeout"] == 5
+    assert "paper.example/v2/orders/bo-1" in requests[0][0][1]
+
+
 def test_pending_submit_is_polled_by_exact_id_and_never_notifies(tmp_path, monkeypatch):
     settings = _settings(tmp_path)
     store = _store(settings)
