@@ -61,6 +61,7 @@ from .tools.exit_lot_provenance import (
     build_exit_lot_provenance,
     unavailable_exit_lot_provenance,
 )
+from .tools.fill_watch import run_trade_fill_watch
 from .tools.gate_effectiveness_reporting import publish_gate_effectiveness_postmarket
 from .tools.learning_mode import active_learning_mode, learning_mode_source
 from .tools.learning_penalty_cycle_shadow import (
@@ -4128,6 +4129,64 @@ def broker_reconciliation_job(
         coordinator.finish_reconciliation(lease, "completed" if 'result' in locals() else "failed")
 
 
+def trade_fill_watch_job(
+    settings: Settings,
+    store: Store,
+    *,
+    verbose: bool = True,
+) -> dict[str, Any] | None:
+    """Poll confirmed fills in a separate, bounded, fail-open job."""
+
+    run_id = new_id("fillwatch")
+    started_at = datetime.now(timezone.utc)
+    if not settings.trade_fill_watch_enabled:
+        _set_job_status(
+            store,
+            "trade_fill_watch",
+            status="skipped",
+            run_id=run_id,
+            started_at=started_at,
+            detail="watcher desactivado por configuración",
+        )
+        return None
+    market_status = MarketCalendar(settings.market_calendar, settings.local_timezone).status()
+    if not market_status.is_open:
+        _set_job_status(
+            store,
+            "trade_fill_watch",
+            status="skipped",
+            run_id=run_id,
+            started_at=started_at,
+            detail="mercado cerrado",
+        )
+        return None
+    try:
+        result = run_trade_fill_watch(settings, store)
+        _set_job_status(
+            store,
+            "trade_fill_watch",
+            status="completed",
+            run_id=run_id,
+            started_at=started_at,
+            detail="vigilancia intradia completada",
+            extra=result,
+        )
+        return result
+    except Exception as exc:  # noqa: BLE001 - no debe bloquear el ciclo activo.
+        if verbose:
+            LOGGER.exception("Fallo fail-open del watcher intradia de fills")
+        _set_job_status(
+            store,
+            "trade_fill_watch",
+            status="failed",
+            run_id=run_id,
+            started_at=started_at,
+            detail=str(exc),
+            extra={"error_type": type(exc).__name__},
+        )
+        return None
+
+
 def operational_health_refresh_job(
     settings: Settings,
     store: Store,
@@ -4259,6 +4318,18 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         coalesce=True,
         replace_existing=True,
     )
+    if settings.trade_fill_watch_enabled:
+        scheduler.add_job(
+            trade_fill_watch_job,
+            trigger=IntervalTrigger(seconds=settings.trade_fill_watch_cadence_seconds),
+            args=[settings, store],
+            kwargs={"verbose": verbose},
+            id="trade_fill_watch",
+            name="Intraday confirmed fill watcher",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
     scheduler.add_job(
         closed_market_technical_study_job,
         trigger=IntervalTrigger(minutes=settings.closed_market_study_interval_minutes),

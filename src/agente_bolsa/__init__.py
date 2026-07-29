@@ -29,4 +29,5 @@ __all__ = ["__version__"]
 # P-L72: opening-to-opening account and SPY performance, shared by UI and Telegram (0.4.206).
 # P-L73: position-level total and current-day P/L from the same Alpaca snapshot.
 # P-L74: deterministic SPY opening authority and explicit session interval UX (0.4.208).
-__version__ = "0.4.208"
+# P-L69-W: provider-neutral intraday confirmed-fill watcher (0.4.209).
+__version__ = "0.4.209"

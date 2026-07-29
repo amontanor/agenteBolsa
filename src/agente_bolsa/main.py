@@ -666,6 +666,30 @@ def command_status(_: argparse.Namespace) -> None:
     _print_json(payload)
 
 
+def command_trade_fill_watch_status(args: argparse.Namespace) -> None:
+    """Read the latest watcher metrics without contacting the provider."""
+
+    settings = get_settings()
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    last_run = store.get_runtime_value("trade_fill_watch:last_run")
+    try:
+        pending = store.pending_broker_orders(limit=settings.trade_fill_watch_max_pending_per_run)
+        pending_count = len(pending)
+    except Exception as exc:  # noqa: BLE001 - status remains diagnostic.
+        pending_count = None
+        last_run = {"previous": last_run, "read_warning": type(exc).__name__}
+    payload = {
+        "status": "collecting" if last_run is None else "available",
+        "enabled": bool(settings.trade_fill_watch_enabled),
+        "pending_local_orders": pending_count,
+        "last_run": last_run,
+    }
+    if args.json:
+        _print_json(payload)
+    else:
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+
+
 def command_retention_cleanup(_: argparse.Namespace) -> None:
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
@@ -3743,6 +3767,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = subparsers.add_parser("status", help="Muestra estado basico.")
     status.set_defaults(func=command_status)
+
+    trade_fill_watch_status = subparsers.add_parser(
+        "trade-fill-watch-status",
+        help="Muestra métricas locales del watcher de fills sin consultar al proveedor.",
+    )
+    trade_fill_watch_status.add_argument("--json", action="store_true", help="Devuelve el resultado en JSON.")
+    trade_fill_watch_status.set_defaults(func=command_trade_fill_watch_status)
 
     validate_agent_config = subparsers.add_parser(
         "validate-agent-config",
