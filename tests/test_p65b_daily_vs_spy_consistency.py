@@ -162,11 +162,11 @@ def test_chart_data_layers_share_explicit_formatted_tooltip_and_aux_layers_do_no
     ]
     assert len(data_layers) == 2
     expected = [
-        {"field": "fecha", "title": "Fecha", "type": "nominal"},
+            {"field": "sesion_iniciada", "title": "Sesión iniciada", "type": "nominal"},
         {"field": "retorno", "format": "+.2%", "title": "% ganancias", "type": "quantitative"},
         {"field": "serie", "title": "Serie", "type": "nominal"},
         {"field": "estado", "title": "Estado", "type": "nominal"},
-        {"field": "periodo", "title": "Ventana", "type": "nominal"},
+            {"field": "periodo", "title": "Intervalo", "type": "nominal"},
     ]
     for layer in data_layers:
         assert layer["encoding"]["tooltip"] == expected

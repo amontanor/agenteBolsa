@@ -61,6 +61,7 @@ from .tools.exit_lot_provenance import (
     build_exit_lot_provenance,
     unavailable_exit_lot_provenance,
 )
+from .tools.fill_watch import run_trade_fill_watch
 from .tools.gate_effectiveness_reporting import publish_gate_effectiveness_postmarket
 from .tools.learning_mode import active_learning_mode, learning_mode_source
 from .tools.learning_penalty_cycle_shadow import (
@@ -74,6 +75,7 @@ from .tools.market_cycle_timing import MarketCycleTiming
 from .tools.news_sentiment import analyze_news_sentiment_for_candidates
 from .tools.opening_performance import (
     build_session_open_snapshot,
+    capture_authoritative_spy_open_cache,
     extract_exact_open_snapshots,
     persist_session_open_snapshot,
     read_session_open_snapshots,
@@ -2096,6 +2098,36 @@ def portfolio_watch_job(
     )
 
 
+def _attempt_authoritative_spy_open_capture(
+    settings: Settings,
+    store: Store,
+    *,
+    session_date: str | None,
+) -> dict[str, Any] | None:
+    """Retry the dedicated SPY-open capture only on natural market cycles."""
+
+    if not session_date:
+        return None
+    state_key = f"market_cycle_spy_open_capture:{session_date}"
+    state = store.get_runtime_value(state_key) or {}
+    if not isinstance(state, dict):
+        state = {}
+    if state.get("status") in {"inserted", "available", "idempotent", "recovered"}:
+        return state
+    attempts = int(state.get("attempts") or 0)
+    result = capture_authoritative_spy_open_cache(settings, session_date)
+    next_state = {
+        "attempts": attempts + 1,
+        "attempted_at": datetime.now(timezone.utc).isoformat(),
+        "status": result.get("status"),
+        "cache_id": result.get("cache_id"),
+        "reason": result.get("reason"),
+        "retry_on_next_market_cycle": result.get("status") not in {"inserted", "available", "idempotent", "recovered"},
+    }
+    store.set_runtime_value(state_key, next_state)
+    return next_state
+
+
 def market_cycle_job(
     settings: Settings,
     store: Store,
@@ -2336,6 +2368,18 @@ def market_cycle_job(
                 "technical_report": technical_context.get("path") if technical_context else None,
             },
         )
+        try:
+            # This happens after the active cycle has produced its decisions
+            # and orders.  It is observational/fail-open and reuses the
+            # existing 15-minute market-cycle cadence; it never polls from
+            # portfolio_watch or from presentation.
+            _attempt_authoritative_spy_open_capture(
+                settings,
+                store,
+                session_date=str(status.session_date or ""),
+            )
+        except Exception as exc:  # noqa: BLE001 - benchmark capture is fail-open.
+            log_swallow(LOGGER, "capturar apertura autorizada de SPY", exc)
     except Exception as exc:
         _persist_learning_penalty_cycle_shadow_partial(store, reporter, learning_penalty_shadow, run_id)
         timing.finalize("failed", error=exc)
@@ -4085,6 +4129,64 @@ def broker_reconciliation_job(
         coordinator.finish_reconciliation(lease, "completed" if 'result' in locals() else "failed")
 
 
+def trade_fill_watch_job(
+    settings: Settings,
+    store: Store,
+    *,
+    verbose: bool = True,
+) -> dict[str, Any] | None:
+    """Poll confirmed fills in a separate, bounded, fail-open job."""
+
+    run_id = new_id("fillwatch")
+    started_at = datetime.now(timezone.utc)
+    if not settings.trade_fill_watch_enabled:
+        _set_job_status(
+            store,
+            "trade_fill_watch",
+            status="skipped",
+            run_id=run_id,
+            started_at=started_at,
+            detail="watcher desactivado por configuración",
+        )
+        return None
+    market_status = MarketCalendar(settings.market_calendar, settings.local_timezone).status()
+    if not market_status.is_open:
+        _set_job_status(
+            store,
+            "trade_fill_watch",
+            status="skipped",
+            run_id=run_id,
+            started_at=started_at,
+            detail="mercado cerrado",
+        )
+        return None
+    try:
+        result = run_trade_fill_watch(settings, store)
+        _set_job_status(
+            store,
+            "trade_fill_watch",
+            status="completed",
+            run_id=run_id,
+            started_at=started_at,
+            detail="vigilancia intradia completada",
+            extra=result,
+        )
+        return result
+    except Exception as exc:  # noqa: BLE001 - no debe bloquear el ciclo activo.
+        if verbose:
+            LOGGER.exception("Fallo fail-open del watcher intradia de fills")
+        _set_job_status(
+            store,
+            "trade_fill_watch",
+            status="failed",
+            run_id=run_id,
+            started_at=started_at,
+            detail=str(exc),
+            extra={"error_type": type(exc).__name__},
+        )
+        return None
+
+
 def operational_health_refresh_job(
     settings: Settings,
     store: Store,
@@ -4216,6 +4318,18 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         coalesce=True,
         replace_existing=True,
     )
+    if settings.trade_fill_watch_enabled:
+        scheduler.add_job(
+            trade_fill_watch_job,
+            trigger=IntervalTrigger(seconds=settings.trade_fill_watch_cadence_seconds),
+            args=[settings, store],
+            kwargs={"verbose": verbose},
+            id="trade_fill_watch",
+            name="Intraday confirmed fill watcher",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
     scheduler.add_job(
         closed_market_technical_study_job,
         trigger=IntervalTrigger(minutes=settings.closed_market_study_interval_minutes),

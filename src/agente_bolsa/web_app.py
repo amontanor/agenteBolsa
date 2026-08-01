@@ -1357,12 +1357,27 @@ def _position_rows(history: dict[str, Any], *, local_timezone: str = "Europe/Mad
                 "Actual": item.get("current_price"),
                 "P/L $": item.get("unrealized_pl"),
                 "P/L %": item.get("unrealized_plpc"),
+                "P/L día $": item.get("unrealized_intraday_pl"),
+                "P/L día %": item.get("unrealized_intraday_plpc"),
+                "P/L fuente": "alpaca_position_snapshot",
                 "Stop": item.get("stop_loss"),
                 "Take": item.get("take_profit"),
                 "Motivo": risk.get("reason"),
             }
         )
     return rows
+
+
+def _position_pl_chip(amount: Any, percentage: Any) -> str:
+    normalized_amount = _num(amount)
+    normalized_percentage = _num(percentage)
+    if normalized_amount is None and normalized_percentage is None:
+        return "<span class='portfolio-native-unavailable'>n/d</span>"
+    tone_value = normalized_amount if normalized_amount is not None else normalized_percentage
+    tone = "gain" if (tone_value or 0.0) > 0 else "loss" if (tone_value or 0.0) < 0 else "flat"
+    amount_text = _money(normalized_amount) if normalized_amount is not None else "n/d"
+    percentage_text = _pct(normalized_percentage) if normalized_percentage is not None else "n/d"
+    return f"<b class='pl-chip {tone}'>{amount_text} <em>{percentage_text}</em></b>"
 
 
 def _portfolio_table(rows: list[dict[str, Any]]) -> None:
@@ -1372,16 +1387,14 @@ def _portfolio_table(rows: list[dict[str, Any]]) -> None:
     sorted_rows = sorted(rows, key=lambda item: abs(_num(item.get("P/L $")) or 0), reverse=True)
     body = []
     for item in sorted_rows:
-        pl = _num(item.get("P/L $")) or 0.0
-        plpc = item.get("P/L %")
-        tone = "gain" if pl > 0 else "loss" if pl < 0 else "flat"
         symbol = escape(str(item.get("Simbolo") or "-"))
         body.append(
             "<tr>"
             f"<td><strong>{symbol}</strong></td>"
             f"<td>{_money(item.get('Valor'))}<span>qty {_num(item.get('Qty')) or 0:g}</span></td>"
             f"<td>{_money(item.get('Actual'))}<span>entrada {_money(item.get('Entrada'))}</span></td>"
-            f"<td><b class=\"pl-chip {tone}\">{_money(pl)} <em>{_pct(plpc)}</em></b></td>"
+            f"<td>{_position_pl_chip(item.get('P/L $'), item.get('P/L %'))}</td>"
+            f"<td>{_position_pl_chip(item.get('P/L día $'), item.get('P/L día %'))}</td>"
             f"<td>{_money(item.get('Stop'))}</td>"
             f"<td>{_money(item.get('Take'))}</td>"
             "</tr>"
@@ -1389,7 +1402,7 @@ def _portfolio_table(rows: list[dict[str, Any]]) -> None:
     st.markdown(
         "<table class=\"portfolio-table compact-positions\">"
         "<thead><tr>"
-        "<th>Accion</th><th>Valor</th><th>Precio</th><th>P/L</th><th>Stop</th><th>Take</th>"
+        "<th>Accion</th><th>Valor</th><th>Precio</th><th>P/L total</th><th>P/L día</th><th>Stop</th><th>Take</th>"
         "</tr></thead>"
         f"<tbody>{''.join(body)}</tbody>"
         "</table>",
@@ -1404,19 +1417,16 @@ def _portfolio_action_table(rows: list[dict[str, Any]], *, key_prefix: str = "po
     clicked_symbol = None
     sorted_rows = sorted(rows, key=_position_purchase_sort_key)
     st.caption("Ordenada por compra más reciente")
-    header = st.columns([0.9, 1.25, 1.1, 1.1, 1.2, 0.9, 0.9])
+    header = st.columns([0.8, 1.15, 1.0, 1.0, 1.15, 1.15, 0.8, 0.8])
     for column, label in zip(
         header,
-        ["Accion", "Compra", "Valor", "Precio", "P/L", "Stop", "Take"],
+        ["Accion", "Compra", "Valor", "Precio", "P/L total", "P/L día", "Stop", "Take"],
         strict=False,
     ):
         column.markdown(f"<div class='portfolio-native-header'>{escape(label)}</div>", unsafe_allow_html=True)
     for item in sorted_rows:
-        pl = _num(item.get("P/L $")) or 0.0
-        plpc = item.get("P/L %")
-        tone = "gain" if pl > 0 else "loss" if pl < 0 else "flat"
         symbol = str(item.get("Simbolo") or "-").upper()
-        c1, c2, c3, c4, c5, c6, c7 = st.columns([0.9, 1.25, 1.1, 1.1, 1.2, 0.9, 0.9])
+        c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([0.8, 1.15, 1.0, 1.0, 1.15, 1.15, 0.8, 0.8])
         with c1:
             if st.button(symbol, key=f"{key_prefix}_{symbol}", width="stretch"):
                 clicked_symbol = symbol
@@ -1437,11 +1447,15 @@ def _portfolio_action_table(rows: list[dict[str, Any]], *, key_prefix: str = "po
             unsafe_allow_html=True,
         )
         c5.markdown(
-            f"<div class='portfolio-native-cell'><b class='pl-chip {tone}'>{_money(pl)} <em>{_pct(plpc)}</em></b></div>",
+            f"<div class='portfolio-native-cell'>{_position_pl_chip(item.get('P/L $'), item.get('P/L %'))}</div>",
             unsafe_allow_html=True,
         )
-        c6.markdown(f"<div class='portfolio-native-cell'>{_money(item.get('Stop'))}</div>", unsafe_allow_html=True)
-        c7.markdown(f"<div class='portfolio-native-cell'>{_money(item.get('Take'))}</div>", unsafe_allow_html=True)
+        c6.markdown(
+            f"<div class='portfolio-native-cell'>{_position_pl_chip(item.get('P/L día $'), item.get('P/L día %'))}</div>",
+            unsafe_allow_html=True,
+        )
+        c7.markdown(f"<div class='portfolio-native-cell'>{_money(item.get('Stop'))}</div>", unsafe_allow_html=True)
+        c8.markdown(f"<div class='portfolio-native-cell'>{_money(item.get('Take'))}</div>", unsafe_allow_html=True)
     return clicked_symbol
 
 
@@ -3201,12 +3215,21 @@ def _daily_vs_spy_window_label(value: int | None) -> str:
     return f"Ultimos {value} dias"
 
 
+def _opening_interval_label(row: dict[str, Any]) -> str:
+    """Show the exact opening interval in Europe/Madrid."""
+
+    start = _local_datetime(row.get("system_start_at"), "Europe/Madrid")
+    end = _local_datetime(row.get("system_end_at"), "Europe/Madrid")
+    return f"{start} -> {end if end != 'n/d' else 'ahora'}"
+
+
 def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
     if alt is None:
         return None
     chart_rows = [
         {
             "fecha": row["session_date"],
+            "sesion_iniciada": row["session_date"],
             "Sistema": row["system_pct"],
             "SP500": row["spy_pct"],
             "estado": (
@@ -3214,7 +3237,7 @@ def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
                 if row.get("status") == "final" or row.get("comparison_status") == "comparable"
                 else "En curso"
             ),
-            "periodo": f"{row.get('system_start_at') or 'n/d'} → {row.get('system_end_at') or 'ahora'}",
+            "periodo": _opening_interval_label(row),
         }
         for row in rows
     ]
@@ -3226,11 +3249,11 @@ def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
     y_pad = max(abs(y_min_raw), abs(y_max_raw), 0.002) * 0.35
     y_min, y_max = y_min_raw - y_pad, y_max_raw + y_pad
     tooltip = [
-        alt.Tooltip("fecha:N", title="Fecha"),
+        alt.Tooltip("sesion_iniciada:N", title="Sesión iniciada"),
         alt.Tooltip("retorno:Q", title="% ganancias", format="+.2%"),
         alt.Tooltip("serie:N", title="Serie"),
         alt.Tooltip("estado:N", title="Estado"),
-        alt.Tooltip("periodo:N", title="Ventana"),
+        alt.Tooltip("periodo:N", title="Intervalo"),
     ]
     base = alt.Chart(chart_frame).encode(
         x=alt.X("fecha:N", title=None, axis=alt.Axis(labelAngle=0, labelOverlap=True)),
@@ -3319,9 +3342,9 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
         title_col, control_col = st.columns([3, 1])
         with title_col:
             _section_title(
-                "Rendimiento diario: Sistema vs SP500",
-                "Apertura XNYS → siguiente apertura; la sesión vigente compara la última apertura con ahora. "
-                "Sistema = variación de equity; SP500 = SPY ajustado. Sin ajustes de flujos.",
+                "Rendimiento desde apertura: Sistema vs SPY",
+                "Sesión iniciada en apertura XNYS → siguiente apertura; la sesión vigente compara la última apertura con ahora. "
+                "Sistema = variación de equity; SPY = ETF S&P 500 ajustado. Sin ajustes de flujos.",
             )
         with control_col:
             visible_days = st.selectbox(
@@ -3382,14 +3405,15 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
             )
             spy_text = f"{spy_text}<span>{escape(source_detail)}</span>"
             state = "Final" if row["status"] == "final" else "En curso"
+            interval = escape(_opening_interval_label(row))
             html_rows.append(
                 "<tr>"
-                f"<td><strong>{row['session_date']}</strong></td>"
+                f"<td><strong>{row['session_date']}</strong></td><td>{interval}</td>"
                 f"<td>{system_text}</td><td>{spy_text}</td><td>{state}</td><td>{winner}</td>"
                 "</tr>"
             )
         st.markdown(
-            "<table class='portfolio-table'><thead><tr><th>Fecha</th><th>Sistema</th>"
+            "<table class='portfolio-table'><thead><tr><th>Sesión iniciada</th><th>Intervalo</th><th>Sistema</th>"
             "<th>SPY (ETF S&amp;P 500)</th><th>Estado</th><th>Superior</th></tr></thead>"
             f"<tbody>{''.join(html_rows)}</tbody></table>",
             unsafe_allow_html=True,
@@ -4357,7 +4381,13 @@ def page_dashboard() -> None:
     portfolio_history: dict[str, Any] = {}
     intraday_portfolio_history: dict[str, Any] = {}
     try:
-        history = build_trade_history(settings, limit=1000, start_date=DEFAULT_START_DATE)
+        history = build_trade_history(
+            settings,
+            limit=1000,
+            start_date=DEFAULT_START_DATE,
+            portfolio_snapshot=portfolio,
+            broker_client=broker_client,
+        )
         # The UI uses local, filled BUY lots as its only purchase-date source.
         # This is a read-only Store lookup and does not add a broker request.
         history["executed_buy_lots_by_symbol"] = store.executed_buy_lots_by_symbol()
@@ -4489,7 +4519,8 @@ def page_dashboard() -> None:
         with st.container(border=True):
             _section_title(
                 "Cartera abierta",
-                "Ordenada por compra más reciente; los fills verificados prevalecen y las órdenes pendientes se muestran como hora provisional.",
+                "P/L total desde la entrada y P/L día del ciclo intradía publicado por Alpaca; "
+                "ordenada por compra más reciente.",
             )
             selected_position = _portfolio_action_table(position_rows, key_prefix="dashboard_position")
             if selected_position:
@@ -4664,8 +4695,9 @@ def page_system_status() -> None:
 def page_portfolio() -> None:
     settings = _settings()
     _page_header("Cartera", "Posiciones, ordenes abiertas, stops, takes y motivos guardados por el sistema.")
+    broker_client = BrokerClientFactory(settings)
     try:
-        portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
+        portfolio = broker_client.alpaca_portfolio_snapshot()
     except Exception as exc:  # noqa: BLE001
         st.error(f"No se pudo leer Alpaca: {exc}")
         return
@@ -4680,30 +4712,39 @@ def page_portfolio() -> None:
     with c4:
         _metric_card("Ordenes abiertas", len(portfolio.open_orders))
 
-    history = build_trade_history(settings, limit=300, start_date=DEFAULT_START_DATE)
+    history = build_trade_history(
+        settings,
+        limit=300,
+        start_date=DEFAULT_START_DATE,
+        portfolio_snapshot=portfolio,
+        broker_client=broker_client,
+    )
     history["executed_buy_lots_by_symbol"] = _store().executed_buy_lots_by_symbol()
     risk_levels = history.get("risk_levels", {})
     position_rows = _position_rows(history, local_timezone=settings.local_timezone)
     positions = []
-    for item in history.get("open_positions", []):
-        risk = risk_levels.get(str(item.get("symbol")).upper(), {})
+    for item in position_rows:
+        risk = risk_levels.get(str(item.get("Simbolo")).upper(), {})
         positions.append(
             {
-                "simbolo": item.get("symbol"),
-                "qty": item.get("qty"),
-                "valor": item.get("market_value"),
-                "precio_medio": item.get("avg_entry_price"),
-                "precio_actual": item.get("current_price"),
-                "P/L abierto": item.get("unrealized_pl"),
-                "P/L %": item.get("unrealized_plpc"),
-                "stop_loss": item.get("stop_loss"),
-                "take_profit": item.get("take_profit"),
+                "simbolo": item.get("Simbolo"),
+                "qty": item.get("Qty"),
+                "valor": item.get("Valor"),
+                "precio_medio": item.get("Entrada"),
+                "precio_actual": item.get("Actual"),
+                "P/L total": item.get("P/L $"),
+                "P/L total %": item.get("P/L %"),
+                "P/L día": item.get("P/L día $"),
+                "P/L día %": item.get("P/L día %"),
+                "stop_loss": item.get("Stop"),
+                "take_profit": item.get("Take"),
                 "confianza": risk.get("confidence"),
                 "motivo compra": risk.get("reason"),
             }
         )
 
     st.subheader("Posiciones abiertas")
+    st.caption("P/L día usa los campos intradía de la misma posición Alpaca; si no están disponibles se muestra n/d.")
     if positions:
         st.dataframe(pd.DataFrame(positions), width="stretch", hide_index=True)
         st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
