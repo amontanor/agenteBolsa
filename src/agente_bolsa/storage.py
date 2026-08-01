@@ -2131,12 +2131,8 @@ class Store:
                 rows = conn.execute(query, tuple(params)).fetchall()
         finally:
             self.close_read_connection()
-        from .tools.fill_provider import TERMINAL_STATUSES, normalize_order_status
-
         result: list[dict[str, Any]] = []
         for row in rows:
-            if normalize_order_status(row["status"]) in TERMINAL_STATUSES:
-                continue
             try:
                 payload = json.loads(row["payload_json"] or "{}")
             except (TypeError, json.JSONDecodeError):
