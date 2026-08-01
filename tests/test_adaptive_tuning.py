@@ -90,7 +90,7 @@ def test_active_adaptive_overrides_reads_only_active(tmp_path):
         encoding="utf-8",
     )
 
-    overrides = active_adaptive_overrides(settings)
+    overrides = active_adaptive_overrides(settings, current_session_date="2026-04-28")
 
     assert overrides == {"entry_quality_max_rsi": 81.0}
 
@@ -125,7 +125,7 @@ def test_promote_post_market_improvements_activates_conservative_overrides(tmp_p
     }
 
     result = promote_post_market_improvements(settings, report)
-    overrides = active_adaptive_overrides(settings)
+    overrides = active_adaptive_overrides(settings, current_session_date="2026-04-28")
 
     assert set(result["promoted"]) == {
         "LLM_EXIT_EXCEPTION_MIN_CONFIDENCE",
