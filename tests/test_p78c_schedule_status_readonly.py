@@ -31,7 +31,10 @@ def _disk_snapshot(database_path: Path) -> dict[str, object]:
             "mtime_ns": stat.st_mtime_ns,
         }
 
-    if database_path.exists():
+    sidecar_present = Path(f"{database_path}-wal").exists() or Path(f"{database_path}-shm").exists()
+    database_header = database_path.read_bytes()[:20] if database_path.exists() else b""
+    wal_mode = len(database_header) >= 19 and database_header[18] == 2
+    if database_path.exists() and not sidecar_present and not wal_mode:
         uri = database_path.resolve().as_uri() + "?mode=ro"
         with sqlite3.connect(uri, uri=True) as connection:
             connection.execute("PRAGMA query_only=ON")
@@ -61,18 +64,26 @@ def test_existing_database_uses_read_only_runtime_and_preserves_disk(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings = _settings(tmp_path)
-    store = Store(settings.database_path, settings.agent_logs_dir)
-    store.ensure_schema()
-    store.set_runtime_value(
-        _job_state_key("market_cycle"),
-        {
-            "job": "market_cycle",
-            "status": "completed",
-            "run_id": "p78c-test",
-            "detail": "ok",
-        },
-    )
-    store.close_read_connection()
+    settings.database_path.parent.mkdir(parents=True)
+    with sqlite3.connect(settings.database_path) as connection:
+        connection.execute(
+            "CREATE TABLE runtime_state (key TEXT PRIMARY KEY, value_json TEXT, updated_at TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO runtime_state(key, value_json, updated_at) VALUES (?, ?, ?)",
+            (
+                _job_state_key("market_cycle"),
+                json.dumps(
+                    {
+                        "job": "market_cycle",
+                        "status": "completed",
+                        "run_id": "p78c-test",
+                        "detail": "ok",
+                    }
+                ),
+                "2026-08-01T00:00:00+00:00",
+            ),
+        )
     before = _disk_snapshot(settings.database_path)
 
     def fail_if_called(_self: Store) -> None:
@@ -88,6 +99,27 @@ def test_existing_database_uses_read_only_runtime_and_preserves_disk(
         "source": "sqlite_read_only",
     }
     assert status["job_runtime"]["market_cycle"]["run_id"] == "p78c-test"
+    assert before == after
+
+
+def test_wal_backed_database_is_unavailable_without_touching_sidecars(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.database_path.parent.mkdir(parents=True)
+    with sqlite3.connect(settings.database_path) as connection:
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute(
+            "CREATE TABLE runtime_state (key TEXT PRIMARY KEY, value_json TEXT, updated_at TEXT)"
+        )
+    before = _disk_snapshot(settings.database_path)
+
+    status = scheduler_status(settings)
+    after = _disk_snapshot(settings.database_path)
+
+    assert status["runtime_state"] == {
+        "available": False,
+        "reason": "wal_mode_or_sidecar_present",
+        "source": "sqlite_read_only",
+    }
     assert before == after
 
 
@@ -193,4 +225,3 @@ def test_schedule_status_preserves_calendar_and_job_contract(tmp_path: Path) -> 
         "broker_reconciliation",
         "agents_healthcheck",
     }
-

@@ -5104,6 +5104,7 @@ def build_parser() -> argparse.ArgumentParser:
     schedule.set_defaults(func=command_schedule)
 
     schedule_status = subparsers.add_parser("schedule-status", help="Muestra calendario y jobs.")
+    schedule_status.add_argument("--json", action="store_true", help="Devuelve el estado en JSON.")
     schedule_status.set_defaults(func=command_schedule_status)
 
     job_once = subparsers.add_parser("job-once", help="Ejecuta manualmente un job del scheduler.")
