@@ -3011,3 +3011,23 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Producción, `.env`, datos, stack y archivos protegidos no se modificaron. El
   candidato queda pendiente de integración y despliegue cerrado; no se
   reescriben eventos históricos GLM/Kimi.
+
+## P-L78C - `schedule-status` read-only (0.4.213)
+
+- La caracterización contra P-L78B reprodujo que `schedule-status` llamaba
+  `Store.ensure_schema()` y creaba o migraba SQLite en una `DATA_DIR` ausente.
+- Candidato aislado `pl78c_schedule_status_readonly`, rama
+  `codex/pl78c-schedule-status-readonly`, usa exclusivamente la lectura
+  `Store.read_connection`/`read_runtime_values` y nunca ejecuta migraciones.
+- DB ausente, schema incompatible, acceso denegado, payload inválido y WAL o
+  sidecar con riesgo de mutación se expresan como runtime unavailable con
+  razones estables; calendario/jobs estáticos permanecen disponibles.
+- Acepta `schedule-status --json` sin cambiar la salida JSON existente ni el
+  scheduling efectivo. La deriva `.env`/kernel de P-L78B sigue sin resolverse y
+  bloquea cualquier despliegue, fuera del alcance P-L78C.
+- Suite final aislada: `2380 passed, 1 skipped` preexistente y `1 warning`
+  externo; focales P-L78C `10 passed`; Ruff/NUL/compilación/diff/config/kernel
+  temporal y smoke fake aislado verdes.
+- Dictamen del candidato: `ready_for_pl78c_closed_market_integration`. El
+  siguiente paso único sigue siendo resolver la procedencia de `.env`/kernel y
+  realizar un ensayo combinado separado; P-L78C no autoriza despliegue.

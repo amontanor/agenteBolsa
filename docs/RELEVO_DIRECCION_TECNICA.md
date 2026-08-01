@@ -1123,3 +1123,23 @@ con XNYS cerrado. No desplegar automaticamente.
 - El worktree está listo para ensayo de integración cerrado. No tocar
   producción ni `.env` desde este relevo; el siguiente turno debe integrar el
   HEAD final con `merge --no-ff`, repetir gates y verificar dos health checks.
+
+## P-L78C - `schedule-status` read-only (0.4.213)
+
+- El candidato `pl78c_schedule_status_readonly` parte de P-L78B exacto y
+  elimina la ruta `ensure_schema` del lector de estado del scheduler.
+- `Store.read_runtime_values` usa SQLite URI `mode=ro` + `query_only`, cierra
+  la conexión y falla cerrado ante DB ausente, schema legacy/incompatible,
+  error de acceso, payload inválido o WAL/sidecars cuya lectura podría tocar
+  `-shm`. En esos casos `runtime_state.available=false` y los jobs tienen
+  `null`; calendario/cadencias permanecen informativos.
+- El contrato CLI acepta `schedule-status --json`. No representa runtime
+  unavailable como cero o como actividad confirmada.
+- Suite final: `2380 passed, 1 skipped` preexistente y `1 warning` externo;
+  focal P-L78C `10 passed`; Ruff, NUL, compilación, diff, config y smoke fake
+  aislado verdes. Kernel temporal `unsealed` esperado sin violaciones.
+  La deriva productiva de `.env`/kernel continúa bloqueando P-L78B y no fue
+  tocada por este lote.
+- No integrar ni desplegar desde este relevo. Siguiente paso único: cerrar
+  gates del candidato y resolver la procedencia autorizada de `.env` antes del
+  ensayo combinado P-L78B+P-L78C.

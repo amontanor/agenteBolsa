@@ -125,3 +125,78 @@ HEAD final de este candidato mediante `merge --no-ff`, repetir los gates de
 despliegue, cambiar únicamente las claves de modelo/proveedor productivas
 autorizadas y verificar doble salud. Este informe no autoriza por sí mismo esa
 integración.
+
+## P-L78C — `schedule-status` genuinamente read-only (0.4.213)
+
+### Dictamen del candidato
+
+`ready_for_pl78c_closed_market_integration`, pendiente de integrar en un
+turno separado. La causa era que `main.command_schedule_status` llamaba a
+`scheduler_status`, que a su vez ejecutaba `Store.ensure_schema()` y lecturas
+mediante la conexión escribible. En una `DATA_DIR` inexistente la consulta
+creaba directorios, SQLite y el esquema; con una base WAL, una conexión SQLite
+URI read-only puede crear o modificar el sidecar `-shm` en Windows.
+
+### Contrato implementado
+
+- `scheduler_status` ya no llama `ensure_schema`, `connect`, migraciones ni
+  escritores de `Store`.
+- La lectura usa `Store.read_runtime_values`, `mode=ro` y
+  `PRAGMA query_only=ON`, con la conexión cerrada en `finally`.
+- Antes de abrir SQLite se comprueba existencia, cabecera WAL y sidecars. Si
+  hay WAL o `-wal`/`-shm`, el estado runtime queda explícitamente
+  `available=false, reason=wal_mode_or_sidecar_present`; no se arriesga una
+  mutación para aparentar frescura. La base productiva usa precisamente este
+  modo, por lo que su `job_runtime` será unavailable mediante esta interfaz
+  hasta existir una lectura segura compatible.
+- Base ausente devuelve `database_missing`; tabla/columnas incompatibles,
+  payload inválido, acceso denegado y errores SQLite tienen razones estables.
+  Calendario, horarios y lista estática de jobs se siguen publicando aunque el
+  runtime no esté disponible; los valores de jobs son `null` en ese caso.
+- Se acepta `schedule-status --json`; la salida existente continúa siendo JSON
+  y no cambia calendario, cadencias, enablement ni scheduling efectivo.
+
+### Evidencia y límites
+
+La caracterización contra la base exacta reprodujo la creación de artefactos
+en `DATA_DIR` inexistente y falló en siete casos de no-mutation. El candidato
+prueba DB ausente, rollback-journal existente, WAL, esquema legacy/parcial,
+errores de apertura, cierre de conexión, JSON estable y preservación de
+calendario/jobs. Runtime unavailable por WAL es una decisión fail-closed, no
+una afirmación de que los jobs estén detenidos.
+
+La deriva productiva de `.env` que deja `kernel-status` en violation y el
+despliegue pendiente de P-L78B no se tocaron ni se resuelven con este lote.
+No se ejecuta `kernel-seal` ni se copia un manifiesto. El siguiente y único
+paso de integración debe resolver primero la procedencia autorizada de `.env`
+según P-L78C-AUDIT; después podrá ensayarse P-L78B junto con este cambio.
+
+### Referencias y validación P-L78C
+
+- Base: `95cfdc04ea7f5e6ccf4a6985dc55d6310b633fc9`, tree
+  `0861b2fbef1e9a4627f21e5377dff60081c7904a`, versión 0.4.212.
+- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl78c_schedule_status_readonly`.
+- Rama: `codex/pl78c-schedule-status-readonly`.
+- Commits: `cb664ae6` (caracterización), `d2c31225` (implementación y bump),
+  `cb6aac67` (version policy) y `36aed9b5` (CLI sin efectos laterales).
+- El candidato conserva como cambios funcionales únicamente la frontera
+  read-only de runtime, el soporte CLI `--json` y el bump 0.4.213; las
+  adaptaciones de tests solo reflejan que una base WAL no puede leerse sin
+  riesgo de sidecar.
+- Regresiones focales: `61 passed` en la batería ampliada; el focal P-L78C final
+  quedó en `10 passed`.
+- Suite completa aislada: `2380 passed, 1 skipped preexistente, 1 warning`
+  externo en `807.22 s`. El skip preexistente y la warning de
+  `websockets.legacy` no fueron creados por este lote.
+- Ruff completo, `scripts/check_no_nulls.py`, compilación y `git diff --check`:
+  verdes. `validate-agent-config --json` aislado: `ok=true`, sin warnings.
+  `kernel-status --json` aislado: `unsealed` esperado por falta de manifiesto
+  temporal, con cero violaciones; no se ejecutó `kernel-seal`.
+- Smoke `run-once --skip-crew` ejecutado mediante la misma frontera CLI con
+  `DATA_DIR` temporal, `use_crew=false`, snapshot/estado de mercado fake y un
+  proveedor broker que falla si es alcanzado: OK, ciclo temporal completado,
+  `market_state_quality=PARTIAL`, sin red, broker ni LLM.
+- `kernel.py`, `tools/broker.py`, `tools/execution.py`, `tools/risk.py`,
+  `config.py` y `.env` no son parte de este lote; producción, stack, SQLite
+  productiva, jobs, broker, red, LLM, Telegram, locks, leases y untracked del
+  operador permanecen intactos.
