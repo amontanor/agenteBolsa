@@ -21,39 +21,8 @@ class LLMEndpoint:
     api_key: str
     base_url: str
     model: str
-    provider: str | None = None
     preflight: bool = False
     reasoning_effort: str | None = None
-
-
-def build_llm_identity(
-    endpoint: LLMEndpoint | None,
-    *,
-    response: Any | None = None,
-    status: str | None = None,
-    reason: str | None = None,
-) -> dict[str, Any]:
-    """Build a structured, non-secret identity for the endpoint actually used."""
-
-    response_model = str(getattr(response, "model", None) or "").strip() or None
-    requested_model = str(endpoint.model).strip() if endpoint and endpoint.model else None
-    effective_model = response_model or requested_model
-    fallback_used = bool(endpoint and endpoint.name == "local_fallback")
-    identity_status = status or ("ok" if effective_model else "unavailable")
-    return {
-        "status": identity_status,
-        "provider": endpoint.provider if endpoint else None,
-        "endpoint": endpoint.name if endpoint else None,
-        "requested_model": requested_model,
-        "effective_model": effective_model,
-        "response_model": response_model,
-        "fallback_used": fallback_used,
-        "reason": reason,
-    }
-
-
-def unavailable_llm_identity(reason: str) -> dict[str, Any]:
-    return build_llm_identity(None, status="unavailable", reason=reason)
 
 
 def _provider_api_key(settings: Settings, provider: str | None) -> str:
@@ -73,7 +42,6 @@ def primary_llm_endpoint(settings: Settings) -> LLMEndpoint:
             api_key=str(settings.opencode_api_key or "").strip(),
             base_url=settings.opencode_api_base,
             model=settings.opencode_model,
-            provider=selector,
             preflight=settings.llm_primary_preflight_enabled,
         )
     if selector == "mimo":
@@ -82,7 +50,6 @@ def primary_llm_endpoint(settings: Settings) -> LLMEndpoint:
             api_key=str(settings.mimo_api_key or settings.openai_api_key or "").strip(),
             base_url=settings.mimo_api_base,
             model=settings.mimo_model,
-            provider="mimo",
             preflight=settings.llm_primary_preflight_enabled,
         )
     return LLMEndpoint(
@@ -90,7 +57,6 @@ def primary_llm_endpoint(settings: Settings) -> LLMEndpoint:
         api_key=str(settings.openai_api_key or "").strip(),
         base_url=settings.openai_api_base,
         model=settings.openai_model,
-        provider="custom",
         preflight=settings.llm_primary_preflight_enabled,
     )
 
@@ -106,7 +72,6 @@ def configured_llm_endpoints(settings: Settings) -> list[LLMEndpoint]:
                 api_key=str(settings.llm_local_fallback_api_key or "local-llama").strip(),
                 base_url=settings.llm_local_fallback_api_base,
                 model=settings.llm_local_fallback_model,
-                provider="openai-local",
                 preflight=settings.llm_local_fallback_preflight_enabled,
             )
         )
@@ -203,7 +168,6 @@ def role_endpoints(settings: Settings, role: str) -> list[LLMEndpoint]:
                 api_key=str(api_key or primary_llm_endpoint(settings).api_key or "").strip(),
                 base_url=base,
                 model=model,
-                provider=primary_llm_endpoint(settings).provider,
                 preflight=settings.llm_primary_preflight_enabled,
             )
         )
@@ -215,7 +179,6 @@ def role_endpoints(settings: Settings, role: str) -> list[LLMEndpoint]:
                 api_key=primary.api_key,
                 base_url=primary.base_url,
                 model=model,
-                provider=primary.provider,
                 preflight=settings.llm_primary_preflight_enabled,
             )
         )
@@ -230,7 +193,6 @@ def role_endpoints(settings: Settings, role: str) -> list[LLMEndpoint]:
                 api_key=improvement_key,
                 base_url=settings.improvement_llm_base_url,
                 model=settings.improvement_llm_model,
-                provider=settings.improvement_llm_provider,
                 preflight=False,
             )
         )

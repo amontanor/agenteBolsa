@@ -6,7 +6,6 @@ import hashlib
 import json
 import logging
 import os
-import sqlite3
 import time
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
@@ -36,7 +35,7 @@ from .kernel import kernel_integrity
 from .logging_utils import log_system_event
 from .market_calendar import MarketCalendar
 from .models import new_id
-from .storage import ReadOnlyRuntimeUnavailable, Store
+from .storage import Store
 from .tools.autonomous_research import build_autonomous_research_report
 from .tools.breakout_scanner import build_breakout_scan, merge_breakout_universe
 from .tools.broker import BrokerClientFactory
@@ -616,6 +615,7 @@ def _run_pre_earnings_trade_operation(
             source_run_id=str(report.get("run_id") or "") or None,
             market_state=report.get("market_state") if isinstance(report.get("market_state"), dict) else None,
             agent_run_id=None,
+            llm_model=settings.openai_model,
             fallback_error=None,
             identity_key=f"{run_id}|{recommendation.symbol}|{recommendation.action}|pre_earnings",
         )
@@ -4531,59 +4531,26 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
     overnight_hour, overnight_minute = _daily_hour_minute(settings.overnight_learning_time_local)
     now_local = datetime.now(ZoneInfo(settings.local_timezone))
     store = Store(settings.database_path, settings.agent_logs_dir)
-    runtime_job_names = [
-        "portfolio_watch",
-        "market_cycle",
-        "closed_market_technical_study",
-        "daily_study",
-        "post_market_review",
-        "broker_reconciliation",
-        "operational_health_refresh",
-        "weekly_learning_review",
-        "overnight_learning_heartbeat",
-        "telegram_daily_summary",
-        "pre_earnings",
-        "continuous_improvement",
-        "agents_healthcheck",
-        *[f"opportunity_snapshot_{slot.replace(':', '')}" for slot in settings.opportunity_snapshot_times],
-    ]
-    runtime_keys = [_job_state_key(job_name) for job_name in runtime_job_names]
-    runtime_state: dict[str, object] = {
-        "available": False,
-        "reason": "database_unavailable",
-        "source": "sqlite_read_only",
+    store.ensure_schema()
+    job_runtime = {
+        job_name: store.get_runtime_value(_job_state_key(job_name))
+        for job_name in [
+            "portfolio_watch",
+            "market_cycle",
+            "closed_market_technical_study",
+            "daily_study",
+            "post_market_review",
+            "broker_reconciliation",
+            "operational_health_refresh",
+            "weekly_learning_review",
+            "overnight_learning_heartbeat",
+            "telegram_daily_summary",
+            "pre_earnings",
+            "continuous_improvement",
+            "agents_healthcheck",
+            *[f"opportunity_snapshot_{slot.replace(':', '')}" for slot in settings.opportunity_snapshot_times],
+        ]
     }
-    job_runtime = {job_name: None for job_name in runtime_job_names}
-    try:
-        runtime_values = store.read_runtime_values(runtime_keys)
-        job_runtime = {
-            job_name: runtime_values.get(_job_state_key(job_name)) for job_name in runtime_job_names
-        }
-        runtime_state = {
-            "available": True,
-            "reason": None,
-            "source": "sqlite_read_only",
-        }
-    except FileNotFoundError:
-        runtime_state["reason"] = "database_missing"
-    except ReadOnlyRuntimeUnavailable as exc:
-        runtime_state["reason"] = exc.reason
-    except PermissionError:
-        runtime_state["reason"] = "access_denied"
-    except sqlite3.OperationalError as exc:
-        message = str(exc).lower()
-        if "no such table" in message or "no such column" in message:
-            runtime_state["reason"] = "schema_incompatible"
-        elif "unable to open database" in message or "permission denied" in message:
-            runtime_state["reason"] = "access_denied"
-        else:
-            runtime_state["reason"] = "database_unavailable"
-    except sqlite3.DatabaseError:
-        runtime_state["reason"] = "database_unavailable"
-    except ValueError:
-        runtime_state["reason"] = "runtime_state_invalid"
-    finally:
-        store.close_read_connection()
     return {
         "market": market_status.as_dict(),
         "scheduler_lock": _scheduler_lock_diagnosis(_scheduler_lock_path(settings)),
@@ -4692,6 +4659,5 @@ def scheduler_status(settings: Settings) -> dict[str, object]:
             ],
         ],
         "now_local": now_local.isoformat(),
-        "runtime_state": runtime_state,
         "job_runtime": job_runtime,
     }

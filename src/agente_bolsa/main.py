@@ -14,7 +14,7 @@ from typing import Any
 
 from .agent_config import load_agent_config, load_task_config, validate_agent_task_config
 from .agent_registry import AGENTS
-from .config import Settings, get_settings
+from .config import get_settings
 from .continuous_improvement.api import run_api_server
 from .continuous_improvement.digest import build_lab_digest, format_lab_digest_text
 from .continuous_improvement.experiments import AutoApplyCodeAgent
@@ -53,11 +53,7 @@ from .scheduler import (
     scheduler_status,
 )
 from .storage import Store
-from .tools.adaptive_tuning import (
-    active_adaptive_overrides,
-    adaptive_status,
-    update_adaptive_config,
-)
+from .tools.adaptive_tuning import adaptive_status, update_adaptive_config
 from .tools.backtest import build_symbol_backtest
 from .tools.breakout_scanner import build_breakout_scan, merge_breakout_universe
 from .tools.broker import BrokerClientFactory
@@ -785,7 +781,7 @@ def command_decide_once(args: argparse.Namespace) -> None:
                 source_run_id=str(technical_context.get("run_id") or "") or None,
                 market_state=None,
                 agent_run_id=None,
-                llm_identity=decision.get("llm_identity"),
+                llm_model=settings.openai_model,
                 fallback_error=decision.get("fallback_error"),
                 identity_key=f"{decision_id}|{recommendation.symbol}|{recommendation.action}",
             ),
@@ -3560,21 +3556,9 @@ def command_schedule(args: argparse.Namespace) -> None:
     run_scheduler_forever(settings, store, use_crew=not args.skip_crew, verbose=not args.quiet)
 
 
-def _get_schedule_status_settings() -> Settings:
-    """Build scheduler-status settings without the normal directory bootstrap."""
-
-    settings = Settings()
-    try:
-        overrides = active_adaptive_overrides(settings)
-        if overrides:
-            settings = settings.model_copy(update=overrides)
-    except Exception:  # noqa: BLE001 - status remains available with base settings.
-        pass
-    return settings
-
-
 def command_schedule_status(_: argparse.Namespace) -> None:
-    settings = _get_schedule_status_settings()
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
     _print_json(scheduler_status(settings))
 
 
@@ -5120,7 +5104,6 @@ def build_parser() -> argparse.ArgumentParser:
     schedule.set_defaults(func=command_schedule)
 
     schedule_status = subparsers.add_parser("schedule-status", help="Muestra calendario y jobs.")
-    schedule_status.add_argument("--json", action="store_true", help="Devuelve el estado en JSON.")
     schedule_status.set_defaults(func=command_schedule_status)
 
     job_once = subparsers.add_parser("job-once", help="Ejecuta manualmente un job del scheduler.")

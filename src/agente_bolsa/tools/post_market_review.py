@@ -420,13 +420,13 @@ def _llm_review(settings: Settings, report: dict[str, Any]) -> dict[str, Any]:
         },
         {"role": "user", "content": json.dumps(prompt, ensure_ascii=True)},
     ]
-    response, endpoint, _attempts = chat_completion_with_fallback(
+    response, _endpoint, _attempts = chat_completion_with_fallback(
         settings,
         messages=messages,
         temperature=0.1,
         max_tokens=max(settings.llm_max_tokens or 0, 1800),
     )
-    record_llm_response(settings, "post_market_review", response, prompt=messages, endpoint=endpoint)
+    record_llm_response(settings, "post_market_review", response, prompt=messages)
     text = response.choices[0].message.content or "{}"
     start = text.find("{")
     end = text.rfind("}")

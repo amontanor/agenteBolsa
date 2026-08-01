@@ -13,7 +13,7 @@ from typing import Any
 
 from agente_bolsa._utils import log_swallow
 from agente_bolsa.config import Settings
-from agente_bolsa.llm_router import build_llm_identity, chat_for_role
+from agente_bolsa.llm_router import chat_for_role
 from agente_bolsa.llm_usage import record_llm_response
 from agente_bolsa.models import (
     OrderPlan,
@@ -3840,16 +3840,8 @@ def request_trade_recommendations(
         return response, messages, endpoint
 
     try:
-        response, messages, endpoint = _create_completion(prompt, decision_max_tokens)
-        record_llm_response(
-            settings,
-            "trade_decision",
-            response,
-            prompt=messages,
-            role="decision",
-            endpoint=endpoint,
-        )
-        effective_endpoint = endpoint
+        response, messages, _endpoint = _create_completion(prompt, decision_max_tokens)
+        record_llm_response(settings, "trade_decision", response, prompt=messages, role="decision")
     except Exception as exc:
         message = str(exc).lower()
         if "timeout" not in message and "timed out" not in message and "read operation" not in message:
@@ -3873,16 +3865,8 @@ def request_trade_recommendations(
             "weak_setups_3d": list(decision_learning_context.get("weak_setups_3d", []) or [])[:3],
             "active_operational_responses": list(decision_learning_context.get("active_operational_responses", []) or [])[:4],
         }
-        response, messages, endpoint = _create_completion(fallback_prompt, min(decision_max_tokens, 1800))
-        record_llm_response(
-            settings,
-            "trade_decision_fallback",
-            response,
-            prompt=messages,
-            role="decision",
-            endpoint=endpoint,
-        )
-        effective_endpoint = endpoint
+        response, messages, _endpoint = _create_completion(fallback_prompt, min(decision_max_tokens, 1800))
+        record_llm_response(settings, "trade_decision_fallback", response, prompt=messages, role="decision")
         prompt = fallback_prompt
     content = response.choices[0].message.content or "{}"
     parsed = _extract_json_object(content)
@@ -3897,7 +3881,6 @@ def request_trade_recommendations(
         "raw_response_preview": content[:2000],
         "recommendations": recommendations,
         "prompt_context": prompt,
-        "llm_identity": build_llm_identity(effective_endpoint, response=response),
     }
 
 

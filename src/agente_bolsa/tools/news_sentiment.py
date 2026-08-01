@@ -194,19 +194,12 @@ def _llm_sentiment(settings: Settings, symbol: str, candidate: dict[str, Any], n
             "content": json.dumps(prompt, ensure_ascii=True),
         },
     ]
-    response, endpoint, _attempts = chat_for_role(
+    response, _endpoint, _attempts = chat_for_role(
         "sentiment",
         settings=settings,
         messages=messages,
     )
-    record_llm_response(
-        settings,
-        "news_sentiment",
-        response,
-        prompt=messages,
-        role="sentiment",
-        endpoint=endpoint,
-    )
+    record_llm_response(settings, "news_sentiment", response, prompt=messages, role="sentiment")
     content = response.choices[0].message.content or "{}"
     result = _extract_json_object(content)
     required = {"sentiment", "sentiment_score", "confidence", "risk_flags"}

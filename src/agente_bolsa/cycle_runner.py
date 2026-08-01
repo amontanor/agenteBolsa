@@ -17,7 +17,7 @@ from .agent_run import AgentRunTracker
 from .config import Settings
 from .crew import build_crew
 from .eventing import AgentPhase, EventReporter
-from .llm_router import build_llm_identity, select_preferred_endpoint, unavailable_llm_identity
+from .llm_router import select_preferred_endpoint
 from .logging_utils import log_system_event
 from .market_calendar import MarketCalendar
 from .models import Hypothesis, new_id
@@ -628,10 +628,8 @@ def _decision_context_snapshot_for_recommendation(
     agent_run_id: str | None,
     fallback_error: Any = None,
     llm_model: str | None = None,
-    llm_identity: dict[str, Any] | None = None,
     identity_key: str | None = None,
 ) -> dict[str, Any]:
-    identity = dict(llm_identity or {})
     lineage = dict(getattr(recommendation, "decision_lineage", {}) or {})
     signal_id = str(lineage.get("signal_id") or "").strip() or None
     signal_capture_id = str(lineage.get("signal_capture_id") or "").strip() or None
@@ -690,11 +688,7 @@ def _decision_context_snapshot_for_recommendation(
         llm_considered=llm_considered,
         llm_selected=llm_selected,
         llm_response_status=llm_status,
-        llm_model=identity.get("effective_model") or llm_model,
-        llm_provider=identity.get("provider"),
-        llm_requested_model=identity.get("requested_model"),
-        llm_effective_model=identity.get("effective_model") or llm_model,
-        llm_fallback_used=identity.get("fallback_used"),
+        llm_model=llm_model,
         fallback_reason=fallback_error,
         identity_key=identity_key,
     )
@@ -1642,7 +1636,6 @@ def _auto_paper_trade(
                 "raw_response_preview": "",
                 "prompt_context": {},
                 "fallback_error": str(exc),
-                "llm_identity": unavailable_llm_identity("deterministic_trade_fallback"),
             }
         else:
             reporter.emit(
@@ -1766,14 +1759,8 @@ def _auto_paper_trade(
             {"decisions": adversarial_review},
         )
 
-    llm_identity = decision.get("llm_identity") or unavailable_llm_identity("identity_unavailable")
     model_info = {
-        "llm_identity": llm_identity,
-        "llm_provider": llm_identity.get("provider"),
-        "llm_model": llm_identity.get("effective_model"),
-        "llm_requested_model": llm_identity.get("requested_model"),
-        "llm_effective_model": llm_identity.get("effective_model"),
-        "llm_fallback_used": llm_identity.get("fallback_used"),
+        "llm_model": settings.openai_model,
         "secondary_review_llm_enabled": settings.secondary_review_llm_enabled,
         "secondary_review_llm_model": settings.secondary_review_llm_model,
         "trade_aggressiveness_profile": settings.trade_aggressiveness_profile,
@@ -1812,7 +1799,7 @@ def _auto_paper_trade(
             market_state=market_state,
             agent_run_id=agent_run_id,
             fallback_error=decision.get("fallback_error"),
-            llm_identity=llm_identity,
+            llm_model=settings.openai_model,
             identity_key=f"{run_id}|{recommendation.symbol}|{recommendation.action}|{fingerprint}",
         )
         recommendation_id = new_id("rec")
@@ -2578,7 +2565,6 @@ def run_observable_cycle(
             "crew_started",
             run_id,
             f"Lanzando CrewAI contra {endpoint.model} en {endpoint.base_url}.",
-            {"llm_identity": build_llm_identity(endpoint)},
         )
         try:
             crew = build_crew(settings)
@@ -2613,11 +2599,7 @@ def run_observable_cycle(
                 "crew_completed",
                 run_id,
                 "CrewAI completo el ciclo de razonamiento.",
-                {
-                    "result_preview": crew_result[:1000],
-                    "crew_stdout_path": str(crew_stdout_path),
-                    "llm_identity": build_llm_identity(endpoint),
-                },
+                {"result_preview": crew_result[:1000], "crew_stdout_path": str(crew_stdout_path)},
             )
         except Exception as exc:
             crew_run.fail(reason=exc, error_code="crew_failed")
@@ -2627,11 +2609,7 @@ def run_observable_cycle(
                 "crew_failed",
                 run_id,
                 f"CrewAI fallo: {exc}. Se continua con decision LLM directa para no perder el ciclo.",
-                {
-                    "error": str(exc),
-                    "fallback": "direct_llm_decision",
-                    "llm_identity": build_llm_identity(endpoint, status="failed", reason="crew_failed"),
-                },
+                {"error": str(exc), "fallback": "direct_llm_decision"},
             )
     else:
         crew_run = AgentRunTracker(

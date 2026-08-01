@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     )
     opencode_api_key: str | None = Field(default=None, alias="OPENCODE_API_KEY")
     opencode_api_base: str = Field(default="https://opencode.ai/zen/go/v1", alias="OPENCODE_API_BASE")
-    opencode_model: str = Field(default="deepseek-v4-flash", alias="OPENCODE_MODEL")
+    opencode_model: str = Field(default="kimi-k2.6", alias="OPENCODE_MODEL")
     mimo_api_key: str | None = Field(default=None, alias="MIMO_API_KEY")
     mimo_api_base: str = Field(default="https://token-plan-ams.xiaomimimo.com/v1", alias="MIMO_API_BASE")
     mimo_model: str = Field(default="mimo-v2.5-pro", alias="MIMO_MODEL")
@@ -35,7 +35,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("OPENAI_API_BASE", "OPENAI_BASE_URL", "LLM_BASE_URL"),
     )
     openai_model: str = Field(
-        default="deepseek-v4-flash",
+        default="mimo-v2.5-pro",
         validation_alias=AliasChoices("OPENAI_MODEL_NAME", "OPENAI_MODEL", "LLM_MODEL"),
     )
     llm_primary_preflight_enabled: bool = Field(default=True, alias="LLM_PRIMARY_PREFLIGHT_ENABLED")
@@ -784,7 +784,7 @@ class Settings(BaseSettings):
         alias="IMPROVEMENT_LLM_BASE_URL",
     )
     improvement_llm_api_key: str | None = Field(default=None, alias="IMPROVEMENT_LLM_API_KEY")
-    improvement_llm_model: str = Field(default="deepseek-v4-flash", alias="IMPROVEMENT_LLM_MODEL")
+    improvement_llm_model: str = Field(default="kimi-k2.6", alias="IMPROVEMENT_LLM_MODEL")
     improvement_llm_orchestrator_provider: str | None = Field(
         default=None,
         alias="IMPROVEMENT_LLM_ORCHESTRATOR_PROVIDER",
@@ -798,7 +798,7 @@ class Settings(BaseSettings):
         alias="IMPROVEMENT_LLM_ORCHESTRATOR_API_KEY",
     )
     improvement_llm_orchestrator_model: str = Field(
-        default="deepseek-v4-flash",
+        default="kimi-k2.6",
         alias="IMPROVEMENT_LLM_ORCHESTRATOR_MODEL",
     )
     improvement_llm_temperature: float = Field(default=0.2, alias="IMPROVEMENT_LLM_TEMPERATURE")
