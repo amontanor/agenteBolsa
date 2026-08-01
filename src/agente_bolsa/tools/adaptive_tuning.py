@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from agente_bolsa.config import Settings
+from agente_bolsa.market_calendar import MarketCalendar
 from agente_bolsa.storage import Store
 
 from .signal_learning import build_learning_status
@@ -134,12 +135,109 @@ def save_adaptive_config(
     return saved
 
 
-def active_adaptive_overrides(settings: Settings) -> dict[str, Any]:
+def _session_date(value: str | date | None) -> date | None:
+    if isinstance(value, datetime):
+        return None
+    if isinstance(value, date):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _individual_auto_apply_authorized(item: dict[str, Any]) -> bool:
+    """Require the canonical per-record authorization fields.
+
+    ``auto_apply`` is a legacy request field.  It is never sufficient on its
+    own; when present alongside the canonical fields it must be a consistent
+    literal boolean, otherwise the record is ambiguous and ignored.
+    """
+
+    requested = item.get("requested_auto_apply")
+    authorized = item.get("authorized_auto_apply")
+    if type(requested) is not bool or type(authorized) is not bool:
+        return False
+    if not requested or not authorized:
+        return False
+    if "auto_apply" in item:
+        legacy = item.get("auto_apply")
+        if type(legacy) is not bool or legacy is not requested or legacy is not authorized:
+            return False
+    return True
+
+
+def _override_expiry_is_valid(
+    settings: Settings,
+    item: dict[str, Any],
+    *,
+    current_session_date: str | date | None,
+) -> bool:
+    """Evaluate session-based expiry without using file timestamps.
+
+    A missing or non-canonical session identity is deliberately unavailable.
+    The exchange schedule is required; the weekday fallback is not safe for
+    authorization-sensitive expiry.
+    """
+
+    expires_after = item.get("expires_after_sessions")
+    if type(expires_after) is not int or expires_after < 1:
+        return False
+    current = _session_date(current_session_date)
+    evidence = item.get("evidence")
+    created = _session_date(evidence.get("session_date") if isinstance(evidence, dict) else None)
+    if created is None or current is None or current < created:
+        return False
+    try:
+        calendar = MarketCalendar(
+            getattr(settings, "market_calendar", "XNYS"),
+            getattr(settings, "local_timezone", "Europe/Madrid"),
+        )
+        schedule = calendar.session_schedule(created.isoformat(), current.isoformat())
+        if schedule is None:
+            return False
+        session_dates = {
+            index.date() if hasattr(index, "date") else index
+            for index in schedule.index
+        }
+    except Exception:
+        return False
+    if created not in session_dates or current not in session_dates:
+        return False
+    elapsed_sessions = sum(created < session for session in session_dates if session <= current)
+    return elapsed_sessions < expires_after
+
+
+def active_adaptive_overrides(
+    settings: Settings,
+    *,
+    current_session_date: str | date | None = None,
+) -> dict[str, Any]:
+    """Return only globally and individually authorized, unexpired overrides.
+
+    The normal Settings loader does not provide a session identity, so records
+    with session-based expiry remain unavailable there.  This is intentional:
+    an uncertain expiry must never alter active Settings.  Auditors and
+    post-market callers may pass the canonical XNYS session explicitly.
+    """
+
+    if not _auto_apply_authorized(settings):
+        return {}
     payload = load_adaptive_config(adaptive_config_path(settings))
     overrides: dict[str, Any] = {}
     for name, item in payload.get("parameters", {}).items():
         meta = ADAPTIVE_PARAMETERS.get(name)
-        if not meta or item.get("status") != "active":
+        if not meta or not isinstance(item, dict) or item.get("status") != "active":
+            continue
+        if not _individual_auto_apply_authorized(item):
+            continue
+        if not _override_expiry_is_valid(
+            settings,
+            item,
+            current_session_date=current_session_date,
+        ):
             continue
         value = item.get("proposed")
         if value is None:
