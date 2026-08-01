@@ -2977,3 +2977,17 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Dictamen: `ready_for_closed_market_full_validation`, sin despliegue ni
   cambios en producción. Siguiente paso mínimo: preflight cerrado y ejecutar
   la matriz de `P-L69_informe.md` antes de cualquier promoción.
+
+## P-L77B1 - autoridad fail-closed de overrides adaptativos (0.4.211)
+
+- Candidato aislado `pl77b1_adaptive_override_authority`, rama
+  `codex/pl77b1-adaptive-override-authority`, sobre producción `ba9d60d4`.
+- Reproducción: el loader legacy aplicaba `MAX_ORDERS_PER_CYCLE=2` con
+  autorización global falsa, aunque la base es 4.
+- Fix: global literal True + autorización individual canónica + expiración por
+  sesiones XNYS evaluable; registros legacy, ambiguos, vencidos o no evaluables
+  quedan sin autoridad. No se toca `config.py` ni el fichero productivo.
+- Focales `49 passed`; suite `2361 passed`, `1 skipped` preexistente y
+  `1 warning`; Ruff/NUL/py_compile/diff/config/kernel aislado y smoke temporal
+  verdes. Dictamen del candidato: `ready_for_closed_market_deployment`, sin
+  merge productivo ni despliegue.

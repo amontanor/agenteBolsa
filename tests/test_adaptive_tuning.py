@@ -76,10 +76,14 @@ def test_active_adaptive_overrides_reads_only_active(tmp_path):
 {
   "version": 1,
   "parameters": {
-    "ENTRY_QUALITY_MAX_RSI": {
-      "status": "active",
-      "proposed": 81
-    },
+        "ENTRY_QUALITY_MAX_RSI": {
+          "status": "active",
+          "proposed": 81,
+          "requested_auto_apply": true,
+          "authorized_auto_apply": true,
+          "expires_after_sessions": 3,
+          "evidence": {"session_date": "2026-04-28"}
+        },
     "ENTRY_QUALITY_MAX_SMA20_DISTANCE": {
       "status": "shadow",
       "proposed": 0.08
@@ -90,7 +94,7 @@ def test_active_adaptive_overrides_reads_only_active(tmp_path):
         encoding="utf-8",
     )
 
-    overrides = active_adaptive_overrides(settings)
+    overrides = active_adaptive_overrides(settings, current_session_date="2026-04-28")
 
     assert overrides == {"entry_quality_max_rsi": 81.0}
 
@@ -125,7 +129,7 @@ def test_promote_post_market_improvements_activates_conservative_overrides(tmp_p
     }
 
     result = promote_post_market_improvements(settings, report)
-    overrides = active_adaptive_overrides(settings)
+    overrides = active_adaptive_overrides(settings, current_session_date="2026-04-28")
 
     assert set(result["promoted"]) == {
         "LLM_EXIT_EXCEPTION_MIN_CONFIDENCE",

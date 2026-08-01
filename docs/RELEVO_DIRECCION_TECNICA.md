@@ -1083,3 +1083,18 @@ con XNYS cerrado. No desplegar automaticamente.
   temporal o `smoke_unavailable_by_safety`, doble salud >=75 s tras
   `stack_up`, cero órdenes inesperadas y cero locks. No desplegar desde este
   relevo sin esos gates.
+
+## P-L77B1 - autoridad fail-closed de overrides adaptativos
+
+- Candidato `pl77b1_adaptive_override_authority`, versión `0.4.211`, sobre
+  `ba9d60d4`/árbol `7ea8ea9a`. La reproducción confirmó que la lectura legacy
+  podía materializar `MAX_ORDERS_PER_CYCLE=2` con global false; la base es 4.
+- `active_adaptive_overrides` ahora exige autorización global literal,
+  `requested_auto_apply` y `authorized_auto_apply` individuales, y caducidad
+  evaluable por sesiones XNYS. Sin sesión fiable, devuelve vacío; no usa mtime.
+  El inventario health continúa mostrando `preexisting_unauthorized`.
+- `config.py`, los protegidos, `.env`, SQLite y producción no se modificaron.
+  Focales `49 passed`; suite `2361 passed`, un skip preexistente y una warning;
+  Ruff/NUL/py_compile/diff/config/kernel aislado y smoke temporal verdes.
+  Estado: `ready_for_closed_market_deployment` como candidato, sin despliegue
+  ni habilitación de cambios de política desde este relevo.
