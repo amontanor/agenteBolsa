@@ -1096,5 +1096,13 @@ con XNYS cerrado. No desplegar automaticamente.
 - `config.py`, los protegidos, `.env`, SQLite y producción no se modificaron.
   Focales `49 passed`; suite `2361 passed`, un skip preexistente y una warning;
   Ruff/NUL/py_compile/diff/config/kernel aislado y smoke temporal verdes.
-  Estado: `ready_for_closed_market_deployment` como candidato, sin despliegue
-  ni habilitación de cambios de política desde este relevo.
+  Estado previo del candidato: `ready_for_closed_market_deployment`.
+- Cierre P-L77B1 completado en producción mediante merge `7682901a` desde el
+  candidato exacto `9701e2f1`; versión `0.4.211`, árbol funcional
+  `ea93a512`. Suite `2361 passed`, `1 skipped` preexistente y `1 warning`,
+  focales post-merge `73 passed`; dos checks post-arranque separados por más
+  de 75 s confirmaron HTTP `200/200`, kernel `sealed/ok`, paper/live-off,
+  scheduler/token coherentes, `MAX_ORDERS_PER_CYCLE=4`, cero órdenes abiertas
+  y cero críticos. El inventario legacy sigue `preexisting_unauthorized` y
+  warning observacional; no tiene autoridad efectiva. No abrir P-L78 en este
+  turno.

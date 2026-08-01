@@ -2,9 +2,9 @@
 
 ## Dictamen
 
-`ready_for_closed_market_deployment`. La validación cerrada terminó verde en
-el candidato. El resultado es un candidato listo para un ensayo/integración y
-despliegue posterior, no un despliegue ejecutado en este lote.
+`deployed`. La validación cerrada y el despliegue productivo terminaron verdes.
+El merge exacto se verificó en producción y el stack superó dos comprobaciones
+post-arranque separadas por más de 75 segundos.
 
 ## Base, aislamiento y evidencia de producción
 
@@ -93,10 +93,36 @@ lote y queda omitida por no ser necesaria para el contrato de autoridad.
 
 Al corte, XNYS estaba cerrado y la próxima apertura era 2026-08-03 15:30
 CEST. El PMR del 2026-07-31 tenía terminal durable `completed` con reason
-`pipeline_completed`, sin lease activo; la SQLite productiva se consultó solo
-con URI `mode=ro` y `PRAGMA query_only=ON`. No se invocó `schedule-status` ni
-ninguna ruta operativa escritora.
+`pipeline_completed`, sin lease activo; las comprobaciones SQLite forenses se
+hicieron solo con URI `mode=ro` y `PRAGMA query_only=ON`. Las rutas operativas
+usadas para el preflight y los checks fueron las canónicas autorizadas; no se
+ejecutaron postmarket, reconciliación, run-once ni jobs productivos manuales.
 
-El siguiente paso único es integrar mediante ensayo cerrado el commit final
-`a636be2540130ae7e2a60c47b119c9c2a14fc2be`; no se autoriza saltar directamente
-desde este worktree a producción. No se desplegó desde este lote.
+El siguiente paso único es mantener la observación natural de la primera sesión
+XNYS posterior; no se abre P-L78 en este lote.
+
+## Cierre productivo P-L77B1
+
+- Merge productivo `7682901ab2e66f82f5b2838b55d8d29d45c822ac`, padres exactos
+  `ba9d60d4` y `9701e2f1`; producción queda en versión `0.4.211`, árbol
+  funcional `ea93a5124ecf8c9c7a212d6c1abd9cb75dc3851f`.
+- Suite completa en el candidato exacto tras el merge: `2361 passed`, `1
+  skipped` preexistente y `1 warning` de dependencia; focales post-merge
+  `73 passed`. Ruff, NUL, compilación temporal (`446` archivos), diff,
+  validate-agent-config y smoke aislado quedaron verdes.
+- Check post-arranque 1: 2026-08-01 12:04:21 CEST, HTTP raíz/health `200/200`,
+  kernel `sealed/ok`, paper activo, live false, `MAX_ORDERS_PER_CYCLE=4`,
+  cero órdenes abiertas, cero críticos y token del scheduler válido.
+- Check post-arranque 2: 2026-08-01 12:07:29 CEST, HTTP `200/200`, kernel
+  `sealed/ok`, scheduler `owner_alive`/token válido, un listener web,
+  `MAX_ORDERS_PER_CYCLE=4`, cero órdenes abiertas y cero críticos. Los cinco
+  warnings observacionales permanecen sin autoridad de trading.
+- SHA-256 de `.env` y `data/state/adaptive_config.json` permaneció idéntico al
+  preflight (`99907aa6…aa58` y `60833b60…f4d0`, respectivamente); no se
+  activó ni modificó ningún override legacy.
+- El watcher conserva `enabled=true`, límites `30/25/5/30/300` y estado
+  natural `collecting` sin ejecución por mercado cerrado. PMR terminal y lease
+  vacío se conservaron; no se ejecutaron jobs manuales ni se enviaron fills.
+
+No quedan acciones funcionales autorizadas en este lote. La primera sesión
+XNYS posterior debe observarse por su ruta natural; no se abre P-L78.

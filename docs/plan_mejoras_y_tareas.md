@@ -2989,5 +2989,8 @@ de despliegue quedan pendientes con XNYS cerrado.
   quedan sin autoridad. No se toca `config.py` ni el fichero productivo.
 - Focales `49 passed`; suite `2361 passed`, `1 skipped` preexistente y
   `1 warning`; Ruff/NUL/py_compile/diff/config/kernel aislado y smoke temporal
-  verdes. Dictamen del candidato: `ready_for_closed_market_deployment`, sin
-  merge productivo ni despliegue.
+  verdes. El merge productivo `7682901a` dejó producción en `0.4.211`, con
+  dos checks post-arranque HTTP `200/200`, kernel `sealed/ok`, scheduler con
+  token válido, `MAX_ORDERS_PER_CYCLE=4`, cero órdenes abiertas y cero
+  críticos. Dictamen: `deployed`; el warning de inventario legacy permanece
+  observacional y sin autoridad.
