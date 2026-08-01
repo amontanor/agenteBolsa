@@ -615,7 +615,6 @@ def _run_pre_earnings_trade_operation(
             source_run_id=str(report.get("run_id") or "") or None,
             market_state=report.get("market_state") if isinstance(report.get("market_state"), dict) else None,
             agent_run_id=None,
-            llm_model=settings.openai_model,
             fallback_error=None,
             identity_key=f"{run_id}|{recommendation.symbol}|{recommendation.action}|pre_earnings",
         )

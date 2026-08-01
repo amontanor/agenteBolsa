@@ -781,7 +781,7 @@ def command_decide_once(args: argparse.Namespace) -> None:
                 source_run_id=str(technical_context.get("run_id") or "") or None,
                 market_state=None,
                 agent_run_id=None,
-                llm_model=settings.openai_model,
+                llm_identity=decision.get("llm_identity"),
                 fallback_error=decision.get("fallback_error"),
                 identity_key=f"{decision_id}|{recommendation.symbol}|{recommendation.action}",
             ),

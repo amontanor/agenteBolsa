@@ -31,4 +31,5 @@ __all__ = ["__version__"]
 # P-L74: deterministic SPY opening authority and explicit session interval UX (0.4.208).
 # P-L76R1: isolate P-L54 conflict reads from broker-order status (0.4.210).
 # P-L77B1: fail-closed adaptive override authority and session expiry (0.4.211).
-__version__ = "0.4.211"
+# P-L78B: DeepSeek V4 Flash as the runtime LLM default and effective identity carrier (0.4.212).
+__version__ = "0.4.212"
