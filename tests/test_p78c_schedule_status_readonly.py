@@ -65,7 +65,7 @@ def test_cli_missing_data_dir_does_not_create_logging_artifacts(
 ) -> None:
     settings = _settings(tmp_path / "missing")
     captured: list[dict[str, object]] = []
-    monkeypatch.setattr("agente_bolsa.main.get_settings", lambda: settings)
+    monkeypatch.setattr("agente_bolsa.main._get_schedule_status_settings", lambda: settings)
     monkeypatch.setattr("agente_bolsa.main._print_json", captured.append)
 
     command_schedule_status(type("Args", (), {"json": True})())
