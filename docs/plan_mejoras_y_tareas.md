@@ -2994,3 +2994,43 @@ de despliegue quedan pendientes con XNYS cerrado.
   token válido, `MAX_ORDERS_PER_CYCLE=4`, cero órdenes abiertas y cero
   críticos. Dictamen: `deployed`; el warning de inventario legacy permanece
   observacional y sin autoridad.
+
+## P-L78B - default global DeepSeek V4 Flash (0.4.212)
+
+- Candidato aislado `pl78b_deepseek_default`, rama
+  `codex/pl78b-deepseek-default`, sobre la base productiva `ba7d488d`.
+- Reproducción: Settings, roles y codegen heredaban Kimi por defaults de código
+  aunque parte de la ruta productiva ya seleccionaba OpenCode Go/DeepSeek;
+  mejora continua conservaba GLM como default activo.
+- Fix: defaults globales y `.env.example` pasan a
+  `opencode-go/deepseek-v4-flash`; Qwen sigue siendo fallback técnico y los
+  overrides explícitos compatibles se conservan. La identidad efectiva de
+  telemetría sale del endpoint/respuesta real, no de `settings.openai_model`.
+- Focales `317 passed`; suite aislada `2370 passed`, 1 skip preexistente y
+  1 warning externo; Ruff/NUL/compile/diff/config/kernel/smoke temporal verdes.
+- Producción, `.env`, datos, stack y archivos protegidos no se modificaron. El
+  candidato queda pendiente de integración y despliegue cerrado; no se
+  reescriben eventos históricos GLM/Kimi.
+
+## P-L78C - `schedule-status` read-only (0.4.213)
+
+- La caracterización contra P-L78B reprodujo que `schedule-status` llamaba
+  `Store.ensure_schema()` y creaba o migraba SQLite en una `DATA_DIR` ausente.
+- Candidato aislado `pl78c_schedule_status_readonly`, rama
+  `codex/pl78c-schedule-status-readonly`, usa exclusivamente la lectura
+  `Store.read_connection`/`read_runtime_values` y nunca ejecuta migraciones.
+- DB ausente, schema incompatible, acceso denegado, payload inválido y WAL o
+  sidecar con riesgo de mutación se expresan como runtime unavailable con
+  razones estables; calendario/jobs estáticos permanecen disponibles.
+- Acepta `schedule-status --json` sin cambiar la salida JSON existente ni el
+  scheduling efectivo. La deriva `.env`/kernel de P-L78B sigue sin resolverse y
+  bloquea cualquier despliegue, fuera del alcance P-L78C.
+- Suite final aislada: `2380 passed, 1 skipped` preexistente
+  (`test_score_study_regression_current_sqlite`, sin SQLite histórica local) y
+  `1 warning` externo; focales P-L78C `10 passed`; Ruff/NUL/compilación/diff/
+  config/kernel temporal y smoke fake aislado verdes.
+- `schedule-status --json` real con DB ausente devuelve `database_missing` sin
+  crear `DATA_DIR` ni artefactos de logging.
+- Dictamen del candidato: `ready_for_pl78c_closed_market_integration`. El
+  siguiente paso único sigue siendo resolver la procedencia de `.env`/kernel y
+  realizar un ensayo combinado separado; P-L78C no autoriza despliegue.

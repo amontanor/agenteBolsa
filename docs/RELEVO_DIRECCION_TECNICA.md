@@ -1106,3 +1106,44 @@ con XNYS cerrado. No desplegar automaticamente.
   y cero críticos. El inventario legacy sigue `preexisting_unauthorized` y
   warning observacional; no tiene autoridad efectiva. No abrir P-L78 en este
   turno.
+
+## P-L78B - default global DeepSeek V4 Flash
+
+- Candidato aislado `pl78b_deepseek_default`, versión `0.4.212`, sobre la base
+  productiva `ba7d488d`/tree `6938d157`.
+- `opencode-go/deepseek-v4-flash` es el default global. Los fallbacks técnicos
+  siguen siendo Qwen y luego deterministas; GLM/Kimi/MiMo solo quedan como
+  overrides explícitos, compatibilidad o historia.
+- La telemetría de uso, snapshots de decisión y eventos CrewAI llevan
+  `requested/effective/provider/fallback` del endpoint real. No se cambia la
+  autoridad económica de gates, riesgo, sizing, planes u órdenes.
+- QA: focales `317 passed`; suite completa aislada `2370 passed`, 1 skip
+  preexistente y 1 warning externo en `812.37 s`; Ruff, NUL, compilación,
+  diff, config, kernel temporal y smoke `run-once --skip-crew` temporal verdes.
+- El worktree está listo para ensayo de integración cerrado. No tocar
+  producción ni `.env` desde este relevo; el siguiente turno debe integrar el
+  HEAD final con `merge --no-ff`, repetir gates y verificar dos health checks.
+
+## P-L78C - `schedule-status` read-only (0.4.213)
+
+- El candidato `pl78c_schedule_status_readonly` parte de P-L78B exacto y
+  elimina la ruta `ensure_schema` del lector de estado del scheduler.
+- `Store.read_runtime_values` usa SQLite URI `mode=ro` + `query_only`, cierra
+  la conexión y falla cerrado ante DB ausente, schema legacy/incompatible,
+  error de acceso, payload inválido o WAL/sidecars cuya lectura podría tocar
+  `-shm`. En esos casos `runtime_state.available=false` y los jobs tienen
+  `null`; calendario/cadencias permanecen informativos.
+- El contrato CLI acepta `schedule-status --json`. No representa runtime
+  unavailable como cero o como actividad confirmada; mantiene código `0` por
+  compatibilidad y exige consumir `runtime_state.reason`.
+- Suite final: `2380 passed, 1 skipped` preexistente
+  (`test_score_study_regression_current_sqlite`, sin SQLite histórica local) y
+  `1 warning` externo; focal P-L78C `10 passed`; Ruff, NUL, compilación, diff,
+  config y smoke fake aislado verdes. Kernel temporal `unsealed` esperado sin
+  violaciones.
+  `schedule-status --json` real con DB ausente no crea `DATA_DIR` ni logs.
+  La deriva productiva de `.env`/kernel continúa bloqueando P-L78B y no fue
+  tocada por este lote.
+- No integrar ni desplegar desde este relevo. Siguiente paso único: cerrar
+  gates del candidato y resolver la procedencia autorizada de `.env` antes del
+  ensayo combinado P-L78B+P-L78C.

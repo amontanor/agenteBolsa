@@ -771,5 +771,5 @@ def test_version_policy_requires_bump():
     if dist:
         # Con PYTHONPATH al src del worktree, leemos __init__.py
         import agente_bolsa
-        # P-L77B1 is the current candidate after the adaptive authority fix.
-        assert agente_bolsa.__version__ == "0.4.211"
+        # P-L78C is the current candidate after the read-only schedule-status change.
+        assert agente_bolsa.__version__ == "0.4.213"

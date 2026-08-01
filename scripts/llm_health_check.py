@@ -116,7 +116,7 @@ def build_probe_specs(env: dict[str, str]) -> list[ProbeSpec]:
     if selector in ("opencode", "opencode-go"):
         prim_base = cfg(env, "OPENCODE_API_BASE", "https://opencode.ai/zen/go/v1")
         prim_key = cfg(env, "OPENCODE_API_KEY")
-        prim_model = cfg(env, "OPENCODE_MODEL", "kimi-k2.6")
+        prim_model = cfg(env, "OPENCODE_MODEL", "deepseek-v4-flash")
     else:
         prim_base = cfg(env, "OPENAI_API_BASE")
         prim_key = cfg(env, "OPENAI_API_KEY")
