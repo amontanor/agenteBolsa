@@ -3034,3 +3034,18 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Dictamen del candidato: `ready_for_pl78c_closed_market_integration`. El
   siguiente paso único sigue siendo resolver la procedencia de `.env`/kernel y
   realizar un ensayo combinado separado; P-L78C no autoriza despliegue.
+
+## P-L78D - ensayo combinado P-L78B + P-L78C
+
+- Merge `--no-ff` `304a61ab` desde producción exacta hacia el candidato
+  P-L78C; primer/segundo padres `ba7d488d`/`1bab847a`.
+- El árbol funcional mergeado coincide exactamente con `308baa64`, versión
+  0.4.213; no hubo conflictos ni deltas inesperados.
+- Focales combinados `174 passed`; suite `2380 passed`, un skip histórico
+  preexistente y una warning externa; Ruff/NUL/compile/diff/config/kernel
+  aislado y smoke fake verdes.
+- `config.py` conserva únicamente el delta de defaults de P-L78B; kernel,
+  broker, execution y risk son idénticos a producción. El bloqueo `.env`/
+  kernel productivo no fue tocado.
+- Dictamen: `ready_for_pl78_combined_closed_market_deployment_after_env_authority`;
+  no desplegar hasta resolver la autoridad `.env` y repetir el cierre.

@@ -212,3 +212,57 @@ según P-L78C-AUDIT; después podrá ensayarse P-L78B junto con este cambio.
   `config.py` y `.env` no son parte de este lote; producción, stack, SQLite
   productiva, jobs, broker, red, LLM, Telegram, locks, leases y untracked del
   operador permanecen intactos.
+
+## P-L78D — ensayo combinado P-L78B + P-L78C
+
+### Dictamen
+
+`ready_for_pl78_combined_closed_market_deployment_after_env_authority` como
+ensayo de integración. No es un dictamen de despliegue: la deriva productiva
+de `.env` mantiene `kernel-status=violation` y su procedencia completa sigue
+unavailable.
+
+- Producción base: `ba7d488de5ddb2f0b1174b22ff676e5abba1ac1d`, tree
+  `6938d15799c39d760035e1afc8294f614ece0b04`, versión 0.4.211.
+- Candidato integrado: worktree
+  `C:\Antonio\Bref\agenteBolsa_worktrees\pl78d_combined_integration_rehearsal`,
+  rama `codex/pl78d-combined-integration-rehearsal`.
+- Merge `--no-ff`: `304a61ab1e04a0b3bda623114002ab6bbcd9dcf5`; primer padre
+  `ba7d488d`, segundo padre `1bab847a`; versión 0.4.213.
+- El árbol funcional del merge es exactamente
+  `308baa6469f99c375d8bae0058950e32949112da`. Cualquier commit posterior es
+  exclusivamente documental.
+
+### QA del árbol combinado
+
+- Focales P-L78B/P-L78C y regresiones relacionadas: `174 passed`.
+- Suite completa aislada: `2380 passed, 1 skipped preexistente, 1 warning`
+  externo en `842.03 s`. El skip es
+  `tests/test_pre_earnings.py::test_score_study_regression_current_sqlite`,
+  por ausencia de SQLite histórica local; la warning es la deprecación externa
+  de `websockets.legacy`.
+- Ruff, NUL, compilación, `git diff --check` y `validate-agent-config`:
+  verdes. Kernel temporal `unsealed` esperado, cero violaciones, sin
+  `kernel-seal`.
+- Smoke `run-once --skip-crew` con `DATA_DIR` temporal, snapshot/estado fake y
+  broker que falla si se alcanza: OK, `used_crew=false`, sin red, broker ni
+  LLM.
+- Configuración: defaults efectivos `opencode-go/deepseek-v4-flash`; GLM/Kimi
+  aparecen únicamente en overrides, compatibilidad, tests o perfiles UI
+  explícitos. La telemetría usa el carrier efectivo, no
+  `settings.openai_model` como identidad reconstruida.
+
+### Paridad y protegidos
+
+`kernel.py`, `tools/broker.py`, `tools/execution.py` y `tools/risk.py` son
+idénticos por objeto Git a producción base. `config.py` difiere únicamente en
+los cuatro defaults de modelo autorizados por P-L78B (OpenCode, OpenAI,
+improvement y orchestrator pasan a DeepSeek Flash); no hubo cambios de trading,
+riesgo, ejecución, candidatos, gates, sizing, planes, órdenes o exposición.
+`.env`, manifest, SQLite productiva, stack, locks, leases y untracked del
+operador permanecieron intactos.
+
+El siguiente único paso es resolver por autoridad separada la procedencia de
+`.env`/manifest y repetir el cierre productivo. Este ensayo no integra ni
+despliega, no ejecuta `schedule-status` productivo, no hace `kernel-seal` y no
+hace push.

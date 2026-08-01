@@ -1147,3 +1147,17 @@ con XNYS cerrado. No desplegar automaticamente.
 - No integrar ni desplegar desde este relevo. Siguiente paso único: cerrar
   gates del candidato y resolver la procedencia autorizada de `.env` antes del
   ensayo combinado P-L78B+P-L78C.
+
+## P-L78D - ensayo combinado P-L78B + P-L78C
+
+- Merge de ensayo `304a61ab` con padres exactos producción `ba7d488d` y
+  candidato `1bab847a`; árbol funcional `308baa64`, versión 0.4.213.
+- Focales `174 passed`; suite `2380 passed`, un skip preexistente y una warning
+  externa; Ruff, NUL, compilación, diff, config y smoke fake aislado verdes.
+- Kernel temporal `unsealed` esperado sin violaciones. Kernel/broker/execution/
+  risk son idénticos a producción; `config.py` solo contiene los cuatro
+  defaults DeepSeek autorizados por P-L78B.
+- Producción, `.env`, manifest, stack, SQLite, locks, leases y untracked del
+  operador no se tocaron. La deriva `.env` continúa bloqueando el despliegue.
+- Siguiente paso único: resolver autoridad/procedencia `.env` y repetir gates
+  cerrados; no desplegar desde este ensayo.
