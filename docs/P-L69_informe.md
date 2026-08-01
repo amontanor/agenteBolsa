@@ -324,6 +324,38 @@ stack_down, merge, gates con stack detenido, delta exacto de las seis claves
 TRADE_FILL_WATCH autorizadas, stack_up y doble health. No se ha modificado
 producción ni se ha desplegado.
 
+### P-L76-CLOSE — despliegue validado
+
+Dictamen: `deployed`.
+
+- Merge productivo `49d33e17e1146e700bce890bdd8018ee4e64c7b1`, con el candidato
+  exacto `568c07ddcbd22c0684fa182e2d312c207394f5eb`; árbol funcional
+  `3f2b859bb081ccdd6fcc4a6ed43b1bc3073bd812`, versión `0.4.210`.
+- Suite candidata final: `2339 passed`, `1 skipped` preexistente, 1 warning;
+  suite merged en producción: `2340 passed`, 1 warning, `901.38 s`.
+  Focales finales: `107 passed`; Ruff, NUL, compileall, diff-check,
+  configuración y smoke aislado del entrypoint OK.
+- Preflight: XNYS cerrado, próxima apertura 2026-08-03 15:30 CEST; PMR
+  2026-07-31 `pmr_dfe5e200c9cc` terminal `completed/pipeline_completed`;
+  lease activo ausente. No se ejecutó PMR/reconciliación manual.
+- `.env`: hash previo `CC3AE9E750C8692F0B55E1B15F1EB623868158953B2D816C46547B27F7D741A`;
+  hash posterior `99907AA6E778F21FD535553845BA1BEF0607BB91E17F530E50951F2EC849AA58`.
+  La huella de líneas no objetivo permaneció igual; el delta son únicamente
+  las seis claves TRADE_FILL_WATCH autorizadas.
+- `kernel-status` productivo OK después del sellado exacto del delta `.env`;
+  hashes de kernel/broker/execution sin cambios.
+- Health 1: 10:20:02 CEST; health 2: 10:22:45 CEST (>75 s). Ambas HTTP raíz y
+  `/health` `200`; un árbol scheduler launcher/runtime y un listener web.
+  El `lock_orphan` del script es el falso positivo documentado para el runtime
+  hijo; PID 34784 está vivo bajo 19768→26340 y el token está presente.
+- `trade_fill_watch` cargado con `True/30/25/5/30/300`, estado natural
+  `skipped: mercado cerrado`; no hubo fills ni avisos de prueba. No hubo
+  órdenes locales nuevas desde el despliegue, duplicados recientes ni eventos
+  exactos de `database is locked`; el log contiene coincidencias históricas
+  anteriores al arranque.
+- Salud persistida: `critical=0`, cinco warnings observacionales. Producción
+  tracked limpia; se preservan los untracked del operador. Sin push.
+
 ### Commits P-L76
 
 - Merge: `faccc5de` — `merge: rehearse P-L69-R2 over P-L75`.

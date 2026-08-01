@@ -2938,6 +2938,18 @@ de despliegue quedan pendientes con XNYS cerrado.
 - XNYS abierto: suite completa/smoke/operación real omitidos. Dictamen:
   `ready_for_closed_market_full_validation`.
 
+## P-L76-CLOSE - despliegue validado
+
+- Merge productivo `49d33e17`, árbol funcional `3f2b859b`, versión `0.4.210`.
+- Suite merged `2340 passed`, 1 warning; focales `107 passed`; Ruff/NUL/
+  compile/diff/config/kernel/smoke aislado verdes.
+- XNYS cerrado, PMR 2026-07-31 terminal completed y lease activo ausente.
+- `.env` solo recibió las seis claves TRADE_FILL_WATCH autorizadas; hash
+  posterior `99907AA6E778F21FD535553845BA1BEF0607BB91E17F530E50951F2EC849AA58`.
+- Health doble 200/200 separada por más de 75 s; watcher registrado y normal
+  `skipped` por mercado cerrado; cero órdenes inesperadas y cero críticos.
+- Estado: `deployed`. No push ni tareas nuevas.
+
 ## P-L76R1 - corrección del gate P-L54 y suite cerrada
 
 - Fix mínimo `00015af6`: el lector de conflictos P-L54 ya no mezcla estados de

@@ -1035,6 +1035,20 @@ con XNYS cerrado. No desplegar automaticamente.
   XNYS abierto; pendiente solo la validación cerrada antes de reintegrar o
   desplegar.
 
+## P-L76-CLOSE - despliegue validado
+
+- Producción desplegada en merge `49d33e17`, árbol funcional `3f2b859b`,
+  versión `0.4.210`; tracked limpio y untracked del operador preservados.
+- Suite merged `2340 passed`, focales `107 passed`, gates estáticos/config,
+  kernel y smoke aislado verdes.
+- PMR 2026-07-31 completed; XNYS cerrado. El watcher está activo en config
+  `True/30/25/5/30/300`, pero el estado natural es `skipped` por mercado
+  cerrado; no se provocaron fills ni Telegram real.
+- Health 10:20:02 y 10:22:45 CEST, HTTP raíz/health 200/200, cero críticos,
+  cero órdenes nuevas/duplicados/locks post-arranque. El `lock_orphan` es el
+  falso positivo launcher/runtime documentado y el árbol PID es coherente.
+- Dictamen final: `deployed`; sin push y sin abrir mejoras nuevas.
+
 ## P-L76R1 - gate funcional cerrado
 
 - El candidato `pl76_p69_predeployment_rehearsal` queda en versión `0.4.210`
