@@ -1134,7 +1134,8 @@ con XNYS cerrado. No desplegar automaticamente.
   `-shm`. En esos casos `runtime_state.available=false` y los jobs tienen
   `null`; calendario/cadencias permanecen informativos.
 - El contrato CLI acepta `schedule-status --json`. No representa runtime
-  unavailable como cero o como actividad confirmada.
+  unavailable como cero o como actividad confirmada; mantiene código `0` por
+  compatibilidad y exige consumir `runtime_state.reason`.
 - Suite final: `2380 passed, 1 skipped` preexistente
   (`test_score_study_regression_current_sqlite`, sin SQLite histórica local) y
   `1 warning` externo; focal P-L78C `10 passed`; Ruff, NUL, compilación, diff,

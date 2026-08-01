@@ -154,7 +154,10 @@ URI read-only puede crear o modificar el sidecar `-shm` en Windows.
   Calendario, horarios y lista estática de jobs se siguen publicando aunque el
   runtime no esté disponible; los valores de jobs son `null` en ese caso.
 - Se acepta `schedule-status --json`; la salida existente continúa siendo JSON
-  y no cambia calendario, cadencias, enablement ni scheduling efectivo.
+  y no cambia calendario, cadencias, enablement ni scheduling efectivo. Para
+  conservar compatibilidad, la consulta devuelve código de salida `0` incluso
+  cuando `runtime_state.available=false`; el consumidor debe atender la razón
+  estructurada y no interpretar `null` como actividad confirmada.
 
 ### Evidencia y límites
 
