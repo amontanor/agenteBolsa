@@ -178,7 +178,8 @@ según P-L78C-AUDIT; después podrá ensayarse P-L78B junto con este cambio.
 - Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl78c_schedule_status_readonly`.
 - Rama: `codex/pl78c-schedule-status-readonly`.
 - Commits: `cb664ae6` (caracterización), `d2c31225` (implementación y bump),
-  `cb6aac67` (version policy) y `36aed9b5` (CLI sin efectos laterales).
+  `cb6aac67` (version policy), `36aed9b5` (CLI sin efectos laterales) y
+  `227140c0` (settings CLI sin bootstrap de directorios).
 - El candidato conserva como cambios funcionales únicamente la frontera
   read-only de runtime, el soporte CLI `--json` y el bump 0.4.213; las
   adaptaciones de tests solo reflejan que una base WAL no puede leerse sin
@@ -196,6 +197,8 @@ según P-L78C-AUDIT; después podrá ensayarse P-L78B junto con este cambio.
   `DATA_DIR` temporal, `use_crew=false`, snapshot/estado de mercado fake y un
   proveedor broker que falla si es alcanzado: OK, ciclo temporal completado,
   `market_state_quality=PARTIAL`, sin red, broker ni LLM.
+- Invocación real `schedule-status --json` sobre `DATA_DIR` inexistente:
+  `database_missing`, `available=false` y el directorio no fue creado.
 - `kernel.py`, `tools/broker.py`, `tools/execution.py`, `tools/risk.py`,
   `config.py` y `.env` no son parte de este lote; producción, stack, SQLite
   productiva, jobs, broker, red, LLM, Telegram, locks, leases y untracked del

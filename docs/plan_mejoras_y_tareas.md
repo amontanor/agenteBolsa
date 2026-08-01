@@ -3028,6 +3028,8 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Suite final aislada: `2380 passed, 1 skipped` preexistente y `1 warning`
   externo; focales P-L78C `10 passed`; Ruff/NUL/compilación/diff/config/kernel
   temporal y smoke fake aislado verdes.
+- `schedule-status --json` real con DB ausente devuelve `database_missing` sin
+  crear `DATA_DIR` ni artefactos de logging.
 - Dictamen del candidato: `ready_for_pl78c_closed_market_integration`. El
   siguiente paso único sigue siendo resolver la procedencia de `.env`/kernel y
   realizar un ensayo combinado separado; P-L78C no autoriza despliegue.
