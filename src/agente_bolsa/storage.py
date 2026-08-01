@@ -59,6 +59,14 @@ class LearningObservationBatchError(RuntimeError):
         self.cause = cause
         self.retry_possible = retry_possible
 
+
+class ReadOnlyRuntimeUnavailable(RuntimeError):
+    """Runtime status cannot be read without risking a sidecar mutation."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 
@@ -3001,6 +3009,34 @@ class Store:
         if not row:
             return None
         return json.loads(row["value_json"])
+
+    def read_runtime_values(self, keys: Iterable[str]) -> dict[str, Any]:
+        """Read runtime values through the cached read-only connection."""
+
+        key_list = tuple(dict.fromkeys(str(key) for key in keys))
+        if not key_list:
+            return {}
+        if not self.database_path.exists():
+            raise FileNotFoundError(self.database_path)
+        sidecar_present = Path(f"{self.database_path}-wal").exists() or Path(f"{self.database_path}-shm").exists()
+        with self.database_path.open("rb") as database_file:
+            header = database_file.read(20)
+        wal_mode = len(header) >= 19 and header[18] == 2
+        if sidecar_present or wal_mode:
+            raise ReadOnlyRuntimeUnavailable("wal_mode_or_sidecar_present")
+
+        placeholders = ", ".join("?" for _ in key_list)
+        rows = self.read_connection().execute(
+            f"SELECT key, value_json FROM runtime_state WHERE key IN ({placeholders})",
+            key_list,
+        ).fetchall()
+        result: dict[str, Any] = {}
+        for row in rows:
+            try:
+                result[str(row["key"])] = json.loads(row["value_json"])
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise ValueError("runtime_state payload is invalid JSON") from exc
+        return result
 
     def set_runtime_value(self, key: str, value: Any) -> None:
         with self.connect() as conn:

@@ -277,7 +277,7 @@ def test_initiative_topic_key_ignores_generated_ci_identifiers():
 
 def test_improvement_llm_client_disabled_returns_valid_json_payload(tmp_path):
     settings = _settings(tmp_path)
-    assert settings.improvement_llm_orchestrator_model == "kimi-k2.6"
+    assert settings.improvement_llm_orchestrator_model == "deepseek-v4-flash"
     result = ImprovementLLMClient(settings).generate_json(
         [{"role": "user", "content": "context"}],
         {},
