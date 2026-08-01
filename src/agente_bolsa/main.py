@@ -3558,7 +3558,6 @@ def command_schedule(args: argparse.Namespace) -> None:
 
 def command_schedule_status(_: argparse.Namespace) -> None:
     settings = get_settings()
-    configure_logging(settings.logs_dir, settings.log_level)
     _print_json(scheduler_status(settings))
 
 

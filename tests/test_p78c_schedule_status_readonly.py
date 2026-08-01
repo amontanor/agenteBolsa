@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from agente_bolsa.config import Settings
-from agente_bolsa.main import build_parser
+from agente_bolsa.main import build_parser, command_schedule_status
 from agente_bolsa.scheduler import _job_state_key, scheduler_status
 from agente_bolsa.storage import Store
 
@@ -58,6 +58,20 @@ def test_missing_data_dir_is_read_only_and_reports_unavailable(tmp_path: Path) -
     }
     assert all(value is None for value in status["job_runtime"].values())
     assert not (tmp_path / "missing").exists()
+
+
+def test_cli_missing_data_dir_does_not_create_logging_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path / "missing")
+    captured: list[dict[str, object]] = []
+    monkeypatch.setattr("agente_bolsa.main.get_settings", lambda: settings)
+    monkeypatch.setattr("agente_bolsa.main._print_json", captured.append)
+
+    command_schedule_status(type("Args", (), {"json": True})())
+
+    assert captured[0]["runtime_state"]["reason"] == "database_missing"
+    assert not settings.data_dir.exists()
 
 
 def test_existing_database_uses_read_only_runtime_and_preserves_disk(
