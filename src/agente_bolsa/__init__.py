@@ -33,4 +33,5 @@ __all__ = ["__version__"]
 # P-L77B1: fail-closed adaptive override authority and session expiry (0.4.211).
 # P-L78B: DeepSeek V4 Flash as the runtime LLM default and effective identity carrier (0.4.212).
 # P-L78C: genuinely read-only schedule-status contract (0.4.213).
-__version__ = "0.4.213"
+# P-L79: Arrow-safe text boundary for the Streamlit configuration table (0.4.214).
+__version__ = "0.4.214"
