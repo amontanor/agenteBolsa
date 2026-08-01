@@ -2994,3 +2994,23 @@ de despliegue quedan pendientes con XNYS cerrado.
   token válido, `MAX_ORDERS_PER_CYCLE=4`, cero órdenes abiertas y cero
   críticos. Dictamen: `deployed`; el warning de inventario legacy permanece
   observacional y sin autoridad.
+
+## P-L79H - cierre productivo intentado y revertido
+
+- Preflight cerrado del 02-ago-2026: XNYS cerrado, PMR 2026-07-31
+  `completed/pipeline_completed`, lease vacio, kernel `ok` tras el sellado
+  manual autorizado y stack sano.
+- Se integro el candidato exacto `222d2371` mediante merge `--no-ff`
+  `d05ce134`, con arbol funcional `205964d4` y version `0.4.214`.
+- El gate de suite completa termino en `1678 passed, 1 failed, 1 warning`
+  tras 751.99 s. Fallo reproducible:
+  `tests/test_p69_fill_watch_implementation.py::test_configuration_is_disabled_and_provider_timeout_is_neutral`,
+  que espera el watcher desactivado mientras la configuracion productiva
+  autorizada de P-L76 lo tiene activo.
+- No se modifico `.env`, manifest ni codigo para ocultar el fallo. Se ejecuto
+  rollback auditable `6c36c062`; produccion queda en version `0.4.211`, arbol
+  `6938d157`, stack levantado y health doble `200/200` separado por mas de 75 s.
+- Dictamen: `needs_fix`. Siguiente paso unico: corregir el aislamiento o
+  contrato de esa prueba sin cambiar la activacion productiva del watcher y
+  repetir la validacion cerrada; no reintentar el despliegue antes de suite
+  verde.

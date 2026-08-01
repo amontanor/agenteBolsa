@@ -1106,3 +1106,24 @@ con XNYS cerrado. No desplegar automaticamente.
   y cero críticos. El inventario legacy sigue `preexisting_unauthorized` y
   warning observacional; no tiene autoridad efectiva. No abrir P-L78 en este
   turno.
+
+## P-L79H - cierre intentado, gate rojo y rollback
+
+- El preflight del 02-ago-2026 fue verde: XNYS cerrado, PMR 2026-07-31
+  terminal `completed/pipeline_completed`, lease vacio, kernel `ok` y
+  referencias limpias. Se preservaron los untracked del operador.
+- El merge `--no-ff` `d05ce134` integro `222d2371` sobre `ba7d488d` y produjo
+  temporalmente el arbol `205964d4`, version `0.4.214`.
+- La suite completa se detuvo por un fallo real despues de `1678 passed` y
+  `751.99 s`:
+  `tests/test_p69_fill_watch_implementation.py::test_configuration_is_disabled_and_provider_timeout_is_neutral`
+  afirma `False`, pero el `.env` productivo autorizado activa el watcher por
+  P-L76. Hubo una warning externa y ningun cambio de test/config para ocultarlo.
+- Revert auditable `6c36c062` dejo el arbol funcional `6938d157`, version
+  `0.4.211`; `stack_up` y dos comprobaciones a las `01:31:22` y `01:33:06`
+  CEST confirmaron HTTP raiz/health `200/200`, un scheduler, listener unico,
+  kernel `ok` y ausencia de blockers.
+- Estado: `needs_fix`. Proximo unico lote: aislar esa expectativa de test del
+  `.env` productivo o actualizar su contrato de forma autorizada, sin cambiar
+  la activacion del watcher; despues repetir suite y cierre. No desplegar
+  `0.4.214` hasta obtener suite completamente verde.
