@@ -7,7 +7,6 @@ import pytest
 
 from agente_bolsa import web_app
 
-
 MIXED_CONFIG_ROWS = [
     {"clave": "feature_enabled", "valor": True},
     {"clave": "max_orders", "valor": 4},
