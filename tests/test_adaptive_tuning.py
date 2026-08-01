@@ -76,10 +76,14 @@ def test_active_adaptive_overrides_reads_only_active(tmp_path):
 {
   "version": 1,
   "parameters": {
-    "ENTRY_QUALITY_MAX_RSI": {
-      "status": "active",
-      "proposed": 81
-    },
+        "ENTRY_QUALITY_MAX_RSI": {
+          "status": "active",
+          "proposed": 81,
+          "requested_auto_apply": true,
+          "authorized_auto_apply": true,
+          "expires_after_sessions": 3,
+          "evidence": {"session_date": "2026-04-28"}
+        },
     "ENTRY_QUALITY_MAX_SMA20_DISTANCE": {
       "status": "shadow",
       "proposed": 0.08
