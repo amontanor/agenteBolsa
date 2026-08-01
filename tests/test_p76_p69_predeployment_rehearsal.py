@@ -23,7 +23,7 @@ def test_fill_watch_preserves_provider_neutral_post_submit_order() -> None:
     assert "finalization_pending" in reconciliation_source
 
 
-def test_fill_watch_provider_and_scheduler_boundaries_are_explicit() -> None:
+def test_fill_watch_provider_and_scheduler_boundaries_are_explicit(tmp_path, monkeypatch) -> None:
     provider_source = inspect.getsource(fill_provider.AlpacaOrderStatusProvider)
     scheduler_source = inspect.getsource(scheduler.build_scheduler)
     job_source = inspect.getsource(scheduler.trade_fill_watch_job)
@@ -35,4 +35,5 @@ def test_fill_watch_provider_and_scheduler_boundaries_are_explicit() -> None:
     assert "max_instances=1" in scheduler_source
     assert "coalesce=True" in scheduler_source
     assert "trade_fill_watch_enabled" in job_source
-    assert Settings(_env_file=None).trade_fill_watch_enabled is False
+    monkeypatch.delenv("TRADE_FILL_WATCH_ENABLED", raising=False)
+    assert Settings(DATA_DIR=tmp_path, _env_file=None).trade_fill_watch_enabled is False
