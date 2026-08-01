@@ -1106,3 +1106,20 @@ con XNYS cerrado. No desplegar automaticamente.
   y cero críticos. El inventario legacy sigue `preexisting_unauthorized` y
   warning observacional; no tiene autoridad efectiva. No abrir P-L78 en este
   turno.
+
+## P-L78B - default global DeepSeek V4 Flash
+
+- Candidato aislado `pl78b_deepseek_default`, versión `0.4.212`, sobre la base
+  productiva `ba7d488d`/tree `6938d157`.
+- `opencode-go/deepseek-v4-flash` es el default global. Los fallbacks técnicos
+  siguen siendo Qwen y luego deterministas; GLM/Kimi/MiMo solo quedan como
+  overrides explícitos, compatibilidad o historia.
+- La telemetría de uso, snapshots de decisión y eventos CrewAI llevan
+  `requested/effective/provider/fallback` del endpoint real. No se cambia la
+  autoridad económica de gates, riesgo, sizing, planes u órdenes.
+- QA: focales `317 passed`; suite completa aislada `2370 passed`, 1 skip
+  preexistente y 1 warning externo en `812.37 s`; Ruff, NUL, compilación,
+  diff, config, kernel temporal y smoke `run-once --skip-crew` temporal verdes.
+- El worktree está listo para ensayo de integración cerrado. No tocar
+  producción ni `.env` desde este relevo; el siguiente turno debe integrar el
+  HEAD final con `merge --no-ff`, repetir gates y verificar dos health checks.

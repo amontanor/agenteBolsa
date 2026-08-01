@@ -2994,3 +2994,20 @@ de despliegue quedan pendientes con XNYS cerrado.
   token válido, `MAX_ORDERS_PER_CYCLE=4`, cero órdenes abiertas y cero
   críticos. Dictamen: `deployed`; el warning de inventario legacy permanece
   observacional y sin autoridad.
+
+## P-L78B - default global DeepSeek V4 Flash (0.4.212)
+
+- Candidato aislado `pl78b_deepseek_default`, rama
+  `codex/pl78b-deepseek-default`, sobre la base productiva `ba7d488d`.
+- Reproducción: Settings, roles y codegen heredaban Kimi por defaults de código
+  aunque parte de la ruta productiva ya seleccionaba OpenCode Go/DeepSeek;
+  mejora continua conservaba GLM como default activo.
+- Fix: defaults globales y `.env.example` pasan a
+  `opencode-go/deepseek-v4-flash`; Qwen sigue siendo fallback técnico y los
+  overrides explícitos compatibles se conservan. La identidad efectiva de
+  telemetría sale del endpoint/respuesta real, no de `settings.openai_model`.
+- Focales `317 passed`; suite aislada `2370 passed`, 1 skip preexistente y
+  1 warning externo; Ruff/NUL/compile/diff/config/kernel/smoke temporal verdes.
+- Producción, `.env`, datos, stack y archivos protegidos no se modificaron. El
+  candidato queda pendiente de integración y despliegue cerrado; no se
+  reescriben eventos históricos GLM/Kimi.
