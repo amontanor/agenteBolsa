@@ -178,6 +178,8 @@ según P-L78C-AUDIT; después podrá ensayarse P-L78B junto con este cambio.
 
 - Base: `95cfdc04ea7f5e6ccf4a6985dc55d6310b633fc9`, tree
   `0861b2fbef1e9a4627f21e5377dff60081c7904a`, versión 0.4.212.
+- HEAD final del candidato: `c5e8f5fcac10174ea5d2cfd5b7074a1a5b4198cb`, tree
+  `f4dbd9e07b05c3817df7741a793a0e6389761536`, versión 0.4.213.
 - Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl78c_schedule_status_readonly`.
 - Rama: `codex/pl78c-schedule-status-readonly`.
 - Commits: `cb664ae6` (caracterización), `d2c31225` (implementación y bump),
