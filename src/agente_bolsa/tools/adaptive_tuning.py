@@ -174,6 +174,7 @@ def _override_expiry_is_valid(
     item: dict[str, Any],
     *,
     current_session_date: str | date | None,
+    calendar: MarketCalendar | None = None,
 ) -> bool:
     """Evaluate session-based expiry without using file timestamps.
 
@@ -191,7 +192,7 @@ def _override_expiry_is_valid(
     if created is None or current is None or current < created:
         return False
     try:
-        calendar = MarketCalendar(
+        calendar = calendar or MarketCalendar(
             getattr(settings, "market_calendar", "XNYS"),
             getattr(settings, "local_timezone", "Europe/Madrid"),
         )
@@ -225,6 +226,17 @@ def active_adaptive_overrides(
 
     if not _auto_apply_authorized(settings):
         return {}
+    calendar = None
+    if current_session_date is None:
+        try:
+            calendar = MarketCalendar(
+                getattr(settings, "market_calendar", "XNYS"),
+                getattr(settings, "local_timezone", "Europe/Madrid"),
+            )
+            market_status = calendar.status()
+            current_session_date = market_status.session_date if market_status.is_open else None
+        except Exception:
+            current_session_date = None
     payload = load_adaptive_config(adaptive_config_path(settings))
     overrides: dict[str, Any] = {}
     for name, item in payload.get("parameters", {}).items():
@@ -237,6 +249,7 @@ def active_adaptive_overrides(
             settings,
             item,
             current_session_date=current_session_date,
+            calendar=calendar,
         ):
             continue
         value = item.get("proposed")
