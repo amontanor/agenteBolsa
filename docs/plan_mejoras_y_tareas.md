@@ -2938,6 +2938,18 @@ de despliegue quedan pendientes con XNYS cerrado.
 - XNYS abierto: suite completa/smoke/operación real omitidos. Dictamen:
   `ready_for_closed_market_full_validation`.
 
+## P-L76R1 - corrección del gate P-L54 y suite cerrada
+
+- Fix mínimo `00015af6`: el lector de conflictos P-L54 ya no mezcla estados de
+  broker ni accede a una columna inexistente. Versión `0.4.210`.
+- QA de expectativas históricas actualizadas: `1f4b4a79` y `2b2a21d0`.
+- Suite final `2339 passed`, `1 skipped` preexistente, `1 warning`,
+  `816.43 s`; focales finales `107 passed`; Ruff/NUL/compile/diff/config OK y
+  smoke de entrypoint temporal aislado OK.
+- Estado: listo para revalidación productiva cerrada y despliegue autorizado,
+  aún no desplegado. Siguiente paso único: ejecutar P-L76-CLOSE con preflight
+  read-only y sin reparar más código.
+
 ## P-L76-PRECLOSE - ensayo previo de P-L69-R2 sobre P-L75
 
 - Worktree aislado `pl76_p69_predeployment_rehearsal`, rama

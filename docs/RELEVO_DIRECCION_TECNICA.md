@@ -1035,6 +1035,20 @@ con XNYS cerrado. No desplegar automaticamente.
   XNYS abierto; pendiente solo la validación cerrada antes de reintegrar o
   desplegar.
 
+## P-L76R1 - gate funcional cerrado
+
+- El candidato `pl76_p69_predeployment_rehearsal` queda en versión `0.4.210`
+  tras `00015af6`; `1f4b4a79` y `2b2a21d0` son QA de expectativas obsoletas.
+- Causa corregida: `capital_deployment_funnel_shadow_conflicts()` no debe
+  importar ni filtrar por estados de `broker_orders`; su consulta solo contiene
+  `agent_events`. La frontera `pending_broker_orders()` conserva su propio
+  filtro terminal.
+- Suite cerrada final: `2339 passed`, un skip preexistente y una advertencia
+  externa; focales `107 passed`; gates estáticos/config y smoke de entrypoint
+  temporal aislado verdes.
+- No se ha tocado producción. Reanudar únicamente con el preflight cerrado
+  exigido, merge exacto, delta `.env` autorizado y doble health posterior.
+
 ## P-L76-PRECLOSE - relevo para validación cerrada
 
 - Ensayo aislado: `pl76_p69_predeployment_rehearsal`, rama

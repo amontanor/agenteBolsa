@@ -299,6 +299,31 @@ crítica, orden inesperada o lock de SQLite. El rollback autorizado es un
 `git revert` auditable, nunca reset/clean; P-L76 no ejecuta rollback ni
 despliegue.
 
+### P-L76R1 — corrección mínima del gate P-L54
+
+La suite cerrada del candidato reprodujo un defecto propio del candidato:
+`capital_deployment_funnel_shadow_conflicts()` seleccionaba eventos de
+`agent_events` sin el campo `status`, pero importaba el normalizador de estados
+del broker y accedía a `row["status"]`. Se retiró únicamente ese import/filtro;
+el lector de conflictos P-L54 vuelve a tratar solo eventos P-L54 y
+`pending_broker_orders()` conserva su exclusión terminal independiente.
+
+- Fix funcional `00015af6`; versión `0.4.210`.
+- QA mínima de expectativas históricas de versión y tooltip de sesión:
+  `1f4b4a79`, `2b2a21d0`.
+- Suite final: `2339 passed`, `1 skipped` preexistente y `1 warning` externo,
+  en `816.43 s`.
+- Focales finales: `107 passed`; Ruff, NUL, compileall, diff-check,
+  `validate-agent-config` aislado y smoke de entrypoint `run-once --skip-crew`
+  monkeypatched sin proveedores externos: OK.
+- `kernel-status` aislado quedó `unsealed` sin violaciones por usar DATA_DIR
+  temporal; requiere comprobación productiva antes del despliegue.
+
+El candidato queda listo para continuar la secuencia cerrada de preflight,
+stack_down, merge, gates con stack detenido, delta exacto de las seis claves
+TRADE_FILL_WATCH autorizadas, stack_up y doble health. No se ha modificado
+producción ni se ha desplegado.
+
 ### Commits P-L76
 
 - Merge: `faccc5de` — `merge: rehearse P-L69-R2 over P-L75`.
