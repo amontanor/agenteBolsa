@@ -93,6 +93,20 @@ postmarket, reconciliación, despliegue, reinicio ni push. El bloqueo separado
 de procedencia `.env`/kernel de P-L78 continúa pendiente y no queda resuelto
 por este candidato.
 
+## P-L79I — aislamiento de tests P-L69 respecto del entorno
+
+- Reproducción contra `222d2371`: con `TRADE_FILL_WATCH_ENABLED=true` en el
+  entorno temporal, `Settings(DATA_DIR=tmp_path)` leyó la variable externa y
+  falló la expectativa de watcher desactivado.
+- Corrección exclusivamente en tests: `_env_file=None`, `DATA_DIR` temporal y
+  saneamiento de las seis variables `TRADE_FILL_WATCH_*` mediante
+  `monkeypatch`. No se modifican watcher, Settings, `.env` ni política.
+- También se aisló la aserción equivalente de P-L76, que tenía el mismo patrón.
+- Evidencia: reproducción roja `1 failed`; tras el fix, focales bajo entorno
+  activo externo `159 passed, 1 warning` y subconjunto limpio `3 passed`.
+- Gates de este lote: Ruff, NUL y `git diff --check` verdes. Suite completa
+  omitida por alcance; queda como gate del siguiente ensayo cerrado.
+
 ## Siguiente paso único
 
 Revisar el árbol limpio y ejecutar el ensayo de integración cerrado de P-L79
