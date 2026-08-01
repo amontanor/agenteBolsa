@@ -3025,9 +3025,10 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Acepta `schedule-status --json` sin cambiar la salida JSON existente ni el
   scheduling efectivo. La deriva `.env`/kernel de P-L78B sigue sin resolverse y
   bloquea cualquier despliegue, fuera del alcance P-L78C.
-- Suite final aislada: `2380 passed, 1 skipped` preexistente y `1 warning`
-  externo; focales P-L78C `10 passed`; Ruff/NUL/compilación/diff/config/kernel
-  temporal y smoke fake aislado verdes.
+- Suite final aislada: `2380 passed, 1 skipped` preexistente
+  (`test_score_study_regression_current_sqlite`, sin SQLite histórica local) y
+  `1 warning` externo; focales P-L78C `10 passed`; Ruff/NUL/compilación/diff/
+  config/kernel temporal y smoke fake aislado verdes.
 - `schedule-status --json` real con DB ausente devuelve `database_missing` sin
   crear `DATA_DIR` ni artefactos de logging.
 - Dictamen del candidato: `ready_for_pl78c_closed_market_integration`. El

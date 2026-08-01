@@ -1135,9 +1135,11 @@ con XNYS cerrado. No desplegar automaticamente.
   `null`; calendario/cadencias permanecen informativos.
 - El contrato CLI acepta `schedule-status --json`. No representa runtime
   unavailable como cero o como actividad confirmada.
-- Suite final: `2380 passed, 1 skipped` preexistente y `1 warning` externo;
-  focal P-L78C `10 passed`; Ruff, NUL, compilación, diff, config y smoke fake
-  aislado verdes. Kernel temporal `unsealed` esperado sin violaciones.
+- Suite final: `2380 passed, 1 skipped` preexistente
+  (`test_score_study_regression_current_sqlite`, sin SQLite histórica local) y
+  `1 warning` externo; focal P-L78C `10 passed`; Ruff, NUL, compilación, diff,
+  config y smoke fake aislado verdes. Kernel temporal `unsealed` esperado sin
+  violaciones.
   `schedule-status --json` real con DB ausente no crea `DATA_DIR` ni logs.
   La deriva productiva de `.env`/kernel continúa bloqueando P-L78B y no fue
   tocada por este lote.

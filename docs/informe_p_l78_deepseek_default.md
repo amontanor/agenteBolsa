@@ -187,8 +187,10 @@ según P-L78C-AUDIT; después podrá ensayarse P-L78B junto con este cambio.
 - Regresiones focales: `61 passed` en la batería ampliada; el focal P-L78C final
   quedó en `10 passed`.
 - Suite completa aislada: `2380 passed, 1 skipped preexistente, 1 warning`
-  externo en `807.22 s`. El skip preexistente y la warning de
-  `websockets.legacy` no fueron creados por este lote.
+  externo en `807.81 s`. El skip es
+  `tests/test_pre_earnings.py::test_score_study_regression_current_sqlite`,
+  condicionado a disponer de la SQLite histórica local; no fue creado por
+  este lote. La warning es la deprecación externa de `websockets.legacy`.
 - Ruff completo, `scripts/check_no_nulls.py`, compilación y `git diff --check`:
   verdes. `validate-agent-config --json` aislado: `ok=true`, sin warnings.
   `kernel-status --json` aislado: `unsealed` esperado por falta de manifiesto
