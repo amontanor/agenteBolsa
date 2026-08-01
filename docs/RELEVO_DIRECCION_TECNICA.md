@@ -1161,3 +1161,20 @@ con XNYS cerrado. No desplegar automaticamente.
   operador no se tocaron. La deriva `.env` continúa bloqueando el despliegue.
 - Siguiente paso único: resolver autoridad/procedencia `.env` y repetir gates
   cerrados; no desplegar desde este ensayo.
+
+## P-L79 - tabla de configuración Streamlit segura para PyArrow
+
+- Candidato: `pl79_arrow_safe_config_table`, versión `0.4.214`, base
+  `5e0f41e2`/tree `d00abe9c`.
+- `page_config()` ya no entrega valores heterogéneos al serializador: la
+  frontera informativa convierte booleanos, números, paths, secuencias y
+  missing a texto determinista (`true`/`false`, valor numérico o `n/d`). No
+  muta Settings ni añade claves o secretos.
+- Suite `2385 passed`, un skip histórico preexistente y una warning externa;
+  focales P-L79/P-L78B/P-L78C y flujo con dobles verdes. Ruff, NUL,
+  compilación, diff, configuración temporal y kernel temporal (`unsealed`, sin
+  violaciones) verdes. La ruta CLI real `run-once` no se lanzó porque exigiría
+  adquisición de mercado; no se hizo red/broker/LLM.
+- Siguiente paso único: revisar y ensayar integración `--no-ff` del candidato.
+  El bloqueo productivo `.env`/kernel de P-L78 continúa intacto; P-L79 no lo
+  repara ni autoriza despliegue.

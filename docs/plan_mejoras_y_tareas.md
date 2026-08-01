@@ -3049,3 +3049,22 @@ de despliegue quedan pendientes con XNYS cerrado.
   kernel productivo no fue tocado.
 - Dictamen: `ready_for_pl78_combined_closed_market_deployment_after_env_authority`;
   no desplegar hasta resolver la autoridad `.env` y repetir el cierre.
+
+## P-L79 - tabla de configuración Streamlit segura para PyArrow (0.4.214)
+
+- Candidato aislado `pl79_arrow_safe_config_table`, rama
+  `codex/pl79-arrow-safe-config-table`, sobre el HEAD documental final de
+  P-L78D `5e0f41e2`/tree `d00abe9c`.
+- Caracterización: `page_config()` entregaba una columna `valor` heterogénea
+  (`str`/`bool`/números/`Path`/`None`) y PyArrow fallaba antes del fallback
+  interno de Streamlit.
+- Corrección: frontera `_config_display_dataframe()` exclusivamente textual,
+  con `true`/`false`, representación numérica estable, `n/d` explícito para
+  missing y preservación de orden/claves/copy. No cambia Settings ni trading.
+- QA final: suite `2385 passed, 1 skipped` preexistente y `1 warning` externa;
+  Ruff/NUL/compilación/diff/config/kernel temporal y focales verdes. El smoke
+  CLI real no se ejecutó para no adquirir datos externos; el flujo de ciclo con
+  dobles quedó cubierto (`22 passed`).
+- Dictamen del candidato: `ready_for_pl79_closed_market_integration`.
+  Siguiente paso único: ensayo `--no-ff` separado. El bloqueo `.env`/kernel de
+  P-L78 sigue fuera de este lote.
