@@ -3196,3 +3196,16 @@ fuera de alcance.
 - Estado: `blocked_external_provider`. Siguiente acción única: opt-in regional
   oficial de OpenCode Go y una nueva ejecución aislada del script; no cambiar a
   GLM/Kimi ni alterar fallback/política.
+
+## P-L80H4 - correccion del gate de version del candidato
+
+P-L80H3 fue revertido de forma auditable porque la suite encontro una
+expectativa stale de `0.4.215` en el candidato `0.4.216`. La base
+`0.4.214` pasa su expectativa `0.4.214`; el candidato fallaba. P-L80H4
+corrige solo esa asercion en `tests/test_p59c_llm_selected_authority.py`.
+
+El candidato queda `ready_for_closed_market_redeployment`: commit funcional
+`338d0cc0`, version `0.4.216`, focales 70 passed y suite 2410 passed, 1 skip
+preexistente y 1 warning externo. No hay cambios de trading, riesgo,
+ejecucion, proveedor, modelo, endpoint ni credenciales. Siguiente lote unico:
+revalidacion cerrada y redeploy secuenciado con todos los gates verdes.

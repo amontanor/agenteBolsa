@@ -582,3 +582,55 @@ repetirse el mismo script una sola vez, sin cambiar el contrato.
 `ddcf3087` (resolución read-only del `.env` existente desde worktree aislado) y
 `fc25f79f` (guard de endpoint oficial y test). El HEAD/tree finales y el estado
 de limpieza se reportan en el dictamen final.
+
+## P-L80H4 - causa raiz y fix minimo del gate del rollback
+
+Dictamen: `ready_for_closed_market_redeployment`. Este candidato no se ha
+integrado ni desplegado; produccion permanece en el estado seguro restaurado.
+
+La reproduccion contra produccion v0.4.214 (`b1c4cc0f`, tree `2ee61f28`)
+paso el test `test_version_policy_requires_bump`: la expectativa activa en esa
+base es `0.4.214`. La reproduccion contra el candidato P-L80H2
+`7e6e782c`/tree `6493d7e4` fallo porque la prueba seguia esperando `0.4.215`
+despues del bump funcional a `0.4.216`. Es una regresion de test del candidato,
+no un cambio de trading ni un leak de entorno.
+
+El fix unico es el commit `338d0cc0`: actualiza la expectativa y su comentario
+para `0.4.216` en `tests/test_p59c_llm_selected_authority.py`. No cambia
+runtime, seleccion, gates economicos, sizing, riesgo, ejecucion, proveedor,
+modelo, endpoint ni credenciales.
+
+### QA P-L80H4
+
+- Focales P-L80B/H2/P-L59C: **70 passed**.
+- Suite completa: **2410 passed, 1 skip preexistente, 1 warning externo**,
+  **815.69 s**. El skip y la warning son los preexistentes de la suite.
+- Ruff: verde; `check_no_nulls.py`: **468 archivos OK**; compilacion temporal:
+  **452 archivos**; `git diff --check`: verde.
+- `validate-agent-config --json` aislado: `ok=true`, sin warnings.
+- `kernel-status --json` aislado: `unsealed`, `violations=[]`, esperado sin
+  manifiesto temporal.
+- Smoke CLI real `run-once --skip-crew` aislado: verde con DATA_DIR temporal,
+  snapshot/estado fake, `used_crew=false`, sin ordenes enviadas y sin broker,
+  red o LLM. El primer arnes fallo antes de invocar el CLI por usar una firma
+  incorrecta; se corrigio el arnes, no el codigo productivo, y el smoke final
+  paso.
+- Objetos Git protegidos (`kernel.py`, `broker.py`, `execution.py`, `risk.py`,
+  `config.py`) iguales a la base.
+
+### Probe DeepSeek recuperada
+
+No se repitio la llamada en P-L80H4. La reprobe aislada posterior ya existente
+fue: `provider=opencode-go`, `model=deepseek-v4-flash`, endpoint
+`https://opencode.ai/zen/go/v1/chat/completions`, HTTP 200, `ok=true`,
+latencia `1.774 s`, `finish_reason=stop`, `fallback_used=false`,
+`requests_made=1`. El timestamp no fue emitido por la salida sanitizada.
+La sonda canonica anterior con `max_tokens=16` habia terminado en
+`response_invalid`/`finish_reason=length`; no se usa como evidencia verde.
+
+Base de trabajo: `7e6e782c`; worktree
+`C:\Antonio\Bref\agenteBolsa_worktrees\pl80h4_gate_fix`; rama
+`codex/pl80h4-gate-fix`; commit funcional `338d0cc0`; version `0.4.216`.
+Produccion, `.env`, SQLite, stack, untracked del operador y el candidato
+original permanecen intactos; no hubo probe adicional, merge productivo,
+despliegue, jobs manuales, kernel-seal ni push.
