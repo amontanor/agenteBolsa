@@ -3087,3 +3087,17 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Dictamen del candidato: `ready_for_pl79_closed_market_integration`.
   Siguiente paso único: ensayo `--no-ff` separado. El bloqueo `.env`/kernel de
   P-L78 sigue fuera de este lote.
+
+## P-L79I - aislamiento de tests P-L69 respecto del entorno
+
+- Reproducción contra `222d2371`: con `TRADE_FILL_WATCH_ENABLED=true` en el
+  entorno temporal, `Settings(DATA_DIR=tmp_path)` leyó la variable externa y
+  falló la expectativa de watcher desactivado.
+- Corrección exclusivamente en tests: `_env_file=None`, `DATA_DIR` temporal y
+  saneamiento de las seis variables `TRADE_FILL_WATCH_*` mediante
+  `monkeypatch`. También se aisló la aserción equivalente de P-L76.
+- Focales bajo entorno externo activo: `159 passed, 1 warning`; subconjunto
+  limpio: `3 passed`. Ruff, NUL y `git diff --check` verdes.
+- Dictamen del candidato: `ready_for_closed_market_redeployment_rehearsal`.
+  Suite completa y gates de integración quedan pendientes del siguiente
+  ensayo cerrado; no se modifica el watcher productivo ni `.env`.

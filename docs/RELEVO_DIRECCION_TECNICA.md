@@ -1198,3 +1198,18 @@ con XNYS cerrado. No desplegar automaticamente.
 - Siguiente paso único: revisar y ensayar integración `--no-ff` del candidato.
   El bloqueo productivo `.env`/kernel de P-L78 continúa intacto; P-L79 no lo
   repara ni autoriza despliegue.
+
+## P-L79I - aislamiento de tests P-L69 respecto del entorno
+
+- Contra `222d2371`, la prueba de defaults heredaba
+  `TRADE_FILL_WATCH_ENABLED=true` del entorno del proceso aunque usara
+  `DATA_DIR` temporal. La reproducción roja fue `1 failed`.
+- Se corrigieron únicamente `tests/test_p69_fill_watch_implementation.py` y
+  `tests/test_p76_p69_predeployment_rehearsal.py`: `_env_file=None`, entorno
+  saneado con `monkeypatch` y regresión negativa con las seis variables del
+  watcher. No cambia `.env`, Settings, watcher ni política.
+- QA: `159 passed, 1 warning` con entorno activo externo y `3 passed` limpio;
+  Ruff/NUL/diff verdes. Suite completa y smoke se reservan para la integración
+  cerrada siguiente.
+- Estado: `ready_for_closed_market_redeployment_rehearsal`; candidato limpio
+  pendiente de ensayo `--no-ff`, sin despliegue en este lote.

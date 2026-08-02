@@ -10,6 +10,15 @@ from agente_bolsa.tools import fill_provider, fill_watch, telegram_trade_notific
 
 NOW = datetime(2026, 7, 29, 14, 0, tzinfo=timezone.utc)
 
+_TRADE_FILL_WATCH_ENV_NAMES = (
+    "TRADE_FILL_WATCH_ENABLED",
+    "TRADE_FILL_WATCH_CADENCE_SECONDS",
+    "TRADE_FILL_WATCH_MAX_PENDING_PER_RUN",
+    "TRADE_FILL_WATCH_REQUEST_TIMEOUT_SECONDS",
+    "TRADE_FILL_WATCH_BACKOFF_SECONDS",
+    "TRADE_FILL_WATCH_MAX_BACKOFF_SECONDS",
+)
+
 
 class FakeProvider:
     def __init__(self, snapshots):
@@ -304,8 +313,33 @@ def test_watcher_and_postmarket_race_has_one_local_transition_and_one_message(tm
     assert len(sent) == 1
 
 
-def test_configuration_is_disabled_and_provider_timeout_is_neutral(tmp_path):
-    settings = Settings(DATA_DIR=tmp_path)
+def _neutral_settings(tmp_path, monkeypatch):
+    """Build defaults without inheriting operator or repository environment."""
+    for name in _TRADE_FILL_WATCH_ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
+    return Settings(DATA_DIR=tmp_path, _env_file=None)
+
+
+def test_configuration_is_disabled_and_provider_timeout_is_neutral(tmp_path, monkeypatch):
+    settings = _neutral_settings(tmp_path, monkeypatch)
+
+    assert settings.trade_fill_watch_enabled is False
+    assert settings.trade_fill_watch_cadence_seconds == 30
+    assert settings.trade_fill_watch_max_pending_per_run == 25
+    assert settings.trade_fill_watch_request_timeout_seconds == 5
+    assert settings.trade_fill_watch_backoff_seconds == 30
+    assert settings.trade_fill_watch_max_backoff_seconds == 300
+
+
+def test_configuration_defaults_ignore_external_watcher_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("TRADE_FILL_WATCH_ENABLED", "true")
+    monkeypatch.setenv("TRADE_FILL_WATCH_CADENCE_SECONDS", "1")
+    monkeypatch.setenv("TRADE_FILL_WATCH_MAX_PENDING_PER_RUN", "1")
+    monkeypatch.setenv("TRADE_FILL_WATCH_REQUEST_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv("TRADE_FILL_WATCH_BACKOFF_SECONDS", "1")
+    monkeypatch.setenv("TRADE_FILL_WATCH_MAX_BACKOFF_SECONDS", "1")
+
+    settings = _neutral_settings(tmp_path, monkeypatch)
 
     assert settings.trade_fill_watch_enabled is False
     assert settings.trade_fill_watch_cadence_seconds == 30
