@@ -140,6 +140,16 @@ def test_configuration_mismatch_makes_no_request():
     assert transport.calls == []
 
 
+def test_endpoint_mismatch_makes_no_request():
+    transport = RecordingTransport(_success_response())
+
+    result = MODULE.run_probe(_config(endpoint="https://other.example/v1/chat/completions"), transport)
+
+    assert result["error_type"] == "configuration_mismatch"
+    assert result["requests_made"] == 0
+    assert transport.calls == []
+
+
 def test_missing_key_makes_no_request():
     transport = RecordingTransport(_success_response())
 

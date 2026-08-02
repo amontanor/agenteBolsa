@@ -187,16 +187,22 @@ def run_probe(config: ProbeConfig, transport: HealthTransport | None = None) -> 
         "error_message": None,
         "requests_made": 0,
     }
-    if not config.provider.strip() or config.provider.lower() not in {"opencode", "opencode-go"}:
+    if config.provider.strip().lower() != DEFAULT_PROVIDER:
         common.update(
             error_type="configuration_mismatch",
-            error_message="El selector no es OpenCode Go",
+            error_message="El selector no es opencode-go",
         )
         return _json_result(config=config, **common)
     if not config.model.strip() or config.model != DEFAULT_MODEL:
         common.update(
             error_type="configuration_mismatch",
             error_message="El modelo efectivo no es deepseek-v4-flash",
+        )
+        return _json_result(config=config, **common)
+    if config.endpoint != DEFAULT_ENDPOINT:
+        common.update(
+            error_type="configuration_mismatch",
+            error_message="El endpoint no es el endpoint oficial de OpenCode Go",
         )
         return _json_result(config=config, **common)
     if not config.endpoint.startswith("https://"):
