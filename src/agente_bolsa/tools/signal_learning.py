@@ -504,8 +504,6 @@ def update_signal_decisions(
     updated = 0
     for recommendation in recommendations:
         symbol = recommendation.symbol.upper()
-        decision_lineage = dict(getattr(recommendation, "decision_lineage", {}) or {})
-        signal_id = str(decision_lineage.get("signal_id") or "").strip() or None
         decision = recommendation.action
         gate = dict(gate_by_symbol.get(symbol, {}))
         backtest = gate.get("backtest_gate")
@@ -580,25 +578,21 @@ def update_signal_decisions(
             },
         }
         try:
-            applied = store.update_signal_decision(
+            store.update_signal_decision(
                 source_run_id=source_run_id,
                 symbol=symbol,
                 decision=decision,
                 features=feature_updates,
                 gate=gate_updates,
-                signal_id=signal_id,
             )
         except TypeError:
-            if signal_id:
-                raise
-            applied = store.update_signal_decision(
+            store.update_signal_decision(
                 source_run_id=source_run_id,
                 symbol=symbol,
                 decision=decision,
                 gate=gate_updates,
             )
-        if applied is not False:
-            updated += 1
+        updated += 1
     return updated
 
 
@@ -662,37 +656,17 @@ def _backtest_near_miss_shadow(settings: Settings, backtest_gate: dict[str, Any]
     }
 
 
-def _carrier_signal_id(item: Any) -> str | None:
-    if isinstance(item, dict):
-        direct = item.get("signal_id")
-        lineage = item.get("decision_lineage") or {}
-    else:
-        direct = None
-        lineage = getattr(item, "decision_lineage", {}) or {}
-    value = str(direct or lineage.get("signal_id") or "").strip()
-    return value or None
-
-
-def _carrier_lineage(item: Any) -> dict[str, Any]:
-    if isinstance(item, dict):
-        return dict(item.get("decision_lineage") or {})
-    return dict(getattr(item, "decision_lineage", {}) or {})
-
-
 def update_signal_execution_status(
     store: Store,
     *,
     source_run_id: str | None,
     approved_symbols: list[str] | None = None,
-    approved_recommendations: list[Any] | None = None,
     rejected_order_plans: list[dict[str, Any]] | None = None,
     planned_symbols: list[str] | None = None,
-    planned_signal_ids: list[str] | None = None,
     submitted: list[dict[str, Any]] | None = None,
     failed: list[dict[str, Any]] | None = None,
     effective_max_orders_per_cycle: int | None = None,
     effective_max_daily_buy_orders: int | None = None,
-    cycle_id: str | None = None,
 ) -> int:
     if not source_run_id:
         return 0
@@ -712,102 +686,8 @@ def update_signal_execution_status(
         for item in (failed or [])
         if str(item.get("symbol") or "").strip()
     }
-    rejected_by_signal_id = {
-        str(item.get("signal_id") or "").strip(): item
-        for item in (rejected_order_plans or [])
-        if str(item.get("signal_id") or "").strip()
-    }
-    submitted_by_signal_id = {
-        _carrier_signal_id(item): item
-        for item in (submitted or [])
-        if _carrier_signal_id(item)
-    }
-    failed_by_signal_id = {
-        _carrier_signal_id(item): item
-        for item in (failed or [])
-        if _carrier_signal_id(item)
-    }
-    exact_planned_signal_ids = {
-        str(item or "").strip() for item in (planned_signal_ids or []) if str(item or "").strip()
-    }
     planned = {str(symbol).upper().strip() for symbol in (planned_symbols or []) if str(symbol).strip()}
     updated = 0
-
-    def _payload_for(
-        *,
-        signal_id: str | None = None,
-        lineage: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "effective_max_orders_per_cycle": effective_max_orders_per_cycle,
-            "effective_max_daily_buy_orders": effective_max_daily_buy_orders,
-            "source_run_id": source_run_id,
-        }
-        if cycle_id:
-            payload["cycle_id"] = cycle_id
-        if signal_id:
-            payload["signal_id"] = signal_id
-        if lineage:
-            payload["decision_lineage"] = dict(lineage)
-        return payload
-
-    def _apply_exact(recommendation: Any) -> None:
-        nonlocal updated
-        symbol = str(getattr(recommendation, "symbol", "") or "").upper().strip()
-        signal_id = _carrier_signal_id(recommendation)
-        if not symbol or not signal_id:
-            return
-        lineage = _carrier_lineage(recommendation)
-        payload = _payload_for(signal_id=signal_id, lineage=lineage)
-        if signal_id in submitted_by_signal_id:
-            item = submitted_by_signal_id[signal_id]
-            payload.update(
-                {
-                    "status": "submitted",
-                    "broker_status": item.get("status"),
-                    "notional": item.get("notional"),
-                }
-            )
-        elif signal_id in failed_by_signal_id:
-            item = failed_by_signal_id[signal_id]
-            payload.update(
-                {
-                    "status": "submit_failed",
-                    "side": item.get("side"),
-                    "error": item.get("error"),
-                }
-            )
-        elif signal_id in rejected_by_signal_id:
-            item = rejected_by_signal_id[signal_id]
-            payload.update(
-                {
-                    "status": "plan_rejected",
-                    "stage": item.get("stage"),
-                    "reason": item.get("reason"),
-                    "checks": item.get("checks", {}),
-                }
-            )
-        elif signal_id in exact_planned_signal_ids:
-            payload["status"] = "plan_created"
-        else:
-            payload.update(
-                {
-                    "status": "approved_not_planned",
-                    "reason": "approved_not_planned",
-                }
-            )
-        if store.update_signal_gate(
-            source_run_id=source_run_id,
-            symbol=symbol,
-            signal_id=signal_id,
-            gate={"execution": payload},
-        ):
-            updated += 1
-
-    if approved_recommendations is not None:
-        for recommendation in approved_recommendations:
-            _apply_exact(recommendation)
-        return updated
 
     for raw_symbol in approved_symbols or []:
         symbol = str(raw_symbol or "").upper().strip()
@@ -816,10 +696,7 @@ def update_signal_execution_status(
         payload = {
             "effective_max_orders_per_cycle": effective_max_orders_per_cycle,
             "effective_max_daily_buy_orders": effective_max_daily_buy_orders,
-            "source_run_id": source_run_id,
         }
-        if cycle_id:
-            payload["cycle_id"] = cycle_id
         if symbol in submitted_by_symbol:
             item = submitted_by_symbol[symbol]
             payload.update(

@@ -3916,61 +3916,35 @@ class Store:
         decision: str,
         gate: dict[str, Any],
         features: dict[str, Any] | None = None,
-        signal_id: str | None = None,
-    ) -> bool:
-        exact_signal_id = str(signal_id or "").strip()
+    ) -> None:
         with self.connect() as conn:
-            if exact_signal_id:
-                row = conn.execute(
-                    """
-                    SELECT gate_json, features_json
-                    FROM signal_outcomes
-                    WHERE signal_id = ? AND source_run_id = ?
-                      AND coalesce(source, '') != 'lab_book'
-                    LIMIT 1
-                    """,
-                    (exact_signal_id, source_run_id),
-                ).fetchone()
-            else:
-                row = conn.execute(
-                    """
-                    SELECT gate_json, features_json
-                    FROM signal_outcomes
-                    WHERE source_run_id = ? AND symbol = ?
-                      AND coalesce(source, '') != 'lab_book'
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                    """,
-                    (source_run_id, symbol.upper()),
-                ).fetchone()
+            row = conn.execute(
+                """
+                SELECT gate_json, features_json
+                FROM signal_outcomes
+                WHERE source_run_id = ? AND symbol = ?
+                  AND coalesce(source, '') != 'lab_book'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (source_run_id, symbol.upper()),
+            ).fetchone()
             if not row:
-                return False
+                return
             existing_gate = json.loads(row["gate_json"] or "{}")
             existing_gate.update(gate)
             existing_features = json.loads(row["features_json"] or "{}")
             if features:
                 existing_features.update(features)
-            if exact_signal_id:
-                cursor = conn.execute(
-                    """
-                    UPDATE signal_outcomes
-                    SET decision = ?, gate_json = ?, features_json = ?, updated_at = ?
-                    WHERE signal_id = ? AND source_run_id = ?
-                      AND coalesce(source, '') != 'lab_book'
-                    """,
-                    (decision, _dumps(existing_gate), _dumps(existing_features), _utc_iso(), exact_signal_id, source_run_id),
-                )
-            else:
-                cursor = conn.execute(
-                    """
-                    UPDATE signal_outcomes
-                    SET decision = ?, gate_json = ?, features_json = ?, updated_at = ?
-                    WHERE source_run_id = ? AND symbol = ?
-                      AND coalesce(source, '') != 'lab_book'
-                    """,
-                    (decision, _dumps(existing_gate), _dumps(existing_features), _utc_iso(), source_run_id, symbol.upper()),
-                )
-            return cursor.rowcount > 0
+            conn.execute(
+                """
+                UPDATE signal_outcomes
+                SET decision = ?, gate_json = ?, features_json = ?, updated_at = ?
+                WHERE source_run_id = ? AND symbol = ?
+                  AND coalesce(source, '') != 'lab_book'
+                """,
+                (decision, _dumps(existing_gate), _dumps(existing_features), _utc_iso(), source_run_id, symbol.upper()),
+            )
 
     def update_signal_gate(
         self,
@@ -3978,90 +3952,32 @@ class Store:
         source_run_id: str,
         symbol: str,
         gate: dict[str, Any],
-        signal_id: str | None = None,
-    ) -> bool:
-        exact_signal_id = str(signal_id or "").strip()
+    ) -> None:
         with self.connect() as conn:
-            if exact_signal_id:
-                row = conn.execute(
-                    """
-                    SELECT gate_json
-                    FROM signal_outcomes
-                    WHERE signal_id = ? AND source_run_id = ?
-                      AND coalesce(source, '') != 'lab_book'
-                    LIMIT 1
-                    """,
-                    (exact_signal_id, source_run_id),
-                ).fetchone()
-            else:
-                row = conn.execute(
-                    """
-                    SELECT gate_json
-                    FROM signal_outcomes
-                    WHERE source_run_id = ? AND symbol = ?
-                      AND coalesce(source, '') != 'lab_book'
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                    """,
-                    (source_run_id, symbol.upper()),
-                ).fetchone()
+            row = conn.execute(
+                """
+                SELECT gate_json
+                FROM signal_outcomes
+                WHERE source_run_id = ? AND symbol = ?
+                  AND coalesce(source, '') != 'lab_book'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (source_run_id, symbol.upper()),
+            ).fetchone()
             if not row:
-                return False
+                return
             existing_gate = json.loads(row["gate_json"] or "{}")
-            incoming_execution = gate.get("execution") if isinstance(gate, dict) else None
-            existing_execution = existing_gate.get("execution")
-            if exact_signal_id and isinstance(existing_execution, dict) and isinstance(incoming_execution, dict):
-                existing_hash = _snapshot_content_hash(existing_execution)
-                candidate_hash = _snapshot_content_hash(incoming_execution)
-                if existing_hash == candidate_hash and set(gate) == {"execution"}:
-                    return True
-                if set(gate) == {"execution"}:
-                    conflict_id = f"signal_execution_carrier:{exact_signal_id}:conflict:{candidate_hash}"
-                    conflict_payload = {
-                        "signal_id": exact_signal_id,
-                        "source_run_id": source_run_id,
-                        "existing_content_hash": existing_hash,
-                        "candidate_content_hash": candidate_hash,
-                        "status": "conflict",
-                    }
-                    conn.execute(
-                        """
-                        INSERT OR IGNORE INTO agent_events (
-                            event_id, agent, event_type, cycle_id, payload_json, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            conflict_id,
-                            "signal_learning",
-                            "signal_execution_carrier_conflict",
-                            incoming_execution.get("cycle_id"),
-                            _dumps(conflict_payload),
-                            _utc_iso(),
-                        ),
-                    )
-                    return False
             existing_gate.update(gate)
-            if exact_signal_id:
-                cursor = conn.execute(
-                    """
-                    UPDATE signal_outcomes
-                    SET gate_json = ?, updated_at = ?
-                    WHERE signal_id = ? AND source_run_id = ?
-                      AND coalesce(source, '') != 'lab_book'
-                    """,
-                    (_dumps(existing_gate), _utc_iso(), exact_signal_id, source_run_id),
-                )
-            else:
-                cursor = conn.execute(
-                    """
-                    UPDATE signal_outcomes
-                    SET gate_json = ?, updated_at = ?
-                    WHERE source_run_id = ? AND symbol = ?
-                      AND coalesce(source, '') != 'lab_book'
-                    """,
-                    (_dumps(existing_gate), _utc_iso(), source_run_id, symbol.upper()),
-                )
-            return cursor.rowcount > 0
+            conn.execute(
+                """
+                UPDATE signal_outcomes
+                SET gate_json = ?, updated_at = ?
+                WHERE source_run_id = ? AND symbol = ?
+                  AND coalesce(source, '') != 'lab_book'
+                """,
+                (_dumps(existing_gate), _utc_iso(), source_run_id, symbol.upper()),
+            )
 
     def update_signal_outcome(self, signal_id: str, outcome: dict[str, Any]) -> None:
         with self.connect() as conn:
