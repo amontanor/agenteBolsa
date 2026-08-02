@@ -152,6 +152,35 @@ def _format_env_value(value: Any) -> str:
     return text
 
 
+def _config_value_for_display(value: Any) -> str:
+    """Render one settings value as stable text for the informational table."""
+    if value is None:
+        return "n/d"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return ", ".join(_config_value_for_display(item) for item in value)
+    if isinstance(value, Path):
+        return str(value)
+    return str(value)
+
+
+def _config_display_dataframe(rows: list[dict[str, Any]]) -> pd.DataFrame:
+    """Build the Arrow-safe, text-only view without changing settings values."""
+    return pd.DataFrame(
+        [
+            {
+                "clave": row.get("clave"),
+                "valor": _config_value_for_display(row.get("valor")),
+            }
+            for row in rows
+        ],
+        columns=["clave", "valor"],
+    )
+
+
 def update_env_file(path: Path, updates: dict[str, Any]) -> None:
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     lines = existing.splitlines()
@@ -7247,7 +7276,7 @@ def page_config() -> None:
         {"clave": "entry_quality_max_sma20_distance", "valor": settings.entry_quality_max_sma20_distance},
         {"clave": "database", "valor": str(settings.database_path)},
     ]
-    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+    st.dataframe(_config_display_dataframe(rows), width="stretch", hide_index=True)
     st.subheader("Selector LLM")
     st.caption("Guarda cambios en `.env` local. En la nube replica los mismos valores como variables/secrets de Fly.")
     col_primary, col_agents, col_orchestrator = st.columns(3)

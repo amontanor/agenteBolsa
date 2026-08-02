@@ -3014,3 +3014,76 @@ de despliegue quedan pendientes con XNYS cerrado.
   contrato de esa prueba sin cambiar la activacion productiva del watcher y
   repetir la validacion cerrada; no reintentar el despliegue antes de suite
   verde.
+## P-L78B - default global DeepSeek V4 Flash (0.4.212)
+
+- Candidato aislado `pl78b_deepseek_default`, rama
+  `codex/pl78b-deepseek-default`, sobre la base productiva `ba7d488d`.
+- Reproducción: Settings, roles y codegen heredaban Kimi por defaults de código
+  aunque parte de la ruta productiva ya seleccionaba OpenCode Go/DeepSeek;
+  mejora continua conservaba GLM como default activo.
+- Fix: defaults globales y `.env.example` pasan a
+  `opencode-go/deepseek-v4-flash`; Qwen sigue siendo fallback técnico y los
+  overrides explícitos compatibles se conservan. La identidad efectiva de
+  telemetría sale del endpoint/respuesta real, no de `settings.openai_model`.
+- Focales `317 passed`; suite aislada `2370 passed`, 1 skip preexistente y
+  1 warning externo; Ruff/NUL/compile/diff/config/kernel/smoke temporal verdes.
+- Producción, `.env`, datos, stack y archivos protegidos no se modificaron. El
+  candidato queda pendiente de integración y despliegue cerrado; no se
+  reescriben eventos históricos GLM/Kimi.
+
+## P-L78C - `schedule-status` read-only (0.4.213)
+
+- La caracterización contra P-L78B reprodujo que `schedule-status` llamaba
+  `Store.ensure_schema()` y creaba o migraba SQLite en una `DATA_DIR` ausente.
+- Candidato aislado `pl78c_schedule_status_readonly`, rama
+  `codex/pl78c-schedule-status-readonly`, usa exclusivamente la lectura
+  `Store.read_connection`/`read_runtime_values` y nunca ejecuta migraciones.
+- DB ausente, schema incompatible, acceso denegado, payload inválido y WAL o
+  sidecar con riesgo de mutación se expresan como runtime unavailable con
+  razones estables; calendario/jobs estáticos permanecen disponibles.
+- Acepta `schedule-status --json` sin cambiar la salida JSON existente ni el
+  scheduling efectivo. La deriva `.env`/kernel de P-L78B sigue sin resolverse y
+  bloquea cualquier despliegue, fuera del alcance P-L78C.
+- Suite final aislada: `2380 passed, 1 skipped` preexistente
+  (`test_score_study_regression_current_sqlite`, sin SQLite histórica local) y
+  `1 warning` externo; focales P-L78C `10 passed`; Ruff/NUL/compilación/diff/
+  config/kernel temporal y smoke fake aislado verdes.
+- `schedule-status --json` real con DB ausente devuelve `database_missing` sin
+  crear `DATA_DIR` ni artefactos de logging.
+- Dictamen del candidato: `ready_for_pl78c_closed_market_integration`. El
+  siguiente paso único sigue siendo resolver la procedencia de `.env`/kernel y
+  realizar un ensayo combinado separado; P-L78C no autoriza despliegue.
+
+## P-L78D - ensayo combinado P-L78B + P-L78C
+
+- Merge `--no-ff` `304a61ab` desde producción exacta hacia el candidato
+  P-L78C; primer/segundo padres `ba7d488d`/`1bab847a`.
+- El árbol funcional mergeado coincide exactamente con `308baa64`, versión
+  0.4.213; no hubo conflictos ni deltas inesperados.
+- Focales combinados `174 passed`; suite `2380 passed`, un skip histórico
+  preexistente y una warning externa; Ruff/NUL/compile/diff/config/kernel
+  aislado y smoke fake verdes.
+- `config.py` conserva únicamente el delta de defaults de P-L78B; kernel,
+  broker, execution y risk son idénticos a producción. El bloqueo `.env`/
+  kernel productivo no fue tocado.
+- Dictamen: `ready_for_pl78_combined_closed_market_deployment_after_env_authority`;
+  no desplegar hasta resolver la autoridad `.env` y repetir el cierre.
+
+## P-L79 - tabla de configuración Streamlit segura para PyArrow (0.4.214)
+
+- Candidato aislado `pl79_arrow_safe_config_table`, rama
+  `codex/pl79-arrow-safe-config-table`, sobre el HEAD documental final de
+  P-L78D `5e0f41e2`/tree `d00abe9c`.
+- Caracterización: `page_config()` entregaba una columna `valor` heterogénea
+  (`str`/`bool`/números/`Path`/`None`) y PyArrow fallaba antes del fallback
+  interno de Streamlit.
+- Corrección: frontera `_config_display_dataframe()` exclusivamente textual,
+  con `true`/`false`, representación numérica estable, `n/d` explícito para
+  missing y preservación de orden/claves/copy. No cambia Settings ni trading.
+- QA final: suite `2385 passed, 1 skipped` preexistente y `1 warning` externa;
+  Ruff/NUL/compilación/diff/config/kernel temporal y focales verdes. El smoke
+  CLI real no se ejecutó para no adquirir datos externos; el flujo de ciclo con
+  dobles quedó cubierto (`22 passed`).
+- Dictamen del candidato: `ready_for_pl79_closed_market_integration`.
+  Siguiente paso único: ensayo `--no-ff` separado. El bloqueo `.env`/kernel de
+  P-L78 sigue fuera de este lote.
