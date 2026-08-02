@@ -3144,3 +3144,28 @@ mantener la paridad de candidatos/ranks/gates/sizing/planes/órdenes/exposición
 y detenerse si exige tocar trading, riesgo o ejecución. La validación completa
 requiere XNYS cerrado, PMR terminal, lease vacío y fixtures temporales; no se
 promueven propuestas ni se cierra TTL durante esta auditoría.
+## P-L80B - cierre prospectivo del carrier same-cycle (candidato 0.4.215)
+
+Estado: `ready_for_integration_rehearsal`; no desplegado ni integrado en
+producción. Sobre P-L80A se corrigió únicamente la propagación observacional
+de identidad y capacidad: `decision_lineage.signal_id` y `source_run_id`
+viajan desde `run_observable_cycle` hasta `signal_outcomes.gate_json` y
+`learning_observations.gate_json`. El matcher
+`same_cycle_eligible_next_best` no cambia.
+
+La ruta exacta usa `signal_id` + `source_run_id`; la ruta por símbolo queda
+solo como compatibilidad para callers legacy sin carrier. Missing/conflict no
+se convierte en control. Reintentos iguales son no-op y contenido distinto
+conserva el original con evento de conflicto append-only. No hay backfill de
+las 43 ejecuciones de P-L80A ni cambios de trading, riesgo o ejecución.
+
+Worktree `pl80b_same_cycle_control_carrier`, rama
+`codex/p-l80b-same-cycle-control-carrier`, base `b89bef47`. Commits:
+`39ac28c6` caracterización, `e089f7f3` implementación/bump y `a57c0f67`
+corrección QA de versión. La suite cerrada queda en 2392 passed, 1 skip
+preexistente y 1 warning externo; el siguiente paso único es el ensayo
+`merge --no-ff` en un worktree separado, no un despliegue directo.
+
+Cutoff prospectivo pendiente de integración: `deployment_activation_at` UTC
+y cinco sesiones XNYS completadas posteriores, sin usar filas históricas.
+P-L80C-G continúan como cola provisional y no se inician en paralelo.

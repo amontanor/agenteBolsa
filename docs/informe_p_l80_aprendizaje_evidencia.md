@@ -316,7 +316,7 @@ y retención. Solo P-L80B es el siguiente lote recomendado.
 
 ## Validación y cambios realizados
 
-No se ejecutaron tests largos, suite completa, smoke, jobs, servicios o
+En la auditoría P-L80A no se ejecutaron tests largos, suite completa, smoke, jobs, servicios o
 proveedores externos por el alcance y las restricciones de mercado. Se
 realizaron lecturas de código, artefactos y consultas SQLite estrictamente
 read-only; se creó únicamente este worktree y la documentación del lote.
@@ -326,3 +326,94 @@ manifest, kernel, broker, red, LLM operativo, Telegram ni Git de producción.
 El commit de entrega es documental/audit-only; no hay bump de versión. El
 HEAD/tree concretos de cierre se consignan en el dictamen final junto con la
 limpieza del worktree y la confirmación de producción intacta.
+
+## P-L80B - cierre prospectivo del carrier same-cycle
+
+**Dictamen:** `ready_for_integration_rehearsal`.
+
+**Causa y frontera reparada:** el productor activo conocía el
+`decision_lineage.signal_id`, pero `update_signal_execution_status()` solo
+recibía `approved_symbols`; Store buscaba por `source_run_id + symbol`. La
+primera pérdida verificable era por tanto la llamada
+`run_observable_cycle` → `update_signal_execution_status` →
+`Store.update_signal_gate`, antes de `signal_outcomes.gate_json`. Dos señales
+del mismo símbolo y source-run podían contaminarse y el carrier de capacidad
+no llegaba a `learning_observations`.
+
+El candidato introduce una ruta exacta y una compatibilidad legacy separadas:
+
+```text
+recommendation.decision_lineage.signal_id
+  -> update_signal_decisions(signal_id, source_run_id)
+  -> update_signal_execution_status(approved_recommendations, cycle_id)
+  -> signal_outcomes.gate_json.execution
+  -> daily_learning._materialize_observations()
+  -> learning_observations.gate_json
+  -> learning_scoreboard._cohort_rows()
+```
+
+La ruta exacta transporta `signal_id`, `source_run_id`, `cycle_id`,
+`decision_lineage`, límites efectivos y el estado `submitted`,
+`submit_failed`, `plan_rejected`, `plan_created` o `approved_not_planned`.
+Una identidad ausente no cae silenciosamente a símbolo. La ruta anterior por
+símbolo permanece solo para callers legacy que no entregan el carrier.
+`learning_scoreboard` y sus condiciones de matching no se modificaron.
+
+**Caracterización y pruebas deterministas:** contra la base P-L80A,
+`tests/test_p80b_same_cycle_control_carrier.py` falló con
+`TypeError` porque el API no aceptaba `approved_recommendations`. Tras el
+fix, las pruebas demuestran:
+
+- la pareja exacta de la misma fecha/source-run produce un único control
+  `approved_not_planned`;
+- fecha distinta, source-run distinto, decisión `candidate`, razón no
+  allowlisted e identidad ausente producen `0` controles;
+- dos filas del mismo símbolo se actualizan por `signal_id` sin
+  contaminación;
+- `signal_outcomes` → `learning_observations` conserva el gate y el matcher
+  devuelve solo el control exacto;
+- reintento con el mismo contenido es idempotente; contenido distinto
+  conserva el original y registra `signal_execution_carrier_conflict` en
+  `agent_events` mediante inserción append-only.
+
+Se ejecutaron 147 pruebas focales de carrier, signal-learning, daily-learning,
+scoreboard, counterfactual, ciclo, storage e identidad. La suite completa
+aislada terminó en **2392 passed, 1 skipped preexistente y 1 warning** en
+819 s. El primer intento de suite tuvo 1540 passed y una única aserción
+obsoleta que esperaba 0.4.214; se corrigió solo esa expectativa de
+`test_version_policy_requires_bump` y la repetición quedó verde. El warning
+es la deprecación externa de `websockets.legacy`.
+
+Ruff, `scripts/check_no_nulls.py`, compilación temporal, `git diff --check`
+y `validate-agent-config --json` (`23` agentes, `6` tareas, sin warnings)
+quedaron verdes. `kernel-status --json` del entorno temporal fue
+`unsealed` sin violaciones, esperado por ausencia de manifest. El smoke
+`run-once --skip-crew` usó DATA_DIR temporal, snapshots fake y un broker que
+fallaba si era invocado: terminó con `used_crew=false`, calidad de mercado
+degradada controlada y sin red, broker ni LLM.
+
+**Paridad y seguridad:** la única versión funcional candidata es 0.4.215.
+Los objetos de `kernel.py`, `broker.py`, `execution.py`, `risk.py` y
+`config.py` son idénticos a la base; `.env` no está en el árbol del candidato
+y no fue leído ni modificado. Las pruebas de ciclo/identidad conservan
+candidatos, scores, ranks, gates, sizing, planes, cantidades, precios,
+stops/takes, órdenes, exposición y límites; este cambio solo añade
+observabilidad prospectiva. No hay backfill ni reescritura de las 43 filas
+históricas.
+
+**Cutoff prospectivo:** no se fija una fecha artificial. Tras un eventual
+despliegue, el cutoff será `deployment_activation_at` UTC; la ventana de
+cinco sesiones será la primera sesión XNYS posterior al cutoff y las cuatro
+siguientes, todas completadas y con carrier exacto. Las filas anteriores al
+cutoff, incluida la muestra 43/43 auditada por P-L80A, quedan históricas y no
+se rellenan. El resultado de cinco sesiones solo podrá evaluarse con outcomes
+maduros e identidad canónica.
+
+**Base y entrega:** worktree `pl80b_same_cycle_control_carrier`, rama
+`codex/p-l80b-same-cycle-control-carrier`, base
+`b89bef4790f357d0afea95dc6ec8fdbac4ef84e3`. Commits separados:
+`39ac28c6` (caracterización), `e089f7f3` (implementación y bump) y
+`a57c0f67` (corrección QA de versión). El commit documental de este apartado
+se añade después de cerrar el informe. Producción permanece en
+0.4.214/`eb662c07`/tree `2ee61f28`, sin merge, deploy, reinicio, jobs
+manuales, broker/red/LLM operativo, SQLite escritora ni push.

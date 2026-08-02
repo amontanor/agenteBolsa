@@ -1263,3 +1263,25 @@ DATA_DIR temporal, `_env_file=None`, fakes sin red y suite completa únicamente
 cuando no compita con producción. Si el carrier no existe o exige una frontera
 protegida, detener y pedir revisión humana. P-L80C…P-L80G quedan únicamente
 como cola provisional; no iniciar otro lote en paralelo.
+## P-L80B - cierre prospectivo del carrier same-cycle
+
+Dictamen del candidato: `ready_for_integration_rehearsal`. El productor
+conserva `signal_id`, `source_run_id`, `cycle_id`, decisión y capacidad en el
+carrier exacto hasta `signal_outcomes` y `learning_observations`; el matcher
+no fue relajado. La fixture positiva produce un control solo con misma fecha,
+source-run, `approved_buy*` y estado/razón allowlisted. Fecha/source distintos,
+missing, conflicto o decisión no elegible siguen sin control.
+
+Base P-L80A `b89bef47`; worktree
+`pl80b_same_cycle_control_carrier`; rama
+`codex/p-l80b-same-cycle-control-carrier`; versión candidata `0.4.215`.
+Commits separados: `39ac28c6` (caracterización), `e089f7f3` (implementación)
+y `a57c0f67` (QA/version policy). Suite: 2392 passed, 1 skip preexistente,
+1 warning externo; focales 147 passed; Ruff/NUL/compile/diff/config y smoke
+fake aislado verdes. Protegidos y producción permanecen intactos.
+
+No hay backfill de las 43 filas históricas. El cutoff de cinco sesiones solo
+se fija tras despliegue como `deployment_activation_at` UTC más la primera y
+cuatro sesiones XNYS posteriores completadas con carrier exacto y outcomes
+maduros. Siguiente lote único: ensayo de integración `--no-ff`; no desplegar
+ni iniciar P-L80C-G en paralelo.
