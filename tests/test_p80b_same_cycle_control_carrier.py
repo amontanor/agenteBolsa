@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 from agente_bolsa.config import Settings
+from agente_bolsa.cycle_runner import _rejection_payload_for_plan
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.daily_learning import _materialize_observations
 from agente_bolsa.tools.learning_scoreboard import _cohort_rows
@@ -12,11 +13,26 @@ from agente_bolsa.tools.signal_learning import (
     update_signal_execution_status,
 )
 
+_FILL_WATCH_ENV_KEYS = (
+    "TRADE_FILL_WATCH_ENABLED",
+    "TRADE_FILL_WATCH_CADENCE_SECONDS",
+    "TRADE_FILL_WATCH_MAX_PENDING_PER_RUN",
+    "TRADE_FILL_WATCH_REQUEST_TIMEOUT_SECONDS",
+    "TRADE_FILL_WATCH_BACKOFF_SECONDS",
+    "TRADE_FILL_WATCH_MAX_BACKOFF_SECONDS",
+)
+
 
 def _store(tmp_path):
     store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
     store.ensure_schema()
     return store
+
+
+def _isolated_settings(tmp_path, monkeypatch):
+    for key in _FILL_WATCH_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    return Settings(_env_file=None, DATA_DIR=tmp_path)
 
 
 def _recommendation(signal_id: str, symbol: str) -> SimpleNamespace:
@@ -136,7 +152,14 @@ def test_execution_carrier_requires_exact_recommendation_identity(tmp_path):
     assert row["gate"]["execution"]["status"] == "approved_not_planned"
 
 
-def test_exact_signal_id_prevents_same_symbol_contamination(tmp_path):
+def test_settings_fixture_ignores_external_fill_watch_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("TRADE_FILL_WATCH_ENABLED", "true")
+    settings = _isolated_settings(tmp_path, monkeypatch)
+
+    assert settings.trade_fill_watch_enabled is False
+
+
+def test_exact_signal_id_prevents_same_symbol_contamination(tmp_path, monkeypatch):
     store = _store(tmp_path)
     first_id = "learning_experiment:2026-08-03:BREAKOUT:FIRST"
     second_id = "learning_experiment:2026-08-03:BREAKOUT:SECOND"
@@ -149,7 +172,7 @@ def test_exact_signal_id_prevents_same_symbol_contamination(tmp_path):
         recommendations=[_recommendation(first_id, "SAME")],
         entry_quality_gate=[{"symbol": "SAME", "approved": True}],
         backtest_gate=[{"symbol": "SAME", "approved": True}],
-        settings=Settings(DATA_DIR=tmp_path),
+        settings=_isolated_settings(tmp_path, monkeypatch),
     )
     assert decision_updates == 1
     assert store.signal_outcome_by_id(first_id)["decision"] == "approved_buy"
@@ -169,6 +192,103 @@ def test_exact_signal_id_prevents_same_symbol_contamination(tmp_path):
     second = store.signal_outcome_by_id(second_id)
     assert first["gate"]["execution"]["signal_id"] == first_id
     assert second["gate"] == {}
+
+
+def test_capacity_rejection_carrier_is_allowlisted_and_identity_exact(tmp_path):
+    store = _store(tmp_path)
+    treatment_id = "learning_experiment:2026-08-03:CAPACITY:TREATMENT"
+    allowlisted_id = "learning_experiment:2026-08-03:CAPACITY:ALLOWLISTED"
+    rejected_id = "learning_experiment:2026-08-03:CAPACITY:NOT_ALLOWLISTED"
+    _save_signal(store, signal_id=treatment_id, symbol="TREAT")
+    _save_signal(store, signal_id=allowlisted_id, symbol="ALLOW")
+    _save_signal(store, signal_id=rejected_id, symbol="REJECT")
+
+    updated = update_signal_execution_status(
+        store,
+        source_run_id="cycle-1",
+        approved_recommendations=[
+            _recommendation(treatment_id, "TREAT"),
+            _recommendation(allowlisted_id, "ALLOW"),
+            _recommendation(rejected_id, "REJECT"),
+        ],
+        submitted=[{"signal_id": treatment_id, "symbol": "TREAT", "status": "accepted"}],
+        rejected_order_plans=[
+            {
+                "signal_id": allowlisted_id,
+                "symbol": "ALLOW",
+                "cycle_id": "cycle-1",
+                "stage": "daily_buy_limit",
+                "reason": "max_daily_buy_orders_reached",
+                "checks": {"effective_max_daily_buy_orders": 1},
+            },
+            {
+                "signal_id": rejected_id,
+                "symbol": "REJECT",
+                "cycle_id": "cycle-1",
+                "stage": "manual",
+                "reason": "operator_note",
+                "checks": {},
+            },
+        ],
+        cycle_id="cycle-1",
+        effective_max_orders_per_cycle=1,
+        effective_max_daily_buy_orders=1,
+    )
+    assert updated == 3
+
+    treatment = store.signal_outcome_by_id(treatment_id)
+    allowlisted = store.signal_outcome_by_id(allowlisted_id)
+    rejected = store.signal_outcome_by_id(rejected_id)
+    assert treatment["decision"].startswith("approved_buy")
+    assert allowlisted["decision"].startswith("approved_buy")
+    assert allowlisted["gate"]["execution"] == {
+        "effective_max_orders_per_cycle": 1,
+        "effective_max_daily_buy_orders": 1,
+        "source_run_id": "cycle-1",
+        "cycle_id": "cycle-1",
+        "signal_id": allowlisted_id,
+        "decision_lineage": _recommendation(allowlisted_id, "ALLOW").decision_lineage,
+        "status": "plan_rejected",
+        "stage": "daily_buy_limit",
+        "reason": "max_daily_buy_orders_reached",
+        "checks": {"effective_max_daily_buy_orders": 1},
+    }
+    assert rejected["gate"]["execution"]["reason"] == "operator_note"
+
+    _materialize_observations(
+        store,
+        [
+            _raw_observation(treatment, executed=True),
+            _raw_observation(allowlisted, executed=False),
+            _raw_observation(rejected, executed=False),
+        ],
+    )
+    executed, matched_controls, matches, _all_controls = _cohort_rows(
+        store,
+        since_date="2026-08-03",
+        end_date="2026-08-03",
+    )
+    assert len(executed) == 1
+    assert [row["symbol"] for row in matched_controls] == ["ALLOW"]
+    assert matches[executed[0]["observation_id"]] == [
+        "2026-08-03:ALLOW:learning_experiment"
+    ]
+    assert all(row["symbol"] != "REJECT" for row in matched_controls)
+
+
+def test_rejection_payload_preserves_signal_and_cycle_identity_for_capacity_routes():
+    plan = SimpleNamespace(
+        recommendation=SimpleNamespace(
+            decision_lineage={
+                "signal_id": "learning_experiment:2026-08-03:CAPACITY",
+                "cycle_id": "cycle-1",
+            }
+        )
+    )
+    payload = _rejection_payload_for_plan(plan, {"reason": "max_daily_buy_orders_reached"})
+
+    assert payload["signal_id"] == "learning_experiment:2026-08-03:CAPACITY"
+    assert payload["cycle_id"] == "cycle-1"
 
 
 def test_carrier_materializes_and_unlocks_only_exact_same_cycle_control(tmp_path):
