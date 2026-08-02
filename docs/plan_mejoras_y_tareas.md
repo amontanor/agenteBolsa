@@ -3115,3 +3115,84 @@ de despliegue quedan pendientes con XNYS cerrado.
   autorizado sin cambios (86a8420f...dfc35afb).
 - Warning externo websockets.legacy; no jobs manuales, broker/red/LLM real,
   reconciliacion, postmarket, kernel-seal, edicion de secretos ni push.
+
+## P-L80 - auditoría del embudo de aprendizaje (P-L80A auditado)
+
+- P-L80A es únicamente auditoría read-only sobre producción `0.4.214`:
+  cuantificó el embudo señal → observación → recomendación → plan → orden →
+  outcome → aprendizaje → gobierno y reprodujo 0/43 controles same-cycle.
+- Causa verificada: las 43 ejecuciones llegan como `executed_buy` con
+  `gate.execution={}`; sí existen controles de la misma fecha y
+  `source_run_ids`, pero ninguno alcanza la decisión/razón allowlisted del
+  matcher. Los 7 linajes legacy no verificados son una deuda separada.
+- La actividad de CI no equivale a evidencia: 199/200 propuestas recientes
+  son prosa, el digest vigente admite 0 experimentos de evidencia y las
+  anomalías de market-data (37 en un artefacto stale) quedan `unavailable`
+  para el estado actual.
+- P-L80A no está hecho funcionalmente, no cambia código/política, no reserva
+  versión y no autoriza auto-apply. Informe único:
+  `docs/informe_p_l80_aprendizaje_evidencia.md`.
+
+Cola provisional, dependiente y no autorizada: P-L80B cierre del carrier de
+control same-cycle; P-L80C linaje de los 7 legacy; P-L80D contrato
+finding→proposal; P-L80E admisión de experimentos/evaluación post-apply;
+P-L80F freshness y autoridad de market-data; P-L80G reconciliación de
+duplicate ratio/retención. El único siguiente lote recomendado es P-L80B.
+
+P-L80B debe conservar el matcher exacto, usar IDs/source runs canónicos,
+mantener la paridad de candidatos/ranks/gates/sizing/planes/órdenes/exposición
+y detenerse si exige tocar trading, riesgo o ejecución. La validación completa
+requiere XNYS cerrado, PMR terminal, lease vacío y fixtures temporales; no se
+promueven propuestas ni se cierra TTL durante esta auditoría.
+## P-L80B - cierre prospectivo del carrier same-cycle (candidato 0.4.215)
+
+Estado: `ready_for_integration_rehearsal`; no desplegado ni integrado en
+producción. Sobre P-L80A se corrigió únicamente la propagación observacional
+de identidad y capacidad: `decision_lineage.signal_id` y `source_run_id`
+viajan desde `run_observable_cycle` hasta `signal_outcomes.gate_json` y
+`learning_observations.gate_json`. El matcher
+`same_cycle_eligible_next_best` no cambia.
+
+La ruta exacta usa `signal_id` + `source_run_id`; la ruta por símbolo queda
+solo como compatibilidad para callers legacy sin carrier. Missing/conflict no
+se convierte en control. Reintentos iguales son no-op y contenido distinto
+conserva el original con evento de conflicto append-only. No hay backfill de
+las 43 ejecuciones de P-L80A ni cambios de trading, riesgo o ejecución.
+
+Worktree `pl80b_same_cycle_control_carrier`, rama
+`codex/p-l80b-same-cycle-control-carrier`, base `b89bef47`. Commits:
+`39ac28c6` caracterización, `e089f7f3` implementación/bump y `a57c0f67`
+corrección QA de versión. La suite cerrada queda en 2392 passed, 1 skip
+preexistente y 1 warning externo; el siguiente paso único es el ensayo
+`merge --no-ff` en un worktree separado, no un despliegue directo.
+
+Cutoff prospectivo pendiente de integración: `deployment_activation_at` UTC
+y cinco sesiones XNYS completadas posteriores, sin usar filas históricas.
+P-L80C-G continúan como cola provisional y no se inician en paralelo.
+
+## P-L80BR - ensayo aislado de integración
+
+El ensayo `codex/pl80br-integration-rehearsal` fusionó con `--no-ff` el
+candidato P-L80B `b0ff0d94` sobre producción `eb662c07`. El merge
+`5d7ea285`, versión `0.4.215`, produce exactamente el tree del candidato y
+conserva la paridad de trading/riesgo/ejecución. Hubo 110 focales verdes;
+la suite previa de 2395 passed se reutiliza por identidad exacta de tree.
+Estado: `ready_for_closed_market_deployment`, sin despliegue. La siguiente
+acción única es la validación cerrada y despliegue autorizado; P-L80C-G sigue
+fuera de alcance.
+
+## P-L80H2 - health canónico OpenCode Go / DeepSeek V4 Flash
+
+- Se implementó en worktree aislado `codex/pl80h2-opencode-go-health` la
+  comprobación de una sola llamada al endpoint oficial
+  `opencode-go/deepseek-v4-flash`, sin reintentos, fallback, SQLite ni runtime
+  operativo. Versión candidata: 0.4.216.
+- La probe real autorizada devolvió HTTP 403 `region_forbidden`; no se modificó
+  proveedor, modelo, endpoint, `.env` ni política. El bloqueo es externo y no
+  se marca como defecto de routing del proyecto.
+- Focales del script/routing/CI/overnight: 288 passed; suite completa omitida
+  porque el script no es importado por runtime y una segunda llamada real está
+  prohibida. El healthcheck antiguo de cinco roles no sustituye este contrato.
+- Estado: `blocked_external_provider`. Siguiente acción única: opt-in regional
+  oficial de OpenCode Go y una nueva ejecución aislada del script; no cambiar a
+  GLM/Kimi ni alterar fallback/política.
