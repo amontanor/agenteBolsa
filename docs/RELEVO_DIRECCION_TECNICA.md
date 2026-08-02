@@ -1310,3 +1310,16 @@ P-L80C-G ni ejecutar el carrier contra producción en este ensayo.
 - Dictamen: `blocked_external_provider`. No desplegar ni cambiar proveedor.
   La única acción siguiente es habilitar el opt-in regional oficial y repetir
   exactamente este healthcheck una vez.
+
+## P-L80H4 - estado del candidato tras el rollback
+
+El primer gate de P-L80H3 fue una expectativa de version stale: la base
+0.4.214 pasa, mientras el candidato 0.4.216 esperaba incorrectamente 0.4.215.
+El fix minimo solo modifica esa prueba en `338d0cc0`.
+
+QA cerrada del worktree P-L80H4: 70 focales passed; suite 2410 passed,
+1 skip preexistente, 1 warning externo en 815.69 s; Ruff, NUL, compilacion,
+diff, config y smoke fake aislado verdes. Kernel temporal unsealed esperado,
+sin violaciones. Produccion sigue restaurada en `b1c4cc0f`/tree `2ee61f28`,
+v0.4.214, stack sano. Proximo paso unico: redeploy cerrado de `338d0cc0` y
+documentacion final, sin repetir probe DeepSeek.
