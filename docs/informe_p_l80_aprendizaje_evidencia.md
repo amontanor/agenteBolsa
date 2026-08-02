@@ -457,3 +457,35 @@ en la entrega. Producción sigue en HEAD
 `eb662c0760c77aae58067c18a9cbcdb06651b719`, tree
 `2ee61f285eaa5293a4daab07de793cb9cdbae16c`, versión `0.4.214`, con solo los
 untracked conocidos del operador.
+
+## P-L80BR - ensayo aislado de integración del carrier same-cycle
+
+Dictamen del ensayo: **ready_for_closed_market_deployment**; no desplegado.
+El worktree `pl80br_integration_rehearsal`, rama
+`codex/pl80br-integration-rehearsal`, parte de producción
+`eb662c0760c77aae58067c18a9cbcdb06651b719` y fusiona exclusivamente con
+`git merge --no-ff` el candidato `b0ff0d94212828aad8a427b694d59f955f64db9a`.
+El merge `5d7ea285143f6e16ba416fde7c885ffdc4202ef2` tiene como padres exactos
+producción y candidato; termina en versión `0.4.215`, tree
+`e3e75910efdf6933fe66afc0ed85a3b97c411ee5`, idéntico al tree del candidato.
+No hubo conflictos ni deltas funcionales adicionales.
+
+Los focales combinados del productor, materialización, matcher, identidad,
+idempotencia, conflictos, legacy y paridad dieron **110 passed**. Se reutiliza
+la suite completa previa (**2395 passed, 1 skipped preexistente y 1 warning**)
+porque el tree integrado es idéntico objeto-a-objeto al candidato ya validado;
+no se repitió por actividad. Ruff, NUL, compilación y `git diff --check` fueron
+verdes. `validate-agent-config --json` aislado fue `ok=true`; el kernel temporal
+fue `unsealed` con `violations=[]`, mientras el kernel productivo permanecía
+`ok`. El smoke real del parser `run-once --skip-crew` usó `DATA_DIR` temporal,
+snapshot/estado fake y fronteras broker/órdenes que fallan si se alcanzan; pasó
+sin red, broker ni LLM.
+
+La pareja positiva y sus negativos conservan `signal_id`, `source_run_id`,
+decisión/capacidad y las condiciones exactas del matcher. No se relajó el
+matcher, no se hizo backfill y no se alteran candidatos, scores, ranks, gates,
+sizing, planes, órdenes, exposición ni límites. Los objetos protegidos
+`kernel.py`, broker, execution, risk y config coinciden con producción.
+Producción, stack, SQLite, `.env`, manifest, locks y leases permanecen intactos;
+no hubo merge productivo, reinicio, job manual, broker/red/LLM operativo ni
+push.

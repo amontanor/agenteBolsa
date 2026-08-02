@@ -3169,3 +3169,14 @@ preexistente y 1 warning externo; el siguiente paso único es el ensayo
 Cutoff prospectivo pendiente de integración: `deployment_activation_at` UTC
 y cinco sesiones XNYS completadas posteriores, sin usar filas históricas.
 P-L80C-G continúan como cola provisional y no se inician en paralelo.
+
+## P-L80BR - ensayo aislado de integración
+
+El ensayo `codex/pl80br-integration-rehearsal` fusionó con `--no-ff` el
+candidato P-L80B `b0ff0d94` sobre producción `eb662c07`. El merge
+`5d7ea285`, versión `0.4.215`, produce exactamente el tree del candidato y
+conserva la paridad de trading/riesgo/ejecución. Hubo 110 focales verdes;
+la suite previa de 2395 passed se reutiliza por identidad exacta de tree.
+Estado: `ready_for_closed_market_deployment`, sin despliegue. La siguiente
+acción única es la validación cerrada y despliegue autorizado; P-L80C-G sigue
+fuera de alcance.

@@ -1285,3 +1285,16 @@ se fija tras despliegue como `deployment_activation_at` UTC más la primera y
 cuatro sesiones XNYS posteriores completadas con carrier exacto y outcomes
 maduros. Siguiente lote único: ensayo de integración `--no-ff`; no desplegar
 ni iniciar P-L80C-G en paralelo.
+
+## P-L80BR - ensayo de integración P-L80B
+
+El ensayo aislado quedó `ready_for_closed_market_deployment` en el merge
+`5d7ea285` (`eb662c07` + `b0ff0d94`), versión `0.4.215`, tree idéntico al
+candidato. Focales: 110 passed; suite completa reutilizada por identidad exacta
+del tree: 2395 passed, 1 skip preexistente, 1 warning externo. Ruff/NUL/
+compile/diff/config/smoke aislado verdes; kernel temporal unsealed esperado y
+producción ok. No hubo cambios de trading/riesgo/ejecución ni backfill.
+
+Siguiente paso único: cierre de mercado con preflight, suite/gates operativos y
+despliegue secuenciado si todas las precondiciones siguen verdes. No iniciar
+P-L80C-G ni ejecutar el carrier contra producción en este ensayo.
