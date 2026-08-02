@@ -1891,6 +1891,11 @@ def _auto_paper_trade(
             str(lineage.get("signal_id") or ""),
         )
 
+    def _recommendation_signal_id(item: Any) -> str | None:
+        lineage = dict(getattr(item, "decision_lineage", {}) or {})
+        signal_id = str(lineage.get("signal_id") or "").strip()
+        return signal_id or None
+
     with optional_measure(timing, "deterministic_gates", "order_plan_build"):
         plans = build_order_plans(
             settings,
@@ -1904,12 +1909,22 @@ def _auto_paper_trade(
     effective_plan_limit = _effective_buy_plan_limit(settings, gated_recommendations)
     effective_daily_limit = _effective_daily_buy_limit(settings, plans)
     approved_buys = sorted({item.symbol for item in gated_recommendations if str(item.action).lower() == "buy"})
+    approved_recommendations = [
+        item for item in gated_recommendations if str(getattr(item, "action", "")).lower() == "buy"
+    ]
     with optional_measure(timing, "deterministic_gates", "daily_buy_limit"):
         plans = _apply_daily_buy_limit(settings, store, reporter, run_id, plans, rejected=rejected_order_plans)
     with optional_measure(timing, "deterministic_gates", "low_sample_quota"):
         plans = _apply_low_sample_daily_quota(settings, store, reporter, run_id, plans, rejected=rejected_order_plans)
     with optional_measure(timing, "deterministic_gates", "strategy_pause_filter"):
         plans, paused_plans = _separate_strategy_paused_plans(learning_mode, plans)
+    planned_signal_ids = [
+        signal_id
+        for plan in plans
+        if str(getattr(plan, "side", "")).lower() == "buy"
+        for signal_id in [_recommendation_signal_id(getattr(plan, "recommendation", None))]
+        if signal_id
+    ]
     if paused_plans:
         for plan, strategy_name in paused_plans:
             rejected_order_plans.append(
@@ -2141,12 +2156,15 @@ def _auto_paper_trade(
                     store,
                     source_run_id=decision_context.get("run_id"),
                     approved_symbols=approved_buys,
+                    approved_recommendations=approved_recommendations,
                     rejected_order_plans=rejected_order_plans,
                     planned_symbols=[],
+                    planned_signal_ids=[],
                     submitted=[],
                     failed=[],
                     effective_max_orders_per_cycle=effective_plan_limit,
                     effective_max_daily_buy_orders=effective_daily_limit,
+                    cycle_id=run_id,
                 )
             return {
                 "submitted": [],
@@ -2218,12 +2236,15 @@ def _auto_paper_trade(
                 store,
                 source_run_id=decision_context.get("run_id"),
                 approved_symbols=approved_buys,
+                approved_recommendations=approved_recommendations,
                 rejected_order_plans=rejected_order_plans,
                 planned_symbols=[],
+                planned_signal_ids=[],
                 submitted=[],
                 failed=[],
                 effective_max_orders_per_cycle=effective_plan_limit,
                 effective_max_daily_buy_orders=effective_daily_limit,
+                cycle_id=run_id,
             )
         actions = ", ".join(
             f"{item.symbol}:{item.action}:{item.confidence:.2f}" for item in reviewed_recommendations
@@ -2342,10 +2363,22 @@ def _auto_paper_trade(
                     "low_sample_exploration": LOW_SAMPLE_EXPLORATION_TAG in list((recommendation or {}).get("tags") or []),
                     "decision_lineage": plan.get("payload", {}).get("decision_lineage")
                     or (recommendation or {}).get("decision_lineage", {}),
+                    "signal_id": (
+                        plan.get("payload", {}).get("decision_lineage", {}) or {}
+                    ).get("signal_id")
+                    or (recommendation or {}).get("decision_lineage", {}).get("signal_id"),
                 }
             )
         except Exception as exc:  # noqa: BLE001 - one rejected order should not hide the rest.
-            failed.append({"symbol": plan["symbol"], "side": plan["side"], "error": str(exc)})
+            failed.append(
+                {
+                    "symbol": plan["symbol"],
+                    "side": plan["side"],
+                    "error": str(exc),
+                    "signal_id": (plan.get("payload", {}).get("decision_lineage", {}) or {}).get("signal_id"),
+                    "decision_lineage": copy.deepcopy(plan.get("payload", {}).get("decision_lineage") or {}),
+                }
+            )
             failed_records.append(
                 {
                     "cycle_id": run_id,
@@ -2369,12 +2402,15 @@ def _auto_paper_trade(
             store,
             source_run_id=decision_context.get("run_id"),
             approved_symbols=approved_buys,
+            approved_recommendations=approved_recommendations,
             rejected_order_plans=rejected_order_plans,
             planned_symbols=planned_symbols,
+            planned_signal_ids=planned_signal_ids,
             submitted=submitted,
             failed=failed,
             effective_max_orders_per_cycle=effective_plan_limit,
             effective_max_daily_buy_orders=effective_daily_limit,
+            cycle_id=run_id,
         )
     reporter.emit(
         "execution_agent",
