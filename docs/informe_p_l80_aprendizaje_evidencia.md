@@ -634,3 +634,73 @@ Base de trabajo: `7e6e782c`; worktree
 Produccion, `.env`, SQLite, stack, untracked del operador y el candidato
 original permanecen intactos; no hubo probe adicional, merge productivo,
 despliegue, jobs manuales, kernel-seal ni push.
+
+## P-L80H5 - redespliegue final y apertura de ventana prospectiva
+
+Dictamen: `deployed`.
+
+El preflight del domingo 02-ago-2026, con XNYS cerrado y siguiente apertura
+2026-08-03 15:30 Europe/Madrid, verifico produccion en `b1c4cc0f`/tree
+`2ee61f28`, version 0.4.214, y el candidato exacto
+`f4b4bc58`/tree `59097b81`, version 0.4.216. El ultimo postmarket real
+(`2026-07-31`) estaba `completed/pipeline_completed`; el intento natural del
+02-ago termino `skipped/market_not_ready` y el lease fue liberado. No habia
+pytest, despliegue, reconciliacion ni jobs de mercado activos.
+
+Con el stack detenido por `scripts\\stack_down.ps1 -IncludeScheduled` se
+ejecuto `git revert --no-edit b1c4cc0f`, que produjo `97af2f24` (revert del
+rollback anterior), y despues `git merge --no-ff f4b4bc58`, que produjo
+`3e3ead0e`. Los padres son `97af2f24` y `f4b4bc58`; el tree resultante es
+exactamente `59097b81` y conserva la version 0.4.216. No hubo conflictos ni
+resoluciones globales.
+
+### Gates cerrados
+
+- Focales P-L80B/H2/H4: **70 passed**.
+- Suite completa, desde un cwd de worktree valido sin `.env` productivo,
+  `DATA_DIR` temporal y `PYTHONPATH` del checkout integrado:
+  **2410 passed, 1 skip preexistente y 1 warning externa**, 810.73 s.
+  El primer intento con cwd temporal fallo solo al importar
+  `scripts.check_no_nulls`; la matriz codigo/cwd lo clasifico como arnes
+  invalido y la repeticion correcta fue verde. No se anadio skip/xfail.
+- Ruff: verde; `check_no_nulls.py`: **468 archivos OK**; compilacion
+  temporal: **452 archivos**; `git diff --check`: verde; version policy:
+  **1 passed**.
+- `validate-agent-config --json`: `ok=true`, sin warnings.
+- `kernel-status --json` temporal: `unsealed`, `violations=[]` por ausencia
+  de manifest; productivo: `ok=true`, `violations=[]`, `.env` match.
+- Smoke aislado `run-once --skip-crew`, snapshot/estado fake y `DATA_DIR`
+  temporal: `ok=true`, `cycle_id` presente, `used_crew=false`, sin ordenes.
+- Los objetos Git de `kernel.py`, `broker.py`, `execution.py`, `risk.py` y
+  `config.py` son identicos al estado seguro previo. El `.env` conserva el
+  hash redacted `86a8420f...dfc35afb`; las seis exclusiones locales exactas
+  y los ficheros del operador siguen presentes.
+
+La probe DeepSeek no se repitio. Se reutiliza la evidencia autorizada:
+`provider=opencode-go`, `model=deepseek-v4-flash`, endpoint
+`https://opencode.ai/zen/go/v1/chat/completions`, HTTP 200, `ok=true`,
+latencia 1.774 s, `finish_reason=stop`, `fallback_used=false`,
+`requests_made=1`.
+
+Tras `scripts\\stack_up.ps1`, salud 1 fue a
+`2026-08-02T15:49:25.1267108Z` y salud 2 a
+`2026-08-02T15:51:41.5484478Z` (136 s de separacion). Ambas tuvieron raiz y
+`/health` 200, un listener 8501, un scheduler logico y el arbol
+wrapper PowerShell -> launcher `.venv` -> runtime Python valido. El lock PID
+estaba vivo y hubo eventos de liveness hasta 15:51:55Z. `stack_status` conserva
+la etiqueta `lock_orphan` conocida por comparar launcher y runtime; no es un
+segundo scheduler. Paper estaba activo (`AUTO_PAPER_TRADING=true`),
+`allow_live_trading=false` y `allow_auto_apply_improvements=false`.
+Kernel productivo permanecio sellado/ok. Health tenia `critical=0` y cinco
+warnings observacionales preexistentes; no se repararon. La consulta SQLite
+fue solo `mode=ro`/`query_only`, con 111 ordenes locales terminales `filled` y
+sin lease activo.
+
+El cutoff prospectivo queda fijado en `2026-08-02T15:51:41.5484478Z`, el
+timestamp UTC de la segunda salud sana. La primera cohorte son cinco sesiones
+XNYS completamente posteriores al cutoff (previstas 03-07-ago si completan).
+No hay backfill de las 43 ejecuciones historicas ni cambio de politica activa.
+Se observaran selected/not_selected, controles same-cycle, linaje, costes,
+slippage, P/L, MFE/MAE, drawdown, concentracion, identidad DeepSeek/fallback
+y jobs diarios/nocturnos. No se ejecutaron jobs manuales, broker real,
+ordenes de prueba, reconciliacion, backfill, kernel-seal ni push.

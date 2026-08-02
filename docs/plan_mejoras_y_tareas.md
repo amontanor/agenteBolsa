@@ -3209,3 +3209,18 @@ El candidato queda `ready_for_closed_market_redeployment`: commit funcional
 preexistente y 1 warning externo. No hay cambios de trading, riesgo,
 ejecucion, proveedor, modelo, endpoint ni credenciales. Siguiente lote unico:
 revalidacion cerrada y redeploy secuenciado con todos los gates verdes.
+
+## P-L80H5 - redespliegue final v0.4.216
+
+Estado: `deployed` tras revert auditable del rollback (`97af2f24`) y merge
+`--no-ff` del candidato `f4b4bc58`, con tree funcional `59097b81` y version
+0.4.216. Suite cerrada: 2410 passed, 1 skip preexistente, 1 warning externa;
+focales 70 passed y gates restantes verdes. No hubo cambios de trading,
+riesgo, ejecucion, proveedor, credenciales o politica.
+
+Cutoff prospectivo: `2026-08-02T15:51:41.5484478Z`. La ventana de medicion
+empieza solo en sesiones XNYS completamente posteriores y requiere cinco
+sesiones completadas; no se hace backfill historico. P-L80B queda desplegado
+como carrier prospectivo: el matcher no cambia y missing/conflict no forma
+controles. La siguiente decision se toma despues de esa cohorte, sin iniciar
+P-L80C-G en paralelo.

@@ -1323,3 +1323,22 @@ diff, config y smoke fake aislado verdes. Kernel temporal unsealed esperado,
 sin violaciones. Produccion sigue restaurada en `b1c4cc0f`/tree `2ee61f28`,
 v0.4.214, stack sano. Proximo paso unico: redeploy cerrado de `338d0cc0` y
 documentacion final, sin repetir probe DeepSeek.
+
+## P-L80H5 - relevo tras despliegue
+
+P-L80 v0.4.216 esta desplegado en el merge productivo `3e3ead0e` (padres
+`97af2f24` y `f4b4bc58`, tree funcional `59097b81`). El revert-of-revert fue
+auditable; no hubo conflictos. Suite: 2410 passed, 1 skip preexistente,
+1 warning externa; focales 70 passed. Kernel/config, paper y stack quedaron
+validos y las dos comprobaciones de salud fueron 200/200 con 136 s de
+separacion. `lock_orphan` sigue siendo el falso positivo conocido del arbol
+launcher/runtime, no un duplicado.
+
+La probe DeepSeek verde existente se reutilizo sin nueva llamada
+(`opencode-go/deepseek-v4-flash`, HTTP 200, stop, sin fallback, una request).
+Cutoff: `2026-08-02T15:51:41.5484478Z`; cohorte: cinco sesiones XNYS
+posteriores, previstas 03-07-ago si completan. Durante la ventana registrar
+controles same-cycle, linaje, selected/not_selected, outcomes maduros,
+costes/slippage/P-L/MFE/MAE/drawdown/concentracion, DeepSeek/fallback y
+overnight. No abrir otro lote funcional antes de cerrar esa cohorte; observar
+warnings preexistentes sin repararlos en este lote.
