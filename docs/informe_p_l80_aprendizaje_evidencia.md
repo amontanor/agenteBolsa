@@ -447,3 +447,13 @@ El candidato actual incorpora además `b2645dfe`, que hace la idempotencia del
 carrier independiente del orden de claves JSON mediante hash canónico. El
 HEAD/tree exactos finales se consignan tras el commit documental; producción,
 SQLite, stack, `.env`, manifest y archivos protegidos siguen intactos.
+
+**Identidad del árbol funcional/QA antes del último commit documental:** rama
+`codex/p-l80b-same-cycle-control-carrier`, HEAD
+`27c43c216f6385d5fd435d32c21cbcb416cb7903`, tree
+`16dae762367fe204aaf4ce0baf8a9c15830835c2`, versión `0.4.215`. El commit
+documental de cierre no modifica código ni tests; el HEAD/tree finales constan
+en la entrega. Producción sigue en HEAD
+`eb662c0760c77aae58067c18a9cbcdb06651b719`, tree
+`2ee61f285eaa5293a4daab07de793cb9cdbae16c`, versión `0.4.214`, con solo los
+untracked conocidos del operador.
