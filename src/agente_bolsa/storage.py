@@ -4011,11 +4011,11 @@ class Store:
             incoming_execution = gate.get("execution") if isinstance(gate, dict) else None
             existing_execution = existing_gate.get("execution")
             if exact_signal_id and isinstance(existing_execution, dict) and isinstance(incoming_execution, dict):
-                if _dumps(existing_execution) == _dumps(incoming_execution) and set(gate) == {"execution"}:
+                existing_hash = _snapshot_content_hash(existing_execution)
+                candidate_hash = _snapshot_content_hash(incoming_execution)
+                if existing_hash == candidate_hash and set(gate) == {"execution"}:
                     return True
                 if set(gate) == {"execution"}:
-                    existing_hash = _snapshot_content_hash(existing_execution)
-                    candidate_hash = _snapshot_content_hash(incoming_execution)
                     conflict_id = f"signal_execution_carrier:{exact_signal_id}:conflict:{candidate_hash}"
                     conflict_payload = {
                         "signal_id": exact_signal_id,

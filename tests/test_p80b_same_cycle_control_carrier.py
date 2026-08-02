@@ -310,6 +310,12 @@ def test_exact_carrier_is_idempotent_and_conflicts_are_append_only(tmp_path):
     after = store.signal_outcome_by_id(signal_id)
     assert after["gate"]["execution"] == before["gate"]["execution"]
 
+    equivalent = _recommendation(signal_id, "IDEMP")
+    equivalent.decision_lineage = dict(reversed(list(equivalent.decision_lineage.items())))
+    equivalent_kwargs = dict(kwargs)
+    equivalent_kwargs["approved_recommendations"] = [equivalent]
+    assert update_signal_execution_status(**equivalent_kwargs) == 1
+
     conflict_kwargs = dict(kwargs)
     conflict_kwargs["submitted"] = []
     conflict_kwargs["planned_signal_ids"] = []
