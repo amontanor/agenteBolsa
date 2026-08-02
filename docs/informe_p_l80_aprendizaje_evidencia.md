@@ -417,3 +417,33 @@ maduros e identidad canónica.
 se añade después de cerrar el informe. Producción permanece en
 0.4.214/`eb662c07`/tree `2ee61f28`, sin merge, deploy, reinicio, jobs
 manuales, broker/red/LLM operativo, SQLite escritora ni push.
+
+## P-L80B-QA1 - aislamiento y razón de capacidad allowlisted
+
+La revisión QA añadió cobertura exclusivamente en
+`tests/test_p80b_same_cycle_control_carrier.py`. Los fixtures construyen
+`Settings(_env_file=None, DATA_DIR=tmp_path)` y eliminan las seis variables
+`TRADE_FILL_WATCH_*` del entorno mediante `monkeypatch`; una variable externa
+activa se prueba antes de sanearla y no altera el default del fixture. No se
+lee ni modifica `.env`.
+
+El positivo pasa `rejected_order_plans` con identidad exacta por `signal_id` y
+razón real `max_daily_buy_orders_reached`. Después de materializar conserva
+`decision=approved_buy*`, `gate.execution.status=plan_rejected`, la razón
+allowlisted, `signal_date` y `source_run_id`, y el matcher existente forma el
+control. El gemelo con `operator_note` no forma pareja. También se verificó el
+helper común `_rejection_payload_for_plan`: las rutas reales de daily limit y
+low-sample quota ya le pasan `signal_id` y `cycle_id`; no se amplió código.
+El fallback `approved_not_planned` sigue sin habilitar una decisión que no sea
+`approved_buy*`.
+
+QA1 focal: **9 passed** en el fichero P-L80B. Suite completa final sobre el
+árbol definitivo: **2395 passed, 1 skipped preexistente y 1 warning** en
+755 s. El warning sigue siendo la deprecación externa de
+`websockets.legacy`; no hay skips/xfails nuevos. Ruff, NUL y
+`git diff --check` permanecen verdes. El commit QA es `14c22e5a`.
+
+El candidato actual incorpora además `b2645dfe`, que hace la idempotencia del
+carrier independiente del orden de claves JSON mediante hash canónico. El
+HEAD/tree exactos finales se consignan tras el commit documental; producción,
+SQLite, stack, `.env`, manifest y archivos protegidos siguen intactos.
