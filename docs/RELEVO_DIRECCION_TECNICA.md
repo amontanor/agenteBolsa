@@ -1213,3 +1213,20 @@ con XNYS cerrado. No desplegar automaticamente.
   cerrada siguiente.
 - Estado: `ready_for_closed_market_redeployment_rehearsal`; candidato limpio
   pendiente de ensayo `--no-ff`, sin despliegue en este lote.
+## P-L79L - cierre productivo completado
+
+- Dictamen: deployed el 02-ago-2026 con XNYS cerrado.
+- Produccion integro 6c91279f mediante merge --no-ff 9b6c4a7b sobre
+  1b88ae4a; padres exactos, tree funcional 8a0622ce y version 0.4.214.
+- Preflight: PMR 2026-07-31 completed/pipeline_completed, lease vacio,
+  runtime sin jobs activos, paper true, live/auto-apply false, kernel
+  sellado/ok y .env autorizado estable (86a8420f...dfc35afb).
+- Gates: focales activos/limpios 168 passed cada uno; suite 2387 passed y
+  1 warning en 880.33 s; Ruff/NUL/compile/diff/config/kernel/smoke aislado
+  verdes. Warning externa: websockets.legacy.
+- Health: 02:46:27 y 02:48:08 CEST, separacion 101 s; raiz y /health
+  200/200, un scheduler, listener unico, PID/lock/heartbeat coherentes y
+  sin orden inesperada/database locked observado. lock_orphan continua siendo
+  la etiqueta conocida del launcher/runtime, no un segundo scheduler.
+- No tocar .env/manifest/protegidos, no kernel-seal, no broker/red/LLM real,
+  jobs manuales, postmarket/reconciliacion, reinicio adicional ni push.

@@ -113,3 +113,34 @@ Revisar el árbol limpio y ejecutar el ensayo de integración cerrado de P-L79
 sobre el candidato exacto mediante `merge --no-ff`; no integrar ni desplegar
 desde este worktree sin resolver antes, por su lote propio, el bloqueo
 `.env`/kernel de P-L78.
+## P-L79L - redeploy final v0.4.214
+
+Dictamen: deployed. El 02-ago-2026, con XNYS cerrado y margen hasta la
+apertura del lunes, se verificaron PMR 2026-07-31 completed/pipeline_completed,
+lease ausente, ausencia de jobs operativos, paper activo, live y auto-apply
+desactivados, kernel sellado y configuracion valida. El .env autorizado no se
+modifico; su hash redacted es 86a8420f...dfc35afb.
+
+Se integro en produccion el candidato exacto 6c91279f con merge --no-ff
+9b6c4a7b. Primer padre 1b88ae4a, segundo padre 6c91279f, arbol funcional
+8a0622ce y version 0.4.214. No hubo conflictos ni deltas funcionales
+inesperados.
+
+QA con el stack detenido: focales P-L69/P-L76/P-L78B/P-L78C/P-L79 bajo
+entorno activo y limpio: 168 passed en cada ejecucion; suite completa 2387
+passed y 1 warning en 880.33 s. Warning externa: websockets.legacy. Ruff,
+NUL (465 archivos), compilacion temporal, git diff --check,
+validate-agent-config --json, kernel-status productivo y smoke
+run-once --skip-crew aislado quedaron verdes. El smoke uso fake de ciclo y
+DATA_DIR temporal, sin broker/red/LLM/SQLite productiva.
+
+Tras stack_up.ps1, las comprobaciones fueron 02:46:27 CEST y 02:48:08 CEST
+(101 segundos): raiz y /health 200/200, scheduler/web unicos, kernel ok,
+heartbeat/proceso coherentes y sin procesos pytest/jobs inesperados.
+
+El arbol productivo quedo limpio salvo los untracked conocidos del operador.
+kernel.py, broker.py, execution.py y risk.py permanecen identicos al padre
+productivo; config.py contiene unicamente el cambio de defaults DeepSeek/OpenCode
+Go validado por P-L78B. No hubo kernel-seal, edicion de .env/manifest, broker,
+red, LLM real, Telegram, jobs manuales, reconciliacion, postmarket, reinicio
+ni push.

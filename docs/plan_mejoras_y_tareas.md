@@ -3101,3 +3101,17 @@ de despliegue quedan pendientes con XNYS cerrado.
 - Dictamen del candidato: `ready_for_closed_market_redeployment_rehearsal`.
   Suite completa y gates de integración quedan pendientes del siguiente
   ensayo cerrado; no se modifica el watcher productivo ni `.env`.
+## P-L79L - cierre productivo v0.4.214
+
+- Dictamen: deployed el 02-ago-2026 con XNYS cerrado.
+- Merge productivo 9b6c4a7b (1b88ae4a + 6c91279f), tree funcional 8a0622ce,
+  version 0.4.214; sin conflictos ni deltas funcionales inesperados. PMR
+  2026-07-31 completed/pipeline_completed y sin lease activo.
+- Suite completa 2387 passed y 1 warning en 880.33 s; focales de la cadena
+  bajo entorno activo y limpio 168 passed por ejecucion. Ruff, NUL,
+  compilacion, diff, config, kernel y smoke aislado verdes.
+- Dos comprobaciones posteriores separadas 101 s confirmaron HTTP raiz y
+  /health 200/200, scheduler/listener unicos, kernel sellado/ok y .env
+  autorizado sin cambios (86a8420f...dfc35afb).
+- Warning externo websockets.legacy; no jobs manuales, broker/red/LLM real,
+  reconciliacion, postmarket, kernel-seal, edicion de secretos ni push.
