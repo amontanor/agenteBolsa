@@ -304,6 +304,25 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _default_env_file(repo_root: Path) -> Path | None:
+    """Encuentra el `.env` existente sin copiarlo ni imprimirlo.
+
+    Los worktrees no contienen el `.env` no versionado. Desde un worktree se
+    permite leer el checkout productivo hermano para resolver la credencial,
+    siempre como archivo existente y en modo solo lectura.
+    """
+
+    candidates = (
+        repo_root / ".env",
+        repo_root.parent / "agenteBolsa" / ".env",
+        repo_root.parent.parent / "agenteBolsa" / ".env",
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def _load_settings(repo_root: Path, env_file: Path | None):
     src_path = repo_root / "src"
     if str(src_path) not in sys.path:
@@ -338,7 +357,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     root = _repo_root()
-    env_file = args.env_file if args.env_file is not None else root / ".env"
+    env_file = args.env_file if args.env_file is not None else _default_env_file(root)
     try:
         settings = _load_settings(root, env_file if env_file.exists() else None)
         config = config_from_settings(
