@@ -3180,3 +3180,19 @@ la suite previa de 2395 passed se reutiliza por identidad exacta de tree.
 Estado: `ready_for_closed_market_deployment`, sin despliegue. La siguiente
 acción única es la validación cerrada y despliegue autorizado; P-L80C-G sigue
 fuera de alcance.
+
+## P-L80H2 - health canónico OpenCode Go / DeepSeek V4 Flash
+
+- Se implementó en worktree aislado `codex/pl80h2-opencode-go-health` la
+  comprobación de una sola llamada al endpoint oficial
+  `opencode-go/deepseek-v4-flash`, sin reintentos, fallback, SQLite ni runtime
+  operativo. Versión candidata: 0.4.216.
+- La probe real autorizada devolvió HTTP 403 `region_forbidden`; no se modificó
+  proveedor, modelo, endpoint, `.env` ni política. El bloqueo es externo y no
+  se marca como defecto de routing del proyecto.
+- Focales del script/routing/CI/overnight: 288 passed; suite completa omitida
+  porque el script no es importado por runtime y una segunda llamada real está
+  prohibida. El healthcheck antiguo de cinco roles no sustituye este contrato.
+- Estado: `blocked_external_provider`. Siguiente acción única: opt-in regional
+  oficial de OpenCode Go y una nueva ejecución aislada del script; no cambiar a
+  GLM/Kimi ni alterar fallback/política.

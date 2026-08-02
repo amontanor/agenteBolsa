@@ -489,3 +489,96 @@ sizing, planes, órdenes, exposición ni límites. Los objetos protegidos
 Producción, stack, SQLite, `.env`, manifest, locks y leases permanecen intactos;
 no hubo merge productivo, reinicio, job manual, broker/red/LLM operativo ni
 push.
+
+## P-L80H2 - health canónico OpenCode Go / DeepSeek V4 Flash
+
+**Dictamen: `blocked_external_provider`.** La implementación aislada queda
+validada, pero la única llamada real autorizada al proveedor devolvió HTTP 403
+clasificado como `region_forbidden`. No se hizo fallback, no se reintentó y no
+se cambió proveedor, modelo, endpoint, credencial ni configuración. La ventana
+de auditoría fue el 02-ago-2026, Europe/Madrid; la salida se registró sin
+contenido de respuesta, credenciales ni identificadores de workspace.
+
+### Candidato y alcance
+
+El worktree es `C:\Antonio\Bref\agenteBolsa_worktrees\pl80h2_opencode_go_health`,
+rama `codex/pl80h2-opencode-go-health`, basado en el candidato P-L80BR
+`095f5cb59267c9d3c702b76b8481e9d708cff14c` (tree
+`d0b2ed035a253bc420196292a945c6c2bb1e4fcc`, v0.4.215). El resultado final del
+worktree y sus commits se consignan al cerrar esta sección; la versión de este
+lote es **0.4.216**. Producción sigue en `eb662c07`/tree `2ee61f28`, v0.4.214,
+con únicamente los untracked conocidos del operador.
+
+El script `scripts/check_opencode_go_deepseek.py` es una frontera independiente
+del runtime: no importa scheduler, broker, trading, Store ni SQLite; resuelve
+la credencial mediante `Settings`, lee el `.env` existente del checkout productivo
+hermano cuando el worktree no lo contiene, y nunca lo copia, escribe o imprime.
+Por defecto exige exactamente `provider=opencode-go`,
+`model=deepseek-v4-flash` y
+`https://opencode.ai/zen/go/v1/chat/completions`. Envía una única petición
+OpenAI-compatible, `temperature=0`, `max_tokens=16`, timeout acotado y sin
+reintentos ni fallback. La salida solo expone host/path, estado HTTP,
+latencia, `finish_reason`, `fallback_used=false`, contador de peticiones y
+errores sanitizados. Un endpoint/modelo/selector distinto falla cerrado sin
+hacer la petición.
+
+### Resultado sanitizado de la única probe real
+
+```text
+provider=opencode-go
+model=deepseek-v4-flash
+endpoint_host=opencode.ai
+endpoint_path=/zen/go/v1/chat/completions
+status=failed
+http_status=403
+error_type=region_forbidden
+fallback_used=false
+requests_made=1
+finish_reason=n/d
+```
+
+La causa es externa al repositorio: el endpoint oficial rechaza la región del
+modelo. El resultado es coherente con los 403 `RegionError` históricos del
+31-jul. No hay evidencia de endpoint divergente, alias GLM/Kimi, respuesta
+inválida ni fallo de autenticación; el proveedor no llegó a producir una
+respuesta de chat.
+
+### Auditoría estática de rutas
+
+| Ruta | Productor/consumidor | Identidad efectiva configurada | Fallback | Estado |
+|---|---|---|---|---|
+| Primaria, decisión, sentimiento | `llm_router.py`, `trade_decision.py`, `news_sentiment.py` | `opencode-go/deepseek-v4-flash`, base `/v1` que el cliente completa con `/chat/completions` | Qwen local; decisión conserva fallback determinista | coherente |
+| `deep`, radar, estrategia, lesson y retrospectiva | `chat_for_role("deep")` y consumidores de investigación/CI | hereda DeepSeek de mejora/OpenCode Go | Qwen local o salida segura de la ruta | coherente |
+| Mejora continua y overnight | `ImprovementLLMClient`, rutas `agents`/`orchestrator` | `opencode-go/deepseek-v4-flash`, base oficial | `openai-local/qwen3.6-27b`; errores no adquieren autoridad | coherente |
+| Healthcheck nuevo | `scripts/check_opencode_go_deepseek.py` | identidad oficial exacta | ninguno, fail-closed | implementado |
+| Healthcheck histórico | `scripts/llm_health_check.py` | lee varios roles y puede ejecutar cinco probes | diagnóstico legacy | no usar para este contrato de una llamada |
+
+Los modelos GLM/Kimi que permanecen en UI, fixtures, pruebas de overrides o
+documentación histórica no son defaults ni fallback silencioso. Qwen es el
+único fallback técnico local configurado. El cambio de identidad LLM no otorga
+autoridad sobre candidatos, scores, ranks, gates, sizing, planes, órdenes,
+exposición, límites, readiness o auto-apply.
+
+### QA
+
+- Tests nuevos del script: **15 passed**.
+- Focales de routing/config/DeepSeek, health legacy, mejora continua, codegen,
+  overnight/retrospectiva, sentimiento y decisión: **288 passed**.
+- Ruff focal y completo, NUL, compilación y `git diff --check`: verdes.
+- `validate-agent-config --json` aislado: `ok=true`, sin warnings.
+- `kernel-status --json` aislado: `unsealed` esperado por falta de manifiesto
+  temporal, `violations=[]`; el kernel productivo ya estaba `ok` y no se tocó.
+- Suite completa omitida justificadamente: el script es standalone y no se
+  importa desde el runtime; las rutas importadas quedaron cubiertas por los
+  focales. No se ejecutó smoke para no producir una segunda llamada LLM.
+
+La producción, `.env`, SQLite, stack, locks, leases y archivos protegidos
+permanecen intactos; no hubo broker, órdenes, trading, jobs, reinicio, merge,
+deploy ni push. Siguiente precondición única: que el operador habilite el
+opt-in regional oficial de OpenCode Go para la cuenta/workspace; después debe
+repetirse el mismo script una sola vez, sin cambiar el contrato.
+
+**Entrega del candidato:** commits `8a0a9a8a` (script/tests/version),
+`ddcf3087` (resolución read-only del `.env` existente desde worktree aislado) y
+`fc25f79f` (guard de endpoint oficial y test). El HEAD/tree finales y el estado
+de limpieza se reportan en el dictamen final.

@@ -1298,3 +1298,15 @@ producción ok. No hubo cambios de trading/riesgo/ejecución ni backfill.
 Siguiente paso único: cierre de mercado con preflight, suite/gates operativos y
 despliegue secuenciado si todas las precondiciones siguen verdes. No iniciar
 P-L80C-G ni ejecutar el carrier contra producción en este ensayo.
+
+## P-L80H2 - estado del health DeepSeek
+
+- Candidato aislado v0.4.216 en `codex/pl80h2-opencode-go-health`; script
+  `scripts/check_opencode_go_deepseek.py` exige OpenCode Go/DeepSeek Flash y una
+  sola llamada sin fallback ni reintento.
+- La probe real del 02-ago devolvió `HTTP 403 region_forbidden`, con una sola
+  petición y sin contenido/secretos expuestos. El proyecto resuelve de forma
+  coherente `opencode-go/deepseek-v4-flash`; Qwen sigue siendo fallback técnico.
+- Dictamen: `blocked_external_provider`. No desplegar ni cambiar proveedor.
+  La única acción siguiente es habilitar el opt-in regional oficial y repetir
+  exactamente este healthcheck una vez.
