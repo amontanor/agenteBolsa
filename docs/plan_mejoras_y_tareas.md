@@ -3115,3 +3115,32 @@ de despliegue quedan pendientes con XNYS cerrado.
   autorizado sin cambios (86a8420f...dfc35afb).
 - Warning externo websockets.legacy; no jobs manuales, broker/red/LLM real,
   reconciliacion, postmarket, kernel-seal, edicion de secretos ni push.
+
+## P-L80 - auditoría del embudo de aprendizaje (P-L80A auditado)
+
+- P-L80A es únicamente auditoría read-only sobre producción `0.4.214`:
+  cuantificó el embudo señal → observación → recomendación → plan → orden →
+  outcome → aprendizaje → gobierno y reprodujo 0/43 controles same-cycle.
+- Causa verificada: las 43 ejecuciones llegan como `executed_buy` con
+  `gate.execution={}`; sí existen controles de la misma fecha y
+  `source_run_ids`, pero ninguno alcanza la decisión/razón allowlisted del
+  matcher. Los 7 linajes legacy no verificados son una deuda separada.
+- La actividad de CI no equivale a evidencia: 199/200 propuestas recientes
+  son prosa, el digest vigente admite 0 experimentos de evidencia y las
+  anomalías de market-data (37 en un artefacto stale) quedan `unavailable`
+  para el estado actual.
+- P-L80A no está hecho funcionalmente, no cambia código/política, no reserva
+  versión y no autoriza auto-apply. Informe único:
+  `docs/informe_p_l80_aprendizaje_evidencia.md`.
+
+Cola provisional, dependiente y no autorizada: P-L80B cierre del carrier de
+control same-cycle; P-L80C linaje de los 7 legacy; P-L80D contrato
+finding→proposal; P-L80E admisión de experimentos/evaluación post-apply;
+P-L80F freshness y autoridad de market-data; P-L80G reconciliación de
+duplicate ratio/retención. El único siguiente lote recomendado es P-L80B.
+
+P-L80B debe conservar el matcher exacto, usar IDs/source runs canónicos,
+mantener la paridad de candidatos/ranks/gates/sizing/planes/órdenes/exposición
+y detenerse si exige tocar trading, riesgo o ejecución. La validación completa
+requiere XNYS cerrado, PMR terminal, lease vacío y fixtures temporales; no se
+promueven propuestas ni se cierra TTL durante esta auditoría.

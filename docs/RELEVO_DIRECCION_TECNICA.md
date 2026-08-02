@@ -1230,3 +1230,36 @@ con XNYS cerrado. No desplegar automaticamente.
   la etiqueta conocida del launcher/runtime, no un segundo scheduler.
 - No tocar .env/manifest/protegidos, no kernel-seal, no broker/red/LLM real,
   jobs manuales, postmarket/reconciliacion, reinicio adicional ni push.
+
+## P-L80A - auditoría del embudo de aprendizaje
+
+Dictamen: `ready_for_implementation`. El worktree aislado documenta la
+auditoría read-only de producción `0.4.214` del 02-ago. La actividad de
+agentes está confirmada, pero el scoreboard `pmr_dfe5e200c9cc_measure_scoreboard`
+recibe 43 ejecuciones sin controles: hay 493–496 filas de misma fecha y
+489–496 intersecciones de `source_run_ids` por ejecución, pero las 43 llegan
+como `executed_buy` con `gate.execution={}`. El matcher exacto no debe
+relajarse ni sustituirse por SPY/régimen.
+
+También quedan cuantificados 36/43 linajes verificados, 7
+`legacy_unverified`, 199/200 propuestas PROSA, 0 experimentos de evidencia
+admitidos en el digest vigente, WIP 14, 37 anomalías de market-data stale y
+la discrepancia entre `duplicate_ratio=0,8433` del artefacto diario y la
+proyección de SQLite consultada directamente. No se mezclan sus ventanas ni
+denominadores. Runtime productivo se dejó `unavailable` por
+`wal_mode_or_sidecar_present`, sin reparar sidecars.
+
+Siguiente lote único: **P-L80B — cierre del carrier same-cycle**. Debe seguir
+`signal_learning` → `signal_outcomes.gate_json` →
+`learning_observations.gate_json` y conservar `source_run_id`, decisión,
+razón/estado de capacidad y linaje; una fixture exacta debe producir pareja
+control solo cuando todos esos campos estén presentes. Missing/conflict sigue
+sin pareja. Probables fronteras: `signal_learning.py`, `daily_learning.py`,
+`counterfactual_analysis.py` y tests; no tocar matcher, trading, risk,
+execution, scheduler ni política. No reservar todavía versión.
+
+Precondiciones y gates del siguiente lote: XNYS cerrado, PMR/lease terminales,
+DATA_DIR temporal, `_env_file=None`, fakes sin red y suite completa únicamente
+cuando no compita con producción. Si el carrier no existe o exige una frontera
+protegida, detener y pedir revisión humana. P-L80C…P-L80G quedan únicamente
+como cola provisional; no iniciar otro lote en paralelo.
