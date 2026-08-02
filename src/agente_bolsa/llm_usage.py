@@ -7,6 +7,7 @@ from math import ceil
 from typing import Any
 
 from agente_bolsa.config import Settings
+from agente_bolsa.llm_router import LLMEndpoint, build_llm_identity
 from agente_bolsa.models import new_id
 from agente_bolsa.storage import Store
 
@@ -140,6 +141,7 @@ def record_llm_response(
     *,
     prompt: Any | None = None,
     role: str | None = None,
+    endpoint: LLMEndpoint | None = None,
 ) -> None:
     raw_tokens = usage_tokens_from_response(response)
     tokens = usage_tokens(response, prompt=prompt)
@@ -147,6 +149,7 @@ def record_llm_response(
         **tokens,
         "estimated": int(raw_tokens["total_tokens"] == 0 and tokens["total_tokens"] > 0),
         "role": role,
+        "llm_identity": build_llm_identity(endpoint, response=response),
     }
     try:
         store = Store(settings.database_path, settings.agent_logs_dir)
@@ -154,7 +157,7 @@ def record_llm_response(
         store.record_llm_usage(
             usage_id=new_id("llm_usage"),
             source=source,
-            model=getattr(response, "model", None) or settings.openai_model,
+            model=payload["llm_identity"].get("effective_model"),
             request_count=1,
             prompt_tokens=tokens["prompt_tokens"],
             completion_tokens=tokens["completion_tokens"],

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -110,21 +111,31 @@ def test_selected_candidates_prioritizes_recent_positive_setup_edge(tmp_path):
 
 def test_scheduler_status_includes_last_job_runtime(tmp_path):
     settings = Settings(DATA_DIR=tmp_path)
-    store = Store(settings.database_path, settings.agent_logs_dir)
-    store.ensure_schema()
-    store.set_runtime_value(
-        _job_state_key("market_cycle"),
-        {
-            "job": "market_cycle",
-            "status": "completed",
-            "run_id": "mkt_test",
-            "started_at": "2026-05-09T10:00:00+00:00",
-            "finished_at": "2026-05-09T10:00:05+00:00",
-            "duration_seconds": 5.0,
-            "detail": "ok",
-            "extra": {"selected_symbols": ["AAPL"]},
-        },
-    )
+    settings.database_path.parent.mkdir(parents=True)
+    with sqlite3.connect(settings.database_path) as connection:
+        connection.execute("PRAGMA journal_mode=DELETE")
+        connection.execute(
+            "CREATE TABLE runtime_state (key TEXT PRIMARY KEY, value_json TEXT, updated_at TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO runtime_state(key, value_json, updated_at) VALUES (?, ?, ?)",
+            (
+                _job_state_key("market_cycle"),
+                json.dumps(
+                    {
+                        "job": "market_cycle",
+                        "status": "completed",
+                        "run_id": "mkt_test",
+                        "started_at": "2026-05-09T10:00:00+00:00",
+                        "finished_at": "2026-05-09T10:00:05+00:00",
+                        "duration_seconds": 5.0,
+                        "detail": "ok",
+                        "extra": {"selected_symbols": ["AAPL"]},
+                    }
+                ),
+                "2026-05-09T10:00:05+00:00",
+            ),
+        )
 
     status = scheduler_status(settings)
 

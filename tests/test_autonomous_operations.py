@@ -167,7 +167,12 @@ def test_weekly_review_is_idempotent_and_visible_in_scheduler(tmp_path, monkeypa
     assert first is not None
     assert second is None
     assert "weekly_learning_review" in {item["id"] for item in status["jobs"]}
-    assert status["job_runtime"]["weekly_learning_review"]["status"] == "skipped"
+    assert status["runtime_state"] == {
+        "available": False,
+        "reason": "wal_mode_or_sidecar_present",
+        "source": "sqlite_read_only",
+    }
+    assert status["job_runtime"]["weekly_learning_review"] is None
 
 
 def test_digest_has_exactly_one_director_decision(tmp_path):
