@@ -10,6 +10,7 @@ from datetime import date
 from typing import Any
 from urllib.request import Request, urlopen
 
+from .equity_metrics import daily_equity_change
 from .opening_performance import opening_performance_context
 from .performance_benchmark import overlay_eod_benchmark
 
@@ -246,22 +247,42 @@ def build_daily_summary(
     if equity is None:
         equity = _finite(getattr(portfolio, "portfolio_value", None))
     previous_equity = _finite(opening_account.get("opening_equity")) if opening_available else None
-    if previous_equity is None:
+    daily_metric = daily_equity_change(
+        equity,
+        getattr(portfolio, "previous_close_equity", None),
+        source="Alpaca account.last_equity",
+    )
+    provider_previous_close = _finite(getattr(portfolio, "previous_close_equity", None))
+    if opening_available:
+        account_daily_return = _finite(opening_account.get("system_pct"))
+        equity_delta = (
+            equity - previous_equity
+            if equity is not None and previous_equity is not None
+            else None
+        )
+        account_daily_return_source = "session_open_snapshot"
+    elif provider_previous_close is not None:
+        previous_equity = _finite(daily_metric.get("previous_close_equity"))
+        account_daily_return = _finite(daily_metric.get("daily_equity_return"))
+        equity_delta = _finite(daily_metric.get("daily_equity_pl"))
+        account_daily_return_source = "alpaca_account.last_equity" if account_daily_return is not None else "unavailable"
+    else:
         previous_equity = _finite(account.get("previous_equity"))
-    exact_daily_return = (
-        equity / previous_equity - 1.0
-        if equity is not None and previous_equity is not None and previous_equity > 0
-        else None
-    )
-    legacy_daily_return = _finite(row.get("pnl_pct"))
-    account_daily_return = (
-        _finite(opening_account.get("system_pct"))
-        if opening_available
-        else exact_daily_return
-        if exact_daily_return is not None
-        else legacy_daily_return
-    )
-    equity_delta = equity - previous_equity if exact_daily_return is not None else None
+        exact_daily_return = (
+            equity / previous_equity - 1.0
+            if equity is not None and previous_equity is not None and previous_equity > 0
+            else None
+        )
+        legacy_daily_return = _finite(row.get("pnl_pct"))
+        account_daily_return = exact_daily_return if exact_daily_return is not None else legacy_daily_return
+        equity_delta = equity - previous_equity if exact_daily_return is not None else None
+        account_daily_return_source = (
+            "performance_benchmark.account_equity_pair"
+            if exact_daily_return is not None
+            else "legacy_percentage"
+            if legacy_daily_return is not None
+            else "unavailable"
+        )
     spy_daily_return = (
         _finite(opening_comparison.get("spy_pct"))
         if opening_available
@@ -328,15 +349,10 @@ def build_daily_summary(
         "schema_version": OPENING_SCHEMA_VERSION if opening_available else SCHEMA_VERSION,
         "session_date": session_date,
         "account_daily_return": account_daily_return,
-        "account_daily_return_source": (
-            "session_open_snapshot"
-            if opening_available
-            else "performance_benchmark.account_equity_pair"
-            if exact_daily_return is not None
-            else "legacy_percentage"
-            if legacy_daily_return is not None
-            else "unavailable"
-        ),
+        "account_daily_return_source": account_daily_return_source,
+        "daily_equity_pl": equity_delta,
+        "daily_equity_return": account_daily_return,
+        "daily_equity_source": daily_metric.get("source"),
         "equity": equity,
         "previous_equity": previous_equity,
         "equity_delta": equity_delta,
@@ -384,6 +400,8 @@ def format_daily_summary(payload: Mapping[str, Any]) -> str:
     total_count = len(list(payload.get("positions") or []))
     opening_contract = payload.get("schema_version") == OPENING_SCHEMA_VERSION
     variation_label = "Variación desde apertura XNYS" if opening_contract else "Variación de equity hoy"
+    if payload.get("account_daily_return_source") == "alpaca_account.last_equity":
+        variation_label = "P/L diario de cartera"
     benchmark_label = (
         str(_mapping(payload.get("benchmark")).get("instrument_label") or "SPY (ETF S&P 500)")
         if comparison_status == "unavailable"
@@ -398,6 +416,10 @@ def format_daily_summary(payload: Mapping[str, Any]) -> str:
             f"• {variation_label}: importe n/d",
             f"• Porcentaje disponible (legacy): {_pct(payload.get('account_daily_return'))}",
         ]
+    if False and payload.get("account_daily_return_source") == "alpaca_account.last_equity" and payload.get("equity_delta") is None:
+        equity_lines = [f"â€¢ {variation_label}: n/d (cierre XNYS anterior no disponible)"]
+    if payload.get("account_daily_return_source") == "alpaca_account.last_equity" and payload.get("equity_delta") is None:
+        equity_lines = [f"- {variation_label}: n/d (cierre XNYS anterior no disponible)"]
     base_lines = [
         f"📊 Resumen · {_date_label(payload.get('session_date'))}",
         "",

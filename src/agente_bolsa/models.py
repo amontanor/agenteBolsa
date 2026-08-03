@@ -83,6 +83,9 @@ class PortfolioSnapshot:
     buying_power: float
     positions: list[PositionSnapshot]
     open_orders: list[OrderSnapshot]
+    # Provider-neutral carry of Alpaca account.last_equity.  Legacy fixtures
+    # may omit it; callers must then publish daily equity as unavailable.
+    previous_close_equity: float | None = None
 
 
 @dataclass(frozen=True)

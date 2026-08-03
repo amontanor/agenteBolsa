@@ -3,10 +3,18 @@ from types import SimpleNamespace
 
 import pytest
 
-from agente_bolsa.models import PortfolioSnapshot, PositionSnapshot
+from agente_bolsa.models import PortfolioSnapshot
 from agente_bolsa.tools.broker import BrokerClientFactory
-from agente_bolsa.tools.equity_metrics import daily_equity_change, position_intraday_pl_reconciliation
-from agente_bolsa.web_app import _daily_equity_detail, _daily_equity_metric_for_portfolio, _daily_vs_spy_chart
+from agente_bolsa.tools.equity_metrics import (
+    daily_equity_change,
+    position_intraday_pl_reconciliation,
+)
+from agente_bolsa.tools.telegram_daily_summary import build_daily_summary, format_daily_summary
+from agente_bolsa.web_app import (
+    _daily_equity_detail,
+    _daily_equity_metric_for_portfolio,
+    _daily_vs_spy_chart,
+)
 
 
 def _portfolio(*, equity: float = 1005.0, previous_close: float | None = 1000.0) -> PortfolioSnapshot:
@@ -135,6 +143,18 @@ def test_legacy_snapshot_without_last_equity_remains_unavailable():
     assert metric["status"] == "unavailable"
 
 
+def test_telegram_uses_official_daily_equity_when_snapshot_carries_last_equity():
+    payload = build_daily_summary(
+        session_date="2026-08-03",
+        performance={"equity": 1005.0},
+        portfolio=_portfolio(equity=1005.0, previous_close=1000.0),
+    )
+
+    assert payload["account_daily_return_source"] == "alpaca_account.last_equity"
+    assert payload["daily_equity_pl"] == 5.0
+    assert "P/L diario de cartera: +5.00 USD" in format_daily_summary(payload)
+
+
 def test_current_opening_point_uses_visual_as_of_and_dashed_connector():
     rows = [
         {
@@ -168,4 +188,3 @@ def test_current_opening_point_uses_visual_as_of_and_dashed_connector():
         for layer in spec["layer"]
         for item in layer.get("encoding", {}).get("tooltip", [])
     )
-
