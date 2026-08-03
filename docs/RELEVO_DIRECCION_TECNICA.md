@@ -1342,3 +1342,8 @@ controles same-cycle, linaje, selected/not_selected, outcomes maduros,
 costes/slippage/P-L/MFE/MAE/drawdown/concentracion, DeepSeek/fallback y
 overnight. No abrir otro lote funcional antes de cerrar esa cohorte; observar
 warnings preexistentes sin repararlos en este lote.
+## P-L81 - relevo UI y metricas diarias
+
+El candidato `codex/pl81-ui-daily-equity` adopta `daily_equity_pl = current_equity - account.last_equity` y su porcentaje sobre `last_equity`. La tarjeta global, Telegram cuando dispone del carrier oficial y la reconciliacion secundaria de posiciones distinguen diario, abierto, periodo y desde apertura. El chart conecta el punto actual con tramo discontinuo y muestra la fecha visual sin perder la sesion canónica.
+
+Dictamen provisional: `ready_for_next_closed_market_deployment`. QA focal: 168 passed, 1 warning externo. No se requieren cambios en skills/runbooks. No desplegar si no queda margen para rollback, arranque y dos health checks antes de la apertura XNYS; produccion 0.4.216 permanece intacta.
