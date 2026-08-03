@@ -1347,3 +1347,8 @@ warnings preexistentes sin repararlos en este lote.
 El candidato `codex/pl81-ui-daily-equity` adopta `daily_equity_pl = current_equity - account.last_equity` y su porcentaje sobre `last_equity`. La tarjeta global, Telegram cuando dispone del carrier oficial y la reconciliacion secundaria de posiciones distinguen diario, abierto, periodo y desde apertura. El chart conecta el punto actual con tramo discontinuo y muestra la fecha visual sin perder la sesion canónica.
 
 Dictamen provisional: `ready_for_next_closed_market_deployment`. QA focal: 168 passed, 1 warning externo. No se requieren cambios en skills/runbooks. No desplegar si no queda margen para rollback, arranque y dos health checks antes de la apertura XNYS; produccion 0.4.216 permanece intacta.
+## P-L81 - relevo tras reinicio y hard stop
+
+El candidato `365d855f`/tree `8890f377`, v0.4.217, esta limpio. La primera suite termino `1555 passed, 1 failed, 1 warning` por expectativa stale `0.4.216`; se corrigio solo esa prueba y pasa aislada. La segunda suite fue interrumpida por reinicio sin salida recuperable: queda pendiente, sin repetirla durante la apertura.
+
+Dictamen `ready_for_next_closed_market_deployment`: produccion `e4fe1ddb`/tree `ce15c1b0`, v0.4.216, stack arriba. Siguiente paso unico en cierre: suite completa aislada, gates restantes y despliegue solo si el preflight y el margen son seguros. No tocar broker carry, .env, protegidos ni politica.

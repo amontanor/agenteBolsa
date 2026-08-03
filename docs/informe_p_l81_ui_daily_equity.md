@@ -85,3 +85,10 @@ El helper por defecto de la tarjeta tambien usa el contrato canonico: `P/L diari
 El carry autorizado de `account.last_equity` es solo lectura y provider-neutral. No se añadieron llamadas de broker, no se cambio la ruta opening-to-opening, y no se modificaron skills/runbooks porque no se detecto una instruccion obsoleta reproducible.
 
 La suite completa, gates de cierre y smoke aislado quedan sujetos al margen preapertura. Si no existe margen razonable para rollback, stack_up y dos health checks antes de 15:30 Europe/Madrid, el resultado correcto es `ready_for_next_closed_market_deployment` y produccion permanece intacta.
+## Cierre seguro preapertura 2026-08-03
+
+La primera suite completa aislada se detuvo en el primer fallo real de politica de version: `1555 passed, 1 failed, 1 warning` en `tests/test_p59c_llm_selected_authority.py::test_version_policy_requires_bump`, que aun esperaba `0.4.216`. La causa era la expectativa stale, no la funcionalidad P-L81; `365d855f` la alinea con `0.4.217` y el test aislado pasa (`1 passed`).
+
+La segunda suite fue relanzada con `DATA_DIR` temporal, pero el reinicio del equipo interrumpio el proceso y no dejo salida terminal ni artefacto recuperable. Queda `pending` para el siguiente cierre; no se repite con XNYS a minutos de abrir. Gates breves posteriores: Ruff verde, `check_no_nulls` verde (470 archivos), `git diff --check` verde y version policy verde.
+
+A las 15:22 CEST produccion seguia en `e4fe1ddb`/`ce15c1b0`, v0.4.216, limpia, con scheduler/web arriba y HTTP web OK. No se ejecuto `stack_down`, merge, smoke productivo, broker, red, LLM, ni jobs manuales. El candidato queda limpio en `365d855f`/`8890f377`, v0.4.217, listo para continuar en una ventana cerrada con la suite completa pendiente.
