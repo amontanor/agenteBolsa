@@ -190,7 +190,7 @@ def test_today_percentage_uses_daily_equity_not_current_exposure():
     assert display == same_equity_different_exposure
     assert display["primary_pct"] == "0.27%"
     assert "sobre invertido" not in metric["detail_html"]
-    assert "última apertura xnys" in metric["detail_html"].lower()
+    assert "cierre xnys anterior" in metric["detail_html"].lower()
     assert "acciones subieron" not in metric["detail_html"].lower()
     assert metric["amount"] == "$190.42"
 

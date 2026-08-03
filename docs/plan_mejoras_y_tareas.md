@@ -3224,3 +3224,13 @@ sesiones completadas; no se hace backfill historico. P-L80B queda desplegado
 como carrier prospectivo: el matcher no cambia y missing/conflict no forma
 controles. La siguiente decision se toma despues de esa cohorte, sin iniciar
 P-L80C-G en paralelo.
+## P-L81 - coherencia de ganancia global diaria y continuidad UI
+
+Estado: `ready_for_next_closed_market_deployment`. La definicion general de hoy es `current_equity - previous_close_equity` sobre `account.last_equity`, con porcentaje sobre el cierre anterior. El carrier se propaga a `PortfolioSnapshot`; el helper canonico es reutilizable y la tarjeta ya no presenta apertura-to-now como hoy. La grafica conecta el tramo `En curso` y conserva `session_date`/intervalo exactos en tooltip.
+
+QA focal: 168 passed y 1 warning externo. Produccion sigue en v0.4.216, sin cambios de stack ni politica. No se modificaron skills/runbooks: no habia contradiccion reproducible. Siguiente paso unico: gates cerrados y despliegue en una ventana con margen seguro; sin backfill P-L80 ni cambios de trading.
+## P-L81 - cierre seguro tras reinicio
+
+El primer intento de suite completa encontro solo una expectativa stale de version (`1555 passed, 1 failed, 1 warning`); `365d855f` la corrigio a `0.4.217` y el test aislado pasa. El segundo intento quedo interrumpido por reinicio sin terminal/artefacto recuperable y permanece pendiente. Gates breves verdes: Ruff, NUL, diff-check y version policy.
+
+Dictamen: `ready_for_next_closed_market_deployment`. No iniciar stack_down ni merge preapertura; siguiente precondicion unica: repetir la suite completa aislada y cerrar los gates restantes con XNYS cerrado y margen operativo.

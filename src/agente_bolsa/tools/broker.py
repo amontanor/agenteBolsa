@@ -82,6 +82,7 @@ class BrokerClientFactory:
             "currency": str(getattr(account, "currency", "")),
             "cash": str(getattr(account, "cash", "")),
             "portfolio_value": str(getattr(account, "portfolio_value", "")),
+            "previous_close_equity": _optional_float_attr(account, "last_equity"),
             "buying_power": str(getattr(account, "buying_power", "")),
             "pattern_day_trader": bool(getattr(account, "pattern_day_trader", False)),
             "trading_blocked": bool(getattr(account, "trading_blocked", False)),
@@ -230,4 +231,5 @@ class BrokerClientFactory:
                 )
                 for order in orders
             ],
+            previous_close_equity=_optional_float_attr(account, "last_equity"),
         )
