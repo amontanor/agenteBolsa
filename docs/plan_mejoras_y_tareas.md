@@ -3224,3 +3224,11 @@ sesiones completadas; no se hace backfill historico. P-L80B queda desplegado
 como carrier prospectivo: el matcher no cambia y missing/conflict no forma
 controles. La siguiente decision se toma despues de esa cohorte, sin iniciar
 P-L80C-G en paralelo.
+## P-L81 - resultado del cierre productivo
+
+Estado: `needs_fix`. El candidato v0.4.217 paso suite y gates, pero el merge
+produjo `kernel-status=violation` porque el carry read-only de `account.last_equity`
+modifica el hash protegido de `broker.py`. El merge fue revertido auditably con
+`6f86f260`; produccion queda segura en v0.4.216. Siguiente paso unico: autoridad
+explicita para el sello del hash exacto o rediseño de la frontera protegida; no
+abrir P-L82/P-L83.

@@ -1342,3 +1342,11 @@ controles same-cycle, linaje, selected/not_selected, outcomes maduros,
 costes/slippage/P-L/MFE/MAE/drawdown/concentracion, DeepSeek/fallback y
 overnight. No abrir otro lote funcional antes de cerrar esa cohorte; observar
 warnings preexistentes sin repararlos en este lote.
+## P-L81 - relevo tras rollback
+
+El candidato `7bc4648c`/tree `fc6916c2` fue integrado como `e8f7874e`, con
+`2423 passed` post-merge, pero kernel rechazo el nuevo hash de `broker.py`.
+Rollback auditable `6f86f260` restauro `e4fe1ddb` funcional/tree `ce15c1b0`,
+v0.4.216; stack arriba y doble salud 200/200. El carry de `last_equity` es el
+unico delta. Dictamen `needs_fix`: falta autoridad/procedimiento de sello
+especifico antes de otro despliegue. No tocar P-L80, trading ni politica.
