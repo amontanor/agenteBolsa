@@ -416,8 +416,6 @@ def format_daily_summary(payload: Mapping[str, Any]) -> str:
             f"• {variation_label}: importe n/d",
             f"• Porcentaje disponible (legacy): {_pct(payload.get('account_daily_return'))}",
         ]
-    if False and payload.get("account_daily_return_source") == "alpaca_account.last_equity" and payload.get("equity_delta") is None:
-        equity_lines = [f"â€¢ {variation_label}: n/d (cierre XNYS anterior no disponible)"]
     if payload.get("account_daily_return_source") == "alpaca_account.last_equity" and payload.get("equity_delta") is None:
         equity_lines = [f"- {variation_label}: n/d (cierre XNYS anterior no disponible)"]
     base_lines = [

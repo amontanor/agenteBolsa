@@ -324,7 +324,7 @@ def _today_pl_display(
     display = {
         "primary_pct": _pct(equity_pct) if equity_pct is not None else "n/d",
     }
-    display["period_caption"] = period_caption or "Variaci\u00f3n de equity desde la \u00faltima apertura XNYS"
+    display["period_caption"] = period_caption or "P/L diario de cartera · cierre XNYS anterior → ahora"
     return display
 
 
@@ -1279,9 +1279,6 @@ def _account_group(
             </div>
             <div class="account-kpis">
                 <div class="{today_class}">
-                    <!-- The legacy label is retained in source history but hidden from the active card. -->
-                    <span>Variación de equity hoy</span>
-                    -->
                     <span>Ganancia/pérdida global de hoy</span>
                     <strong>{today_metric["amount"]}</strong>
                     <em>
