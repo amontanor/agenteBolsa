@@ -800,7 +800,7 @@ def test_today_pl_display_uses_daily_equity_pct_as_primary():
 
     assert display == {
         "primary_pct": "0.05%",
-        "period_caption": "P/L diario de cartera · cierre XNYS anterior → ahora",
+        "period_caption": "Variación de equity desde la última apertura XNYS",
     }
 
 
@@ -809,7 +809,7 @@ def test_today_pl_display_returns_nd_when_invested_is_zero():
 
     assert display == {
         "primary_pct": "0.05%",
-        "period_caption": "P/L diario de cartera · cierre XNYS anterior → ahora",
+        "period_caption": "Variación de equity desde la última apertura XNYS",
     }
 
 
@@ -818,7 +818,7 @@ def test_today_pl_display_preserves_negative_pct_over_invested():
 
     assert display == {
         "primary_pct": "-0.07%",
-        "period_caption": "P/L diario de cartera · cierre XNYS anterior → ahora",
+        "period_caption": "Variación de equity desde la última apertura XNYS",
     }
 
 
@@ -827,7 +827,7 @@ def test_today_pl_metric_payload_reuses_same_display_as_hero():
 
     assert payload["amount"] == "$38.42"
     assert payload["display"] == _today_pl_display(38.42, 5246.0, 0.0005)
-    assert payload["detail_html"] == "0.05% · P/L diario de cartera · cierre XNYS anterior → ahora"
+    assert payload["detail_html"] == "0.05% · Variación de equity desde la última apertura XNYS"
 
 
 def test_sidebar_version_label_uses_semantic_version():

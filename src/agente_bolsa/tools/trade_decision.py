@@ -155,14 +155,6 @@ def _compact_portfolio_for_prompt(portfolio: PortfolioSnapshot) -> dict[str, Any
     }
 
 
-def _full_portfolio_for_prompt(portfolio: PortfolioSnapshot) -> dict[str, Any]:
-    """Keep the read-only daily-equity carrier out of decision prompt parity."""
-
-    payload = asdict(portfolio)
-    payload.pop("previous_close_equity", None)
-    return payload
-
-
 def _compact_candidate_for_prompt(candidate: dict[str, Any]) -> dict[str, Any]:
     learning_prior = candidate.get("learning_prior", {}) or {}
     technical_state = candidate.get("technical_state", {}) or {}
@@ -619,7 +611,7 @@ def _llm_prompt_payload(
             "top_shorts": [],
         }
     return {
-        "portfolio": _compact_portfolio_for_prompt(portfolio) if compact else _full_portfolio_for_prompt(portfolio),
+        "portfolio": _compact_portfolio_for_prompt(portfolio) if compact else asdict(portfolio),
         "technical_candidates": technical_candidates,
         "news_sentiment": _compact_sentiment_for_prompt(sentiment_context, technical_context) if compact else sentiment_context,
         "research_evidence": compact_research_context_for_prompt(research_context or {}) if compact else (research_context or {}),

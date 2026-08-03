@@ -52,9 +52,6 @@ from agente_bolsa.tools.broker import BrokerClientFactory
 from agente_bolsa.tools.daily_learning import (
     load_daily_learning_context,
 )
-from agente_bolsa.tools.equity_metrics import (
-    daily_equity_change,
-)
 from agente_bolsa.tools.news_sentiment import fetch_symbol_news
 from agente_bolsa.tools.opening_performance import opening_performance_context
 from agente_bolsa.tools.portfolio_insights import (
@@ -313,29 +310,16 @@ def _pct_signed(value: Any) -> str:
     return f"{sign}{amount:.2f}%"
 
 
-def _today_pl_display(
-    today_pl: Any,
-    _invested: Any,
-    equity_pct: Any | None,
-    *,
-    period_caption: str | None = None,
-) -> dict[str, str | None]:
+def _today_pl_display(today_pl: Any, _invested: Any, equity_pct: Any | None) -> dict[str, str | None]:
     del today_pl
-    display = {
+    return {
         "primary_pct": _pct(equity_pct) if equity_pct is not None else "n/d",
+        "period_caption": "Variaci\u00f3n de equity desde la última apertura XNYS",
     }
-    display["period_caption"] = period_caption or "P/L diario de cartera · cierre XNYS anterior → ahora"
-    return display
 
 
-def _today_pl_metric_payload(
-    today_pl: Any,
-    invested: Any,
-    equity_pct: Any | None,
-    *,
-    period_caption: str | None = None,
-) -> dict[str, Any]:
-    display = _today_pl_display(today_pl, invested, equity_pct, period_caption=period_caption)
+def _today_pl_metric_payload(today_pl: Any, invested: Any, equity_pct: Any | None) -> dict[str, Any]:
+    display = _today_pl_display(today_pl, invested, equity_pct)
     return {
         "amount": _money(today_pl),
         "detail_html": f"{display['primary_pct']} \u00b7 {display['period_caption']}",
@@ -351,20 +335,6 @@ def _num(value: Any) -> float | None:
         return number if math.isfinite(number) else None
     except (TypeError, ValueError):
         return None
-
-
-def _daily_equity_display_date(value: Any) -> str | None:
-    parsed = _parse_utc_timestamp(value)
-    return parsed.astimezone(ZoneInfo("Europe/Madrid")).strftime("%d/%m/%Y") if parsed else None
-
-
-def _daily_equity_detail(metric: dict[str, Any]) -> str:
-    if metric.get("status") != "available":
-        reason = str(metric.get("reason") or "datos no disponibles")
-        return f"P/L diario de cartera · n/d · {reason}"
-    start = _daily_equity_display_date(metric.get("window_start")) or "último cierre Alpaca"
-    end = _daily_equity_display_date(metric.get("window_end")) or "ahora"
-    return f"Equity actual − último cierre Alpaca · {start} → {end}"
 
 
 def _json(value: Any) -> str:
@@ -1243,12 +1213,11 @@ def _account_group(
     equity_summary: dict[str, Any] | None = None,
     equity_source: str | None = None,
     equity_as_of: str | None = None,
-    today_detail: str | None = None,
 ) -> None:
     equity_summary = equity_summary or {}
     total_tone = "good" if (total_pl or 0.0) > 0 else "bad" if (total_pl or 0.0) < 0 else "neutral"
     today_tone = "good" if (today_pl or 0.0) > 0 else "bad" if (today_pl or 0.0) < 0 else "neutral"
-    today_metric = _today_pl_metric_payload(today_pl, exposure, today_pct, period_caption=today_detail)
+    today_metric = _today_pl_metric_payload(today_pl, exposure, today_pct)
     today_display = today_metric["display"]
     tone_class = f"account-pl {total_tone}"
     today_class = f"account-kpi {today_tone}"
@@ -1279,7 +1248,7 @@ def _account_group(
             </div>
             <div class="account-kpis">
                 <div class="{today_class}">
-                    <span>Ganancia/pérdida global de hoy</span>
+                    <span>Variación de equity hoy</span>
                     <strong>{today_metric["amount"]}</strong>
                     <em>
                         <span>{today_display["primary_pct"]} {today_display["period_caption"]}</span>
@@ -2028,48 +1997,6 @@ def _latest_daily_equity_change(
         "pl_pct": _num(latest.get("% dia")),
         "source": str(latest.get("fuente") or ""),
     }
-
-
-def _previous_close_history_timestamp(
-    portfolio_history: dict[str, Any] | None,
-    previous_close_equity: float | None,
-    *,
-    as_of: datetime,
-) -> str | None:
-    if previous_close_equity is None:
-        return None
-    timestamps = list((portfolio_history or {}).get("timestamp") or [])
-    equities = list((portfolio_history or {}).get("equity") or [])
-    matches: list[datetime] = []
-    for raw_timestamp, raw_equity in zip(timestamps, equities, strict=False):
-        parsed = _parse_utc_timestamp(raw_timestamp)
-        equity = _num(raw_equity)
-        if parsed is None or equity is None or parsed > as_of.astimezone(timezone.utc):
-            continue
-        if round(equity, 2) == round(previous_close_equity, 2):
-            matches.append(parsed)
-    return max(matches).isoformat() if matches else None
-
-
-def _daily_equity_metric_for_portfolio(
-    portfolio: PortfolioSnapshot | None,
-    portfolio_history: dict[str, Any] | None,
-    *,
-    as_of: datetime,
-) -> dict[str, Any]:
-    current_equity = _num(getattr(portfolio, "portfolio_value", None)) if portfolio is not None else None
-    previous_close = _num(getattr(portfolio, "previous_close_equity", None)) if portfolio is not None else None
-    previous_close_at = _previous_close_history_timestamp(
-        portfolio_history,
-        previous_close,
-        as_of=as_of,
-    )
-    return daily_equity_change(
-        current_equity,
-        previous_close,
-        previous_close_at=previous_close_at,
-        as_of=as_of.astimezone(timezone.utc).isoformat(),
-    )
 
 
 def _estimated_portfolio_value_series(
@@ -3325,7 +3252,7 @@ def _opening_interval_label(row: dict[str, Any]) -> str:
     return f"{start} -> {end if end != 'n/d' else 'ahora'}"
 
 
-def _daily_vs_spy_chart_legacy(rows: list[dict[str, Any]]) -> Any:
+def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
     if alt is None:
         return None
     chart_rows = [
@@ -3433,133 +3360,6 @@ def _daily_vs_spy_chart_legacy(rows: list[dict[str, Any]]) -> Any:
     if connectors is not None:
         layers.append(connectors)
     layers.append(zero_line)
-    return alt.layer(*layers).properties(height=260)
-
-
-def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
-    """Draw final history solid and the current interval as one dashed connector."""
-
-    if alt is None:
-        return None
-
-    def _visual_date(row: dict[str, Any]) -> str:
-        status = str(row.get("status") or "").lower()
-        if status in {"in_progress", "en_curso"}:
-            parsed = _parse_utc_timestamp(row.get("system_end_at"))
-            if parsed is not None:
-                return parsed.astimezone(ZoneInfo("Europe/Madrid")).date().isoformat()
-        return str(row.get("session_date") or "")[:10]
-
-    chart_rows = [
-        {
-            "fecha_visual": _visual_date(row),
-            "sesion_iniciada": row.get("session_date"),
-            "Sistema": row.get("system_pct"),
-            "SP500": row.get("spy_pct"),
-            "estado": (
-                "Final"
-                if row.get("status") == "final" or row.get("comparison_status") == "comparable"
-                else "En curso"
-            ),
-            "periodo": _opening_interval_label(row),
-            "as_of": _local_datetime(row.get("system_end_at"), "Europe/Madrid"),
-        }
-        for row in rows
-    ]
-    values = [value for row in chart_rows for value in (row["Sistema"], row["SP500"]) if value is not None]
-    if not values:
-        return None
-    y_min_raw, y_max_raw = min(values), max(values)
-    y_pad = max(abs(y_min_raw), abs(y_max_raw), 0.002) * 0.35
-    y_min, y_max = y_min_raw - y_pad, y_max_raw + y_pad
-    tooltip = [
-        alt.Tooltip("fecha_visual:N", title="Fecha visible"),
-        alt.Tooltip("sesion_iniciada:N", title="Sesión iniciada"),
-        alt.Tooltip("retorno:Q", title="% ganancias", format="+.2%"),
-        alt.Tooltip("serie:N", title="Serie"),
-        alt.Tooltip("estado:N", title="Estado"),
-        alt.Tooltip("periodo:N", title="Intervalo"),
-        alt.Tooltip("as_of:N", title="As of"),
-    ]
-    y_encoding = alt.Y(
-        "retorno:Q",
-        title="% ganancias",
-        axis=alt.Axis(format="+.1%"),
-        scale=alt.Scale(domain=[y_min, y_max]),
-    )
-
-    def _fold_layer(data_rows: list[dict[str, Any]], *, stroke_dash: list[int] | None = None) -> Any:
-        chart = alt.Chart(pd.DataFrame(data_rows)).transform_fold(
-            fold=["Sistema", "SP500"],
-            as_=["serie", "retorno"],
-        )
-        mark = {"type": "line", "strokeWidth": 2.5, "strokeCap": "round"}
-        if stroke_dash is not None:
-            mark["strokeDash"] = stroke_dash
-        return chart.mark_line(**{key: value for key, value in mark.items() if key != "type"}).encode(
-            x=alt.X("fecha_visual:N", title=None, axis=alt.Axis(labelAngle=0, labelOverlap=True)),
-            y=y_encoding,
-            color=alt.Color("serie:N", title=None, scale=alt.Scale(domain=["Sistema", "SP500"], range=["#0e7a47", "#1e40af"])),
-            tooltip=tooltip,
-        )
-
-    current_index = next(
-        (index for index in range(len(chart_rows) - 1, -1, -1) if chart_rows[index]["estado"] == "En curso"),
-        None,
-    )
-    layers: list[Any] = []
-    if current_index is None:
-        layers.append(_fold_layer(chart_rows))
-    else:
-        historical_rows = chart_rows[:current_index]
-        if historical_rows:
-            layers.append(_fold_layer(historical_rows))
-        segment_start = max(current_index - 1, 0)
-        layers.append(_fold_layer(chart_rows[segment_start : current_index + 1], stroke_dash=[6, 4]))
-
-    points = (
-        alt.Chart(pd.DataFrame(chart_rows))
-        .transform_fold(fold=["Sistema", "SP500"], as_=["serie", "retorno"])
-        .mark_point(size=70, filled=True, strokeWidth=1.5, stroke="white")
-        .encode(
-            x=alt.X("fecha_visual:N", title=None, axis=alt.Axis(labelAngle=0, labelOverlap=True)),
-            y=y_encoding,
-            color=alt.Color("serie:N", title=None, scale=alt.Scale(domain=["Sistema", "SP500"], range=["#0e7a47", "#1e40af"]), legend=None),
-            tooltip=tooltip,
-        )
-    )
-    layers.append(points)
-
-    comparable_rows = [
-        row
-        for row in chart_rows
-        if row["estado"] == "Final" and row["Sistema"] is not None and row["SP500"] is not None
-    ]
-    if comparable_rows:
-        connectors_df = pd.DataFrame(comparable_rows).copy()
-        connectors_df["ganador"] = connectors_df.apply(
-            lambda row: (
-                "Empate"
-                if abs(row["Sistema"] - row["SP500"]) < 0.00005
-                else "Sistema"
-                if row["Sistema"] > row["SP500"]
-                else "SP500"
-            ),
-            axis=1,
-        )
-        layers.append(
-            alt.Chart(connectors_df)
-            .mark_rule(strokeWidth=2, opacity=0.55, strokeCap="round")
-            .encode(x="fecha_visual:N", y="Sistema:Q", y2="SP500:Q", color=alt.Color("ganador:N", legend=None))
-        )
-    background = alt.Chart(pd.DataFrame({"y0": [0], "y1": [y_max], "y2": [y_min]}))
-    layers.insert(0, background.mark_rect(color="#dcfce7", opacity=0.35).encode(y="y0:Q", y2="y1:Q"))
-    layers.insert(1, background.mark_rect(color="#fee2e2", opacity=0.35).encode(y="y2:Q", y2="y0:Q"))
-    layers.append(
-        alt.Chart(pd.DataFrame({"y": [0]}))
-        .mark_rule(color="#374151", strokeWidth=1.5, strokeDash=[4, 2])
-        .encode(y="y:Q")
-    )
     return alt.layer(*layers).properties(height=260)
 
 
@@ -4654,14 +4454,8 @@ def page_dashboard() -> None:
         now=account_read_at,
     )
     account_current = opening_context.get("account_current") or {}
-    daily_equity_metric = _daily_equity_metric_for_portfolio(
-        portfolio,
-        portfolio_history,
-        as_of=account_read_at,
-    )
-    today_total = _num(daily_equity_metric.get("daily_equity_pl"))
-    today_pct = _num(daily_equity_metric.get("daily_equity_return"))
-    today_detail = _daily_equity_detail(daily_equity_metric)
+    today_total = _num(account_current.get("system_delta"))
+    today_pct = _num(account_current.get("system_pct"))
     full_equity_df = _portfolio_value_series_from_alpaca(portfolio_history, current_equity)
     full_equity_summary = _portfolio_equity_summary(full_equity_df)
     account_total_pl = _num(full_equity_summary.get("pl"))
@@ -4704,7 +4498,6 @@ def page_dashboard() -> None:
         equity_summary=full_equity_summary,
         equity_source=str(account_current.get("system_source") or "apertura exacta no disponible"),
         equity_as_of=str(account_current.get("system_end_at") or account_read_at.isoformat()),
-        today_detail=today_detail,
     )
 
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)

@@ -155,8 +155,8 @@ def test_pending_numeric_history_is_drawn_as_provisional_without_counting_winner
     ]
     assert len(data_layers) == 2
     for layer in data_layers:
+        assert layer["encoding"]["strokeDash"]["field"] == "estado"
         assert any(item.get("field") == "estado" and item.get("title") == "Estado" for item in layer["encoding"]["tooltip"])
-    assert all("strokeDash" not in layer["encoding"] for layer in data_layers)
 
 
 def test_cumulative_baseline_compounds_daily_returns_instead_of_adding_them():

@@ -107,7 +107,7 @@ def test_p70_characterizes_base_summary_ux_defects_before_redesign():
     assert "P/L abierto total (2/2): +50.00 USD" in text
 
 
-def _acceptance_portfolio(*, previous_close_equity: float | None = 70_534.69) -> PortfolioSnapshot:
+def _acceptance_portfolio() -> PortfolioSnapshot:
     rows = [
         ("AAPL", 21.27, 0.0213, 10.05, 0.0099),
         ("CPAY", 24.90, 0.0335, 9.22, 0.0121),
@@ -132,17 +132,7 @@ def _acceptance_portfolio(*, previous_close_equity: float | None = 70_534.69) ->
         )
         for symbol, total, total_pct, today, today_pct in rows
     ]
-    return PortfolioSnapshot(
-        "paper",
-        "ACTIVE",
-        "USD",
-        1_000,
-        70_638.81,
-        2_000,
-        positions,
-        [],
-        previous_close_equity,
-    )
+    return PortfolioSnapshot("paper", "ACTIVE", "USD", 1_000, 70_638.81, 2_000, positions, [])
 
 
 def _comparable_performance(*, equity: float = 70_638.81, previous_equity: float | None = 70_538.59, spy_return: float = -0.003):
@@ -195,7 +185,7 @@ def test_p70_reads_anonymized_performance_daily_payload_without_promoting_provis
     payload = telegram.build_daily_summary(
         session_date="2026-07-28",
         performance=row,
-        portfolio=_acceptance_portfolio(previous_close_equity=None),
+        portfolio=_acceptance_portfolio(),
     )
     text = telegram.format_daily_summary(payload)
 
@@ -235,7 +225,7 @@ def test_p70_acceptance_contract_reconciles_account_and_all_positions():
     payload = telegram.build_daily_summary(
         session_date="2026-07-28",
         performance=_comparable_performance(),
-        portfolio=_acceptance_portfolio(previous_close_equity=None),
+        portfolio=_acceptance_portfolio(),
     )
     text = telegram.format_daily_summary(payload)
 
@@ -272,7 +262,7 @@ def test_p70_preserves_numeric_provisional_benchmark_without_declaring_winner():
     payload = telegram.build_daily_summary(
         session_date="2026-07-28",
         performance=performance,
-        portfolio=_acceptance_portfolio(previous_close_equity=None),
+        portfolio=_acceptance_portfolio(),
     )
     text = telegram.format_daily_summary(payload)
 
@@ -292,7 +282,7 @@ def test_p70_missing_equity_pair_keeps_legacy_percentage_but_not_amount():
             "spy_pct": 0.005,
             "performance_benchmark": {"account": {"equity": 70_638.81, "previous_equity": None}},
         },
-        portfolio=_acceptance_portfolio(previous_close_equity=None),
+        portfolio=_acceptance_portfolio(),
     )
 
     assert payload["equity_delta"] is None
