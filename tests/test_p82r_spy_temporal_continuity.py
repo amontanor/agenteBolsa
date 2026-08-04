@@ -5,7 +5,6 @@ import pytest
 from agente_bolsa import web_app
 from agente_bolsa.tools.opening_performance import build_open_to_open_rows
 
-
 UTC = timezone.utc
 
 
