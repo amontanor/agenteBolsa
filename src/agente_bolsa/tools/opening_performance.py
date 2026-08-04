@@ -688,6 +688,8 @@ def build_open_to_open_rows(
                 "system_source": account[start].get("source"),
                 "spy_source": spy[start].get("source"),
                 "price_basis": spy[start].get("price_basis"),
+                "comparison_status": "comparable",
+                "comparison_reason": None,
             }
         )
     current_at = (current_equity_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -697,27 +699,47 @@ def build_open_to_open_rows(
     current_equity_value = _finite(current_equity)
     current_spy_value = _finite(current_spy.get("price"))
     current_spy_at = _timestamp(current_spy.get("observed_at"))
-    if (
-        include_current
-        and latest_session
-        and current_equity_value is not None
-        and current_spy_value is not None
-        and _finite(account[latest_session].get("equity"))
-        and _finite(spy[latest_session].get("price"))
-        and current_spy.get("price_basis") == spy[latest_session].get("price_basis")
-        and current_spy_at is not None
-        and _session_open_at(latest_session) <= current_spy_at <= current_at
-    ):
-        account_start = float(account[latest_session]["equity"])
-        spy_start = float(spy[latest_session]["price"])
+    if include_current and latest_session and current_equity_value is not None:
+        account_start = _finite(account[latest_session].get("equity"))
+        spy_start = _finite(spy[latest_session].get("price"))
+        comparison_status = "unavailable"
+        comparison_reason = "current_observation_unavailable"
+        spy_pct = (
+            current_spy_value / spy_start - 1.0
+            if (
+                spy_start is not None
+                and spy_start > 0
+                and current_spy_value is not None
+                and current_spy.get("price_basis") == spy[latest_session].get("price_basis")
+            )
+            else None
+        )
+        if account_start is None or account_start <= 0:
+            comparison_reason = "account_open_unavailable"
+        elif spy_start is None or spy_start <= 0 or current_spy_value is None:
+            comparison_reason = "current_spy_unavailable"
+        elif current_spy.get("price_basis") != spy[latest_session].get("price_basis"):
+            comparison_reason = "current_price_basis_mismatch"
+        elif current_spy_at is None:
+            comparison_reason = "current_observation_unavailable"
+        elif current_spy_at > current_at:
+            comparison_reason = "current_observation_future"
+        elif current_spy_at < _session_open_at(latest_session):
+            comparison_reason = "current_observation_before_session_open"
+        elif current_spy_at != current_at:
+            comparison_reason = "current_observation_not_aligned"
+        else:
+            comparison_status = "comparable"
+            comparison_reason = None
         rows.append(
             {
                 "session_date": latest_session,
                 "end_session_date": None,
                 "status": "in_progress",
-                "system_pct": current_equity_value / account_start - 1.0,
-                "system_delta": current_equity_value - account_start,
-                "spy_pct": current_spy_value / spy_start - 1.0,
+                "system_pct": current_equity_value / account_start - 1.0 if account_start else None,
+                "system_delta": current_equity_value - account_start if account_start else None,
+                "spy_pct": spy_pct,
+                "spy_current_price": current_spy_value,
                 "system_start_at": account[latest_session].get("observed_at"),
                 "system_end_at": current_at.isoformat(),
                 "spy_start_at": spy[latest_session].get("observed_at"),
@@ -727,6 +749,16 @@ def build_open_to_open_rows(
                 "system_source": account[latest_session].get("source"),
                 "spy_source": current_spy.get("source"),
                 "price_basis": current_spy.get("price_basis"),
+                "comparison_status": comparison_status,
+                "comparison_reason": comparison_reason,
+                "comparison_lag_seconds": (
+                    (current_at - current_spy_at).total_seconds() if current_spy_at is not None else None
+                ),
+                "comparison_coverage": {
+                    "system_end_at": current_at.isoformat(),
+                    "spy_end_at": current_spy_at.isoformat() if current_spy_at is not None else None,
+                    "aligned": comparison_status == "comparable",
+                },
             }
         )
     return rows

@@ -3302,3 +3302,29 @@ no deja delta funcional fuera de P-L82. Suite post-merge `2431 passed, 1
 warning`; focales `193 passed, 1 warning`; doble salud 200/200 separada
 `136.89s`, kernel `ok`, 0 criticos. Cutoff P-L80 preservado. No iniciar P-L83
 en este cierre.
+
+## P-L82R - continuidad y comparabilidad temporal Sistema vs SPY
+
+Estado: `ready_for_closed_market_deployment` en candidato, todavía no
+desplegado. La base exacta es `d73a8971` / tree `f966a725`, version `0.4.218`;
+el candidato `codex/pl82r-spy-temporal-continuity` queda en version `0.4.219`,
+HEAD `1fab7813`, tree `32506e65`. La caracterización reprodujo que la UI
+conectaba filas finales sobre intervalos omitidos y que una observación SPY
+stale podía clasificarse como comparable por el mero orden temporal.
+
+El fix observacional segmenta por contigüidad XNYS (`end_session_date` de la
+fila anterior igual a `session_date` de la siguiente) y exige igualdad exacta
+de `system_end_at`/`spy_end_at` UTC para la comparación vigente, sin inventar
+umbral de frescura. Sistema y SPY siguen visibles por separado cuando el
+estado es `unavailable`, con razón, lag y cobertura; los ganadores y conectores
+solo consumen filas finales comparables. Las omisiones y conflictos de P-L82
+se conservan; no hay backfill ni llamadas adicionales.
+
+Commits: `3668369f` caracterización, `914c715b` test de exclusión de ganador,
+`0fce01a1` implementación/bump y `1fab7813` QA/version policy. Focales `6
+passed`; regresiones UI/SPY/Telegram `200 passed, 1 warning`; suite completa
+`2436 passed, 1 skipped preexistente, 1 warning` en `786.12s`; Ruff, NUL,
+compile, diff-check, config aislada, kernel temporal sin violaciones y smoke
+fake aislado verdes. Protegidos objeto-a-objeto iguales a la base y producción
+sin cambios. Siguiente acción única: ensayo de integración y despliegue
+cerrado solo si el preflight y el margen siguen verdes. P-L83 permanece fuera.

@@ -3296,9 +3296,16 @@ def _daily_vs_spy_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "end_date": rows[-1]["session_date"] if rows else None,
         }
     final_rows = [row for row in rows if row["status"] == "final"]
-    ties = sum(abs(row["system_pct"] - row["spy_pct"]) < 0.00005 for row in final_rows)
-    system_wins = sum(row["system_pct"] - row["spy_pct"] >= 0.00005 for row in final_rows)
-    spy_wins = sum(row["spy_pct"] - row["system_pct"] >= 0.00005 for row in final_rows)
+    comparable_final = [
+        row
+        for row in final_rows
+        if row.get("comparison_status", "comparable") == "comparable"
+        and row.get("system_pct") is not None
+        and row.get("spy_pct") is not None
+    ]
+    ties = sum(abs(row["system_pct"] - row["spy_pct"]) < 0.00005 for row in comparable_final)
+    system_wins = sum(row["system_pct"] - row["spy_pct"] >= 0.00005 for row in comparable_final)
+    spy_wins = sum(row["spy_pct"] - row["system_pct"] >= 0.00005 for row in comparable_final)
     return {
         "visible_total": len(rows),
         "final": len(final_rows),
@@ -3336,7 +3343,7 @@ def _daily_vs_spy_chart_legacy(rows: list[dict[str, Any]]) -> Any:
             "SP500": row["spy_pct"],
             "estado": (
                 "Final"
-                if row.get("status") == "final" or row.get("comparison_status") == "comparable"
+                if row.get("status") == "final"
                 else "En curso"
             ),
             "periodo": _opening_interval_label(row),
@@ -3436,8 +3443,25 @@ def _daily_vs_spy_chart_legacy(rows: list[dict[str, Any]]) -> Any:
     return alt.layer(*layers).properties(height=260)
 
 
+def _opening_chart_segments(rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Partition rows so lines never cross a missing XNYS interval."""
+
+    segments: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    for row in rows:
+        previous = current[-1] if current else None
+        contiguous = previous is not None and previous.get("end_session_date") == row.get("session_date")
+        if previous is not None and not contiguous:
+            segments.append(current)
+            current = []
+        current.append(row)
+    if current:
+        segments.append(current)
+    return segments
+
+
 def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
-    """Draw final history solid and the current interval as one dashed connector."""
+    """Draw contiguous history and a current interval without crossing gaps."""
 
     if alt is None:
         return None
@@ -3453,14 +3477,19 @@ def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
     chart_rows = [
         {
             "fecha_visual": _visual_date(row),
+            "session_date": row.get("session_date"),
             "sesion_iniciada": row.get("session_date"),
+            "end_session_date": row.get("end_session_date"),
             "Sistema": row.get("system_pct"),
             "SP500": row.get("spy_pct"),
             "estado": (
                 "Final"
-                if row.get("status") == "final" or row.get("comparison_status") == "comparable"
+                if row.get("status") == "final"
                 else "En curso"
             ),
+            "comparison_status": row.get("comparison_status") or ("comparable" if row.get("status") == "final" else "unavailable"),
+            "comparison_reason": row.get("comparison_reason"),
+            "comparison_lag_seconds": row.get("comparison_lag_seconds"),
             "periodo": _opening_interval_label(row),
             "as_of": _local_datetime(row.get("system_end_at"), "Europe/Madrid"),
         }
@@ -3478,6 +3507,9 @@ def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
         alt.Tooltip("retorno:Q", title="% ganancias", format="+.2%"),
         alt.Tooltip("serie:N", title="Serie"),
         alt.Tooltip("estado:N", title="Estado"),
+        alt.Tooltip("comparison_status:N", title="Comparabilidad"),
+        alt.Tooltip("comparison_reason:N", title="Motivo"),
+        alt.Tooltip("comparison_lag_seconds:Q", title="Diferencia as_of (s)"),
         alt.Tooltip("periodo:N", title="Intervalo"),
         alt.Tooltip("as_of:N", title="As of"),
     ]
@@ -3503,19 +3535,34 @@ def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
             tooltip=tooltip,
         )
 
+    segments = _opening_chart_segments(chart_rows)
     current_index = next(
         (index for index in range(len(chart_rows) - 1, -1, -1) if chart_rows[index]["estado"] == "En curso"),
         None,
     )
     layers: list[Any] = []
     if current_index is None:
-        layers.append(_fold_layer(chart_rows))
+        layers.extend(_fold_layer(segment) for segment in segments if segment)
     else:
-        historical_rows = chart_rows[:current_index]
-        if historical_rows:
-            layers.append(_fold_layer(historical_rows))
-        segment_start = max(current_index - 1, 0)
-        layers.append(_fold_layer(chart_rows[segment_start : current_index + 1], stroke_dash=[6, 4]))
+        current_segment_index = next(
+            index for index, segment in enumerate(segments) if chart_rows[current_index] in segment
+        )
+        for segment_index, segment in enumerate(segments):
+            if segment_index < current_segment_index:
+                if segment:
+                    layers.append(_fold_layer(segment))
+                continue
+            if segment_index > current_segment_index:
+                if segment:
+                    layers.append(_fold_layer(segment))
+                continue
+            local_index = segment.index(chart_rows[current_index])
+            historical_rows = segment[:local_index]
+            if len(historical_rows) >= 2:
+                layers.append(_fold_layer(historical_rows))
+            connector = segment[max(local_index - 1, 0) : local_index + 1]
+            if connector:
+                layers.append(_fold_layer(connector, stroke_dash=[6, 4]))
 
     points = (
         alt.Chart(pd.DataFrame(chart_rows))
@@ -3533,7 +3580,12 @@ def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
     comparable_rows = [
         row
         for row in chart_rows
-        if row["estado"] == "Final" and row["Sistema"] is not None and row["SP500"] is not None
+        if (
+            row["estado"] == "Final"
+            and row["comparison_status"] == "comparable"
+            and row["Sistema"] is not None
+            and row["SP500"] is not None
+        )
     ]
     if comparable_rows:
         connectors_df = pd.DataFrame(comparable_rows).copy()
@@ -3636,24 +3688,35 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
         for row in reversed(visible_rows):
             system_text = f"{_pct_signed(row['system_pct'])}<span>{_money(row['system_delta'])}</span>"
             spy_text = _pct_signed(row["spy_pct"])
-            winner = (
-                "Empate"
-                if abs(row["system_pct"] - row["spy_pct"]) < 0.00005
-                else "Sistema"
-                if row["system_pct"] > row["spy_pct"]
-                else "SPY"
-            )
+            comparison_status = row.get("comparison_status") or ("comparable" if row["status"] == "final" else "unavailable")
+            if comparison_status != "comparable" or row.get("system_pct") is None or row.get("spy_pct") is None:
+                winner = "No comparable"
+            else:
+                winner = (
+                    "Empate"
+                    if abs(row["system_pct"] - row["spy_pct"]) < 0.00005
+                    else "Sistema"
+                    if row["system_pct"] > row["spy_pct"]
+                    else "SPY"
+                )
             source_detail = " · ".join(
                 item
                 for item in (
                     row.get("spy_source") or "fuente n/d",
                     row.get("price_basis") or "basis n/d",
                     f"as_of {row['spy_end_at']}" if row.get("spy_end_at") else "as_of n/d",
+                    (
+                        f"comparacion {comparison_status}: {row.get('comparison_reason')}"
+                        if comparison_status != "comparable"
+                        else None
+                    ),
                 )
                 if item
             )
             spy_text = f"{spy_text}<span>{escape(source_detail)}</span>"
             state = "Final" if row["status"] == "final" else "En curso"
+            if state == "En curso" and comparison_status != "comparable":
+                state = f"En curso ({comparison_status})"
             interval = escape(_opening_interval_label(row))
             html_rows.append(
                 "<tr>"

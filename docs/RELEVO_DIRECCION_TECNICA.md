@@ -1421,3 +1421,27 @@ token coherente y 0 criticos. El runtime de `schedule-status` queda
 
 El cutoff P-L80 `2026-08-02T15:51:41.5484478Z` no cambia y no hubo backfill,
 jobs manuales, nueva probe DeepSeek ni push. No iniciar P-L83 en este turno.
+
+## P-L82R - continuidad temporal Sistema vs SPY
+
+El candidato `0.4.219` queda listo para integración cerrada, no desplegado.
+Base productiva exacta `d73a8971` / tree `f966a725`; worktree
+`pl82r_spy_temporal_continuity`, rama `codex/pl82r-spy-temporal-continuity`,
+HEAD `1fab7813`, tree `32506e65`. La regresión estaba en la presentación y
+comparabilidad: la línea atravesaba omisiones y un SPY stale se trataba como
+ganador vigente.
+
+El fix segmenta únicamente intervalos XNYS contiguos, no conecta sobre
+omitted/conflict/missing y exige igualdad exacta UTC de los dos `as_of` para
+comparar la fila `En curso`. Si no están alineados, ambos valores siguen
+visibles con `comparison_status=unavailable`, razón, lag y cobertura; no hay
+ganador ni conector. El caso sistema 04/08 08:11Z frente a SPY 03/08 20:12:55Z
+queda fuera de comparación. Conflictos y cuatro omisiones P-L82 se preservan.
+
+QA: focales `6 passed`; regresiones UI/SPY/Telegram `200 passed, 1 warning`;
+suite `2436 passed, 1 skipped preexistente, 1 warning` en `786.12s`; Ruff,
+NUL, compile, diff, version policy, configuración aislada, kernel temporal
+`unsealed` sin violaciones y smoke fake aislado verdes. Protegidos iguales a
+la base; producción/stack/cutoff P-L80 sin cambios. Siguiente paso único:
+ensayo `merge --no-ff`, preflight cerrado renovado y despliegue secuenciado
+solo con margen; no iniciar P-L83.

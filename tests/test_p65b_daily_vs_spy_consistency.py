@@ -164,11 +164,14 @@ def test_chart_data_layers_share_explicit_formatted_tooltip_and_aux_layers_do_no
     expected = [
         {"field": "fecha_visual", "title": "Fecha visible", "type": "nominal"},
         {"field": "sesion_iniciada", "title": "Sesión iniciada", "type": "nominal"},
-        {"field": "retorno", "format": "+.2%", "title": "% ganancias", "type": "quantitative"},
-        {"field": "serie", "title": "Serie", "type": "nominal"},
-        {"field": "estado", "title": "Estado", "type": "nominal"},
-        {"field": "periodo", "title": "Intervalo", "type": "nominal"},
-        {"field": "as_of", "title": "As of", "type": "nominal"},
+            {"field": "retorno", "format": "+.2%", "title": "% ganancias", "type": "quantitative"},
+            {"field": "serie", "title": "Serie", "type": "nominal"},
+            {"field": "estado", "title": "Estado", "type": "nominal"},
+            {"field": "comparison_status", "title": "Comparabilidad", "type": "nominal"},
+            {"field": "comparison_reason", "title": "Motivo", "type": "nominal"},
+            {"field": "comparison_lag_seconds", "title": "Diferencia as_of (s)", "type": "quantitative"},
+            {"field": "periodo", "title": "Intervalo", "type": "nominal"},
+            {"field": "as_of", "title": "As of", "type": "nominal"},
     ]
     for layer in data_layers:
         assert layer["encoding"]["tooltip"] == expected
