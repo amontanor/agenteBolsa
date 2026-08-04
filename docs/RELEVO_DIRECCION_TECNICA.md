@@ -1461,6 +1461,25 @@ la base; producción/stack/cutoff P-L80 sin cambios. Siguiente paso único:
 ensayo `merge --no-ff`, preflight cerrado renovado y despliegue secuenciado
 solo con margen; no iniciar P-L83.
 
+## P-L83D - cierre productivo y congelacion
+
+P-L83D esta `deployed` en `0.4.220`: merge `613aab87` sobre `5d53e24c`,
+segundo padre `c3a5e671`, tree `57780f1d`. La UI ancla los buckets diarios a
+cierres XNYS, corrige epoch seconds y mantiene el current provisional
+separado. No se modificaron broker, kernel, execution, risk, config, `.env`,
+trading ni la cohorte P-L80.
+
+Suite `2444 passed, 1 skip preexistente, 1 warning`; focales post-merge `227
+passed, 1 warning`; gates verdes. Salud 1 `12:36:06 CEST` y salud 2
+`12:37:58 CEST`, separadas `111.83s`: HTTP 200/200, scheduler/listener
+unicos, owner/token/heartbeat coherentes, paper activo, live/auto-apply off,
+kernel ok, 0 criticos y 0 ordenes abiertas. Los tres warnings preexistentes
+siguen observacionales.
+
+Cutoff P-L80 `2026-08-02T15:51:41.5484478Z` intacto. Congelar cambios
+funcionales hasta la revision del 08/08; no iniciar P-L82/P-L83 adicionales,
+no backfill, no jobs manuales y no push.
+
 ## P-L83D - dashboard y fechas temporales
 
 El candidato aislado `codex/pl83d-dashboard-temporal-dates`, version `0.4.220`,

@@ -3342,6 +3342,23 @@ paper activo, live/auto-apply off, kernel `ok`, 0 críticos y 0 órdenes creadas
 desde el merge. El cutoff P-L80 permanece intacto; no backfill, jobs manuales,
 P-L83 ni push.
 
+### P-L83D - cierre productivo
+
+Estado: `deployed`. Merge `613aab87` sobre `5d53e24c`, segundo padre
+`c3a5e671`, tree final `57780f1d`, version `0.4.220`. El fix normaliza
+timestamps/buckets Alpaca por sesiones XNYS, separa el current provisional y
+preserva la autoridad de P-L81 y la continuidad P-L82R.
+
+La suite fresca fue `2444 passed, 1 skip preexistente, 1 warning`; los focales
+post-merge `227 passed, 1 warning`; gates Ruff/NUL/compile/diff/version/config,
+kernel y smoke fake quedaron verdes. Salud 1 `12:36:06 CEST` y salud 2
+`12:37:58 CEST`, separadas `111.83s`, confirmaron HTTP 200/200, scheduler y
+listener unicos, paper activo, live/auto-apply off, kernel ok, 0 criticos y
+0 ordenes abiertas.
+
+El cutoff P-L80 permanece intacto. Se congelan cambios funcionales hasta la
+revision del 08/08; no iniciar lotes nuevos ni hacer backfill o jobs manuales.
+
 ## P-L83D - correccion temporal final del dashboard
 
 P-L83D es el unico lote UI autorizado antes de la congelacion del 08/08. La

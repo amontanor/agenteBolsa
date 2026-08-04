@@ -126,3 +126,44 @@ queda margen, conservar produccion en `0.4.219` y devolver
 Despues del cierre de P-L83D no se inician cambios funcionales nuevos hasta la
 revision de cohorte del 08/08. El cutoff, la captura P-L80 y la politica activa
 permanecen sin cambios.
+
+## Cierre productivo P-L83D
+
+Dictamen: `deployed`.
+
+El candidato final `c3a5e6714213a1996eac100aa943b1a638ec14bc` se integro sobre
+produccion mediante `merge --no-ff` `613aab8718ed2b1b652010e90019bc43ef5e0735`.
+El primer padre es `5d53e24c16b0cda33993b7dbc294aa484f5e8e55` y el segundo
+padre es el candidato exacto. El tree funcional y documental resultante es
+`57780f1d35d2742d4cb1d9a5aa2f0b281fe935a5`, version `0.4.220`; produccion y
+el candidato quedan limpios.
+
+El ensayo aislado equivalente fue `cd73e8c3`, con los mismos padres logicos y
+tree exacto. En candidato y ensayo se conservaron los archivos protegidos y
+la paridad de trading/riesgo/ejecucion. La suite completa fresca del tree
+final fue `2444 passed, 1 skipped preexistente, 1 warning` en `1139.57s` y se
+reutilizo post-merge por identidad exacta del tree. Los focales post-merge
+fueron `227 passed, 1 warning`; Ruff, NUL (`473 archivos`), compilacion,
+`git diff --check`, version policy, configuracion aislada y kernel productivo
+quedaron verdes. El smoke fake aislado del candidato fue verde y no se repitio
+con produccion para evitar llamadas o efectos operativos adicionales.
+
+Salud 1: `2026-08-04T12:36:06+02:00`, raiz y `/health` `200/200`.
+Salud 2: `2026-08-04T12:37:58+02:00`, raiz y `/health` `200/200`, separacion
+`111.83s`. Ambas confirmaron un scheduler logico, un listener, owner/token y
+heartbeat coherentes, paper activo, live y auto-apply desactivados, kernel
+`ok`, configuracion valida, 0 ordenes abiertas y 0 alertas criticas. Los 3
+warnings observados son preexistentes: deterioro de setup, atribucion
+degradada y governance adaptativa; no se mezclan ni reparan en P-L83D.
+
+`schedule-status` mantuvo `runtime_state=unavailable` por WAL/sidecars bajo
+el contrato read-only; no se hizo checkpoint, borrado ni reparacion. El PMR
+del 03/08 quedo terminal `completed/pipeline_completed` y el lease vacio; el
+estado `skipped/market_not_ready` de la sesion 04/08 es normal antes de
+apertura. El cutoff P-L80 `2026-08-02T15:51:41.5484478Z` y la cohorte no
+cambian.
+
+Desde este cierre quedan congelados los cambios funcionales del proyecto hasta
+la revision de cohorte del 08/08. No se ejecutaron backfill, reconciliacion ni
+jobs manuales, no se llamo a broker/LLM desde tests o smoke, no se tocaron
+secretos ni `.env`, y no hubo push.
