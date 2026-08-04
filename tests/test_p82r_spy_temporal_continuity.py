@@ -94,7 +94,7 @@ def test_current_spy_requires_explicitly_aligned_as_of():
     assert current["status"] == "in_progress"
     assert current["comparison_status"] == "unavailable"
     assert current["comparison_reason"] == "current_observation_not_aligned"
-    assert current["spy_pct"] is None
+    assert current["spy_pct"] == pytest.approx(0.01)
     assert current["system_pct"] == pytest.approx(0.02)
 
 

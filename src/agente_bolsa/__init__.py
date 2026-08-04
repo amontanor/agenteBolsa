@@ -38,4 +38,5 @@ __all__ = ["__version__"]
 # P-L80H2: single-call OpenCode Go / DeepSeek V4 Flash health probe (0.4.216).
 # P-L81: canonical previous-close daily equity metric and connected opening chart (0.4.217).
 # P-L82: group-level SPY opening authority and visible omitted-session reasons (0.4.218).
-__version__ = "0.4.218"
+# P-L82R: do not connect omitted XNYS intervals; require aligned current comparison (0.4.219).
+__version__ = "0.4.219"
