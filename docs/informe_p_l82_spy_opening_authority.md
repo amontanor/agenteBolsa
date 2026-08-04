@@ -221,3 +221,33 @@ risk.py, config.py, `.env`, datos históricos ni cutoff P-L80
 `merge --no-ff` desde `d73a8971` y, solo si las precondiciones/margen siguen
 verdes, cierre productivo secuenciado con gates y dos health checks; no iniciar
 P-L83 ni reparar deudas ajenas.
+
+### P-L82R - cierre productivo
+
+Dictamen: `deployed`. Tras el ensayo exacto (`67183356`, primer padre
+`d73a8971`, segundo padre `06152971`, tree `cd75d3de`) se integró el candidato
+con `merge --no-ff` en producción mediante `b0a88b984b51d862d4d9eb960d82061e6f258db3`.
+El tree productivo final es `cd75d3de6b384ba2a67b97fe21e422d03ad954fa`,
+version `0.4.219`, y el checkout quedó limpio. No hubo conflicto ni delta
+funcional fuera del candidato.
+
+Con stack detenido se repitieron suite y gates: `2436 passed, 1 skipped
+preexistente, 1 warning` en `763.44s`; Ruff, NUL (`472 archivos`), compile,
+diff-check, version policy, configuración aislada, kernel temporal sin
+violaciones y smoke fake aislado verdes. Kernel productivo quedó `ok` con 0
+violaciones y los cinco protegidos permanecen objeto-a-objeto iguales; `.env`
+conserva el hash redacted `86a8420fc308...9ccedfc35afb`.
+
+Salud 1: `2026-08-04T11:07:20 CEST`, HTTP raíz/health `200/200`, scheduler
+owner vivo/token coincidente, wrapper/launcher/runtime coherentes, listener
+único, version `0.4.219`, paper activo, live=false, auto-apply=false y kernel
+ok. Salud 2: `2026-08-04T11:09:34 CEST`, mismos checks, separación `134.33s`.
+El runtime de `schedule-status` sigue `unavailable` por
+`wal_mode_or_sidecar_present`, sin reparación; el artefacto operativo vigente
+reporta 0 críticos y se conservan los warnings observacionales preexistentes.
+PMR `2026-08-03` quedó terminal y las claves de coordinación activa vacías;
+no se crearon órdenes desde el merge.
+
+El cutoff P-L80 `2026-08-02T15:51:41.5484478Z` y su cohorte no cambian. No
+hubo backfill, jobs manuales, broker/red/LLM real, P-L83, kernel-seal,
+modificación de manifest, cambio de `.env` ni push.

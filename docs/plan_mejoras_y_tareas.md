@@ -3328,3 +3328,16 @@ compile, diff-check, config aislada, kernel temporal sin violaciones y smoke
 fake aislado verdes. Protegidos objeto-a-objeto iguales a la base y producción
 sin cambios. Siguiente acción única: ensayo de integración y despliegue
 cerrado solo si el preflight y el margen siguen verdes. P-L83 permanece fuera.
+
+### P-L82R - cierre productivo
+
+Dictamen: `deployed`. Merge productivo `b0a88b98` con primer padre `d73a8971`
+y segundo padre `06152971`; tree final `cd75d3de`, version `0.4.219`, checkout
+limpio. El ensayo previo tuvo tree idéntico y ningún conflicto. La suite
+post-merge fue `2436 passed, 1 skipped preexistente, 1 warning` en `763.44s`;
+Ruff, NUL, compile, diff, version policy, configuración, kernel y smoke fake
+quedaron verdes. Salud 1 `11:07:20 CEST` y salud 2 `11:09:34 CEST` fueron
+`200/200`, separadas `134.33s`, con scheduler/listener únicos, token coherente,
+paper activo, live/auto-apply off, kernel `ok`, 0 críticos y 0 órdenes creadas
+desde el merge. El cutoff P-L80 permanece intacto; no backfill, jobs manuales,
+P-L83 ni push.

@@ -1422,6 +1422,21 @@ token coherente y 0 criticos. El runtime de `schedule-status` queda
 El cutoff P-L80 `2026-08-02T15:51:41.5484478Z` no cambia y no hubo backfill,
 jobs manuales, nueva probe DeepSeek ni push. No iniciar P-L83 en este turno.
 
+### P-L82R - cierre productivo
+
+P-L82R queda `deployed` en version `0.4.219`: merge `b0a88b98`, primer padre
+`d73a8971`, segundo padre `06152971`, tree `cd75d3de`. El ensayo aislado
+`67183356` tuvo el mismo tree y cero conflictos. Suite post-merge `2436
+passed, 1 skipped preexistente, 1 warning` en `763.44s`; Ruff, NUL, compile,
+diff, version policy, config aislada, kernel temporal/productivo y smoke fake
+verdes. Salud 1 `11:07:20 CEST` y salud 2 `11:09:34 CEST`, separadas `134.33s`,
+confirmaron HTTP raíz/health 200/200, listener único, wrapper/launcher/runtime,
+scheduler con owner/token coherentes, paper activo, live/auto-apply off, kernel
+`ok`, 0 críticos y cero órdenes desde el merge. `schedule-status` mantiene
+runtime `unavailable` por WAL/sidecars bajo contrato read-only, sin reparación;
+PMR 03/08 terminal y coordinación activa vacía. Cutoff P-L80 intacto. No
+backfill, jobs manuales, nueva probe DeepSeek, P-L83 ni push.
+
 ## P-L82R - continuidad temporal Sistema vs SPY
 
 El candidato `0.4.219` queda listo para integración cerrada, no desplegado.
