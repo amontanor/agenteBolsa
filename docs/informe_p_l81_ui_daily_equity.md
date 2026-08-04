@@ -2,9 +2,10 @@
 
 ## Dictamen actual
 
-`ready_for_closed_market_full_validation` en el candidato aislado P-L81A,
-pendiente de completar la suite fresca y el cierre productivo autorizado.
-Produccion no ha sido modificada en este lote.
+`deployed`. P-L81A quedo integrado y desplegado el 04-ago-2026 con XNYS
+cerrado. El merge productivo es `32c4025b4d148a9a6e54296e409639339c8f04cc`,
+con padres `91ad200b` y `dc5df89e`, tree `0619f5b6ab5ed7bd9e5b0dd5f4cad42a6c0d0036`
+y version `0.4.217`.
 
 ## Contrato y causa
 
@@ -60,11 +61,13 @@ descartan antes de crear `PortfolioSnapshot`; tampoco existe un carrier en el
 constructor EOD, storage, scheduler o web. Por tanto no hay una via equivalente
 sin tocar el adaptador protegido, hacer otra llamada o inventar un baseline.
 
-## P-L81A: reaplicacion en curso
+## P-L81A: reaplicacion y despliegue auditados
 
-La reaplicacion se realiza desde produccion `91ad200bebe4253f909226ed0a3026aa172c9c5e`
-mediante el revert-of-revert auditable de `6f86f260`; no se vuelve a fusionar
-directamente `7bc4648c`. El diff de `broker.py` queda limitado a:
+La reaplicacion partio de produccion `91ad200bebe4253f909226ed0a3026aa172c9c5e`
+mediante el revert-of-revert auditable de `6f86f260`; no se fusiono directamente
+`7bc4648c`. El candidato limpio fue `dc5df89ec45a72d4eaa951d117dec2bdfb4524ba`
+en `pl81a_last_equity_authority` / `codex/pl81a-last-equity-authority`.
+El diff de `broker.py` queda limitado a:
 
 ```diff
 + "previous_close_equity": _optional_float_attr(account, "last_equity"),
@@ -72,7 +75,27 @@ directamente `7bc4648c`. El diff de `broker.py` queda limitado a:
 ```
 
 No cambia endpoint, credenciales, submit, cancel, reconcile, ejecucion,
-riesgo, seleccion ni politica. La version prevista es 0.4.217.
+riesgo, seleccion ni politica. La version desplegada es 0.4.217.
+
+La suite fresca post-merge termino `2422 passed, 1 skipped preexistente, 1
+warning` en `975.02s`; los focales UI/P-L81 fueron `109 passed, 1 warning`.
+Ruff, NUL, compilacion, diff, version policy, validate-agent-config aislado,
+kernel temporal y smoke `run-once --skip-crew` con proveedores fake quedaron
+verdes. El warning es la deprecacion externa de `websockets.legacy`; no se
+anadieron skips/xfails.
+
+El `kernel-seal` canonico se ejecuto una sola vez tras revisar los hashes, a
+`2026-08-04T06:44:18.051786Z`. `kernel-status` productivo quedo `ok=true` sin
+violaciones; el unico hash protegido diferente al estado previo fue
+`broker.py`, el carry read-only autorizado. Kernel, execution, risk (objeto
+Git), config y `.env` conservaron sus objetos/valores previos.
+
+La salud 1 fue `2026-08-04T08:45:16.586121+02:00` y la salud 2
+`2026-08-04T08:47:19.7616468+02:00` (123 s): raiz y `/health` 200/200,
+scheduler unico con owner/token coherentes, listener unico, paper activo,
+live y auto-apply desactivados, 0 criticos y los 3 warnings preexistentes.
+No se ejecutaron probe DeepSeek, jobs manuales, PMR/reconciliacion, backfill ni
+push. El cutoff P-L80 `2026-08-02T15:51:41.5484478Z` permanece intacto.
 
 ## Seguridad y limites
 

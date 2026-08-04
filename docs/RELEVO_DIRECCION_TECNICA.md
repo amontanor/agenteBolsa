@@ -1368,3 +1368,24 @@ revert-of-revert auditable de `6f86f260`; los conflictos fueron solo
 documentales y se conservaron las trazas de rollback y P-L81R. Falta ejecutar
 la suite fresca y los gates antes de cualquier stack_down, sello o merge
 productivo. No iniciar P-L82/P-L83.
+
+## P-L81A - cierre productivo (04-ago-2026)
+
+Dictamen: `deployed`. Merge `32c4025b` sobre `91ad200b`, segundo padre
+`dc5df89e`, tree `0619f5b6`, version `0.4.217`. El carry autorizado de
+`account.last_equity` se limito a `broker.py` y el resto de protegidos conserva
+sus objetos Git; `.env` no cambio.
+
+La suite fresca post-merge fue `2422 passed, 1 skipped preexistente, 1 warning`
+en 975.02 s; focales `109 passed`. Ruff/NUL/compile/diff/version policy,
+validate-agent-config aislado, kernel temporal y smoke fake pasaron. El sello
+canonico unico termino con kernel `ok` sin violaciones. Salud 1
+`2026-08-04T08:45:16+02:00` y salud 2 `2026-08-04T08:47:19+02:00` quedaron
+separadas 123 s, con HTTP 200/200, scheduler y listener unicos, token/lock
+coherentes, paper activo, live/auto-apply off y 0 criticos. Los tres warnings
+preexistentes siguen observacionales.
+
+El cutoff P-L80 `2026-08-02T15:51:41.5484478Z` permanece vigente. No hubo probe
+DeepSeek adicional, jobs manuales, backfill, reconciliacion forzada ni push.
+La siguiente accion es observar la cohorte prospectiva P-L80; no abrir P-L82/P-L83
+en este turno.

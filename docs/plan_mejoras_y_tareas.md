@@ -3249,3 +3249,23 @@ Estado provisional: `ready_for_closed_market_full_validation`. El contenido
 funcional validado se reaplica mediante revert-of-revert de `6f86f260`, sin
 fusionar directamente el merge revertido. Version prevista: 0.4.217. Faltan
 suite fresca, gates cerrados, sello canonico y despliegue; no abrir P-L82/P-L83.
+
+## P-L81A - cierre productivo (04-ago-2026)
+
+Dictamen: `deployed`. El contenido P-L81A quedo integrado mediante merge
+`32c4025b4d148a9a6e54296e409639339c8f04cc` sobre `91ad200b`, con segundo
+padre `dc5df89e`, tree `0619f5b6ab5ed7bd9e5b0dd5f4cad42a6c0d0036` y version
+`0.4.217`. El carry de `account.last_equity` sigue siendo read-only y no
+modifica trading, riesgo, ejecucion ni politica.
+
+Suite post-merge: `2422 passed, 1 skipped preexistente, 1 warning` en 975.02 s;
+focales P-L81/UI: `109 passed`. Ruff, NUL, compile, diff, version policy,
+configuracion aislada, kernel temporal y smoke fake verdes. El sello canonico
+se ejecuto una vez y kernel productivo quedo `ok` sin violaciones. Dos saludos
+200/200 separadas 123 s confirmaron scheduler/listener unicos, token coherente,
+paper activo, live/auto-apply off y 0 criticos; los 3 warnings existentes se
+conservan sin mezclar este lote.
+
+El cutoff P-L80 `2026-08-02T15:51:41.5484478Z` no cambia. No hay backfill ni
+jobs manuales; la siguiente decision queda despues de la cohorte prospectiva
+P-L80. No iniciar P-L82/P-L83 en este cierre.
