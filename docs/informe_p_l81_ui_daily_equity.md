@@ -1,41 +1,86 @@
-# P-L81 - cierre productivo y resultado
+# P-L81 - coherencia de ganancia global diaria y continuidad UI
 
-## Dictamen
+## Dictamen actual
 
-`needs_fix`. El candidato P-L81 quedo validado, pero el despliegue fue revertido
-porque el cambio read-only autorizado en `broker.py` modifica un archivo cubierto
-por el manifest del kernel. No se ejecuto `kernel-seal`, tal como exige el lote.
+`ready_for_closed_market_full_validation` en el candidato aislado P-L81A,
+pendiente de completar la suite fresca y el cierre productivo autorizado.
+Produccion no ha sido modificada en este lote.
 
-## Evidencia
+## Contrato y causa
 
-- Candidato: `7bc4648cfa5fd22758231357ce5380f359eacd78`, tree
-  `fc6916c25b9901b7f8f2ab3ae079fd76ca6c1844`, v0.4.217.
-- Merge intentado: `e8f7874edbd1b2afc01cec880c22a9dad41046eb`, padres
-  `e4fe1ddb` y `7bc4648c`, tree funcional `fc6916c2`.
-- Suite del candidato: `2422 passed, 1 skipped preexistente, 1 warning`.
-- Suite post-merge desde produccion: `2423 passed, 1 warning`.
-- Focales P-L81/UI: `168 passed, 1 warning`; Ruff, NUL, compile, diff,
-  version policy, validate-agent-config y smoke aislado verdes.
-- Smoke aislado: `run-once --skip-crew`, `used_crew=false`, DATA_DIR temporal.
+La tarjeta de cuenta reutilizaba `opening_context.account_current`, por lo que
+un lunes preapertura podia mostrar apertura-a-ahora como «hoy». El contrato
+canonico queda centralizado en `tools/equity_metrics.py`:
 
-El unico gate rojo fue `kernel-status` productivo tras el merge: esperado de
-`broker.py` `b75016...`, actual `16221f...`. El diff contiene solamente el
-carry de `account.last_equity` hacia `PortfolioSnapshot`; kernel, execution,
-risk y config no cambian. Por no usar `kernel-seal`, se ejecuto
-`git revert -m 1 e8f7874...`, commit `6f86f26044ee7372ca0caa615843de07417ebc93`,
-restaurando tree `ce15c1b0` y v0.4.216.
+`daily_equity_pl = current_equity - previous_close_equity`
 
-## Estado operativo final
+`daily_equity_return = daily_equity_pl / previous_close_equity`
 
-Tras el rollback, kernel `ok` sin violaciones, HTTP raiz y `/health` 200 en dos
-comprobaciones separadas por mas de 75 segundos, scheduler owner/token validos,
-paper activo, live y auto-apply desactivados, PMR terminal y lease vacio. Salud
-operativa: 0 criticos y 3 warnings preexistentes. No se ejecutaron jobs manuales,
-postmarket, reconciliacion, backfill, broker operativo, LLM real ni push.
+`previous_close_equity` procede de `account.last_equity` y la ventana es cierre
+XNYS anterior -> instante actual. Si falta o no es valido, el resultado es
+`unavailable`/`n/d`; no se sustituye por exposicion, porcentajes de posiciones,
+trade history ni apertura XNYS. El P/L abierto, el P/L diario de posiciones,
+el resultado del periodo y desde apertura conservan sus ventanas propias.
 
-## Siguiente precondicion unica
+El carry se hace desde la captura de cuenta ya existente, sin llamada de broker
+adicional desde UI. Los payloads legacy sin carrier permanecen explicitamente
+en la ruta legacy.
 
-Revisar y autorizar explicitamente el procedimiento de sello para el hash exacto
-de `broker.py` tras este carry, o escoger una frontera equivalente que no cambie
-el archivo protegido. Despues repetir preflight, gates y despliegue cerrado; no
-modificar la captura P-L80 ni la politica de trading.
+## UX
+
+- La tarjeta activa se etiqueta «Ganancia/perdida global de hoy» y muestra
+  importe, porcentaje, cierre anterior y fechas.
+- «Resultado del periodo», «P/L abierto» y «Rendimiento desde apertura» no se
+  mezclan con la metrica diaria.
+- La grafica Sistema vs SPY mantiene historicos solidos y dibuja el intervalo
+  vigente como segmento discontinuo desde el ultimo final hasta el punto
+  actual. El tooltip conserva la sesion e intervalo exactos.
+
+## Validacion original conservada
+
+El candidato `7bc4648cfa5fd22758231357ce5380f359eacd78`, tree
+`fc6916c25b9901b7f8f2ab3ae079fd76ca6c1844`, v0.4.217, obtuvo `2422 passed`,
+1 skip preexistente y 1 warning; la validacion post-merge obtuvo `2423 passed`.
+Los focales P-L81/UI fueron `168 passed`; Ruff, NUL, compile, diff, version
+policy, validate-agent-config y smoke aislado fueron verdes.
+
+## Rollback historico
+
+El merge original `e8f7874edbd1b2afc01cec880c22a9dad41046eb` fue revertido con
+`6f86f26044ee7372ca0caa615843de07417ebc93` porque el carry read-only cambiaba
+el hash protegido de `broker.py`. El estado seguro restaurado fue el tree
+funcional `ce15c1b02991ad0a20d11039d46c554e138eff40`, v0.4.216. No se ejecuto
+`kernel-seal` en aquel intento.
+
+## P-L81R: frontera caracterizada
+
+P-L81R demostro con un cliente fake que el SDK entrega
+`account.last_equity=950.0`, pero las fronteras publicas de `broker.py` lo
+descartan antes de crear `PortfolioSnapshot`; tampoco existe un carrier en el
+constructor EOD, storage, scheduler o web. Por tanto no hay una via equivalente
+sin tocar el adaptador protegido, hacer otra llamada o inventar un baseline.
+
+## P-L81A: reaplicacion en curso
+
+La reaplicacion se realiza desde produccion `91ad200bebe4253f909226ed0a3026aa172c9c5e`
+mediante el revert-of-revert auditable de `6f86f260`; no se vuelve a fusionar
+directamente `7bc4648c`. El diff de `broker.py` queda limitado a:
+
+```diff
++ "previous_close_equity": _optional_float_attr(account, "last_equity"),
++ previous_close_equity=_optional_float_attr(account, "last_equity"),
+```
+
+No cambia endpoint, credenciales, submit, cancel, reconcile, ejecucion,
+riesgo, seleccion ni politica. La version prevista es 0.4.217.
+
+## Seguridad y limites
+
+El cutoff P-L80 `2026-08-02T15:51:41.5484478Z` permanece intacto. No hay
+backfill. La UI no obtiene autoridad de trading y la paridad exigida cubre
+candidatos, scores, ranks, gates, sizing, planes, cantidades, precios,
+stops/takes, ordenes, exposicion y limites.
+
+La produccion segura permanece en v0.4.216 con paper activo, live y auto-apply
+desactivados. No se ejecutan jobs manuales, postmarket, reconciliacion,
+backfill ni probe LLM para este lote.

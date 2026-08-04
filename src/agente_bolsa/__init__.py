@@ -36,4 +36,5 @@ __all__ = ["__version__"]
 # P-L79: Arrow-safe text boundary for the Streamlit configuration table (0.4.214).
 # P-L80B: prospective exact same-cycle decision/capacity carrier (0.4.215).
 # P-L80H2: single-call OpenCode Go / DeepSeek V4 Flash health probe (0.4.216).
-__version__ = "0.4.216"
+# P-L81: canonical previous-close daily equity metric and connected opening chart (0.4.217).
+__version__ = "0.4.217"
