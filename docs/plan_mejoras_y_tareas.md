@@ -3341,3 +3341,24 @@ quedaron verdes. Salud 1 `11:07:20 CEST` y salud 2 `11:09:34 CEST` fueron
 paper activo, live/auto-apply off, kernel `ok`, 0 críticos y 0 órdenes creadas
 desde el merge. El cutoff P-L80 permanece intacto; no backfill, jobs manuales,
 P-L83 ni push.
+
+## P-L83D - correccion temporal final del dashboard
+
+P-L83D es el unico lote UI autorizado antes de la congelacion del 08/08. La
+regresion se reprodujo en la base: epoch seconds se interpretaban como
+nanoseconds y los buckets diarios se etiquetaban por fecha civil local en vez
+de por la sesion XNYS de cierre; el current provisional tambien podia
+sobrescribir un cierre. El candidato normaliza epoch seconds/milliseconds,
+asigna cada bucket al ultimo cierre XNYS disponible, conserva `session_date` y
+mantiene el current separado y marcado provisional. No cambia trading, riesgo,
+ejecucion, P-L80, P-L82R ni hace llamadas adicionales al broker.
+
+El candidato `codex/pl83d-dashboard-temporal-dates` esta en version `0.4.220`,
+HEAD `d15eb37e`, tree `306a3dae`, limpio. Suite fresca: `2444 passed, 1 skip
+preexistente, 1 warning`; focales y gates completos constan en el informe
+`docs/informe_p_l83d_dashboard_temporal_dates.md`. Estado: listo para ensayo
+`merge --no-ff`; no marcar desplegado hasta confirmar salud productiva doble.
+
+Siguiente paso unico: ensayo aislado y, si XNYS cerrado y hay margen suficiente,
+despliegue secuenciado. Si no hay margen, posponer al siguiente cierre. Tras
+P-L83D quedan congelados los cambios funcionales hasta la revision del 08/08.

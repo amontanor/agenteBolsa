@@ -1460,3 +1460,22 @@ NUL, compile, diff, version policy, configuración aislada, kernel temporal
 la base; producción/stack/cutoff P-L80 sin cambios. Siguiente paso único:
 ensayo `merge --no-ff`, preflight cerrado renovado y despliegue secuenciado
 solo con margen; no iniciar P-L83.
+
+## P-L83D - dashboard y fechas temporales
+
+El candidato aislado `codex/pl83d-dashboard-temporal-dates`, version `0.4.220`,
+HEAD `d15eb37e` y tree `306a3dae`, corrige la interpretacion de buckets Alpaca
+1D: los epoch se normalizan por unidad y cada punto se ancla a la sesion XNYS
+de cierre. El current queda separado como provisional, no pisa cierres y la
+ventana de siete dias usa `session_date`. Se preservan P-L80 y P-L82R.
+
+QA fresca: `2444 passed, 1 skip preexistente, 1 warning` en 1139.57 s;
+focales P-L83D/UI `133 passed` y regresiones adicionales `102 passed`; Ruff,
+NUL, compile, diff-check, version, config aislada y smoke fake verdes. Los
+archivos protegidos permanecen iguales y produccion continua en `0.4.219`.
+
+Dictamen provisional: `ready_for_closed_market_deployment`. Siguiente accion
+unica: ensayo `merge --no-ff` y preflight cerrado con margen; no detener el
+stack si no se puede completar rollback, arranque y dos health checks antes de
+la apertura. Tras el cierre de P-L83D, congelar cambios hasta la revision del
+08/08.
