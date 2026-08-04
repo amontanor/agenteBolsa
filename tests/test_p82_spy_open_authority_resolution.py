@@ -10,7 +10,6 @@ from agente_bolsa.tools.opening_performance import (
     load_cached_spy_open_observations,
 )
 
-
 SESSION_DATE = "2026-07-29"
 NOW = datetime(2026, 7, 29, 16, 0, tzinfo=timezone.utc)
 AUTHORITY_PRICE = 739.969970703125
