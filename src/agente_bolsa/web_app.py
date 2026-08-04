@@ -3563,6 +3563,24 @@ def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
     return alt.layer(*layers).properties(height=260)
 
 
+def _render_opening_omissions(opening_context: dict[str, Any]) -> None:
+    omissions = list(opening_context.get("omitted_sessions") or [])
+    if not omissions:
+        return
+    st.markdown("**Sesiones omitidas de la comparación**")
+    for omission in omissions:
+        coverage = omission.get("coverage") or {}
+        coverage_text = " / ".join(
+            f"{label}={'sí' if coverage.get(label) else 'no'}"
+            for label in ("account_start", "account_end", "spy_start", "spy_end")
+        )
+        st.caption(
+            f"{omission.get('session_date') or 'n/d'} → {omission.get('end_session_date') or 'n/d'} · "
+            f"estado {omission.get('status') or 'unavailable'} · motivo {omission.get('reason') or 'unavailable'} · "
+            f"cobertura {coverage_text}"
+        )
+
+
 def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
     """Render one exact opening-to-opening rowset without pending rows."""
 
@@ -3591,6 +3609,7 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
                 "No se muestran aproximaciones ni filas pendientes.</div>",
                 unsafe_allow_html=True,
             )
+            _render_opening_omissions(opening_context)
             return
         summary = _daily_vs_spy_summary(visible_rows)
         c1, c2, c3, c4 = st.columns(4)
@@ -3612,6 +3631,7 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
             f"Cobertura exacta: {opening_context.get('exact_comparison_count', 0)} comparaciones; "
             f"{opening_context.get('omitted_session_count', 0)} sesiones omitidas por falta de una apertura exacta."
         )
+        _render_opening_omissions(opening_context)
         html_rows = []
         for row in reversed(visible_rows):
             system_text = f"{_pct_signed(row['system_pct'])}<span>{_money(row['system_delta'])}</span>"
