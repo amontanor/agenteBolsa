@@ -1,126 +1,133 @@
-# P-L82 — resolución autoritativa de apertura SPY y visibilidad de sesiones omitidas
+# P-L82 - resolucion autoritativa de apertura SPY y sesiones omitidas
 
-## Dictamen provisional
+## Dictamen final
 
-`ready_for_closed_market_deployment`, pendiente únicamente de un preflight
-productivo inmediato y de la integración secuenciada. No se ha modificado
-producción ni se ha detenido el stack en este lote de implementación/QA.
+`deployed`. P-L82 esta integrado en produccion con version `0.4.218`.
+El resolver observacional de apertura SPY usa autoridad a nivel de grupo y la
+UI hace visibles las sesiones omitidas. Trading, riesgo, ejecucion, seleccion,
+gates, sizing, ordenes, exposicion, limites y la captura prospectiva P-L80 no
+cambian.
 
-## Base y alcance
+## Referencias
 
-- Base productiva: `2875b01263ecf0bb93513cd12a296cdcdbe66fb5`, tree
-  `49c8e0224aa15f30e70fd795afb7536ea6d0dab3`, versión `0.4.217`.
-- Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl82_spy_opening_authority`.
-- Rama: `codex/pl82-spy-opening-authority`.
-- Commits: `e1538614` caracterización; `87919ee2` implementación y bump;
-  `d5228ac4` cobertura QA; `b938eaa9` actualización de version policy.
-- Versión candidata: `0.4.218`.
-- XNYS cerrado; preflight inicial con próxima apertura
-  `2026-08-04T15:30:00+02:00`. La producción sigue en paper, live=false y
-  auto-apply=false, con kernel sellado/ok.
+- Produccion antes del lote: `2875b01263ecf0bb93513cd12a296cdcdbe66fb5`,
+  tree `49c8e0224aa15f30e70fd795afb7536ea6d0dab3`, version `0.4.217`.
+- Candidato validado: `f1bc5a5b461b53cd274ce6c03567728b625b239f`, tree
+  `93d8a756a8e96ec5c9c5d55baaed2955546c537d`, version `0.4.218`.
+- Commits funcionales y QA: `e1538614`, `87919ee2`, `d5228ac4`,
+  `7b26d259`, `b938eaa9`.
+- Documentacion candidata: `f1bc5a5b`.
+- XNYS cerrado; siguiente apertura verificada:
+  `2026-08-04T15:30:00+02:00`.
+- Cutoff P-L80 preservado:
+  `2026-08-02T15:51:41.5484478Z`.
 
-El lote solo cambia el resolver observacional de aperturas SPY, la visibilidad
-de omisiones en la UI y las pruebas/documentación. No cambia broker, kernel,
-execution, risk, config, `.env`, selección, gates activos, sizing, planes,
-órdenes, exposición, límites ni la captura prospectiva P-L80. El cutoff
-`2026-08-02T15:51:41.5484478Z` se conserva.
+## Causa reproducida
 
-## Causa raíz reproducida
+`load_cached_spy_open_observations()` agrupaba por
+`(price, price_basis)` pero inspeccionaba solo `group[0]` para detectar
+`explicit_benchmark_open`. Un cache generico del mismo precio antes del
+cache dedicado ocultaba la autoridad y producia `conflict`; el orden inverso
+producía `available`. La caracterizacion contra la base fue
+`1 failed, 1 passed` y demostro dependencia del orden de lectura.
 
-`load_cached_spy_open_observations()` en
-`src/agente_bolsa/tools/opening_performance.py` agrupaba por `(price,
-price_basis)` y, cuando había varios valores, inspeccionaba solo `group[0]`
-para detectar `explicit_benchmark_open`. Así, un cache genérico del mismo
-precio leído antes que el cache dedicado ocultaba la autoridad y devolvía
-`conflict`; invirtiendo el orden, devolvía `available`.
+## Contrato implementado
 
-La reproducción contra la base fue roja: `1 failed, 1 passed` en el nuevo
-focal P-L82. La variante con el dedicado primero pasaba, demostrando que el
-defecto dependía del orden de llegada/lectura, no del precio o de una regla de
-autoridad distinta.
+El resolver:
 
-## Contrato aplicado
+1. agrupa por valor canonico y base de precio;
+2. busca autoridad en todos los elementos del grupo, nunca solo en el primero;
+3. acepta un unico grupo con autoridad inequivoca y elige de forma
+   determinista;
+4. conserva `conflict` para autoridades discordantes o varios valores sin
+   autoridad;
+5. conserva missing/unavailable y no usa latest-wins, intuicion o texto libre;
+6. no realiza llamadas de red ni escrituras de cache.
 
-El resolver ahora:
+La UI expone `omitted_sessions` con fecha de sesion, estado, razon y cobertura
+de cuenta/SPY. Muestra omisiones aun sin filas comparables; no fabrica puntos
+ni conecta sobre huecos. Los motivos incluyen
+`account_open_unavailable`, `spy_open_conflict`,
+`spy_open_unavailable`, `price_basis_mismatch` y `not_comparable`.
 
-1. forma grupos por valor canónico y `price_basis`;
-2. busca autoridad dentro de todos los elementos de cada grupo, nunca solo en
-   el primero;
-3. acepta el único grupo con autoridad inequívoca y elige dentro de ese grupo
-   de forma determinista;
-4. conserva `conflict` cuando hay autoridades genuinamente discordantes o
-   varios valores sin autoridad;
-5. conserva la semántica legacy de un único valor sin autoridad y no usa
-   timestamp/latest-wins para resolver la apertura;
-6. no hace llamadas adicionales ni escribe caches: el lector sigue siendo
-   local y read-only.
+## Casos y validacion del candidato
 
-La UI no inventa puntos ni conecta sobre huecos. El contexto añade
-`omitted_sessions` con `session_date`, `end_session_date`, `status`, `reason` y
-la cobertura booleana de cuenta/SPY. El panel muestra esos datos incluso si no
-hay filas comparables, mientras la tabla y el gráfico siguen mostrando solo
-pares exactos. Razones cubiertas: `account_open_unavailable`,
-`spy_open_conflict`, `spy_open_unavailable`, `price_basis_mismatch` y
-`not_comparable`.
+Se cubrieron: generico antes de autoridad dedicada, orden inverso, dos
+autoridades discordantes, ausencia de autoridad, basis incompatible, timestamp
+futuro, repeticion, no mutacion y renderer de omisiones.
 
-## Casos caracterizados y pruebas
-
-- Genérico del mismo valor antes de autoridad dedicada: base roja, candidato
-  verde y autoridad seleccionada.
-- Autoridad antes del genérico: verde y misma autoridad.
-- Dos autoridades con valores distintos: `conflict`, sin precio elegido.
-- Dos valores sin autoridad: `conflict`, sin precio elegido.
-- Basis no compatible o timestamp futuro: `unavailable`, sin apertura/current.
-- Repetición y lectura: resultado idéntico y bytes de `.json`/`.pkl` sin
-  mutación.
-- Omisión: fecha, motivo y cobertura aparecen en el contexto y en el renderer
-  UI.
-
-QA focal de P-L65/P-L68/P-L71/P-L72/P-L74/P-L81/web/Telegram y P-L82:
-`193 passed, 1 warning`. La warning es la deprecación externa
-`websockets.legacy`; no se añadieron skips/xfails.
-
-La primera suite completa terminó en `1555 passed, 1 failed, 1 warning` en
-`712.95s`; el único fallo era el assertion stale de version policy que aún
-esperaba `0.4.217`. Tras corregir solo esa expectativa, la suite fresca
-terminó en `2430 passed, 1 skipped preexistente, 1 warning` en `716.88s`.
-
-Gates adicionales:
-
+- Suite fresca candidata: `2430 passed, 1 skipped preexistente, 1 warning`
+  en `716.88s`.
+- Focales P-L65/P-L68/P-L71/P-L72/P-L74/P-L81/web/Telegram/P-L82:
+  `193 passed, 1 warning`.
 - Ruff completo: verde.
-- `scripts/check_no_nulls.py`: `OK (471 archivos)`.
-- compilación temporal de `src`, `tests` y `scripts`: verde.
+- NUL: `OK (471 archivos)`.
+- Compilacion temporal de `src/tests/scripts`: verde.
 - `git diff --check`: verde.
-- version policy focal: `1 passed`.
-- `validate-agent-config --json` aislado: `ok=true`, 23 agentes, 6 tareas,
-  6 habilitadas, sin errores/warnings.
-- `kernel-status --json` temporal: `status=unsealed`, `violations=[]`,
-  esperado sin manifest productivo; el kernel productivo inicial permaneció
-  sellado/ok.
-- smoke seguro de CLI: `run-once --skip-crew` con `run_cycle` fake,
-  `DATA_DIR` temporal, `use_crew=false`, sin broker/red/LLM/SQLite
-  productiva. No se ejecutó un ciclo real porque la CLI actual no ofrece un
-  proveedor fake inyectable y hacerlo contactaría mercado/broker; no se
-  clasifica esa sustitución como una llamada operativa.
+- Version policy: verde.
+- `validate-agent-config --json`: `ok=true`, 23 agentes, 6 tareas,
+  6 habilitadas, sin warnings.
+- Kernel temporal: `unsealed`, sin violaciones, esperado sin manifest.
+- Smoke: harness fake aislado `ok=true`; no se ejecuto el ciclo real porque
+  la CLI no ofrece un proveedor fake y un ciclo real contactaria broker o
+  mercado.
 
-## Paridad y seguridad
+La primera suite candidata fue `1555 passed, 1 failed, 1 warning`; el unico
+fallo era una expectativa stale de version policy, corregida exclusivamente
+en `b938eaa9`.
 
-Los archivos funcionales cambiados son únicamente
-`tools/opening_performance.py` y `web_app.py`, además del bump de versión. Los
-tests de regresión confirmaron la ruta UI/Telegram y los contratos P-L65/P-L68/
-P-L71/P-L72/P-L74/P-L81. No hay diff en `kernel.py`, `broker.py`,
-`execution.py`, `risk.py`, `config.py` ni `.env`; no hay cambio en requests,
-órdenes, gates, riesgo, sizing, exposición o límites.
+## Integracion y recuperacion auditable
 
-No se usó broker, red, yfinance, LLM real, Telegram, SQLite productiva,
-postmarket, reconciliación, jobs manuales, reinicio, kernel-seal, manifest ni
-push.
+Una primera operacion accidental integro `098283bf` sobre el checkout
+productivo. Se revirtio inmediatamente con `31b7367b`, restaurando el estado
+funcional seguro `49c8e022` / version `0.4.217`. La tentativa y su
+rollback permanecen en la historia y se documentan aqui.
 
-## Siguiente transición
+Despues del `stack_down` gestionado se creo el candidato de recuperacion
+`a0ac5eed9c103b062c02796c6e3c2146d02345d0` mediante revert auditable del
+rollback. Su tree `93d8a756` coincide objeto a objeto con el candidato
+validado `f1bc5a5b`.
 
-Con XNYS cerrado, PMR/leases terminales, ausencia de procesos competidores y
-margen suficiente, corresponde el ensayo/integración `merge --no-ff` del HEAD
-final de este worktree. Antes del despliegue debe repetirse el preflight; si
-algún gate o margen falla, no se debe detener el stack. Si se integra y falla
-un gate, el rollback permitido es `git revert` auditable del merge y
-restauración del stack conocido.
+La integracion final fue:
+
+- merge `--no-ff df80dee8dd1f8f8409906eb511a6e42c97a251cc`;
+- primer padre `31b7367b6393260d1c1a04f2d539ccc0a2dac79e`;
+- segundo padre `a0ac5eed9c103b062c02796c6e3c2146d02345d0`;
+- HEAD productivo `df80dee8dd1f8f8409906eb511a6e42c97a251cc`;
+- tree funcional `93d8a756a8e96ec5c9c5d55baaed2955546c537d`;
+- version `0.4.218`.
+
+Con el stack detenido se repitieron los gates: suite post-merge
+`2431 passed, 1 warning` en `846.40s`; focales `193 passed, 1 warning`;
+Ruff, NUL, compilacion, diff-check, version policy,
+`validate-agent-config`, kernel productivo y paridad de protegidos verdes.
+El kernel productivo quedo `ok` sin violaciones. Los hashes protegidos no
+cambiaron.
+
+## Salud post-arranque
+
+- Salud 1: `2026-08-04T09:59:51.761896+02:00`, HTTP raiz/health
+  `200/200`.
+- Salud 2: `2026-08-04T10:02:08.649277+02:00`, HTTP `200/200`,
+  separacion `136.89s`.
+- En ambas: XNYS cerrado, scheduler unico con owner vivo y token coincidente,
+  listener unico, wrapper/launcher/runtime coherentes, paper activo,
+  live=false y auto-apply=false.
+- Kernel: `ok`, 0 violaciones.
+- Salud operativa durable: 0 criticos, 3 warnings preexistentes
+  (setup edge, atribucion postmarket y governance adaptativa), sin
+  `database is locked`.
+- `schedule-status` informa runtime unavailable por
+  `wal_mode_or_sidecar_present` bajo el contrato read-only; no se repararon
+  WAL/sidecars. La etiqueta `lock_orphan` de `stack_status` es el falso
+  positivo conocido del arbol wrapper/launcher y no se clasifico como segundo
+  scheduler.
+
+El smoke real no se ejecuto por seguridad. No se uso broker, red, LLM real,
+yfinance, Telegram, jobs manuales, postmarket/reconciliacion forzada,
+backfill, kernel-seal, edicion de manifest, nueva probe DeepSeek ni push.
+
+## Estado siguiente
+
+El cutoff P-L80 permanece vigente y la observacion prospectiva no se reescribe.
+No iniciar P-L83 en este cierre.

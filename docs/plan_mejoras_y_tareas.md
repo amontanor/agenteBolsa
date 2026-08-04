@@ -3291,3 +3291,14 @@ No se cambian broker, kernel, execution, risk, config, `.env`, trading,
 selección, gates, sizing, órdenes, exposición, límites ni la captura P-L80.
 La siguiente acción única es preflight cerrado, ensayo `merge --no-ff` y
 despliegue solo con margen suficiente; no iniciar P-L83 ni mezclar deuda ajena.
+
+### P-L82 - cierre productivo
+
+Estado: `deployed`. Merge final `df80dee8` sobre el estado seguro
+`31b7367b`, con segundo padre de recuperacion `a0ac5eed`, tree funcional
+`93d8a756` y version `0.4.218`. La tentativa accidental `098283bf` fue
+revertida de forma auditable por `31b7367b` antes de la integracion final;
+no deja delta funcional fuera de P-L82. Suite post-merge `2431 passed, 1
+warning`; focales `193 passed, 1 warning`; doble salud 200/200 separada
+`136.89s`, kernel `ok`, 0 criticos. Cutoff P-L80 preservado. No iniciar P-L83
+en este cierre.

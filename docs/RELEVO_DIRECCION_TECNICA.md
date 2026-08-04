@@ -1406,3 +1406,18 @@ temporal sin violaciones verdes. Producción P-L81A permanece intacta en
 `0.4.217`; no tocar broker/kernel/execution/risk/config/.env ni la captura
 P-L80. Siguiente paso único: preflight cerrado y despliegue secuenciado solo
 con margen suficiente; no iniciar P-L83.
+
+## P-L82 - relevo tras despliegue
+
+P-L82 esta desplegado en `0.4.218`: merge productivo
+`df80dee8` (padres `31b7367b` y `a0ac5eed`), tree funcional `93d8a756`.
+La tentativa accidental `098283bf` fue revertida auditablemente por
+`31b7367b` antes de la integracion final. La suite post-merge fue `2431
+passed, 1 warning`; focales `193 passed, 1 warning`; kernel `ok`, paper
+activo, live/auto-apply off. Salud 1 `09:59:51 CEST` y salud 2 `10:02:08
+CEST` fueron 200/200 con `136.89s` de separacion, scheduler/listener unicos,
+token coherente y 0 criticos. El runtime de `schedule-status` queda
+`unavailable` por WAL/sidecars segun el contrato read-only, sin reparacion.
+
+El cutoff P-L80 `2026-08-02T15:51:41.5484478Z` no cambia y no hubo backfill,
+jobs manuales, nueva probe DeepSeek ni push. No iniciar P-L83 en este turno.
