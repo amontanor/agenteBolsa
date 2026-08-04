@@ -771,5 +771,5 @@ def test_version_policy_requires_bump():
     if dist:
         # Con PYTHONPATH al src del worktree, leemos __init__.py
         import agente_bolsa
-        # P-L82 is the current candidate after the authoritative SPY resolver fix.
-        assert agente_bolsa.__version__ == "0.4.218"
+        # P-L81 is the current candidate after the canonical daily-equity UI change.
+        assert agente_bolsa.__version__ == "0.4.217"

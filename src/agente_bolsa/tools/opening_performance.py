@@ -536,18 +536,6 @@ def load_cached_spy_open_observations(
     def _resolve_open(
         candidates_by_session: Mapping[str, list[dict[str, Any]]],
     ) -> tuple[dict[str, dict[str, Any]], dict[str, list[dict[str, Any]]]]:
-        def _is_authoritative(candidate: Mapping[str, Any]) -> bool:
-            return (candidate.get("provenance") or {}).get("authority") == "explicit_benchmark_open"
-
-        def _authority_candidate(group: list[dict[str, Any]]) -> dict[str, Any]:
-            return min(
-                (candidate for candidate in group if _is_authoritative(candidate)),
-                key=lambda item: (
-                    str(item.get("cache_created_at") or ""),
-                    str((item.get("provenance") or {}).get("cache_id") or ""),
-                ),
-            )
-
         resolved: dict[str, dict[str, Any]] = {}
         conflicts: dict[str, list[dict[str, Any]]] = {}
         for session_date, candidates in candidates_by_session.items():
@@ -558,15 +546,13 @@ def load_cached_spy_open_observations(
                     candidate.get("price_basis"),
                 )
                 unique.setdefault(signature, []).append(candidate)
-            authority_groups = [group for group in unique.values() if any(_is_authoritative(candidate) for candidate in group)]
-            if len(authority_groups) == 1:
-                # Authority belongs to the canonical value group, not to the
-                # first artifact that happened to be read from that group.
-                # A generic duplicate may precede the dedicated artifact.
-                resolved[session_date] = _authority_candidate(authority_groups[0])
-                continue
             if len(unique) > 1:
-                if len(authority_groups) != 1:
+                authoritative = [
+                    group[0]
+                    for group in unique.values()
+                    if group[0].get("provenance", {}).get("authority") == "explicit_benchmark_open"
+                ]
+                if len(authoritative) != 1:
                     conflicts[session_date] = sorted(
                         [candidate for group in unique.values() for candidate in group],
                         key=lambda item: (
@@ -575,6 +561,8 @@ def load_cached_spy_open_observations(
                         ),
                     )
                     continue
+                resolved[session_date] = authoritative[0]
+                continue
             group = next(iter(unique.values()))
             # Equivalent opening observations are idempotent.  Pick an
             # explicitly authoritative artifact first, otherwise the oldest
@@ -732,62 +720,6 @@ def build_open_to_open_rows(
     return rows
 
 
-def build_opening_omissions(
-    account_opens: list[dict[str, Any]],
-    spy_market: Mapping[str, Any],
-    rows: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Explain exact XNYS intervals that were not comparable.
-
-    This is presentation metadata only.  It never fabricates a row or changes
-    the conservative intersection used by ``build_open_to_open_rows``.
-    """
-
-    if len(account_opens) < 2:
-        return []
-    account = {str(item.get("session_date")): item for item in account_opens}
-    spy = {str(item.get("session_date")): item for item in spy_market.get("opens") or []}
-    conflicts = spy_market.get("conflicts") or {}
-    sessions = xnys_sessions_between(
-        str(account_opens[0].get("session_date")),
-        str(account_opens[-1].get("session_date")),
-    )
-    completed_starts = {str(row.get("session_date")) for row in rows if row.get("status") == "final"}
-    omissions: list[dict[str, Any]] = []
-    for start, end in zip(sessions, sessions[1:], strict=False):
-        if start in completed_starts:
-            continue
-        account_start = start in account
-        account_end = end in account
-        spy_start = start in spy
-        spy_end = end in spy
-        if not account_start or not account_end:
-            reason = "account_open_unavailable"
-        elif start in conflicts or end in conflicts:
-            reason = "spy_open_conflict"
-        elif not spy_start or not spy_end:
-            reason = "spy_open_unavailable"
-        elif spy[start].get("price_basis") != spy[end].get("price_basis"):
-            reason = "price_basis_mismatch"
-        else:
-            reason = "not_comparable"
-        omissions.append(
-            {
-                "session_date": start,
-                "end_session_date": end,
-                "status": "omitted",
-                "reason": reason,
-                "coverage": {
-                    "account_start": account_start,
-                    "account_end": account_end,
-                    "spy_start": spy_start,
-                    "spy_end": spy_end,
-                },
-            }
-        )
-    return omissions
-
-
 def build_current_account_interval(
     account_opens: list[dict[str, Any]],
     *,
@@ -833,7 +765,6 @@ def opening_performance_context(
         current_equity=current_equity,
         current_equity_at=current,
     )
-    omitted_sessions = build_opening_omissions(account_opens, spy_market, rows)
     account_current = build_current_account_interval(
         account_opens,
         current_equity=current_equity,
@@ -855,7 +786,6 @@ def opening_performance_context(
         "exact_comparison_count": len(rows),
         "final_comparison_count": final_count,
         "omitted_session_count": max(expected_final_count - final_count, 0),
-        "omitted_sessions": omitted_sessions,
         "account_current": account_current,
         "current": rows[-1] if rows and rows[-1]["status"] == "in_progress" else None,
     }

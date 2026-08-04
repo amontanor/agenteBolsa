@@ -3269,25 +3269,3 @@ conservan sin mezclar este lote.
 El cutoff P-L80 `2026-08-02T15:51:41.5484478Z` no cambia. No hay backfill ni
 jobs manuales; la siguiente decision queda despues de la cohorte prospectiva
 P-L80. No iniciar P-L82/P-L83 en este cierre.
-
-## P-L82 - resolución autoritativa SPY y sesiones omitidas
-
-Estado: `ready_for_closed_market_deployment`. Se reprodujo en la base que
-`load_cached_spy_open_observations()` dependía de `group[0]`: un duplicado
-genérico del mismo valor leído antes que la cache dedicada producía `conflict`,
-mientras el orden inverso resolvía `available`. El fix de `0.4.218` resuelve la
-autoridad a nivel de grupo `(price, price_basis)`, mantiene conflicto para
-autoridades discordantes y no hace llamadas ni escrituras adicionales.
-
-El contexto/UI expone ahora fecha, estado, motivo y cobertura de cada intervalo
-omitido, sin inventar puntos ni conectar sobre huecos. Commits del candidato:
-`e1538614` caracterización, `87919ee2` implementación/bump, `d5228ac4` QA y
-`b938eaa9` version policy. Suite fresca: `2430 passed, 1 skipped preexistente,
-1 warning`; focales: `193 passed, 1 warning`; Ruff/NUL/compile/diff/config y
-kernel temporal sin violaciones verdes. El warning es la deprecación externa
-de `websockets.legacy`.
-
-No se cambian broker, kernel, execution, risk, config, `.env`, trading,
-selección, gates, sizing, órdenes, exposición, límites ni la captura P-L80.
-La siguiente acción única es preflight cerrado, ensayo `merge --no-ff` y
-despliegue solo con margen suficiente; no iniciar P-L83 ni mezclar deuda ajena.

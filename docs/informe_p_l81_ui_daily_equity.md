@@ -104,6 +104,6 @@ backfill. La UI no obtiene autoridad de trading y la paridad exigida cubre
 candidatos, scores, ranks, gates, sizing, planes, cantidades, precios,
 stops/takes, ordenes, exposicion y limites.
 
-La produccion desplegada queda en v0.4.217 con paper activo, live y auto-apply
+La produccion segura permanece en v0.4.216 con paper activo, live y auto-apply
 desactivados. No se ejecutan jobs manuales, postmarket, reconciliacion,
 backfill ni probe LLM para este lote.
