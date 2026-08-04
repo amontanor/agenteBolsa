@@ -131,3 +131,93 @@ backfill, kernel-seal, edicion de manifest, nueva probe DeepSeek ni push.
 
 El cutoff P-L80 permanece vigente y la observacion prospectiva no se reescribe.
 No iniciar P-L83 en este cierre.
+
+## P-L82R - continuidad y comparabilidad temporal
+
+### Dictamen del candidato
+
+`ready_for_closed_market_deployment`. P-L82R corrige únicamente la frontera
+observacional Sistema vs SPY. El candidato parte de la producción exacta
+`d73a8971b40075830dc40824c2308cd2057e4a6c`, tree
+`f966a7250beb4d4236ef27926e3c7aa956bb007a`, version `0.4.218`, y queda en el
+worktree `pl82r_spy_temporal_continuity`, rama
+`codex/pl82r-spy-temporal-continuity`, HEAD
+`1fab7813814d9bd3e68eaf867f9e6644dbbc5127`, tree
+`32506e65c69c8c0fe1093f13447ac698755be550`, version `0.4.219`.
+
+El candidato no está integrado ni desplegado en este estado del informe.
+Producción, stack, SQLite productiva, `.env`, sello y la captura prospectiva
+P-L80 permanecen intactos. No se inicia P-L83.
+
+### Causa reproducida y contrato
+
+La caracterización contra la base produjo `1 passed, 4 failed`: la gráfica
+formaba un único dataset de línea para filas finales separadas por omisiones,
+y una observación SPY anterior al `system_end_at` se clasificaba como una fila
+vigente comparable. La base no publicaba estado temporal para la fila vigente.
+
+El fix implementa lo mínimo siguiente:
+
+- una línea histórica solo agrupa intervalos contiguos cuando
+  `previous.end_session_date == next.session_date`; cada intervalo omitido,
+  conflicto o missing rompe el segmento y no se conecta visualmente;
+- la comparación vigente exige `system_end_at == spy_end_at` en UTC, además de
+  la misma base de precio y valores válidos. No se inventa un umbral de
+  frescura;
+- cuando los as-of no están alineados, Sistema y SPY permanecen visibles como
+  observaciones separadas, pero la fila publica
+  `comparison_status=unavailable`, `comparison_reason`,
+  `comparison_lag_seconds` y `comparison_coverage.aligned=false`; no produce
+  ganador ni conector de comparación;
+- los contadores y conectores de ganadores solo consumen filas finales con
+  `comparison_status=comparable` y ambos valores presentes;
+- las cuatro omisiones `spy_open_conflict` y los conflictos genuinos de P-L82
+  permanecen sin resolver, sin backfill ni llamada adicional.
+
+El caso equivalente observado por dirección, sistema `2026-08-04T08:11:00Z`
+frente a SPY `2026-08-03T20:12:55Z`, queda
+`current_observation_not_aligned`, sin ganador. La fecha visible puede seguir
+siendo la fecha local del as-of, mientras el intervalo conserva su
+`session_date`/cobertura canónicos.
+
+### Commits y QA
+
+- `3668369f`: caracterización roja y focales iniciales.
+- `914c715b`: cobertura explícita de exclusión de ganador vigente.
+- `0fce01a1`: implementación, ajuste de tooltip y bump `0.4.219`.
+- `1fab7813`: QA/version policy y formato de tests.
+
+Resultados en el worktree, con `PYTHONPATH` del worktree, `DATA_DIR` temporal,
+sin `.env` local, red, broker, LLM, yfinance ni SQLite productiva:
+
+- focales P-L82R: `6 passed`;
+- regresiones P-L65/P-L68/P-L71/P-L72/P-L74/P-L81/P-L82/web/Telegram:
+  `200 passed, 1 warning`;
+- suite completa fresca: `2436 passed, 1 skipped preexistente, 1 warning` en
+  `786.12s`;
+- Ruff completo, `check_no_nulls` (`472 archivos`), compilación temporal,
+  `git diff --check` y version policy: verdes;
+- `validate-agent-config --json`: `ok=true`, 23 agentes, 6 tareas, 6
+  habilitadas, sin warnings;
+- `kernel-status --json` temporal: `unsealed`, `violations=[]`, esperado por
+  ausencia de manifest temporal;
+- smoke fake aislado de la frontera `run_observable_cycle` con
+  `use_crew=false`: `ok=true`, ciclo `smoke-p82r`, persistencia solo en DB
+  temporal. No se ejecutó ciclo productivo ni hubo llamadas externas;
+- protegidos `kernel.py`, `broker.py`, `execution.py`, `risk.py` y `config.py`
+  objeto-a-objeto iguales a `d73a8971`; `.env` no existe en el worktree.
+
+El preflight productivo read-only previo permaneció verde: XNYS cerrado,
+próxima apertura `2026-08-04T15:30:00+02:00`, PMR `2026-08-03` terminal,
+lease vacío, paper activo, live/auto-apply off, kernel productivo `ok`,
+scheduler con owner/token coherentes y cero jobs de validación competidores.
+
+### Límites y siguiente paso
+
+La validación no modifica trading, riesgo, ejecución, selección, gates,
+sizing, exits, órdenes, exposición, límites, broker.py, kernel.py, execution.py,
+risk.py, config.py, `.env`, datos históricos ni cutoff P-L80
+`2026-08-02T15:51:41.5484478Z`. El único siguiente paso es un ensayo
+`merge --no-ff` desde `d73a8971` y, solo si las precondiciones/margen siguen
+verdes, cierre productivo secuenciado con gates y dos health checks; no iniciar
+P-L83 ni reparar deudas ajenas.
