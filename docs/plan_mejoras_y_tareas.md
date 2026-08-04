@@ -3232,3 +3232,20 @@ modifica el hash protegido de `broker.py`. El merge fue revertido auditably con
 `6f86f260`; produccion queda segura en v0.4.216. Siguiente paso unico: autoridad
 explicita para el sello del hash exacto o rediseño de la frontera protegida; no
 abrir P-L82/P-L83.
+## P-L81 - coherencia de ganancia global diaria y continuidad UI
+
+Estado: `ready_for_next_closed_market_deployment`. La definicion general de hoy es `current_equity - previous_close_equity` sobre `account.last_equity`, con porcentaje sobre el cierre anterior. El carrier se propaga a `PortfolioSnapshot`; el helper canonico es reutilizable y la tarjeta ya no presenta apertura-to-now como hoy. La grafica conecta el tramo `En curso` y conserva `session_date`/intervalo exactos en tooltip.
+
+QA focal: 168 passed y 1 warning externo. Produccion sigue en v0.4.216, sin cambios de stack ni politica. No se modificaron skills/runbooks: no habia contradiccion reproducible. Siguiente paso unico: gates cerrados y despliegue en una ventana con margen seguro; sin backfill P-L80 ni cambios de trading.
+## P-L81 - cierre seguro tras reinicio
+
+El primer intento de suite completa encontro solo una expectativa stale de version (`1555 passed, 1 failed, 1 warning`); `365d855f` la corrigio a `0.4.217` y el test aislado pasa. El segundo intento quedo interrumpido por reinicio sin terminal/artefacto recuperable y permanece pendiente. Gates breves verdes: Ruff, NUL, diff-check y version policy.
+
+Dictamen: `ready_for_next_closed_market_deployment`. No iniciar stack_down ni merge preapertura; siguiente precondicion unica: repetir la suite completa aislada y cerrar los gates restantes con XNYS cerrado y margen operativo.
+
+## P-L81A - reaplicacion auditable
+
+Estado provisional: `ready_for_closed_market_full_validation`. El contenido
+funcional validado se reaplica mediante revert-of-revert de `6f86f260`, sin
+fusionar directamente el merge revertido. Version prevista: 0.4.217. Faltan
+suite fresca, gates cerrados, sello canonico y despliegue; no abrir P-L82/P-L83.
