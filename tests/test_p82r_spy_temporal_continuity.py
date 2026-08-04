@@ -131,3 +131,30 @@ def test_future_spy_as_of_is_not_comparable():
     )
 
     assert rows[-1]["comparison_reason"] == "current_observation_future"
+
+
+def test_unavailable_current_observation_is_excluded_from_winner_counts():
+    rows = [
+        {
+            **_opening_row("2026-08-01", "2026-08-03", 0.01, 0.02),
+            "comparison_status": "comparable",
+        },
+        {
+            "session_date": "2026-08-03",
+            "end_session_date": None,
+            "status": "in_progress",
+            "system_pct": 0.50,
+            "spy_pct": None,
+            "comparison_status": "unavailable",
+            "comparison_reason": "current_observation_not_aligned",
+        },
+    ]
+
+    summary = web_app._daily_vs_spy_summary(rows)
+
+    assert summary["visible_total"] == 2
+    assert summary["final"] == 1
+    assert summary["in_progress"] == 1
+    assert summary["system_wins"] == 0
+    assert summary["spy_wins"] == 1
+    assert summary["ties"] == 0
