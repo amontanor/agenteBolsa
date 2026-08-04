@@ -37,4 +37,5 @@ __all__ = ["__version__"]
 # P-L80B: prospective exact same-cycle decision/capacity carrier (0.4.215).
 # P-L80H2: single-call OpenCode Go / DeepSeek V4 Flash health probe (0.4.216).
 # P-L81: canonical previous-close daily equity metric and connected opening chart (0.4.217).
-__version__ = "0.4.217"
+# P-L82: group-level SPY opening authority and visible omitted-session reasons (0.4.218).
+__version__ = "0.4.218"
