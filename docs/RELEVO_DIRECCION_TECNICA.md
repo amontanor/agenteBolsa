@@ -1389,3 +1389,20 @@ El cutoff P-L80 `2026-08-02T15:51:41.5484478Z` permanece vigente. No hubo probe
 DeepSeek adicional, jobs manuales, backfill, reconciliacion forzada ni push.
 La siguiente accion es observar la cohorte prospectiva P-L80; no abrir P-L82/P-L83
 en este turno.
+
+## P-L82 - relevo de autoridad SPY
+
+El candidato `0.4.218` resuelve la autoridad de apertura SPY por grupo de valor
+canónico y no por el primer artefacto leído. La reproducción base fue roja
+cuando el genérico del mismo precio precedía a la cache dedicada; el orden
+inverso era verde. Autoridades discordantes siguen en `conflict`. La UI expone
+sesiones omitidas con fecha, estado, motivo y cobertura sin fabricar puntos.
+
+Worktree `pl82_spy_opening_authority`, rama
+`codex/pl82-spy-opening-authority`; commits `e1538614`, `87919ee2`, `d5228ac4`
+y `b938eaa9`. Suite fresca `2430 passed, 1 skipped preexistente, 1 warning`;
+focales `193 passed, 1 warning`; Ruff, NUL, compile, diff, config y kernel
+temporal sin violaciones verdes. Producción P-L81A permanece intacta en
+`0.4.217`; no tocar broker/kernel/execution/risk/config/.env ni la captura
+P-L80. Siguiente paso único: preflight cerrado y despliegue secuenciado solo
+con margen suficiente; no iniciar P-L83.
