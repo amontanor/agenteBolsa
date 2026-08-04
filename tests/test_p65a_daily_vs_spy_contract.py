@@ -298,7 +298,7 @@ def test_p63_header_and_period_metric_remain_equity_authority():
 
     frame = web_app._portfolio_value_series_from_alpaca(
         {
-            "timestamp": ["2026-04-01T00:00:00Z", "2026-07-28T00:00:00Z"],
+            "timestamp": ["2026-04-02T00:00:00Z", "2026-07-29T00:00:00Z"],
             "equity": [71_550.0, 70_700.0],
         },
         current_equity=70_700.0,

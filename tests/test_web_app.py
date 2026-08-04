@@ -308,17 +308,17 @@ def test_store_daily_llm_usage_counts_requests_and_tokens(tmp_path):
 
 def test_portfolio_value_series_from_alpaca_marks_first_daily_change_unavailable():
     payload = {
-        "timestamp": [
-            "2026-05-08T00:00:00Z",
-            "2026-05-09T00:00:00Z",
-            "2026-05-10T00:00:00Z",
+            "timestamp": [
+                "2026-05-09T00:00:00Z",
+                "2026-05-12T00:00:00Z",
+                "2026-05-13T00:00:00Z",
         ],
         "equity": [1000.0, 1015.0, 1005.0],
     }
 
     df = _portfolio_value_series_from_alpaca(payload, current_equity=None, start_date="2026-05-01")
 
-    assert list(df["fecha"]) == ["2026-05-08", "2026-05-09", "2026-05-10"]
+    assert list(df["fecha"]) == ["2026-05-08", "2026-05-11", "2026-05-12"]
     assert list(df["valor_cartera"]) == [1000.0, 1015.0, 1005.0]
     assert pd.isna(df["P/L dia"].iloc[0])
     assert list(df["P/L dia"].iloc[1:]) == [15.0, -10.0]
@@ -329,10 +329,10 @@ def test_trim_portfolio_chart_range_keeps_latest_window():
     df = _portfolio_value_series_from_alpaca(
         {
             "timestamp": [
-                "2026-05-06T00:00:00Z",
                 "2026-05-07T00:00:00Z",
                 "2026-05-08T00:00:00Z",
                 "2026-05-09T00:00:00Z",
+                "2026-05-12T00:00:00Z",
             ],
             "equity": [1000.0, 1001.0, 1002.0, 1003.0],
         },
@@ -340,9 +340,9 @@ def test_trim_portfolio_chart_range_keeps_latest_window():
         start_date="2026-05-01",
     )
 
-    trimmed = _trim_portfolio_chart_range(df, days=2)
+    trimmed = _trim_portfolio_chart_range(df, days=4)
 
-    assert list(trimmed["fecha"]) == ["2026-05-08", "2026-05-09"]
+    assert list(trimmed["fecha"]) == ["2026-05-08", "2026-05-11"]
     assert list(trimmed["valor_cartera"]) == [1002.0, 1003.0]
 
 
@@ -422,10 +422,10 @@ def test_trim_portfolio_chart_range_none_keeps_full_history():
     df = _portfolio_value_series_from_alpaca(
         {
             "timestamp": [
-                "2026-05-06T00:00:00Z",
                 "2026-05-07T00:00:00Z",
                 "2026-05-08T00:00:00Z",
                 "2026-05-09T00:00:00Z",
+                "2026-05-12T00:00:00Z",
             ],
             "equity": [1000.0, 1001.0, 1002.0, 1003.0],
         },
@@ -435,7 +435,7 @@ def test_trim_portfolio_chart_range_none_keeps_full_history():
 
     full_history = _trim_portfolio_chart_range(df, days=None)
 
-    assert list(full_history["fecha"]) == ["2026-05-06", "2026-05-07", "2026-05-08", "2026-05-09"]
+    assert list(full_history["fecha"]) == ["2026-05-06", "2026-05-07", "2026-05-08", "2026-05-11"]
 
 
 def test_estimated_portfolio_value_series_none_uses_all_available_history():
@@ -471,10 +471,10 @@ def test_portfolio_chart_visible_summary_uses_visible_window_change():
     df = _portfolio_value_series_from_alpaca(
         {
             "timestamp": [
-                "2026-05-06T00:00:00Z",
                 "2026-05-07T00:00:00Z",
                 "2026-05-08T00:00:00Z",
                 "2026-05-09T00:00:00Z",
+                "2026-05-12T00:00:00Z",
             ],
             "equity": [1000.0, 1020.0, 1010.0, 1035.0],
         },
@@ -482,14 +482,14 @@ def test_portfolio_chart_visible_summary_uses_visible_window_change():
         start_date="2026-05-01",
     )
 
-    trimmed = _trim_portfolio_chart_range(df, days=3)
+    trimmed = _trim_portfolio_chart_range(df, days=5)
     summary = _portfolio_chart_visible_summary(trimmed)
 
     assert summary["days"] == 3
     assert summary["pl"] == 15.0
     assert summary["pl_pct"] == 0.014706
     assert summary["start_date"] == "2026-05-07"
-    assert summary["end_date"] == "2026-05-09"
+    assert summary["end_date"] == "2026-05-11"
     assert summary["start_value"] == 1020.0
     assert summary["end_value"] == 1035.0
 
@@ -766,7 +766,7 @@ def test_latest_daily_equity_change_prefers_alpaca_daily_delta():
         "timestamp": [
             "2026-05-22T00:00:00Z",
             "2026-05-23T00:00:00Z",
-            "2026-05-26T00:00:00Z",
+            "2026-05-27T00:00:00Z",
         ],
         "equity": [70719.88, 71081.25, 71072.78],
     }

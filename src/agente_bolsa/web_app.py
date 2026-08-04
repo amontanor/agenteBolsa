@@ -9,8 +9,9 @@ import os
 import subprocess
 from contextlib import closing
 from dataclasses import asdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from html import escape
+from numbers import Real
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -358,11 +359,18 @@ def _daily_equity_display_date(value: Any) -> str | None:
     return parsed.astimezone(ZoneInfo("Europe/Madrid")).strftime("%d/%m/%Y") if parsed else None
 
 
+def _daily_equity_session_display_date(value: Any) -> str | None:
+    session_date = _portfolio_session_date_for_timestamp(value)
+    if not session_date:
+        return None
+    return date.fromisoformat(session_date).strftime("%d/%m/%Y")
+
+
 def _daily_equity_detail(metric: dict[str, Any]) -> str:
     if metric.get("status") != "available":
         reason = str(metric.get("reason") or "datos no disponibles")
         return f"P/L diario de cartera · n/d · {reason}"
-    start = _daily_equity_display_date(metric.get("window_start")) or "último cierre Alpaca"
+    start = _daily_equity_session_display_date(metric.get("window_start")) or "último cierre Alpaca"
     end = _daily_equity_display_date(metric.get("window_end")) or "ahora"
     return f"Equity actual − último cierre Alpaca · {start} → {end}"
 
@@ -1804,40 +1812,61 @@ def _portfolio_value_series_from_alpaca(
     current_equity: float | None,
     *,
     start_date: str = PORTFOLIO_CHART_START_DATE,
+    as_of: datetime | str | None = None,
 ) -> pd.DataFrame:
     timestamps = portfolio_history.get("timestamp") or []
     equities = portfolio_history.get("equity") or []
     if not timestamps or not equities:
         return pd.DataFrame()
 
-    by_date: dict[str, float] = {}
+    observed_at = _parse_utc_timestamp(as_of) if as_of is not None else datetime.now(timezone.utc)
+    if observed_at is None:
+        return pd.DataFrame()
+    observed_at = observed_at.astimezone(timezone.utc)
     timezone_name = _settings().local_timezone
-    for raw_ts, raw_equity in zip(timestamps, equities, strict=False):
+    parsed_rows: list[tuple[int, datetime, float]] = []
+    for index, (raw_ts, raw_equity) in enumerate(zip(timestamps, equities, strict=False)):
         equity = _num(raw_equity)
         if equity is None:
             continue
-        try:
-            if isinstance(raw_ts, (int, float)):
-                parsed = datetime.fromtimestamp(float(raw_ts), tz=ZoneInfo("UTC"))
-            else:
-                parsed = datetime.fromisoformat(str(raw_ts).replace("Z", "+00:00"))
-                if parsed.tzinfo is None:
-                    parsed = parsed.replace(tzinfo=ZoneInfo("UTC"))
-        except (TypeError, ValueError, OSError):
+        parsed = _parse_utc_timestamp(raw_ts)
+        if parsed is None or parsed > observed_at:
             continue
-        date = parsed.astimezone(ZoneInfo(timezone_name)).date().isoformat()
-        if date >= start_date:
-            by_date[date] = round(equity, 2)
-
-    today = datetime.now(ZoneInfo(timezone_name)).date().isoformat()
-    if current_equity is not None and today >= start_date:
-        by_date[today] = round(float(current_equity), 2)
-    if not by_date:
+        parsed_rows.append((index, parsed, round(equity, 2)))
+    if not parsed_rows:
         return pd.DataFrame()
 
+    calendar = MarketCalendar()
+    market_dates = [parsed.astimezone(ZoneInfo("America/New_York")).date() for _, parsed, _ in parsed_rows]
+    schedule = calendar.session_schedule(
+        (min(market_dates) - timedelta(days=31)).isoformat(),
+        max(market_dates).isoformat(),
+    )
+    closed_by_date: dict[str, tuple[datetime, int, float]] = {}
+    for index, parsed, equity in parsed_rows:
+        session_date = _portfolio_session_date_for_timestamp(parsed, calendar=calendar, schedule=schedule)
+        if not session_date or session_date < start_date:
+            continue
+        candidate = (parsed, index, equity)
+        previous = closed_by_date.get(session_date)
+        if previous is None or candidate[:2] >= previous[:2]:
+            closed_by_date[session_date] = candidate
+
+    observations: list[tuple[str, bool, datetime, float]] = [
+        (session_date, False, parsed, equity)
+        for session_date, (parsed, _index, equity) in closed_by_date.items()
+    ]
+    current_value = _num(current_equity)
+    current_date = observed_at.astimezone(ZoneInfo(timezone_name)).date().isoformat()
+    if current_value is not None and current_date >= start_date:
+        observations.append((current_date, True, observed_at, round(current_value, 2)))
+    if not observations:
+        return pd.DataFrame()
+
+    observations.sort(key=lambda item: (item[0], item[1], item[2]))
     rows = []
     previous_equity: float | None = None
-    for date, equity in sorted(by_date.items(), key=lambda item: item[0]):
+    for session_date, is_provisional, _observed_at, equity in observations:
         if previous_equity is None:
             day_pl = None
             day_pct = None
@@ -1846,12 +1875,14 @@ def _portfolio_value_series_from_alpaca(
             day_pct = round(day_pl / previous_equity, 6) if previous_equity else 0.0
         rows.append(
             {
-                "fecha": date,
+                "fecha": session_date,
+                "session_date": session_date,
                 "valor_cartera": equity,
                 "P/L dia": day_pl,
                 "% dia": day_pct,
                 "label": f"{_money(equity)} ({_pct_signed(day_pct)})",
-                "fuente": "Alpaca",
+                "fuente": "Alpaca (provisional)" if is_provisional else "Alpaca",
+                "es_provisional": is_provisional,
             }
         )
         previous_equity = equity
@@ -1873,9 +1904,22 @@ def _trim_portfolio_chart_range(df: pd.DataFrame, *, days: int | str | None) -> 
     normalized = normalized[normalized["_portfolio_chart_date"].notna()]
     if normalized.empty:
         return df.iloc[0:0].copy()
-    normalized = (
-        normalized.sort_values("_portfolio_chart_date", kind="stable")
-        .drop_duplicates("_portfolio_chart_date", keep="last")
+    if "es_provisional" in normalized.columns:
+        normalized["_portfolio_chart_provisional"] = normalized["es_provisional"].fillna(False).astype(bool)
+    else:
+        normalized["_portfolio_chart_provisional"] = False
+    normalized = normalized.sort_values(
+        ["_portfolio_chart_date", "_portfolio_chart_provisional"],
+        kind="stable",
+    )
+    closed = normalized[~normalized["_portfolio_chart_provisional"]].drop_duplicates(
+        "_portfolio_chart_date",
+        keep="last",
+    )
+    provisional = normalized[normalized["_portfolio_chart_provisional"]]
+    normalized = pd.concat([closed, provisional], ignore_index=True).sort_values(
+        ["_portfolio_chart_date", "_portfolio_chart_provisional"],
+        kind="stable",
     )
     if days is not None:
         end_date = normalized["_portfolio_chart_date"].max()
@@ -1888,7 +1932,7 @@ def _trim_portfolio_chart_range(df: pd.DataFrame, *, days: int | str | None) -> 
             window = max(int(days), 1)
             start_date = end_date - pd.Timedelta(days=window - 1)
         normalized = normalized[normalized["_portfolio_chart_date"].between(start_date, end_date)]
-    return normalized.drop(columns="_portfolio_chart_date").reset_index(drop=True)
+    return normalized.drop(columns=["_portfolio_chart_date", "_portfolio_chart_provisional"]).reset_index(drop=True)
 
 
 def _portfolio_chart_visible_summary(df: pd.DataFrame) -> dict[str, Any]:
@@ -3058,17 +3102,74 @@ _DAILY_VS_SPY_STALE_SECONDS = 3 * 24 * 60 * 60
 
 
 def _parse_utc_timestamp(value: Any) -> datetime | None:
-    if value is None or value == "":
+    if value is None or value == "" or isinstance(value, bool):
         return None
     try:
-        parsed = pd.Timestamp(value)
-        if parsed.tzinfo is None:
-            parsed = parsed.tz_localize(timezone.utc)
+        if isinstance(value, Real):
+            numeric = float(value)
+            if not math.isfinite(numeric):
+                return None
+            magnitude = abs(numeric)
+            if magnitude < 100_000_000_000:
+                unit = "s"
+            elif magnitude < 100_000_000_000_000:
+                unit = "ms"
+            else:
+                return None
+            parsed = pd.to_datetime(numeric, unit=unit, utc=True, errors="raise")
         else:
-            parsed = parsed.tz_convert(timezone.utc)
+            parsed = pd.Timestamp(value)
+            if parsed.tzinfo is None:
+                parsed = parsed.tz_localize(timezone.utc)
+            else:
+                parsed = parsed.tz_convert(timezone.utc)
         return parsed.to_pydatetime()
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError, OSError):
         return None
+
+
+def _portfolio_session_date_for_timestamp(
+    value: Any,
+    *,
+    calendar: MarketCalendar | None = None,
+    schedule: Any = None,
+) -> str | None:
+    """Resolve an Alpaca 1D bucket to the last completed XNYS session.
+
+    Alpaca daily portfolio buckets are timestamped at UTC midnight after the
+    session they summarize.  Their civil date in Madrid/New York is therefore
+    not the session identity.  A real exchange schedule is required; when it
+    is unavailable the presentation remains unavailable instead of guessing a
+    weekday or subtracting one day.
+    """
+
+    parsed = _parse_utc_timestamp(value)
+    if parsed is None or parsed.year < 2000:
+        return None
+    parsed_utc = parsed.astimezone(timezone.utc)
+    market_date = parsed_utc.astimezone(ZoneInfo("America/New_York")).date()
+    resolved_calendar = calendar or MarketCalendar()
+    if schedule is None:
+        schedule = resolved_calendar.session_schedule(
+            (market_date - timedelta(days=31)).isoformat(),
+            market_date.isoformat(),
+        )
+    if schedule is None or schedule.empty:
+        return None
+
+    best: tuple[datetime, str] | None = None
+    for session_key, row in schedule.iterrows():
+        try:
+            market_close = row["market_close"]
+            close_utc = _parse_utc_timestamp(market_close.to_pydatetime() if hasattr(market_close, "to_pydatetime") else market_close)
+            if close_utc is None or close_utc > parsed_utc:
+                continue
+            session_date = str(session_key.date()) if hasattr(session_key, "date") else str(session_key)[:10]
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if best is None or close_utc > best[0]:
+            best = (close_utc, session_date)
+    return best[1] if best else None
 
 
 def _canonical_daily_vs_spy_row(
@@ -4745,7 +4846,11 @@ def page_dashboard() -> None:
     today_total = _num(daily_equity_metric.get("daily_equity_pl"))
     today_pct = _num(daily_equity_metric.get("daily_equity_return"))
     today_detail = _daily_equity_detail(daily_equity_metric)
-    full_equity_df = _portfolio_value_series_from_alpaca(portfolio_history, current_equity)
+    full_equity_df = _portfolio_value_series_from_alpaca(
+        portfolio_history,
+        current_equity,
+        as_of=account_read_at,
+    )
     full_equity_summary = _portfolio_equity_summary(full_equity_df)
     account_total_pl = _num(full_equity_summary.get("pl"))
     account_total_pct = _num(full_equity_summary.get("pl_pct"))

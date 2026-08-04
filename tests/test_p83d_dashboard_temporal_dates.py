@@ -3,10 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timezone
 
-import pandas as pd
-
-from agente_bolsa.config import Settings
 import agente_bolsa.web_app as web_app
+from agente_bolsa.config import Settings
 
 
 def _patch_dashboard_settings(monkeypatch):
@@ -94,7 +92,7 @@ def test_seven_day_window_uses_normalized_session_dates_and_keeps_current(monkey
     assert summary["pl"] == -9.05
 
 
-def test_current_snapshot_does_not_overwrite_same_session_close(monkeypatch):
+def test_current_snapshot_does_not_overwrite_close_after_session_close(monkeypatch):
     _patch_dashboard_settings(monkeypatch)
     payload = {
         "timestamp": [_epoch_seconds("2026-08-05T00:00:00Z")],
@@ -105,10 +103,10 @@ def test_current_snapshot_does_not_overwrite_same_session_close(monkeypatch):
         payload,
         101.0,
         start_date="2026-08-01",
-        as_of=datetime(2026, 8, 4, 22, 30, tzinfo=timezone.utc),
+        as_of=datetime(2026, 8, 5, 0, 30, tzinfo=timezone.utc),
     )
 
-    assert list(result["fecha"]) == ["2026-08-04", "2026-08-04"]
+    assert list(result["fecha"]) == ["2026-08-04", "2026-08-05"]
     assert list(result["es_provisional"]) == [False, True]
     assert list(result["valor_cartera"]) == [100.0, 101.0]
 

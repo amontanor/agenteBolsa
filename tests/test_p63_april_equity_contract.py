@@ -23,9 +23,9 @@ from agente_bolsa.web_app import (
 def _descending_equity_history() -> dict[str, list[object]]:
     return {
         "timestamp": [
-            "2026-04-01T00:00:00Z",
-            "2026-04-28T00:00:00Z",
-            "2026-07-28T00:00:00Z",
+            "2026-04-02T00:00:00Z",
+            "2026-04-29T00:00:00Z",
+            "2026-07-29T00:00:00Z",
         ],
         "equity": [71550.0, 71000.0, 70600.0],
     }
@@ -108,7 +108,7 @@ def test_april_equity_result_is_negative_even_with_positive_trade_total():
 
 def test_missing_april_equity_is_partial_or_unavailable_without_trade_reconstruction(monkeypatch):
     later = {
-        "timestamp": ["2026-04-28T00:00:00Z", "2026-07-28T00:00:00Z"],
+        "timestamp": ["2026-04-29T00:00:00Z", "2026-07-29T00:00:00Z"],
         "equity": [71000.0, 70600.0],
     }
     partial = _portfolio_equity_summary(
@@ -132,7 +132,7 @@ def test_missing_april_equity_is_partial_or_unavailable_without_trade_reconstruc
 
 def test_descending_equity_cannot_render_positive_trade_total_as_green_result():
     payload = {
-        "timestamp": ["2026-04-01T00:00:00Z", "2026-07-28T00:00:00Z"],
+        "timestamp": ["2026-04-02T00:00:00Z", "2026-07-29T00:00:00Z"],
         "equity": [71550.0, 70700.0],
     }
     summary = _portfolio_equity_summary(
@@ -155,7 +155,7 @@ def test_explicit_june_window_has_date_authority_and_exact_visible_dates(monkeyp
     class FrozenDateTime(datetime):
         @classmethod
         def now(cls, tz=None):
-            return cls(2026, 7, 28, 22, 30, tzinfo=tz)
+            return cls(2026, 7, 29, 22, 30, tzinfo=tz)
 
     monkeypatch.setattr(web_app, "datetime", FrozenDateTime)
     assert "2026-06-01" in PORTFOLIO_CHART_WINDOWS
@@ -164,9 +164,9 @@ def test_explicit_june_window_has_date_authority_and_exact_visible_dates(monkeyp
     df = _portfolio_value_series_from_alpaca(
         {
             "timestamp": [
-                "2026-04-01T00:00:00Z",
-                "2026-06-01T00:00:00Z",
-                "2026-07-28T00:00:00Z",
+                "2026-04-02T00:00:00Z",
+                "2026-06-02T00:00:00Z",
+                "2026-07-29T00:00:00Z",
             ],
             "equity": [71550.0, 71200.0, 70700.0],
         },
