@@ -269,21 +269,22 @@ class ImprovementLLMClient:
         response_model: type[BaseModel],
         normalize_response: bool,
     ) -> LLMJsonResult:
+        is_local_fallback = endpoint.name == "local_fallback"
         target_tokens = (
             self.settings.improvement_llm_local_context_target_tokens
-            if endpoint.fallback_used
+            if is_local_fallback
             else self.settings.improvement_llm_context_target_tokens
         )
         hard_limit_tokens = (
             self.settings.improvement_llm_local_context_hard_limit_tokens
-            if endpoint.fallback_used
+            if is_local_fallback
             else self.settings.improvement_llm_context_hard_limit_tokens
         )
         messages_to_send, truncation_report = compact_messages_for_token_budget(
             messages,
             target_tokens=target_tokens,
             hard_limit_tokens=hard_limit_tokens,
-            force=endpoint.fallback_used,
+            force=is_local_fallback,
         )
         prompt_tokens_estimate = estimate_json_tokens(messages_to_send)
         request_preview = {
@@ -408,7 +409,7 @@ class ImprovementLLMClient:
         )
 
     def _format_endpoint_error(self, endpoint: _ImprovementEndpoint, exc: Exception) -> str:
-        if endpoint.fallback_used and endpoint.base_url.rstrip("/").startswith("http://127.0.0.1:8080"):
+        if endpoint.name == "local_fallback" and endpoint.base_url.rstrip("/").startswith("http://127.0.0.1:8080"):
             return (
                 "fallback local no disponible en 127.0.0.1:8080 "
                 "(esperado si el servidor local no esta arrancado)"
