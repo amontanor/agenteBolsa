@@ -13,7 +13,7 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
-def _config(provider="opencode-zen", model="deepseek-v4-flash-free", mode="health"):
+def _config(provider="opencode-zen", model="deepseek-v4-flash-free", mode="health", max_tokens=512):
     return MODULE.ProbeConfig(
         provider=provider,
         model=model,
@@ -22,6 +22,7 @@ def _config(provider="opencode-zen", model="deepseek-v4-flash-free", mode="healt
         ),
         api_key="synthetic-key",
         mode=mode,
+        max_tokens=max_tokens,
     )
 
 
@@ -35,15 +36,40 @@ class FakeTransport:
         return self.responses.pop(0)
 
 
-def _response(status=200, *, content="ready", finish_reason="stop", body=None, headers=None):
+def _response(
+    status=200,
+    *,
+    content="ready",
+    reasoning_content=None,
+    finish_reason="stop",
+    body=None,
+    headers=None,
+):
     if body is None:
+        message = {"content": content}
+        if reasoning_content is not None:
+            message["reasoning_content"] = reasoning_content
         body = json.dumps(
             {
-                "choices": [{"message": {"content": content}, "finish_reason": finish_reason}],
-                "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+                "choices": [{"message": message, "finish_reason": finish_reason}],
+                "usage": {
+                    "prompt_tokens": 3,
+                    "completion_tokens": 2,
+                    "total_tokens": 5,
+                    "completion_tokens_details": {"reasoning_tokens": 1},
+                },
             }
         ).encode()
     return MODULE.TransportResponse(status=status, body=body, headers=headers or {})
+
+
+class TokenAwareTransport(FakeTransport):
+    def post(self, **kwargs):
+        self.calls.append(kwargs)
+        request = json.loads(kwargs["body"])
+        if request["max_tokens"] <= 32:
+            return _response(content="partial", finish_reason="length")
+        return _response()
 
 
 def test_zen_success_is_one_request_and_reports_safe_identity():
@@ -58,10 +84,14 @@ def test_zen_success_is_one_request_and_reports_safe_identity():
     assert result["requests_made"] == 1
     assert result["request_id_present"] is True
     assert result["rate_limit_headers_present"] is True
+    assert result["content_present"] is True
+    assert result["reasoning_content_present"] is False
+    assert result["captured_at"].endswith("+00:00")
+    assert result["usage"]["reasoning_tokens"] == 1
     assert "secret-id" not in json.dumps(result)
 
 
-def test_structured_and_multiturn_modes_validate_without_network():
+def test_structured_multiturn_and_combined_modes_validate_without_network():
     structured = FakeTransport([_response(content='{"ok":true}')])
     result = MODULE.run_probe(_config(mode="structured"), transport=structured)
     assert result["ok"] is True
@@ -71,6 +101,44 @@ def test_structured_and_multiturn_modes_validate_without_network():
     result = MODULE.run_probe(_config(mode="multiturn"), transport=multiturn)
     assert result["ok"] is True
     assert json.loads(multiturn.calls[0]["body"])["reasoning_effort"] == "low"
+
+    combined = FakeTransport([_response(content='{"ok":true}', reasoning_content="short")])
+    result = MODULE.run_probe(_config(mode="combined"), transport=combined)
+    assert result["ok"] is True
+    combined_body = json.loads(combined.calls[0]["body"])
+    assert combined_body["response_format"] == {"type": "json_object"}
+    assert combined_body["reasoning_effort"] == "low"
+    assert result["reasoning_content_present"] is True
+
+
+def test_low_cap_can_produce_length_but_aligned_cap_is_valid():
+    low = MODULE.run_probe(_config(max_tokens=32), transport=TokenAwareTransport([]))
+    assert low["ok"] is False
+    assert low["finish_reason"] == "length"
+    assert low["error_type"] == "finish_reason_invalid"
+
+    aligned = MODULE.run_probe(_config(max_tokens=512), transport=TokenAwareTransport([]))
+    assert aligned["ok"] is True
+    assert aligned["finish_reason"] == "stop"
+    assert aligned["content_present"] is True
+
+
+def test_reasoning_content_never_substitutes_required_final_content():
+    with_content = MODULE.run_probe(
+        _config(),
+        transport=FakeTransport([_response(content="ready", reasoning_content="hidden")]),
+    )
+    assert with_content["ok"] is True
+    assert with_content["reasoning_content_present"] is True
+
+    reasoning_only = MODULE.run_probe(
+        _config(),
+        transport=FakeTransport([_response(content="", reasoning_content="hidden")]),
+    )
+    assert reasoning_only["ok"] is False
+    assert reasoning_only["error_type"] == "response_invalid"
+    assert reasoning_only["content_present"] is False
+    assert reasoning_only["reasoning_content_present"] is True
 
 
 def test_http_failures_are_classified_without_response_body():

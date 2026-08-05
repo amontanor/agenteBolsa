@@ -15,6 +15,7 @@ import sys
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
@@ -29,6 +30,7 @@ GO_PROVIDER = "opencode-go"
 GO_MODEL = "deepseek-v4-flash"
 GO_BASE_URL = "https://opencode.ai/zen/go/v1"
 DEFAULT_TIMEOUT_SECONDS = 30.0
+DEFAULT_MAX_TOKENS = 512
 USER_AGENT = "agente-bolsa-opencode-zen-health/1.0"
 VALID_FINISH_REASONS = frozenset({"stop", "tool_calls", "function_call"})
 
@@ -45,6 +47,7 @@ class ProbeConfig:
     api_key: str
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     mode: str = "health"
+    max_tokens: int = DEFAULT_MAX_TOKENS
 
 
 @dataclass(frozen=True)
@@ -124,6 +127,11 @@ def _content_text(value: Any) -> str:
     return ""
 
 
+def _safe_text_presence(value: Any) -> tuple[bool, int]:
+    text = _content_text(value)
+    return bool(text), len(text)
+
+
 def _mode_payload(mode: str) -> dict[str, Any]:
     if mode == "structured":
         return {
@@ -142,6 +150,16 @@ def _mode_payload(mode: str) -> dict[str, Any]:
                 {"role": "user", "content": "Return the remembered token only."},
             ],
         }
+    if mode == "combined":
+        return {
+            "messages": [
+                {"role": "system", "content": 'Return only JSON with boolean key "ok".'},
+                {"role": "user", "content": "Remember the token: amber."},
+                {"role": "assistant", "content": "amber"},
+                {"role": "user", "content": 'Return {"ok":true} and no other text.'},
+            ],
+            "response_format": {"type": "json_object"},
+        }
     return {
         "messages": [
             {"role": "system", "content": "Return a short benign health response."},
@@ -159,6 +177,11 @@ def _safe_usage(payload: Any) -> dict[str, int] | None:
         value = usage.get(key)
         if isinstance(value, int) and value >= 0:
             result[key] = value
+    details = usage.get("completion_tokens_details")
+    if isinstance(details, dict):
+        value = details.get("reasoning_tokens")
+        if isinstance(value, int) and value >= 0:
+            result["reasoning_tokens"] = value
     return result or None
 
 
@@ -217,11 +240,16 @@ def _result(
     primary_error_class: str | None = None,
     usage: dict[str, int] | None = None,
     headers: Mapping[str, str] | None = None,
+    content_present: bool = False,
+    content_length: int = 0,
+    reasoning_content_present: bool = False,
+    reasoning_content_length: int = 0,
 ) -> dict[str, Any]:
     host, path = endpoint_parts(config.endpoint)
     metadata = _header_metadata(headers or {})
     return {
         "ok": ok,
+        "captured_at": datetime.now(timezone.utc).isoformat(),
         "provider": config.provider,
         "model": config.model,
         "endpoint_host": host,
@@ -230,6 +258,10 @@ def _result(
         "http_status": http_status,
         "latency_seconds": latency_seconds,
         "finish_reason": finish_reason,
+        "content_present": content_present,
+        "content_length": content_length,
+        "reasoning_content_present": reasoning_content_present,
+        "reasoning_content_length": reasoning_content_length,
         "usage": usage,
         "fallback_used": fallback_used,
         "fallback_reason": fallback_reason,
@@ -288,9 +320,9 @@ def run_probe(config: ProbeConfig, transport: ProbeTransport | None = None) -> d
         "model": config.model,
         **_mode_payload(config.mode),
         "temperature": 0,
-        "max_tokens": 32,
+        "max_tokens": config.max_tokens,
     }
-    if config.mode == "multiturn":
+    if config.mode in {"multiturn", "combined"}:
         body_obj["reasoning_effort"] = "low"
     body = json.dumps(body_obj, separators=(",", ":")).encode("utf-8")
     headers = {
@@ -384,14 +416,17 @@ def run_probe(config: ProbeConfig, transport: ProbeTransport | None = None) -> d
     choice = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
     message = choice.get("message") if choice else None
     finish_reason = _safe_finish_reason(choice.get("finish_reason") if choice else None)
-    content = _content_text(message.get("content") if isinstance(message, dict) else None)
-    if choice is None or not isinstance(message, dict) or not content:
+    content_value = message.get("content") if isinstance(message, dict) else None
+    reasoning_value = message.get("reasoning_content") if isinstance(message, dict) else None
+    content_present, content_length = _safe_text_presence(content_value)
+    reasoning_present, reasoning_length = _safe_text_presence(reasoning_value)
+    if choice is None or not isinstance(message, dict) or not content_present:
         error_type, message_text = "response_invalid", "La respuesta no contiene contenido valido"
     elif finish_reason not in VALID_FINISH_REASONS:
         error_type, message_text = "finish_reason_invalid", "finish_reason no util para el contrato"
     elif config.mode == "structured":
         try:
-            structured = json.loads(content)
+            structured = json.loads(_content_text(content_value))
         except json.JSONDecodeError:
             structured = None
         if not isinstance(structured, dict) or structured.get("ok") is not True:
@@ -413,6 +448,10 @@ def run_probe(config: ProbeConfig, transport: ProbeTransport | None = None) -> d
             requests_made=1,
             usage=_safe_usage(payload),
             headers=response.headers,
+            content_present=content_present,
+            content_length=content_length,
+            reasoning_content_present=reasoning_present,
+            reasoning_content_length=reasoning_length,
         )
     return _result(
         config=config,
@@ -426,6 +465,10 @@ def run_probe(config: ProbeConfig, transport: ProbeTransport | None = None) -> d
         requests_made=1,
         usage=_safe_usage(payload),
         headers=response.headers,
+        content_present=content_present,
+        content_length=content_length,
+        reasoning_content_present=reasoning_present,
+        reasoning_content_length=reasoning_length,
     )
 
 
@@ -483,7 +526,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
-    parser.add_argument("--mode", choices=("health", "structured", "multiturn"), default="health")
+    parser.add_argument("--mode", choices=("health", "structured", "multiturn", "combined"), default="health")
+    parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS, help=argparse.SUPPRESS)
     parser.add_argument("--with-go-fallback", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--env-file", type=Path, default=None, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -497,6 +541,7 @@ def main(argv: list[str] | None = None) -> int:
         api_key=api_key,
         timeout_seconds=args.timeout,
         mode=args.mode,
+        max_tokens=args.max_tokens,
     )
     if args.with_go_fallback:
         fallback = ProbeConfig(
