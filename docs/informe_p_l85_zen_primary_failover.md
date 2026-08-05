@@ -168,3 +168,58 @@ arrancar con helpers y completar dos health checks separados al menos 75 s.
 El cutoff P-L80 `2026-08-02T15:51:41.5484478Z` permanece inmutable; la
 activación Zen requerirá su propio `activation_at` UTC y cohortes separadas,
 sin backfill.
+
+## P-L85R - cierre productivo
+
+### Dictamen
+
+`deployed`. La migración quedó integrada y operativa con Zen Free como ruta
+primaria y OpenCode Go como fallback inmediato de una sola tentativa. No se
+repitió ninguna llamada externa después de agotar el presupuesto `10/10` de
+caracterización; la evidencia real verde anterior se reutiliza.
+
+### Integración y configuración
+
+- Merge productivo: `78bb075840274eb3e2b74508a3c8133214a750a1`, primer padre
+  `94a5cf7fe3695d5c3935d16a3bb1428b8e554e62`, segundo padre
+  `f9bc389cca6037924b432911ebd568b6ee465730`.
+- Tree funcional desplegado: `8ea38dbcb743942488689de9441b1b0ebbf96b75`;
+  versión `0.4.221`. El commit documental posterior solo actualiza este
+  informe, el plan y el relevo.
+- `.env`: delta limitado a 13 aliases no secretos de selector, proveedor,
+  base URL y modelo para la ruta primaria Zen Free; credenciales, flags,
+  endpoints broker y política no se tocaron.
+- Hash `.env` antes: `86a8420f...dfc35afb`; después y tras el sello:
+  `8e9bef2d...9ed0171`. `kernel-seal` canónico se ejecutó una única vez a
+  `2026-08-05T23:11:51.479232Z`; `kernel-status` quedó `ok`, sin violaciones.
+
+### Gates y salud
+
+- Focales post-merge: `161 passed`.
+- Suite completa fresca sobre el tree exacto del merge (candidato limpio,
+  misma identidad objeto-a-objeto): `2456 passed, 1 skipped preexistente,
+  1 warning` en `872.69 s`. El warning es el `DeprecationWarning` externo de
+  `websockets.legacy`. Una primera invocación desde un cwd temporal falló antes
+  de recoger tests por importar `scripts.check_no_nulls`; se clasificó como
+  error de arnés/cwd y se repitió correctamente desde el worktree del tree
+  exacto, sin ocultar fallos.
+- NUL `475 archivos`, Ruff, compilación, diff-check, config aislada, kernel
+  temporal, smoke fake aislado y paridad de trading/riesgo/ejecución: verdes.
+- Salud 1: `2026-08-05T23:12:25.7463568Z` (`01:12:25.7463568` Madrid), raíz y
+  `/health` 200/200.
+- Salud 2: `2026-08-05T23:14:15.6752134Z` (`01:14:15.6752134` Madrid), raíz y
+  `/health` 200/200; separación `109.9286 s`.
+- En ambas: scheduler único con owner/token/heartbeat coherentes, un listener
+  web, paper activo, live=false, auto-apply=false, kernel/config válidos,
+  lease postmarket vacío/no activo y cero órdenes abiertas inesperadas. El
+  runtime SQLite se mantuvo `unavailable` por WAL/sidecar bajo el contrato
+  read-only; no hubo checkpoint, reparación ni escritura manual.
+
+### Cutoff y observación
+
+`activation_at` de P-L85 es `2026-08-05T23:14:15.6752134Z`, después de la
+segunda salud. Las cohortes Zen-success, Zen-failure→Go-success y fallo total
+quedan separadas desde ese instante. El cutoff P-L80
+`2026-08-02T15:51:41.5484478Z` no cambia y no hay backfill. No se ejecutaron
+run-once, decide-once, job-once, postmarket, reconciliación manual ni nueva
+probe DeepSeek.

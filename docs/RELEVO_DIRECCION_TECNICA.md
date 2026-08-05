@@ -1532,3 +1532,17 @@ posteriores `106 passed`. Produccion sigue Go/v0.4.220 hasta un preflight
 cerrado, gates detenidos, delta `.env` no secreto revisado, eventual sello
 canonico unico, stack_up y doble salud >=75 s. No iniciar otro lote en paralelo,
 no tocar el cutoff P-L80 ni hacer backfill.
+
+### P-L85 - desplegado
+
+P-L85 queda desplegado en `0.4.221`, merge `78bb0758`, tree funcional
+`8ea38dbb`. Zen Free es primario y Go es fallback inmediato de una sola
+tentativa; los fallbacks locales existentes siguen después. El sello canónico
+único de `.env` terminó `ok`; no se tocaron credenciales ni política. Suite
+`2456 passed, 1 skip preexistente, 1 warning`, focales post-merge `161 passed`.
+Salud 1 `01:12:25.746` y salud 2 `01:14:15.675` Madrid, separadas `109.9286s`,
+confirmaron HTTP 200/200, scheduler/listener únicos, owner/token/heartbeat,
+paper/live/auto-apply seguros y cero órdenes abiertas. `activation_at`:
+`2026-08-05T23:14:15.6752134Z`; cutoff P-L80 intacto, sin backfill ni nueva
+probe. La prioridad siguiente es la revisión de cohorte del 08/08, no otro
+lote de proveedores en paralelo.

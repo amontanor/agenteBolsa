@@ -3499,3 +3499,14 @@ QA candidata: suite `2456 passed, 1 skipped preexistente, 1 warning` en
 diff-check, configuracion aislada, kernel temporal sin violaciones y smoke fake
 aislado verdes. El siguiente unico paso es preflight cerrado y despliegue
 secuenciado; si falla cualquier gate, mantener Go sin mutar produccion.
+
+### P-L85 - transición completada
+
+P-L85 queda `deployed` en `0.4.221`: merge `78bb0758`, tree funcional
+`8ea38dbb`, con Zen Free primario y Go como fallback inmediato de una tentativa.
+El kernel fue sellado una sola vez tras el delta exacto de aliases `.env` y
+quedó `ok`. Las dos saludes fueron 200/200, separadas `109.9286s`, con paper
+activo, live/auto-apply off, scheduler/listener únicos y cero órdenes abiertas.
+La activación prospectiva es `2026-08-05T23:14:15.6752134Z`; P-L80 mantiene su
+cutoff y no hay backfill. No iniciar otro lote de routing antes de la revisión
+P-L80 del 08/08.
