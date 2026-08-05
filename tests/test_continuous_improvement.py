@@ -277,7 +277,7 @@ def test_initiative_topic_key_ignores_generated_ci_identifiers():
 
 def test_improvement_llm_client_disabled_returns_valid_json_payload(tmp_path):
     settings = _settings(tmp_path)
-    assert settings.improvement_llm_orchestrator_model == "deepseek-v4-flash"
+    assert settings.improvement_llm_orchestrator_model == "deepseek-v4-flash-free"
     result = ImprovementLLMClient(settings).generate_json(
         [{"role": "user", "content": "context"}],
         {},
@@ -358,6 +358,28 @@ def test_improvement_llm_client_can_route_orchestrator_to_separate_provider(tmp_
     assert orchestrator_endpoint.base_url == "https://opencode.ai/zen/go/v1"
     assert orchestrator_endpoint.model == "kimi-k2.6"
     assert orchestrator_endpoint.api_key == "opencode-token"
+
+
+def test_improvement_zen_chain_inserts_one_shot_go_before_local(tmp_path):
+    settings = _settings(
+        tmp_path,
+        IMPROVEMENT_LLM_ENABLED=True,
+        OPENCODE_API_KEY="opencode-token",
+        IMPROVEMENT_LLM_PROVIDER="opencode-zen",
+        IMPROVEMENT_LLM_BASE_URL="https://opencode.ai/zen/v1",
+        IMPROVEMENT_LLM_MODEL="deepseek-v4-flash-free",
+        IMPROVEMENT_LLM_LOCAL_FALLBACK_ENABLED=True,
+    )
+    client = ImprovementLLMClient(settings)
+
+    endpoints = client._endpoints("deepseek-v4-flash-free")
+
+    assert [(item.provider, item.model, item.fallback_used) for item in endpoints] == [
+        ("opencode-zen", "deepseek-v4-flash-free", False),
+        ("opencode-go", "deepseek-v4-flash", True),
+        ("openai-local", "qwen3.6-27b", True),
+    ]
+    assert client._use_openai_sdk("opencode-zen") is True
 
 
 def test_improvement_llm_client_rejects_invalid_json(tmp_path):

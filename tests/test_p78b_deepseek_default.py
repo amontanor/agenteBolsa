@@ -16,27 +16,28 @@ from agente_bolsa.storage import Store
 from agente_bolsa.tools.decision_context import build_decision_context_snapshot
 
 
-def test_settings_without_environment_use_opencode_deepseek_flash_defaults():
+def test_settings_without_environment_use_opencode_zen_free_defaults():
     settings = Settings(_env_file=None)
 
-    assert settings.llm_model_selector == "opencode-go"
-    assert settings.opencode_model == "deepseek-v4-flash"
-    assert settings.improvement_llm_model == "deepseek-v4-flash"
-    assert settings.improvement_llm_orchestrator_model == "deepseek-v4-flash"
+    assert settings.llm_model_selector == "opencode-zen"
+    assert settings.opencode_api_base == "https://opencode.ai/zen/v1"
+    assert settings.opencode_model == "deepseek-v4-flash-free"
+    assert settings.improvement_llm_model == "deepseek-v4-flash-free"
+    assert settings.improvement_llm_orchestrator_model == "deepseek-v4-flash-free"
 
 
 def test_default_role_chain_uses_deepseek_flash_without_override():
     settings = Settings(_env_file=None, LLM_PRIMARY_PREFLIGHT_ENABLED=False)
 
-    assert role_endpoints(settings, "decision")[0].model == "deepseek-v4-flash"
-    assert role_endpoints(settings, "sentiment")[0].model == "deepseek-v4-flash"
-    assert role_endpoints(settings, "deep")[0].model == "deepseek-v4-flash"
+    assert role_endpoints(settings, "decision")[0].model == "deepseek-v4-flash-free"
+    assert role_endpoints(settings, "sentiment")[0].model == "deepseek-v4-flash-free"
+    assert role_endpoints(settings, "deep")[0].model == "deepseek-v4-flash-free"
 
 
 def test_codegen_inherits_global_deepseek_default_without_override():
     settings = Settings(_env_file=None)
 
-    assert _codegen_model(settings) == "deepseek-v4-flash"
+    assert _codegen_model(settings) == "deepseek-v4-flash-free"
 
 
 def test_explicit_role_override_remains_authoritative():
@@ -109,10 +110,10 @@ def test_effective_endpoint_identity_survives_response_without_model(tmp_path):
 
     row = Store(settings.database_path, settings.agent_logs_dir).latest_llm_usage(limit=1)[0]
     identity = json.loads(row["payload_json"])["llm_identity"]
-    assert row["model"] == "deepseek-v4-flash"
-    assert identity["provider"] == "opencode-go"
-    assert identity["requested_model"] == "deepseek-v4-flash"
-    assert identity["effective_model"] == "deepseek-v4-flash"
+    assert row["model"] == "deepseek-v4-flash-free"
+    assert identity["provider"] == "opencode-zen"
+    assert identity["requested_model"] == "deepseek-v4-flash-free"
+    assert identity["effective_model"] == "deepseek-v4-flash-free"
     assert identity["fallback_used"] is False
 
 
@@ -127,9 +128,9 @@ def test_decision_snapshot_uses_effective_identity_not_generic_settings_model():
     )
     identity = {
         "status": "ok",
-        "provider": "opencode-go",
-        "requested_model": "deepseek-v4-flash",
-        "effective_model": "deepseek-v4-flash",
+        "provider": "opencode-zen",
+        "requested_model": "deepseek-v4-flash-free",
+        "effective_model": "deepseek-v4-flash-free",
         "fallback_used": False,
     }
 
@@ -145,10 +146,10 @@ def test_decision_snapshot_uses_effective_identity_not_generic_settings_model():
         llm_response_status="ok",
     )
 
-    assert snapshot["llm_provider"] == "opencode-go"
-    assert snapshot["llm_model"] == "deepseek-v4-flash"
-    assert snapshot["llm_requested_model"] == "deepseek-v4-flash"
-    assert snapshot["llm_effective_model"] == "deepseek-v4-flash"
+    assert snapshot["llm_provider"] == "opencode-zen"
+    assert snapshot["llm_model"] == "deepseek-v4-flash-free"
+    assert snapshot["llm_requested_model"] == "deepseek-v4-flash-free"
+    assert snapshot["llm_effective_model"] == "deepseek-v4-flash-free"
     assert snapshot["llm_fallback_used"] is False
 
 

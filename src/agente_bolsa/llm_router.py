@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -13,6 +13,13 @@ from ._utils import log_swallow
 from .config import Settings
 
 LOGGER = logging.getLogger(__name__)
+
+ZEN_PROVIDER = "opencode-zen"
+ZEN_BASE_URL = "https://opencode.ai/zen/v1"
+ZEN_MODEL = "deepseek-v4-flash-free"
+GO_PROVIDER = "opencode-go"
+GO_BASE_URL = "https://opencode.ai/zen/go/v1"
+GO_MODEL = "deepseek-v4-flash"
 
 
 @dataclass(frozen=True)
@@ -24,6 +31,8 @@ class LLMEndpoint:
     provider: str | None = None
     preflight: bool = False
     reasoning_effort: str | None = None
+    fallback_used: bool = False
+    fallback_reason: str | None = None
 
 
 def build_llm_identity(
@@ -38,7 +47,7 @@ def build_llm_identity(
     response_model = str(getattr(response, "model", None) or "").strip() or None
     requested_model = str(endpoint.model).strip() if endpoint and endpoint.model else None
     effective_model = response_model or requested_model
-    fallback_used = bool(endpoint and endpoint.name == "local_fallback")
+    fallback_used = bool(endpoint and (endpoint.fallback_used or endpoint.name == "local_fallback"))
     identity_status = status or ("ok" if effective_model else "unavailable")
     return {
         "status": identity_status,
@@ -48,6 +57,7 @@ def build_llm_identity(
         "effective_model": effective_model,
         "response_model": response_model,
         "fallback_used": fallback_used,
+        "fallback_reason": endpoint.fallback_reason if endpoint else None,
         "reason": reason,
     }
 
@@ -58,7 +68,7 @@ def unavailable_llm_identity(reason: str) -> dict[str, Any]:
 
 def _provider_api_key(settings: Settings, provider: str | None) -> str:
     provider_key = str(provider or "").strip().lower()
-    if provider_key in {"opencode", "opencode-go"}:
+    if provider_key in {"opencode", "opencode-go", "opencode-zen"}:
         return str(settings.opencode_api_key or "").strip()
     if provider_key == "mimo":
         return str(settings.mimo_api_key or settings.openai_api_key or "").strip()
@@ -67,7 +77,7 @@ def _provider_api_key(settings: Settings, provider: str | None) -> str:
 
 def primary_llm_endpoint(settings: Settings) -> LLMEndpoint:
     selector = str(getattr(settings, "llm_model_selector", "custom") or "custom").strip().lower()
-    if selector in {"opencode", "opencode-go"}:
+    if selector in {"opencode", "opencode-go", "opencode-zen"}:
         return LLMEndpoint(
             name=f"primary:{selector}",
             api_key=str(settings.opencode_api_key or "").strip(),
@@ -96,9 +106,20 @@ def primary_llm_endpoint(settings: Settings) -> LLMEndpoint:
 
 
 def configured_llm_endpoints(settings: Settings) -> list[LLMEndpoint]:
-    endpoints = [
-        primary_llm_endpoint(settings),
-    ]
+    primary = primary_llm_endpoint(settings)
+    endpoints = [primary]
+    if primary.provider == ZEN_PROVIDER:
+        endpoints.append(
+            LLMEndpoint(
+                name="fallback:opencode-go",
+                api_key=str(settings.opencode_api_key or "").strip(),
+                base_url=GO_BASE_URL,
+                model=GO_MODEL,
+                provider=GO_PROVIDER,
+                preflight=False,
+                fallback_used=True,
+            )
+        )
     if settings.llm_local_fallback_enabled:
         endpoints.append(
             LLMEndpoint(
@@ -108,6 +129,7 @@ def configured_llm_endpoints(settings: Settings) -> list[LLMEndpoint]:
                 model=settings.llm_local_fallback_model,
                 provider="openai-local",
                 preflight=settings.llm_local_fallback_preflight_enabled,
+                fallback_used=True,
             )
         )
     unique: list[LLMEndpoint] = []
@@ -140,7 +162,7 @@ def classify_llm_client_error(exc: Exception) -> str:
 
 
 def is_endpoint_available(endpoint: LLMEndpoint, timeout_seconds: int) -> tuple[bool, str | None]:
-    if not endpoint.preflight:
+    if endpoint.provider in {ZEN_PROVIDER, GO_PROVIDER} or not endpoint.preflight:
         return True, None
     try:
         client = build_openai_client(endpoint, max(3, min(timeout_seconds, 10)))
@@ -351,7 +373,11 @@ def _complete_with_endpoints(
         )
         if not available:
             continue
-        retry_attempts = max(0, int(settings.llm_retry_attempts))
+        retry_attempts = (
+            0
+            if endpoint.provider in {ZEN_PROVIDER, GO_PROVIDER}
+            else max(0, int(settings.llm_retry_attempts))
+        )
         for retry_index in range(retry_attempts + 1):
             try:
                 client = build_openai_client(endpoint, timeout_seconds)
@@ -364,6 +390,8 @@ def _complete_with_endpoints(
                 if endpoint.reasoning_effort:
                     request_kwargs["reasoning_effort"] = endpoint.reasoning_effort
                 response = client.chat.completions.create(**request_kwargs)
+                if not _response_content_is_usable(response):
+                    raise LLMResponseContractError("llm_response_without_final_content")
                 attempts.append(
                     {
                         "name": endpoint.name,
@@ -375,6 +403,11 @@ def _complete_with_endpoints(
                         "error": None,
                     }
                 )
+                if endpoint.fallback_used and last_error is not None:
+                    endpoint = replace(
+                        endpoint,
+                        fallback_reason=_safe_fallback_reason(last_error),
+                    )
                 return response, endpoint, attempts
             except Exception as exc:  # noqa: BLE001 - fallback is intentional here
                 last_error = exc
@@ -402,6 +435,44 @@ def _complete_with_endpoints(
     if last_error is None:
         raise RuntimeError("No hay endpoints LLM configurados.")
     raise last_error
+
+
+class LLMResponseContractError(RuntimeError):
+    """The provider returned no final text accepted by the active consumer."""
+
+
+def _safe_fallback_reason(exc: Exception) -> str:
+    """Return a bounded, non-sensitive reason for fallback telemetry."""
+
+    status_code = _http_status_code(exc)
+    if status_code is not None:
+        return f"http_{status_code}"
+    if isinstance(exc, LLMResponseContractError):
+        return "response_contract_invalid"
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    if isinstance(exc, (ImportError, ModuleNotFoundError)):
+        return "llm_client_import_broken"
+    return type(exc).__name__.lower()
+
+
+def _response_content_is_usable(response: Any) -> bool:
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        return False
+    choice = choices[0]
+    finish_reason = getattr(choice, "finish_reason", None)
+    if finish_reason and finish_reason not in {"stop", "tool_calls", "function_call"}:
+        return False
+    message = getattr(choice, "message", None)
+    content = getattr(message, "content", None)
+    if isinstance(content, list):
+        content = "".join(
+            str(getattr(item, "text", ""))
+            for item in content
+            if getattr(item, "text", None)
+        )
+    return isinstance(content, str) and bool(content.strip())
 
 
 def _http_status_code(exc: Exception) -> int | None:

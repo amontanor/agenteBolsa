@@ -26,6 +26,31 @@ def _is_quota_exhausted_error(error_text: str) -> bool:
     return "quota exhausted" in text or "code\": \"429" in text or "http 429" in text
 
 
+def _safe_error_status(error_text: str) -> int | None:
+    text = str(error_text or "").lower()
+    for code in (401, 403, 404, 408, 409, 429, 500, 502, 503, 504):
+        if f"http {code}" in text or f"status_code={code}" in text or f"code={code}" in text:
+            return code
+    return None
+
+
+def _safe_error_class(error_text: str) -> str:
+    text = str(error_text or "").lower()
+    if _safe_error_status(text) == 429 or _is_quota_exhausted_error(text):
+        return "quota_exhausted"
+    if "timeout" in text:
+        return "timeout"
+    if "json" in text or "schema" in text or "response" in text:
+        return "invalid_response"
+    if "context_too_large" in text:
+        return "context_too_large"
+    if "configuration" in text or "token-plan" in text:
+        return "configuration_error"
+    if "connection" in text or "network" in text:
+        return "network_or_provider"
+    return "provider_error"
+
+
 class _ImprovementEndpoint:
     def __init__(
         self,
@@ -141,22 +166,25 @@ class ImprovementLLMClient:
             last_error = result.error or ""
             final_preview = result.request_preview
 
-        fallback_endpoint = endpoints[1] if len(endpoints) > 1 else None
-        if fallback_endpoint is not None and _is_quota_exhausted_error(last_error):
-            final_preview = {
-                **final_preview,
-                "fallback_skipped": True,
-                "fallback_skip_reason": "quota_exhausted",
-            }
-            fallback_endpoint = None
-        if fallback_endpoint is not None:
+        for fallback_endpoint in endpoints[1:]:
+            if (
+                fallback_endpoint.provider != "opencode-go"
+                and _is_quota_exhausted_error(last_error)
+            ):
+                final_preview = {
+                    **final_preview,
+                    "fallback_skipped": True,
+                    "fallback_skip_reason": "quota_exhausted",
+                }
+                break
             fallback_preview = {
                 **request_preview,
                 "provider": fallback_endpoint.provider,
                 "base_url": fallback_endpoint.base_url,
                 "model": fallback_endpoint.model,
                 "fallback_used": True,
-                "primary_error": last_error,
+                "primary_error_class": _safe_error_class(last_error),
+                "primary_error_status": _safe_error_status(last_error),
             }
             fallback_result = self._try_endpoint(
                 endpoint=fallback_endpoint,
@@ -173,14 +201,20 @@ class ImprovementLLMClient:
             final_preview = fallback_result.request_preview
             fallback_error = fallback_result.error or ""
             if last_error and fallback_error:
-                last_error = f"primary_error={last_error} | local_fallback_error={fallback_error}"
+                last_error = f"primary_error={last_error} | fallback_error={fallback_error}"
             else:
                 last_error = fallback_error or last_error
 
         log_system_event(
             self.settings.logs_dir,
             "continuous_improvement_llm_failed",
-            {"llm_call_id": llm_call_id, "provider": primary.provider, "model": primary.model, "error": last_error},
+            {
+                "llm_call_id": llm_call_id,
+                "provider": primary.provider,
+                "model": primary.model,
+                "error_class": _safe_error_class(last_error),
+                "error_status": _safe_error_status(last_error),
+            },
         )
         return LLMJsonResult(
             ok=False,
@@ -223,6 +257,17 @@ class ImprovementLLMClient:
                 fallback_used=False,
             )
         ]
+        if str(provider or "").strip().lower() == "opencode-zen":
+            endpoints.append(
+                _ImprovementEndpoint(
+                    name="fallback:opencode-go",
+                    provider="opencode-go",
+                    base_url="https://opencode.ai/zen/go/v1",
+                    api_key=self.settings.opencode_api_key,
+                    model="deepseek-v4-flash",
+                    fallback_used=True,
+                )
+            )
         if self.settings.improvement_llm_local_fallback_enabled:
             endpoints.append(
                 _ImprovementEndpoint(
@@ -238,7 +283,7 @@ class ImprovementLLMClient:
 
     def _provider_api_key(self, provider: str) -> str | None:
         provider_key = provider.strip().lower()
-        if provider_key in {"opencode", "opencode-go"}:
+        if provider_key in {"opencode", "opencode-go", "opencode-zen"}:
             return self.settings.opencode_api_key
         if provider_key == "mimo":
             return self.settings.mimo_api_key or self.settings.openai_api_key
@@ -256,21 +301,22 @@ class ImprovementLLMClient:
         response_model: type[BaseModel],
         normalize_response: bool,
     ) -> LLMJsonResult:
+        is_local_fallback = endpoint.name == "local_fallback"
         target_tokens = (
             self.settings.improvement_llm_local_context_target_tokens
-            if endpoint.fallback_used
+            if is_local_fallback
             else self.settings.improvement_llm_context_target_tokens
         )
         hard_limit_tokens = (
             self.settings.improvement_llm_local_context_hard_limit_tokens
-            if endpoint.fallback_used
+            if is_local_fallback
             else self.settings.improvement_llm_context_hard_limit_tokens
         )
         messages_to_send, truncation_report = compact_messages_for_token_budget(
             messages,
             target_tokens=target_tokens,
             hard_limit_tokens=hard_limit_tokens,
-            force=endpoint.fallback_used,
+            force=is_local_fallback,
         )
         prompt_tokens_estimate = estimate_json_tokens(messages_to_send)
         request_preview = {
@@ -325,7 +371,11 @@ class ImprovementLLMClient:
         )
         headers = self._request_headers(endpoint.provider, endpoint.api_key)
         target = endpoint.base_url.rstrip("/") + "/chat/completions"
-        retries = 0 if endpoint.fallback_used else max(1, self.settings.improvement_llm_retries + 1) - 1
+        retries = (
+            0
+            if endpoint.fallback_used or endpoint.provider.strip().lower() in {"opencode-zen", "opencode-go"}
+            else max(1, self.settings.improvement_llm_retries + 1) - 1
+        )
         last_error = ""
         for attempt in range(retries + 1):
             try:
@@ -391,7 +441,7 @@ class ImprovementLLMClient:
         )
 
     def _format_endpoint_error(self, endpoint: _ImprovementEndpoint, exc: Exception) -> str:
-        if endpoint.fallback_used and endpoint.base_url.rstrip("/").startswith("http://127.0.0.1:8080"):
+        if endpoint.name == "local_fallback" and endpoint.base_url.rstrip("/").startswith("http://127.0.0.1:8080"):
             return (
                 "fallback local no disponible en 127.0.0.1:8080 "
                 "(esperado si el servidor local no esta arrancado)"
@@ -452,7 +502,7 @@ class ImprovementLLMClient:
         return headers
 
     def _use_openai_sdk(self, provider: str) -> bool:
-        return provider.strip().lower() in {"opencode", "opencode-go", "openai", "openai-local"}
+        return provider.strip().lower() in {"opencode", "opencode-go", "opencode-zen", "openai", "openai-local"}
 
     def _sdk_chat_completion_content(self, endpoint: _ImprovementEndpoint, body: dict[str, Any]) -> str:
         default_headers = None

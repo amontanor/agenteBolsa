@@ -113,10 +113,10 @@ def _validate_probe_content(spec: ProbeSpec, content: str, finish_reason: str | 
 
 def build_probe_specs(env: dict[str, str]) -> list[ProbeSpec]:
     selector = (cfg(env, "LLM_MODEL_SELECTOR", "custom") or "custom").strip().lower()
-    if selector in ("opencode", "opencode-go"):
-        prim_base = cfg(env, "OPENCODE_API_BASE", "https://opencode.ai/zen/go/v1")
+    if selector in ("opencode", "opencode-go", "opencode-zen"):
+        prim_base = cfg(env, "OPENCODE_API_BASE", "https://opencode.ai/zen/v1")
         prim_key = cfg(env, "OPENCODE_API_KEY")
-        prim_model = cfg(env, "OPENCODE_MODEL", "deepseek-v4-flash")
+        prim_model = cfg(env, "OPENCODE_MODEL", "deepseek-v4-flash-free")
     else:
         prim_base = cfg(env, "OPENAI_API_BASE")
         prim_key = cfg(env, "OPENAI_API_KEY")

@@ -106,6 +106,10 @@ LEADERBOARD_SUBMIT_URL = f"{LEADERBOARD_API_BASE_URL}/api/submit"
 LEADERBOARD_DATA_URL = f"{LEADERBOARD_API_BASE_URL}/api/data"
 LEADERBOARD_MODEL = "AMR"
 LLM_PROVIDER_CATALOG = {
+    "opencode-zen": {
+        "base_url": "https://opencode.ai/zen/v1",
+        "models": ["deepseek-v4-flash-free"],
+    },
     "opencode-go": {
         "base_url": "https://opencode.ai/zen/go/v1",
         "models": [
@@ -124,7 +128,7 @@ LLM_PROVIDER_CATALOG = {
         "models": ["mimo-v2.5", "mimo-v2.5-pro"],
     },
 }
-PRIMARY_LLM_SELECTORS = ["opencode-go", "mimo", "custom"]
+PRIMARY_LLM_SELECTORS = ["opencode-zen", "opencode-go", "mimo", "custom"]
 
 
 def _settings():
@@ -6809,7 +6813,7 @@ def _dashboard_llm_pills(
     pills: list[dict[str, str]] = []
     latest_trade_llm = _latest_trade_decision_llm_usage(store)
     selector = str(getattr(settings, "llm_model_selector", "custom") or "custom").strip()
-    if selector == "opencode-go":
+    if selector in {"opencode-zen", "opencode-go"}:
         primary_model = str(getattr(settings, "opencode_model", "") or "").strip()
     elif selector == "mimo":
         primary_model = str(getattr(settings, "mimo_model", "") or "").strip()
@@ -7684,7 +7688,7 @@ def page_config() -> None:
         primary_models = _provider_models(primary_selector)
         if primary_models:
             current_primary_model = (
-                settings.opencode_model if primary_selector == "opencode-go" else settings.mimo_model
+                settings.opencode_model if primary_selector in {"opencode-zen", "opencode-go"} else settings.mimo_model
             )
             primary_model = st.selectbox(
                 "Modelo primario",
@@ -7730,8 +7734,8 @@ def page_config() -> None:
             "IMPROVEMENT_LLM_ORCHESTRATOR_BASE_URL": _provider_base_url(orchestrator_provider_choice),
             "IMPROVEMENT_LLM_ORCHESTRATOR_MODEL": orchestrator_model,
         }
-        if primary_selector == "opencode-go":
-            updates["OPENCODE_API_BASE"] = _provider_base_url("opencode-go")
+        if primary_selector in {"opencode-zen", "opencode-go"}:
+            updates["OPENCODE_API_BASE"] = _provider_base_url(primary_selector)
             updates["OPENCODE_MODEL"] = primary_model
         elif primary_selector == "mimo":
             updates["MIMO_API_BASE"] = _provider_base_url("mimo")
