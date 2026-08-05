@@ -406,7 +406,7 @@ def _complete_with_endpoints(
                 if endpoint.fallback_used and last_error is not None:
                     endpoint = replace(
                         endpoint,
-                        fallback_reason=classify_llm_client_error(last_error),
+                        fallback_reason=_safe_fallback_reason(last_error),
                     )
                 return response, endpoint, attempts
             except Exception as exc:  # noqa: BLE001 - fallback is intentional here
@@ -439,6 +439,21 @@ def _complete_with_endpoints(
 
 class LLMResponseContractError(RuntimeError):
     """The provider returned no final text accepted by the active consumer."""
+
+
+def _safe_fallback_reason(exc: Exception) -> str:
+    """Return a bounded, non-sensitive reason for fallback telemetry."""
+
+    status_code = _http_status_code(exc)
+    if status_code is not None:
+        return f"http_{status_code}"
+    if isinstance(exc, LLMResponseContractError):
+        return "response_contract_invalid"
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    if isinstance(exc, (ImportError, ModuleNotFoundError)):
+        return "llm_client_import_broken"
+    return type(exc).__name__.lower()
 
 
 def _response_content_is_usable(response: Any) -> bool:

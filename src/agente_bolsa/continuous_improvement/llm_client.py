@@ -26,6 +26,31 @@ def _is_quota_exhausted_error(error_text: str) -> bool:
     return "quota exhausted" in text or "code\": \"429" in text or "http 429" in text
 
 
+def _safe_error_status(error_text: str) -> int | None:
+    text = str(error_text or "").lower()
+    for code in (401, 403, 404, 408, 409, 429, 500, 502, 503, 504):
+        if f"http {code}" in text or f"status_code={code}" in text or f"code={code}" in text:
+            return code
+    return None
+
+
+def _safe_error_class(error_text: str) -> str:
+    text = str(error_text or "").lower()
+    if _safe_error_status(text) == 429 or _is_quota_exhausted_error(text):
+        return "quota_exhausted"
+    if "timeout" in text:
+        return "timeout"
+    if "json" in text or "schema" in text or "response" in text:
+        return "invalid_response"
+    if "context_too_large" in text:
+        return "context_too_large"
+    if "configuration" in text or "token-plan" in text:
+        return "configuration_error"
+    if "connection" in text or "network" in text:
+        return "network_or_provider"
+    return "provider_error"
+
+
 class _ImprovementEndpoint:
     def __init__(
         self,
@@ -158,7 +183,8 @@ class ImprovementLLMClient:
                 "base_url": fallback_endpoint.base_url,
                 "model": fallback_endpoint.model,
                 "fallback_used": True,
-                "primary_error": last_error,
+                "primary_error_class": _safe_error_class(last_error),
+                "primary_error_status": _safe_error_status(last_error),
             }
             fallback_result = self._try_endpoint(
                 endpoint=fallback_endpoint,
@@ -182,7 +208,13 @@ class ImprovementLLMClient:
         log_system_event(
             self.settings.logs_dir,
             "continuous_improvement_llm_failed",
-            {"llm_call_id": llm_call_id, "provider": primary.provider, "model": primary.model, "error": last_error},
+            {
+                "llm_call_id": llm_call_id,
+                "provider": primary.provider,
+                "model": primary.model,
+                "error_class": _safe_error_class(last_error),
+                "error_status": _safe_error_status(last_error),
+            },
         )
         return LLMJsonResult(
             ok=False,

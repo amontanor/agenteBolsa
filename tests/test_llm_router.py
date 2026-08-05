@@ -274,7 +274,7 @@ def test_zen_failure_calls_go_once_without_retry_and_marks_identity(monkeypatch)
     assert response.model == "deepseek-v4-flash"
     assert endpoint.provider == "opencode-go"
     assert endpoint.fallback_used is True
-    assert endpoint.fallback_reason == "zen unavailable"
+    assert endpoint.fallback_reason == "http_503"
     assert calls == ["opencode-zen", "opencode-go"]
     assert len([item for item in attempts if item["stage"] == "completion"]) == 2
 
