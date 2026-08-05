@@ -1,6 +1,7 @@
 from agente_bolsa.config import Settings
 from agente_bolsa.llm_router import (
     _retry_delay_seconds,
+    build_llm_identity,
     chat_for_role,
     classify_llm_client_error,
     configured_llm_endpoints,
@@ -14,16 +15,39 @@ from agente_bolsa.llm_usage import record_llm_response
 from agente_bolsa.storage import Store
 
 
-def test_default_primary_llm_endpoint_uses_opencode_go_profile():
+def test_default_primary_llm_endpoint_uses_opencode_zen_profile():
     settings = Settings(LLM_LOCAL_FALLBACK_ENABLED=False)
 
     endpoint = primary_llm_endpoint(settings)
 
-    assert endpoint.name == "primary:opencode-go"
-    assert endpoint.base_url == "https://opencode.ai/zen/go/v1"
+    assert endpoint.name == "primary:opencode-zen"
+    assert endpoint.base_url == "https://opencode.ai/zen/v1"
     # El modelo lo dicta la configuracion (.env puede sobreescribir el default),
     # asi que verificamos el cableado, no un string fijo (evita romper al cambiar de modelo).
     assert endpoint.model == settings.opencode_model
+
+
+def test_zen_primary_adds_exact_go_fallback_before_local_fallback():
+    settings = Settings(
+        _env_file=None,
+        LLM_MODEL_SELECTOR="opencode-zen",
+        OPENCODE_API_KEY="opencode-key",
+        OPENCODE_API_BASE="https://opencode.ai/zen/v1",
+        OPENCODE_MODEL="deepseek-v4-flash-free",
+        LLM_LOCAL_FALLBACK_ENABLED=True,
+        LLM_LOCAL_FALLBACK_API_KEY="local-llama",
+        LLM_LOCAL_FALLBACK_API_BASE="http://127.0.0.1:8080/v1",
+        LLM_LOCAL_FALLBACK_MODEL="qwen3.6-27b",
+    )
+
+    endpoints = configured_llm_endpoints(settings)
+
+    assert [(item.provider, item.model, item.fallback_used) for item in endpoints] == [
+        ("opencode-zen", "deepseek-v4-flash-free", False),
+        ("opencode-go", "deepseek-v4-flash", True),
+        ("openai-local", "qwen3.6-27b", True),
+    ]
+    assert endpoints[1].base_url == "https://opencode.ai/zen/go/v1"
 
 
 def test_configured_llm_endpoints_return_custom_primary_and_local_fallback():
@@ -197,6 +221,112 @@ def test_router_honors_retry_after_before_fallback(monkeypatch):
     assert completion_attempts[0]["status_code"] == 429
     assert completion_attempts[0]["retry_scheduled"] is True
     assert completion_attempts[1]["available"] is True
+
+
+def test_zen_failure_calls_go_once_without_retry_and_marks_identity(monkeypatch):
+    settings = _role_settings(
+        LLM_MODEL_SELECTOR="opencode-zen",
+        OPENCODE_API_KEY="opencode-key",
+        OPENCODE_API_BASE="https://opencode.ai/zen/v1",
+        OPENCODE_MODEL="deepseek-v4-flash-free",
+        LLM_LOCAL_FALLBACK_ENABLED=False,
+        LLM_RETRY_ATTEMPTS=2,
+    )
+    calls = []
+
+    class _Response:
+        model = "deepseek-v4-flash"
+        choices = [type("Choice", (), {"message": type("Message", (), {"content": "{}"})()})()]
+        usage = None
+
+    class _Failure(Exception):
+        status_code = 503
+
+    class _Client:
+        def __init__(self, endpoint):
+            self.endpoint = endpoint
+
+        class _Chat:
+            pass
+
+        @property
+        def chat(self):
+            endpoint = self.endpoint
+
+            class _Completions:
+                @staticmethod
+                def create(**_kwargs):
+                    calls.append(endpoint.provider)
+                    if endpoint.provider == "opencode-zen":
+                        raise _Failure("zen unavailable")
+                    return _Response()
+
+            return type("Chat", (), {"completions": _Completions()})()
+
+    monkeypatch.setattr("agente_bolsa.llm_router.build_openai_client", lambda endpoint, _timeout: _Client(endpoint))
+
+    response, endpoint, attempts = chat_for_role(
+        "decision",
+        settings=settings,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert response.model == "deepseek-v4-flash"
+    assert endpoint.provider == "opencode-go"
+    assert endpoint.fallback_used is True
+    assert endpoint.fallback_reason == "zen unavailable"
+    assert calls == ["opencode-zen", "opencode-go"]
+    assert len([item for item in attempts if item["stage"] == "completion"]) == 2
+
+    identity = build_llm_identity(endpoint, response=response)
+    assert identity["provider"] == "opencode-go"
+    assert identity["effective_model"] == "deepseek-v4-flash"
+    assert identity["fallback_used"] is True
+
+
+def test_zen_empty_content_is_a_single_attempt_failure_that_reaches_go(monkeypatch):
+    settings = _role_settings(
+        LLM_MODEL_SELECTOR="opencode-zen",
+        OPENCODE_API_KEY="opencode-key",
+        OPENCODE_API_BASE="https://opencode.ai/zen/v1",
+        OPENCODE_MODEL="deepseek-v4-flash-free",
+        LLM_LOCAL_FALLBACK_ENABLED=False,
+    )
+    calls = []
+
+    class _Response:
+        def __init__(self, model, content):
+            self.model = model
+            self.choices = [type("Choice", (), {"message": type("Message", (), {"content": content})()})()]
+            self.usage = None
+
+    class _Client:
+        def __init__(self, endpoint):
+            self.endpoint = endpoint
+
+        def _response(self, **_kwargs):
+            calls.append(self.endpoint.provider)
+            return _Response(self.endpoint.model, "" if self.endpoint.provider == "opencode-zen" else "{}")
+
+        @property
+        def chat(self):
+            return type(
+                "Chat",
+                (),
+                {"completions": type("Completions", (), {"create": self._response})()},
+            )()
+
+    monkeypatch.setattr("agente_bolsa.llm_router.build_openai_client", lambda endpoint, _timeout: _Client(endpoint))
+
+    response, endpoint, _attempts = chat_for_role(
+        "decision",
+        settings=settings,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert response.model == "deepseek-v4-flash"
+    assert endpoint.provider == "opencode-go"
+    assert calls == ["opencode-zen", "opencode-go"]
 
 
 def test_router_uses_bounded_exponential_backoff_for_403():

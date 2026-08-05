@@ -141,15 +141,17 @@ class ImprovementLLMClient:
             last_error = result.error or ""
             final_preview = result.request_preview
 
-        fallback_endpoint = endpoints[1] if len(endpoints) > 1 else None
-        if fallback_endpoint is not None and _is_quota_exhausted_error(last_error):
-            final_preview = {
-                **final_preview,
-                "fallback_skipped": True,
-                "fallback_skip_reason": "quota_exhausted",
-            }
-            fallback_endpoint = None
-        if fallback_endpoint is not None:
+        for fallback_endpoint in endpoints[1:]:
+            if (
+                fallback_endpoint.provider != "opencode-go"
+                and _is_quota_exhausted_error(last_error)
+            ):
+                final_preview = {
+                    **final_preview,
+                    "fallback_skipped": True,
+                    "fallback_skip_reason": "quota_exhausted",
+                }
+                break
             fallback_preview = {
                 **request_preview,
                 "provider": fallback_endpoint.provider,
@@ -173,7 +175,7 @@ class ImprovementLLMClient:
             final_preview = fallback_result.request_preview
             fallback_error = fallback_result.error or ""
             if last_error and fallback_error:
-                last_error = f"primary_error={last_error} | local_fallback_error={fallback_error}"
+                last_error = f"primary_error={last_error} | fallback_error={fallback_error}"
             else:
                 last_error = fallback_error or last_error
 
@@ -223,6 +225,17 @@ class ImprovementLLMClient:
                 fallback_used=False,
             )
         ]
+        if str(provider or "").strip().lower() == "opencode-zen":
+            endpoints.append(
+                _ImprovementEndpoint(
+                    name="fallback:opencode-go",
+                    provider="opencode-go",
+                    base_url="https://opencode.ai/zen/go/v1",
+                    api_key=self.settings.opencode_api_key,
+                    model="deepseek-v4-flash",
+                    fallback_used=True,
+                )
+            )
         if self.settings.improvement_llm_local_fallback_enabled:
             endpoints.append(
                 _ImprovementEndpoint(
@@ -238,7 +251,7 @@ class ImprovementLLMClient:
 
     def _provider_api_key(self, provider: str) -> str | None:
         provider_key = provider.strip().lower()
-        if provider_key in {"opencode", "opencode-go"}:
+        if provider_key in {"opencode", "opencode-go", "opencode-zen"}:
             return self.settings.opencode_api_key
         if provider_key == "mimo":
             return self.settings.mimo_api_key or self.settings.openai_api_key
@@ -325,7 +338,11 @@ class ImprovementLLMClient:
         )
         headers = self._request_headers(endpoint.provider, endpoint.api_key)
         target = endpoint.base_url.rstrip("/") + "/chat/completions"
-        retries = 0 if endpoint.fallback_used else max(1, self.settings.improvement_llm_retries + 1) - 1
+        retries = (
+            0
+            if endpoint.fallback_used or endpoint.provider.strip().lower() in {"opencode-zen", "opencode-go"}
+            else max(1, self.settings.improvement_llm_retries + 1) - 1
+        )
         last_error = ""
         for attempt in range(retries + 1):
             try:
@@ -452,7 +469,7 @@ class ImprovementLLMClient:
         return headers
 
     def _use_openai_sdk(self, provider: str) -> bool:
-        return provider.strip().lower() in {"opencode", "opencode-go", "openai", "openai-local"}
+        return provider.strip().lower() in {"opencode", "opencode-go", "opencode-zen", "openai", "openai-local"}
 
     def _sdk_chat_completion_content(self, endpoint: _ImprovementEndpoint, body: dict[str, Any]) -> str:
         default_headers = None
