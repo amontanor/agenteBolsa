@@ -3474,3 +3474,28 @@ Tras la revision P-L80 del 08/08 se seleccionara como maximo un lote minimo.
 P-L84A es el candidato por defecto solo si la evidencia de esa revision no
 identifica antes un defecto mas critico de captura, control, linaje, costes u
 outcomes. P-L84B-H no se inician por inercia ni en paralelo.
+
+## P-L85 - migracion condicionada Zen Free / Go
+
+Estado: `ready_for_closed_market_deployment` en candidato aislado; produccion
+continua en v0.4.220 con OpenCode Go como primario vigente hasta completar el
+cierre autorizado. La caracterizacion inicial encontro una respuesta HTTP 200
+con `finish_reason=length` y contenido final ausente usando el cap antiguo de
+32; no se ignora ni se reclasifica como exito. La probe corregida uso un cap
+alineado con los consumidores y valido cuatro llamadas Zen adicionales y una
+health Go, agotando `10/10` llamadas reales autorizadas sin retry.
+
+Contrato unico: Zen Free (`opencode-zen`, `deepseek-v4-flash-free`,
+`https://opencode.ai/zen/v1`) es primario; Go
+(`opencode-go`, `deepseek-v4-flash`, `https://opencode.ai/zen/go/v1`) es una
+unica tentativa inmediata por peticion si Zen falla. Despues siguen los
+fallbacks locales existentes. `length`, contenido ausente, identidad
+incorrecta y respuesta invalida permanecen fail-closed. No cambia la politica
+de trading, riesgo, ejecucion, gates, sizing, seleccion, autoridad ni el
+cutoff P-L80.
+
+QA candidata: suite `2456 passed, 1 skipped preexistente, 1 warning` en
+`752.91s`; focales posteriores `106 passed`; Ruff, NUL, compilacion,
+diff-check, configuracion aislada, kernel temporal sin violaciones y smoke fake
+aislado verdes. El siguiente unico paso es preflight cerrado y despliegue
+secuenciado; si falla cualquier gate, mantener Go sin mutar produccion.

@@ -1514,3 +1514,21 @@ agente, es solo el candidato por defecto; queda desplazado si la revision
 descubre antes un defecto critico de captura, control same-cycle, linaje,
 costes o outcomes. P-L84B-H no se ejecutan en paralelo, no cambian politica y
 requieren autorizacion posterior segun su alcance.
+
+## P-L85 - estado para cierre Zen Free
+
+La incertidumbre de la probe Zen quedo caracterizada sin relajar el contrato.
+Las cuatro llamadas Zen corregidas y la health Go fueron HTTP 200, `stop`, con
+contenido final y `reasoning_content` presentes; se consumio el presupuesto
+`10/10` y no se observaron limites de rate ni errores HTTP. La respuesta
+historica `length` queda como evidencia invalida de la bateria original y su
+causa exacta es `unavailable`.
+
+El candidato aislado configura Zen Free como primario y una sola tentativa Go
+como fallback inmediato, con fallbacks locales posteriores. La telemetria no
+publica mensajes crudos del proveedor; solo clase/HTTP acotados. Suite fresca:
+`2456 passed, 1 skipped preexistente, 1 warning` en `752.91s`; focales
+posteriores `106 passed`. Produccion sigue Go/v0.4.220 hasta un preflight
+cerrado, gates detenidos, delta `.env` no secreto revisado, eventual sello
+canonico unico, stack_up y doble salud >=75 s. No iniciar otro lote en paralelo,
+no tocar el cutoff P-L80 ni hacer backfill.
