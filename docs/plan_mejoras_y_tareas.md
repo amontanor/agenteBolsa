@@ -3379,3 +3379,98 @@ preexistente, 1 warning`; focales y gates completos constan en el informe
 Siguiente paso unico: ensayo aislado y, si XNYS cerrado y hay margen suficiente,
 despliegue secuenciado. Si no hay margen, posponer al siguiente cierre. Tras
 P-L83D quedan congelados los cambios funcionales hasta la revision del 08/08.
+
+## P-L84 - evidencia y orquestacion de agentes (plan condicional)
+
+Estado: `planned_conditional_after_p_l80_review`. Este bloque incorpora las
+ideas utiles observadas en BQuant Agents sin adoptar sus afirmaciones
+comerciales como evidencia. No reserva version, no autoriza implementacion y
+no altera la congelacion funcional ni el cutoff P-L80
+`2026-08-02T15:51:41.5484478Z`.
+
+Referencia informativa consultada el 05/08/2026:
+`https://bquantagents.com/` y `https://bquantfunds.info/mcp`.
+
+### Tesis y limites
+
+El valor de una cartera multi-agente no se demuestra por el numero de agentes,
+herramientas, informes o votos. Debe demostrarse prospectivamente mediante
+aportacion incremental, independencia de errores, calibracion, identidad
+efectiva, control comparable y outcomes maduros. La decision de no operar es
+una decision evaluable; el desacuerdo entre agentes es informacion, no una
+orden ni un permiso.
+
+P-L84 permanece subordinado a la revision de las cinco sesiones XNYS del
+03-07 de agosto. Si los outcomes no estan maduros, el carrier P-L80B no tiene
+cobertura suficiente o faltan controles same-cycle comparables, la decision
+correcta es esperar. Ningun sublote puede cambiar seleccion, gates, sizing,
+exits, riesgo, ejecucion, autoridad, modelo, politica activa o auto-apply.
+
+### Secuencia estricta, un solo sublote activo
+
+1. **P-L84A - auditoria del contrato efectivo de agentes.** Read-only y sin
+   schema nuevo: inventariar productor -> evento -> consumidor para cada
+   agente, reutilizando contratos existentes antes de proponer campos.
+   Contrato minimo evaluado: `cycle_id`, identidad efectiva de agente/modelo,
+   `as_of`, horizonte, prediccion/direccion, probabilidad o confianza
+   interpretable, referencias de evidencia, latencia, estado y fallback.
+   Metrica primaria: porcentaje de decisiones elegibles con contrato completo
+   y trazable. Salida: `ready_for_implementation`, `wait_for_sample` o
+   `not_needed`; nunca promocion.
+2. **P-L84B - carrier prospectivo de creencias, solo si A demuestra un hueco.**
+   Un unico cambio observacional append-only e idempotente, sin reconstruccion
+   por simbolo/fecha y sin convertir missing en cero. Metrica primaria:
+   cobertura exacta del contrato en decisiones elegibles posteriores al
+   cutoff del despliegue. Paridad economica completa obligatoria.
+3. **P-L84C - scoreboard de aportacion ortogonal.** Con muestra madura, medir
+   calibracion con una proper scoring rule y comparar cada agente contra el
+   control same-cycle y el ensemble sin ese agente. Metrica primaria: delta
+   OOS de Brier frente al control preregistrado. Cobertura,
+   correlacion de errores, latencia, fallos, fallback, P/L neto, drawdown,
+   MAE/tail y concentracion son guardrails, no excusas para mezclar
+   denominadores. El scoreboard no cambia pesos activos.
+4. **P-L84D - debate auditado en shadow.** Tesis y esceptico deben emitir
+   contratos estructurados con evidencia, objecion e invalidacion; un arbitro
+   solo registra el desacuerdo y no adquiere autoridad de trading. Metrica
+   primaria: tasa de falsos positivos de alta confianza frente al control
+   comparable. Si no existe muestra/control suficiente, `wait_for_sample`.
+5. **P-L84E - tres horizontes en shadow.** Evaluar diario/semanal/mensual con
+   cortes temporales exactos; acuerdo y desacuerdo permanecen telemetria.
+   Metrica primaria: expectativa neta madura frente al control same-cycle.
+   No convertir alineamiento en gate antes de promocion human-gated.
+6. **P-L84F - proveedor externo point-in-time, piloto opcional de research.**
+   Solo si una carencia de datos prioritaria esta demostrada: adaptador
+   postmarket/fail-open que entregue snapshots canonicos con `observed_at`,
+   `effective_at`, `published_at`, vintage, proveedor y conflicto. Metrica
+   primaria: porcentaje reproducible de observaciones con identidad y
+   temporalidad completas. Verificar licencia, SLA, survivorship, revisiones,
+   limites y coste antes de considerar BQuant MCP u otro proveedor. Nunca
+   permitir seleccion dinamica de tools LLM en la ruta operativa.
+7. **P-L84G - coste de transicion y crowding, solo despues de C.** Medir en
+   shadow turnover, spread, slippage, comisiones y concentracion del cambio
+   cartera actual -> objetivo. Metrica primaria: error absoluto del coste neto
+   estimado frente al realizado. Correlacion de recomendaciones/exposiciones
+   basta como diagnostico inicial; no introducir formalismos de transporte o
+   sincronizacion sin valor incremental demostrado.
+8. **P-L84H - routing por regimen, ultimo y human-gated.** Solo con regimenes
+   preregistrados, datos point-in-time, potencia suficiente y un control sin
+   router. Metrica primaria: expectativa neta OOS frente al control. Un mejor
+   retorno con peor drawdown, MAE o cola queda rechazado.
+
+### Exclusiones explicitas
+
+- No crear mas agentes ni ampliar el catalogo de tools por actividad aparente.
+- No usar SPY, un pool de regimen o promedios historicos como sustituto de un
+  control causal same-cycle.
+- No activar voto ponderado, pesos bayesianos o regime switching por prosa.
+- No incorporar insiders, 13F, Congreso, consenso, macro o noticias sin lag de
+  publicacion y vintage point-in-time verificables.
+- No integrar BQuant MCP ni otro servicio en trading, broker, riesgo o gates;
+  cualquier piloto es research-only, aislado y revocable.
+
+### Primera decision permitida
+
+Tras la revision P-L80 del 08/08 se seleccionara como maximo un lote minimo.
+P-L84A es el candidato por defecto solo si la evidencia de esa revision no
+identifica antes un defecto mas critico de captura, control, linaje, costes u
+outcomes. P-L84B-H no se inician por inercia ni en paralelo.

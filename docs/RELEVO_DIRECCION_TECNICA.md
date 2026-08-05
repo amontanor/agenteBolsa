@@ -1498,3 +1498,19 @@ unica: ensayo `merge --no-ff` y preflight cerrado con margen; no detener el
 stack si no se puede completar rollback, arranque y dos health checks antes de
 la apertura. Tras el cierre de P-L83D, congelar cambios hasta la revision del
 08/08.
+
+## P-L84 - plan condicional de evidencia multi-agente
+
+Se incorpora al plan maestro una cola condicional inspirada por la arquitectura
+publica de BQuant Agents: contrato efectivo de agentes, aportacion ortogonal,
+debate auditado, decision no-trade, horizontes y datos point-in-time. Es una
+actualizacion exclusivamente documental, sin version ni autorizacion de
+implementacion.
+
+La siguiente accion sigue siendo la revision prospectiva P-L80 del 08/08. Si
+las cinco sesiones y outcomes estan maduros, se elegira un unico lote por riesgo
+y valor de informacion. P-L84A, auditoria read-only del contrato real de cada
+agente, es solo el candidato por defecto; queda desplazado si la revision
+descubre antes un defecto critico de captura, control same-cycle, linaje,
+costes o outcomes. P-L84B-H no se ejecutan en paralelo, no cambian politica y
+requieren autorizacion posterior segun su alcance.
