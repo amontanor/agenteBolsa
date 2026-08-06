@@ -1589,12 +1589,12 @@ solo web, validar localhost/LAN, `/health`, `/kindle`, listener y Git limpio.
 
 ## P-L86K - ruta Kindle raw
 
-Dictamen: `ready_for_closed_market_full_validation`. La caracterizacion
+Dictamen: `deployed`. La caracterizacion
 confirmo que `/kindle` devolvia el shell JS de Streamlit. El candidato v0.4.223
 registra una ruta ASGI oficial `st.App`/Starlette antes de las rutas internas,
 sin servidor, proceso, puerto, tarea o persistencia nuevos. Loading y vista
 cargada son HTML simple sin JS; la vista usa el snapshot de cuenta, no expone
 `Cantidad` y deja SPY en `n/d` si el carrier diario no prueba comparabilidad.
-Focales y lint son verdes; la suite completa y el despliegue se omiten por el
-margen preapertura y deben ejecutarse solo en un cierre seguro. Produccion,
-LAN, P-L80 y P-L85 no cambian.
+Focales y lint son verdes. Merge `9b9068f3`, tarea web gestionada Running,
+HTTP 200 local/LAN y dos saludes separadas 121.28 s. Produccion queda en
+v0.4.223; scheduler, LAN, P-L80 y P-L85 no cambian.

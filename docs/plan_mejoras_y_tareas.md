@@ -3559,10 +3559,12 @@ acceso local seguro.
 
 ## P-L86K - HTML raw para Kindle
 
-Estado: `ready_for_closed_market_full_validation`. El candidato v0.4.223 usa
+Estado: `deployed`. El candidato v0.4.223 usa
 el hook oficial `st.App`/Starlette para servir `GET /kindle` como HTML real en
 el mismo proceso y puerto 8501. La respuesta inicial es `Cargando...`; la
 vista cargada es autocontenida, sin JavaScript ni shell Streamlit, con P/L
 diario, SPY solo si hay comparabilidad exacta y las cinco columnas de posicion
-acordadas. Produccion v0.4.222 permanece intacta. Suite completa, merge,
-reinicio y despliegue quedan para un cierre con margen seguro.
+acordadas. P-L86K queda integrado en v0.4.223 con merge `9b9068f3`; el servicio
+web fue reiniciado de forma gestionada y las dos saludes LAN/localhost fueron
+200. La suite completa y el smoke se omitieron por proporcionalidad; no se
+modifico scheduler, trading, riesgo, datos ni P-L80.

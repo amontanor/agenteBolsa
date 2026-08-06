@@ -1,6 +1,6 @@
 # P-L86K — dictamen y evidencia
 
-**Dictamen: `ready_for_closed_market_full_validation`.**
+**Dictamen: `deployed`.**
 
 ## Causa y solucion
 
@@ -40,6 +40,24 @@ produccion ni se reinicio el servicio web.
 
 No cambian broker, trading, riesgo, ejecucion, LLM, config, `.env`, SQLite,
 scheduler, firewall, tarea LAN ni P-L80. No se crean procesos, puertos,
-persistencia, snapshots o tareas nuevas. El siguiente unico paso es validacion
-cerrada proporcional, integracion `merge --no-ff` y comprobacion HTTP real solo
-si existe margen suficiente antes de la apertura.
+persistencia, snapshots o tareas nuevas.
+
+## Cierre productivo
+
+Se integro con `merge --no-ff` el candidato exacto `67200bf0`. El merge
+productivo es `9b9068f3f13f94077670d3ec2a09ca9f72b98259`, con primer padre
+`563e95aa` y segundo padre `67200bf0`; tree `c2239e7c` y version v0.4.223.
+Se reinicio unicamente la tarea gestionada `AgenteBolsaWeb`; no se reinicio el
+scheduler ni se uso `stack_down` global.
+
+Salud 1: `2026-08-06T15:17:47.4591793+02:00` CEST. Salud 2:
+`2026-08-06T15:19:48.7424810+02:00` CEST, separadas 121.28 s. En ambas hubo
+HTTP 200 para `/`, `/health` y `/kindle` en `127.0.0.1` y `192.168.1.136`,
+listener unico `0.0.0.0:8501`, tarea Running, scheduler PID 29624/token
+coherentes, kernel ok sin violaciones, paper activo y Git limpio. La vista
+cargada comprobada devolvio HTML raw con `Cartera hoy`, refresh 300, datos de
+posiciones, SPY explicito y sin shell Streamlit ni `Cantidad`.
+
+La regla `AgenteBolsaWeb Private LAN 8501` permanece TCP 8501, perfil Private,
+RemoteAddress LocalSubnet; Test-NetConnection LAN fue correcto. No hubo
+rollback, push, jobs manuales, cambios de trading, broker, SQLite o firewall.
