@@ -26,6 +26,8 @@ La tabla contiene `Accion`, `Entrada`, `Actual`, `P/L total` y `P/L hoy`, sin
 - Worktree: `C:\Antonio\Bref\agenteBolsa_worktrees\pl86k_kindle_raw_html`.
 - Rama: `codex/pl86k-kindle-raw-html`.
 - Commits: `3a1549eb` (caracterizacion) y `c7e7feb6` (implementacion+bump).
+- HEAD documental: `58a56ce46fbc60dfcb2f13a1303766948f053e9d`; tree final:
+  `f7a7fc871bfa6b2ab70139dbf9fa224351c90bc5`.
 - Version candidata: v0.4.223.
 - Archivos funcionales: `src/agente_bolsa/web_app.py` (+95/-0) y version
   `src/agente_bolsa/__init__.py`; el bloque funcional nuevo es de 89 lineas.
