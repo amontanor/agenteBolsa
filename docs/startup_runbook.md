@@ -112,6 +112,12 @@ Que debe pasar:
 
 ### Paso 3. Levantar el panel web
 
+La tarea gestionada `AgenteBolsaWeb` enlaza `0.0.0.0:8501` para permitir la
+consulta LAN. El acceso externo solo es válido con la interfaz en perfil
+`Private` y una regla Firewall TCP 8501 limitada a `RemoteAddress LocalSubnet`.
+No se autoriza perfil Public/Domain ni otros puertos. Desde el equipo se usa
+`http://127.0.0.1:8501`; desde la LAN, `http://<IPv4-privada>:8501`.
+
 Foreground:
 
 ```powershell
