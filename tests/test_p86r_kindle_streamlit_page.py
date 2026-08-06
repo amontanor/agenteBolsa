@@ -38,10 +38,41 @@ def test_streamlit_hidden_kindle_route_is_declared_without_replacing_manual_menu
 
 def test_streamlit_158_supports_exact_hidden_kindle_page():
     page = st.Page(lambda: None, title="Kindle", url_path="kindle", visibility="hidden")
-    # Bare-mode Streamlit has no ScriptRunContext, so the public property is
-    # not materialized; the constructor's canonical internal value is stable.
-    assert page._url_path == "kindle"
+    # Bare-mode Streamlit has no ScriptRunContext, so URL materialization is
+    # deferred to navigation; the visibility contract is still available.
+    assert "url_path" in inspect.signature(st.Page).parameters
     assert page._visibility == "hidden"
+
+
+def test_main_keeps_dashboard_styles_off_hidden_kindle_page(monkeypatch):
+    calls = []
+
+    class FakeNavigation:
+        url_path = "kindle"
+
+        def run(self):
+            calls.append("run")
+
+    class FakeStreamlit:
+        def set_page_config(self, **kwargs):
+            calls.append(("config", kwargs))
+
+        def Page(self, *args, **kwargs):
+            calls.append(("page", kwargs))
+            return object()
+
+        def navigation(self, pages, *, position):
+            calls.append(("navigation", position))
+            return FakeNavigation()
+
+    monkeypatch.setattr(web_app, "st", FakeStreamlit())
+    monkeypatch.setattr(web_app, "_setup_page_styles", lambda: calls.append("dashboard_styles"))
+
+    web_app.main()
+
+    assert "dashboard_styles" not in calls
+    assert "run" in calls
+    assert ("navigation", "hidden") in calls
 
 
 def test_kindle_view_model_uses_daily_equity_contract_and_minimal_position_fields():
@@ -74,6 +105,42 @@ def test_kindle_view_model_uses_daily_equity_contract_and_minimal_position_field
             "today_pl_pct": 0.015,
         }
     ]
+
+
+def test_kindle_positions_are_sorted_and_missing_values_are_not_zero():
+    model = web_app._kindle_view_model(
+        _portfolio(
+            PositionSnapshot(
+                symbol="zeta",
+                qty=None,
+                market_value=None,
+                avg_entry_price=None,
+                current_price=None,
+                unrealized_pl=None,
+                unrealized_plpc=None,
+                side="long",
+                unrealized_intraday_pl=None,
+                unrealized_intraday_plpc=None,
+            ),
+            PositionSnapshot(
+                symbol="alpha",
+                qty=1.0,
+                market_value=100.0,
+                avg_entry_price=100.0,
+                current_price=100.0,
+                unrealized_pl=0.0,
+                unrealized_plpc=0.0,
+                side="long",
+                unrealized_intraday_pl=0.0,
+                unrealized_intraday_plpc=0.0,
+            ),
+        ),
+        {},
+        as_of=datetime(2026, 8, 6, 10, 0, tzinfo=timezone.utc),
+    )
+    assert [row["symbol"] for row in model["positions"]] == ["ALPHA", "ZETA"]
+    assert model["positions"][1]["qty"] is None
+    assert model["positions"][1]["total_pl_pct"] is None
 
 
 def test_kindle_spy_is_only_shown_for_existing_comparable_dashboard_context():

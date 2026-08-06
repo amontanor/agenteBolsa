@@ -772,4 +772,4 @@ def test_version_policy_requires_bump():
         # Con PYTHONPATH al src del worktree, leemos __init__.py
         import agente_bolsa
         # P-L85 is the current candidate after the Zen primary/fallback change.
-        assert agente_bolsa.__version__ == "0.4.221"
+        assert agente_bolsa.__version__ == "0.4.222"
