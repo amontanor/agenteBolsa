@@ -67,10 +67,6 @@ Dashboard:
 python -m agente_bolsa.main web
 ```
 
-Para la tarea gestionada `AgenteBolsaWeb`, el acceso LAN usa `0.0.0.0:8501`
-solo con WLAN en perfil `Private` y Firewall TCP 8501 restringido a
-`LocalSubnet`; local sigue siendo `http://127.0.0.1:8501`.
-
 ## 4. Que debe pasar durante sesion
 
 | Hora Madrid | Actividad esperada |

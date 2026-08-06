@@ -2,8 +2,7 @@
     install_web_task.ps1
 
     Registra (y arranca) una Tarea Programada que mantiene el panel web de
-    agenteBolsa (Streamlit) corriendo de forma persistente en 0.0.0.0:8501.
-    La exposicion LAN queda limitada por Firewall a perfil Private/LocalSubnet.
+    agenteBolsa (Streamlit) corriendo de forma persistente en 127.0.0.1:8501.
     Complementa a install_scheduler_task.ps1.
 
     Uso:
@@ -27,7 +26,7 @@ if (-not (Test-Path $Python)) {
 
 $action = New-ScheduledTaskAction `
     -Execute $Python `
-    -Argument "-m agente_bolsa.main web --host 0.0.0.0 --port 8501" `
+    -Argument "-m agente_bolsa.main web --host 127.0.0.1 --port 8501" `
     -WorkingDirectory $Repo
 
 $trigger = New-ScheduledTaskTrigger -AtLogOn
@@ -52,10 +51,10 @@ Register-ScheduledTask `
     -Trigger $trigger `
     -Settings $settings `
     -Principal $principal `
-    -Description "Panel agenteBolsa en 0.0.0.0:8501; acceso LAN solo por Firewall Private/LocalSubnet." `
+    -Description "Mantiene vivo el panel web de agenteBolsa (Streamlit) en 127.0.0.1:8501." `
     -Force | Out-Null
 
 Write-Host "Tarea '$TaskName' registrada." -ForegroundColor Green
 Start-ScheduledTask -TaskName $TaskName
 Start-Sleep -Seconds 3
-Write-Host "Panel local: http://127.0.0.1:8501; LAN: http://<IPv4-privada>:8501" -ForegroundColor Cyan
+Write-Host "Panel deberia responder en http://127.0.0.1:8501" -ForegroundColor Cyan

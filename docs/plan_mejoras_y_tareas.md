@@ -3547,12 +3547,3 @@ primera suite fue `2464 passed, 1 skip, 1 warning` en `856.38s`; tras el ajuste
 de formato Ruff del test se ejecutó una segunda suite final
 `2464 passed, 1 skip, 1 warning` en `891.60s`. No se modifican P-L80/P-L85 ni
 se inicia otro lote.
-
-## P-L86L - acceso Kindle por LAN privada
-
-Estado: `implementation_pending`. Cambio operativo mínimo: la tarea
-`AgenteBolsaWeb` enlaza `0.0.0.0:8501` y Firewall permite solo perfil `Private`,
-TCP 8501 y `RemoteAddress LocalSubnet`. No se modifican Streamlit, scheduler,
-trading, riesgo, datos, `.env` ni protegidos. Requiere perfil WLAN `Private`,
-preflight cerrado y verificación localhost/LAN; sin regla se mantiene el
-acceso local seguro.
