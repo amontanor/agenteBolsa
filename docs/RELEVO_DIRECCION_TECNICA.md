@@ -1578,3 +1578,11 @@ snapshot, carrier, tarea o scheduler nuevos. La suite final fue
 breves verdes. Salud 1/2 200/200, separadas `134.66s`, kernel `ok`, scheduler y
 listener únicos, paper activo, live/auto-apply off y 0 críticos. El cutoff
 P-L80 y P-L85 permanecen intactos. No abrir otro lote ni hacer push.
+
+## P-L86L - habilitación LAN privada
+
+Lote operacional pendiente: actualizar únicamente `install_web_task.ps1` para
+`--host 0.0.0.0`, reconciliar la tarea existente y crear una regla TCP 8501
+limitada a `Private/LocalSubnet`. La WLAN ya está en `Private`; no tocar
+scheduler, trading, configuración protegida ni otros puertos. Tras reiniciar
+solo web, validar localhost/LAN, `/health`, `/kindle`, listener y Git limpio.
