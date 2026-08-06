@@ -1546,20 +1546,3 @@ paper/live/auto-apply seguros y cero órdenes abiertas. `activation_at`:
 `2026-08-05T23:14:15.6752134Z`; cutoff P-L80 intacto, sin backfill ni nueva
 probe. La prioridad siguiente es la revisión de cohorte del 08/08, no otro
 lote de proveedores en paralelo.
-
-## P-L86 - página Kindle read-only
-
-P-L86 está caracterizado e implementado como candidato aislado v0.4.222. La
-URL exacta será `/kindle` en el servicio gestionado `AgenteBolsaKindle`
-(`0.0.0.0:8502`), independiente de Streamlit. Lee un snapshot JSON atómico y
-sanitizado publicado desde la foto de cartera ya cargada por las rutas
-naturales; no llama broker, SQLite, red ni LLM desde GET. La métrica diaria usa
-`account.last_equity`; SPY queda n/d si el contrato canónico no está alineado.
-
-Base/worktree: `eba2faa2` /
-`C:\Antonio\Bref\agenteBolsa_worktrees\pl86_kindle_local_page`, rama
-`codex/pl86-kindle-local-page`. Focales actuales: `6 passed`; falta suite y
-gates de cierre. No iniciar P-L87 ni tocar P-L85, P-L80, broker, kernel,
-execution, risk, config o `.env`. Siguiente paso único: validación cerrada y
-despliegue solo si permanece XNYS cerrado con margen suficiente; registrar la
-tarea sin firewall y verificar `/kindle` y `/health` dos veces separadas >=75 s.

@@ -136,7 +136,6 @@ function Get-StackExpectedServices {
     return @(
         @{ name = "scheduler"; kind = "task"; task = "AgenteBolsaScheduler"; pattern = "agente_bolsa\.main schedule(\s|$)|run_scheduler_supervisor\.ps1"; lock = "scheduler" },
         @{ name = "web"; kind = "web"; task = "AgenteBolsaWeb"; pattern = "agente_bolsa\.main web|streamlit.*web_app\.py"; port = 8501; lock = "web" },
-        @{ name = "kindle"; kind = "web"; task = "AgenteBolsaKindle"; pattern = "agente_bolsa\.kindle_server"; port = 8502; health_path = "/health"; lock = "kindle" },
         @{ name = "telegram_radar_supervisor"; kind = "supervisor"; script = "scripts\run_telegram_radar_supervisor.ps1"; pattern = "run_telegram_radar_supervisor\.ps1"; lock = "telegram_radar_supervisor" },
         @{ name = "overlay_shadow_supervisor"; kind = "supervisor"; script = "scripts\run_overlay_shadow_supervisor.ps1"; pattern = "run_overlay_shadow_supervisor\.ps1"; lock = "overlay_shadow_supervisor" },
         @{ name = "ci_digest_supervisor"; kind = "supervisor"; script = "scripts\run_ci_digest_supervisor.ps1"; pattern = "run_ci_digest_supervisor\.ps1"; lock = "ci_digest_supervisor" },
@@ -186,16 +185,13 @@ function Test-StackForeignServiceRoot {
     if ($Service.name -eq "web") {
         return -not ($executable -eq $managedPython)
     }
-    if ($Service.name -eq "kindle") {
-        return -not ($executable -eq $managedPython)
-    }
     return $false
 }
 
 function Get-StackForeignProcesses {
     $foreign = @()
     foreach ($service in Get-StackExpectedServices) {
-        if ($service.name -notin @("scheduler", "web", "kindle")) {
+        if ($service.name -notin @("scheduler", "web")) {
             continue
         }
         $roots = @(Get-StackRootProcesses -Processes (Get-StackMatchingProcesses -Pattern $service.pattern))
@@ -300,12 +296,9 @@ function Get-StackSchedulerLockInfo {
 }
 
 function Test-StackPort {
-    param(
-        [int]$Port,
-        [string]$Path = "/"
-    )
+    param([int]$Port)
     try {
-        $response = Invoke-WebRequest -UseBasicParsing ("http://127.0.0.1:{0}{1}" -f $Port, $Path) -TimeoutSec 3
+        $response = Invoke-WebRequest -UseBasicParsing ("http://127.0.0.1:{0}" -f $Port) -TimeoutSec 3
         return @{ ok = ($response.StatusCode -eq 200); status = $response.StatusCode }
     } catch {
         return @{ ok = $false; status = $null }
@@ -323,8 +316,7 @@ function Get-StackServiceStatus {
     }
     $portInfo = $null
     if ($Service.kind -eq "web") {
-        $healthPath = if ($Service.health_path) { [string]$Service.health_path } else { "/" }
-        $portInfo = Test-StackPort -Port ([int]$Service.port) -Path $healthPath
+        $portInfo = Test-StackPort -Port ([int]$Service.port)
     }
     $state = "PARADO"
     if ($rootProcesses.Count -gt 1) {
