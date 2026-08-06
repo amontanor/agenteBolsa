@@ -123,3 +123,27 @@ para ocultar una diferencia.
 - `docs/tutorial_arranque_diario.md` y `docs/startup_runbook.md`: operacion.
 - `docs/promotion_checklist.md`: promocion.
 - Un unico informe por lote; no crear planes paralelos.
+
+## 11. Rigor proporcional por nivel (P-L86Q)
+
+Antes de empezar, asigna el lote al nivel de riesgo más alto que toque:
+
+- **N0:** documentación, copy o formato sin cambio de contrato.
+- **N1:** UI/presentación aislada, sin nueva fuente, persistencia, proceso ni
+  efecto operativo.
+- **N2:** contrato, fuente, carrier, identidad, temporalidad o persistencia sin
+  cambio de autoridad de trading.
+- **N3:** trading, riesgo, archivos protegidos, configuración o despliegue.
+
+Presupuesto blando mínimo: N0 revisión y `git diff --check`; N1 focales de la
+UI, Ruff/NUL y diff; N2 caracterización, focales, regresiones y gates
+proporcionales; N3 Definition of Done completa, preflight cerrado, paridad,
+integración y doble salud. Si surge una dependencia nueva, persistencia o
+esquema, proceso/servicio, frontera protegida, riesgo no clasificado o el
+trabajo supera 2x el presupuesto, detén y consulta.
+
+Solo cuenta una suite completa por árbol funcional final. Puede heredarse
+evidencia previa si la identidad del árbol/objetos está demostrada y los cambios
+posteriores son exclusivamente no semánticos. Un cambio semántico o en una ruta
+compartida obliga a repetir los gates afectados; no se usan omisiones para
+ocultar fallos.
