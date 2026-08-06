@@ -64,6 +64,7 @@ from .tools.exit_lot_provenance import (
 )
 from .tools.fill_watch import run_trade_fill_watch
 from .tools.gate_effectiveness_reporting import publish_gate_effectiveness_postmarket
+from .tools.kindle_snapshot import benchmark_from_performance, publish_kindle_snapshot
 from .tools.learning_mode import active_learning_mode, learning_mode_source
 from .tools.learning_penalty_cycle_shadow import (
     build_learning_penalty_cycle_shadow,
@@ -1990,6 +1991,14 @@ def portfolio_watch_job(
     try:
         broker_client = BrokerClientFactory(settings)
         portfolio = broker_client.alpaca_portfolio_snapshot()
+        # Kindle is a projection of this already-loaded snapshot.  It never
+        # performs a second broker read and failures stay outside trading.
+        publish_kindle_snapshot(
+            settings.data_dir,
+            portfolio,
+            captured_at=datetime.now(timezone.utc),
+            benchmark={"status": "unavailable", "reason": "spy_intraday_not_comparable"},
+        )
         has_activity = bool(portfolio.positions or portfolio.open_orders)
         try:
             session_date = str(status.session_date or "")
@@ -3411,6 +3420,19 @@ def post_market_review_job(
             canonical_telemetry=canonical_telemetry,
             canonical_eod_snapshot=canonical_eod_snapshot,
         )
+        try:
+            publish_kindle_snapshot(
+                settings.data_dir,
+                portfolio,
+                captured_at=datetime.now(timezone.utc),
+                benchmark=benchmark_from_performance(daily_performance),
+            )
+        except Exception as exc:  # noqa: BLE001 - Kindle is observational/fail-open.
+            log_system_event(
+                settings.logs_dir,
+                "kindle_snapshot_publish_failed",
+                {"error_type": type(exc).__name__, "session_date": session_date},
+            )
         coordinator.stage(lease, current_stage, "completed")
         current_stage = "measurement_pipeline"
         coordinator.stage(lease, current_stage, "started")

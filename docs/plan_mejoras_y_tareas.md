@@ -3510,3 +3510,25 @@ activo, live/auto-apply off, scheduler/listener únicos y cero órdenes abiertas
 La activación prospectiva es `2026-08-05T23:14:15.6752134Z`; P-L80 mantiene su
 cutoff y no hay backfill. No iniciar otro lote de routing antes de la revisión
 P-L80 del 08/08.
+
+## P-L86 - página Kindle read-only en red local
+
+Estado: `ready_for_closed_market_full_validation` en worktree aislado; no
+desplegado. La página independiente `/kindle` se sirve por un proceso stdlib
+gestionado en `0.0.0.0:8502`, fuera de Streamlit y sin JavaScript. El lector
+solo consume `data/state/kindle_snapshot.json`; el productor fail-open reutiliza
+la única `PortfolioSnapshot` ya cargada por `portfolio_watch` o postmarket y
+publica solo equity diaria, benchmark canónico comparable y seis campos de
+posición.
+
+La métrica cartera es `portfolio_value - account.last_equity`. SPY se muestra
+únicamente con contrato EOD autoritativo y temporalmente comparable; en otro
+caso queda `n/d`, sin sustituirlo por apertura, exposición o una llamada nueva.
+No se toca broker, riesgo, ejecución, configuración, `.env`, política ni el
+cutoff P-L80. La tarea `AgenteBolsaKindle` y los helpers de stack se integran
+solo dentro del cierre autorizado, sin abrir firewall.
+
+Versión candidata: `0.4.222`; base exacta `eba2faa2`; informe único:
+`docs/informe_p_l86_kindle_local_page.md`. Siguiente acción única: gates
+cerrados, ensayo y despliegue gestionado solo con margen antes de XNYS; si no,
+posponer sin detener producción.
