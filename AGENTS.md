@@ -514,3 +514,32 @@ Antes de terminar una tarea, confirma:
 - [ ] producción/servicios intactos o despliegue validado dos veces;
 - [ ] sin secretos, push o mutaciones no autorizadas;
 - [ ] siguiente paso y sus precondiciones explícitos.
+
+## Política de rigor proporcional y presupuesto de validación (P-L86Q)
+
+Clasifica cada lote antes de actuar:
+
+- **N0 — documentación/copy:** texto, runbook o formato sin cambio de contrato.
+- **N1 — UI aislada:** presentación sin nueva fuente, persistencia, proceso ni
+  efecto operativo.
+- **N2 — contrato/fuente/persistencia:** cambios de datos, carriers, identidad,
+  temporalidad o almacenamiento, sin alterar autoridad de trading.
+- **N3 — trading/riesgo/protegidos/configuración/despliegue:** cualquier cambio
+  en esas fronteras o en servicios productivos.
+
+Los presupuestos de validación son blandos y proporcionales: N0 requiere
+revisión y `git diff --check`; N1 requiere focales de UI, lint/NUL y diff; N2
+requiere caracterización, focales, regresiones y gates proporcionales; N3
+requiere el DoD completo, preflight cerrado, paridad, integración y salud
+postarranque. Mercado abierto, seguridad y AGENTS prevalecen sobre el nivel.
+
+Detén el lote y consulta si aparece una dependencia nueva, una frontera
+protegida, persistencia/esquema, proceso/servicio adicional, riesgo no
+clasificado o un consumo superior a 2x el presupuesto acordado. No amplíes el
+alcance para hacer pasar un gate.
+
+Ejecuta como máximo una suite completa por árbol funcional definitivo. La
+evidencia previa puede heredarse después de demostrar identidad de objetos o
+árbol y que los cambios posteriores son exclusivamente no semánticos. Cualquier
+cambio semántico, ruta compartida o duda de equivalencia exige repetir los
+gates proporcionales afectados; declarar una omisión no equivale a aprobarla.
