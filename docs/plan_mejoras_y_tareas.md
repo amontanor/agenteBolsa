@@ -3535,3 +3535,15 @@ candidato no reutiliza `kindle_server.py`, `kindle_snapshot.py`,
 tentativa independiente revertida. La siguiente acción única es completar los
 gates y desplegar solo con XNYS cerrado y margen para rollback, arranque y dos
 saludes; no iniciar otro lote.
+
+### P-L86R - cierre productivo
+
+P-L86R queda `deployed` en `0.4.222`: merge `849feebd`, segundo padre
+`307658f3`, árbol del candidato `bd5e10d4`. La ruta `/kindle` vive en el mismo
+proceso Streamlit/puerto 8501, permanece oculta del menú y reutiliza los
+contratos de cartera/SPY/posiciones existentes. Salud doble 200/200 separada
+`134.66s`, kernel `ok`, paper activo, live/auto-apply off y 0 críticos. La
+primera suite fue `2464 passed, 1 skip, 1 warning` en `856.38s`; tras el ajuste
+de formato Ruff del test se ejecutó una segunda suite final
+`2464 passed, 1 skip, 1 warning` en `891.60s`. No se modifican P-L80/P-L85 ni
+se inicia otro lote.

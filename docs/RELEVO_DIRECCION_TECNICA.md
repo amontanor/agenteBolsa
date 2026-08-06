@@ -1567,3 +1567,14 @@ permanecen intactos y los componentes independientes antiguos no deben
 reaparecer. Solo si el preflight cerrado y el margen hasta XNYS siguen verdes
 se hará merge `--no-ff`, stack gestionado, comprobación real de `/kindle` y dos
 health checks separados >=75 s. Sin push.
+
+### P-L86R - cierre productivo
+
+P-L86R queda `deployed` en `0.4.222`: merge `849feebd`, primer padre
+`faa2e157`, segundo padre `307658f3`, árbol funcional del candidato `bd5e10d4`.
+La ruta oculta `/kindle` comparte `AgenteBolsaWeb` y 8501, sin servidor,
+snapshot, carrier, tarea o scheduler nuevos. La suite final fue
+`2464 passed, 1 skip, 1 warning` en `891.60s`; focales post-merge `54`, gates
+breves verdes. Salud 1/2 200/200, separadas `134.66s`, kernel `ok`, scheduler y
+listener únicos, paper activo, live/auto-apply off y 0 críticos. El cutoff
+P-L80 y P-L85 permanecen intactos. No abrir otro lote ni hacer push.

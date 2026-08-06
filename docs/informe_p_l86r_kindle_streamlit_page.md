@@ -80,3 +80,28 @@ Siguiente acción única: completar la suite/gates aislados y, si XNYS sigue
 cerrado con margen suficiente, realizar `merge --no-ff`, arranque canónico y
 dos comprobaciones de salud separadas al menos 75 segundos, incluyendo la
 ruta `/kindle`. Sin push.
+
+## Cierre productivo
+
+P-L86R queda `deployed`. Se integró con `git merge --no-ff` mediante
+`849feebd773a459418a3b031b4be4f2fb084b4d9`, primer padre
+`faa2e15773c526af66768fe63656dbb0c04292d0` y segundo padre
+`307658f331f4424cd0a8c107bf7905049c897ec6`; el árbol funcional/documental del
+candidato era `bd5e10d45c8b08d0b6104f1b4979abaff6984ad4` y la versión efectiva
+es `0.4.222`.
+
+La suite fresca del árbol candidato pasó `2464 passed, 1 skipped` y `1 warning`
+externo en `891.60s`; una primera ejecución anterior había pasado `2464/1/1`
+en `856.38s`. La segunda ejecución fue necesaria únicamente porque Ruff
+detectó y corrigió el orden de imports de un test, sin cambio semántico. Tras
+el merge, los focales P-L86R/version pasaron `54`, Ruff/NUL/compile/diff,
+config aislada y smoke fake quedaron verdes. No se repitieron suites por
+expectativa stale.
+
+Stack up canónico a las `13:33:32` CEST. Salud 1 a
+`2026-08-06T11:34:15.8840595Z` y salud 2 a
+`2026-08-06T11:36:30.5421722Z`, separadas `134.66s`: raíz, `/health` y
+`/kindle` 200; scheduler/listener únicos; PID/lock/token/heartbeat coherentes;
+paper activo, live/auto-apply off, kernel `ok`, 0 críticos. El lock_orphan del
+helper sigue siendo el falso positivo wrapper/runtime conocido. No hubo
+órdenes, broker operativo, backfill, jobs manuales ni push.
