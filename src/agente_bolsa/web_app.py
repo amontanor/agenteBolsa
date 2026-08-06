@@ -1440,6 +1440,158 @@ def _position_rows(history: dict[str, Any], *, local_timezone: str = "Europe/Mad
     return rows
 
 
+def _kindle_spy_metric(opening_context: dict[str, Any] | None) -> dict[str, Any]:
+    """Expose only the already validated dashboard SPY comparison."""
+
+    current = (opening_context or {}).get("current") or {}
+    if current.get("comparison_status") == "comparable" and _num(current.get("spy_pct")) is not None:
+        return {
+            "pct": _num(current.get("spy_pct")),
+            "status": "comparable",
+            "reason": None,
+        }
+    reasons = current.get("reason_codes") or current.get("reasons") or []
+    reason = ", ".join(str(item) for item in reasons if str(item).strip()) or "spy_not_temporally_comparable"
+    return {"pct": None, "status": "unavailable", "reason": reason}
+
+
+def _kindle_view_model(
+    portfolio: PortfolioSnapshot | None,
+    opening_context: dict[str, Any] | None,
+    *,
+    as_of: datetime,
+    portfolio_history: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the small read-only view without adding a data carrier or writes."""
+
+    daily = _daily_equity_metric_for_portfolio(portfolio, portfolio_history or {}, as_of=as_of)
+    positions = []
+    for position in sorted(
+        list(getattr(portfolio, "positions", None) or []),
+        key=lambda item: str(getattr(item, "symbol", "") or "").upper(),
+    ):
+        positions.append(
+            {
+                "symbol": str(getattr(position, "symbol", "") or "").upper(),
+                "qty": _num(getattr(position, "qty", None)),
+                "entry": _num(getattr(position, "avg_entry_price", None)),
+                "current": _num(getattr(position, "current_price", None)),
+                "total_pl_pct": _num(getattr(position, "unrealized_plpc", None)),
+                "today_pl_pct": _num(getattr(position, "unrealized_intraday_plpc", None)),
+            }
+        )
+    local_as_of = as_of.astimezone(ZoneInfo("Europe/Madrid"))
+    return {
+        "daily": {
+            "amount": _num(daily.get("daily_equity_pl")),
+            "pct": _num(daily.get("daily_equity_return")),
+            "status": daily.get("status"),
+            "reason": daily.get("reason"),
+        },
+        "spy": _kindle_spy_metric(opening_context),
+        "positions": positions,
+        "as_of": as_of.astimezone(timezone.utc).isoformat(),
+        "as_of_label": local_as_of.strftime("%d/%m/%Y %H:%M %Z"),
+        "source": daily.get("source") or "Alpaca account.last_equity",
+    }
+
+
+def _kindle_value(value: Any, formatter: Any) -> str:
+    normalized = _num(value)
+    return formatter(normalized) if normalized is not None else "n/d"
+
+
+def _kindle_html(model: dict[str, Any]) -> str:
+    """Render the compact, no-script presentation for narrow e-ink screens."""
+
+    daily = model.get("daily") or {}
+    spy = model.get("spy") or {}
+    daily_amount = _kindle_value(daily.get("amount"), _money)
+    daily_pct = _kindle_value(daily.get("pct"), _pct_signed)
+    spy_pct = _kindle_value(spy.get("pct"), _pct_signed)
+    if spy.get("status") != "comparable":
+        spy_pct = "n/d — no comparable"
+    positions = model.get("positions") or []
+    if positions:
+        position_html = "".join(
+            "<tr>"
+            f"<td>{escape(str(row.get('symbol') or 'n/d'))}</td>"
+            f"<td>{_kindle_value(row.get('qty'), lambda value: f'{value:g}')}</td>"
+            f"<td>{_kindle_value(row.get('entry'), _money)}</td>"
+            f"<td>{_kindle_value(row.get('current'), _money)}</td>"
+            f"<td>{_kindle_value(row.get('total_pl_pct'), _pct_signed)}</td>"
+            f"<td>{_kindle_value(row.get('today_pl_pct'), _pct_signed)}</td>"
+            "</tr>"
+            for row in positions
+        )
+    else:
+        position_html = '<tr><td colspan="6">n/d — sin posiciones</td></tr>'
+    return f"""
+<style>
+  .kindle-page {{ max-width: 760px; margin: 0 auto; color: #000; background: #fff;
+                  font-family: system-ui, sans-serif; line-height: 1.35; }}
+  .kindle-page h1 {{ font-size: 1.45rem; margin: 0 0 .15rem; }}
+  .kindle-page h2 {{ font-size: 1.05rem; margin: 1.2rem 0 .35rem; border-bottom: 1px solid #000; }}
+  .kindle-page p {{ margin: .25rem 0; }}
+  .kindle-summary {{ border: 1px solid #000; padding: .65rem; margin: .75rem 0; }}
+  .kindle-value {{ font-size: 1.25rem; font-weight: 700; }}
+  .kindle-muted {{ font-size: .85rem; }}
+  .kindle-page table {{ width: 100%; border-collapse: collapse; font-size: .82rem; }}
+  .kindle-page th, .kindle-page td {{ border-bottom: 1px solid #000; padding: .4rem .25rem; text-align: left; }}
+  .kindle-page th {{ font-weight: 700; }}
+  .kindle-page a {{ color: #000; font-weight: 700; }}
+</style>
+<main class="kindle-page">
+  <h1>Cartera</h1>
+  <p class="kindle-muted">Actualizado {escape(str(model.get('as_of_label') or 'n/d'))}</p>
+  <section class="kindle-summary">
+    <h2>Ganancia/pérdida global de hoy</h2>
+    <p class="kindle-value">{escape(daily_amount)} ({escape(daily_pct)})</p>
+    <p class="kindle-muted">Equity actual − último cierre Alpaca · account.last_equity</p>
+  </section>
+  <section class="kindle-summary">
+    <h2>S&amp;P 500 de hoy</h2>
+    <p class="kindle-value">{escape(spy_pct)}</p>
+    <p class="kindle-muted">Solo se muestra con comparabilidad temporal del consumidor existente.</p>
+  </section>
+  <h2>Posiciones</h2>
+  <table>
+    <thead><tr><th>Símbolo</th><th>Cantidad</th><th>Entrada</th><th>Actual</th><th>P/L total</th><th>P/L hoy</th></tr></thead>
+    <tbody>{position_html}</tbody>
+  </table>
+  <p><a href="/kindle">Actualizar</a></p>
+</main>
+"""
+
+
+def page_kindle() -> None:
+    """Render the hidden /kindle page inside the existing Streamlit process."""
+
+    settings = _settings()
+    store = _store()
+    broker_client = BrokerClientFactory(settings)
+    as_of = datetime.now(timezone.utc)
+    portfolio: PortfolioSnapshot | None = None
+    opening_context: dict[str, Any] = {}
+    try:
+        portfolio = broker_client.alpaca_portfolio_snapshot()
+    except Exception as exc:  # noqa: BLE001 - presentation remains available as n/d.
+        LOGGER.warning("No se pudo leer cartera para /kindle: %s", exc)
+    try:
+        intraday_history = broker_client.alpaca_portfolio_history(period="2W", timeframe="15Min")
+        opening_context = opening_performance_context(
+            settings,
+            store,
+            intraday_history=intraday_history,
+            current_equity=_num(getattr(portfolio, "portfolio_value", None)),
+            now=as_of,
+        )
+    except Exception as exc:  # noqa: BLE001 - SPY remains explicitly unavailable.
+        LOGGER.warning("No se pudo leer benchmark para /kindle: %s", exc)
+    model = _kindle_view_model(portfolio, opening_context, as_of=as_of)
+    st.markdown(_kindle_html(model), unsafe_allow_html=True)
+
+
 def _position_pl_chip(amount: Any, percentage: Any) -> str:
     normalized_amount = _num(amount)
     normalized_percentage = _num(percentage)
@@ -2461,8 +2613,11 @@ def _metric_card(label: str, value: Any, delta: Any | None = None) -> None:
     st.metric(label, value, delta=delta)
 
 
-def _setup_page() -> None:
+def _set_page_config() -> None:
     st.set_page_config(page_title="Agente Bolsa", page_icon=None, layout="wide")
+
+
+def _setup_page_styles() -> None:
     st.markdown(
         """
         <style>
@@ -7832,8 +7987,7 @@ def page_config() -> None:
     st.json(store.status())
 
 
-def main() -> None:
-    _setup_page()
+def _render_manual_navigation() -> None:
     st.sidebar.title("Agente Bolsa")
     st.sidebar.caption("Panel local")
     refresh_interval_seconds = _auto_refresh_control()
@@ -7875,6 +8029,44 @@ def main() -> None:
         "Configuracion": page_config,
     }
     _render_refreshable_page(pages[page], refresh_interval_seconds)
+
+
+def _setup_page() -> None:
+    """Configure the legacy/manual dashboard path for fallback runtimes."""
+    _set_page_config()
+    _setup_page_styles()
+
+
+def main() -> None:
+    if hasattr(st, "navigation") and hasattr(st, "Page"):
+        _set_page_config()
+        navigation = st.navigation(
+            [
+                st.Page(
+                    _render_manual_navigation,
+                    title="Agente Bolsa",
+                    default=True,
+                ),
+                st.Page(
+                    page_kindle,
+                    title="Kindle",
+                    url_path="kindle",
+                    visibility="hidden",
+                ),
+            ],
+            position="hidden",
+        )
+        # The Kindle page is deliberately free of the dashboard's external
+        # font import and presentation CSS.  The normal dashboard keeps its
+        # existing appearance, while /kindle remains a compact e-ink view.
+        if getattr(navigation, "url_path", "") != "kindle":
+            _setup_page_styles()
+        navigation.run()
+        return
+    # Compatibility with import-only/minimal test environments without the
+    # Streamlit multipage API; the production 1.58 runtime uses the branch above.
+    _setup_page()
+    _render_manual_navigation()
 
 
 if __name__ == "__main__":
