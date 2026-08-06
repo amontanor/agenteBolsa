@@ -42,4 +42,5 @@ __all__ = ["__version__"]
 # P-L83D: normalize Alpaca daily buckets to XNYS sessions and preserve current equity (0.4.220).
 # P-L85: OpenCode Zen Free primary with one-shot OpenCode Go fallback (0.4.221).
 # P-L86R: hidden /kindle page inside the existing Streamlit web task (0.4.222).
-__version__ = "0.4.222"
+# P-L86K: raw HTML /kindle route for non-JavaScript Kindle browsers (0.4.223).
+__version__ = "0.4.223"

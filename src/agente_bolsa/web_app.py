@@ -37,6 +37,12 @@ except ModuleNotFoundError:  # pragma: no cover - import-only test environments 
             raise RuntimeError("Streamlit no esta instalado. Instala las dependencias del dashboard para usar web.")
 
     st = _MissingStreamlit()  # type: ignore[assignment]
+try:
+    from starlette.responses import HTMLResponse
+    from starlette.routing import Route
+except ModuleNotFoundError:  # pragma: no cover - Streamlit supplies Starlette in production.
+    HTMLResponse = None  # type: ignore[assignment,misc]
+    Route = None  # type: ignore[assignment,misc]
 
 from agente_bolsa import __version__
 from agente_bolsa.config import get_settings
@@ -1562,6 +1568,95 @@ def _kindle_html(model: dict[str, Any]) -> str:
   <p><a href="/kindle">Actualizar</a></p>
 </main>
 """
+
+
+def _kindle_loading_html() -> str:
+    """Return the first raw response without exposing the Streamlit shell."""
+
+    return (
+        '<!doctype html><html lang="es"><head><meta charset="utf-8">'
+        '<meta http-equiv="refresh" content="2;url=/kindle?view=loaded">'
+        '<title>Cargando...</title></head><body><p>Cargando...</p></body></html>'
+    )
+
+
+def _kindle_raw_spy(spy: dict[str, Any]) -> dict[str, Any]:
+    """Accept SPY only when the existing carrier proves the daily window."""
+
+    if (
+        spy.get("status") == "comparable"
+        and spy.get("window") == "previous_close_to_as_of"
+        and spy.get("system_end_at") == spy.get("spy_end_at")
+        and _num(spy.get("pct")) is not None
+    ):
+        return spy
+    return {"pct": None, "status": "unavailable", "reason": "spy_not_temporally_comparable"}
+
+
+def _kindle_loaded_html(model: dict[str, Any]) -> str:
+    """Render raw HTML for a narrow e-ink browser, without Streamlit markup."""
+
+    daily = model.get("daily") or {}
+    spy = _kindle_raw_spy(model.get("spy") or {})
+    daily_amount = _kindle_value(daily.get("amount"), _money)
+    daily_pct = _kindle_value(daily.get("pct"), _pct_signed)
+    spy_pct = _kindle_value(spy.get("pct"), _pct_signed) if spy.get("status") == "comparable" else "n/d"
+    positions = model.get("positions") or []
+    if positions:
+        position_html = "".join(
+            "<tr>"
+            f"<td>{escape(str(row.get('symbol') or 'n/d'))}</td>"
+            f"<td>{_kindle_value(row.get('entry'), _money)}</td>"
+            f"<td>{_kindle_value(row.get('current'), _money)}</td>"
+            f"<td>{_kindle_value(row.get('total_pl_pct'), _pct_signed)}</td>"
+            f"<td>{_kindle_value(row.get('today_pl_pct'), _pct_signed)}</td>"
+            "</tr>"
+            for row in positions
+        )
+    else:
+        position_html = '<tr><td colspan="5">n/d - sin posiciones</td></tr>'
+    return f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
+<meta http-equiv="refresh" content="300;url=/kindle">
+<title>Cartera hoy</title></head><body style="color:#000;background:#fff;font-family:serif;line-height:1.3">
+<h1>Cartera hoy</h1>
+<p>Actualizado {escape(str(model.get('as_of_label') or 'n/d'))}</p>
+<p><b>Hoy:</b> {escape(daily_amount)} ({escape(daily_pct)})</p>
+<p><b>SPY:</b> {escape(spy_pct)}</p>
+<p>Equity actual - ultimo cierre Alpaca · account.last_equity</p>
+<table><thead><tr><th>Accion</th><th>Entrada</th><th>Actual</th><th>P/L total</th><th>P/L hoy</th></tr></thead>
+<tbody>{position_html}</tbody></table>
+<p><a href="/kindle">Actualizar</a></p></body></html>"""
+
+
+def _kindle_raw_model() -> dict[str, Any]:
+    """Build the raw view from the existing account snapshot only."""
+
+    settings = _settings()
+    broker_client = BrokerClientFactory(settings)
+    as_of = datetime.now(timezone.utc)
+    portfolio: PortfolioSnapshot | None = None
+    try:
+        portfolio = broker_client.alpaca_portfolio_snapshot()
+    except Exception as exc:  # noqa: BLE001 - presentation remains n/d.
+        LOGGER.warning("No se pudo leer cartera para /kindle: %s", exc)
+    return _kindle_view_model(portfolio, {}, as_of=as_of)
+
+
+async def _kindle_raw_route(request: Any) -> Any:
+    """Serve /kindle as raw HTML while keeping the existing process and port."""
+
+    body = (
+        _kindle_loaded_html(_kindle_raw_model())
+        if request.query_params.get("view") == "loaded"
+        else _kindle_loading_html()
+    )
+    return HTMLResponse(body, headers={"Cache-Control": "no-store"})
+
+
+if Route is not None and HTMLResponse is not None and hasattr(st, "App"):
+    app = st.App(__file__, routes=[Route("/kindle", endpoint=_kindle_raw_route, methods=["GET"])])
+else:  # pragma: no cover - only import-only environments without Streamlit/Starlette.
+    app = None
 
 
 def page_kindle() -> None:
