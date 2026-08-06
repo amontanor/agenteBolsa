@@ -1546,3 +1546,24 @@ paper/live/auto-apply seguros y cero órdenes abiertas. `activation_at`:
 `2026-08-05T23:14:15.6752134Z`; cutoff P-L80 intacto, sin backfill ni nueva
 probe. La prioridad siguiente es la revisión de cohorte del 08/08, no otro
 lote de proveedores en paralelo.
+
+## P-L86R - página Kindle oculta en Streamlit
+
+P-L86R sustituye la tentativa independiente de servidor/puerto/tarea por una
+única ruta `/kindle` dentro de `AgenteBolsaWeb` en el puerto 8501. El candidato
+usa Streamlit 1.58 (`st.Page(url_path="kindle", visibility="hidden")` y
+`st.navigation(position="hidden")`), conserva la navegación manual en `/` y
+no expone la ruta en el menú.
+
+La vista reutiliza `PortfolioSnapshot`, `daily_equity_change`, el consumidor
+SPY del dashboard y las posiciones ya cargadas. No crea snapshots, carriers,
+archivos, jobs, procesos ni escrituras; no llama a broker/LLM/red desde un
+productor nuevo. El HTML es básico, escapado, blanco/negro y sin JavaScript ni
+recursos externos. La versión candidata es `0.4.222`.
+
+La caracterización y los focales iniciales pasan `54`. Falta la suite completa
+y los gates de cierre en árbol final. Producción sigue `0.4.221`, P-L80/P-L85
+permanecen intactos y los componentes independientes antiguos no deben
+reaparecer. Solo si el preflight cerrado y el margen hasta XNYS siguen verdes
+se hará merge `--no-ff`, stack gestionado, comprobación real de `/kindle` y dos
+health checks separados >=75 s. Sin push.

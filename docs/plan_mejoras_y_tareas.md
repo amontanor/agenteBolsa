@@ -3510,3 +3510,28 @@ activo, live/auto-apply off, scheduler/listener únicos y cero órdenes abiertas
 La activación prospectiva es `2026-08-05T23:14:15.6752134Z`; P-L80 mantiene su
 cutoff y no hay backfill. No iniciar otro lote de routing antes de la revisión
 P-L80 del 08/08.
+
+## P-L86R - página Kindle oculta en Streamlit
+
+Estado: `ready_for_closed_market_deployment` en candidato aislado, pendiente de
+suite/gates cerrados e integración si existe margen seguro. La solución
+reemplaza la arquitectura independiente de P-L86 por una página directa
+`/kindle` dentro del mismo proceso Streamlit y puerto 8501. Usa `st.Page` con
+`visibility="hidden"` y `st.navigation(position="hidden")`; la navegación
+manual y el dashboard raíz permanecen intactos y `/kindle` no aparece en el
+menú.
+
+El contenido se limita a P/L diario con `account.last_equity`, SPY solo cuando
+el consumidor existente declara comparabilidad temporal, posiciones y
+`as_of`. La presentación es HTML básico sin JavaScript, gráficos, recursos o
+fuentes externas; missing es `n/d`, el orden de símbolos es estable y no hay
+persistencia ni llamadas nuevas fuera de las lecturas normales de la página.
+Versión prevista: `0.4.222`. No se tocan broker, kernel, execution, risk,
+config, `.env`, scheduler, main, stack, trading ni la captura P-L80.
+
+La evidencia está en `docs/informe_p_l86r_kindle_streamlit_page.md`. El
+candidato no reutiliza `kindle_server.py`, `kindle_snapshot.py`,
+`install_kindle_task.ps1`, `stack_common` ni ningún otro componente de la
+tentativa independiente revertida. La siguiente acción única es completar los
+gates y desplegar solo con XNYS cerrado y margen para rollback, arranque y dos
+saludes; no iniciar otro lote.
