@@ -61,6 +61,7 @@ from agente_bolsa.tools.daily_learning import (
 )
 from agente_bolsa.tools.equity_metrics import (
     daily_equity_change,
+    position_intraday_pl_reconciliation,
 )
 from agente_bolsa.tools.news_sentiment import fetch_symbol_news
 from agente_bolsa.tools.opening_performance import opening_performance_context
@@ -1262,12 +1263,24 @@ def _account_group(
     equity_source: str | None = None,
     equity_as_of: str | None = None,
     today_detail: str | None = None,
+    position_intraday: dict[str, Any] | None = None,
 ) -> None:
     equity_summary = equity_summary or {}
+    position_intraday = position_intraday or {}
     total_tone = "good" if (total_pl or 0.0) > 0 else "bad" if (total_pl or 0.0) < 0 else "neutral"
     today_tone = "good" if (today_pl or 0.0) > 0 else "bad" if (today_pl or 0.0) < 0 else "neutral"
     today_metric = _today_pl_metric_payload(today_pl, exposure, today_pct, period_caption=today_detail)
     today_display = today_metric["display"]
+    intraday_amount = (
+        _money(position_intraday.get("amount"))
+        if position_intraday.get("amount") is not None
+        else "n/d"
+    )
+    intraday_coverage = (
+        f"{position_intraday.get('known', 0)}/{position_intraday.get('total', 0)} posiciones"
+        if position_intraday
+        else "n/d"
+    )
     tone_class = f"account-pl {total_tone}"
     today_class = f"account-kpi {today_tone}"
     equity_detail = _portfolio_equity_summary_detail(equity_summary)
@@ -1304,6 +1317,7 @@ def _account_group(
                         <small>&nbsp;</small>
                     </em>
                 </div>
+                <div class="account-kpi"><span>Ganancia/pérdida de la cartera actual hoy</span><strong>{intraday_amount}</strong><em>{intraday_coverage}</em></div>
                 <div class="account-kpi"><span>Posiciones</span><strong>{positions_count}</strong><em>&nbsp;</em></div>
                 <div class="account-kpi"><span>Ordenes</span><strong>{orders_count}</strong><em>&nbsp;</em></div>
             </div>
@@ -1444,6 +1458,66 @@ def _position_rows(history: dict[str, Any], *, local_timezone: str = "Europe/Mad
             }
         )
     return rows
+
+
+def _sales_since_open_rows(
+    history: dict[str, Any],
+    opening_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Select sell fills after the exact opening already loaded by dashboard."""
+
+    account_current = (opening_context or {}).get("account_current") or {}
+    opening_at = _parse_utc_timestamp(account_current.get("system_start_at"))
+    if opening_at is None:
+        return {"status": "unavailable", "reason": "opening_unavailable", "rows": []}
+
+    rows: list[dict[str, Any]] = []
+    for trade in list(history.get("trades") or []):
+        if str(trade.get("side") or "").lower() != "sell":
+            continue
+        trade_at = _parse_utc_timestamp(trade.get("time"))
+        if trade_at is None or trade_at < opening_at:
+            continue
+        rows.append(
+            {
+                "time": trade.get("time"),
+                "symbol": str(trade.get("symbol") or "").upper() or None,
+                "notional": _num(trade.get("notional")),
+                "realized_pl": _num(trade.get("realized_pl")),
+                "order_id": str(trade.get("order_id") or ""),
+            }
+        )
+    rows.sort(key=lambda item: (str(item.get("time") or ""), str(item.get("order_id") or "")))
+    return {
+        "status": "available",
+        "reason": None,
+        "opening_at": opening_at.isoformat(),
+        "rows": rows,
+    }
+
+
+def _render_sales_since_open(history: dict[str, Any], opening_context: dict[str, Any]) -> None:
+    sales = _sales_since_open_rows(history, opening_context)
+    _section_title(
+        "Ventas desde la última apertura",
+        "Un fill de venta por fila; el P/L realizado puede no estar disponible.",
+    )
+    if sales["status"] != "available":
+        st.info("n/d — apertura XNYS no disponible")
+        return
+    rows = sales.get("rows") or []
+    if not rows:
+        st.caption("No hay ventas desde la última apertura XNYS.")
+        return
+    table = [
+        {
+            "Símbolo": row.get("symbol") or "n/d",
+            "Notional": _money(row.get("notional")) if row.get("notional") is not None else "n/d",
+            "P/L realizado": _money(row.get("realized_pl")) if row.get("realized_pl") is not None else "n/d",
+        }
+        for row in rows
+    ]
+    st.dataframe(pd.DataFrame(table), width="stretch", hide_index=True)
 
 
 def _kindle_spy_metric(opening_context: dict[str, Any] | None) -> dict[str, Any]:
@@ -3022,7 +3096,7 @@ def _setup_page_styles() -> None:
         .account-pl.neutral {color:#374151;}
         .account-kpis {
             display:grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
+            grid-template-columns: repeat(4, minmax(0, 1fr));
             gap:8px;
             margin-top:12px;
             padding-top:12px;
@@ -3280,7 +3354,7 @@ def _setup_page_styles() -> None:
         .account-items strong {font-size:1.1rem; font-weight:800; letter-spacing:0;}
         .account-strip {padding:16px 18px 14px;}
         .account-title {margin-bottom:14px;}
-        .account-kpis {grid-template-columns:repeat(3, minmax(0,1fr)); gap:14px; margin-top:14px; padding-top:14px;}
+        .account-kpis {grid-template-columns:repeat(4, minmax(0,1fr)); gap:14px; margin-top:14px; padding-top:14px;}
         .account-kpi {border-radius:8px; min-height:58px; padding:10px 12px;}
         .account-kpi span {margin-bottom:3px;}
         .account-kpi strong {font-size:1.12rem; font-weight:800;}
@@ -3341,7 +3415,7 @@ def _setup_page_styles() -> None:
             .account-items {grid-template-columns:repeat(2, minmax(0,1fr)); gap:10px 14px;}
             .account-items div {border-top:1px solid var(--ab-border); padding-top:8px;}
             .account-items strong {font-size:1rem; white-space:normal; overflow-wrap:anywhere;}
-            .account-kpis {grid-template-columns:repeat(3, minmax(0,1fr)); gap:8px;}
+            .account-kpis {grid-template-columns:repeat(2, minmax(0,1fr)); gap:8px;}
             .account-kpi {padding:9px 8px;}
             .account-kpi strong {font-size:1rem;}
         }
@@ -5097,6 +5171,9 @@ def page_dashboard() -> None:
         portfolio_history,
         as_of=account_read_at,
     )
+    position_intraday = position_intraday_pl_reconciliation(
+        portfolio.positions if portfolio else None
+    )
     today_total = _num(daily_equity_metric.get("daily_equity_pl"))
     today_pct = _num(daily_equity_metric.get("daily_equity_return"))
     today_detail = _daily_equity_detail(daily_equity_metric)
@@ -5147,6 +5224,7 @@ def page_dashboard() -> None:
         equity_source=str(account_current.get("system_source") or "apertura exacta no disponible"),
         equity_as_of=str(account_current.get("system_end_at") or account_read_at.isoformat()),
         today_detail=today_detail,
+        position_intraday=position_intraday,
     )
 
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
@@ -5284,6 +5362,9 @@ def page_dashboard() -> None:
 
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
     _render_daily_vs_spy_table(opening_context)
+
+    st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+    _render_sales_since_open(history, opening_context)
 
     # ===== Detalle avanzado: progressive disclosure (plegado por defecto) =====
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)

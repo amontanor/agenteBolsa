@@ -43,4 +43,5 @@ __all__ = ["__version__"]
 # P-L85: OpenCode Zen Free primary with one-shot OpenCode Go fallback (0.4.221).
 # P-L86R: hidden /kindle page inside the existing Streamlit web task (0.4.222).
 # P-L86K: raw HTML /kindle route for non-JavaScript Kindle browsers (0.4.223).
-__version__ = "0.4.223"
+# P-L87: dashboard position-day reconciliation and sales since XNYS open (0.4.224).
+__version__ = "0.4.224"
