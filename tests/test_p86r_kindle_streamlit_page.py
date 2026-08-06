@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import streamlit as st
 
-from agente_bolsa.models import PortfolioSnapshot, PositionSnapshot
 from agente_bolsa import web_app
+from agente_bolsa.models import PortfolioSnapshot, PositionSnapshot
 
 
 def _portfolio(*positions: PositionSnapshot, equity: float = 1005.0, previous_close: float | None = 1000.0):
