@@ -41,4 +41,5 @@ __all__ = ["__version__"]
 # P-L82R: do not connect omitted XNYS intervals; require aligned current comparison (0.4.219).
 # P-L83D: normalize Alpaca daily buckets to XNYS sessions and preserve current equity (0.4.220).
 # P-L85: OpenCode Zen Free primary with one-shot OpenCode Go fallback (0.4.221).
-__version__ = "0.4.221"
+# P-L86: independent sanitized server-rendered Kindle page on the managed LAN port 8502 (0.4.222).
+__version__ = "0.4.222"
