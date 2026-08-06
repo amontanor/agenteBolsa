@@ -3568,3 +3568,13 @@ acordadas. P-L86K queda integrado en v0.4.223 con merge `9b9068f3`; el servicio
 web fue reiniciado de forma gestionada y las dos saludes LAN/localhost fueron
 200. La suite completa y el smoke se omitieron por proporcionalidad; no se
 modifico scheduler, trading, riesgo, datos ni P-L80.
+
+## P-L87 - visibilidad diaria de cartera y ventas
+
+Estado: `ready_for_closed_market_deployment` en candidato v0.4.224. El
+dashboard añade la reconciliación secundaria de P/L intradía de posiciones con
+cobertura K/N y un bloque de ventas desde la apertura XNYS, usando únicamente
+`PortfolioSnapshot`, `history["trades"]` y `opening_context` ya cargados. No
+hay llamadas nuevas, persistencia, cambio de métrica diaria, política,
+trading, riesgo, ejecución, Kindle, LLM o configuración. Producción permanece
+en 0.4.223 hasta preflight cerrado, merge y reinicio solo de web.
