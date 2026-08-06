@@ -1601,10 +1601,10 @@ v0.4.223; scheduler, LAN, P-L80 y P-L85 no cambian.
 
 ## P-L87 - siguiente cierre
 
-El candidato v0.4.224 está validado proporcionalmente para el dashboard: añade
+P-L87 queda `deployed` en v0.4.224 mediante merge `db5a8584`: añade
 la cuarta tarjeta de ganancia/pérdida intradía de posiciones con cobertura K/N
 y las ventas desde la apertura XNYS, una fila por sell fill. Reutiliza los
 carriers ya cargados, conserva `n/d` cuando falta P/L realizado o apertura y no
-altera trading, riesgo, ejecución ni P-L80. Antes de integrar hay que renovar
-PMR/lease/procesos, confirmar XNYS cerrado y margen; después solo se reinicia
-`AgenteBolsaWeb`, con dos saludes web separadas >=75 s. No iniciar P-L88.
+altera trading, riesgo, ejecución ni P-L80. La tarea web fue reiniciada de
+forma gestionada; raíz, `/health` y `/kindle` quedaron 200 local/LAN y las dos
+saludes se separaron 110,6 s. No iniciar P-L88.

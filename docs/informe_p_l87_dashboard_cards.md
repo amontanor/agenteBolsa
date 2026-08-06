@@ -1,6 +1,6 @@
 # P-L87 — visibilidad diaria de cartera y ventas
 
-Dictamen de candidato: `ready_for_closed_market_deployment`.
+Dictamen: `deployed`.
 
 P-L87 añade dos superficies observacionales al dashboard existente. La cuarta
 tarjeta reutiliza `position_intraday_pl_reconciliation` sobre el mismo
@@ -29,7 +29,21 @@ productivo: el lote es N1 de presentación aislada y no introduce fuente,
 persistencia, proceso ni cambio de autoridad; se deja como gate de cierre si
 el preflight exige validación adicional.
 
-La producción no ha sido integrada ni reiniciada en P-L87. Siguiente paso
-único: renovar preflight cerrado y, si PMR/leases/procesos/margen siguen
-verdes, merge `--no-ff`, reiniciar exclusivamente `AgenteBolsaWeb` y hacer
-dos comprobaciones de salud separadas al menos 75 segundos. Sin push.
+Integración productiva: merge `db5a8584`, primer padre `d6bf37b0` y segundo
+padre `9ecee304`; HEAD/tree finales son `db5a8584`/`447bbfd0`, versión
+`0.4.224`, producción limpia. Se reinició exclusivamente `AgenteBolsaWeb`
+mediante la tarea gestionada; el árbol nuevo es `39956` → `28812` y el único
+listener es `0.0.0.0:8501`. No se reinició el scheduler.
+
+Salud 1: `2026-08-06T23:25:46.6533928+02:00`. Salud 2:
+`2026-08-06T23:27:37.2529625+02:00`, separación 110,6 s. En ambas se
+confirmaron raíz y `/health` 200; en la segunda también `/kindle` 200, local y
+LAN, con HTML raw sin shell Streamlit. Scheduler owner/token siguió válido,
+kernel `ok`, paper activo, live/auto-apply desactivados, un listener y cero
+críticos. Persisten únicamente tres warnings preexistentes.
+
+El cierre no ejecutó suite completa ni smoke productivo por la clasificación
+N1 documentada; sí ejecutó las regresiones focales (`133 passed, 1 warning`),
+Ruff afectado, NUL y diff-check. No hubo broker, LLM, jobs manuales,
+reconciliación, cambios de datos, backfill ni push. El cutoff P-L80 permanece
+inmutable.
