@@ -2,12 +2,14 @@
 
 ## Dictamen
 
-`ready_for_closed_market_deployment`.
+`ready_for_closed_market_deployment_truthful_ui`.
 
 El candidato queda preparado en worktree aislado; no se ha integrado ni
-desplegado porque XNYS seguia abierto durante la caracterizacion y QA breve.
-Produccion permanece intacta en v0.4.224. El siguiente paso unico es renovar
-el preflight al cierre y ejecutar la validacion cerrada antes del merge.
+desplegado porque XNYS sigue abierto. La UI de Sistema es segura y veraz, pero
+el objetivo completo de comparar SPY apertura -> ahora no queda resuelto: el
+carrier actual no prueba una observacion intradia del proveedor. Produccion
+permanece intacta en v0.4.224. El siguiente paso unico es decidir una fuente o
+cadencia que transporte ese timestamp antes de afirmar comparabilidad de SPY.
 
 ## Hechos y causa reproducida
 
@@ -22,10 +24,15 @@ el preflight al cierre y ejecutar la validacion cerrada antes del merge.
   Por eso sus ventanas y porcentajes no eran equivalentes. El cambio no
   elimina la metrica diaria: la etiqueta ahora dice explicitamente `desde
   cierre anterior`.
-- `build_open_to_open_rows` exigia igualdad exacta de los timestamps de
-  Sistema y SPY. El caso observado con Sistema a las 19:51 y SPY a las
-  16:02:32 queda correctamente no comparable por stale; una observacion con
-  desfase de segundos/minutos dentro del contrato puede compararse.
+- La auditoria P-L88A encontro que el current SPY procede de caches diarios
+  `yfinance` con `created_at`, `interval=1d` y `adjusted_ohlc`, pero sin
+  `provider_observed_at`/`market_observed_at`. A las 18:23 UTC el ultimo
+  metadata era 18:14:42 UTC (~9 min de lag) y el artefacto dedicado SPY era
+  18:01:29 UTC; la secuencia observada es irregular y no demuestra una
+  cadencia <=300 s ni semantica intradia del precio diario.
+- La caracterizacion roja de P-L88R reprodujo que un cache reciente sin
+  timestamp del proveedor se clasificaba `comparable` solo por `created_at`.
+  El fix ya no usa `created_at` como observacion de mercado.
 - SPY continua siendo el ETF `SPY (ETF S&P 500)`. No se usa el indice SPX de
   TradingView ni se afirma equivalencia entre ambos instrumentos.
 
@@ -35,12 +42,18 @@ el preflight al cierre y ejecutar la validacion cerrada antes del merge.
   `equity_at_exact_open`, con ventana apertura XNYS -> `account_read_at`.
 - Benchmark: apertura exacta de SPY -> observacion actual del carrier ya
   existente. Solo se publica en grafica, tabla y tarjeta si el estado es
-  `comparable`, el instrumento es SPY y el desfase es de como maximo 300
-  segundos. El umbral esta centralizado en
-  `CURRENT_BENCHMARK_ALIGNMENT_TOLERANCE_SECONDS`.
-- Observacion futura, anterior a la apertura, missing, instrumento distinto o
-  desfase superior a 300 s permanece `unavailable`; la UI muestra `n/d`,
-  razon y `as_of`, y no calcula ganador.
+  `comparable`, el instrumento es SPY, existe un
+  `provider_observed_at`/`market_observed_at` explicito y el desfase frente a
+  `account_read_at` es de como maximo 300 segundos. El umbral esta
+  centralizado en `CURRENT_BENCHMARK_ALIGNMENT_TOLERANCE_SECONDS` y no
+  legitima por si mismo la edad de un cache.
+- Si el cache solo contiene `created_at`, el current queda `unavailable` con
+  razon `current_observation_timestamp_unverified`; la UI muestra `n/d` y no
+  hay ganador ni valor SPY visible. Un timestamp explicito valido continua
+  siendo comparable dentro de la tolerancia.
+- Observacion futura, anterior a la apertura, missing, instrumento distinto,
+  timestamp no verificable o desfase superior a 300 s permanece `unavailable`;
+  la UI muestra `n/d`, razon y `as_of`, y no calcula ganador.
 - El valor SPY crudo puede mantenerse en el carrier para diagnostico, pero no
   entra en la serie visible ni en el conteo de ganadores si la comparacion no
   es valida.
@@ -69,6 +82,10 @@ la fuente de datos.
 - N1 y version: `7717c20f`; focales finales, regresiones y version policy
   `96 passed`.
 - QA de frontera: `e04f3ba0`, prueba del limite inclusivo de 300 segundos.
+- P-L88R caracterizacion: `7abdfb1f`; el caso de cache reciente sin
+  timestamp explicito fue rojo (`1 failed`). Ajuste fail-closed y regresiones:
+  `9350f024`; P-L88R `10 passed` y regresiones P-L72/P-L74/P-L75/P-L82/P-L82R
+  `40 passed`.
 - Version candidata: v0.4.225.
 - Ruff afectado: verde. `check_no_nulls.py`: verde (480 archivos).
 - `git diff --check`: verde.
