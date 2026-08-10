@@ -66,6 +66,20 @@ def _timestamp(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _explicit_provider_observed_at(meta: Mapping[str, Any]) -> datetime | None:
+    """Return only a provider/market observation timestamp from metadata.
+
+    Cache creation time describes when this process wrote an artifact; it is
+    not evidence of when the provider observed the market value.
+    """
+
+    for key in ("provider_observed_at", "market_observed_at"):
+        observed_at = _timestamp(meta.get(key))
+        if observed_at is not None:
+            return observed_at
+    return None
+
+
 def _session_open_at(session_date: str) -> datetime:
     local = datetime.combine(date.fromisoformat(session_date), time(9, 30), tzinfo=MARKET_TIMEZONE)
     return local.astimezone(timezone.utc)
@@ -427,7 +441,8 @@ def load_cached_spy_open_observations(
         session_date: str,
         price: float,
         *,
-        observed_at: str,
+        observed_at: str | None,
+        observation_timestamp_verified: bool,
         provenance: Mapping[str, Any],
         paired_open_price: float | None = None,
     ) -> None:
@@ -436,6 +451,7 @@ def load_cached_spy_open_observations(
                 "session_date": session_date,
                 "price": price,
                 "observed_at": observed_at,
+                "observation_timestamp_verified": observation_timestamp_verified,
                 "source": provenance.get("source"),
                 "price_basis": provenance.get("price_basis"),
                 "cache_created_at": provenance.get("cache_created_at"),
@@ -484,6 +500,7 @@ def load_cached_spy_open_observations(
             continue
         source = str(meta.get("source") or "")
         provenance = _cache_provenance(meta_path, meta, created_at, source, basis, interval)
+        provider_observed_at = _explicit_provider_observed_at(meta)
         open_series = _field_series(frame, symbol, "Open")
         close_series = _field_series(frame, symbol, "Close")
         artifact_open_sessions: set[str] = set()
@@ -506,6 +523,7 @@ def load_cached_spy_open_observations(
                 session_date,
                 value,
                 observed_at=_session_open_at(session_date).isoformat(),
+                observation_timestamp_verified=True,
                 provenance=provenance,
             )
             artifact_open_sessions.add(session_date)
@@ -519,8 +537,10 @@ def load_cached_spy_open_observations(
             if value is None or value <= 0 or pd.isna(index):
                 continue
             # A daily cache row is indexed at the civil session date.  Its
-            # actual observation time is the cache capture, not midnight.
-            observed_at = created_at.isoformat()
+            # provider observation time is unavailable unless the metadata
+            # carries an explicit provider/market timestamp.  created_at is
+            # deliberately not a substitute for that authority.
+            observed_at = provider_observed_at.isoformat() if provider_observed_at else None
             session_date = (
                 index.tz_convert(MARKET_TIMEZONE).date().isoformat()
                 if index.tzinfo is not None
@@ -533,6 +553,7 @@ def load_cached_spy_open_observations(
                 session_date,
                 value,
                 observed_at=observed_at,
+                observation_timestamp_verified=provider_observed_at is not None,
                 provenance=provenance,
                 paired_open_price=artifact_open_prices.get(session_date),
             )
@@ -710,10 +731,12 @@ def build_open_to_open_rows(
         spy_start = _finite(spy[latest_session].get("price"))
         comparison_status = "unavailable"
         comparison_reason = "current_observation_unavailable"
+        timestamp_verified = current_spy.get("observation_timestamp_verified")
         spy_pct = (
             current_spy_value / spy_start - 1.0
             if (
-                spy_start is not None
+                timestamp_verified is not False
+                and spy_start is not None
                 and spy_start > 0
                 and current_spy_value is not None
                 and current_spy.get("price_basis") == spy[latest_session].get("price_basis")
@@ -726,6 +749,8 @@ def build_open_to_open_rows(
             comparison_reason = "current_spy_unavailable"
         elif current_spy.get("price_basis") != spy[latest_session].get("price_basis"):
             comparison_reason = "current_price_basis_mismatch"
+        elif timestamp_verified is False:
+            comparison_reason = "current_observation_timestamp_unverified"
         elif current_spy_at is None:
             comparison_reason = "current_observation_unavailable"
         elif current_spy_at > current_at:

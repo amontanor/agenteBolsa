@@ -1,8 +1,7 @@
-from datetime import datetime, timezone
 import json
+from datetime import datetime, timezone
 
 import pandas as pd
-
 import pytest
 
 from agente_bolsa import web_app
@@ -92,6 +91,43 @@ def test_recent_cache_capture_without_provider_timestamp_is_not_comparable(tmp_p
     assert current["comparison_status"] == "unavailable"
     assert current["comparison_reason"] == "current_observation_timestamp_unverified"
     assert current["spy_pct"] is None
+
+
+def test_explicit_provider_timestamp_can_be_compared(tmp_path):
+    cache = tmp_path / "cache" / "market_data"
+    cache.mkdir(parents=True)
+    pd.DataFrame(
+        {"Open": [100.0], "Close": [101.0]},
+        index=pd.to_datetime(["2026-08-10"]),
+    ).to_pickle(cache / "market_data_explicit.pkl")
+    (cache / "market_data_explicit.json").write_text(
+        json.dumps(
+            {
+                "requested_symbols": ["SPY"],
+                "interval": "1d",
+                "price_basis": "adjusted_ohlc",
+                "source": "fixture",
+                "created_at": "2026-08-10T13:59:30+00:00",
+                "provider_observed_at": "2026-08-10T13:59:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    now = datetime(2026, 8, 10, 14, 0, tzinfo=UTC)
+    spy = load_cached_spy_open_observations(Settings(_env_file=None, DATA_DIR=tmp_path), now=now)
+    rows = build_open_to_open_rows(
+        [{"session_date": "2026-08-10", "equity": 100.0, "observed_at": "2026-08-10T13:30:00+00:00"}],
+        spy,
+        current_equity=102.0,
+        current_equity_at=now,
+    )
+
+    current = rows[-1]
+    assert spy["current"]["observed_at"] == "2026-08-10T13:59:00+00:00"
+    assert current["comparison_status"] == "comparable"
+    assert current["comparison_lag_seconds"] == pytest.approx(60.0)
+    assert current["spy_pct"] == pytest.approx(0.01)
 
 
 def test_current_spy_observation_beyond_tolerance_is_unavailable():
