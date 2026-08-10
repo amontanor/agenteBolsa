@@ -64,7 +64,10 @@ from agente_bolsa.tools.equity_metrics import (
     position_intraday_pl_reconciliation,
 )
 from agente_bolsa.tools.news_sentiment import fetch_symbol_news
-from agente_bolsa.tools.opening_performance import opening_performance_context
+from agente_bolsa.tools.opening_performance import (
+    CURRENT_BENCHMARK_ALIGNMENT_TOLERANCE_SECONDS,
+    opening_performance_context,
+)
 from agente_bolsa.tools.portfolio_insights import (
     latest_analyzed_news as build_latest_analyzed_news,
 )
@@ -323,6 +326,25 @@ def _pct_signed(value: Any) -> str:
         return "-"
     sign = "+" if amount > 0 else ""
     return f"{sign}{amount:.2f}%"
+
+
+def _pct_signed_or_na(value: Any) -> str:
+    return _pct_signed(value) if _num(value) is not None else "n/d"
+
+
+def _money_or_na(value: Any) -> str:
+    return _money(value) if _num(value) is not None else "n/d"
+
+
+def _portfolio_pct_label(value: Any) -> str:
+    return _pct_signed(value) if _num(value) is not None else "n/d"
+
+
+def _portfolio_pct_color(value: Any) -> str:
+    number = _num(value)
+    if number is None or number == 0:
+        return "#374151"
+    return "#15803d" if number > 0 else "#b91c1c"
 
 
 def _today_pl_display(
@@ -1246,6 +1268,54 @@ def _section_title(title: str, subtitle: str | None = None) -> None:
     st.markdown(f"<div class='section-title'>{title}</div>{sub}", unsafe_allow_html=True)
 
 
+def _opening_comparable_metric(opening_context: dict[str, Any] | None) -> dict[str, Any]:
+    """Expose the shared opening window without making a benchmark guess."""
+
+    context = opening_context or {}
+    account = context.get("account_current") or {}
+    current = context.get("current") or {}
+    system_amount = _num(account.get("system_delta"))
+    system_pct = _num(account.get("system_pct"))
+    system_start_at = account.get("system_start_at")
+    system_end_at = account.get("system_end_at")
+    if system_amount is None or system_pct is None or not system_start_at or not system_end_at:
+        system_status = "unavailable"
+        system_reason = "opening_equity_unavailable"
+    else:
+        system_status = "available"
+        system_reason = None
+
+    instrument_label = str(current.get("instrument_label") or "SPY (ETF S&P 500)")
+    benchmark_symbol = str(current.get("benchmark_symbol") or "SPY").upper()
+    instrument_is_spy = benchmark_symbol == "SPY" and "SPY" in instrument_label.upper()
+    comparison_status = str(current.get("comparison_status") or "unavailable")
+    if not instrument_is_spy:
+        spy_status = "unavailable"
+        spy_reason = "benchmark_instrument_not_spy"
+    elif comparison_status == "comparable" and _num(current.get("spy_pct")) is not None:
+        spy_status = "comparable"
+        spy_reason = None
+    else:
+        spy_status = "unavailable"
+        spy_reason = str(current.get("comparison_reason") or "current_observation_unavailable")
+
+    return {
+        "system_status": system_status,
+        "system_reason": system_reason,
+        "system_amount": system_amount,
+        "system_pct": system_pct,
+        "system_start_at": system_start_at,
+        "system_end_at": system_end_at,
+        "spy_status": spy_status,
+        "spy_reason": spy_reason,
+        "spy_pct": _num(current.get("spy_pct")) if spy_status == "comparable" else None,
+        "spy_as_of": current.get("spy_end_at"),
+        "comparison_lag_seconds": _num(current.get("comparison_lag_seconds")),
+        "instrument_label": instrument_label,
+        "price_basis": current.get("price_basis"),
+    }
+
+
 def _account_group(
     *,
     initial_equity: float | None,
@@ -1264,6 +1334,7 @@ def _account_group(
     equity_as_of: str | None = None,
     today_detail: str | None = None,
     position_intraday: dict[str, Any] | None = None,
+    opening_context: dict[str, Any] | None = None,
 ) -> None:
     equity_summary = equity_summary or {}
     position_intraday = position_intraday or {}
@@ -1294,6 +1365,40 @@ def _account_group(
     )
     equity_detail = f"{equity_detail} · {source_detail}" if equity_detail else source_detail
     equity_start_label = _portfolio_display_date(equity_summary.get("start_date"))
+    opening_metric = _opening_comparable_metric(opening_context)
+    opening_tone = (
+        "good"
+        if (opening_metric.get("system_amount") or 0.0) > 0
+        else "bad"
+        if (opening_metric.get("system_amount") or 0.0) < 0
+        else "neutral"
+    )
+    opening_interval = " → ".join(
+        _local_datetime(opening_metric.get(key), "Europe/Madrid")
+        for key in ("system_start_at", "system_end_at")
+    )
+    opening_spy = (
+        _pct_signed_or_na(opening_metric.get("spy_pct"))
+        if opening_metric.get("spy_status") == "comparable"
+        else "n/d"
+    )
+    opening_spy_detail = " · ".join(
+        item
+        for item in (
+            str(opening_metric.get("instrument_label") or "SPY (ETF S&P 500)"),
+            (
+                f"as_of {_local_datetime(opening_metric.get('spy_as_of'), 'Europe/Madrid')}"
+                if opening_metric.get("spy_as_of")
+                else str(opening_metric.get("spy_reason") or "observación n/d")
+            ),
+            (
+                f"desfase {opening_metric['comparison_lag_seconds']:.0f}s"
+                if opening_metric.get("comparison_lag_seconds") is not None
+                else None
+            ),
+        )
+        if item
+    )
     st.markdown(
         f"""
         <div class="account-strip">
@@ -1308,9 +1413,21 @@ def _account_group(
                 <div><span>Cash</span><strong>{_money(cash)}</strong></div>
                 <div><span>Invertido</span><strong>{_money(exposure)}</strong><em>{_pct(exposure_pct)}</em></div>
             </div>
+            <div class="account-kpis opening-kpis">
+                <div class="account-kpi {opening_tone}">
+                    <span>Desde apertura XNYS · Sistema</span>
+                    <strong>{_money_or_na(opening_metric.get("system_amount"))} {_pct_signed_or_na(opening_metric.get("system_pct"))}</strong>
+                    <em>{escape(opening_interval)}</em>
+                </div>
+                <div class="account-kpi">
+                    <span>Desde apertura XNYS · {escape(str(opening_metric.get("instrument_label") or "SPY (ETF S&P 500)"))}</span>
+                    <strong>{opening_spy}</strong>
+                    <em>{escape(opening_spy_detail)}</em>
+                </div>
+            </div>
             <div class="account-kpis">
                 <div class="{today_class}">
-                    <span>Ganancia/pérdida global de hoy</span>
+                    <span>Ganancia/pérdida global (desde cierre anterior)</span>
                     <strong>{today_metric["amount"]}</strong>
                     <em>
                         <span>{today_display["primary_pct"]} {today_display["period_caption"]}</span>
@@ -2205,7 +2322,9 @@ def _portfolio_value_series_from_alpaca(
                 "valor_cartera": equity,
                 "P/L dia": day_pl,
                 "% dia": day_pct,
-                "label": f"{_money(equity)} ({_pct_signed(day_pct)})",
+                "label_pct": _portfolio_pct_label(day_pct),
+                "label_color": _portfolio_pct_color(day_pct),
+                "label": f"{_money(equity)} ({_portfolio_pct_label(day_pct)})",
                 "fuente": "Alpaca (provisional)" if is_provisional else "Alpaca",
                 "es_provisional": is_provisional,
             }
@@ -2499,7 +2618,9 @@ def _estimated_portfolio_value_series(
                 "valor_cartera": rounded_equity,
                 "P/L dia": item["P/L dia"],
                 "% dia": day_pct,
-                "label": f"{_money(rounded_equity)} ({_pct_signed(day_pct)})",
+                "label_pct": _portfolio_pct_label(day_pct),
+                "label_color": _portfolio_pct_color(day_pct),
+                "label": f"{_money(rounded_equity)} ({_portfolio_pct_label(day_pct)})",
                 "fuente": "estimado",
             }
         )
@@ -2525,6 +2646,10 @@ def _portfolio_value_chart(
         st.markdown("<div class='empty-box'>Sin datos suficientes para graficar la cartera.</div>", unsafe_allow_html=True)
         return _portfolio_equity_summary(df)
     chart_df = df.copy()
+    if "label_pct" not in chart_df.columns:
+        chart_df["label_pct"] = chart_df.get("% dia", pd.Series(index=chart_df.index, dtype=float)).map(_portfolio_pct_label)
+    if "label_color" not in chart_df.columns:
+        chart_df["label_color"] = chart_df.get("% dia", pd.Series(index=chart_df.index, dtype=float)).map(_portfolio_pct_color)
     visible_summary = (
         _portfolio_equity_summary(chart_df)
         if days is None
@@ -2536,7 +2661,7 @@ def _portfolio_value_chart(
             "Vista degradada: grafico no disponible por dependencia opcional faltante; mostrando serie tabular.",
         )
         st.dataframe(
-            chart_df[["fecha", "valor_cartera", "P/L dia", "% dia", "fuente"]],
+            chart_df[["fecha", "valor_cartera", "P/L dia", "% dia", "label_pct", "fuente"]],
             width="stretch",
             hide_index=True,
         )
@@ -2575,7 +2700,24 @@ def _portfolio_value_chart(
         .mark_circle(size=76, color="#0e7a47", opacity=0.95)
         .encode(x=date_axis, y="valor_cartera:Q")
     )
-    st.altair_chart((line + points).properties(height=292), width="stretch")
+    labels = (
+        alt.Chart(chart_df)
+        .mark_text(align="center", baseline="bottom", dy=-9, fontSize=11, clip=False)
+        .encode(
+            x=date_axis,
+            y="valor_cartera:Q",
+            text="label_pct:N",
+            color=alt.Color(
+                "label_color:N",
+                scale=alt.Scale(
+                    domain=["#15803d", "#b91c1c", "#374151"],
+                    range=["#15803d", "#b91c1c", "#374151"],
+                ),
+                legend=None,
+            ),
+        )
+    )
+    st.altair_chart((line + points + labels).properties(height=292), width="stretch")
     return visible_summary
 
 
@@ -3889,6 +4031,15 @@ def _opening_chart_segments(rows: list[dict[str, Any]]) -> list[list[dict[str, A
     return segments
 
 
+def _chart_spy_value(row: dict[str, Any]) -> float | None:
+    comparison_status = row.get("comparison_status")
+    if comparison_status is None and row.get("status") == "final":
+        comparison_status = "comparable"
+    if str(comparison_status or "") != "comparable":
+        return None
+    return _num(row.get("spy_pct"))
+
+
 def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
     """Draw contiguous history and a current interval without crossing gaps."""
 
@@ -3910,7 +4061,7 @@ def _daily_vs_spy_chart(rows: list[dict[str, Any]]) -> Any:
             "sesion_iniciada": row.get("session_date"),
             "end_session_date": row.get("end_session_date"),
             "Sistema": row.get("system_pct"),
-            "SP500": row.get("spy_pct"),
+            "SP500": _chart_spy_value(row),
             "estado": (
                 "Final"
                 if row.get("status") == "final"
@@ -4072,7 +4223,7 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
             _section_title(
                 "Rendimiento desde apertura: Sistema vs SPY",
                 "Sesión iniciada en apertura XNYS → siguiente apertura; la sesión vigente compara la última apertura con ahora. "
-                "Sistema = variación de equity; SPY = ETF S&P 500 ajustado. Sin ajustes de flujos.",
+                f"Sistema = variación de equity; SPY = ETF S&P 500 ajustado y solo comparable con un desfase ≤ {CURRENT_BENCHMARK_ALIGNMENT_TOLERANCE_SECONDS // 60} min. Sin ajustes de flujos.",
             )
         with control_col:
             visible_days = st.selectbox(
@@ -4115,9 +4266,9 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
         _render_opening_omissions(opening_context)
         html_rows = []
         for row in reversed(visible_rows):
-            system_text = f"{_pct_signed(row['system_pct'])}<span>{_money(row['system_delta'])}</span>"
-            spy_text = _pct_signed(row["spy_pct"])
+            system_text = f"{_pct_signed_or_na(row['system_pct'])}<span>{_money_or_na(row['system_delta'])}</span>"
             comparison_status = row.get("comparison_status") or ("comparable" if row["status"] == "final" else "unavailable")
+            spy_text = _pct_signed_or_na(row["spy_pct"]) if comparison_status == "comparable" else "n/d"
             if comparison_status != "comparable" or row.get("system_pct") is None or row.get("spy_pct") is None:
                 winner = "No comparable"
             else:
@@ -5225,6 +5376,7 @@ def page_dashboard() -> None:
         equity_as_of=str(account_current.get("system_end_at") or account_read_at.isoformat()),
         today_detail=today_detail,
         position_intraday=position_intraday,
+        opening_context=opening_context,
     )
 
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)

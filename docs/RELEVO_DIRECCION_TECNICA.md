@@ -1608,3 +1608,38 @@ carriers ya cargados, conserva `n/d` cuando falta P/L realizado o apertura y no
 altera trading, riesgo, ejecución ni P-L80. La tarea web fue reiniciada de
 forma gestionada; raíz, `/health` y `/kindle` quedaron 200 local/LAN y las dos
 saludes se separaron 110,6 s. No iniciar P-L88.
+
+## P-L88 - dashboard Sistema vs S&P 500
+
+El candidato aislado `codex/pl88-system-spy-temporal-ui` adopta la ventana
+apertura XNYS exacta -> ahora para Sistema y el carrier existente de SPY. Un
+SPY solo se dibuja/compara si es el ETF correcto, transporta
+`provider_observed_at`/`market_observed_at` explicito y su observacion esta a
+<=300 segundos del `account_read_at`; `created_at` de cache no sustituye ese
+timestamp. Sin carrier explicito el caso queda `n/d` con razon
+`current_observation_timestamp_unverified`, sin ganador. La cabecera conserva
+el P/L oficial desde cierre anterior pero lo identifica con ese nombre. El
+commit N1 separado etiqueta cada punto visible de `Valor de cartera` con
+porcentaje y color semantico, preservando el predecesor oculto.
+
+Base productiva: `0cf8a535` / tree `57ad3370` / v0.4.224 limpia. Candidato
+v0.4.225; commits `81a2bcd0`, `64bf9b59`, `7717c20f`, `e04f3ba0`, `7abdfb1f`,
+`9350f024`; informe unico `docs/informe_p_l88_sistema_spy_temporal.md`.
+P-L88R: caracterizacion roja `1 failed`, despues `10 passed` y `40 passed` de
+regresiones SPY; Ruff/NUL/diff verdes. XNYS estaba abierto durante la
+ejecucion, por lo que no hubo suite completa, merge, reinicio ni despliegue.
+La UI queda lista para un despliegue veraz, pero la comparacion SPY
+apertura->ahora sigue `unavailable` hasta resolver fuente/cadencia. P-L80 y la
+politica de trading permanecen intactos.
+
+### Cierre P-L88R-D
+
+La suite cerrada inicial encontro una expectativa de version stale en
+`test_p59c_llm_selected_authority.py` (`1567 passed, 1 failed, 1 warning`),
+reproducible tambien en la base `0cf8a535`. `de7b9923` corrigio solo el test a
+`0.4.225`; la suite fresca definitiva termino `2493 passed, 1 skipped, 1
+warning` en `801.14 s`. Smoke fake `1 passed`, Ruff/NUL/compile/diff-check y
+configuracion aislada verdes. No se repite la suite por cambios documentales
+posteriores; el siguiente paso unico es preflight cerrado, merge gestionado y
+dos comprobaciones de salud. SPY sigue honestamente `n/d` si no existe
+`provider_observed_at`/`market_observed_at` alineado.

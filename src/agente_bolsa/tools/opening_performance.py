@@ -29,6 +29,10 @@ SCHEMA_VERSION = "p-l72.session-open-snapshot.v1"
 EVENT_TYPE = "session_open_snapshot"
 EVENT_ID_PREFIX = "session_open_snapshot:"
 MARKET_TIMEZONE = ZoneInfo("America/New_York")
+# A benchmark quote captured a few minutes before the account read still
+# describes the same opening-to-now interval; a stale quote must remain
+# unavailable.  This is presentation/measurement metadata only.
+CURRENT_BENCHMARK_ALIGNMENT_TOLERANCE_SECONDS = 5 * 60
 
 
 def _finite(value: Any) -> float | None:
@@ -60,6 +64,20 @@ def _timestamp(value: Any) -> datetime | None:
     except (TypeError, ValueError, OSError, OverflowError):
         return None
     return parsed.astimezone(timezone.utc)
+
+
+def _explicit_provider_observed_at(meta: Mapping[str, Any]) -> datetime | None:
+    """Return only a provider/market observation timestamp from metadata.
+
+    Cache creation time describes when this process wrote an artifact; it is
+    not evidence of when the provider observed the market value.
+    """
+
+    for key in ("provider_observed_at", "market_observed_at"):
+        observed_at = _timestamp(meta.get(key))
+        if observed_at is not None:
+            return observed_at
+    return None
 
 
 def _session_open_at(session_date: str) -> datetime:
@@ -423,7 +441,8 @@ def load_cached_spy_open_observations(
         session_date: str,
         price: float,
         *,
-        observed_at: str,
+        observed_at: str | None,
+        observation_timestamp_verified: bool,
         provenance: Mapping[str, Any],
         paired_open_price: float | None = None,
     ) -> None:
@@ -432,6 +451,7 @@ def load_cached_spy_open_observations(
                 "session_date": session_date,
                 "price": price,
                 "observed_at": observed_at,
+                "observation_timestamp_verified": observation_timestamp_verified,
                 "source": provenance.get("source"),
                 "price_basis": provenance.get("price_basis"),
                 "cache_created_at": provenance.get("cache_created_at"),
@@ -480,6 +500,7 @@ def load_cached_spy_open_observations(
             continue
         source = str(meta.get("source") or "")
         provenance = _cache_provenance(meta_path, meta, created_at, source, basis, interval)
+        provider_observed_at = _explicit_provider_observed_at(meta)
         open_series = _field_series(frame, symbol, "Open")
         close_series = _field_series(frame, symbol, "Close")
         artifact_open_sessions: set[str] = set()
@@ -502,6 +523,7 @@ def load_cached_spy_open_observations(
                 session_date,
                 value,
                 observed_at=_session_open_at(session_date).isoformat(),
+                observation_timestamp_verified=True,
                 provenance=provenance,
             )
             artifact_open_sessions.add(session_date)
@@ -515,8 +537,10 @@ def load_cached_spy_open_observations(
             if value is None or value <= 0 or pd.isna(index):
                 continue
             # A daily cache row is indexed at the civil session date.  Its
-            # actual observation time is the cache capture, not midnight.
-            observed_at = created_at.isoformat()
+            # provider observation time is unavailable unless the metadata
+            # carries an explicit provider/market timestamp.  created_at is
+            # deliberately not a substitute for that authority.
+            observed_at = provider_observed_at.isoformat() if provider_observed_at else None
             session_date = (
                 index.tz_convert(MARKET_TIMEZONE).date().isoformat()
                 if index.tzinfo is not None
@@ -529,6 +553,7 @@ def load_cached_spy_open_observations(
                 session_date,
                 value,
                 observed_at=observed_at,
+                observation_timestamp_verified=provider_observed_at is not None,
                 provenance=provenance,
                 paired_open_price=artifact_open_prices.get(session_date),
             )
@@ -688,6 +713,8 @@ def build_open_to_open_rows(
                 "system_source": account[start].get("source"),
                 "spy_source": spy[start].get("source"),
                 "price_basis": spy[start].get("price_basis"),
+                "benchmark_symbol": "SPY",
+                "instrument_label": spy_market.get("instrument") or "SPY (ETF S&P 500)",
                 "comparison_status": "comparable",
                 "comparison_reason": None,
             }
@@ -704,10 +731,12 @@ def build_open_to_open_rows(
         spy_start = _finite(spy[latest_session].get("price"))
         comparison_status = "unavailable"
         comparison_reason = "current_observation_unavailable"
+        timestamp_verified = current_spy.get("observation_timestamp_verified")
         spy_pct = (
             current_spy_value / spy_start - 1.0
             if (
-                spy_start is not None
+                timestamp_verified is not False
+                and spy_start is not None
                 and spy_start > 0
                 and current_spy_value is not None
                 and current_spy.get("price_basis") == spy[latest_session].get("price_basis")
@@ -720,13 +749,15 @@ def build_open_to_open_rows(
             comparison_reason = "current_spy_unavailable"
         elif current_spy.get("price_basis") != spy[latest_session].get("price_basis"):
             comparison_reason = "current_price_basis_mismatch"
+        elif timestamp_verified is False:
+            comparison_reason = "current_observation_timestamp_unverified"
         elif current_spy_at is None:
             comparison_reason = "current_observation_unavailable"
         elif current_spy_at > current_at:
             comparison_reason = "current_observation_future"
         elif current_spy_at < _session_open_at(latest_session):
             comparison_reason = "current_observation_before_session_open"
-        elif current_spy_at != current_at:
+        elif (current_at - current_spy_at).total_seconds() > CURRENT_BENCHMARK_ALIGNMENT_TOLERANCE_SECONDS:
             comparison_reason = "current_observation_not_aligned"
         else:
             comparison_status = "comparable"
@@ -749,11 +780,14 @@ def build_open_to_open_rows(
                 "system_source": account[latest_session].get("source"),
                 "spy_source": current_spy.get("source"),
                 "price_basis": current_spy.get("price_basis"),
+                "benchmark_symbol": "SPY",
+                "instrument_label": spy_market.get("instrument") or "SPY (ETF S&P 500)",
                 "comparison_status": comparison_status,
                 "comparison_reason": comparison_reason,
                 "comparison_lag_seconds": (
                     (current_at - current_spy_at).total_seconds() if current_spy_at is not None else None
                 ),
+                "comparison_alignment_tolerance_seconds": CURRENT_BENCHMARK_ALIGNMENT_TOLERANCE_SECONDS,
                 "comparison_coverage": {
                     "system_end_at": current_at.isoformat(),
                     "spy_end_at": current_spy_at.isoformat() if current_spy_at is not None else None,

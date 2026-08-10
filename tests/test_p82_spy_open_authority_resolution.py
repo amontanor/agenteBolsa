@@ -36,6 +36,7 @@ def _write_cache(
     metadata = {
         "source": "fixture",
         "created_at": created_at,
+        "provider_observed_at": created_at,
         "requested_symbols": requested_symbols,
         "start": SESSION_DATE,
         "end": SESSION_DATE,

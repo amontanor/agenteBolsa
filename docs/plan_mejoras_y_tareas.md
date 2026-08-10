@@ -3578,4 +3578,46 @@ cobertura K/N y un bloque de ventas desde la apertura XNYS, usando únicamente
 hay llamadas nuevas, persistencia, cambio de métrica diaria, política,
 trading, riesgo, ejecución, Kindle, LLM o configuración. Salud web local/LAN
 200 en dos comprobaciones separadas; scheduler, kernel, flags paper/live y
-cutoff P-L80 permanecen intactos.
+ cutoff P-L80 permanecen intactos.
+
+## P-L88 - coherencia temporal del dashboard Sistema vs S&P 500
+
+Estado: `ready_for_closed_market_deployment_truthful_ui` en candidato v0.4.225;
+no integrado mientras XNYS esta abierto. El cambio N2 usa la apertura XNYS
+exacta como inicio comun para Sistema y SPY. El benchmark solo es comparable
+si es el ETF SPY, transporta `provider_observed_at`/`market_observed_at`
+explicito y su desfase frente a `account_read_at` no supera 300 segundos.
+`created_at` de un cache diario no es timestamp de mercado: sin carrier
+explicito el current queda `n/d` con
+`current_observation_timestamp_unverified`, sin ganador. La metrica previa de
+cierre Alpaca se conserva con copy explicito `desde cierre anterior`.
+
+El commit N1 separado añade etiquetas porcentuales visibles a todos los puntos
+de `Valor de cartera` sin cambiar calculo, fuente, resumen ni ventanas. El
+primer punto sin predecesor es `n/d`; positivo/negativo/cero usan verde/rojo/
+gris.
+
+Commits del worktree: `81a2bcd0` caracterizacion, `64bf9b59` contrato temporal,
+`7717c20f` etiquetas/version, `e04f3ba0` QA de frontera, `7abdfb1f`
+caracterizacion P-L88R y `9350f024` ajuste fail-closed. QA P-L88R: `10 passed`
+mas `40 passed` de regresiones SPY relacionadas; Ruff/NUL/diff verdes. Suite
+completa y despliegue quedan para cierre de mercado. No tocar P-L80, broker,
+kernel, execution, risk, config, `.env`, scheduler, datos ni politica. Siguiente
+accion unica: decidir fuente/cadencia con timestamp de proveedor y, solo despues,
+preflight cerrado y validacion/despliegue secuenciado.
+
+### P-L88R-D - QA cerrada del fix fail-closed
+
+La suite cerrada inicial se detuvo en `1567 passed, 1 failed, 1 warning` por
+la expectativa stale de version `0.4.222` en
+`test_p59c_llm_selected_authority.py`. La misma asercion falla igualmente en
+la base productiva `0cf8a535`, por lo que se clasifico como deuda preexistente.
+El commit `de7b9923` actualiza unicamente esa expectativa a `0.4.225`.
+
+La suite fresca sobre el tree funcional definitivo termino `2493 passed, 1
+skipped, 1 warning` en `801.14 s`; el skip y el warning son preexistentes.
+Smoke fake `1 passed`, Ruff/NUL/compile/diff-check y gates de configuracion
+aislada verdes. El kernel temporal aparece `unsealed` sin violaciones por
+ausencia de manifiesto, que es el resultado esperado; el kernel productivo
+permanece valido. Dictamen: `ready_for_closed_market_deployment_truthful_ui`,
+pendiente solo de preflight cerrado, merge y salud postarranque.

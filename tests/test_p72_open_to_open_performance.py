@@ -62,6 +62,7 @@ def _write_spy_cache(tmp_path) -> None:
                 "price_basis": "adjusted_ohlc",
                 "source": "yfinance_cache",
                 "created_at": "2026-07-28T20:05:00+00:00",
+                "provider_observed_at": "2026-07-28T20:05:00+00:00",
             }
         ),
         encoding="utf-8",

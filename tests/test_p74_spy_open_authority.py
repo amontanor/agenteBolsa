@@ -44,6 +44,7 @@ def _write_cache(
             {
                 "source": "yfinance",
                 "created_at": created_at,
+                "provider_observed_at": created_at,
                 "requested_symbols": requested_symbols,
                 "start": "2026-07-29",
                 "end": "2026-07-29",
