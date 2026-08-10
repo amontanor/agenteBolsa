@@ -336,6 +336,17 @@ def _money_or_na(value: Any) -> str:
     return _money(value) if _num(value) is not None else "n/d"
 
 
+def _portfolio_pct_label(value: Any) -> str:
+    return _pct_signed(value) if _num(value) is not None else "n/d"
+
+
+def _portfolio_pct_color(value: Any) -> str:
+    number = _num(value)
+    if number is None or number == 0:
+        return "#374151"
+    return "#15803d" if number > 0 else "#b91c1c"
+
+
 def _today_pl_display(
     today_pl: Any,
     _invested: Any,
@@ -2311,7 +2322,9 @@ def _portfolio_value_series_from_alpaca(
                 "valor_cartera": equity,
                 "P/L dia": day_pl,
                 "% dia": day_pct,
-                "label": f"{_money(equity)} ({_pct_signed(day_pct)})",
+                "label_pct": _portfolio_pct_label(day_pct),
+                "label_color": _portfolio_pct_color(day_pct),
+                "label": f"{_money(equity)} ({_portfolio_pct_label(day_pct)})",
                 "fuente": "Alpaca (provisional)" if is_provisional else "Alpaca",
                 "es_provisional": is_provisional,
             }
@@ -2605,7 +2618,9 @@ def _estimated_portfolio_value_series(
                 "valor_cartera": rounded_equity,
                 "P/L dia": item["P/L dia"],
                 "% dia": day_pct,
-                "label": f"{_money(rounded_equity)} ({_pct_signed(day_pct)})",
+                "label_pct": _portfolio_pct_label(day_pct),
+                "label_color": _portfolio_pct_color(day_pct),
+                "label": f"{_money(rounded_equity)} ({_portfolio_pct_label(day_pct)})",
                 "fuente": "estimado",
             }
         )
@@ -2631,6 +2646,10 @@ def _portfolio_value_chart(
         st.markdown("<div class='empty-box'>Sin datos suficientes para graficar la cartera.</div>", unsafe_allow_html=True)
         return _portfolio_equity_summary(df)
     chart_df = df.copy()
+    if "label_pct" not in chart_df.columns:
+        chart_df["label_pct"] = chart_df.get("% dia", pd.Series(index=chart_df.index, dtype=float)).map(_portfolio_pct_label)
+    if "label_color" not in chart_df.columns:
+        chart_df["label_color"] = chart_df.get("% dia", pd.Series(index=chart_df.index, dtype=float)).map(_portfolio_pct_color)
     visible_summary = (
         _portfolio_equity_summary(chart_df)
         if days is None
@@ -2642,7 +2661,7 @@ def _portfolio_value_chart(
             "Vista degradada: grafico no disponible por dependencia opcional faltante; mostrando serie tabular.",
         )
         st.dataframe(
-            chart_df[["fecha", "valor_cartera", "P/L dia", "% dia", "fuente"]],
+            chart_df[["fecha", "valor_cartera", "P/L dia", "% dia", "label_pct", "fuente"]],
             width="stretch",
             hide_index=True,
         )
@@ -2681,7 +2700,24 @@ def _portfolio_value_chart(
         .mark_circle(size=76, color="#0e7a47", opacity=0.95)
         .encode(x=date_axis, y="valor_cartera:Q")
     )
-    st.altair_chart((line + points).properties(height=292), width="stretch")
+    labels = (
+        alt.Chart(chart_df)
+        .mark_text(align="center", baseline="bottom", dy=-9, fontSize=11, clip=False)
+        .encode(
+            x=date_axis,
+            y="valor_cartera:Q",
+            text="label_pct:N",
+            color=alt.Color(
+                "label_color:N",
+                scale=alt.Scale(
+                    domain=["#15803d", "#b91c1c", "#374151"],
+                    range=["#15803d", "#b91c1c", "#374151"],
+                ),
+                legend=None,
+            ),
+        )
+    )
+    st.altair_chart((line + points + labels).properties(height=292), width="stretch")
     return visible_summary
 
 
@@ -4230,7 +4266,7 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
         _render_opening_omissions(opening_context)
         html_rows = []
         for row in reversed(visible_rows):
-            system_text = f"{_pct_signed(row['system_pct'])}<span>{_money(row['system_delta'])}</span>"
+            system_text = f"{_pct_signed_or_na(row['system_pct'])}<span>{_money_or_na(row['system_delta'])}</span>"
             comparison_status = row.get("comparison_status") or ("comparable" if row["status"] == "final" else "unavailable")
             spy_text = _pct_signed_or_na(row["spy_pct"]) if comparison_status == "comparable" else "n/d"
             if comparison_status != "comparable" or row.get("system_pct") is None or row.get("spy_pct") is None:

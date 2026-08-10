@@ -44,4 +44,5 @@ __all__ = ["__version__"]
 # P-L86R: hidden /kindle page inside the existing Streamlit web task (0.4.222).
 # P-L86K: raw HTML /kindle route for non-JavaScript Kindle browsers (0.4.223).
 # P-L87: dashboard position-day reconciliation and sales since XNYS open (0.4.224).
-__version__ = "0.4.224"
+# P-L88: coherent opening-to-now System/SPY UI and portfolio-point percentages (0.4.225).
+__version__ = "0.4.225"
