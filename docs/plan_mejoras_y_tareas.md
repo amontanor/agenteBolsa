@@ -3621,3 +3621,14 @@ aislada verdes. El kernel temporal aparece `unsealed` sin violaciones por
 ausencia de manifiesto, que es el resultado esperado; el kernel productivo
 permanece valido. Dictamen: `ready_for_closed_market_deployment_truthful_ui`,
 pendiente solo de preflight cerrado, merge y salud postarranque.
+
+### Cierre productivo P-L88R-D
+
+Estado: `deployed`, v0.4.225. Merge `--no-ff` `8b572948` sobre `0cf8a535`,
+segundo padre `2884f2ac`, tree `3d0c8650`. Suite definitiva `2493 passed, 1
+skipped, 1 warning`; focal post-merge `111 passed, 1 warning`, Ruff/NUL/
+compile/diff/config/kernel/smoke verdes. Salud 1 a las 00:01:49 CEST y salud
+2 a las 00:04:19 CEST, separadas ~150 s: raíz, `/health` y `/kindle` 200
+local/LAN, listener único, scheduler/token coherentes, paper seguro, 0
+criticos y 3 warnings preexistentes. SPY sigue fail-closed/unavailable sin
+timestamp de proveedor. P-L80, trading y politica no cambiaron.

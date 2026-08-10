@@ -112,6 +112,31 @@ gestionado solo si no se requiere reinicio global, y dos health checks >=75 s
 incluyendo `/`, `/health` y `/kindle` local/LAN. Ante fallo, `git revert`
 auditable. No ejecutar `kernel-seal`, no copiar manifest y no hacer push.
 
+## Cierre productivo P-L88R-D
+
+Dictamen: `deployed`.
+
+El candidato final `2884f2ac` se integro mediante merge `--no-ff` en
+`8b572948`; primer padre `0cf8a535` y segundo padre `2884f2ac`. El tree
+funcional/documental resultante es `3d0c8650` y la version es `0.4.225`. No
+hubo conflictos ni rollback. La suite completa fresca fue `2493 passed, 1
+skipped, 1 warning` en `801.14 s`; despues del merge quedaron verdes los 111
+focales, Ruff, NUL, compilacion, diff-check, configuracion aislada, kernel
+productivo y smoke fake. La correccion del test stale de version queda
+documentada en `de7b9923` y no cambia runtime.
+
+Salud 1: 2026-08-11T00:01:49+02:00. Salud 2:
+2026-08-11T00:04:19+02:00; separacion aproximada 150 s. En ambas se verifico
+HTTP 200 en `/`, `/health` y `/kindle` por `127.0.0.1` y `192.168.1.136`,
+listener unico `0.0.0.0:8501`, tarea web gestionada, paper activo, live y
+auto-apply desactivados, scheduler owner/token coherentes y kernel valido.
+`/kindle` entrego HTML real: `Cargando...` con meta-refresh y vista cargada
+con Cartera/SPY/P/L, sin shell Streamlit ni columna Cantidad. El runtime
+SQLite se mantuvo `unavailable` por WAL/sidecar, sin reparacion. Salud
+operativa: 0 criticos y 3 warnings preexistentes. No se hizo llamada SPY
+adicional, backfill, job manual, push ni cambio de politica; SPY continua
+`n/d` cuando falta timestamp de proveedor verificable.
+
 ## Cierre QA P-L88R-D
 
 La primera suite cerrada sobre el candidato se detuvo en `1567 passed, 1

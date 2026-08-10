@@ -1632,6 +1632,18 @@ La UI queda lista para un despliegue veraz, pero la comparacion SPY
 apertura->ahora sigue `unavailable` hasta resolver fuente/cadencia. P-L80 y la
 politica de trading permanecen intactos.
 
+### Cierre productivo P-L88R-D
+
+P-L88R-D queda `deployed` en v0.4.225: merge `8b572948` con primer padre
+`0cf8a535` y segundo padre `2884f2ac`, tree `3d0c8650`. Suite definitiva
+`2493 passed, 1 skipped, 1 warning`; focal post-merge `111 passed, 1 warning`
+y gates estaticos/config/kernel/smoke verdes. Dos saludes: 00:01:49 y
+00:04:19 CEST (~150 s), HTTP 200 local/LAN en `/`, `/health` y `/kindle`,
+listener unico, scheduler owner/token coherentes, paper activo y live/
+auto-apply off. El kernel productivo sigue valido. SPY no comparable sin
+`provider_observed_at`/`market_observed_at`; no iniciar una fuente nueva en
+este lote.
+
 ### Cierre P-L88R-D
 
 La suite cerrada inicial encontro una expectativa de version stale en
