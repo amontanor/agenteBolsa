@@ -111,3 +111,21 @@ funcional final, gates proporcionales, ensayo/merge `--no-ff`, reinicio web
 gestionado solo si no se requiere reinicio global, y dos health checks >=75 s
 incluyendo `/`, `/health` y `/kindle` local/LAN. Ante fallo, `git revert`
 auditable. No ejecutar `kernel-seal`, no copiar manifest y no hacer push.
+
+## Cierre QA P-L88R-D
+
+La primera suite cerrada sobre el candidato se detuvo en `1567 passed, 1
+failed, 1 warning` por una asercion de version obsoleta en
+`tests/test_p59c_llm_selected_authority.py`, que esperaba `0.4.222`. El mismo
+test y la misma expectativa existen en la base productiva `0cf8a535`; se
+reprodujo contra la base y se clasifico como deuda preexistente, no como una
+regresion de P-L88. El ajuste aislado `de7b9923` solo actualiza la expectativa
+al candidato `0.4.225`.
+
+Sobre el tree funcional definitivo, la suite fresca termino `2493 passed, 1
+skipped, 1 warning` en `801.14 s`. El skip y el warning son preexistentes. El
+smoke aislado del ciclo con datos temporales y fronteras fake termino `1
+passed`; no uso broker, red, LLM ni SQLite productiva. Ruff, NUL, compile,
+`git diff --check`, configuracion aislada y kernel temporal (`unsealed` sin
+violations, esperado sin manifiesto) quedaron verdes. El despliegue sigue
+pendiente de preflight cerrado y no se ha hecho ninguna llamada SPY nueva.

@@ -1631,3 +1631,15 @@ ejecucion, por lo que no hubo suite completa, merge, reinicio ni despliegue.
 La UI queda lista para un despliegue veraz, pero la comparacion SPY
 apertura->ahora sigue `unavailable` hasta resolver fuente/cadencia. P-L80 y la
 politica de trading permanecen intactos.
+
+### Cierre P-L88R-D
+
+La suite cerrada inicial encontro una expectativa de version stale en
+`test_p59c_llm_selected_authority.py` (`1567 passed, 1 failed, 1 warning`),
+reproducible tambien en la base `0cf8a535`. `de7b9923` corrigio solo el test a
+`0.4.225`; la suite fresca definitiva termino `2493 passed, 1 skipped, 1
+warning` en `801.14 s`. Smoke fake `1 passed`, Ruff/NUL/compile/diff-check y
+configuracion aislada verdes. No se repite la suite por cambios documentales
+posteriores; el siguiente paso unico es preflight cerrado, merge gestionado y
+dos comprobaciones de salud. SPY sigue honestamente `n/d` si no existe
+`provider_observed_at`/`market_observed_at` alineado.

@@ -3605,3 +3605,19 @@ completa y despliegue quedan para cierre de mercado. No tocar P-L80, broker,
 kernel, execution, risk, config, `.env`, scheduler, datos ni politica. Siguiente
 accion unica: decidir fuente/cadencia con timestamp de proveedor y, solo despues,
 preflight cerrado y validacion/despliegue secuenciado.
+
+### P-L88R-D - QA cerrada del fix fail-closed
+
+La suite cerrada inicial se detuvo en `1567 passed, 1 failed, 1 warning` por
+la expectativa stale de version `0.4.222` en
+`test_p59c_llm_selected_authority.py`. La misma asercion falla igualmente en
+la base productiva `0cf8a535`, por lo que se clasifico como deuda preexistente.
+El commit `de7b9923` actualiza unicamente esa expectativa a `0.4.225`.
+
+La suite fresca sobre el tree funcional definitivo termino `2493 passed, 1
+skipped, 1 warning` en `801.14 s`; el skip y el warning son preexistentes.
+Smoke fake `1 passed`, Ruff/NUL/compile/diff-check y gates de configuracion
+aislada verdes. El kernel temporal aparece `unsealed` sin violaciones por
+ausencia de manifiesto, que es el resultado esperado; el kernel productivo
+permanece valido. Dictamen: `ready_for_closed_market_deployment_truthful_ui`,
+pendiente solo de preflight cerrado, merge y salud postarranque.
