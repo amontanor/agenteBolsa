@@ -29,6 +29,10 @@ SCHEMA_VERSION = "p-l72.session-open-snapshot.v1"
 EVENT_TYPE = "session_open_snapshot"
 EVENT_ID_PREFIX = "session_open_snapshot:"
 MARKET_TIMEZONE = ZoneInfo("America/New_York")
+# A benchmark quote captured a few minutes before the account read still
+# describes the same opening-to-now interval; a stale quote must remain
+# unavailable.  This is presentation/measurement metadata only.
+CURRENT_BENCHMARK_ALIGNMENT_TOLERANCE_SECONDS = 5 * 60
 
 
 def _finite(value: Any) -> float | None:
@@ -688,6 +692,8 @@ def build_open_to_open_rows(
                 "system_source": account[start].get("source"),
                 "spy_source": spy[start].get("source"),
                 "price_basis": spy[start].get("price_basis"),
+                "benchmark_symbol": "SPY",
+                "instrument_label": spy_market.get("instrument") or "SPY (ETF S&P 500)",
                 "comparison_status": "comparable",
                 "comparison_reason": None,
             }
@@ -726,7 +732,7 @@ def build_open_to_open_rows(
             comparison_reason = "current_observation_future"
         elif current_spy_at < _session_open_at(latest_session):
             comparison_reason = "current_observation_before_session_open"
-        elif current_spy_at != current_at:
+        elif (current_at - current_spy_at).total_seconds() > CURRENT_BENCHMARK_ALIGNMENT_TOLERANCE_SECONDS:
             comparison_reason = "current_observation_not_aligned"
         else:
             comparison_status = "comparable"
@@ -749,11 +755,14 @@ def build_open_to_open_rows(
                 "system_source": account[latest_session].get("source"),
                 "spy_source": current_spy.get("source"),
                 "price_basis": current_spy.get("price_basis"),
+                "benchmark_symbol": "SPY",
+                "instrument_label": spy_market.get("instrument") or "SPY (ETF S&P 500)",
                 "comparison_status": comparison_status,
                 "comparison_reason": comparison_reason,
                 "comparison_lag_seconds": (
                     (current_at - current_spy_at).total_seconds() if current_spy_at is not None else None
                 ),
+                "comparison_alignment_tolerance_seconds": CURRENT_BENCHMARK_ALIGNMENT_TOLERANCE_SECONDS,
                 "comparison_coverage": {
                     "system_end_at": current_at.isoformat(),
                     "spy_end_at": current_spy_at.isoformat() if current_spy_at is not None else None,

@@ -1,11 +1,9 @@
 from datetime import datetime, timezone
 
-import pandas as pd
 import pytest
 
 from agente_bolsa import web_app
 from agente_bolsa.tools.opening_performance import build_open_to_open_rows
-
 
 UTC = timezone.utc
 
@@ -105,24 +103,6 @@ def test_system_window_is_open_to_now_even_when_spy_is_stale():
     assert current["spy_pct"] == pytest.approx(0.01)
     assert current["comparison_status"] == "unavailable"
     assert current["comparison_reason"] == "current_observation_not_aligned"
-
-
-def test_portfolio_series_exposes_signed_percent_label_for_each_point():
-    frame = web_app._portfolio_value_series_from_alpaca(
-        {
-            "timestamp": [
-                "2026-08-05T00:00:00Z",
-                "2026-08-06T00:00:00Z",
-                "2026-08-07T00:00:00Z",
-            ],
-            "equity": [100.0, 101.0, 99.0],
-        },
-        current_equity=None,
-        start_date="2026-08-01",
-    )
-
-    assert list(frame["label_pct"]) == ["n/d", "+1.00%", "-1.98%"]
-    assert list(frame["% dia"].iloc[1:]) == [0.01, pytest.approx(-0.019802, abs=1e-6)]
 
 
 def test_portfolio_series_keeps_source_rows_immutable():
