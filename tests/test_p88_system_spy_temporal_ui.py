@@ -68,6 +68,24 @@ def test_current_spy_observation_beyond_tolerance_is_unavailable():
     assert current["comparison_lag_seconds"] == pytest.approx(301.0)
 
 
+def test_current_spy_observation_at_tolerance_boundary_is_comparable():
+    account, spy = _current_fixture(
+        spy_at="2026-08-10T19:46:00+00:00",
+        system_at="2026-08-10T19:51:00+00:00",
+    )
+
+    rows = build_open_to_open_rows(
+        account,
+        spy,
+        current_equity=102.0,
+        current_equity_at=datetime(2026, 8, 10, 19, 51, tzinfo=UTC),
+    )
+
+    current = rows[-1]
+    assert current["comparison_status"] == "comparable"
+    assert current["comparison_alignment_tolerance_seconds"] == 300
+
+
 def test_future_spy_observation_remains_unavailable():
     account, spy = _current_fixture(
         spy_at="2026-08-10T19:52:00+00:00",
