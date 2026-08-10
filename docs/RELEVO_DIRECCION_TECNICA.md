@@ -1608,3 +1608,23 @@ carriers ya cargados, conserva `n/d` cuando falta P/L realizado o apertura y no
 altera trading, riesgo, ejecución ni P-L80. La tarea web fue reiniciada de
 forma gestionada; raíz, `/health` y `/kindle` quedaron 200 local/LAN y las dos
 saludes se separaron 110,6 s. No iniciar P-L88.
+
+## P-L88 - dashboard Sistema vs S&P 500
+
+El candidato aislado `codex/pl88-system-spy-temporal-ui` adopta la ventana
+apertura XNYS exacta -> ahora para Sistema y el carrier existente de SPY. Un
+SPY solo se dibuja/compara si es el ETF correcto y su observacion esta a <=300
+segundos del `account_read_at`; el caso stale observado queda `n/d` con razon,
+sin ganador. La cabecera conserva el P/L oficial desde cierre anterior pero lo
+identifica con ese nombre. El commit N1 separado etiqueta cada punto visible de
+`Valor de cartera` con porcentaje y color semantico, preservando el
+predecesor oculto.
+
+Base productiva: `0cf8a535` / tree `57ad3370` / v0.4.224 limpia. Candidato
+v0.4.225; commits `81a2bcd0`, `64bf9b59`, `7717c20f`, `e04f3ba0`; informe unico
+`docs/informe_p_l88_sistema_spy_temporal.md`. Focales y regresiones finales:
+96 passed; Ruff/NUL/diff verdes. XNYS estaba abierto durante la ejecucion, por
+lo que no hubo suite completa, merge, reinicio ni despliegue. Siguiente accion
+unica: renovar preflight tras el cierre, ejecutar una suite completa sobre el
+tree final y desplegar solo con margen para rollback, arranque y dos saludes de
+al menos 75 s. P-L80 y la politica de trading permanecen intactos.

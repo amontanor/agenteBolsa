@@ -3578,4 +3578,26 @@ cobertura K/N y un bloque de ventas desde la apertura XNYS, usando únicamente
 hay llamadas nuevas, persistencia, cambio de métrica diaria, política,
 trading, riesgo, ejecución, Kindle, LLM o configuración. Salud web local/LAN
 200 en dos comprobaciones separadas; scheduler, kernel, flags paper/live y
-cutoff P-L80 permanecen intactos.
+ cutoff P-L80 permanecen intactos.
+
+## P-L88 - coherencia temporal del dashboard Sistema vs S&P 500
+
+Estado: `ready_for_closed_market_deployment` en candidato v0.4.225; no
+integrado mientras XNYS esta abierto. El cambio N2 usa la apertura XNYS exacta
+como inicio comun para Sistema y SPY. El benchmark solo es comparable si la
+observacion actual de SPY es del ETF SPY y su desfase frente a
+`account_read_at` no supera 300 segundos; stale/future/missing/SPX queda
+`n/d`, sin ganador ni serie comparable. La metrica previa de cierre Alpaca se
+conserva con copy explicito `desde cierre anterior`.
+
+El commit N1 separado añade etiquetas porcentuales visibles a todos los puntos
+de `Valor de cartera` sin cambiar calculo, fuente, resumen ni ventanas. El
+primer punto sin predecesor es `n/d`; positivo/negativo/cero usan verde/rojo/
+gris.
+
+Commits del worktree: `81a2bcd0` caracterizacion, `64bf9b59` contrato temporal,
+`7717c20f` etiquetas/version y `e04f3ba0` QA de frontera. QA focal y regresiones finales: 96 passed en
+el tree final; Ruff/NUL/diff verdes. Suite completa y despliegue quedan para
+cierre de mercado. No tocar P-L80, broker, kernel, execution, risk, config,
+`.env`, scheduler, datos ni politica. Siguiente paso unico: preflight cerrado
+y validacion/despliegue secuenciado si queda margen.
