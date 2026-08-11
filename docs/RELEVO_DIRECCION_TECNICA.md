@@ -1655,3 +1655,25 @@ configuracion aislada verdes. No se repite la suite por cambios documentales
 posteriores; el siguiente paso unico es preflight cerrado, merge gestionado y
 dos comprobaciones de salud. SPY sigue honestamente `n/d` si no existe
 `provider_observed_at`/`market_observed_at` alineado.
+
+## P-L89B - siguiente paso unico
+
+El candidato `codex/pl89b-capital-observability` queda listo para integracion
+cerrada en version `0.4.226`. Completa el carrier observacional append-only
+del funnel de capital con IDs exactos y proyecta la cuenta desde el snapshot
+ya cargado, sin llamadas broker nuevas ni autoridad sobre sizing, gates,
+riesgo, seleccion o ejecucion. El EOD lleva `previous_close_equity` como
+`equity_start` y timestamps UTC coherentes; sigue `unavailable` si faltan
+ventana XNYS, flows, costes, exposicion temporal o benchmark comparable.
+
+QA final: `2497 passed, 1 skip preexistente, 1 warning` en `797.61s`; focales
+36 y policy 47, Ruff/NUL/compile/diff/config/kernel/smoke verdes. Produccion
+base `eb9d6bede5a5aa55de10441fb442430028d1fb47` / tree
+`250dfa2c527d53c1d3d13ecda1ea5027f496e149` permanece intacta. El cutoff
+P-L80 no cambia. No iniciar experimento de capital: esperar dos ventanas
+maduras con controles same-cycle y EOD/costes/exposicion validos.
+
+Siguiente accion: renovar preflight cerrado, hacer merge `--no-ff` del
+candidato, repetir gates con stack detenido y ejecutar stack_up con dos
+saludes separadas. Si falla una precondicion, no desplegar y dejar produccion
+intacta. Sin backfill, jobs manuales, kernel-seal, cambios de `.env` ni push.

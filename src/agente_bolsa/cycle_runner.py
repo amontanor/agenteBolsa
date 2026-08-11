@@ -30,6 +30,7 @@ from .tools.canonical_selection_ledger import (
     persist_canonical_selection_ledger,
 )
 from .tools.capital_deployment_funnel_shadow import (
+    account_projection_from_portfolio_snapshot,
     build_capital_deployment_funnel_shadow,
     persist_capital_deployment_funnel_shadow,
     unavailable_capital_deployment_funnel,
@@ -1436,6 +1437,13 @@ def _persist_capital_deployment_funnel_shadow(
     """Persist P-L54B after the active route; every failure is fail-open."""
 
     try:
+        if not str(run_id or "").strip():
+            return {
+                "status": "unavailable",
+                "persist_status": "skipped",
+                "event_id": None,
+                "error": "cycle_id_unavailable",
+            }
         candidates = None
         if isinstance(phase_a, dict):
             candidates = phase_a.get("all_candidates", phase_a.get("ranked_candidates"))
@@ -1586,8 +1594,10 @@ def _auto_paper_trade(
             ),
         }
 
+    capital_account = None
     try:
         portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
+        capital_account = account_projection_from_portfolio_snapshot(portfolio)
         decision_context = technical_context or load_latest_technical_candidates(
             settings.data_dir,
             per_side=max(1, settings.news_sentiment_top_n // 2),
@@ -2309,6 +2319,7 @@ def _auto_paper_trade(
                 plans=plan_records or plans,
                 rejected_order_plans=rejected_order_plans,
                 submitted=[],
+                account=capital_account,
             ),
         }
 
@@ -2470,6 +2481,7 @@ def _auto_paper_trade(
             plans=plan_records or plans,
             rejected_order_plans=rejected_order_plans,
             submitted=ordered_records,
+            account=capital_account,
         ),
     }
 

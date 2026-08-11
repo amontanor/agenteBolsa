@@ -232,6 +232,8 @@ def build_canonical_eod_account_snapshot(
     comparable_session_count: int | None = None,
     outcomes_matured: bool = False,
     descriptive_realized_pl: Any = None,
+    account_read_at: Any = None,
+    equity_start_source: str | None = None,
 ) -> dict[str, Any]:
     reasons: set[str] = set()
     warnings: set[str] = set()
@@ -246,6 +248,9 @@ def build_canonical_eod_account_snapshot(
     generated = _timestamp(generated_at)
     as_of_normalized = _timestamp(as_of)
     captured = _timestamp(captured_at)
+    account_read = _timestamp(account_read_at)
+    if account_read_at is not None and account_read is None:
+        reasons.add("account_read_at_invalid_or_naive")
     if start is None or end is None:
         reasons.add("window_timestamp_invalid_or_naive")
     elif start >= end:
@@ -338,6 +343,8 @@ def build_canonical_eod_account_snapshot(
         "window_end_at": end,
         "generated_at": generated,
         "as_of": as_of_normalized,
+        "account_read_at": account_read,
+        "equity_start_source": equity_start_source,
         "source_timestamps": sources,
         "freshness": {
             "status": "exact" if sources and all(value is not None for value in age_seconds.values()) and not any(reason.startswith("source_timestamp_after_as_of:") for reason in reasons) else "unavailable" if not sources else "partial",
@@ -476,8 +483,19 @@ def build_from_postmarket_inputs(
         gross = metrics.get("gross_realized_pl")
         costs = {name: metrics.get(name) for name in COST_FIELDS} if all(name in metrics for name in COST_FIELDS) else None
     contributions = _contributions_from_trade_attribution(canonical_trade_attribution)
-    as_of = report.get("as_of") if isinstance(report, Mapping) else None
-    as_of = _timestamp(as_of) or capture.isoformat().replace("+00:00", "Z")
+    account_read_at = _timestamp(report.get("as_of")) if isinstance(report, Mapping) else None
+    source_values = {
+        "portfolio": account_read_at,
+        "canonical_operation_telemetry": _timestamp((canonical_telemetry or {}).get("captured_at"))
+        if isinstance(canonical_telemetry, Mapping)
+        else None,
+        "canonical_trade_attribution": _timestamp((canonical_trade_attribution or {}).get("captured_at"))
+        if isinstance(canonical_trade_attribution, Mapping)
+        else None,
+    }
+    source_values = {key: value for key, value in source_values.items() if value is not None}
+    measurement_candidates = list(source_values.values()) + [capture.isoformat().replace("+00:00", "Z")]
+    as_of = max(measurement_candidates, key=lambda value: _timestamp(value) or "")
     window_start = report.get("window_start_at") if isinstance(report, Mapping) else None
     # The PMR has one authorized observation time but no second EOD snapshot.
     # Preserve that limitation instead of manufacturing an opening value.
@@ -490,7 +508,8 @@ def build_from_postmarket_inputs(
         generated_at=as_of,
         as_of=as_of,
         captured_at=capture,
-        equity_start=None,
+        equity_start=_portfolio_value(portfolio, "previous_close_equity"),
+        equity_start_source=("account.previous_close_equity" if _portfolio_value(portfolio, "previous_close_equity") is not None else None),
         equity_end=equity,
         cash_start=None,
         cash_end=cash,
@@ -503,7 +522,8 @@ def build_from_postmarket_inputs(
         contributions=contributions,
         open_orders=[{ "broker_order_id": getattr(item, "order_id", None) } for item in (_portfolio_value(portfolio, "open_orders") or [])],
         benchmark=(report or {}).get("benchmark") if isinstance(report, Mapping) else None,
-        source_timestamps={"portfolio": as_of, "canonical_operation_telemetry": (canonical_telemetry or {}).get("captured_at") if isinstance(canonical_telemetry, Mapping) else None, "canonical_trade_attribution": (canonical_trade_attribution or {}).get("captured_at") if isinstance(canonical_trade_attribution, Mapping) else None},
+        source_timestamps=source_values,
+        account_read_at=account_read_at,
         session_count=1,
         comparable_session_count=0,
         outcomes_matured=False,
