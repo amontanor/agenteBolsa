@@ -771,5 +771,5 @@ def test_version_policy_requires_bump():
     if dist:
         # Con PYTHONPATH al src del worktree, leemos __init__.py
         import agente_bolsa
-        # P-L88 is the current candidate after the temporal dashboard change.
-        assert agente_bolsa.__version__ == "0.4.225"
+        # P-L89B is the current candidate after the capital observability change.
+        assert agente_bolsa.__version__ == "0.4.226"
