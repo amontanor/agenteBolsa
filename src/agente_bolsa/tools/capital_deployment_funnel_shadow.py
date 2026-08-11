@@ -272,7 +272,7 @@ def _primary_reason(row: Mapping[str, Any], stages: Mapping[str, str]) -> str | 
 
 
 def _compact_detail(row: Mapping[str, Any]) -> dict[str, Any]:
-    return {
+    detail = {
         "identity_key": row.get("identity_key"),
         "signal_identity_key": row.get("signal_identity_key")
         if row.get("decision_identity_quality") != "verified"
@@ -291,6 +291,104 @@ def _compact_detail(row: Mapping[str, Any]) -> dict[str, Any]:
         "submitted_notional": row.get("submitted_notional"),
         "filled_notional": row.get("filled_notional"),
         "order_status": row.get("order_status"),
+    }
+    optional = {
+        "approved_notional": row.get("approved_notional"),
+        "cash_floor": row.get("cash_floor"),
+        "max_position_exposure": row.get("max_position_exposure"),
+        "max_position_notional": row.get("max_position_notional"),
+        "buying_power": row.get("buying_power"),
+        "position_concentration": row.get("position_concentration"),
+        "size_multiplier": row.get("size_multiplier"),
+        "primary_rejection_reason": row.get("primary_rejection_reason"),
+    }
+    for field, value in optional.items():
+        if value is None:
+            continue
+        if field == "approved_notional" and value == row.get("risk_approved_notional"):
+            continue
+        if field == "primary_rejection_reason" and value == row.get("primary_drop_reason"):
+            continue
+        detail[field] = value
+    return detail
+
+
+def _capital_observations(value: Any) -> dict[str, Any]:
+    """Read already-produced sizing/risk fields without evaluating policy."""
+
+    raw = _mapping(value)
+    payload = _mapping(raw.get("payload"))
+    risk = _mapping(raw.get("risk_decision") or payload.get("risk_decision"))
+    checks = _mapping(risk.get("checks"))
+    sizing = _mapping(checks.get("position_sizing"))
+    decision = _mapping(raw.get("decision_context_snapshot"))
+    if not decision:
+        decision = _mapping(_mapping(payload.get("recommendation")).get("decision_context_snapshot"))
+
+    def first(*values: Any) -> Any:
+        return next((item for item in values if item is not None), None)
+
+    return {
+        "requested_notional": first(
+            raw.get("requested_notional"), checks.get("proposal_notional")
+        ),
+        "approved_notional": first(
+            raw.get("approved_notional"),
+            raw.get("risk_approved_notional"),
+            sizing.get("adjusted_target_notional"),
+        ),
+        "risk_approved_notional": first(
+            raw.get("risk_approved_notional"), sizing.get("adjusted_target_notional")
+        ),
+        "sizing_approved_notional": first(
+            raw.get("sizing_approved_notional"), sizing.get("adjusted_target_notional")
+        ),
+        "cash_floor": first(raw.get("cash_floor"), checks.get("cash_floor"), decision.get("cash_floor")),
+        "max_position_exposure": first(
+            raw.get("max_position_exposure"), checks.get("max_position_exposure")
+        ),
+        "max_position_notional": first(
+            raw.get("max_position_notional"), sizing.get("max_position_notional")
+        ),
+        "buying_power": first(
+            raw.get("buying_power"), sizing.get("available_buying_power"), checks.get("available_buying_power")
+        ),
+        "position_concentration": first(
+            raw.get("position_concentration"), checks.get("position_exposure")
+        ),
+        "size_multiplier": first(raw.get("size_multiplier"), sizing.get("size_multiplier")),
+        "primary_rejection_reason": first(
+            raw.get("primary_rejection_reason"), raw.get("rejection_reason"), raw.get("reason_code")
+        ),
+    }
+
+
+def account_projection_from_portfolio_snapshot(portfolio: Any) -> dict[str, Any] | None:
+    """Project one loaded PortfolioSnapshot; never reads a provider itself."""
+
+    if portfolio is None:
+        return None
+    equity = _finite(getattr(portfolio, "portfolio_value", None), allow_negative=True)
+    positions = getattr(portfolio, "positions", None)
+    values: list[tuple[float, str]] = []
+    for position in positions or []:
+        value = _finite(getattr(position, "market_value", None), allow_negative=True)
+        side = _text(getattr(position, "side", None)) or "long"
+        if value is None:
+            values = []
+            break
+        values.append((value, side.lower()))
+    values_complete = positions is not None and len(values) == len(positions or [])
+    gross = sum(abs(value) for value, _ in values) if values_complete else None
+    net = sum(value if side not in {"short", "sell"} else -abs(value) for value, side in values) if gross is not None else None
+    concentration = max((abs(value) / equity for value, _ in values), default=0.0) if gross is not None and equity not in (None, 0) else None
+    return {
+        "equity": equity,
+        "cash": _finite(getattr(portfolio, "cash", None), allow_negative=True),
+        "buying_power": _finite(getattr(portfolio, "buying_power", None), allow_negative=True),
+        "gross_exposure": _finite(gross, allow_negative=True),
+        "net_exposure": _finite(net, allow_negative=True),
+        "position_concentration": _finite(concentration, allow_negative=False),
     }
 
 
@@ -352,7 +450,16 @@ def _normalise_row(value: Any, *, cycle_id: str, captured_at: datetime, warnings
         "micro_experiment": raw.get("micro_experiment") if isinstance(raw.get("micro_experiment"), bool) else None,
         "notional_authority": _text(raw.get("notional_authority")),
     }
+    row.update(
+        {
+            field: _finite(value, allow_negative=False)
+            if field != "primary_rejection_reason"
+            else _text(value)
+            for field, value in _capital_observations(raw).items()
+        }
+    )
     row["primary_drop_reason"] = _primary_reason(raw, row["stage_statuses"])
+    row["primary_rejection_reason"] = row.get("primary_rejection_reason") or row["primary_drop_reason"]
     return row
 
 
@@ -418,6 +525,15 @@ def _merge_exact(
                 parsed = _finite(source_value, allow_negative=False)
                 if parsed is not None:
                     target[field] = parsed
+        for field, source_value in _capital_observations(raw).items():
+            if source_value is None:
+                continue
+            if field == "primary_rejection_reason":
+                target[field] = _text(source_value)
+            else:
+                parsed = _finite(source_value, allow_negative=False)
+                if parsed is not None:
+                    target[field] = parsed
         if raw.get("source") is not None:
             target["decision_source"] = _text(raw.get("source"))
         if label in {"plan", "rejection"}:
@@ -425,6 +541,7 @@ def _merge_exact(
         if label == "submitted":
             attachment_counts["order_attachment_verified"] += 1 if target.get("broker_order_id") or target.get("client_order_id") else 0
         target["primary_drop_reason"] = _primary_reason(target, target["stage_statuses"])
+        target["primary_rejection_reason"] = target.get("primary_rejection_reason") or target["primary_drop_reason"]
 
 
 def _stage_counts(
@@ -744,7 +861,20 @@ def build_capital_deployment_funnel_shadow(
         observed_count=len(buy_rows),
     )
     account_projection = {}
-    for field in ("equity", "cash", "buying_power", "gross_exposure", "net_exposure", "target_account_exposure", "target_min_exposure", "target_max_exposure"):
+    for field in (
+        "equity",
+        "cash",
+        "buying_power",
+        "gross_exposure",
+        "net_exposure",
+        "cash_floor",
+        "max_position_exposure",
+        "max_position_notional",
+        "position_concentration",
+        "target_account_exposure",
+        "target_min_exposure",
+        "target_max_exposure",
+    ):
         account_projection[field] = _finite((account or {}).get(field), allow_negative=True) if isinstance(account, Mapping) else None
     status = "collecting" if candidates is None else "verified"
     if warnings or omitted or excluded_identity_count or not invariants["valid"]:

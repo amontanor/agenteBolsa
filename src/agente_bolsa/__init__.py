@@ -45,4 +45,5 @@ __all__ = ["__version__"]
 # P-L86K: raw HTML /kindle route for non-JavaScript Kindle browsers (0.4.223).
 # P-L87: dashboard position-day reconciliation and sales since XNYS open (0.4.224).
 # P-L88: coherent opening-to-now System/SPY UI and portfolio-point percentages (0.4.225).
-__version__ = "0.4.225"
+# P-L89B: exact capital funnel and EOD observational carriers (0.4.226).
+__version__ = "0.4.226"
