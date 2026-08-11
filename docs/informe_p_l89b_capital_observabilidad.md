@@ -135,3 +135,52 @@ revisión humana. No activar experimento en este lote.
 No se ejecutaron broker operativo, red, LLM real, jobs manuales, postmarket,
 reconciliación manual, backfill, cambios de configuración, kernel-seal,
 stack productivo, merge productivo ni push.
+
+## Cierre productivo P-L89B
+
+Dictamen: `deployed`.
+
+El preflight cerrado se renovo el 11/08/2026. XNYS estaba cerrado y la
+proxima apertura era 12/08/2026 15:30 Europe/Madrid. PMR y reconciliacion
+estaban terminales (`session_already_completed` y `completed`, con 0 cambios y
+0 errores); no habia pytest, deploy, lease ni competidor operativo activo.
+`runtime_state` continuo `unavailable` por WAL/sidecar, sin reparacion. La
+configuracion permanecia en paper, con live y auto-apply desactivados.
+
+Se ejecuto `stack_down.ps1 -IncludeScheduled`, se integro exactamente el
+candidato `6a87c589dd6106e26f5221b70da9aaa0f0800f80` mediante
+`merge --no-ff`, y se arranco con `stack_up.ps1`. El merge productivo es:
+
+- HEAD funcional: `4efd58ffc72239f75148014d4a17c21a869d6315`;
+- primer padre: `eb9d6bede5a5aa55de10441fb442430028d1fb47`;
+- segundo padre: `6a87c589dd6106e26f5221b70da9aaa0f0800f80`;
+- tree funcional: `505c3ee88cd5c902e3ce7e9debbb4100e6b88f8e`;
+- version: `0.4.226`.
+
+Los gates post-merge fueron verdes: focales `83 passed, 1 warning`, Ruff,
+NUL (`481 archivos`), compilacion, `git diff --check`, configuracion aislada,
+kernel productivo y smoke aislado. La suite completa definitiva se reutilizo
+por identidad exacta del tree y conserva `2497 passed, 1 skipped preexistente,
+1 warning externo` en `797.61s`; no se repitio por actividad inercial del
+despliegue. El kernel productivo quedo `ok=true`, `violations=[]`, con los
+hashes protegidos y `.env` sin cambios.
+
+Salud 1: `2026-08-11T23:51:33.9799274+02:00`. Salud 2:
+`2026-08-11T23:53:37.2454445+02:00` (123.27 s despues). En ambas, `/`,
+`/health` y `/kindle` respondieron HTTP 200; hubo un unico listener
+`0.0.0.0:8501`. La cadena scheduler wrapper -> launcher -> runtime quedo
+viva con PID/token coherentes (runtime 33092); la cadena web quedo viva con
+un unico listener (PID 39100). `operational-health` informo 0 criticos y las
+3 advertencias preexistentes (setup edge, atribucion postmarket y governance
+adaptativa), sin repararlas ni mezclarlas.
+
+Produccion y el worktree candidato quedaron limpios; los untracked del
+operador permanecen presentes y excluidos por sus rutas exactas. El cutoff
+P-L80 `2026-08-02T15:51:41.5484478Z` permanece intacto. No hubo backfill,
+jobs manuales, broker operativo, red, LLM real, escritura SQLite productiva,
+kernel-seal, cambios de `.env`, reinicios fuera de los helpers, ni push.
+
+El siguiente unico paso es observar al menos dos ventanas maduras con
+controles same-cycle y EOD/costes/exposicion validos antes de valorar una
+dimension shadow de capital con revision humana. No se activa ningun
+experimento en este lote.

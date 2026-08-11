@@ -3663,3 +3663,16 @@ decision shadow deben observarse al menos dos ventanas maduras con controles
 same-cycle, EOD/costes/exposicion validos y revision humana. Siguiente accion
 unica: preflight cerrado, ensayo `merge --no-ff`, gates detenidos, stack_up y
 dos saludes separadas; si falla una precondicion, dejar produccion intacta.
+
+### Cierre productivo P-L89B
+
+P-L89B queda `deployed` en v0.4.226. Merge `--no-ff` funcional
+`4efd58ff`, primer padre `eb9d6bde`, segundo padre `6a87c589`, tree
+`505c3ee8`. Los gates post-merge fueron verdes y la suite definitiva reutilizada
+por identidad exacta fue `2497 passed, 1 skipped preexistente, 1 warning`.
+Salud 1 `23:51:33.9799274+02:00` y salud 2 `23:53:37.2454445+02:00`,
+separadas 123.27 s: HTTP 200 en `/`, `/health` y `/kindle`, listener unico,
+scheduler/token coherentes, kernel/config validos, paper seguro y 0 criticos.
+Las 3 advertencias operativas siguen siendo preexistentes. El cutoff P-L80 no
+cambia. Esperar dos ventanas maduras con captura valida antes de disenar un
+shadow de capital; no iniciar experimento ni cambiar sizing.

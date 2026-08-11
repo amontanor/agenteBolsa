@@ -1677,3 +1677,17 @@ Siguiente accion: renovar preflight cerrado, hacer merge `--no-ff` del
 candidato, repetir gates con stack detenido y ejecutar stack_up con dos
 saludes separadas. Si falla una precondicion, no desplegar y dejar produccion
 intacta. Sin backfill, jobs manuales, kernel-seal, cambios de `.env` ni push.
+
+### Cierre productivo P-L89B
+
+P-L89B fue desplegado en v0.4.226 mediante merge `4efd58ff` (primer padre
+`eb9d6bde`, segundo `6a87c589`, tree funcional `505c3ee8`). La suite definitiva
+reutilizada por identidad exacta fue `2497 passed, 1 skipped preexistente,
+1 warning`; gates post-merge verdes. Salud 1 a las 23:51:33.9799274 CEST y
+salud 2 a las 23:53:37.2454445 CEST, separadas 123.27 s: HTTP 200 en las tres
+rutas web, listener unico, scheduler owner/token coherentes, paper activo,
+live/auto-apply off, kernel/config validos y 0 criticos. El funnel/EOD
+historico sigue `unavailable` cuando faltan carriers; no se imputo nada. El
+cutoff P-L80 permanece intacto. Siguiente paso unico: observar dos ventanas
+maduras con controles same-cycle y EOD/costes/exposicion validos antes de
+valorar una dimension shadow, siempre human-gated.
