@@ -3632,3 +3632,34 @@ compile/diff/config/kernel/smoke verdes. Salud 1 a las 00:01:49 CEST y salud
 local/LAN, listener único, scheduler/token coherentes, paper seguro, 0
 criticos y 3 warnings preexistentes. SPY sigue fail-closed/unavailable sin
 timestamp de proveedor. P-L80, trading y politica no cambiaron.
+
+## P-L89B - observabilidad del funnel de capital y snapshot EOD
+
+Estado: `ready_for_closed_market_deployment` en worktree aislado, version
+`0.4.226`. El lote es N2 y solo observacional/append-only: transporta por
+identidad exacta la cadena candidato/recomendacion -> gates/capacidad ->
+sizing/riesgo -> plan -> orden -> fill, junto con notionales, cap,
+multiplicador, buying power, exposicion, concentracion y razones cuando ya
+existen. La cuenta se proyecta desde el `PortfolioSnapshot` ya cargado; no hay
+llamada broker adicional ni cambio de politica.
+
+El snapshot EOD conserva `account.last_equity` como `equity_start` con fuente
+explicita y alinea `account_read_at`, `as_of` y timestamps de fuentes en UTC.
+No inventa ventana XNYS, flows, costes, exposicion temporal ni benchmark:
+cuando faltan, el estado sigue `unavailable`/parcial. Se bloquea la escritura
+de un evento de funnel sin `cycle_id`.
+
+Base `eb9d6bede5a5aa55de10441fb442430028d1fb47` / tree
+`250dfa2c527d53c1d3d13ecda1ea5027f496e149`; worktree
+`codex/pl89b-capital-observability`; commits `e028a3cd` (caracterizacion),
+`b8c84d70` (implementacion+bump) y `c2d221db` (QA de version policy).
+QA final: `2497 passed, 1 skip preexistente, 1 warning` en `797.61s`; focales
+`36 passed` y policy `47 passed`; Ruff/NUL/compile/diff/config/kernel/smoke
+verdes. Protegidos y `.env` identicos a la base. Informe unico:
+`docs/informe_p_l89b_capital_observabilidad.md`.
+
+No se disena ni activa experimento de aumento de capital. Antes de cualquier
+decision shadow deben observarse al menos dos ventanas maduras con controles
+same-cycle, EOD/costes/exposicion validos y revision humana. Siguiente accion
+unica: preflight cerrado, ensayo `merge --no-ff`, gates detenidos, stack_up y
+dos saludes separadas; si falla una precondicion, dejar produccion intacta.
