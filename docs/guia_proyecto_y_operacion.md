@@ -352,6 +352,16 @@ Reglas:
 
 Siempre separar hechos verificados, inferencias y datos `unavailable`.
 
+### Nota operativa: sonda de liveness ARM64
+
+El healthcheck del scheduler candidato usa `scripts/container_scheduler_health.py`.
+Valida lock/PID/proceso vivo y no abre SQLite ni ejecuta `schedule-status` completo;
+esta ultima orden sigue siendo la comprobacion funcional del preflight. No se
+debe declarar salud por un HTTP 200 de Streamlit ni por la sonda de liveness
+aislada. La Raspberry continua en `0.4.229-arm64`; la lectura del 2026-08-13
+mostro el scheduler healthy pero con 37 reinicios acumulados, pendiente de
+rebuild ARM64 y de una validacion post-corte con `restart=0`.
+
 ## 11. Rollback
 
 Si el candidato Raspberry falla:

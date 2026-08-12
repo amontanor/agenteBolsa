@@ -129,3 +129,50 @@ def test_scheduler_lock_accepts_managed_venv_launcher_runtime_chain():
     assert proc.returncode == 0, proc.stderr
     lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
     assert lines[-3:] == ["true", "false", "true"]
+
+
+def test_scheduler_lock_matches_datetime_creation_date_on_modern_powershell():
+    command = r"""
+    . .\scripts\stack_common.ps1
+    $root = Join-Path ([IO.Path]::GetTempPath()) ("stack-lock-datetime-" + [guid]::NewGuid().ToString())
+    New-Item -ItemType Directory -Force -Path (Join-Path $root 'data\state') | Out-Null
+    $created = [datetime]'2026-08-12T21:50:29Z'
+    $token = ([DateTimeOffset]$created.ToUniversalTime()).ToFileTime() + 3
+    [IO.File]::WriteAllText(
+        (Join-Path $root 'data\state\scheduler.lock'),
+        ('{"pid":42,"kind":"scheduler","token":"' + $token + '"}')
+    )
+
+    function Get-StackRepoRoot { return $root }
+    function Get-StackManagedPythonPath { return 'C:\repo\.venv\Scripts\python.exe' }
+    $runtime = [pscustomobject]@{
+        ProcessId = 42
+        ParentProcessId = 41
+        CommandLine = 'C:\Python311\python.exe -m agente_bolsa.main schedule'
+        ExecutablePath = 'C:\Python311\python.exe'
+        CreationDate = $created
+    }
+    $launcher = [pscustomobject]@{
+        ProcessId = 41
+        ParentProcessId = 40
+        CommandLine = 'C:\repo\.venv\Scripts\python.exe -m agente_bolsa.main schedule'
+        ExecutablePath = 'C:\repo\.venv\Scripts\python.exe'
+        CreationDate = $null
+    }
+    function Get-StackProcessByPid {
+        param([int]$ProcessId)
+        if ($ProcessId -eq 42) { return $runtime }
+        if ($ProcessId -eq 41) { return $launcher }
+        return $null
+    }
+
+    $info = Get-StackSchedulerLockInfo
+    Write-Output ($info.compatible.ToString().ToLowerInvariant())
+    Write-Output ($info.token_match.ToString().ToLowerInvariant())
+    Remove-Item -LiteralPath $root -Recurse -Force
+    """
+    proc = _powershell(command)
+
+    assert proc.returncode == 0, proc.stderr
+    lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    assert lines[-2:] == ["true", "true"]

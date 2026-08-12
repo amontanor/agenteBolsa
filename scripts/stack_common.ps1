@@ -76,16 +76,28 @@ function Test-StackProcessCompatible {
     return [bool]($proc.CommandLine -match $CommandPattern)
 }
 
-function Get-StackProcessStartText {
+function ConvertTo-StackProcessCreationDate {
     param([object]$Process)
     if ($null -eq $Process -or -not $Process.CreationDate) {
-        return "hora desconocida"
+        return $null
+    }
+    if ($Process.CreationDate -is [datetime]) {
+        return [datetime]$Process.CreationDate
     }
     try {
-        return ([Management.ManagementDateTimeConverter]::ToDateTime($Process.CreationDate)).ToString("HH:mm")
+        return [Management.ManagementDateTimeConverter]::ToDateTime([string]$Process.CreationDate)
     } catch {
+        return $null
+    }
+}
+
+function Get-StackProcessStartText {
+    param([object]$Process)
+    $start = ConvertTo-StackProcessCreationDate -Process $Process
+    if ($null -eq $start) {
         return "hora desconocida"
     }
+    return $start.ToString("HH:mm")
 }
 
 function Acquire-StackSingleInstanceLock {
@@ -310,12 +322,24 @@ function Get-StackSchedulerLockInfo {
     if ([string]::IsNullOrWhiteSpace($expected)) { $expected = [string]($payload.token) }
     $actual = $null
     if ($alive -and $proc.CreationDate) {
-        try {
-            $start = [Management.ManagementDateTimeConverter]::ToDateTime($proc.CreationDate)
+        $start = ConvertTo-StackProcessCreationDate -Process $proc
+        if ($null -ne $start) {
             $actual = ([DateTimeOffset]$start.ToUniversalTime()).ToFileTime()
-        } catch { $actual = $null }
+        }
     }
-    $tokenMatch = (-not [string]::IsNullOrWhiteSpace($expected)) -and ($null -ne $actual) -and ([string]$actual -eq $expected)
+    $tokenMatch = $false
+    $expectedTicks = 0L
+    $actualTicks = 0L
+    if (
+        -not [string]::IsNullOrWhiteSpace($expected) -and
+        $null -ne $actual -and
+        [long]::TryParse($expected, [ref]$expectedTicks) -and
+        [long]::TryParse([string]$actual, [ref]$actualTicks)
+    ) {
+        # CIM and the Python runtime can round the same FILETIME by a few
+        # 100-ns ticks. One second still rejects a genuinely reused PID.
+        $tokenMatch = [math]::Abs([decimal]$actualTicks - [decimal]$expectedTicks) -le 10000000
+    }
     if (-not $alive) { $status = "stale_dead_owner" }
     elseif ($expected -and $actual -and -not $tokenMatch) { $status = "pid_reused" }
     elseif (-not $compatible) { $status = "owner_alive" }

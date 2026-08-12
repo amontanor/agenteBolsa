@@ -3744,3 +3744,15 @@ Auditoria posterior 23:56: SSH disponible, USB ext4/rw y `whale-copy`
 `running/healthy` con `restarts=0`; uptime 4 min. El journal no conserva el
 boot anterior ni muestra causa filtrable. La causa del reinicio queda
 `unavailable`; esperar estabilidad y volver a auditar de forma read-only.
+
+Actualizacion 2026-08-13 00:08: el preflight con `receipt.json` paso los gates
+de host, USB, I/O, memoria basica, SQLite/WAL/SHM, imagen y flags PAPER. El
+core antiguo `0.4.229-arm64` estaba healthy, pero su scheduler acumulaba 37
+reinicios y CPU alta; el corte sigue sin estar autorizado. El commit candidato
+`611da4b1` incorpora una sonda ARM64 ligera que evita usar `schedule-status`
+como healthcheck Docker; requiere rebuild ARM64 porque Docker Desktop estaba
+inaccesible. Tambien se corrigio la comparacion Windows de `CreationDate` y
+FILETIME en `stack_common.ps1`; focales/preflight: `16 passed`, y
+`stack_status` vuelve a informar `lock_ok=true`. Siguiente lote: rebuild y
+verificacion de la imagen, preflight estricto con exclusividad, y solo despues
+dos saludes post-corte; Raspberry y `whale-copy` permanecen sin mutar.

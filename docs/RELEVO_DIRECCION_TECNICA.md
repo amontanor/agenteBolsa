@@ -1743,3 +1743,14 @@ Auditoria 23:56 CEST: Raspberry respondia, USB ext4/rw y `whale-copy`
 `running/healthy`, pero uptime solo 4 min. `journalctl` no conserva el boot
 anterior ni evidencia OOM/I/O/watchdog; causa del reinicio `unavailable`. No
 hacer otro corte hasta superar 600 s y repetir el preflight.
+
+Actualizacion 2026-08-13 00:08 CEST: el preflight con `receipt.json` valida
+identidad, USB ext4/rw, recursos basicos, SQLite/WAL/SHM, imagen candidata y
+flags PAPER. La Raspberry sigue en `0.4.229-arm64`; el scheduler figura
+healthy pero acumula 37 reinicios y CPU alta, por lo que no se declara corte
+listo. Windows sigue activo con scheduler unico y lock/token coherentes.
+El commit candidato `611da4b1` aligera el healthcheck ARM64, pero requiere
+rebuild ARM64 y verificacion de contenido antes de cargarlo; Docker Desktop
+estaba inaccesible en esta ronda. Proxima accion: rebuild local, validacion de
+imagen/Compose, preflight estricto con Windows detenido solo dentro de una
+ventana autorizada y dos healthchecks separados; sin tocar `whale-copy`.

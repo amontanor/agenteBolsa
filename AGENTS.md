@@ -210,6 +210,8 @@ despliegue, promoción y cualquier solicitud de autorización humana.
   nunca ejecuta Compose, toca locks ni abre/repara SQLite activa.
 - `scripts/sqlite_cold_snapshot.py`: snapshot frio explicito de SQLite y
   sidecars, con hashes/receipt; requiere `--writers-stopped` y no sobrescribe.
+- `scripts/container_scheduler_health.py`: sonda Docker ARM64 de liveness del
+  scheduler basada en lock/PID; no sustituye el preflight funcional.
 - `data/config/`: configuración versionada que puede entrar en la imagen.
 - `deploy/`: Compose y ejemplos de configuración para Docker/ARM64; nunca
   poner secretos reales aquí.
@@ -463,6 +465,17 @@ arranque (600 s por defecto), `/dev/sda1` ext4/rw y UUID, I/O o procesos `D`,
 bytes/inodos/memoria, core Docker, imagen candidata, flags PAPER en cada
 contenedor, receipt SQLite o exclusividad Windows. No ejecuta Compose, no borra
 locks, no abre la SQLite activa y no toca `whale-copy`.
+
+El healthcheck del scheduler dentro de la imagen debe ser ligero y no debe
+ejecutar `schedule-status` completo: en ARM64 esa orden puede superar el
+timeout y devolver 137 aunque el contenedor no este marcado `OOMKilled`.
+`scripts/container_scheduler_health.py` valida solamente el lock
+`p-l47b1.scheduler-lock.v1`, el PID vivo/no zombie y la linea de comandos del
+scheduler. Es una sonda de liveness, no una prueba de salud funcional; el
+preflight sigue obligado a comprobar SQLite, recursos, leases, politica PAPER,
+jobs y exclusividad antes del corte. La imagen solo puede declararse candidata
+con esta mejora despues de reconstruirla y verificar que el script existe en
+`/app/scripts/`.
 
 El snapshot se crea únicamente después de detener canónicamente los escritores:
 

@@ -331,3 +331,36 @@ la consulta filtrada del boot anterior no aporto evidencia de OOM, I/O,
 watchdog, thermal o panic; la causa del reinicio queda `unavailable`, no se
 atribuye a ningun componente. No se ejecutaron reinicios, reparaciones,
 limpiezas ni cambios remotos.
+
+## Auditoria read-only 2026-08-13 00:07-00:08 Europe/Madrid
+
+Con la receipt correcta `receipt.json`, el preflight Raspberry devolvio
+`ok=true` sin `--require-windows-stopped`: host `Raspberryi5`/`aarch64`, uptime
+894 s, `/dev/sda1` SanDisk ext4/rw con UUID esperado, 224 GB libres, 1% de
+inodos, sin errores I/O recientes ni procesos `D`, memoria disponible ~941 MB,
+SQLite presente con WAL/SHM y snapshot validado con SHA-256
+`7fab2f7f1b854d20cd6e5b752687d741e8edae50e7dd58dfdaf4ad337fc324af`.
+
+El core activo sigue siendo `0.4.229-arm64`; web, auxiliary y scheduler estaban
+`healthy`, pero el scheduler acumulaba `37` reinicios y aproximadamente 178%
+de CPU en la muestra. Estar healthy en esa lectura no borra el historial ni
+satisface la validacion post-corte exigida de `restart=0`. Las flags observadas
+por contenedor siguen siendo PAPER: `TRADING_MODE=paper`,
+`AUTO_PAPER_TRADING=true`, `REQUIRE_HUMAN_APPROVAL=false`,
+`ALLOW_LIVE_TRADING=false` y `ALLOW_AUTO_APPLY_IMPROVEMENTS=false`.
+
+Windows permanece activo y unico en su checkout local segun `schedule-status`:
+PID `28008`, estado `owner_alive` y token coincidente. Se corrigio
+`stack_common.ps1` para aceptar `CreationDate` como `DateTime` en PowerShell
+moderno y tolerar el redondeo de hasta un segundo de FILETIME; la regresion
+focal y el preflight pasaron (`16 passed`) y `stack_status.ps1` ya informa
+`lock_ok=true`. Esto corrige observabilidad, no detiene ni reinicia Windows.
+
+El candidato contiene el commit operativo `611da4b1` con la sonda ligera del
+scheduler, pero la imagen remota
+`sha256:c9745ce004fa44be7590a59e543f64faaacd8c7cbc24862bcadefdeeab9a19ff`
+corresponde a la construccion anterior `42b8dfc1`; no se puede afirmar que
+contenga la sonda. El build ARM64 local queda pendiente porque Docker Desktop
+no estaba disponible (`dockerDesktopLinuxEngine` ausente). No hubo mutaciones
+remotas, carga de imagen, Compose, cambios de env, SQLite, `whale-copy` ni
+push. Dictamen vigente: `precondition_not_met` / no desplegado.
