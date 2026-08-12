@@ -1736,7 +1736,8 @@ disponible bajo 256 MiB. Se hizo rollback a Windows; despues Raspberry se
 reinicio externamente y el preflight final mostro uptime 67 s y core
 unhealthy. Dictamen `precondition_not_met`; no transferir ni desplegar hasta
 auditoria read-only del reinicio y estabilidad >=600 s. La snapshot y la
-candidata se conservan.
+candidata se conservan; la exclusividad queda sin demostrar porque Raspberry
+conserva el core antiguo `0.4.229-arm64`.
 
 Auditoria 23:56 CEST: Raspberry respondia, USB ext4/rw y `whale-copy`
 `running/healthy`, pero uptime solo 4 min. `journalctl` no conserva el boot

@@ -3736,8 +3736,9 @@ SHM `e5e00a5e876a70ebf35b644e2c00a082da06f16860efe4ec9643651e39829a82`;
 El corte quedo bloqueado por proceso `D` de `whale-copy` y memoria disponible
 por debajo de 256 MiB. Tras rollback, Raspberry reinicio externamente y quedo
 con uptime 67 s y core scheduler/web unhealthy en el preflight final. Dictamen
-`precondition_not_met`; Windows restaurado y unica instancia activa. No volver
-a intentar hasta caracterizar el reinicio/whale-copy y obtener estabilidad.
+`precondition_not_met`; Windows restaurado, pero exclusividad no demostrada
+porque Raspberry conserva el core antiguo unhealthy. No volver a intentar hasta
+caracterizar el reinicio/whale-copy y obtener estabilidad.
 
 Auditoria posterior 23:56: SSH disponible, USB ext4/rw y `whale-copy`
 `running/healthy` con `restarts=0`; uptime 4 min. El journal no conserva el

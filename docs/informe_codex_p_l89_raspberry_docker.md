@@ -315,10 +315,11 @@ las 23:53:31 devolvio `exit_code=2`: uptime `67 s`, scheduler/web core
 la causa del reinicio; requiere una auditoria posterior con el host estable.
 
 Dictamen del corte: `precondition_not_met`. Raspberry continua en
-`0.4.229-arm64`; Windows es la unica instancia activa; la candidata
-`0.4.230-arm64` y el backup frio quedan preservados para otra ventana. No hubo
-push ni cambios en `whale-copy`, SQLite remota, firewall, otros discos o
-credenciales.
+`0.4.229-arm64`; Windows quedo restaurado, pero no se puede afirmar
+exclusividad porque Raspberry conserva sus contenedores antiguos y el preflight
+posterior los vio `unhealthy`. La candidata `0.4.230-arm64` y el backup frio
+quedan preservados para otra ventana. No hubo push ni cambios en `whale-copy`,
+SQLite remota, firewall, otros discos o credenciales.
 
 ## Auditoria read-only posterior al reinicio 2026-08-12 (23:56 Europe/Madrid)
 
