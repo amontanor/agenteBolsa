@@ -267,3 +267,55 @@ USB y el kernel storage pasaron, no habia procesos `D`, el core Docker estaba
 healthy, la imagen candidata y sus flags PAPER pasaban. Los dos bloqueantes
 reales son la ausencia de `--sqlite-receipt` y que scheduler/web Windows siguen
 activos. No hubo mutaciones.
+
+## Corte abortado y rollback 2026-08-12 (23:46-23:53 Europe/Madrid)
+
+El preflight fisico de las 23:46:28 tenia todos los gates de host/USB/Docker
+verdes salvo la falta de receipt. Con XNYS cerrado, postmarket de la sesion
+terminal, reconciliacion completada sin cambios/errores y sin foreign Windows,
+se ejecuto `scripts/stack_down.ps1 -IncludeScheduled` a las 23:46:34.
+Scheduler y web quedaron parados; el lock no se borro y paso a
+`stale_dead_owner` con PID muerto.
+
+Se produjo una primera copia de SQLite, pero su receipt apunto por error al
+directorio temporal `.partial-*`; no se consumio como evidencia y permanece
+sin usar. Tras corregir la herramienta y separar origen de destino, la segunda
+snapshot fria valida quedo en:
+
+`C:\Antonio\Bref\agenteBolsa_backups\raspberry-cut-20260812-2350\`
+
+Receipt `p-l89.sqlite-cold-snapshot.v2`, `journal_mode=wal`,
+`quick_check=ok`, `integrity_check=ok`:
+
+| Fichero | Bytes | SHA-256 |
+|---|---:|---|
+| `agente_bolsa.sqlite3` | 1.777.291.264 | `7fab2f7f1b854d20cd6e5b752687d741e8edae50e7dd58dfdaf4ad337fc324af` |
+| `agente_bolsa.sqlite3-wal` | 477.207.272 | `66632ef2e2604da422fae9d1fbe7c911a3653182934723bd10d98af0724e6061` |
+| `agente_bolsa.sqlite3-shm` | 32.768 | `e5e00a5e876a70ebf35b644e2c00a082da06f16860efe4ec9643651e39829a82` |
+
+La receipt fue validada contra los ficheros reales a las 23:50:16. Todos los
+gates pasaron, incluida exclusividad Windows, salvo dos bloqueos externos:
+
+- proceso `D` de `whale-copy`, PID `13492`, bloqueado en I/O;
+- memoria disponible `257.298.432` bytes, inferior al umbral operativo de
+  `268.435.456` bytes.
+
+No se detuvo ni modifico `whale-copy`, no se transfirio la base, no se cargo la
+imagen ni se arranco Compose Raspberry. Se ejecuto rollback mediante
+`scripts/stack_up.ps1` a las 23:50:31. A las 23:51:17 el scheduler Windows
+tenia PID vivo y token coincidente; el checkout principal aun usa el helper
+antiguo que muestra `lock_orphan=true`, aunque `schedule-status` confirma
+`owner_alive` y `token_match=true`. El helper corregido esta en el worktree
+`codex/operational-hardening`.
+
+A las 23:52:55 la Raspberry respondio tras un reinicio no iniciado por este
+lote (`uptime=0 min`, `whale-copy running/health=starting`). El preflight de
+las 23:53:31 devolvio `exit_code=2`: uptime `67 s`, scheduler/web core
+`unhealthy`, receipt SQLite valida y Windows activo por rollback. No se infiere
+la causa del reinicio; requiere una auditoria posterior con el host estable.
+
+Dictamen del corte: `precondition_not_met`. Raspberry continua en
+`0.4.229-arm64`; Windows es la unica instancia activa; la candidata
+`0.4.230-arm64` y el backup frio quedan preservados para otra ventana. No hubo
+push ni cambios en `whale-copy`, SQLite remota, firewall, otros discos o
+credenciales.

@@ -3722,3 +3722,19 @@ resuelve el `stack_status.ps1` del checkout principal; `foreign=[]`. La lectura
 anterior que mostraba el web como foreign era un falso positivo del contexto del
 worktree y queda corregida en el helper. Los unicos blockers siguen siendo
 receipt SQLite ausente y scheduler/web Windows activos.
+
+## Resultado de ventana 2026-08-12 23:46-23:53
+
+Se hizo un corte controlado y se revirtio sin transferir ni desplegar la
+Raspberry. La snapshot fria Windows valida esta en
+`C:\Antonio\Bref\agenteBolsa_backups\raspberry-cut-20260812-2350`, con base
+SHA-256 `7fab2f7f1b854d20cd6e5b752687d741e8edae50e7dd58dfdaf4ad337fc324af`,
+WAL `66632ef2e2604da422fae9d1fbe7c911a3653182934723bd10d98af0724e6061` y
+SHM `e5e00a5e876a70ebf35b644e2c00a082da06f16860efe4ec9643651e39829a82`;
+`quick_check`/`integrity_check` correctos.
+
+El corte quedo bloqueado por proceso `D` de `whale-copy` y memoria disponible
+por debajo de 256 MiB. Tras rollback, Raspberry reinicio externamente y quedo
+con uptime 67 s y core scheduler/web unhealthy en el preflight final. Dictamen
+`precondition_not_met`; Windows restaurado y unica instancia activa. No volver
+a intentar hasta caracterizar el reinicio/whale-copy y obtener estabilidad.

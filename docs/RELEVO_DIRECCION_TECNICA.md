@@ -1726,3 +1726,14 @@ Reconciliacion 23:42 CEST: `windows_exclusivity` ya informa `foreign=[]` al
 resolver el checkout principal desde `git-common-dir`; la foreign process
 anterior era un falso positivo del worktree candidato. Permanecen solo falta
 de receipt SQLite y scheduler/web Windows activos.
+
+Ventana 2026-08-12 23:46-23:53 CEST: se detuvo Windows con el helper canonico,
+se creo y valido la snapshot fria v2 en
+`C:\Antonio\Bref\agenteBolsa_backups\raspberry-cut-20260812-2350` (base
+`7fab2f7f...`, WAL `66632ef2...`, SHM `e5e00a5e...`, quick/integrity ok). El
+preflight Raspberry bloqueo el corte por `whale-copy` en estado D y memoria
+disponible bajo 256 MiB. Se hizo rollback a Windows; despues Raspberry se
+reinicio externamente y el preflight final mostro uptime 67 s y core
+unhealthy. Dictamen `precondition_not_met`; no transferir ni desplegar hasta
+auditoria read-only del reinicio y estabilidad >=600 s. La snapshot y la
+candidata se conservan.
