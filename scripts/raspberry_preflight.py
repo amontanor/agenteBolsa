@@ -197,15 +197,17 @@ def _verify_snapshot_receipt(path: str | None, args: argparse.Namespace) -> tupl
     except (OSError, json.JSONDecodeError) as exc:
         return False, f"receipt invalido: {exc}"
     required = {
-        "schema": "p-l89.sqlite-cold-snapshot.v1",
+        "schema": "p-l89.sqlite-cold-snapshot.v2",
         "status": "ok",
         "quick_check": "ok",
         "integrity_check": "ok",
-        "source_host": args.expected_host,
-        "mount": args.mount,
-        "device_uuid": args.expected_uuid,
+        "target_host": args.expected_host,
+        "target_mount": args.mount,
+        "target_device_uuid": args.expected_uuid,
     }
     mismatches = [f"{key}={receipt.get(key)!r} (esperado {value!r})" for key, value in required.items() if receipt.get(key) != value]
+    if not str(receipt.get("source_host", "")).strip():
+        mismatches.append("source_host ausente o vacio")
     sha256 = str(receipt.get("sha256", ""))
     if not re.fullmatch(r"[0-9a-fA-F]{64}", sha256):
         mismatches.append("sha256 ausente o no hexadecimal de 64 caracteres")

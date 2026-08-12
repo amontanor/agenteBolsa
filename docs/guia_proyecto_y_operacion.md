@@ -263,8 +263,9 @@ existe más de un checkout operativo.
 El resultado debe conservarse en el informe del lote. La comprobación de
 SQLite queda `unavailable` mientras la base activa tenga WAL/SHM o no exista
 un receipt local de snapshot frío validado. Un receipt aceptable debe tener
-schema `p-l89.sqlite-cold-snapshot.v1`, estado `ok`, `quick_check=ok`,
-`integrity_check=ok`, hostname, montaje, UUID y SHA-256 de 64 caracteres:
+schema `p-l89.sqlite-cold-snapshot.v2`, estado `ok`, `quick_check=ok`,
+`integrity_check=ok`, `source_host`, `target_host`, montaje, UUID y SHA-256 de
+64 caracteres:
 
 ```powershell
 & ".\.venv\Scripts\python.exe" scripts\raspberry_preflight.py `
@@ -288,9 +289,10 @@ copia la SQLite y los sidecars presentes, valida el conjunto copiado y deja
 python scripts/sqlite_cold_snapshot.py \
   --source /var/lib/agente-bolsa/state/agente_bolsa.sqlite3 \
   --destination-dir /var/backups/agente-bolsa/cold-YYYYMMDD-HHMMSS \
-  --source-host Raspberryi5 \
-  --mount /var/lib/agente-bolsa \
-  --device-uuid 1a8cb7c0-3a65-4d72-866f-340db4c6bafc \
+  --source-host Windows-Productivo \
+  --target-host Raspberryi5 \
+  --target-mount /var/lib/agente-bolsa \
+  --target-device-uuid 1a8cb7c0-3a65-4d72-866f-340db4c6bafc \
   --writers-stopped --json
 ```
 

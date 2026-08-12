@@ -67,13 +67,14 @@ def test_preflight_accepts_a_validated_cold_snapshot_receipt(tmp_path):
     receipt.write_text(
         json.dumps(
             {
-                "schema": "p-l89.sqlite-cold-snapshot.v1",
+                "schema": "p-l89.sqlite-cold-snapshot.v2",
                 "status": "ok",
                 "quick_check": "ok",
                 "integrity_check": "ok",
-                "source_host": "Raspberryi5",
-                "mount": "/var/lib/agente-bolsa",
-                "device_uuid": "1a8cb7c0-3a65-4d72-866f-340db4c6bafc",
+                "source_host": "Windows-Productivo",
+                "target_host": "Raspberryi5",
+                "target_mount": "/var/lib/agente-bolsa",
+                "target_device_uuid": "1a8cb7c0-3a65-4d72-866f-340db4c6bafc",
                 "source_path": r"C:\data\agente_bolsa.sqlite3",
                 "snapshot_path": str(snapshot),
                 "sha256": snapshot_hash,
@@ -102,13 +103,14 @@ def test_preflight_rejects_receipt_when_snapshot_hash_differs(tmp_path):
     receipt.write_text(
         json.dumps(
             {
-                "schema": "p-l89.sqlite-cold-snapshot.v1",
+                "schema": "p-l89.sqlite-cold-snapshot.v2",
                 "status": "ok",
                 "quick_check": "ok",
                 "integrity_check": "ok",
-                "source_host": "Raspberryi5",
-                "mount": "/var/lib/agente-bolsa",
-                "device_uuid": "1a8cb7c0-3a65-4d72-866f-340db4c6bafc",
+                "source_host": "Windows-Productivo",
+                "target_host": "Raspberryi5",
+                "target_mount": "/var/lib/agente-bolsa",
+                "target_device_uuid": "1a8cb7c0-3a65-4d72-866f-340db4c6bafc",
                 "source_path": r"C:\data\agente_bolsa.sqlite3",
                 "snapshot_path": str(snapshot),
                 "sha256": "0" * 64,

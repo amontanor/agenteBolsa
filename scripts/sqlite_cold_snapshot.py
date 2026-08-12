@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote
 
-RECEIPT_SCHEMA = "p-l89.sqlite-cold-snapshot.v1"
+RECEIPT_SCHEMA = "p-l89.sqlite-cold-snapshot.v2"
 
 
 def _sha256(path: Path) -> str:
@@ -62,8 +62,9 @@ def _receipt(
     source: Path,
     destination: Path,
     source_host: str,
-    mount: str,
-    device_uuid: str,
+    target_host: str,
+    target_mount: str,
+    target_device_uuid: str,
     source_files: list[Path],
     journal_mode: str,
     quick_check: str,
@@ -81,8 +82,9 @@ def _receipt(
         "status": "ok",
         "generated_at": datetime.now(UTC).isoformat(),
         "source_host": source_host,
-        "mount": mount,
-        "device_uuid": device_uuid,
+        "target_host": target_host,
+        "target_mount": target_mount,
+        "target_device_uuid": target_device_uuid,
         "source_path": str(source),
         "snapshot_path": str(destination / source.name),
         "snapshot_method": "cold_file_set",
@@ -131,13 +133,15 @@ def create_snapshot(args: argparse.Namespace) -> dict[str, object]:
             source=source,
             destination=temporary,
             source_host=args.source_host,
-            mount=args.mount,
-            device_uuid=args.device_uuid,
+            target_host=args.target_host,
+            target_mount=args.target_mount,
+            target_device_uuid=args.target_device_uuid,
             source_files=files,
             journal_mode=journal_mode,
             quick_check=quick_check,
             integrity_check=integrity_check,
         )
+        receipt["snapshot_path"] = str(destination / source.name)
         (temporary / "receipt.json").write_text(
             json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
@@ -153,8 +157,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--source", required=True, help="SQLite productiva congelada")
     parser.add_argument("--destination-dir", required=True, help="directorio nuevo del snapshot")
     parser.add_argument("--source-host", required=True)
-    parser.add_argument("--mount", required=True)
-    parser.add_argument("--device-uuid", required=True)
+    parser.add_argument("--target-host", required=True)
+    parser.add_argument("--target-mount", required=True)
+    parser.add_argument("--target-device-uuid", required=True)
     parser.add_argument(
         "--writers-stopped",
         action="store_true",

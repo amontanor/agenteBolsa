@@ -217,7 +217,7 @@ código `2` y `ok=false` por estas razones:
 
 El script queda como gate reproducible: no modifica archivos remotos, no
 detiene procesos, no ejecuta Compose, no limpia locks y no toca `whale-copy`.
-Un receipt válido debe usar el schema `p-l89.sqlite-cold-snapshot.v1`, incluir
+Un receipt válido debe usar el schema `p-l89.sqlite-cold-snapshot.v2`, incluir
 `quick_check=ok`, `integrity_check=ok`, hostname, montaje, UUID y SHA-256, y se
 verifica localmente mediante `--sqlite-receipt` contra el fichero snapshot real,
 su tamaño y sus sidecars.
