@@ -3699,6 +3699,9 @@ Cambios del lote:
 - Las pruebas focales cubren la cadena launcher/runtime y el preflight con
   montaje correcto, recursos, contenedores saludables, WAL/SHM y bloqueo por
   falta de receipt.
+- `scripts/sqlite_cold_snapshot.py` exige `--writers-stopped`, no sobrescribe,
+  copia la base y sidecars, valida `quick_check`/`integrity_check`, calcula
+  SHA-256 y produce el receipt que consume el preflight.
 
 Evidencia externa del 12-ago-2026 23:21: host Raspberry reiniciado a las
 23:15:16, uptime 455 s; montaje USB correcto, sin I/O error reciente, core

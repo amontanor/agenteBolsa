@@ -50,6 +50,7 @@ Archivos protegidos que no se modifican sin revisión humana explícita:
 | `scripts/check_services.ps1` | Diagnóstico de servicios Windows |
 | `scripts/check_services.ps1` | Diagnóstico de servicios Windows |
 | `scripts/raspberry_preflight.py` | Preflight Raspberry read-only con salida JSON |
+| `scripts/sqlite_cold_snapshot.py` | Snapshot frio SQLite con WAL/SHM, hashes y receipt |
 | `scripts/run_*_supervisor.ps1` | Supervisores auxiliares Windows |
 | `data/state/` | Estado SQLite productivo |
 | `data/reports/` | Informes y artefactos operativos |
@@ -269,6 +270,27 @@ El receipt no sustituye al snapshot: solo permite verificar de forma
 reproducible una evidencia producida por el procedimiento autorizado. Nunca
 se debe fabricar, editar o reutilizar un receipt de otra Raspberry, UUID o
 estado de SQLite.
+
+El snapshot se genera con `scripts/sqlite_cold_snapshot.py` solo despues de
+detener canonicamente todos los escritores y confirmar exclusividad. Exige la
+bandera explicita `--writers-stopped`, no sobrescribe un destino existente,
+copia la SQLite y los sidecars presentes, valida el conjunto copiado y deja
+`receipt.json` dentro del directorio nuevo:
+
+```bash
+python scripts/sqlite_cold_snapshot.py \
+  --source /var/lib/agente-bolsa/state/agente_bolsa.sqlite3 \
+  --destination-dir /var/backups/agente-bolsa/cold-YYYYMMDD-HHMMSS \
+  --source-host Raspberryi5 \
+  --mount /var/lib/agente-bolsa \
+  --device-uuid 1a8cb7c0-3a65-4d72-866f-340db4c6bafc \
+  --writers-stopped --json
+```
+
+El comando no hace `VACUUM`, `checkpoint`, backfill ni reparacion. Si la
+fuente cambia durante la copia, o el `quick_check`/`integrity_check` del
+conjunto copiado falla, elimina solo su directorio temporal parcial y no crea
+un receipt valido.
 
 ## 8. Migración Raspberry: estado documentado
 

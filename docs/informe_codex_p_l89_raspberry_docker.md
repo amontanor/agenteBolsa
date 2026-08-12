@@ -219,4 +219,10 @@ El script queda como gate reproducible: no modifica archivos remotos, no
 detiene procesos, no ejecuta Compose, no limpia locks y no toca `whale-copy`.
 Un receipt válido debe usar el schema `p-l89.sqlite-cold-snapshot.v1`, incluir
 `quick_check=ok`, `integrity_check=ok`, hostname, montaje, UUID y SHA-256, y se
-verifica localmente mediante `--sqlite-receipt` sin poder fabricar evidencia.
+verifica localmente mediante `--sqlite-receipt` contra el fichero snapshot real,
+su tamaño y sus sidecars.
+La herramienta `scripts/sqlite_cold_snapshot.py` queda preparada para la
+ventana autorizada: exige `--writers-stopped`, no sobrescribe, no ejecuta
+`VACUUM`/checkpoint/backfill, copia la base y sidecars presentes, valida la
+copia y escribe el receipt dentro del directorio nuevo. No se ejecutó sobre la
+Raspberry en este lote.

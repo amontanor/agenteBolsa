@@ -8,6 +8,7 @@ validated cold snapshot before considering the data gate satisfied.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -157,6 +158,14 @@ def _service_rows(value: str) -> dict[str, str]:
     return rows
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def _inspect_rows(observations: dict[str, str]) -> list[str]:
     failures = []
     for name in REQUIRED_CONTAINERS:
@@ -189,6 +198,46 @@ def _verify_snapshot_receipt(path: str | None, args: argparse.Namespace) -> tupl
     sha256 = str(receipt.get("sha256", ""))
     if not re.fullmatch(r"[0-9a-fA-F]{64}", sha256):
         mismatches.append("sha256 ausente o no hexadecimal de 64 caracteres")
+    snapshot_path_value = receipt.get("snapshot_path")
+    snapshot_path = Path(snapshot_path_value) if isinstance(snapshot_path_value, str) else None
+    source_name = Path(str(receipt.get("source_path", ""))).name
+    files = receipt.get("files")
+    if snapshot_path is None or not snapshot_path.is_file():
+        mismatches.append(f"snapshot_path no existe: {snapshot_path_value!r}")
+    else:
+        if snapshot_path.parent != receipt_path.parent:
+            mismatches.append("snapshot_path no pertenece al directorio de la receipt")
+        if not source_name:
+            mismatches.append("source_path ausente o invalido")
+        elif snapshot_path.name != source_name:
+            mismatches.append(f"snapshot_path={snapshot_path.name!r} no coincide con source_path={source_name!r}")
+        observed_sha256 = _sha256(snapshot_path)
+        if observed_sha256.lower() != sha256.lower():
+            mismatches.append(
+                f"sha256 snapshot={observed_sha256} (receipt {sha256.lower()})"
+            )
+        primary = files.get(source_name) if isinstance(files, dict) else None
+        if not isinstance(primary, dict):
+            mismatches.append(f"files no contiene la SQLite primaria {source_name!r}")
+        else:
+            if primary.get("size") != snapshot_path.stat().st_size:
+                mismatches.append(
+                    f"size snapshot={snapshot_path.stat().st_size} (receipt {primary.get('size')!r})"
+                )
+            if str(primary.get("sha256", "")).lower() != observed_sha256.lower():
+                mismatches.append("files.sha256 no coincide con el snapshot")
+            for name, metadata in files.items() if isinstance(files, dict) else []:
+                if not isinstance(name, str) or Path(name).name != name or not isinstance(metadata, dict):
+                    mismatches.append(f"entrada files invalida: {name!r}")
+                    continue
+                companion = snapshot_path if name == snapshot_path.name else snapshot_path.parent / name
+                if not companion.is_file():
+                    mismatches.append(f"sidecar declarado ausente: {companion}")
+                    continue
+                if metadata.get("size") != companion.stat().st_size:
+                    mismatches.append(f"size no coincide para {name}")
+                if str(metadata.get("sha256", "")).lower() != _sha256(companion).lower():
+                    mismatches.append(f"sha256 no coincide para {name}")
     if mismatches:
         return False, "receipt no valida: " + "; ".join(mismatches)
     return True, f"receipt validada {receipt_path.name}, sha256={sha256.lower()}"
@@ -294,10 +343,6 @@ def build_report(args: argparse.Namespace, observations: dict[str, str], ssh_err
         bool(candidate),
         f"{args.candidate_image}={candidate or 'no disponible'}",
     )
-    flags = []
-    for name in REQUIRED_CONTAINERS:
-        raw = observations.get(f"flags.{name}", "")
-        flags.extend(item for item in raw.split(";") if item)
     required_flags = {
         "TRADING_MODE=paper",
         "ALPACA_PAPER=true",
@@ -306,9 +351,14 @@ def build_report(args: argparse.Namespace, observations: dict[str, str], ssh_err
         "ALLOW_LIVE_TRADING=false",
         "ALLOW_AUTO_APPLY_IMPROVEMENTS=false",
     }
-    observed_flags = set(flags)
-    missing_flags = sorted(required_flags - observed_flags)
-    add("paper_policy", not missing_flags, f"missing={missing_flags}")
+    missing_by_container: dict[str, list[str]] = {}
+    for name in REQUIRED_CONTAINERS:
+        raw = observations.get(f"flags.{name}", "")
+        observed_flags = {item for item in raw.split(";") if item}
+        missing = sorted(required_flags - observed_flags)
+        if missing:
+            missing_by_container[name] = missing
+    add("paper_policy", not missing_by_container, f"missing={missing_by_container}")
 
     sqlite_files = observations.get("sqlite_files", "")
     sidecars = [item for item in sqlite_files.split(";") if item.endswith("-wal|") or "-wal|" in item or "-shm|" in item]

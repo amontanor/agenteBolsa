@@ -208,6 +208,8 @@ despliegue, promoción y cualquier solicitud de autorización humana.
 - `scripts/stack_*.ps1`: helpers canónicos del stack.
 - `scripts/raspberry_preflight.py`: preflight Raspberry read-only con salida JSON;
   nunca ejecuta Compose, toca locks ni abre/repara SQLite activa.
+- `scripts/sqlite_cold_snapshot.py`: snapshot frio explicito de SQLite y
+  sidecars, con hashes/receipt; requiere `--writers-stopped` y no sobrescribe.
 - `data/config/`: configuración versionada que puede entrar en la imagen.
 - `deploy/`: Compose y ejemplos de configuración para Docker/ARM64; nunca
   poner secretos reales aquí.

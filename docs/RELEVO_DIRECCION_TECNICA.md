@@ -1709,3 +1709,8 @@ Siguiente secuencia: esperar estabilidad, producir y validar el snapshot frio
 autorizado, ejecutar el preflight con `--sqlite-receipt`, confirmar postmarket,
 leases y exclusividad Windows, y solo despues realizar el corte cerrado con
 rollback a `0.4.229-arm64` preparado.
+
+La herramienta `scripts/sqlite_cold_snapshot.py` implementa ese snapshot sin
+`VACUUM`, checkpoint ni backfill: exige `--writers-stopped`, no sobrescribe,
+conserva los sidecars presentes, valida la copia y genera `receipt.json` con
+hashes y resultados de integridad.
