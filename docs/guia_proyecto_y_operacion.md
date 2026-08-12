@@ -48,6 +48,8 @@ Archivos protegidos que no se modifican sin revisión humana explícita:
 | `scripts/stack_*.ps1` | Helpers canónicos del stack Windows |
 | `scripts/check_no_nulls.py` | Gate sin NUL |
 | `scripts/check_services.ps1` | Diagnóstico de servicios Windows |
+| `scripts/check_services.ps1` | Diagnóstico de servicios Windows |
+| `scripts/raspberry_preflight.py` | Preflight Raspberry read-only con salida JSON |
 | `scripts/run_*_supervisor.ps1` | Supervisores auxiliares Windows |
 | `data/state/` | Estado SQLite productivo |
 | `data/reports/` | Informes y artefactos operativos |
@@ -233,6 +235,40 @@ ssh -i $RaspKey -N -L 18081:127.0.0.1:8081 antonio@192.168.1.234
 ```
 
 La publicación LAN en `0.0.0.0:8081` solo se valida dentro de la red privada; no abrir Internet, router o firewall público sin autoridad explícita.
+
+### 7.4 Preflight Raspberry automatizado
+
+El helper `scripts/raspberry_preflight.py` ejecuta únicamente lecturas por SSH:
+identidad, UUID/montaje, espacio e inodos, memoria, procesos en estado `D`,
+errores recientes de USB/ext4, Docker, salud de los tres contenedores core,
+imagen candidata y flags PAPER. No ejecuta Compose, no detiene procesos, no
+abre ni repara SQLite y devuelve código `2` si una precondición falla.
+
+Uso desde PowerShell:
+
+```powershell
+& ".\.venv\Scripts\python.exe" scripts\raspberry_preflight.py `
+  --identity "$env:USERPROFILE\.ssh\codex_raspberry_ed25519" `
+  --json
+```
+
+El resultado debe conservarse en el informe del lote. La comprobación de
+SQLite queda `unavailable` mientras la base activa tenga WAL/SHM o no exista
+un receipt local de snapshot frío validado. Un receipt aceptable debe tener
+schema `p-l89.sqlite-cold-snapshot.v1`, estado `ok`, `quick_check=ok`,
+`integrity_check=ok`, hostname, montaje, UUID y SHA-256 de 64 caracteres:
+
+```powershell
+& ".\.venv\Scripts\python.exe" scripts\raspberry_preflight.py `
+  --identity "$env:USERPROFILE\.ssh\codex_raspberry_ed25519" `
+  --sqlite-receipt .\sqlite-cold-snapshot.json `
+  --json
+```
+
+El receipt no sustituye al snapshot: solo permite verificar de forma
+reproducible una evidencia producida por el procedimiento autorizado. Nunca
+se debe fabricar, editar o reutilizar un receipt de otra Raspberry, UUID o
+estado de SQLite.
 
 ## 8. Migración Raspberry: estado documentado
 

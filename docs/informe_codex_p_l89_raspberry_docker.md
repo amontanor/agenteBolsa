@@ -195,3 +195,28 @@ se limpiaron locks y no se hizo push. El siguiente intento requiere que el
 operador confirme un host estable tras este arranque, resuelva la prueba
 SQLite bloqueada y demuestre Windows detenido/exclusividad; despues se repite
 el preflight sin esperar indefinidamente.
+
+## Preflight automatizado posterior 2026-08-12 (23:21 Europe/Madrid)
+
+Se ejecutó `scripts/raspberry_preflight.py` en modo estrictamente read-only,
+con SSH por la clave autorizada y sin receipt de SQLite. El helper devuelve
+código `2` y `ok=false` por estas razones:
+
+- el host volvió a arrancar a las `23:15:16`; a las `23:21` llevaba solo 455
+  segundos, por debajo del mínimo operativo de 600 segundos;
+- la integridad de SQLite queda `unavailable` hasta aportar un receipt de
+  snapshot frío validado; la base activa conserva WAL/SHM y el helper no la
+  abre, repara ni somete a `quick_check` online;
+- el USB sí pasa identidad y montaje: SanDisk `/dev/sda1`, ext4, `rw`, UUID
+  `1a8cb7c0-3a65-4d72-866f-340db4c6bafc`, aproximadamente 224 GB libres;
+- no se observaron errores I/O/USB/ext4 ni procesos en estado `D` durante esta
+  lectura; los tres contenedores core estaban `running/healthy` con la imagen
+  antigua `0.4.229-arm64`;
+- la imagen candidata `0.4.230-arm64` está disponible y conserva la revisión
+  `42b8dfc1`; los flags efectivos siguen siendo PAPER y live/auto-apply false.
+
+El script queda como gate reproducible: no modifica archivos remotos, no
+detiene procesos, no ejecuta Compose, no limpia locks y no toca `whale-copy`.
+Un receipt válido debe usar el schema `p-l89.sqlite-cold-snapshot.v1`, incluir
+`quick_check=ok`, `integrity_check=ok`, hostname, montaje, UUID y SHA-256, y se
+verifica localmente mediante `--sqlite-receipt` sin poder fabricar evidencia.

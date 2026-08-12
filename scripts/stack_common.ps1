@@ -153,6 +153,44 @@ function Get-StackManagedPythonPath {
     return (Join-Path (Get-StackRepoRoot) ".venv\Scripts\python.exe")
 }
 
+function Test-StackManagedProcessAncestry {
+    param(
+        [object]$Process,
+        [string]$CommandPattern
+    )
+    if ($null -eq $Process) {
+        return $false
+    }
+    if ([string]$Process.CommandLine -notmatch $CommandPattern) {
+        return $false
+    }
+
+    $managedPython = Get-StackManagedPythonPath
+    $seen = @{}
+    $current = $Process
+    while ($null -ne $current) {
+        $currentPid = [int]$current.ProcessId
+        if ($seen.ContainsKey($currentPid)) {
+            return $false
+        }
+        $seen[$currentPid] = $true
+
+        if ([string]$current.ExecutablePath -eq $managedPython) {
+            return $true
+        }
+        if ([string]$current.CommandLine -match "run_scheduler_supervisor\.ps1") {
+            return $true
+        }
+
+        $parentPid = [int]$current.ParentProcessId
+        if ($parentPid -le 0 -or $parentPid -eq $currentPid) {
+            return $false
+        }
+        $current = Get-StackProcessByPid -ProcessId $parentPid
+    }
+    return $false
+}
+
 function Get-StackRootProcesses {
     param([object[]]$Processes)
     if ($null -eq $Processes -or $Processes.Count -eq 0) {
@@ -267,8 +305,7 @@ function Get-StackSchedulerLockInfo {
     }
     $proc = Get-StackProcessByPid -ProcessId $pidValue
     $alive = $null -ne $proc
-    $managedPython = Get-StackManagedPythonPath
-    $compatible = $alive -and ([string]$proc.CommandLine -match "agente_bolsa.main schedule(s|$)") -and ([string]$proc.ExecutablePath -eq $managedPython)
+    $compatible = $alive -and (Test-StackManagedProcessAncestry -Process $proc -CommandPattern "agente_bolsa\.main schedule(s|$)")
     $expected = [string]($payload.owner_process_token)
     if ([string]::IsNullOrWhiteSpace($expected)) { $expected = [string]($payload.token) }
     $actual = $null
@@ -292,6 +329,7 @@ function Get-StackSchedulerLockInfo {
         status = $status
         token = $expected
         token_match = $tokenMatch
+        managed_ancestry = [bool]$compatible
     }
 }
 

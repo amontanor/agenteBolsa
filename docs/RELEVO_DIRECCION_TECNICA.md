@@ -1691,3 +1691,21 @@ historico sigue `unavailable` cuando faltan carriers; no se imputo nada. El
 cutoff P-L80 permanece intacto. Siguiente paso unico: observar dos ventanas
 maduras con controles same-cycle y EOD/costes/exposicion validos antes de
 valorar una dimension shadow, siempre human-gated.
+## P-L89-RPI-HARDENING - estado operativo
+
+El lote `codex/operational-hardening` añade un preflight Raspberry read-only y
+corrige la detección de ownership Windows en la cadena wrapper -> launcher
+`.venv` -> runtime Python. No toca trading, riesgo, broker, `.env`, SQLite
+activa ni `whale-copy`.
+
+Preflight real 2026-08-12 23:21 Europe/Madrid: Raspberry `Raspberryi5`,
+`aarch64`, USB `/dev/sda1` ext4 `rw`, UUID esperado, espacio suficiente,
+contenedores core healthy, imagen `0.4.230-arm64` cargada y flags PAPER
+correctos. Dictamen `precondition_not_met`: el host se reinicio a las 23:15:16 y
+solo tenia 455 s de uptime; falta receipt de snapshot frio SQLite. La lectura
+no produjo mutaciones ni dejo procesos `D`.
+
+Siguiente secuencia: esperar estabilidad, producir y validar el snapshot frio
+autorizado, ejecutar el preflight con `--sqlite-receipt`, confirmar postmarket,
+leases y exclusividad Windows, y solo despues realizar el corte cerrado con
+rollback a `0.4.229-arm64` preparado.

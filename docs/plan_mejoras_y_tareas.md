@@ -3676,3 +3676,34 @@ scheduler/token coherentes, kernel/config validos, paper seguro y 0 criticos.
 Las 3 advertencias operativas siguen siendo preexistentes. El cutoff P-L80 no
 cambia. Esperar dos ventanas maduras con captura valida antes de disenar un
 shadow de capital; no iniciar experimento ni cambiar sizing.
+
+## P-L89-RPI-HARDENING — preflight Raspberry y ownership Windows
+
+Estado: `implementation_in_progress` en el worktree `codex/operational-hardening`,
+basado en `171d9df6`.
+
+Objetivo: convertir los bloqueos observados en gates reproducibles antes del
+corte Raspberry, sin tocar trading, riesgo, broker, `.env`, SQLite activa ni
+`whale-copy`.
+
+Cambios del lote:
+
+- `scripts/raspberry_preflight.py` ejecuta lecturas SSH de identidad,
+  dispositivo/UUID/montaje, estabilidad de arranque, I/O, procesos `D`,
+  espacio/inodos, memoria, Docker, salud de contenedores, imagen y flags PAPER.
+  Devuelve JSON y código no cero ante una precondición, sin ejecutar Compose ni
+  abrir/reparar SQLite.
+- `scripts/stack_common.ps1` reconoce la cadena Windows
+  wrapper/supervisor → launcher `.venv` → runtime Python real, evitando marcar
+  como huérfano un lock cuyo PID pertenece al runtime hijo gestionado.
+- Las pruebas focales cubren la cadena launcher/runtime y el preflight con
+  montaje correcto, recursos, contenedores saludables, WAL/SHM y bloqueo por
+  falta de receipt.
+
+Evidencia externa del 12-ago-2026 23:21: host Raspberry reiniciado a las
+23:15:16, uptime 455 s; montaje USB correcto, sin I/O error reciente, core
+healthy, imagen candidata cargada y flags PAPER correctos. El dictamen sigue
+`precondition_not_met` por estabilidad insuficiente y ausencia de snapshot
+frío SQLite validado. Siguiente paso: obtener el receipt mediante el
+procedimiento autorizado, repetir preflight tras estabilidad, resolver la
+exclusividad Windows y solo entonces ejecutar el corte cerrado.
