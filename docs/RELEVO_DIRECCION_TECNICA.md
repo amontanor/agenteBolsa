@@ -1714,3 +1714,10 @@ La herramienta `scripts/sqlite_cold_snapshot.py` implementa ese snapshot sin
 `VACUUM`, checkpoint ni backfill: exige `--writers-stopped`, no sobrescribe,
 conserva los sidecars presentes, valida la copia y genera `receipt.json` con
 hashes y resultados de integridad.
+
+Ultimo preflight estricto 2026-08-12 23:37 CEST: Raspberry estable (uptime
+1306 s), USB esperado ext4/rw sin I/O reciente, core Docker healthy, candidata
+`0.4.230-arm64` cargada y flags PAPER coherentes por contenedor. Dictamen
+`precondition_not_met`: falta receipt de snapshot fria y Windows aun mantiene
+scheduler/web activos. No detener, reiniciar ni cambiar Compose/env hasta el
+corte autorizado; conservar rollback a `0.4.229-arm64`.

@@ -3710,3 +3710,9 @@ healthy, imagen candidata cargada y flags PAPER correctos. El dictamen sigue
 frío SQLite validado. Siguiente paso: obtener el receipt mediante el
 procedimiento autorizado, repetir preflight tras estabilidad, resolver la
 exclusividad Windows y solo entonces ejecutar el corte cerrado.
+
+Preflight estricto posterior 2026-08-12 23:37: uptime 1306 s, USB ext4/rw sin
+I/O reciente, sin procesos `D`, core healthy, candidata cargada con digest
+`sha256:c9745ce004fa44be7590a59e543f64faaacd8c7cbc24862bcadefdeeab9a19ff` y
+flags PAPER correctas en los tres contenedores. Sigue `precondition_not_met`
+por falta de receipt y por scheduler/web Windows activos; no hubo mutaciones.

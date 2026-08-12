@@ -226,3 +226,30 @@ ventana autorizada: exige `--writers-stopped`, no sobrescribe, no ejecuta
 `VACUUM`/checkpoint/backfill, copia la base y sidecars presentes, valida la
 copia y escribe el receipt dentro del directorio nuevo. No se ejecutó sobre la
 Raspberry en este lote.
+
+## Preflight estricto 2026-08-12 (23:37 Europe/Madrid)
+
+Se repitio el helper despues de superar la estabilidad minima, con
+`--require-windows-stopped`, siempre en modo read-only. El resultado fue
+`exit_code=2`, `ok=false`, con los siguientes hechos:
+
+- host `Raspberryi5`, `aarch64`, uptime `1306 s`; el gate de estabilidad paso;
+- `/dev/sda1` sigue siendo el USB esperado, ext4/rw, UUID
+  `1a8cb7c0-3a65-4d72-866f-340db4c6bafc`, sin errores I/O/USB/ext4 recientes ni
+  procesos en estado `D`;
+- el core Docker esta `running/healthy`, la candidata
+  `agente-bolsa:0.4.230-arm64` esta cargada con digest
+  `sha256:c9745ce004fa44be7590a59e543f64faaacd8c7cbc24862bcadefdeeab9a19ff`
+  y revision de imagen `42b8dfc1d5c295aec51775690db1b0f683a55f5c`;
+- las flags requeridas pasan individualmente en scheduler, auxiliary y web:
+  PAPER activo, `AUTO_PAPER_TRADING=true`, `REQUIRE_HUMAN_APPROVAL=false`,
+  `ALLOW_LIVE_TRADING=false` y `ALLOW_AUTO_APPLY_IMPROVEMENTS=false`;
+- siguen bloqueantes `sqlite_integrity: falta --sqlite-receipt` y
+  `windows_exclusivity`: scheduler/web continuan activos y el web Windows
+  publica `0.0.0.0:8501`.
+
+La lectura no detuvo Windows, no creo snapshot, no reinicio ni arranco stacks,
+no toco SQLite/WAL/SHM, `whale-copy`, Compose, locks ni firewall. El siguiente
+paso autorizado es detener canonicamente Windows solo dentro del corte, generar
+la snapshot fria con `--writers-stopped`, validarla y repetir el preflight antes
+de cualquier cambio de imagen en Raspberry.
