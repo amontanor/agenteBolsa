@@ -244,6 +244,8 @@ identidad, UUID/montaje, espacio e inodos, memoria, procesos en estado `D`,
 errores recientes de USB/ext4, Docker, salud de los tres contenedores core,
 imagen candidata y flags PAPER. No ejecuta Compose, no detiene procesos, no
 abre ni repara SQLite y devuelve código `2` si una precondición falla.
+El gate de bytes exige al menos 10 GiB libres y el de inodos bloquea por encima
+del 90% por defecto; ambos umbrales se pueden ajustar explícitamente.
 
 Uso desde PowerShell:
 

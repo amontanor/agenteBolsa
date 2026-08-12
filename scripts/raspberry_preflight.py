@@ -132,6 +132,17 @@ def _parse_memory_available(value: str) -> int | None:
         return None
 
 
+def _parse_use_percent(value: str) -> int | None:
+    fields = value.split()
+    if len(fields) < 5:
+        return None
+    raw = fields[4].rstrip("%")
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
 def _has_expected_mount(value: str, expected_uuid: str, block: str) -> tuple[bool, str]:
     fields = value.split()
     if len(fields) < 3:
@@ -322,6 +333,12 @@ def build_report(args: argparse.Namespace, observations: dict[str, str], ssh_err
         available is not None and available >= args.min_free_bytes,
         f"available_bytes={available}, minimo={args.min_free_bytes}",
     )
+    inode_use_percent = _parse_use_percent(observations.get("inode", ""))
+    add(
+        "inode_space",
+        inode_use_percent is not None and inode_use_percent <= args.max_inode_use_percent,
+        f"use_percent={inode_use_percent}, maximo={args.max_inode_use_percent}",
+    )
     memory_available = _parse_memory_available(observations.get("memory", ""))
     add(
         "memory",
@@ -411,6 +428,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--candidate-image", default=DEFAULT_CANDIDATE_IMAGE)
     parser.add_argument("--min-uptime-seconds", type=int, default=600)
     parser.add_argument("--min-free-bytes", type=int, default=10 * 1024**3)
+    parser.add_argument("--max-inode-use-percent", type=int, default=90)
     parser.add_argument("--min-memory-bytes", type=int, default=256 * 1024**2)
     parser.add_argument("--connect-timeout", type=int, default=8)
     parser.add_argument("--command-timeout", type=int, default=30)

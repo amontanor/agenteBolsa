@@ -12,6 +12,7 @@ def _healthy_observations() -> dict[str, str]:
         "mount": "/dev/sda1 ext4 rw,noatime",
         "block": 'NAME="sda1" UUID="1a8cb7c0-3a65-4d72-866f-340db4c6bafc"',
         "disk": "/dev/sda1 100 10 90000000000 10% /var/lib/agente-bolsa",
+        "inode": "/dev/sda1 100 10 90 10% /var/lib/agente-bolsa",
         "memory": "Mem: 2000000000 500000000 1500000000 0 0 1500000000",
         "kernel_storage": "",
         "d_state": "",
@@ -53,6 +54,7 @@ def test_preflight_keeps_sqlite_integrity_blocked_until_cold_snapshot():
     assert report["checks"]["usb_mount"]["ok"] is True
     assert report["checks"]["docker_core_health"]["ok"] is True
     assert report["checks"]["sqlite_integrity"]["ok"] is False
+    assert report["checks"]["inode_space"]["ok"] is True
     assert any("sqlite_integrity" in reason for reason in report["blocking_reasons"])
     assert report["mutations"] == []
 
@@ -131,6 +133,15 @@ def test_preflight_requires_paper_flags_on_each_core_container(tmp_path):
 
     assert report["checks"]["paper_policy"]["ok"] is False
     assert "agente-bolsa-auxiliary-1" in report["checks"]["paper_policy"]["detail"]
+
+
+def test_preflight_blocks_inode_pressure():
+    observations = _healthy_observations()
+    observations["inode"] = "/dev/sda1 100 95 5 95% /var/lib/agente-bolsa"
+
+    report = build_report(parse_args([]), observations, None)
+
+    assert report["checks"]["inode_space"]["ok"] is False
 
 
 def test_preflight_blocks_recent_storage_and_blocked_io():
