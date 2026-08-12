@@ -1761,3 +1761,7 @@ activos. Identidad, USB ext4/rw, I/O, snapshot SQLite, imagen, flags PAPER y
 salud actual pasaron. El nuevo flag `--require-core-restart-zero` queda como
 gate obligatorio del corte. No detener ni arrancar nada hasta reconstruir la
 imagen `611da4b1` y repetir el preflight con ambos bloqueos resueltos.
+
+Bloqueo local adicional: Docker Desktop `4.33.1` no levanta el engine porque
+requiere `WSL update required` y la actualizacion elevada fue denegada. No
+ejecutar `wsl --update` automaticamente; requiere autoridad administrativa.

@@ -3764,3 +3764,9 @@ snapshot SQLite, imagen, flags PAPER y salud puntual pasaron. El gate evita
 confundir healthy puntual con estabilidad de despliegue. Siguiente accion:
 rebuild ARM64 con `611da4b1`, repetir preflight estricto y solo entonces hacer
 el corte; sin mutar `whale-copy`, SQLite ni credenciales.
+
+El build local queda separado como `authority_required`: Docker Desktop 4.33.1
+detuvo el engine por `WSL update required` y la actualizacion elevada fue
+denegada. No ejecutar `wsl --update` ni alterar Docker sin autoridad del
+operador; la Raspberry no debe usarse como build host mientras siga con
+presion de recursos y el scheduler inestable.

@@ -384,3 +384,9 @@ tocada. No se detuvo Windows, no se reinicio Docker, no se cambio Compose/env,
 no se modifico `whale-copy` y no se hizo push. El siguiente corte requiere
 resolver ambos bloqueos, reconstruir la imagen con `611da4b1` y repetir este
 preflight antes de cualquier parada/arranque.
+
+El build local sigue pendiente por un bloqueo independiente: Docker Desktop
+`4.33.1` informa `WSL update required` y `wsl update failed` porque la
+actualizacion elevada fue denegada. El daemon no responde aunque el proceso y
+el pipe existan. No se ejecuto `wsl --update`, no se modifico la instalacion de
+Docker y se requiere autoridad administrativa del operador para resolverlo.
