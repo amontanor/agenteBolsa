@@ -1691,3 +1691,49 @@ historico sigue `unavailable` cuando faltan carriers; no se imputo nada. El
 cutoff P-L80 permanece intacto. Siguiente paso unico: observar dos ventanas
 maduras con controles same-cycle y EOD/costes/exposicion validos antes de
 valorar una dimension shadow, siempre human-gated.
+## P-L89-RPI-HARDENING - estado operativo
+
+El lote `codex/operational-hardening` añade un preflight Raspberry read-only y
+corrige la detección de ownership Windows en la cadena wrapper -> launcher
+`.venv` -> runtime Python. No toca trading, riesgo, broker, `.env`, SQLite
+activa ni `whale-copy`.
+
+Preflight real 2026-08-12 23:21 Europe/Madrid: Raspberry `Raspberryi5`,
+`aarch64`, USB `/dev/sda1` ext4 `rw`, UUID esperado, espacio suficiente,
+contenedores core healthy, imagen `0.4.230-arm64` cargada y flags PAPER
+correctos. Dictamen `precondition_not_met`: el host se reinicio a las 23:15:16 y
+solo tenia 455 s de uptime; falta receipt de snapshot frio SQLite. La lectura
+no produjo mutaciones ni dejo procesos `D`.
+
+Siguiente secuencia: esperar estabilidad, producir y validar el snapshot frio
+autorizado, ejecutar el preflight con `--sqlite-receipt`, confirmar postmarket,
+leases y exclusividad Windows, y solo despues realizar el corte cerrado con
+rollback a `0.4.229-arm64` preparado.
+
+La herramienta `scripts/sqlite_cold_snapshot.py` implementa ese snapshot sin
+`VACUUM`, checkpoint ni backfill: exige `--writers-stopped`, no sobrescribe,
+conserva los sidecars presentes, valida la copia y genera `receipt.json` con
+hashes y resultados de integridad.
+
+Ultimo preflight estricto 2026-08-12 23:37 CEST: Raspberry estable (uptime
+1306 s), USB esperado ext4/rw sin I/O reciente, core Docker healthy, candidata
+`0.4.230-arm64` cargada y flags PAPER coherentes por contenedor. Dictamen
+`precondition_not_met`: falta receipt de snapshot fria y Windows aun mantiene
+scheduler/web activos. No detener, reiniciar ni cambiar Compose/env hasta el
+corte autorizado; conservar rollback a `0.4.229-arm64`.
+
+Reconciliacion 23:42 CEST: `windows_exclusivity` ya informa `foreign=[]` al
+resolver el checkout principal desde `git-common-dir`; la foreign process
+anterior era un falso positivo del worktree candidato. Permanecen solo falta
+de receipt SQLite y scheduler/web Windows activos.
+
+Ventana 2026-08-12 23:46-23:53 CEST: se detuvo Windows con el helper canonico,
+se creo y valido la snapshot fria v2 en
+`C:\Antonio\Bref\agenteBolsa_backups\raspberry-cut-20260812-2350` (base
+`7fab2f7f...`, WAL `66632ef2...`, SHM `e5e00a5e...`, quick/integrity ok). El
+preflight Raspberry bloqueo el corte por `whale-copy` en estado D y memoria
+disponible bajo 256 MiB. Se hizo rollback a Windows; despues Raspberry se
+reinicio externamente y el preflight final mostro uptime 67 s y core
+unhealthy. Dictamen `precondition_not_met`; no transferir ni desplegar hasta
+auditoria read-only del reinicio y estabilidad >=600 s. La snapshot y la
+candidata se conservan.

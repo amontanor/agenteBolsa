@@ -83,3 +83,49 @@ def test_check_services_script_parses_in_windows_powershell_51():
 
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == "ok"
+
+
+def test_scheduler_lock_accepts_managed_venv_launcher_runtime_chain():
+    command = r"""
+    . .\scripts\stack_common.ps1
+    $root = Join-Path ([IO.Path]::GetTempPath()) ("stack-lock-" + [guid]::NewGuid().ToString())
+    New-Item -ItemType Directory -Force -Path (Join-Path $root 'data\state') | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $root 'data\state\scheduler.lock'),
+        '{"pid":42,"kind":"scheduler"}'
+    )
+
+    function Get-StackRepoRoot { return $root }
+    function Get-StackManagedPythonPath { return 'C:\repo\.venv\Scripts\python.exe' }
+    $runtime = [pscustomobject]@{
+        ProcessId = 42
+        ParentProcessId = 41
+        CommandLine = 'C:\Python311\python.exe -m agente_bolsa.main schedule'
+        ExecutablePath = 'C:\Python311\python.exe'
+        CreationDate = $null
+    }
+    $launcher = [pscustomobject]@{
+        ProcessId = 41
+        ParentProcessId = 40
+        CommandLine = 'C:\repo\.venv\Scripts\python.exe -m agente_bolsa.main schedule'
+        ExecutablePath = 'C:\repo\.venv\Scripts\python.exe'
+        CreationDate = $null
+    }
+    function Get-StackProcessByPid {
+        param([int]$ProcessId)
+        if ($ProcessId -eq 42) { return $runtime }
+        if ($ProcessId -eq 41) { return $launcher }
+        return $null
+    }
+
+    $info = Get-StackSchedulerLockInfo
+    Write-Output ($info.compatible.ToString().ToLowerInvariant())
+    Write-Output ($info.orphan.ToString().ToLowerInvariant())
+    Write-Output ($info.managed_ancestry.ToString().ToLowerInvariant())
+    Remove-Item -LiteralPath $root -Recurse -Force
+    """
+    proc = _powershell(command)
+
+    assert proc.returncode == 0, proc.stderr
+    lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    assert lines[-3:] == ["true", "false", "true"]

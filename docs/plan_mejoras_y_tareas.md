@@ -3676,3 +3676,65 @@ scheduler/token coherentes, kernel/config validos, paper seguro y 0 criticos.
 Las 3 advertencias operativas siguen siendo preexistentes. El cutoff P-L80 no
 cambia. Esperar dos ventanas maduras con captura valida antes de disenar un
 shadow de capital; no iniciar experimento ni cambiar sizing.
+
+## P-L89-RPI-HARDENING — preflight Raspberry y ownership Windows
+
+Estado: `implementation_in_progress` en el worktree `codex/operational-hardening`,
+basado en `171d9df6`.
+
+Objetivo: convertir los bloqueos observados en gates reproducibles antes del
+corte Raspberry, sin tocar trading, riesgo, broker, `.env`, SQLite activa ni
+`whale-copy`.
+
+Cambios del lote:
+
+- `scripts/raspberry_preflight.py` ejecuta lecturas SSH de identidad,
+  dispositivo/UUID/montaje, estabilidad de arranque, I/O, procesos `D`,
+  espacio/inodos, memoria, Docker, salud de contenedores, imagen y flags PAPER.
+  Devuelve JSON y código no cero ante una precondición, sin ejecutar Compose ni
+  abrir/reparar SQLite.
+- `scripts/stack_common.ps1` reconoce la cadena Windows
+  wrapper/supervisor → launcher `.venv` → runtime Python real, evitando marcar
+  como huérfano un lock cuyo PID pertenece al runtime hijo gestionado.
+- Las pruebas focales cubren la cadena launcher/runtime y el preflight con
+  montaje correcto, recursos, contenedores saludables, WAL/SHM y bloqueo por
+  falta de receipt.
+- `scripts/sqlite_cold_snapshot.py` exige `--writers-stopped`, no sobrescribe,
+  copia la base y sidecars, valida `quick_check`/`integrity_check`, calcula
+  SHA-256 y produce el receipt que consume el preflight.
+
+Evidencia externa del 12-ago-2026 23:21: host Raspberry reiniciado a las
+23:15:16, uptime 455 s; montaje USB correcto, sin I/O error reciente, core
+healthy, imagen candidata cargada y flags PAPER correctos. El dictamen sigue
+`precondition_not_met` por estabilidad insuficiente y ausencia de snapshot
+frío SQLite validado. Siguiente paso: obtener el receipt mediante el
+procedimiento autorizado, repetir preflight tras estabilidad, resolver la
+exclusividad Windows y solo entonces ejecutar el corte cerrado.
+
+Preflight estricto posterior 2026-08-12 23:37: uptime 1306 s, USB ext4/rw sin
+I/O reciente, sin procesos `D`, core healthy, candidata cargada con digest
+`sha256:c9745ce004fa44be7590a59e543f64faaacd8c7cbc24862bcadefdeeab9a19ff` y
+flags PAPER correctas en los tres contenedores. Sigue `precondition_not_met`
+por falta de receipt y por scheduler/web Windows activos; no hubo mutaciones.
+
+Reconciliacion 23:42: el preflight ejecutado desde el worktree candidato ya
+resuelve el `stack_status.ps1` del checkout principal; `foreign=[]`. La lectura
+anterior que mostraba el web como foreign era un falso positivo del contexto del
+worktree y queda corregida en el helper. Los unicos blockers siguen siendo
+receipt SQLite ausente y scheduler/web Windows activos.
+
+## Resultado de ventana 2026-08-12 23:46-23:53
+
+Se hizo un corte controlado y se revirtio sin transferir ni desplegar la
+Raspberry. La snapshot fria Windows valida esta en
+`C:\Antonio\Bref\agenteBolsa_backups\raspberry-cut-20260812-2350`, con base
+SHA-256 `7fab2f7f1b854d20cd6e5b752687d741e8edae50e7dd58dfdaf4ad337fc324af`,
+WAL `66632ef2e2604da422fae9d1fbe7c911a3653182934723bd10d98af0724e6061` y
+SHM `e5e00a5e876a70ebf35b644e2c00a082da06f16860efe4ec9643651e39829a82`;
+`quick_check`/`integrity_check` correctos.
+
+El corte quedo bloqueado por proceso `D` de `whale-copy` y memoria disponible
+por debajo de 256 MiB. Tras rollback, Raspberry reinicio externamente y quedo
+con uptime 67 s y core scheduler/web unhealthy en el preflight final. Dictamen
+`precondition_not_met`; Windows restaurado y unica instancia activa. No volver
+a intentar hasta caracterizar el reinicio/whale-copy y obtener estabilidad.

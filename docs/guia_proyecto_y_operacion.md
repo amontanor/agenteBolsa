@@ -48,6 +48,9 @@ Archivos protegidos que no se modifican sin revisión humana explícita:
 | `scripts/stack_*.ps1` | Helpers canónicos del stack Windows |
 | `scripts/check_no_nulls.py` | Gate sin NUL |
 | `scripts/check_services.ps1` | Diagnóstico de servicios Windows |
+| `scripts/check_services.ps1` | Diagnóstico de servicios Windows |
+| `scripts/raspberry_preflight.py` | Preflight Raspberry read-only con salida JSON |
+| `scripts/sqlite_cold_snapshot.py` | Snapshot frio SQLite con WAL/SHM, hashes y receipt |
 | `scripts/run_*_supervisor.ps1` | Supervisores auxiliares Windows |
 | `data/state/` | Estado SQLite productivo |
 | `data/reports/` | Informes y artefactos operativos |
@@ -233,6 +236,70 @@ ssh -i $RaspKey -N -L 18081:127.0.0.1:8081 antonio@192.168.1.234
 ```
 
 La publicación LAN en `0.0.0.0:8081` solo se valida dentro de la red privada; no abrir Internet, router o firewall público sin autoridad explícita.
+
+### 7.4 Preflight Raspberry automatizado
+
+El helper `scripts/raspberry_preflight.py` ejecuta únicamente lecturas por SSH:
+identidad, UUID/montaje, espacio e inodos, memoria, procesos en estado `D`,
+errores recientes de USB/ext4, Docker, salud de los tres contenedores core,
+imagen candidata y flags PAPER. No ejecuta Compose, no detiene procesos, no
+abre ni repara SQLite y devuelve código `2` si una precondición falla.
+El gate de bytes exige al menos 10 GiB libres y el de inodos bloquea por encima
+del 90% por defecto; ambos umbrales se pueden ajustar explícitamente.
+
+Uso desde PowerShell:
+
+```powershell
+& ".\.venv\Scripts\python.exe" scripts\raspberry_preflight.py `
+  --identity "$env:USERPROFILE\.ssh\codex_raspberry_ed25519" `
+  --json
+```
+
+Con `--require-windows-stopped`, el helper audita el `stack_status.ps1` del
+checkout principal resuelto mediante `git-common-dir`, aunque el comando se
+ejecute desde un worktree candidato. Se puede fijar con `--windows-repo` si
+existe más de un checkout operativo.
+
+El resultado debe conservarse en el informe del lote. La comprobación de
+SQLite queda `unavailable` mientras la base activa tenga WAL/SHM o no exista
+un receipt local de snapshot frío validado. Un receipt aceptable debe tener
+schema `p-l89.sqlite-cold-snapshot.v2`, estado `ok`, `quick_check=ok`,
+`integrity_check=ok`, `source_host`, `target_host`, montaje, UUID y SHA-256 de
+64 caracteres:
+
+```powershell
+& ".\.venv\Scripts\python.exe" scripts\raspberry_preflight.py `
+  --identity "$env:USERPROFILE\.ssh\codex_raspberry_ed25519" `
+  --sqlite-receipt .\sqlite-cold-snapshot.json `
+  --json
+```
+
+El receipt no sustituye al snapshot: solo permite verificar de forma
+reproducible una evidencia producida por el procedimiento autorizado. Nunca
+se debe fabricar, editar o reutilizar un receipt de otra Raspberry, UUID o
+estado de SQLite.
+
+El snapshot se genera con `scripts/sqlite_cold_snapshot.py` solo despues de
+detener canonicamente todos los escritores y confirmar exclusividad. Exige la
+bandera explicita `--writers-stopped`, no sobrescribe un destino existente,
+copia la SQLite y los sidecars presentes, valida el conjunto copiado y deja
+`receipt.json` dentro del directorio nuevo:
+
+```bash
+python scripts/sqlite_cold_snapshot.py \
+  --source /var/lib/agente-bolsa/state/agente_bolsa.sqlite3 \
+  --destination-dir /var/backups/agente-bolsa/cold-YYYYMMDD-HHMMSS \
+  --source-host Windows-Productivo \
+  --target-host Raspberryi5 \
+  --target-mount /var/lib/agente-bolsa \
+  --target-device-uuid 1a8cb7c0-3a65-4d72-866f-340db4c6bafc \
+  --writers-stopped --json
+```
+
+El comando no hace `VACUUM`, `checkpoint`, backfill ni reparacion. Si la
+fuente cambia durante la copia, o el `quick_check`/`integrity_check` del
+conjunto copiado falla, elimina solo su directorio temporal parcial y no crea
+un receipt valido.
 
 ## 8. Migración Raspberry: estado documentado
 
