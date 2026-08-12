@@ -1754,3 +1754,10 @@ rebuild ARM64 y verificacion de contenido antes de cargarlo; Docker Desktop
 estaba inaccesible en esta ronda. Proxima accion: rebuild local, validacion de
 imagen/Compose, preflight estricto con Windows detenido solo dentro de una
 ventana autorizada y dos healthchecks separados; sin tocar `whale-copy`.
+
+Preflight estricto 2026-08-13 00:17 CEST: `ok=false` por dos razones
+reproducibles: scheduler Raspberry con 37 reinicios y Windows con scheduler/web
+activos. Identidad, USB ext4/rw, I/O, snapshot SQLite, imagen, flags PAPER y
+salud actual pasaron. El nuevo flag `--require-core-restart-zero` queda como
+gate obligatorio del corte. No detener ni arrancar nada hasta reconstruir la
+imagen `611da4b1` y repetir el preflight con ambos bloqueos resueltos.

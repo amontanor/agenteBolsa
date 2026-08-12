@@ -166,3 +166,28 @@ def test_preflight_blocks_recent_storage_and_blocked_io():
     assert report["checks"]["host_stability"]["ok"] is False
     assert report["checks"]["kernel_storage"]["ok"] is False
     assert report["checks"]["no_blocked_io_process"]["ok"] is False
+
+
+def test_preflight_reports_restart_history_without_blocking_by_default():
+    observations = _healthy_observations()
+    observations["inspect.agente-bolsa-scheduler-1"] = (
+        "running|healthy|37|agente-bolsa:0.4.229-arm64|started"
+    )
+
+    report = build_report(parse_args(["--sqlite-receipt", "missing.json"]), observations, None)
+
+    assert report["checks"]["docker_core_restart_history"]["ok"] is False
+    assert any("docker_core_restart_history" in warning for warning in report["warnings"])
+
+
+def test_preflight_can_require_zero_core_restarts():
+    observations = _healthy_observations()
+    observations["inspect.agente-bolsa-scheduler-1"] = (
+        "running|healthy|37|agente-bolsa:0.4.229-arm64|started"
+    )
+    args = parse_args(["--require-core-restart-zero"])
+
+    report = build_report(args, observations, None)
+
+    assert report["ok"] is False
+    assert any("docker_core_restart_history" in reason for reason in report["blocking_reasons"])

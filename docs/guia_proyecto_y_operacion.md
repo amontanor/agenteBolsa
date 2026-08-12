@@ -261,6 +261,11 @@ ejecute desde un worktree candidato. Se puede fijar con `--windows-repo` si
 existe más de un checkout operativo.
 
 El resultado debe conservarse en el informe del lote. La comprobación de
+Para la ventana de corte se debe anadir `--require-core-restart-zero`. Un
+contenedor puede estar healthy en la lectura actual y conservar reinicios
+anteriores; ese flag convierte esa evidencia en bloqueo hasta que el core sea
+recreado y pase las comprobaciones con contador de reinicios cero.
+
 SQLite queda `unavailable` mientras la base activa tenga WAL/SHM o no exista
 un receipt local de snapshot frío validado. Un receipt aceptable debe tener
 schema `p-l89.sqlite-cold-snapshot.v2`, estado `ok`, `quick_check=ok`,

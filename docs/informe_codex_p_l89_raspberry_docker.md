@@ -364,3 +364,23 @@ contenga la sonda. El build ARM64 local queda pendiente porque Docker Desktop
 no estaba disponible (`dockerDesktopLinuxEngine` ausente). No hubo mutaciones
 remotas, carga de imagen, Compose, cambios de env, SQLite, `whale-copy` ni
 push. Dictamen vigente: `precondition_not_met` / no desplegado.
+
+## Preflight estricto 2026-08-13 00:17 Europe/Madrid
+
+Se ejecuto el helper read-only con `--require-windows-stopped`,
+`--require-core-restart-zero` y la receipt fria validada. El resultado fue
+`ok=false`, con todos los gates fisicos, SQLite, imagen, flags PAPER y salud
+actual del core en verde. Los dos bloqueos exactos fueron:
+
+- `docker_core_restart_history`: scheduler Raspberry `37`, auxiliary `0`, web
+  `0`.
+- `windows_exclusivity`: scheduler y web Windows activos; procesos foreign
+  vacios.
+
+La Raspberry tenia uptime `1525 s`, `/dev/sda1` ext4/rw, ~224 GB libres,
+memoria disponible ~419 MB y sin errores I/O/procesos `D`, pero el scheduler
+consumia ~123% CPU en esa muestra. La SQLite activa mantenia WAL/SHM y no fue
+tocada. No se detuvo Windows, no se reinicio Docker, no se cambio Compose/env,
+no se modifico `whale-copy` y no se hizo push. El siguiente corte requiere
+resolver ambos bloqueos, reconstruir la imagen con `611da4b1` y repetir este
+preflight antes de cualquier parada/arranque.

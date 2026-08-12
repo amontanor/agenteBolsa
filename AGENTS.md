@@ -457,7 +457,8 @@ La migración Raspberry tiene un gate read-only reproducible:
 ```powershell
 & ".\.venv\Scripts\python.exe" scripts\raspberry_preflight.py `
   --identity "$env:USERPROFILE\.ssh\codex_raspberry_ed25519" `
-  --require-windows-stopped --sqlite-receipt .\sqlite-cold-snapshot.json --json
+  --require-windows-stopped --require-core-restart-zero `
+  --sqlite-receipt .\sqlite-cold-snapshot.json --json
 ```
 
 `raspberry_preflight.py` bloquea si falla identidad del host, estabilidad de
@@ -465,6 +466,11 @@ arranque (600 s por defecto), `/dev/sda1` ext4/rw y UUID, I/O o procesos `D`,
 bytes/inodos/memoria, core Docker, imagen candidata, flags PAPER en cada
 contenedor, receipt SQLite o exclusividad Windows. No ejecuta Compose, no borra
 locks, no abre la SQLite activa y no toca `whale-copy`.
+
+`--require-core-restart-zero` es obligatorio en el preflight de corte: diferencia
+un contenedor healthy en la lectura actual de un core que ha tenido reinicios.
+Sin esa bandera, el contador se muestra como advertencia read-only; con ella,
+cualquier reinicio acumulado o contador unavailable bloquea el corte.
 
 El healthcheck del scheduler dentro de la imagen debe ser ligero y no debe
 ejecutar `schedule-status` completo: en ARM64 esa orden puede superar el

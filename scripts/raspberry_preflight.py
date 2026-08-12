@@ -188,6 +188,21 @@ def _inspect_rows(observations: dict[str, str]) -> list[str]:
     return failures
 
 
+def _restart_counts(observations: dict[str, str]) -> tuple[dict[str, int], list[str]]:
+    counts: dict[str, int] = {}
+    errors: list[str] = []
+    for name in REQUIRED_CONTAINERS:
+        fields = observations.get(f"inspect.{name}", "").split("|")
+        if len(fields) < 3 or not fields[2]:
+            errors.append(f"{name}: restart_count unavailable")
+            continue
+        try:
+            counts[name] = int(fields[2])
+        except ValueError:
+            errors.append(f"{name}: restart_count invalido={fields[2]!r}")
+    return counts, errors
+
+
 def _verify_snapshot_receipt(path: str | None, args: argparse.Namespace) -> tuple[bool, str]:
     if not path:
         return False, "unavailable: falta --sqlite-receipt"
@@ -314,11 +329,14 @@ def _local_windows_status(explicit_repo: str | None) -> tuple[dict[str, Any] | N
 def build_report(args: argparse.Namespace, observations: dict[str, str], ssh_error: str | None) -> dict[str, Any]:
     checks: dict[str, dict[str, Any]] = {}
     blockers: list[str] = []
+    warnings: list[str] = []
 
     def add(name: str, ok: bool, detail: str, blocking: bool = True) -> None:
         checks[name] = {"ok": bool(ok), "detail": detail}
         if blocking and not ok:
             blockers.append(f"{name}: {detail}")
+        elif not blocking and not ok:
+            warnings.append(f"{name}: {detail}")
 
     if ssh_error:
         add("ssh", False, ssh_error)
@@ -329,6 +347,7 @@ def build_report(args: argparse.Namespace, observations: dict[str, str], ssh_err
             "observations": {},
             "checks": checks,
             "blocking_reasons": blockers,
+            "warnings": warnings,
             "mutations": [],
             "ok": False,
         }
@@ -380,6 +399,17 @@ def build_report(args: argparse.Namespace, observations: dict[str, str], ssh_err
         "docker_core_health",
         not missing and not unhealthy,
         f"missing={missing}, unhealthy={unhealthy}; whale-copy se observa pero no es gate del core",
+    )
+    restart_counts, restart_errors = _restart_counts(observations)
+    restart_ok = not restart_errors and all(count == 0 for count in restart_counts.values())
+    restart_detail = f"counts={restart_counts}"
+    if restart_errors:
+        restart_detail += f"; errores={restart_errors}"
+    add(
+        "docker_core_restart_history",
+        restart_ok,
+        restart_detail,
+        blocking=args.require_core_restart_zero,
     )
     candidate = observations.get(f"image.{args.candidate_image}", "")
     add(
@@ -436,6 +466,7 @@ def build_report(args: argparse.Namespace, observations: dict[str, str], ssh_err
         "observations": observations,
         "checks": checks,
         "blocking_reasons": blockers,
+        "warnings": warnings,
         "windows_status": windows_status,
         "mutations": [],
         "ok": not blockers,
@@ -460,6 +491,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--connect-timeout", type=int, default=8)
     parser.add_argument("--command-timeout", type=int, default=30)
     parser.add_argument("--require-windows-stopped", action="store_true")
+    parser.add_argument(
+        "--require-core-restart-zero",
+        action="store_true",
+        help="bloquea si algun contenedor core tiene reinicios acumulados o no informa el contador",
+    )
     parser.add_argument(
         "--windows-repo",
         help="checkout Windows a auditar; por defecto se resuelve desde el git-common-dir",

@@ -3756,3 +3756,11 @@ FILETIME en `stack_common.ps1`; focales/preflight: `16 passed`, y
 `stack_status` vuelve a informar `lock_ok=true`. Siguiente lote: rebuild y
 verificacion de la imagen, preflight estricto con exclusividad, y solo despues
 dos saludes post-corte; Raspberry y `whale-copy` permanecen sin mutar.
+
+Preflight estricto 2026-08-13 00:17: se incorporo y ejecuto el gate
+`--require-core-restart-zero`. La lectura confirmo `ok=false` por scheduler
+Raspberry con 37 reinicios y por scheduler/web Windows activos; almacenamiento,
+snapshot SQLite, imagen, flags PAPER y salud puntual pasaron. El gate evita
+confundir healthy puntual con estabilidad de despliegue. Siguiente accion:
+rebuild ARM64 con `611da4b1`, repetir preflight estricto y solo entonces hacer
+el corte; sin mutar `whale-copy`, SQLite ni credenciales.
