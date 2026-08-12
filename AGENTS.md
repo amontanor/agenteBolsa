@@ -196,12 +196,45 @@ despliegue, promoción y cualquier solicitud de autorización humana.
 - `src/agente_bolsa/web_app.py`: presentación Streamlit; no debe adquirir
   autoridad de trading.
 - `src/agente_bolsa/tools/`: productores, políticas, auditorías y consumidores.
+- `src/agente_bolsa/continuous_improvement/`: laboratorio, propuestas,
+  evidencias y aprendizaje.
+- `src/agente_bolsa/docker_supervisor.py`: supervisor Linux de auxiliares
+  Docker.
+- `src/agente_bolsa/runtime_paths.py`: rutas del intérprete en Windows y
+  contenedor.
 - `tests/`: pruebas aisladas y caracterizaciones.
 - `data/state/agente_bolsa.sqlite3`: SQLite productiva; nunca usar en tests.
 - `data/reports/`: artefactos operativos, no fixtures de test.
 - `scripts/stack_*.ps1`: helpers canónicos del stack.
+- `data/config/`: configuración versionada que puede entrar en la imagen.
+- `deploy/`: Compose y ejemplos de configuración para Docker/ARM64; nunca
+  poner secretos reales aquí.
+- `docs/guia_proyecto_y_operacion.md`: mapa estable del proyecto, persistencia,
+  políticas, Windows, Raspberry, Docker, salud y rollback.
+- `docs/informe_codex_p_l89_raspberry_docker.md`: fotografía única de la
+  migración Raspberry, hashes, dictamen y siguiente ventana.
 
 Busca primero con `rg`/`rg --files`. No dupliques contratos o helpers existentes.
+
+### Mapa funcional para explicar el sistema
+
+- **Entrada y coordinación:** `main.py` expone la CLI; `scheduler.py` coordina
+  jobs, locks, leases y cadencias.
+- **Ciclo de mercado:** `cycle_runner.py` orquesta investigación, selección,
+  decisión, gates, sizing y carriers observacionales.
+- **Seguridad y ejecución:** `kernel.py`, `tools/risk.py`,
+  `tools/execution.py` y `tools/broker.py` son fronteras protegidas.
+- **Persistencia y evidencia:** `storage.py` usa `Store`; `agent_events` es
+  historia append-only y `runtime_state` es vista latest.
+- **Presentación:** `web_app.py` muestra el estado; la UI no es autoridad de
+  trading ni fuente de identidad.
+- **Aprendizaje y shadows:** `continuous_improvement/` y `tools/` generan
+  evidencia; una ruta shadow no puede cambiar órdenes.
+- **Operación multiplataforma:** Windows usa `scripts/stack_*.ps1`; Raspberry
+  usa Compose separado, `docker_supervisor.py`, red propia y datos en USB.
+- **Documentación:** el plan maestro define backlog; el relevo define la
+  siguiente secuencia; la guía explica el mapa; el informe único registra la
+  evidencia fechada del lote.
 
 ## Código y configuración
 
@@ -464,6 +497,10 @@ reconciliación u outcomes manualmente para “validar” un despliegue.
 - Actualiza `docs/plan_mejoras_y_tareas.md` como fuente única de estado/backlog.
 - Actualiza `docs/RELEVO_DIRECCION_TECNICA.md` con la secuencia siguiente.
 - Mantén un único informe por lote; amplíalo en vez de crear planes paralelos.
+- Consulta `docs/guia_proyecto_y_operacion.md` para explicar apartados,
+  rutas, políticas, persistencia, Docker, Raspberry, salud y rollback.
+- Consulta `docs/informe_codex_p_l89_raspberry_docker.md` para el estado fechado
+  de la migración Raspberry; no deduzcas `deployed` de una etiqueta de imagen.
 - Registra causa raíz, contrato, denominadores, seguridad, validaciones,
   commits/trees, límites y siguiente paso.
 - No marques `deployed` antes de verificar el stack real.
