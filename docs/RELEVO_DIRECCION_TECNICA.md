@@ -1737,3 +1737,8 @@ reinicio externamente y el preflight final mostro uptime 67 s y core
 unhealthy. Dictamen `precondition_not_met`; no transferir ni desplegar hasta
 auditoria read-only del reinicio y estabilidad >=600 s. La snapshot y la
 candidata se conservan.
+
+Auditoria 23:56 CEST: Raspberry respondia, USB ext4/rw y `whale-copy`
+`running/healthy`, pero uptime solo 4 min. `journalctl` no conserva el boot
+anterior ni evidencia OOM/I/O/watchdog; causa del reinicio `unavailable`. No
+hacer otro corte hasta superar 600 s y repetir el preflight.

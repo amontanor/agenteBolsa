@@ -319,3 +319,14 @@ Dictamen del corte: `precondition_not_met`. Raspberry continua en
 `0.4.230-arm64` y el backup frio quedan preservados para otra ventana. No hubo
 push ni cambios en `whale-copy`, SQLite remota, firewall, otros discos o
 credenciales.
+
+## Auditoria read-only posterior al reinicio 2026-08-12 (23:56 Europe/Madrid)
+
+La Raspberry respondio por SSH con uptime aproximado de 4 minutos. El USB
+continuaba montado como `/dev/sda1 ext4 rw,noatime`. `whale-copy` estaba
+`running/healthy`, con `restarts=0`, pero el host todavia no superaba el gate de
+estabilidad de 600 s. `journalctl --list-boots` solo conserva el boot actual y
+la consulta filtrada del boot anterior no aporto evidencia de OOM, I/O,
+watchdog, thermal o panic; la causa del reinicio queda `unavailable`, no se
+atribuye a ningun componente. No se ejecutaron reinicios, reparaciones,
+limpiezas ni cambios remotos.
