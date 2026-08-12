@@ -147,3 +147,51 @@ Para la siguiente ventana cerrada:
 
 No ejecutar `run-once`, `job-once` ni `decide-once`.
 
+## Preflight de cierre 2026-08-12 (22:31-22:34 Europe/Madrid)
+
+**Dictamen: `precondition_not_met`.** XNYS aparece cerrado a las 22:31:31,
+pero no se inicia el corte porque el host y la exclusividad de instancias no
+quedan demostrados.
+
+Evidencia read-only obtenida:
+
+- La Raspberry sigue siendo `Raspberryi5`, `aarch64`. El montaje es
+  `/dev/sda1` sobre `/var/lib/agente-bolsa`, `ext4`, `rw,noatime`; el dispositivo
+  es el SanDisk `3.2Gen1`, serie `00010123090725114448`, UUID
+  `1a8cb7c0-3a65-4d72-866f-340db4c6bafc`. Hay aproximadamente 209 GB libres y
+  1% de inodos usados.
+- El host acaba de arrancar: `uptime -s` indica `2026-08-12 22:32:08`. El
+  kernel registra la enumeracion USB del SanDisk a las 22:32:09 y el montaje
+  ext4 a las 22:32:21. No hay errores I/O de USB visibles en el filtro reciente,
+  pero no existe aun una ventana de estabilidad suficiente. El root de la
+  microSD tambien mostro limpieza de huerfanos en solo lectura antes de
+  remontarse `rw`.
+- Recursos actuales: raiz 27 GB libres, USB 209 GB libres, 1% de inodos, RAM
+  disponible aproximada 911 MiB y swap zram 1.8 GiB libre. Docker reporta los
+  contenedores antiguos `healthy`, pero el supervisor auxiliary conserva un
+  proceso de la comprobacion SQLite read-only en estado `D` (PID 5427) tras
+  superar 60 s; no se lo mata ni se reinicia el contenedor a ciegas.
+- La lectura ligera de SQLite confirma `journal_mode=wal`, `schema_version=88`
+  y acceso read-only al esquema. `PRAGMA quick_check(1)` no termino en 60 s y
+  queda `unavailable` para este preflight; no se hizo checkpoint, VACUUM,
+  reparacion ni escritura de datos.
+- La instancia Raspberry activa sigue en `agente-bolsa:0.4.229-arm64`. La
+  candidata `0.4.230-arm64` permanece cargada con descriptor
+  `sha256:c9745ce004fa44be7590a59e543f64faaacd8c7cbc24862bcadefdeeab9a19ff`.
+  Los flags efectivos leidos siguen siendo PAPER:
+  `AUTO_PAPER_TRADING=true`, `REQUIRE_HUMAN_APPROVAL=false`,
+  `ALLOW_LIVE_TRADING=false` y `ALLOW_AUTO_APPLY_IMPROVEMENTS=false`.
+- En Windows, `schedule-status` observo un lock cuyo propietario estaba vivo;
+  inmediatamente despues `stack_status.ps1` mostro el scheduler `CORRIENDO`
+  con wrapper PowerShell y Python activos, aunque marco el lock como huerfano.
+  Esta contradiccion impide demostrar que Windows esta detenido y que no hay
+  competidor. No se detuvo ningun proceso.
+- El checkout principal conserva el artefacto no versionado `.playwright-cli/`;
+  no se inspecciono fuera de su inventario ni se elimino/restauro.
+
+No se cambio Compose/env, no se hizo snapshot frio, no se detuvieron ni
+arrancaron stacks, no se toco `whale-copy`, no se modifico SQLite/WAL/SHM, no
+se limpiaron locks y no se hizo push. El siguiente intento requiere que el
+operador confirme un host estable tras este arranque, resuelva la prueba
+SQLite bloqueada y demuestre Windows detenido/exclusividad; despues se repite
+el preflight sin esperar indefinidamente.
