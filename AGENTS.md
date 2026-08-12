@@ -448,6 +448,41 @@ El lock debe pertenecer al runtime efectivo, no necesariamente al launcher.
 No borres un lock si no has demostrado que su propietario está muerto o es un
 PID reutilizado.
 
+### Operación Raspberry y snapshot de migración
+
+La migración Raspberry tiene un gate read-only reproducible:
+
+```powershell
+& ".\.venv\Scripts\python.exe" scripts\raspberry_preflight.py `
+  --identity "$env:USERPROFILE\.ssh\codex_raspberry_ed25519" `
+  --require-windows-stopped --sqlite-receipt .\sqlite-cold-snapshot.json --json
+```
+
+`raspberry_preflight.py` bloquea si falla identidad del host, estabilidad de
+arranque (600 s por defecto), `/dev/sda1` ext4/rw y UUID, I/O o procesos `D`,
+bytes/inodos/memoria, core Docker, imagen candidata, flags PAPER en cada
+contenedor, receipt SQLite o exclusividad Windows. No ejecuta Compose, no borra
+locks, no abre la SQLite activa y no toca `whale-copy`.
+
+El snapshot se crea únicamente después de detener canónicamente los escritores:
+
+```powershell
+& ".\.venv\Scripts\python.exe" scripts\sqlite_cold_snapshot.py `
+  --source .\data\state\agente_bolsa.sqlite3 `
+  --destination-dir <backup-no-existente> `
+  --source-host Windows-Productivo --target-host Raspberryi5 `
+  --target-mount /var/lib/agente-bolsa `
+  --target-device-uuid <uuid-confirmado> --writers-stopped --json
+```
+
+La receipt v2 separa origen y destino, conserva los sidecars WAL/SHM presentes,
+valida `quick_check`/`integrity_check`, registra hashes y nunca sobrescribe.
+Un proceso `D` de `whale-copy`, presión de memoria, reinicio reciente o health
+core fallido implica `precondition_not_met`: preservar el backup, no reparar a
+ciegas y volver a Windows mediante el helper canónico si ya se inició el corte.
+La fotografía fechada y el rollback están en
+`docs/informe_codex_p_l89_raspberry_docker.md`.
+
 Despliegue:
 
 1. precondiciones read-only;
