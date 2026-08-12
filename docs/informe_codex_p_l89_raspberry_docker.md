@@ -253,3 +253,17 @@ no toco SQLite/WAL/SHM, `whale-copy`, Compose, locks ni firewall. El siguiente
 paso autorizado es detener canonicamente Windows solo dentro del corte, generar
 la snapshot fria con `--writers-stopped`, validarla y repetir el preflight antes
 de cualquier cambio de imagen en Raspberry.
+
+## Reconciliacion del preflight 2026-08-12 (23:42 Europe/Madrid)
+
+Tras corregir la resolucion del `stack_status.ps1`, el preflight estricto
+volvio a devolver `exit_code=2`, `ok=false`, pero `windows_exclusivity` quedo
+en `active=['scheduler','web'], foreign=[]`. La aparente foreign process de la
+lectura de las 23:37 era un falso positivo por auditar Windows desde el
+worktree candidato en lugar del checkout principal.
+
+En esta lectura el host llevaba `1591 s`, el gate de inodos paso con `1%`, el
+USB y el kernel storage pasaron, no habia procesos `D`, el core Docker estaba
+healthy, la imagen candidata y sus flags PAPER pasaban. Los dos bloqueantes
+reales son la ausencia de `--sqlite-receipt` y que scheduler/web Windows siguen
+activos. No hubo mutaciones.

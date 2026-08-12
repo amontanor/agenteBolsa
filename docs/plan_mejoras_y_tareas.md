@@ -3716,3 +3716,9 @@ I/O reciente, sin procesos `D`, core healthy, candidata cargada con digest
 `sha256:c9745ce004fa44be7590a59e543f64faaacd8c7cbc24862bcadefdeeab9a19ff` y
 flags PAPER correctas en los tres contenedores. Sigue `precondition_not_met`
 por falta de receipt y por scheduler/web Windows activos; no hubo mutaciones.
+
+Reconciliacion 23:42: el preflight ejecutado desde el worktree candidato ya
+resuelve el `stack_status.ps1` del checkout principal; `foreign=[]`. La lectura
+anterior que mostraba el web como foreign era un falso positivo del contexto del
+worktree y queda corregida en el helper. Los unicos blockers siguen siendo
+receipt SQLite ausente y scheduler/web Windows activos.

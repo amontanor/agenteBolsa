@@ -1,7 +1,7 @@
 import hashlib
 import json
 
-from scripts.raspberry_preflight import build_report, parse_args
+from scripts.raspberry_preflight import _windows_status_script, build_report, parse_args
 
 
 def _healthy_observations() -> dict[str, str]:
@@ -142,6 +142,14 @@ def test_preflight_blocks_inode_pressure():
     report = build_report(parse_args([]), observations, None)
 
     assert report["checks"]["inode_space"]["ok"] is False
+
+
+def test_windows_status_script_can_target_production_checkout_explicitly(tmp_path):
+    script = tmp_path / "scripts" / "stack_status.ps1"
+    script.parent.mkdir()
+    script.write_text("# test", encoding="utf-8")
+
+    assert _windows_status_script(str(tmp_path)) == script
 
 
 def test_preflight_blocks_recent_storage_and_blocked_io():

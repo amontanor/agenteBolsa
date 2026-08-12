@@ -1721,3 +1721,8 @@ Ultimo preflight estricto 2026-08-12 23:37 CEST: Raspberry estable (uptime
 `precondition_not_met`: falta receipt de snapshot fria y Windows aun mantiene
 scheduler/web activos. No detener, reiniciar ni cambiar Compose/env hasta el
 corte autorizado; conservar rollback a `0.4.229-arm64`.
+
+Reconciliacion 23:42 CEST: `windows_exclusivity` ya informa `foreign=[]` al
+resolver el checkout principal desde `git-common-dir`; la foreign process
+anterior era un falso positivo del worktree candidato. Permanecen solo falta
+de receipt SQLite y scheduler/web Windows activos.

@@ -255,6 +255,11 @@ Uso desde PowerShell:
   --json
 ```
 
+Con `--require-windows-stopped`, el helper audita el `stack_status.ps1` del
+checkout principal resuelto mediante `git-common-dir`, aunque el comando se
+ejecute desde un worktree candidato. Se puede fijar con `--windows-repo` si
+existe más de un checkout operativo.
+
 El resultado debe conservarse en el informe del lote. La comprobación de
 SQLite queda `unavailable` mientras la base activa tenga WAL/SHM o no exista
 un receipt local de snapshot frío validado. Un receipt aceptable debe tener

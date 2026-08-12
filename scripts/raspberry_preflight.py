@@ -254,8 +254,33 @@ def _verify_snapshot_receipt(path: str | None, args: argparse.Namespace) -> tupl
     return True, f"receipt validada {receipt_path.name}, sha256={sha256.lower()}"
 
 
-def _local_windows_status() -> tuple[dict[str, Any] | None, str | None]:
-    script = Path(__file__).with_name("stack_status.ps1")
+def _windows_status_script(explicit_repo: str | None) -> Path:
+    source_root = Path(__file__).resolve().parents[1]
+    if explicit_repo:
+        return Path(explicit_repo).expanduser().resolve() / "scripts" / "stack_status.ps1"
+    try:
+        common_dir_result = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=source_root,
+            text=True,
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        common_dir_result = None
+    if common_dir_result and common_dir_result.returncode == 0:
+        common_dir = Path(common_dir_result.stdout.strip())
+        if common_dir.name == ".git":
+            main_root = common_dir.parent
+            candidate = main_root / "scripts" / "stack_status.ps1"
+            if candidate.exists():
+                return candidate
+    return source_root / "scripts" / "stack_status.ps1"
+
+
+def _local_windows_status(explicit_repo: str | None) -> tuple[dict[str, Any] | None, str | None]:
+    script = _windows_status_script(explicit_repo)
     if not script.exists():
         return None, "stack_status.ps1 no existe"
     try:
@@ -389,7 +414,7 @@ def build_report(args: argparse.Namespace, observations: dict[str, str], ssh_err
 
     windows_status: dict[str, Any] | None = None
     if args.require_windows_stopped:
-        windows_status, local_error = _local_windows_status()
+        windows_status, local_error = _local_windows_status(args.windows_repo)
         if local_error:
             add("windows_exclusivity", False, local_error)
         else:
@@ -433,6 +458,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--connect-timeout", type=int, default=8)
     parser.add_argument("--command-timeout", type=int, default=30)
     parser.add_argument("--require-windows-stopped", action="store_true")
+    parser.add_argument(
+        "--windows-repo",
+        help="checkout Windows a auditar; por defecto se resuelve desde el git-common-dir",
+    )
     parser.add_argument(
         "--sqlite-receipt",
         help="receipt JSON local de un snapshot frio validado; nunca se genera ni modifica aqui",
