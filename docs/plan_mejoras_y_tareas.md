@@ -3770,3 +3770,7 @@ detuvo el engine por `WSL update required` y la actualizacion elevada fue
 denegada. No ejecutar `wsl --update` ni alterar Docker sin autoridad del
 operador; la Raspberry no debe usarse como build host mientras siga con
 presion de recursos y el scheduler inestable.
+
+Incidente 2026-08-13 00:22: el puerto TCP/22 acepta conexion, pero el banner
+SSH expira dos veces. El preflight queda `precondition_not_met`; no confundir
+TCP accesible con host operativo ni ejecutar reinicios/limpiezas a ciegas.

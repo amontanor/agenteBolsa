@@ -385,6 +385,16 @@ no se modifico `whale-copy` y no se hizo push. El siguiente corte requiere
 resolver ambos bloqueos, reconstruir la imagen con `611da4b1` y repetir este
 preflight antes de cualquier parada/arranque.
 
+## Auditoria de conectividad 2026-08-13 00:22 Europe/Madrid
+
+Una nueva ejecucion no pudo completar el preflight: `ssh_exit_255`, timeout
+durante el intercambio de banner SSH contra `192.168.1.234`. `Test-NetConnection`
+si confirma TCP/22 accesible y ARP resuelve la Raspberry, por lo que no se
+confunde red TCP con operabilidad SSH. Se hizo un unico reintento acotado y
+fallo igual. No se ejecutaron comandos remotos, reinicios, limpiezas ni cambios
+en Docker, SQLite, discos o `whale-copy`; el estado remoto queda `unavailable`
+y el dictamen permanece `precondition_not_met`.
+
 El build local sigue pendiente por un bloqueo independiente: Docker Desktop
 `4.33.1` informa `WSL update required` y `wsl update failed` porque la
 actualizacion elevada fue denegada. El daemon no responde aunque el proceso y

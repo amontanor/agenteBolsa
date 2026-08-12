@@ -472,6 +472,11 @@ un contenedor healthy en la lectura actual de un core que ha tenido reinicios.
 Sin esa bandera, el contador se muestra como advertencia read-only; con ella,
 cualquier reinicio acumulado o contador unavailable bloquea el corte.
 
+`Test-NetConnection` al puerto 22 no demuestra que Raspberry sea operable:
+tambien debe completarse el banner SSH y una lectura autenticada. Un timeout
+durante el banner es `precondition_not_met`; no se deben reiniciar servicios,
+limpiar locks ni tocar discos para recuperarlo a ciegas.
+
 El healthcheck del scheduler dentro de la imagen debe ser ligero y no debe
 ejecutar `schedule-status` completo: en ARM64 esa orden puede superar el
 timeout y devolver 137 aunque el contenedor no este marcado `OOMKilled`.

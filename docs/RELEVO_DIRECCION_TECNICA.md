@@ -1762,6 +1762,11 @@ salud actual pasaron. El nuevo flag `--require-core-restart-zero` queda como
 gate obligatorio del corte. No detener ni arrancar nada hasta reconstruir la
 imagen `611da4b1` y repetir el preflight con ambos bloqueos resueltos.
 
+Incidente posterior 2026-08-13 00:22 CEST: TCP/22 responde y ARP resuelve
+`192.168.1.234`, pero SSH expira durante el banner en dos intentos acotados.
+Raspberry queda `unavailable`; no reiniciar ni limpiar remotamente. Reanudar
+solo cuando una lectura SSH autenticada confirme host, montaje, I/O y Docker.
+
 Bloqueo local adicional: Docker Desktop `4.33.1` no levanta el engine porque
 requiere `WSL update required` y la actualizacion elevada fue denegada. No
 ejecutar `wsl --update` automaticamente; requiere autoridad administrativa.
