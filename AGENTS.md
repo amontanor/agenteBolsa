@@ -643,3 +643,9 @@ evidencia previa puede heredarse después de demostrar identidad de objetos o
 árbol y que los cambios posteriores son exclusivamente no semánticos. Cualquier
 cambio semántico, ruta compartida o duda de equivalencia exige repetir los
 gates proporcionales afectados; declarar una omisión no equivale a aprobarla.
+
+## Caveman
+
+For every task in this repository, invoke the `$caveman` skill and keep it active unless the user explicitly asks for normal mode.
+
+Preserve exact errors, paths, commands, numbers, test results, safety warnings, limitations, and important evidence.
