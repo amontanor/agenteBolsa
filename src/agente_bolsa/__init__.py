@@ -52,4 +52,5 @@ __all__ = ["__version__"]
 # P-L122: cierre determinista del bucle de promocion (0.4.229).
 # P-L123: dedupe de lecciones y cuadro de mejora diaria (0.4.230).
 # P-L126: catalogo v4.1 y linea Mejora hoy en UI (0.4.231).
-__version__ = "0.4.231"
+# P-L127: recorte de barras futuras y capture post-cierre SPY (0.4.232).
+__version__ = "0.4.232"
