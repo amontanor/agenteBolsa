@@ -4394,3 +4394,15 @@ sizing, política o producción en esta auditoría.
 - QA: p63 11 passed, bateria 145 passed, Ruff/NUL/diff/config verdes.
 - Informe: `docs/informe_p_l140c_baseline_contract.md`.
 - Siguiente: merge a `codex/astra` → suite completa → port Jetson.
+
+## P-L140D — guardia de superficie SPY unica (candidato Windows 0.4.244, sin bump, listo para revision)
+
+- Worktree `pl140d_spy_contract_guard`, rama
+  `codex/pl140d-spy-contract-guard`, base `15a3698d` (merge P-L140C).
+  Dictamen `ready_for_review`; XNYS cerrado, sin merge/despliegue/push.
+- Reescritura minima del test cuyo sujeto retiro P-L140B; nuevo
+  contrato: una sola superficie SPY. p71 future-bar verificado
+  preexistente en base, fuera de alcance.
+- QA: p65a 12 passed, Ruff/diff verdes. Sin cambios en `src`.
+- Informe: `docs/informe_p_l140d_spy_guard.md`.
+- Siguiente: merge a `codex/astra` → suite completa → port Jetson.

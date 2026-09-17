@@ -2518,3 +2518,14 @@ reconciliación manual ni cambios de política.
 - QA: p63 11, bateria 145, Ruff/NUL/diff/config verdes.
 - Informe: `docs/informe_p_l140c_baseline_contract.md`.
 - Siguiente: merge a `codex/astra` → suite completa → port Jetson.
+
+### P-L140D — guardia SPY unica (candidato 0.4.244 sin bump, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS cerrado; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl140d_spy_contract_guard`, rama
+  `codex/pl140d-spy-contract-guard`, base `15a3698d`. Commit:
+  `67a0dac4` (test). Solo tests, sin `src`, sin bump.
+- QA: p65a 12 passed, Ruff/diff verdes.
+- Informe: `docs/informe_p_l140d_spy_guard.md`.
+- Siguiente: merge a `codex/astra` → suite completa → port Jetson.
