@@ -6173,6 +6173,47 @@ class Store:
             row = conn.execute(query, params).fetchone()
         return int(row["count"] or 0)
 
+    def order_plan_linkage_summary(self, *, recent_days: int = 30) -> dict[str, Any]:
+        """Coverage of broker orders joined to a persisted order plan (P-L135, read-only).
+
+        Rows without a matching plan are historical evidence gaps: counted as
+        `legacy_unverified`, never reconstructed by symbol/date.
+        """
+
+        from datetime import timedelta
+
+        from .tools.canonical_trade_attribution import FILLED_STATUSES
+
+        window = max(1, int(recent_days))
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=window)).isoformat()
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT b.status AS status, b.created_at AS created_at,
+                       CASE WHEN p.plan_id IS NULL THEN 0 ELSE 1 END AS has_plan
+                FROM broker_orders b LEFT JOIN order_plans p ON p.plan_id = b.plan_id
+                """
+            ).fetchall()
+
+        def _summarize(items: list[Any]) -> dict[str, Any]:
+            filled = [row for row in items if str(row["status"] or "").lower() in FILLED_STATUSES]
+            with_plan = sum(1 for row in filled if row["has_plan"])
+            without_plan = len(filled) - with_plan
+            return {
+                "total": len(items),
+                "filled": len(filled),
+                "filled_with_plan": with_plan,
+                "filled_without_plan": without_plan,
+                "coverage": round(with_plan / len(filled), 4) if filled else None,
+            }
+
+        recent = [row for row in rows if str(row["created_at"] or "") >= cutoff]
+        summary = _summarize(rows)
+        summary["recent"] = _summarize(recent)
+        summary["recent_days"] = window
+        summary["unverified_label"] = "legacy_unverified"
+        return summary
+
     def create_continuous_improvement_cycle(self, item: dict[str, Any]) -> None:
         from .continuous_improvement.persistence_compaction import (
             compact_cycle_context,
