@@ -158,6 +158,7 @@ def sync_promotion_policies(
     reference = _now(now)
     if evaluations is None and settings is None:
         return {"shadowed": [], "kept": [], "demoted": [], "human_review": [], "reason": "settings_required"}
+    if evaluations is None:
         evaluations = evaluate_promotion_readiness(settings, store, since_date=since_date).get("evaluations", [])
     existing = {str(item.get("policy_id")): item for item in store.learning_policy_candidates(limit=1000)}
     shadowed: list[str] = []
@@ -201,6 +202,7 @@ def sync_promotion_policies(
             )
             shadowed.append(policy_id)
         elif verdict == "RETIRE_CANDIDATE":
+            matched_before = len(demoted)
             for policy_id, current in existing.items():
                 evidence = current.get("evidence") or {}
                 if str(evidence.get("tag") or "") != key and not policy_id.endswith(_slug(key)):
@@ -225,6 +227,8 @@ def sync_promotion_policies(
                     }
                 )
                 demoted.append(policy_id)
+            if len(demoted) == matched_before:
+                human_review.append(f"{kind}:{key}")
     for policy_id in sorted(set(shadowed) | set(demoted)):
         store.save_learning_policy_evaluation(
             {
