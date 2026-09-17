@@ -2516,6 +2516,24 @@ def command_learning_promotions(args: argparse.Namespace) -> None:
         print(f"  - [{item['status']}] {item['policy_id']} | promoted_at={item.get('promoted_at') or '-'}")
 
 
+def command_spy_eod_coverage(args: argparse.Namespace) -> None:
+    """Cobertura de pares de cierres SPY con autoridad EOD (P-L121, read-only)."""
+    from .tools.spy_eod_authority import spy_eod_coverage
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    report = spy_eod_coverage(settings, args.start, args.end)
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    print(f"SPY EOD {report['start']}..{report['end']} comparable={report['sessions_comparable']}/{report['sessions_total']} provisional={report['provisional']}")
+    for item in report.get("by_session", []):
+        status = item["comparison_status"]
+        auth = item.get("eod_authority") or "-"
+        reasons = ",".join(item.get("reason_codes") or [])
+        print(f"  - {item['session_date']} {status} {auth} {reasons}")
+
+
 def command_learning_scoreboard(args: argparse.Namespace) -> None:
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
@@ -4049,6 +4067,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     learning_promotions.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     learning_promotions.set_defaults(func=command_learning_promotions)
+
+    spy_eod_coverage = subparsers.add_parser(
+        "spy-eod-coverage",
+        help="Cobertura de pares de cierres SPY con autoridad EOD por sesion XNYS (P-L121).",
+    )
+    spy_eod_coverage.add_argument(
+        "--from",
+        dest="start",
+        default="2026-08-10",
+        help="Fecha inicial YYYY-MM-DD.",
+    )
+    spy_eod_coverage.add_argument("--to", dest="end", default="2026-08-12", help="Fecha final YYYY-MM-DD.")
+    spy_eod_coverage.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    spy_eod_coverage.set_defaults(func=command_spy_eod_coverage)
+
 
     learning_scoreboard = subparsers.add_parser(
         "learning-scoreboard",

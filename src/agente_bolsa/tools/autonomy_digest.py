@@ -77,9 +77,29 @@ def collect_autonomy_state(store: Store, settings: Settings) -> dict[str, Any]:
         # Flujo del laboratorio (Etapa 7): WIP, edades y throughput. Si
         # oldest_open_days crece sin parar, el lab acumula en vez de terminar.
         "lab_flow": _safe(lambda: _lab_flow(store), {}),
+        "improvement": _safe(lambda: _improvement_dashboard(store, settings), {}),
     }
 
 
+
+
+def _improvement_line(improvement: dict[str, Any]) -> str:
+    if not improvement:
+        return "- Mejora hoy: n/d (cuadro no disponible)."
+    real = improvement.get("real_improvement") or {}
+    learn = improvement.get("daily_learning") or {}
+    cov = (improvement.get("system_vs_spy") or {}).get("coverage") or {}
+    return (
+        f"- Mejora hoy: {improvement.get('verdict')} "
+        f"(aplicados={real.get('applied_today')}, sync={real.get('promotion_sync_today')}, "
+        f"observaciones={learn.get('observations_today')}, lecciones_netas={learn.get('lessons_net')}, "
+        f"SPY comparables={cov.get('sessions_comparable')}/{cov.get('sessions_total')})."
+    )
+
+def _improvement_dashboard(store: Store, settings: Settings) -> dict[str, Any]:
+    from .improvement_dashboard import build_improvement_dashboard
+
+    return build_improvement_dashboard(store, settings)
 def _lab_flow(store: Store) -> dict[str, Any]:
     from ..continuous_improvement.lifecycle import flow_report
 
@@ -106,6 +126,9 @@ def build_autonomy_digest(store: Store, settings: Settings) -> dict[str, Any]:
         f"- RESULTADO: {state.get('result_metrics')}",
         f"- PROCESO: {state.get('process_metrics')}",
         f"- Coste LLM hoy: ${state.get('llm_cost_today_usd')} | PnL del dia: {state.get('pnl_pct_today')} (T5.9)",
+        "",
+        "## Mejora de hoy (P-L123)",
+        _improvement_line(state.get("improvement") or {}),
     ]
     digest_md = "\n".join(lines)
     path = settings.data_dir / "reports" / f"autonomy_digest_{date}.md"

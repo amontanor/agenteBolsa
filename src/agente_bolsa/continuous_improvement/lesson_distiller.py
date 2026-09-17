@@ -11,8 +11,10 @@ Nucleo stdlib; la llamada al modelo es inyectable para tests.
 
 from __future__ import annotations
 
+import re
 import statistics
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from ..models import new_id
@@ -29,6 +31,8 @@ DEFAULT_DISTILLER_PROMPT = (
     "clave del agregado que la respalda). No inventes: cada leccion debe apoyarse en un "
     "agregado presente en la entrada."
 )
+
+LESSON_EVIDENCE_MAX_AGE_DAYS = 14
 
 WEAK_CONFIDENCE = 0.45
 RETIRE_CONFIDENCE = 0.35
@@ -234,6 +238,8 @@ def revalidate_lessons(
     }
     transitions: list[dict[str, Any]] = []
     for lesson in store.distilled_lessons(limit=500):
+        if (lesson.get("source_refs") or {}).get("duplicate_of"):
+            continue  # P-L123: los duplicados retirados no se reactivan.
         if lesson["status"] == "RETIRED":
             continue
         setup = str((lesson.get("source_refs") or {}).get("setup") or "")
@@ -267,15 +273,31 @@ def revalidate_lessons(
     return {"revalidated": True, "transitions": transitions}
 
 
-def relevant_lessons(store: Store, *, setup: str | None = None, k: int = 5) -> list[dict[str, Any]]:
-    """Top-K lecciones ACTIVE, opcionalmente filtradas por setup."""
+def relevant_lessons(
+    store: Store,
+    *,
+    setup: str | None = None,
+    k: int = 5,
+    max_age_days: int = LESSON_EVIDENCE_MAX_AGE_DAYS,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Top-K lecciones ACTIVE con evidencia fresca y sin duplicados (P-L123)."""
 
-    lessons = store.distilled_lessons(status="ACTIVE", limit=200)
+    reference = now or datetime.now(timezone.utc)
+    fresh: list[dict[str, Any]] = []
+    for item in store.distilled_lessons(status="ACTIVE", limit=200):
+        refs = item.get("source_refs") or {}
+        if refs.get("duplicate_of"):
+            continue
+        validated = _validated_at(item.get("last_validated_at"))
+        if validated is None or (reference - validated).days > int(max_age_days):
+            continue
+        fresh.append(item)
     if setup:
-        matched = [item for item in lessons if str((item.get("source_refs") or {}).get("setup") or "") == setup]
+        matched = [item for item in fresh if str((item.get("source_refs") or {}).get("setup") or "") == setup]
         if matched:
-            lessons = matched
-    return lessons[:k]
+            fresh = matched
+    return fresh[:k]
 
 
 def _extract_obj(raw: str) -> dict[str, Any]:
@@ -302,3 +324,87 @@ def _default_llm(settings: Settings, messages: list[dict[str, str]]) -> str:
         return response.choices[0].message.content or ""
     except Exception:  # noqa: BLE001
         return ""
+_STATUS_KEEP_RANK = {"ACTIVE": 3, "HYPOTHESIS": 2, "WEAKENED": 1}
+
+
+def _semantic_key(lesson: dict[str, Any]) -> tuple[str, ...]:
+    refs = lesson.get("source_refs") or {}
+    agg = refs.get("aggregate") or {}
+    setup = str(refs.get("setup") or "").strip().lower()
+    if setup or agg:
+        return (
+            "agg",
+            str(lesson.get("scope") or ""),
+            setup,
+            str(agg.get("n") or agg.get("decided") or ""),
+            str(agg.get("decided") or ""),
+            str(agg.get("winners") or ""),
+        )
+    collapsed = re.sub(r"\s+", " ", str(lesson.get("statement") or "").strip().lower())[:160]
+    return ("stmt", str(lesson.get("scope") or ""), collapsed)
+
+
+def _validated_at(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def dedupe_lessons(store: Store, *, now: datetime | None = None, limit: int = 2000) -> dict[str, Any]:
+    """Retira duplicados semanticos (p. ej. EN/ES) conservando el mas fresco.
+
+    Nunca borra: los duplicados pasan a RETIRED con `duplicate_of` y
+    `revalidate_lessons` los ignora para no reactivarlos.
+    """
+    reference = now or datetime.now(timezone.utc)
+    groups: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+    for lesson in store.distilled_lessons(limit=limit):
+        if str(lesson.get("status") or "") == "RETIRED":
+            continue
+        groups.setdefault(_semantic_key(lesson), []).append(lesson)
+    retired: list[str] = []
+    kept: list[str] = []
+    for key, items in groups.items():
+        if len(items) < 2:
+            kept.append(str(items[0].get("lesson_id")))
+            continue
+        ranked = sorted(
+            items,
+            key=lambda item: (
+                _validated_at(item.get("last_validated_at")) or datetime.min.replace(tzinfo=timezone.utc),
+                _STATUS_KEEP_RANK.get(str(item.get("status") or ""), 0),
+                str(item.get("lesson_id") or ""),
+            ),
+            reverse=True,
+        )
+        winner = ranked[0]
+        kept.append(str(winner.get("lesson_id")))
+        for dup in ranked[1:]:
+            dup_refs = dict(dup.get("source_refs") or {})
+            dup_refs["duplicate_of"] = str(winner.get("lesson_id"))
+            dup_refs["deduped_at"] = reference.isoformat()
+            dup_refs["dedupe_key"] = "|".join(key)
+            store.upsert_distilled_lesson(
+                {
+                    "lesson_id": dup.get("lesson_id"),
+                    "scope": dup.get("scope"),
+                    "statement": dup.get("statement"),
+                    "supporting_cases": dup.get("supporting_cases"),
+                    "contradicting_cases": dup.get("contradicting_cases"),
+                    "confidence": dup.get("confidence"),
+                    "status": "RETIRED",
+                    "last_validated_at": dup.get("last_validated_at"),
+                    "source_refs": dup_refs,
+                }
+            )
+            retired.append(str(dup.get("lesson_id")))
+    return {
+        "groups": len(groups),
+        "duplicate_groups": sum(1 for items in groups.values() if len(items) > 1),
+        "kept": sorted(kept),
+        "retired": sorted(retired),
+    }

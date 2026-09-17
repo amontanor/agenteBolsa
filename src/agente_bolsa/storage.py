@@ -6449,6 +6449,49 @@ class Store:
                 ),
             )
 
+    def update_continuous_improvement_validation_status(
+        self,
+        validation_id: str,
+        *,
+        status: str,
+        actor: str,
+        reason: str,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        """Cierra una validacion con fila de decision durable (auditable)."""
+        now = _utc_iso()
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT proposal_id, cycle_id FROM continuous_improvement_validations WHERE validation_id = ?",
+                (validation_id,),
+            ).fetchone()
+            if not row:
+                raise KeyError(validation_id)
+            conn.execute(
+                "UPDATE continuous_improvement_validations SET status = ? WHERE validation_id = ?",
+                (status, validation_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO continuous_improvement_decisions (
+                    decision_id, proposal_id, cycle_id, decision, reason, actor,
+                    payload_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"ci_decision_{validation_id}_{now}",
+                    row["proposal_id"],
+                    row["cycle_id"],
+                    status,
+                    reason,
+                    actor,
+                    _dumps(payload or {}),
+                    now,
+                ),
+            )
+
+
     def save_continuous_improvement_decision(self, item: dict[str, Any]) -> None:
         now = _utc_iso()
         with self.connect() as conn:

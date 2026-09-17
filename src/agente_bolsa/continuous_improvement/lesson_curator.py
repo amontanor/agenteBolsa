@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .lesson_distiller import distill_lessons, promote_qualified_lessons, revalidate_lessons
+from .lesson_distiller import (
+    dedupe_lessons,
+    distill_lessons,
+    promote_qualified_lessons,
+    revalidate_lessons,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only.
     from ..config import Settings
@@ -17,6 +22,7 @@ def curate_lessons(
     *,
     since_date: str | None = None,
 ) -> dict[str, Any]:
+    deduped = dedupe_lessons(store)
     distilled = distill_lessons(store, settings, since_date=since_date)
     promoted = promote_qualified_lessons(store, settings)
     revalidated = revalidate_lessons(store, settings, since_date=since_date)
@@ -28,6 +34,7 @@ def curate_lessons(
         "retired": sum(1 for item in all_lessons if item.get("status") == "RETIRED"),
     }
     return {
+        "deduped": deduped,
         "distilled": distilled,
         "promoted": promoted,
         "revalidated": revalidated,

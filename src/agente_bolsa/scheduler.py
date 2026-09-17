@@ -3423,6 +3423,25 @@ def post_market_review_job(
         coordinator.stage(lease, current_stage, "completed")
         report["measurement_pipeline"] = measurement_pipeline
         _run_change_watchdog(settings, store, reporter, run_id)
+        try:
+            from .continuous_improvement.lifecycle import run_lifecycle
+            from .continuous_improvement.promotion_loop import (
+                close_stale_validations,
+                resolve_applied_impacts,
+            )  # noqa: I001
+            lifecycle_result = run_lifecycle(store, settings)
+            expired = close_stale_validations(store)
+            impacts = resolve_applied_impacts(
+                store, clean_days=int(getattr(settings, "autonomy_promotion_clean_sessions", 15))
+            )
+            report["promotion_loop"] = {
+                "lifecycle_flow": lifecycle_result.get("flow", {}),
+                "validations_expired": expired.get("expired", 0),
+                "impacts_passed": impacts.get("passed", []),
+                "impacts_failed": impacts.get("failed", []),
+            }
+        except Exception as exc:  # noqa: BLE001 - el cierre del bucle nunca tumba el postmarket.
+            log_system_event(settings.logs_dir, "promotion_loop_failed", {"error": repr(exc)})
         current_stage = "thesis"
         coordinator.stage(lease, current_stage, "started")
         _run_macro_thesis(settings, store, reporter, run_id)
@@ -4107,6 +4126,17 @@ def broker_reconciliation_job(
             )
         except Exception:
             pass
+        try:
+            from .tools.spy_eod_authority import capture_spy_eod_receipt
+
+            spy_receipt = capture_spy_eod_receipt(settings, session_date)
+            result["spy_eod_receipt"] = {
+                "persisted": bool(spy_receipt.get("persisted")),
+                "comparison_status": (spy_receipt.get("receipt") or {}).get("comparison_status"),
+                "reason_codes": (spy_receipt.get("receipt") or {}).get("reason_codes", []),
+            }
+        except Exception:  # noqa: BLE001 - telemetria fail-open, nunca tumba reconciliacion.
+            result["spy_eod_receipt"] = {"persisted": False, "reason": "spy_eod_capture_failed_open"}
         return result
     except Exception as exc:  # noqa: BLE001 - no debe tumbar el scheduler.
         coordinator.stage(lease, "reconciliation", "failed", error=repr(exc))
@@ -4259,6 +4289,14 @@ def weekly_learning_review_job(
             run_id=run_id,
             weekly=True,
         )
+        try:
+            from .continuous_improvement.promotion_loop import sync_promotion_policies
+
+            promotion_sync = sync_promotion_policies(settings, store)
+            report["promotion_sync"] = promotion_sync
+        except Exception as exc:  # noqa: BLE001 - la sincronizacion nunca tumba la revision semanal.
+            log_system_event(settings.logs_dir, "promotion_sync_failed", {"error": repr(exc)})
+            report["promotion_sync"] = {"shadowed": [], "kept": [], "demoted": [], "human_review": []}
         store.set_runtime_value(state_key, review_key)
         _set_job_status(
             store,
@@ -4270,6 +4308,7 @@ def weekly_learning_review_job(
             extra={
                 "report_path": report.get("path"),
                 "decision_requested": (report.get("digest") or {}).get("decision_requested"),
+                "promotion_sync": report.get("promotion_sync", {}),
             },
         )
         return report

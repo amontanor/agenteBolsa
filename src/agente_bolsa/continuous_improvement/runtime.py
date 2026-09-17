@@ -1661,6 +1661,7 @@ class ContinuousImprovementLabRuntime:
         merged_payloads.sort(key=lambda item: int(item.get("_initiative_score") or 0), reverse=True)
         limit = max(1, int(self.settings.continuous_improvement_max_proposals_per_cycle))
         kept = merged_payloads[:limit]
+        kept, contract_stats = self._attach_measured_contracts(kept)
         dropped_by_limit = max(0, len(merged_payloads) - len(kept))
         return kept, {
             "input": len(proposal_payloads),
@@ -1668,7 +1669,30 @@ class ContinuousImprovementLabRuntime:
             "kept": len(kept),
             "dropped_by_limit": dropped_by_limit,
             "max_per_cycle": limit,
+            "contract_attached": int(contract_stats.get("attached") or 0),
+            "contract_unbuildable": int(contract_stats.get("unbuildable") or 0),
         }
+
+    def _attach_measured_contracts(
+        self, raws: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], dict[str, int]]:
+        """Attach deterministic bridge contracts on exact target match (P-L120).
+
+        Never invents measurements: raws without exactly-matched measured
+        evidence keep flowing unchanged and stay rejectable downstream.
+        """
+        from .contract_builder import bridge_contracts_by_target, enrich_raws
+
+        try:
+            contracts = bridge_contracts_by_target(
+                self.settings,
+                self.store,
+                origin_run_id=f"contract-builder:{new_id('ci_run')}",
+                source_event_ids=[],
+            )
+        except Exception:  # noqa: BLE001 - el gate nunca rompe el ciclo.
+            return raws, {"attached": 0, "unbuildable": len(raws)}
+        return enrich_raws(raws, contracts)
 
     def _proposal_topic_key(self, raw: dict[str, Any]) -> str:
         proposal_type = str(raw.get("proposal_type") or "MONITORING_CHANGE").strip().lower()
