@@ -2490,3 +2490,18 @@ reconciliación manual ni cambios de política.
 - Informe: `docs/informe_p_l140a_mis_inversiones.md`.
 - Siguiente: P-L140B sobre esta rama → merge P-L130→P-L140 → suite →
   port Jetson.
+
+### P-L140B — SPY unico y leaderboard a Config (candidato 0.4.243, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS cerrado; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl140b_spy_leaderboard`, rama
+  `codex/pl140b-spy-leaderboard`, base `66103e2f`, version `0.4.243`.
+  Commits: `3664038e` (tests), `10dcd62b` (feat + bump + pin).
+- Solo `web_app.py`: alpha misma-ventana, leaderboard via
+  session_state, baseline muerto fuera (~90 lineas menos).
+- QA: focales 5 (+2 renders), regresiones 134, Ruff/NUL/diff/config
+  verdes. Suite pendiente de integracion.
+- Informe: `docs/informe_p_l140b_spy_unico.md`.
+- Siguiente: revision → merge P-L130→P-L140 → suite → verificado
+  visual con operador → port Jetson.

@@ -4367,3 +4367,19 @@ sizing, política o producción en esta auditoría.
 - Informe: `docs/informe_p_l140a_mis_inversiones.md`.
 - Siguiente: P-L140B sobre esta rama → revision → merge conjunto
   P-L130→P-L140 → suite → port Jetson.
+
+## P-L140B — comparativa SPY unica y leaderboard a Config (candidato Windows 0.4.243, listo para revision)
+
+- Worktree `pl140b_spy_leaderboard`, rama
+  `codex/pl140b-spy-leaderboard`, base `66103e2f` (P-L140A). Dictamen
+  `ready_for_review`; XNYS cerrado, sin merge/despliegue/push.
+- `_spy_alpha_summary` puro sobre las mismas filas finales
+  comparables; quinta metrica Alpha. Leaderboard a Config via
+  `session_state` (cero broker nuevo). Baseline duplicado retirado
+  (~90 lineas menos).
+- Bump `0.4.242` → `0.4.243`; pin `test_p59c` actualizado.
+- QA: focales 5 passed (+2 renders), regresiones 134 passed,
+  Ruff/NUL/diff/config verdes. Suite completa pendiente.
+- Informe: `docs/informe_p_l140b_spy_unico.md`.
+- Siguiente: revision → merge conjunto P-L130→P-L140 a `codex/astra`
+  → suite completa → verificado visual con operador → port Jetson.
