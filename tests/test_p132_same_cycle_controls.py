@@ -16,13 +16,13 @@ def _settings(tmp_path):
     )
 
 
-def _executed(signal_date, symbol, *, return_5d=0.02):
+def _executed(signal_date, symbol, *, return_5d=0.02, source="cycle-a"):
     return {
         "observation_id": f"{signal_date}:{symbol}:exec",
         "signal_date": signal_date,
         "symbol": symbol,
         "source_family": LEARNING_EXPERIMENT_SOURCE,
-        "source_run_ids": ["cycle-a"],
+        "source_run_ids": [source],
         "best_signal_id": f"sig-{symbol}",
         "best_score": 15.0,
         "decision": "executed_buy",
@@ -93,7 +93,7 @@ def test_mixed_week_separates_matched_from_unmatched(tmp_path, monkeypatch):
         tmp_path, monkeypatch,
         [
             _executed("2026-07-07", "EXEC"),
-            _executed("2026-07-07", "ALONE"),
+            _executed("2026-07-07", "ALONE", source="cycle-b"),
             _control("2026-07-07", "CTRL"),
         ],
     )

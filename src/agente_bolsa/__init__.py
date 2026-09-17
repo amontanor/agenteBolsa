@@ -56,4 +56,5 @@ __all__ = ["__version__"]
 # P-L128: regla de retire por sangria lenta 10d (0.4.233).
 # P-L130: accept dataclass recommendations in selection ledger decision rows (0.4.234).
 # P-L131: calibrated execution cost in learning scoreboard, 10/20bps bands intact (0.4.235).
-__version__ = "0.4.235"
+# P-L132: same-cycle control coverage per week and explicit control cost basis (0.4.236).
+__version__ = "0.4.236"

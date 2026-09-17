@@ -218,11 +218,13 @@ def _weekly_rows(
     end_date: str | None,
     horizon: int = 5,
     calibration: dict[str, Any] | None = None,
+    matches: dict[str, list[str]] | None = None,
 ) -> list[dict[str, Any]]:
     if not rows:
         return []
     calibration = calibration or {"cost_basis": "assumption_10bps", "calibrated": False,
                                   "calibration_samples": 0}
+    matched_by_id = matches or {}
     calibrated_rate = float(calibration["cost_rate"]) if calibration.get("calibrated") else None
     first_day = date.fromisoformat(since_date)
     benchmark = _build_spy_forward_returns(settings, start=since_date, end=end_date)
@@ -266,6 +268,16 @@ def _weekly_rows(
         expectancy_10 = _round(_mean(costs_10))
         expectancy_20 = _round(_mean(costs_20))
         expectancy_cal = _round(_mean(costs_cal)) if calibrated_rate is not None and costs_cal else None
+        # Cobertura same-cycle por semana: ejecutados maduros con/sin control
+        # apareado (misma fecha + fuente + motivo de capacidad, espejo de
+        # la elegibilidad P-L31B). Sin union por simbolo.
+        mature_ids = [
+            str(item.get("observation_id") or "")
+            for item in items
+            if _mature_return(item, horizon) is not None
+        ]
+        matched = sum(1 for obs_id in mature_ids if matched_by_id.get(obs_id))
+        unmatched = len(mature_ids) - matched
         alpha_net = _round(_mean(alpha_values))
         portfolio_drawdown = _round(_max_drawdown(daily_returns), 4)
         control_expectancy = _round(_mean(control_values))
@@ -279,6 +291,9 @@ def _weekly_rows(
                 "expectancy_net_calibrated": expectancy_cal,
                 "cost_basis": calibration.get("cost_basis"),
                 "calibration_samples": calibration.get("calibration_samples"),
+                "control_cost_basis": "assumption_10bps",
+                "matched_executed": matched,
+                "unmatched_executed": unmatched,
                 "hit_rate": _round(sum(1 for flag in hit_flags if flag) / len(hit_flags), 4) if hit_flags else None,
                 "profit_factor": _round(_profit_factor(costs_10), 4),
                 "alpha_vs_spy": alpha_net,
@@ -447,6 +462,7 @@ def build_learning_scoreboard(
         since_date=since_date,
         end_date=resolved_end_date,
         calibration=calibration,
+        matches=matches,
     )
     evaluation = _evaluation(weekly_rows, executed_total=len(executed))
     data_quality = _data_quality(executed, control, matches, all_control)
