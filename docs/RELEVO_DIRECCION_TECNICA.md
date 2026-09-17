@@ -2382,3 +2382,18 @@ reconciliación manual ni cambios de política.
   pendiente de ventana cerrada.
 - Informe: `docs/informe_p_l131_costes_calibrados.md`.
 - Siguiente: merge conjunto P-L130+P-L131 → suite → port Jetson.
+
+### P-L132 — cobertura same-cycle por semana (candidato 0.4.236, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS abierto; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl132_same_cycle_controls`, rama
+  `codex/pl132-same-cycle-controls`, base `5f7035e6`, version `0.4.236`.
+  Commits: `2e148fa2` (tests, rojo 3/3), `81bae8ff` (feat + bump + pin).
+- Solo observacional: `matched/unmatched_executed` por semana,
+  `control_cost_basis` explicito; matcher sin cambios (control
+  compartido declarado como limite).
+- QA: focales 12, regresiones 68, Ruff/NUL/diff/config verdes. Suite
+  pendiente de ventana cerrada.
+- Informe: `docs/informe_p_l132_controles_same_cycle.md`.
+- Siguiente: merge conjunto P-L130+P-L131+P-L132 → suite → port Jetson.

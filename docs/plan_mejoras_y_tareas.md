@@ -4234,3 +4234,20 @@ sizing, política o producción en esta auditoría.
 - Informe: `docs/informe_p_l131_costes_calibrados.md`.
 - Siguiente: merge conjunto P-L130+P-L131 a `codex/astra` en ventana
   cerrada → suite completa → port Jetson `0.4.306+arm64`.
+
+## P-L132 — cobertura same-cycle por semana y cost_basis del control (candidato Windows 0.4.236, listo para revision)
+
+- Worktree `pl132_same_cycle_controls`, rama
+  `codex/pl132-same-cycle-controls`, base `5f7035e6` (P-L131). Dictamen
+  `ready_for_review`; XNYS abierto, sin merge/despliegue/push.
+- Cada fila semanal publica `matched_executed`/`unmatched_executed`
+  (maduros) y `control_cost_basis = "assumption_10bps"` (controles sin
+  fills: el calibrado no aplica). Criterio y schema intactos.
+- Limite declarado: el matcher comparte un control entre ejecutados del
+  mismo ciclo; no se cambia su semantica aqui.
+- Bump `0.4.235` → `0.4.236`; pin `test_p59c` actualizado.
+- QA aislada: focales 12 passed, regresiones 68 passed, Ruff/NUL/diff
+  verdes, `validate-agent-config ok=true`. Suite completa pendiente.
+- Informe: `docs/informe_p_l132_controles_same_cycle.md`.
+- Siguiente: merge conjunto P-L130+P-L131+P-L132 a `codex/astra` en
+  ventana cerrada → suite completa → port Jetson.
