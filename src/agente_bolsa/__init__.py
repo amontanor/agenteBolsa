@@ -60,4 +60,5 @@ __all__ = ["__version__"]
 # P-L133: misfire delays, per-job skip summary and outcome emptiness in health (0.4.237).
 # P-L134: read-only LLM uplift report over causal llm_selected flag (0.4.238).
 # P-L135: order-plan linkage coverage with legacy_unverified gaps (0.4.239).
-__version__ = "0.4.239"
+# P-L136: append-only external cash-flow ledger feeding EOD flow coverage (0.4.240).
+__version__ = "0.4.240"

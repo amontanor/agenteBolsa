@@ -82,7 +82,8 @@ def test_ledger_feeds_eod_flow_coverage(tmp_path: Path) -> None:
     ledger = read_cash_flow_ledger(store, start="2026-09-02T00:00:00+00:00", end="2026-09-03T00:00:00+00:00")
 
     snapshot = build_canonical_eod_account_snapshot(
-        "2026-09-02",
+        session_date="2026-09-02",
+        account_id="paper",
         currency="USD",
         window_start_at="2026-09-02T00:00:00+00:00",
         window_end_at="2026-09-03T00:00:00+00:00",
@@ -92,5 +93,5 @@ def test_ledger_feeds_eod_flow_coverage(tmp_path: Path) -> None:
         external_flow_ledger=ledger["flows"],
     )
 
-    assert snapshot["flow_coverage"]["status"] == "exact"
+    assert snapshot["coverage"]["flow_coverage"]["status"] == "exact"
     assert snapshot["external_cash_flows"] == 500.0
