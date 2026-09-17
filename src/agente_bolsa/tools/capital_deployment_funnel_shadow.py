@@ -482,17 +482,20 @@ def _merge_exact(
         key = info["decision_key"]
         if key is None:
             warnings.append(f"{label}_{info['reason'] or 'identity_unavailable'}")
-            attachment_counts[f"{label}_attachment_unavailable"] += 1
+            unavailable_key = f"{label}_attachment_unavailable"
+            attachment_counts[unavailable_key] = attachment_counts.get(unavailable_key, 0) + 1
             continue
         target_index = exact_index.get(key)
         if target_index is None:
             warnings.append(f"{label}_without_candidate")
-            attachment_counts[f"{label}_attachment_unavailable"] += 1
+            unavailable_key = f"{label}_attachment_unavailable"
+            attachment_counts[unavailable_key] = attachment_counts.get(unavailable_key, 0) + 1
             continue
         target = rows[target_index]
         if target.get("identity_status") != "verified":
             warnings.append(f"{label}_identity_conflict")
-            attachment_counts[f"{label}_attachment_ambiguous"] += 1
+            ambiguous_key = f"{label}_attachment_ambiguous"
+            attachment_counts[ambiguous_key] = attachment_counts.get(ambiguous_key, 0) + 1
             continue
         raw = _mapping(value)
         raw_payload = _mapping(raw.get("payload"))

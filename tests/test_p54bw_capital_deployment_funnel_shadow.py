@@ -122,6 +122,38 @@ def test_missing_identity_and_invalid_numbers_remain_unavailable() -> None:
     assert result["notional_waterfall"]["requested"]["value"] is None
 
 
+def test_missing_and_conflicting_attachments_count_without_crashing() -> None:
+    row = _row(1, _statuses())
+    result = build_capital_deployment_funnel_shadow(
+        "cycle-capital",
+        [row],
+        recommendations=[{"cycle_id": "cycle-capital", "action": "buy"}],
+        gated_recommendations=[{"cycle_id": "cycle-capital", "action": "buy"}],
+        captured_at=CAPTURED,
+    )
+
+    assert result["status"] == "partial"
+    assert result["attachment_coverage"]["recommendation_attachment_unavailable"] == 1
+    assert result["attachment_coverage"]["gate_attachment_unavailable"] == 1
+    assert "recommendation_identity_unavailable" in result["warnings"]
+    assert "gate_identity_unavailable" in result["warnings"]
+
+
+def test_conflicting_recommendation_attachment_is_ambiguous_without_crashing() -> None:
+    row = _row(1, _statuses())
+    row["identity_ambiguous"] = True
+    result = build_capital_deployment_funnel_shadow(
+        "cycle-capital",
+        [row],
+        recommendations=[row],
+        captured_at=CAPTURED,
+    )
+
+    assert result["status"] == "partial"
+    assert result["attachment_coverage"]["recommendation_attachment_ambiguous"] == 1
+    assert "recommendation_identity_conflict" in result["warnings"]
+
+
 def test_truncation_preserves_denominators_and_is_compact() -> None:
     rows = [_row(i, _statuses()) for i in range(500)]
     start = time.perf_counter()
