@@ -4185,3 +4185,11 @@ sizing, política o producción en esta auditoría.
   alcance solo-Jetson). Lote B/C en observacion: sin admisiones con mercado
   cerrado; sync semanal viernes.
 - Informes: `docs/informe_p_l127_telegram_sp500.md` (en rama).
+
+## P-L128 — retire por sangria lenta 10d (Jetson 0.4.303)
+
+- Ejecutados sangran a 10d (confirmed_pattern alfa -2,15%, 73 maduras) sin
+  disparar el retire 5d. Nueva regla 10d (solo degrada a shadow o avisa).
+- Primera prueba en vivo: human_review con 3 claves, 0 auto-degradaciones.
+- Rama Windows `codex/pl128-bleed` con tests (4+2). Informe:
+  `docs/informe_p_l128_sangria_lenta.md`.
