@@ -280,15 +280,13 @@ def test_system_spy_tooltip_is_explicit_and_auxiliary_raw_fields_are_absent():
         assert "tooltip" not in layer.get("mark", {})
 
 
-def test_baseline_render_is_single_store_read_and_no_broker_network_call():
-    source = getsource(web_app._render_performance_baseline)
+def test_spy_comparison_has_single_surface_without_baseline_renderer():
+    # P-L140B retiro el renderer duplicado; la tabla apertura->apertura es
+    # la unica superficie Sistema vs SPY del Dashboard.
+    page_source = getsource(web_app.page_dashboard)
 
-    assert source.count("performance_daily(") == 1
-    assert "BrokerClientFactory" not in source
-    assert "download_daily_prices" not in source
-    # Gap for P-L65B: the Store API supports a readonly connection but this UI
-    # reader does not request it explicitly.
-    assert "readonly=True" in source
+    assert "_render_daily_vs_spy_table" in page_source
+    assert "_render_performance_baseline" not in page_source
 
 
 def test_p63_header_and_period_metric_remain_equity_authority():
