@@ -58,4 +58,5 @@ __all__ = ["__version__"]
 # P-L131: calibrated execution cost in learning scoreboard, 10/20bps bands intact (0.4.235).
 # P-L132: same-cycle control coverage per week and explicit control cost basis (0.4.236).
 # P-L133: misfire delays, per-job skip summary and outcome emptiness in health (0.4.237).
-__version__ = "0.4.237"
+# P-L134: read-only LLM uplift report over causal llm_selected flag (0.4.238).
+__version__ = "0.4.238"
