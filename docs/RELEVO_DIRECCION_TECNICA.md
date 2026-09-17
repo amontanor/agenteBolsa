@@ -2397,3 +2397,17 @@ reconciliación manual ni cambios de política.
   pendiente de ventana cerrada.
 - Informe: `docs/informe_p_l132_controles_same_cycle.md`.
 - Siguiente: merge conjunto P-L130+P-L131+P-L132 → suite → port Jetson.
+
+### P-L133 — delays de misfire y vaciedad en health (candidato 0.4.237, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS abierto; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl133_misfire_health`, rama
+  `codex/pl133-misfire-health`, base `d44beb52`, version `0.4.237`.
+  Commits: `c46254c4` (tests), `30def441` (feat + bump + pin).
+- Solo observacional: `delay_seconds` aditivo, resumen por job,
+  `% vacios` en health, fail-open, sin alertas nuevas. Linkage → R2b.
+- QA: focales 7, regresiones 69, Ruff/NUL/diff/config verdes. Suite
+  pendiente de ventana cerrada.
+- Informe: `docs/informe_p_l133_misfire_health.md`.
+- Siguiente: merge conjunto P-L130→P-L133 → suite → port Jetson.

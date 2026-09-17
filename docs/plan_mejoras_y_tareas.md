@@ -4251,3 +4251,20 @@ sizing, política o producción en esta auditoría.
 - Informe: `docs/informe_p_l132_controles_same_cycle.md`.
 - Siguiente: merge conjunto P-L130+P-L131+P-L132 a `codex/astra` en
   ventana cerrada → suite completa → port Jetson.
+
+## P-L133 — delays de misfire y vaciedad de outcomes en health (candidato Windows 0.4.237, listo para revision)
+
+- Worktree `pl133_misfire_health`, rama
+  `codex/pl133-misfire-health`, base `d44beb52` (P-L132). Dictamen
+  `ready_for_review`; XNYS abierto, sin merge/despliegue/push.
+- Skips APScheduler con `delay_seconds` aditivo; resumen por job y
+  `% outcomes vacios` en `production_health`, todo fail-open y sin
+  alertas nuevas. Sin tocar cadencias ni `misfire_grace_time`.
+- Linkage filled-sin-plan recortado a R2b (LOTE 5); sin tocar
+  `storage.py` aqui.
+- Bump `0.4.236` → `0.4.237`; pin `test_p59c` actualizado.
+- QA aislada: focales 7 passed, regresiones 69 passed, Ruff/NUL/diff
+  verdes, `validate-agent-config ok=true`. Suite completa pendiente.
+- Informe: `docs/informe_p_l133_misfire_health.md`.
+- Siguiente: merge conjunto P-L130→P-L133 a `codex/astra` en ventana
+  cerrada → suite completa → port Jetson.
