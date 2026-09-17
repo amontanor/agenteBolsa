@@ -4143,3 +4143,23 @@ Siguiente secuencia: ventana cerrada con preflight, merge `--no-ff` y
 despliegue de P-L95; comprobar desaparición del `KeyError`; después lotes
 separados para carriers EOD, fuente/cadencia SPY y misfires. Sin cambios de
 sizing, política o producción en esta auditoría.
+
+## P-L124 — bucle de mejora continua P-L120..P-L123 (candidato 0.4.230, desplegado 2026-09-17 pendiente arranque)
+
+- Dictamen: `deployed` pendiente de doble salud (tareas programadas
+  deshabilitadas pre-despliegue; requieren PowerShell elevado para arrancar).
+- Merge productivo `--no-ff` `83e366d9` (padres `f2cdf3aa` + `fd308241`).
+- L120 proveedor determinista de contrato (CODE_CHANGE en allowlist);
+  L121 recibos SPY EOD + CLI `spy-eod-coverage`; L122 cierre del bucle
+  (EXPIRED_PENDING, impactos medidos, sync semanal a shadow); L123 dedupe de
+  lecciones + cuadro de mejora con veredicto en el digest.
+- Suite post-merge: 2531 passed; 2 fallos clasificados preexistentes
+  (test_llm_router reproduce en base limpia; test_score_study lee SQLite
+  productiva y depende de datos vivos). Ruff/NUL/diff/config/smoke verdes.
+- `kernel-status`: violacion preexistente solo en `.env` (editado por el
+  operador el 16-sep); codigo protegido coincide con el sello. No re-sellado.
+- Postura: paper, live false, auto-apply false. Sin backfill ni reescritura.
+- Informes unicos: `docs/informe_p_l120_proveedor_contrato.md`,
+  `docs/informe_p_l121_spy_eod.md`, `docs/informe_p_l122_bucle_promocion.md`,
+  `docs/informe_p_l123_cuadro_mejora.md`,
+  `docs/informe_p_l124_integracion_despliegue.md`.

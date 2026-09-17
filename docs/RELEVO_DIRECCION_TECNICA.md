@@ -2339,3 +2339,12 @@ preflight, integrar P-L95 con `merge --no-ff`, desplegar, comprobar desaparició
 del error y realizar dos healthchecks separados. Después tratar EOD, SPY y
 misfires en lotes independientes. Sizing sigue bloqueado; no hacer backfill,
 reconciliación manual ni cambios de política.
+### P-L124 — bucle de mejora continua desplegado pendiente arranque (17-sep-2026)
+
+- Merge `83e366d9`, v0.4.230. Suite 2531 passed con 2 preexistentes
+  clasificados. Kernel con violacion preexistente solo en `.env`.
+- Tareas `AgenteBolsaScheduler`/`AgenteBolsaWeb` deshabilitadas antes del
+  despliegue; `stack_up.ps1` exige PowerShell elevado para habilitarlas.
+- Siguiente unico paso: en sesion elevada ejecutar `stack_up.ps1`, doble
+  salud separada 75 s, y cerrar `informe_p_l124` a `deployed` verificado.
+  No hacer merge, push ni re-sellar kernel sin confirmacion.
