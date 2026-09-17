@@ -52,4 +52,3 @@ __all__ = ["__version__"]
 # P-L122: cierre determinista del bucle de promocion (0.4.229).
 # P-L123: dedupe de lecciones y cuadro de mejora diaria (0.4.230).
 __version__ = "0.4.230"
-
