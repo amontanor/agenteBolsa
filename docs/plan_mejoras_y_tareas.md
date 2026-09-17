@@ -4302,3 +4302,20 @@ sizing, política o producción en esta auditoría.
 - Informe: `docs/informe_p_l135_linkage_ordenes.md`.
 - Siguiente: merge conjunto P-L130→P-L135 a `codex/astra` en ventana
   cerrada → suite completa → medir cobertura real → port Jetson.
+
+## P-L136 — ledger append-only de flujos de caja (candidato Windows 0.4.240, listo para revision)
+
+- Worktree `pl136_cash_flows`, rama `codex/pl136-cash-flows`, base
+  `ca876b97` (P-L135). Dictamen `ready_for_review`; XNYS abierto, sin
+  merge/despliegue/push.
+- Nuevo `tools/cash_flow_ledger.py` (`p-l136.cash-flow-ledger.v1`):
+  record validado + read por ventana en la forma P-L52B; conflictos
+  auditables, sin backfill, sin esquema nuevo.
+- Compatibilidad P-L52B probada (`flow_coverage exact`). Cableado al
+  builder PMR diferido al siguiente lote con paridad.
+- Bump `0.4.239` → `0.4.240`; pin `test_p59c` actualizado.
+- QA aislada: focales 5 passed, regresiones 83 passed, Ruff/NUL/diff
+  verdes, `validate-agent-config ok=true`. Suite completa pendiente.
+- Informe: `docs/informe_p_l136_flujos_caja.md`.
+- Siguiente: merge conjunto P-L130→P-L136 a `codex/astra` en ventana
+  cerrada → suite completa → cableado PMR → port Jetson.

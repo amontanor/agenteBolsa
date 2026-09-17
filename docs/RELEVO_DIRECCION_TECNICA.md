@@ -2440,3 +2440,17 @@ reconciliación manual ni cambios de política.
 - Informe: `docs/informe_p_l135_linkage_ordenes.md`.
 - Siguiente: merge conjunto P-L130→P-L135 → suite → medir cobertura
   real → port Jetson.
+
+### P-L136 — ledger de flujos de caja (candidato 0.4.240, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS abierto; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl136_cash_flows`, rama `codex/pl136-cash-flows`, base
+  `ca876b97`, version `0.4.240`. Commits: `b7cefc8b` (tests),
+  `cc289559` (feat + bump + pin).
+- Productor EOD compatible probado; cableado PMR diferido con paridad.
+- QA: focales 5, regresiones 83, Ruff/NUL/diff/config verdes. Suite
+  pendiente de ventana cerrada.
+- Informe: `docs/informe_p_l136_flujos_caja.md`.
+- Siguiente: merge conjunto P-L130→P-L136 → suite → cableado PMR →
+  port Jetson.
