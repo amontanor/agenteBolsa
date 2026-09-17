@@ -2468,3 +2468,10 @@ reconciliación manual ni cambios de política.
   pendiente de ventana cerrada.
 - Informe: `docs/informe_p_l137_sellos_sesion.md`.
 - Siguiente: merge conjunto P-L130→P-L137 → suite → port Jetson.
+
+### P-L138 — geometria stop/take (bloqueado, sin codigo, 17-sep-2026)
+
+- `blocked` hasta 2-3 semanas de outcomes maduros con P-L131/P-L132/
+  P-L137 en produccion y `sufficient_sample` en uplift. Pre-registro
+  §6 + checklist de promocion congelados antes de mirar resultados.
+  Sin sizing hasta revision humana.

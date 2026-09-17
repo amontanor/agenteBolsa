@@ -4335,3 +4335,20 @@ sizing, política o producción en esta auditoría.
 - Informe: `docs/informe_p_l137_sellos_sesion.md`.
 - Siguiente: merge conjunto P-L130→P-L137 a `codex/astra` en ventana
   cerrada → suite completa → port Jetson.
+
+## P-L138 — revision de geometria stop/take (BLOQUEADO hasta madurez, sin codigo)
+
+- Estado: `blocked` hasta 2-3 semanas de outcomes maduros con P-L131
+  (coste calibrado), P-L132 (controles) y P-L137 (sellos de sesion)
+  desplegados y corriendo en produccion. No antes de principios de
+  octubre de 2026 y solo con `sufficient_sample` en el reporte de
+  uplift (P-L134).
+- Pre-registro exigido (buenas-practicas §6): entry/exit/invalidation/
+  stop_loss/take_profit/costs/min_trades/metrics (Sharpe OOS,
+  drawdown, profit factor, hit rate). Criterios congelados antes de
+  mirar resultados.
+- Checklist de promocion: OOS/walk-forward sin fuga, costes y slippage
+  calibrados, MAE/tail loss y concentracion; mejor retorno con peor
+  drawdown/cola no se promociona. Orden shadow → guarded → active.
+- Este lote futuro no toca sizing hasta superar el checklist con
+  revision humana. Sin codigo ni version en este apunte.
