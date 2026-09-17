@@ -2348,3 +2348,160 @@ reconciliación manual ni cambios de política.
 - Siguiente unico paso: en sesion elevada ejecutar `stack_up.ps1`, doble
   salud separada 75 s, y cerrar `informe_p_l124` a `deployed` verificado.
   No hacer merge, push ni re-sellar kernel sin confirmacion.
+
+### P-L130 — funnel dataclass + attachment fail-open (candidato 0.4.234, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS abierto (sesion 2026-09-17, cierre
+  22:00 Europe/Madrid); sin merge, despliegue, push ni escritura productiva.
+- Worktree `pl130_funnel_dataclass_fix`, rama
+  `codex/pl130-funnel-dataclass-fix`, base `c40ac2fd`, version `0.4.234`.
+  Commits: `fb11b7bb` (tests, rojo 5/5 confirmado), `e96f263a` (fix
+  ledger + bump + pin), `5ddcb923` (fix contadores funnel + 2 tests).
+- Port byte-identico (`diff-count=0`) de `6d6a8e67` y `927e830e`
+  (rama `codex/pl95-funnel-attachment-fix`, nunca integrada): 1 linea
+  `_mapping()` en `_build_decision_row` + contadores `.get(key, 0) + 1`.
+  Cierra el `KeyError` de P-L95 en la linea Windows.
+- QA aislada: focales 60 passed, regresiones 80-91 passed, Ruff/NUL/diff
+  verdes, `validate-agent-config ok=true`, smoke temporal exit=0. Suite
+  completa pendiente de ventana cerrada.
+- Informe: `docs/informe_p_l130_funnel_dataclass.md`; plan maestro con
+  fila P-L130.
+- Siguiente: revision operador → `merge --no-ff` a `codex/astra` en
+  ventana cerrada → suite completa → port Jetson `0.4.305+arm64`.
+
+### P-L131 — coste calibrado en scoreboard (candidato 0.4.235, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS abierto; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl131_calibrated_costs`, rama
+  `codex/pl131-calibrated-costs`, base `e24f34e1`, version `0.4.235`.
+  Commits: `461ee0dd` (tests, rojo 4/4), `35958530` (feat + bump + pins).
+- Solo observacional: mediana `signal_to_fill_bps`, umbral 10, corte
+  200; bandas 10/20 y criterio intactos; schema 2→3 aditivo.
+- QA: focales 9, regresiones 19-55, Ruff/NUL/diff/config verdes. Suite
+  pendiente de ventana cerrada.
+- Informe: `docs/informe_p_l131_costes_calibrados.md`.
+- Siguiente: merge conjunto P-L130+P-L131 → suite → port Jetson.
+
+### P-L132 — cobertura same-cycle por semana (candidato 0.4.236, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS abierto; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl132_same_cycle_controls`, rama
+  `codex/pl132-same-cycle-controls`, base `5f7035e6`, version `0.4.236`.
+  Commits: `2e148fa2` (tests, rojo 3/3), `81bae8ff` (feat + bump + pin).
+- Solo observacional: `matched/unmatched_executed` por semana,
+  `control_cost_basis` explicito; matcher sin cambios (control
+  compartido declarado como limite).
+- QA: focales 12, regresiones 68, Ruff/NUL/diff/config verdes. Suite
+  pendiente de ventana cerrada.
+- Informe: `docs/informe_p_l132_controles_same_cycle.md`.
+- Siguiente: merge conjunto P-L130+P-L131+P-L132 → suite → port Jetson.
+
+### P-L133 — delays de misfire y vaciedad en health (candidato 0.4.237, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS abierto; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl133_misfire_health`, rama
+  `codex/pl133-misfire-health`, base `d44beb52`, version `0.4.237`.
+  Commits: `c46254c4` (tests), `30def441` (feat + bump + pin).
+- Solo observacional: `delay_seconds` aditivo, resumen por job,
+  `% vacios` en health, fail-open, sin alertas nuevas. Linkage → R2b.
+- QA: focales 7, regresiones 69, Ruff/NUL/diff/config verdes. Suite
+  pendiente de ventana cerrada.
+- Informe: `docs/informe_p_l133_misfire_health.md`.
+- Siguiente: merge conjunto P-L130→P-L133 → suite → port Jetson.
+
+### P-L134 — reporte de uplift LLM (candidato 0.4.238, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS abierto; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl134_llm_uplift`, rama `codex/pl134-llm-uplift`, base
+  `06b8e6d1`, version `0.4.238`. Commits: `d69b0bf5` (modulo + 4
+  tests), `5db22b69` (bump + pin).
+- Solo lectura: brazos por flag causal, pre-registro 30/10/0.70,
+  veredicto sin promotion. Anti-proxy probado.
+- QA: focales 4, regresiones 55, Ruff/NUL/diff/config verdes. Suite
+  pendiente de ventana cerrada.
+- Informe: `docs/informe_p_l134_uplift_llm.md`.
+- Siguiente: merge conjunto P-L130→P-L134 → suite → port Jetson.
+
+### P-L135 — linkage orden-plan (candidato 0.4.239, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS abierto; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl135_order_linkage`, rama `codex/pl135-order-linkage`,
+  base `5d7d998f`, version `0.4.239`. Commits: `382e79a7` (tests, rojo
+  4/4), `9b2cfcbe` (feat + bump + pin).
+- Lector aditivo en `Store` + health fail-open; ruta de submit sin
+  cambios (ya plan-first). Sin enlace → `legacy_unverified`.
+- QA: focales 4, regresiones 70, Ruff/NUL/diff/config verdes. Suite
+  pendiente de ventana cerrada.
+- Informe: `docs/informe_p_l135_linkage_ordenes.md`.
+- Siguiente: merge conjunto P-L130→P-L135 → suite → medir cobertura
+  real → port Jetson.
+
+### P-L136 — ledger de flujos de caja (candidato 0.4.240, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS abierto; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl136_cash_flows`, rama `codex/pl136-cash-flows`, base
+  `ca876b97`, version `0.4.240`. Commits: `b7cefc8b` (tests),
+  `cc289559` (feat + bump + pin).
+- Productor EOD compatible probado; cableado PMR diferido con paridad.
+- QA: focales 5, regresiones 83, Ruff/NUL/diff/config verdes. Suite
+  pendiente de ventana cerrada.
+- Informe: `docs/informe_p_l136_flujos_caja.md`.
+- Siguiente: merge conjunto P-L130→P-L136 → suite → cableado PMR →
+  port Jetson.
+
+### P-L137 — sellos de sesion en maduracion (candidato 0.4.241, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS abierto; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl137_session_seals`, rama `codex/pl137-session-seals`,
+  base `c785b0b1`, version `0.4.241`. Commits: `7cd1bdd2` (tests),
+  `726d223b` (feat + bump + pin).
+- Recorte same-day con calendario real, fallback degradado, paridad
+  probada con historia cerrada.
+- QA: focales 4, regresiones 97, Ruff/NUL/diff/config verdes. Suite
+  pendiente de ventana cerrada.
+- Informe: `docs/informe_p_l137_sellos_sesion.md`.
+- Siguiente: merge conjunto P-L130→P-L137 → suite → port Jetson.
+
+### P-L138 — geometria stop/take (bloqueado, sin codigo, 17-sep-2026)
+
+- `blocked` hasta 2-3 semanas de outcomes maduros con P-L131/P-L132/
+  P-L137 en produccion y `sufficient_sample` en uplift. Pre-registro
+  §6 + checklist de promocion congelados antes de mirar resultados.
+  Sin sizing hasta revision humana.
+
+### P-L140A — franja Mis inversiones (candidato 0.4.242, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS cerrado; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl140a_mis_inversiones`, rama
+  `codex/pl140a-mis-inversiones`, base `a6655e10`, version `0.4.242`.
+  Commits: `587f711e` (tests), `e7244de2` (feat + bump + pin).
+- Solo `web_app.py`: helper puro + franja de 4 tarjetas, misma fuente
+  ya cargada. Sin broker nuevo, sin escrituras, sin trading.
+- QA: focales 7 (render headless incluido), regresiones 128,
+  Ruff/NUL/diff/config verdes. Suite pendiente de integracion.
+- Informe: `docs/informe_p_l140a_mis_inversiones.md`.
+- Siguiente: P-L140B sobre esta rama → merge P-L130→P-L140 → suite →
+  port Jetson.
+
+### P-L140B — SPY unico y leaderboard a Config (candidato 0.4.243, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS cerrado; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl140b_spy_leaderboard`, rama
+  `codex/pl140b-spy-leaderboard`, base `66103e2f`, version `0.4.243`.
+  Commits: `3664038e` (tests), `10dcd62b` (feat + bump + pin).
+- Solo `web_app.py`: alpha misma-ventana, leaderboard via
+  session_state, baseline muerto fuera (~90 lineas menos).
+- QA: focales 5 (+2 renders), regresiones 134, Ruff/NUL/diff/config
+  verdes. Suite pendiente de integracion.
+- Informe: `docs/informe_p_l140b_spy_unico.md`.
+- Siguiente: revision → merge P-L130→P-L140 → suite → verificado
+  visual con operador → port Jetson.

@@ -4200,3 +4200,186 @@ sizing, política o producción en esta auditoría.
   Ejemplo real: 210 caracteres frente a ~600.
 - Rama Windows `codex/pl129-tgcompact` (0.4.234). Informe:
   `docs/informe_p_l129_telegram_compacto.md`.
+
+## P-L130 — funnel dataclass + attachment fail-open (candidato Windows 0.4.234, listo para revision)
+
+- Worktree `pl130_funnel_dataclass_fix`, rama
+  `codex/pl130-funnel-dataclass-fix`, base `c40ac2fd`. Dictamen
+  `ready_for_review`; XNYS abierto, sin merge/despliegue/push.
+- Port byte-identico (`diff-count=0`) de dos fixes upstream nunca
+  integrados: `6d6a8e67` (`_build_decision_row` acepta dataclass via
+  `_mapping`, 1 linea) y `927e830e` (contadores funnel con
+  `.get(key, 0) + 1`, cierra el `KeyError` visto 52 veces en Jetson).
+- Pin de version preexistente roto en base (`0.4.230` vs base real
+  `0.4.233`) corregido a `0.4.234`; bump `0.4.233` → `0.4.234`.
+- QA aislada: focales 60 passed, regresiones 80-91 passed, Ruff/NUL/diff
+  verdes, `validate-agent-config ok=true`, smoke temporal exit=0.
+  Suite completa pendiente de ventana cerrada.
+- Informe: `docs/informe_p_l130_funnel_dataclass.md`.
+- Siguiente: revision operador → `merge --no-ff` a `codex/astra` en
+  ventana cerrada → suite completa → port Jetson `0.4.305+arm64`.
+
+## P-L131 — coste calibrado en learning scoreboard (candidato Windows 0.4.235, listo para revision)
+
+- Worktree `pl131_calibrated_costs`, rama
+  `codex/pl131-calibrated-costs`, base `e24f34e1` (P-L130). Dictamen
+  `ready_for_review`; XNYS abierto, sin merge/despliegue/push.
+- `_calibrated_cost`: mediana `signal_to_fill_bps` (P-L33B) con umbral
+  10 muestras y corte |bps|<=200; sin muestra,
+  `expectancy_net_calibrated` queda `unavailable`. Bandas 10/20 bps,
+  `_evaluation` y criterio intactos; schema 2→3 aditivo.
+- Bump `0.4.234` → `0.4.235`; pins `test_p59c` y schema actualizados.
+- QA aislada: focales 9 passed, regresiones 19-55 passed, Ruff/NUL/diff
+  verdes, `validate-agent-config ok=true`. Suite completa pendiente.
+- Informe: `docs/informe_p_l131_costes_calibrados.md`.
+- Siguiente: merge conjunto P-L130+P-L131 a `codex/astra` en ventana
+  cerrada → suite completa → port Jetson `0.4.306+arm64`.
+
+## P-L132 — cobertura same-cycle por semana y cost_basis del control (candidato Windows 0.4.236, listo para revision)
+
+- Worktree `pl132_same_cycle_controls`, rama
+  `codex/pl132-same-cycle-controls`, base `5f7035e6` (P-L131). Dictamen
+  `ready_for_review`; XNYS abierto, sin merge/despliegue/push.
+- Cada fila semanal publica `matched_executed`/`unmatched_executed`
+  (maduros) y `control_cost_basis = "assumption_10bps"` (controles sin
+  fills: el calibrado no aplica). Criterio y schema intactos.
+- Limite declarado: el matcher comparte un control entre ejecutados del
+  mismo ciclo; no se cambia su semantica aqui.
+- Bump `0.4.235` → `0.4.236`; pin `test_p59c` actualizado.
+- QA aislada: focales 12 passed, regresiones 68 passed, Ruff/NUL/diff
+  verdes, `validate-agent-config ok=true`. Suite completa pendiente.
+- Informe: `docs/informe_p_l132_controles_same_cycle.md`.
+- Siguiente: merge conjunto P-L130+P-L131+P-L132 a `codex/astra` en
+  ventana cerrada → suite completa → port Jetson.
+
+## P-L133 — delays de misfire y vaciedad de outcomes en health (candidato Windows 0.4.237, listo para revision)
+
+- Worktree `pl133_misfire_health`, rama
+  `codex/pl133-misfire-health`, base `d44beb52` (P-L132). Dictamen
+  `ready_for_review`; XNYS abierto, sin merge/despliegue/push.
+- Skips APScheduler con `delay_seconds` aditivo; resumen por job y
+  `% outcomes vacios` en `production_health`, todo fail-open y sin
+  alertas nuevas. Sin tocar cadencias ni `misfire_grace_time`.
+- Linkage filled-sin-plan recortado a R2b (LOTE 5); sin tocar
+  `storage.py` aqui.
+- Bump `0.4.236` → `0.4.237`; pin `test_p59c` actualizado.
+- QA aislada: focales 7 passed, regresiones 69 passed, Ruff/NUL/diff
+  verdes, `validate-agent-config ok=true`. Suite completa pendiente.
+- Informe: `docs/informe_p_l133_misfire_health.md`.
+- Siguiente: merge conjunto P-L130→P-L133 a `codex/astra` en ventana
+  cerrada → suite completa → port Jetson.
+
+## P-L134 — reporte read-only de uplift LLM (candidato Windows 0.4.238, listo para revision)
+
+- Worktree `pl134_llm_uplift`, rama `codex/pl134-llm-uplift`, base
+  `06b8e6d1` (P-L133). Dictamen `ready_for_review`; XNYS abierto, sin
+  merge/despliegue/push.
+- Nuevo `tools/llm_uplift.py`: expectancy LLM vs deterministicas sobre
+  ejecutadas maduras, agrupacion solo por flag causal `llm_selected`
+  (embebido o join exacto por `best_signal_id`); source-text jamas
+  como proxy. Pre-registro: 30 maduras, 10 por brazo, cobertura 0.70.
+- Bump `0.4.237` → `0.4.238`; pin `test_p59c` actualizado.
+- QA aislada: focales 4 passed, regresiones 55 passed, Ruff/NUL/diff
+  verdes, `validate-agent-config ok=true`. Suite completa pendiente.
+- Informe: `docs/informe_p_l134_uplift_llm.md`.
+- Siguiente: merge conjunto P-L130→P-L134 a `codex/astra` en ventana
+  cerrada → suite completa → port Jetson.
+
+## P-L135 — cobertura de linkage orden-plan (candidato Windows 0.4.239, listo para revision)
+
+- Worktree `pl135_order_linkage`, rama `codex/pl135-order-linkage`,
+  base `5d7d998f` (P-L134). Dictamen `ready_for_review`; XNYS abierto,
+  sin merge/despliegue/push.
+- `Store.order_plan_linkage_summary`: LEFT JOIN por `plan_id` exacto,
+  filled canonico, ventana recent 30d; sin enlace →
+  `legacy_unverified`, nunca reconstruido. Cableado fail-open a
+  `production_health` (completa S3 de P-L133).
+- Ruta activa ya persiste plan-antes-de-submit (las 63 son legacy por
+  inspeccion de codigo, no verificado en produccion).
+- Bump `0.4.238` → `0.4.239`; pin `test_p59c` actualizado.
+- QA aislada: focales 4 passed, regresiones 70 passed, Ruff/NUL/diff
+  verdes, `validate-agent-config ok=true`. Suite completa pendiente.
+- Informe: `docs/informe_p_l135_linkage_ordenes.md`.
+- Siguiente: merge conjunto P-L130→P-L135 a `codex/astra` en ventana
+  cerrada → suite completa → medir cobertura real → port Jetson.
+
+## P-L136 — ledger append-only de flujos de caja (candidato Windows 0.4.240, listo para revision)
+
+- Worktree `pl136_cash_flows`, rama `codex/pl136-cash-flows`, base
+  `ca876b97` (P-L135). Dictamen `ready_for_review`; XNYS abierto, sin
+  merge/despliegue/push.
+- Nuevo `tools/cash_flow_ledger.py` (`p-l136.cash-flow-ledger.v1`):
+  record validado + read por ventana en la forma P-L52B; conflictos
+  auditables, sin backfill, sin esquema nuevo.
+- Compatibilidad P-L52B probada (`flow_coverage exact`). Cableado al
+  builder PMR diferido al siguiente lote con paridad.
+- Bump `0.4.239` → `0.4.240`; pin `test_p59c` actualizado.
+- QA aislada: focales 5 passed, regresiones 83 passed, Ruff/NUL/diff
+  verdes, `validate-agent-config ok=true`. Suite completa pendiente.
+- Informe: `docs/informe_p_l136_flujos_caja.md`.
+- Siguiente: merge conjunto P-L130→P-L136 a `codex/astra` en ventana
+  cerrada → suite completa → cableado PMR → port Jetson.
+
+## P-L137 — maduracion recortada a sesiones completas (candidato Windows 0.4.241, listo para revision)
+
+- Worktree `pl137_session_seals`, rama `codex/pl137-session-seals`,
+  base `c785b0b1` (P-L136). Dictamen `ready_for_review`; XNYS abierto,
+  sin merge/despliegue/push.
+- `trim_to_completed_sessions`: recorta la barra mutable same-day
+  antes de madurar outcomes (mismo bug P-L71/P-L127, en universo);
+  calendario real con fallback weekday degradado; contadores aditivos.
+  Paridad bit-identica con historia cerrada.
+- Bump `0.4.240` → `0.4.241`; pin `test_p59c` actualizado.
+- QA aislada: focales 4 passed, regresiones 97 passed, Ruff/NUL/diff
+  verdes, `validate-agent-config ok=true`. Suite completa pendiente.
+- Informe: `docs/informe_p_l137_sellos_sesion.md`.
+- Siguiente: merge conjunto P-L130→P-L137 a `codex/astra` en ventana
+  cerrada → suite completa → port Jetson.
+
+## P-L138 — revision de geometria stop/take (BLOQUEADO hasta madurez, sin codigo)
+
+- Estado: `blocked` hasta 2-3 semanas de outcomes maduros con P-L131
+  (coste calibrado), P-L132 (controles) y P-L137 (sellos de sesion)
+  desplegados y corriendo en produccion. No antes de principios de
+  octubre de 2026 y solo con `sufficient_sample` en el reporte de
+  uplift (P-L134).
+- Pre-registro exigido (buenas-practicas §6): entry/exit/invalidation/
+  stop_loss/take_profit/costs/min_trades/metrics (Sharpe OOS,
+  drawdown, profit factor, hit rate). Criterios congelados antes de
+  mirar resultados.
+- Checklist de promocion: OOS/walk-forward sin fuga, costes y slippage
+  calibrados, MAE/tail loss y concentracion; mejor retorno con peor
+  drawdown/cola no se promociona. Orden shadow → guarded → active.
+- Este lote futuro no toca sizing hasta superar el checklist con
+  revision humana. Sin codigo ni version en este apunte.
+
+## P-L140A — franja Mis inversiones (candidato Windows 0.4.242, listo para revision)
+
+- Worktree `pl140a_mis_inversiones`, rama
+  `codex/pl140a-mis-inversiones`, base `a6655e10` (P-L137). Dictamen
+  `ready_for_review`; XNYS cerrado, sin merge/despliegue/push.
+- `_invested_day_metric` puro: primario % sobre invertido, secundario
+  % sobre equity, cobertura; `n/d` sin dato. Franja de 4 tarjetas con
+  la fuente ya cargada (sin broker nuevo).
+- Bump `0.4.241` → `0.4.242`; pin `test_p59c` actualizado.
+- QA: focales 7 passed (incluye render headless), regresiones 128
+  passed, Ruff/NUL/diff/config verdes. Suite completa pendiente.
+- Informe: `docs/informe_p_l140a_mis_inversiones.md`.
+- Siguiente: P-L140B sobre esta rama → revision → merge conjunto
+  P-L130→P-L140 → suite → port Jetson.
+
+## P-L140B — comparativa SPY unica y leaderboard a Config (candidato Windows 0.4.243, listo para revision)
+
+- Worktree `pl140b_spy_leaderboard`, rama
+  `codex/pl140b-spy-leaderboard`, base `66103e2f` (P-L140A). Dictamen
+  `ready_for_review`; XNYS cerrado, sin merge/despliegue/push.
+- `_spy_alpha_summary` puro sobre las mismas filas finales
+  comparables; quinta metrica Alpha. Leaderboard a Config via
+  `session_state` (cero broker nuevo). Baseline duplicado retirado
+  (~90 lineas menos).
+- Bump `0.4.242` → `0.4.243`; pin `test_p59c` actualizado.
+- QA: focales 5 passed (+2 renders), regresiones 134 passed,
+  Ruff/NUL/diff/config verdes. Suite completa pendiente.
+- Informe: `docs/informe_p_l140b_spy_unico.md`.
+- Siguiente: revision → merge conjunto P-L130→P-L140 a `codex/astra`
+  → suite completa → verificado visual con operador → port Jetson.

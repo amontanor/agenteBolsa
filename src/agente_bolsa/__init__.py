@@ -54,4 +54,14 @@ __all__ = ["__version__"]
 # P-L126: catalogo v4.1 y linea Mejora hoy en UI (0.4.231).
 # P-L127: recorte de barras futuras y capture post-cierre SPY.
 # P-L128: regla de retire por sangria lenta 10d (0.4.233).
-__version__ = "0.4.233"
+# P-L130: accept dataclass recommendations in selection ledger decision rows (0.4.234).
+# P-L131: calibrated execution cost in learning scoreboard, 10/20bps bands intact (0.4.235).
+# P-L132: same-cycle control coverage per week and explicit control cost basis (0.4.236).
+# P-L133: misfire delays, per-job skip summary and outcome emptiness in health (0.4.237).
+# P-L134: read-only LLM uplift report over causal llm_selected flag (0.4.238).
+# P-L135: order-plan linkage coverage with legacy_unverified gaps (0.4.239).
+# P-L136: append-only external cash-flow ledger feeding EOD flow coverage (0.4.240).
+# P-L137: outcome maturation trimmed to completed XNYS sessions (0.4.241).
+# P-L140A: Mis inversiones strip with day P/L over invested as primary (0.4.242).
+# P-L140B: single SPY alpha, leaderboard moved to Config, baseline removed (0.4.243).
+__version__ = "0.4.243"

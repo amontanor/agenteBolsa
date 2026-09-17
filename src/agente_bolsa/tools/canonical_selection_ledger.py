@@ -309,7 +309,7 @@ def _build_decision_row(
     decision_id: str | None,
 ) -> dict[str, Any]:
     """Build a single decision row from one recommendation."""
-    raw = dict(recommendation)
+    raw = _mapping(recommendation)
     lineage = _mapping(raw.get("decision_lineage"))
     snapshot = _mapping(raw.get("decision_context_snapshot"))
     llm_raw = normalize_llm_selected(snapshot.get("llm_selected"))

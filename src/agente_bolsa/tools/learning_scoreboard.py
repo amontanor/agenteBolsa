@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import statistics
 from collections import defaultdict
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -28,6 +30,48 @@ LEARNING_SCOREBOARD_CRITERION = (
 
 def _round(value: float | None, digits: int = 4) -> float | None:
     return None if value is None else round(float(value), digits)
+
+
+MIN_CALIBRATION_SAMPLES = 10
+MAX_CALIBRATION_ABS_BPS = 200.0
+
+
+def _calibrated_cost(executed: list[dict[str, Any]]) -> dict[str, Any]:
+    """Median signal_to_fill_bps over executed snapshots; assumption fallback.
+
+    P-L131: the scoreboard no longer presents fixed 10/20 bps as the only
+    truth. With >= MIN_CALIBRATION_SAMPLES finite snapshots (|bps| <= 200)
+    the cost rate is the observed median; otherwise the calibrated column
+    stays unavailable and the 10 bps band remains explicitly labelled as
+    an assumption, never as measured cost.
+    """
+
+    samples: list[float] = []
+    for row in executed:
+        snapshot = (row.get("execution") or {}).get("execution_snapshot") or {}
+        bps = (snapshot.get("metrics") or {}).get("signal_to_fill_bps")
+        if isinstance(bps, bool) or not isinstance(bps, (int, float)):
+            continue
+        value = float(bps)
+        if not math.isfinite(value) or abs(value) > MAX_CALIBRATION_ABS_BPS:
+            continue
+        samples.append(value)
+    if len(samples) < MIN_CALIBRATION_SAMPLES:
+        return {
+            "cost_basis": "assumption_10bps",
+            "cost_bps": 10.0,
+            "cost_rate": 0.001,
+            "calibration_samples": len(samples),
+            "calibrated": False,
+        }
+    median_bps = round(float(statistics.median(samples)), 2)
+    return {
+        "cost_basis": "calibrated",
+        "cost_bps": median_bps,
+        "cost_rate": median_bps / 10_000.0,
+        "calibration_samples": len(samples),
+        "calibrated": True,
+    }
 
 
 def _week_index(first_day: date, current_day: date) -> int:
@@ -173,9 +217,15 @@ def _weekly_rows(
     since_date: str,
     end_date: str | None,
     horizon: int = 5,
+    calibration: dict[str, Any] | None = None,
+    matches: dict[str, list[str]] | None = None,
 ) -> list[dict[str, Any]]:
     if not rows:
         return []
+    calibration = calibration or {"cost_basis": "assumption_10bps", "calibrated": False,
+                                  "calibration_samples": 0}
+    matched_by_id = matches or {}
+    calibrated_rate = float(calibration["cost_rate"]) if calibration.get("calibrated") else None
     first_day = date.fromisoformat(since_date)
     benchmark = _build_spy_forward_returns(settings, start=since_date, end=end_date)
     grouped: dict[int, list[dict[str, Any]]] = {}
@@ -192,6 +242,7 @@ def _weekly_rows(
         items = grouped[week]
         costs_10 = []
         costs_20 = []
+        costs_cal = []
         alpha_values = []
         hit_flags = []
         for item in items:
@@ -202,6 +253,8 @@ def _weekly_rows(
             net_20 = value - 0.002
             costs_10.append(net_10)
             costs_20.append(net_20)
+            if calibrated_rate is not None:
+                costs_cal.append(value - calibrated_rate)
             hit_flags.append(net_10 > 0)
             spy_return = benchmark.get((str(item.get("signal_date") or ""), horizon))
             if spy_return is not None:
@@ -214,6 +267,17 @@ def _weekly_rows(
         daily_returns = _daily_portfolio_returns(items, horizon=horizon, cost=0.001)
         expectancy_10 = _round(_mean(costs_10))
         expectancy_20 = _round(_mean(costs_20))
+        expectancy_cal = _round(_mean(costs_cal)) if calibrated_rate is not None and costs_cal else None
+        # Cobertura same-cycle por semana: ejecutados maduros con/sin control
+        # apareado (misma fecha + fuente + motivo de capacidad, espejo de
+        # la elegibilidad P-L31B). Sin union por simbolo.
+        mature_ids = [
+            str(item.get("observation_id") or "")
+            for item in items
+            if _mature_return(item, horizon) is not None
+        ]
+        matched = sum(1 for obs_id in mature_ids if matched_by_id.get(obs_id))
+        unmatched = len(mature_ids) - matched
         alpha_net = _round(_mean(alpha_values))
         portfolio_drawdown = _round(_max_drawdown(daily_returns), 4)
         control_expectancy = _round(_mean(control_values))
@@ -224,6 +288,12 @@ def _weekly_rows(
                 "n": len(costs_10),
                 "expectancy_net_10bps": expectancy_10,
                 "expectancy_net_20bps": expectancy_20,
+                "expectancy_net_calibrated": expectancy_cal,
+                "cost_basis": calibration.get("cost_basis"),
+                "calibration_samples": calibration.get("calibration_samples"),
+                "control_cost_basis": "assumption_10bps",
+                "matched_executed": matched,
+                "unmatched_executed": unmatched,
                 "hit_rate": _round(sum(1 for flag in hit_flags if flag) / len(hit_flags), 4) if hit_flags else None,
                 "profit_factor": _round(_profit_factor(costs_10), 4),
                 "alpha_vs_spy": alpha_net,
@@ -384,21 +454,25 @@ def build_learning_scoreboard(
         since_date=since_date,
         end_date=resolved_end_date,
     )
+    calibration = _calibrated_cost(executed)
     weekly_rows = _weekly_rows(
         settings,
         executed,
         control,
         since_date=since_date,
         end_date=resolved_end_date,
+        calibration=calibration,
+        matches=matches,
     )
     evaluation = _evaluation(weekly_rows, executed_total=len(executed))
     data_quality = _data_quality(executed, control, matches, all_control)
     report = {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": run_id,
         "as_of": datetime.now(timezone.utc).isoformat(),
         "period": {"from": since_date, "to": resolved_end_date},
         "cohort": LEARNING_EXPERIMENT_SOURCE,
+        "cost_calibration": calibration,
         "weekly_rows": weekly_rows,
         "data_quality": data_quality,
         "maturity_by_horizon": data_quality["maturity_by_horizon"],
@@ -439,7 +513,13 @@ def format_learning_scoreboard(report: dict[str, Any]) -> str:
     for row in report.get("weekly_rows") or []:
         lines.append(
             f"  - {row['label']}: n={row['n']} exp10={row.get('expectancy_net_10bps')} "
-            f"exp20={row.get('expectancy_net_20bps')} hit={row.get('hit_rate')} pf={row.get('profit_factor')} "
+            f"exp20={row.get('expectancy_net_20bps')} exp_cal={row.get('expectancy_net_calibrated')} "
+            f"hit={row.get('hit_rate')} pf={row.get('profit_factor')} "
             f"alpha={row.get('alpha_vs_spy')} dd={row.get('max_drawdown')} control_exp10={row.get('control_expectancy_net_10bps')}"
         )
+    calibration = report.get("cost_calibration") or {}
+    lines.append(
+        f"cost_basis={calibration.get('cost_basis')} "
+        f"cost_bps={calibration.get('cost_bps')} samples={calibration.get('calibration_samples')}"
+    )
     return "\n".join(lines)

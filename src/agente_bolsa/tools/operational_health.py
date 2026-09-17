@@ -899,6 +899,52 @@ def _response_id(kind: str, scope: str) -> str:
     return f"{kind}:{clean_scope}"
 
 
+def scheduler_skip_summary(store: Store, *, limit: int = 500) -> dict[str, Any]:
+    """Aggregate APScheduler skip/miss telemetry per job (P-L133, read-only).
+
+    Reads `scheduler_job_skipped` append-only events. `delay_seconds`
+    exists only on events written after P-L133; older rows contribute
+    to counts with unknown delay.
+    """
+
+    events = store.agent_events(event_type_prefix="scheduler_job_skipped", limit=limit)
+    jobs: dict[str, dict[str, Any]] = {}
+    for event in events:
+        payload = event.get("payload") or {}
+        job_id = str(payload.get("job_id") or event.get("cycle_id") or "unknown")
+        entry = jobs.setdefault(
+            job_id, {"missed": 0, "max_instances": 0, "max_delay_seconds": None, "last_at": None}
+        )
+        reason = str(payload.get("reason") or "")
+        if reason == "missed":
+            entry["missed"] += 1
+        elif reason == "max_instances":
+            entry["max_instances"] += 1
+        delay = payload.get("delay_seconds")
+        if isinstance(delay, bool):
+            delay = None
+        if isinstance(delay, (int, float)):
+            current = entry["max_delay_seconds"]
+            entry["max_delay_seconds"] = float(delay) if current is None else max(float(current), float(delay))
+        created = str(event.get("created_at") or "")
+        if created and (entry["last_at"] is None or created > str(entry["last_at"])):
+            entry["last_at"] = created
+    return {"total": len(events), "jobs": jobs}
+
+
+def signal_outcome_emptiness(store: Store, *, limit: int = 500) -> dict[str, Any]:
+    """Share of recent canonical signal outcomes with an empty outcome (P-L133, read-only)."""
+
+    rows = store.signal_outcomes(limit=limit)
+    empty = sum(1 for row in rows if not row.get("outcome"))
+    total = len(rows)
+    return {
+        "total": total,
+        "empty": empty,
+        "pct_empty": round(empty / total, 4) if total else None,
+    }
+
+
 def _build_operational_responses(alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     responses: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -1014,6 +1060,18 @@ def build_production_health_report(
     llm_quality = _llm_fallback_ratio(store)
     post_market_runtime = _post_market_runtime_health(scheduler_runtime, settings.data_dir)
     market_cycle_timing = summarize_market_cycle_timings(reports_dir, limit=20)
+    try:
+        scheduler_skips: dict[str, Any] = scheduler_skip_summary(store)
+    except Exception:  # noqa: BLE001 - observability must stay fail-open.
+        scheduler_skips = {"status": "unavailable"}
+    try:
+        outcome_emptiness: dict[str, Any] = signal_outcome_emptiness(store)
+    except Exception:  # noqa: BLE001 - observability must stay fail-open.
+        outcome_emptiness = {"status": "unavailable"}
+    try:
+        order_linkage: dict[str, Any] = store.order_plan_linkage_summary()
+    except Exception:  # noqa: BLE001 - observability must stay fail-open.
+        order_linkage = {"status": "unavailable"}
 
     continuous_improvement_summary = {
         "enabled": settings.continuous_improvement_enabled,
@@ -1127,12 +1185,18 @@ def build_production_health_report(
             },
             "post_market_runtime": post_market_runtime,
             "market_cycle_timing": market_cycle_timing,
+            "scheduler_skips": scheduler_skips,
+            "outcome_emptiness": outcome_emptiness,
+            "order_linkage": order_linkage,
         },
         "operational_health": operational_report,
         "alerts": alerts,
         "responses": responses,
         "scheduler_heartbeat": scheduler_freshness,
         "scheduler_coherence": scheduler_coherence,
+        "scheduler_skips": scheduler_skips,
+        "outcome_emptiness": outcome_emptiness,
+        "order_linkage": order_linkage,
         "market_data_quality": market_data_quality,
         "llm_quality": llm_quality,
         "llm_decision_quality": {
