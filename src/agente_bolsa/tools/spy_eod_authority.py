@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -193,3 +193,64 @@ def receipt_as_observation(receipt: dict[str, Any]) -> dict[str, Any]:
         "data_quality": "available",
         "warnings": [],
     }
+
+
+def refresh_and_capture_spy_eod(settings: Any, session_date: str, *, now: datetime | None = None) -> dict[str, Any]:
+    """Descarga la ventana exacta [previa, sesion] y persiste el recibo (P-L127).
+
+    Fail-open total: cualquier fallo de red, validacion o I/O devuelve un
+    resumen no persistido sin lanzar. Nunca inventa cierres.
+    """
+    from .market_data import download_daily_prices_with_metadata
+
+    captured = _now(now)
+    try:
+        previous = previous_xnys_session(session_date)
+    except (TypeError, ValueError):
+        return {"persisted": False, "reason": "invalid_session_date", "receipt": None}
+    if previous is None:
+        return {"persisted": False, "reason": "missing_previous_xnys_session", "receipt": None}
+    status, _ = session_status(session_date, now=captured)
+    if status != "closed":
+        return {"persisted": False, "reason": "session_not_closed", "receipt": None}
+    symbol = str(getattr(settings, "benchmark_symbol", "SPY") or "SPY").upper()
+    try:
+        end = (date.fromisoformat(session_date) + timedelta(days=1)).isoformat()
+        download_daily_prices_with_metadata(
+            [symbol],
+            previous,
+            end,
+            cache_dir=_cache_root(settings),
+            provider=getattr(settings, "market_data_provider", "auto") or "auto",
+        )
+    except Exception as exc:  # noqa: BLE001 - red caida no tumba reconciliacion.
+        return {"persisted": False, "reason": f"fetch_failed_open:{type(exc).__name__}", "receipt": None}
+    captured_result = capture_spy_eod_receipt(settings, session_date, now=captured)
+    receipt = captured_result.get("receipt") or {}
+    if not captured_result.get("persisted") or receipt.get("comparison_status") != "comparable":
+        return {
+            "persisted": bool(captured_result.get("persisted")),
+            "reason": ",".join(receipt.get("reason_codes") or ["receipt_unavailable"]),
+            "receipt": receipt or None,
+        }
+    return {**captured_result, "reason": None}
+
+
+def backfill_spy_eod_receipts(settings: Any, start: str, end: str, *, now: datetime | None = None) -> dict[str, Any]:
+    """Genera recibos desde caches existentes, sin descargas (P-L127)."""
+    sessions = xnys_sessions_between(start, end)
+    built: list[str] = []
+    skipped: list[str] = []
+    unavailable: dict[str, list[str]] = {}
+    for session_date in sessions:
+        existing = load_spy_eod_receipt(settings, session_date)
+        if existing is not None and existing.get("comparison_status") == "comparable":
+            skipped.append(session_date)
+            continue
+        captured = capture_spy_eod_receipt(settings, session_date, now=now)
+        receipt = captured.get("receipt") or {}
+        if captured.get("persisted") and receipt.get("comparison_status") == "comparable":
+            built.append(session_date)
+        else:
+            unavailable[session_date] = list(receipt.get("reason_codes") or ["receipt_unavailable"])
+    return {"built": built, "skipped": skipped, "unavailable": unavailable}

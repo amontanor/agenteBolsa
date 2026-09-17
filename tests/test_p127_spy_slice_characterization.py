@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pandas as pd
 
-from agente_bolsa.tools.performance_benchmark import load_cached_spy_observation, previous_xnys_session
+from agente_bolsa.tools.performance_benchmark import (
+    load_cached_spy_observation,
+    previous_xnys_session,
+)
 
 
 def _settings(tmp_path):
@@ -86,3 +88,39 @@ def test_missing_pair_stays_unavailable_without_zero(tmp_path):
     assert obs["previous_close"] is None
     assert obs["close"] is None
     assert obs["daily_return"] is None
+
+
+def test_backfill_builds_from_existing_caches_without_download(tmp_path):
+    from agente_bolsa.tools.spy_eod_authority import backfill_spy_eod_receipts, load_spy_eod_receipt
+
+    settings = _settings(tmp_path)
+    _write_cache(
+        settings,
+        dates=["2026-09-10", "2026-09-11", "2026-09-14"],
+        closes=[700.0, 702.0, 704.0],
+        created_at="2026-09-15T01:00:00+00:00",
+    )
+    now = datetime(2026, 9, 16, 21, 0, tzinfo=timezone.utc)
+    report = backfill_spy_eod_receipts(settings, "2026-09-11", "2026-09-14", now=now)
+    assert report["built"] == ["2026-09-11", "2026-09-14"]
+    assert report["unavailable"] == {}
+    assert load_spy_eod_receipt(settings, "2026-09-14")["close"] == 704.0
+    rerun = backfill_spy_eod_receipts(settings, "2026-09-11", "2026-09-14", now=now)
+    assert rerun["skipped"] == ["2026-09-11", "2026-09-14"]
+    assert rerun["built"] == []
+
+
+def test_refresh_open_session_never_downloads(tmp_path, monkeypatch):
+    from agente_bolsa.tools import spy_eod_authority
+
+    settings = _settings(tmp_path)
+    monkeypatch.setattr(
+        spy_eod_authority,
+        "download_daily_prices_with_metadata",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no debe descargar")),
+        raising=False,
+    )
+    now = datetime(2026, 9, 17, 10, 0, tzinfo=timezone.utc)
+    result = spy_eod_authority.refresh_and_capture_spy_eod(settings, "2026-09-17", now=now)
+    assert result["persisted"] is False
+    assert result["receipt"] is None

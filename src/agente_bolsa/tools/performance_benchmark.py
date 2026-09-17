@@ -262,6 +262,36 @@ def _bar_by_date(series: pd.Series, wanted: str) -> tuple[float | None, str | No
     return None, None
 
 
+def _series_through_session(series: pd.Series, session_date: str) -> tuple[pd.Series, int]:
+    """Recorta barras posteriores a la sesion sin inventar nada (P-L127).
+
+    Las barras futuras no aportan al par (previa, cierre) y antes invalidaban
+    la observacion entera; ahora se ignoran y se cuentan para auditoria.
+    """
+    try:
+        target = date.fromisoformat(session_date)
+    except ValueError:
+        return series, 0
+    kept: list[int] = []
+    dropped = 0
+    for position, timestamp in enumerate(series.index):
+        try:
+            parsed = pd.Timestamp(timestamp)
+            bar_date = (
+                parsed.tz_convert(ZoneInfo("America/New_York")).date()
+                if parsed.tzinfo is not None
+                else parsed.date()
+            )
+        except Exception:
+            kept.append(position)
+            continue
+        if bar_date <= target:
+            kept.append(position)
+        else:
+            dropped += 1
+    return series.iloc[kept], dropped
+
+
 def _future_bar_present(series: pd.Series, session_date: str) -> bool:
     target = date.fromisoformat(session_date)
     for timestamp in series.index:
@@ -445,6 +475,9 @@ def load_cached_spy_observation(settings: Settings, session_date: str, *, now: d
         series, selected_name = _extract_close_series(frame, symbol)
         if series.empty:
             continue
+        series, future_bars_ignored = _series_through_session(series, session_date)
+        if series.empty:
+            continue
         previous_close, previous_as_of = _bar_by_date(series, previous)
         close, as_of = _bar_by_date(series, session_date)
         warnings = list(status_warnings)
@@ -481,6 +514,7 @@ def load_cached_spy_observation(settings: Settings, session_date: str, *, now: d
             "as_of": as_of or previous_as_of,
             "cache_created_at": created_at.isoformat() if created_at else None,
             "eod_authority": eod_authority,
+            "future_bars_ignored": future_bars_ignored,
             "interval": str(meta.get("interval") or meta.get("timeframe") or "1d"),
             "data_quality": "available",
             "warnings": sorted(set(warnings)),

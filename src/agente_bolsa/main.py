@@ -2534,6 +2534,19 @@ def command_spy_eod_coverage(args: argparse.Namespace) -> None:
         print(f"  - {item['session_date']} {status} {auth} {reasons}")
 
 
+def command_spy_eod_backfill(args: argparse.Namespace) -> None:
+    """Genera recibos SPY EOD desde caches existentes (P-L127, sin descargas)."""
+    from .tools.spy_eod_authority import backfill_spy_eod_receipts
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    report = backfill_spy_eod_receipts(settings, args.start, args.end)
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    print(f"SPY EOD backfill {args.start}..{args.end} built={len(report['built'])} skipped={len(report['skipped'])} unavailable={len(report['unavailable'])}")
+
+
 def command_learning_scoreboard(args: argparse.Namespace) -> None:
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
@@ -4081,6 +4094,19 @@ def build_parser() -> argparse.ArgumentParser:
     spy_eod_coverage.add_argument("--to", dest="end", default="2026-08-12", help="Fecha final YYYY-MM-DD.")
     spy_eod_coverage.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     spy_eod_coverage.set_defaults(func=command_spy_eod_coverage)
+    spy_eod_backfill = subparsers.add_parser(
+        "spy-eod-backfill",
+        help="Genera recibos SPY EOD desde caches existentes por sesion XNYS (P-L127).",
+    )
+    spy_eod_backfill.add_argument(
+        "--from",
+        dest="start",
+        default="2026-09-03",
+        help="Fecha inicial YYYY-MM-DD.",
+    )
+    spy_eod_backfill.add_argument("--to", dest="end", default="2026-09-16", help="Fecha final YYYY-MM-DD.")
+    spy_eod_backfill.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    spy_eod_backfill.set_defaults(func=command_spy_eod_backfill)
 
 
     learning_scoreboard = subparsers.add_parser(
