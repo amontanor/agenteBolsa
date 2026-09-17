@@ -2529,3 +2529,15 @@ reconciliación manual ni cambios de política.
 - QA: p65a 12 passed, Ruff/diff verdes.
 - Informe: `docs/informe_p_l140d_spy_guard.md`.
 - Siguiente: merge a `codex/astra` → suite completa → port Jetson.
+
+### INTEGRACION P-L130→P-L140D (17/18-sep-2026, XNYS cerrado)
+
+- Dictamen: `integrated_validated_awaiting_jetson_port`. Produccion
+  `eb35ff86` (0.4.244), merges `--no-ff` b6e1a48c/15a3698d/089144d2.
+- Suite: 2591 passed, 1 skip + 1 fallo preexistentes (p71 en base).
+  Ruff/NUL/diff/config/kernel/smoke verdes. Revision PASS previa.
+- Jetson DIFERIDO (sin rama local 0.4.304; port P-L141 con validacion;
+  postmarket activo; Windows parado como rollback).
+- Auditoria Jetson del dia: scheduler vivo pero 22/22 ciclos `missed`
+  (grace 1 s), 1 ciclo `failed` (crew→observer), LLM mejora caido
+  (400 + fallback), 0 recs/ordenes. P-L139 urgente siguiente.

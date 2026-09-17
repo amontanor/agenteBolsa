@@ -4406,3 +4406,25 @@ sizing, política o producción en esta auditoría.
 - QA: p65a 12 passed, Ruff/diff verdes. Sin cambios en `src`.
 - Informe: `docs/informe_p_l140d_spy_guard.md`.
 - Siguiente: merge a `codex/astra` → suite completa → port Jetson.
+
+## INTEGRACION P-L130→P-L140D — mergeada y validada en `codex/astra` (17/18-sep-2026, 0.4.244)
+
+- Dictamen: `integrated_validated_awaiting_jetson_port`. Merges `--no-ff`:
+  cadena P-L130→P-L137 (`b6e1a48c`), P-L140C (`15a3698d`), P-L140D
+  (`089144d2` + docs `eb35ff86`). Produccion `eb35ff86`, tree limpio
+  (solo untracked del operador preservados).
+- Suite completa en worktree limpio: **2591 passed, 1 skip
+  preexistente, 1 fallo preexistente** (`test_p71 future_bar`,
+  verificado identico en base sin la cadena). Chunks 564+496+847+661
+  +23. `test_llm_router` selector: solo falla con `.env` del operador
+  presente (pasa en limpio); no tocar `.env`, no maquillar el test.
+- Ruff/NUL(509)/diff/config/kernel(sellado ok)/smoke temporal (exit 0)
+  verdes. Cero protegidos en el diff (2345+/14-, todas clasificadas).
+- Revision adversarial previa: PASS (59 focales re-ejecutados).
+- Jetson: corte DIFERIDO. Produccion Jetson 0.4.304 no tiene rama
+  local; el port exige reconciliar la evolucion Jetson-only
+  (P-L90→P-L129) en lote propio P-L141 con validacion cerrada. No se
+  fuerza de noche ni con postmarket activo. Windows sigue parado como
+  rollback; no se arranca (doble instancia prohibida).
+- Siguiente: P-L139 urgente (misfires grace, crew_observer fail-open,
+  proveedor LLM 400) → P-L141 port Jetson → corte canonico.
