@@ -4163,3 +4163,11 @@ sizing, política o producción en esta auditoría.
   `docs/informe_p_l121_spy_eod.md`, `docs/informe_p_l122_bucle_promocion.md`,
   `docs/informe_p_l123_cuadro_mejora.md`,
   `docs/informe_p_l124_integracion_despliegue.md`.
+
+## P-L125 — port a Jetson 0.4.298 (desplegado 17-sep-2026, pendiente observation)
+
+- Port mecanico de P-L120..P-L123 sobre la linea Jetson 0.4.297 (12/13 hunks
+  directos + 1 adaptado). Imagen incremental `0.4.298-arm64`.
+- Incidente intermedio propio (doble patch duplico parser CLI) con rollback
+  inmediato y reconstruccion con guardas. Sin impacto.
+- Informe: `docs/informe_p_l125_port_jetson.md`.
