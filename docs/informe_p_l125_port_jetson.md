@@ -1,8 +1,8 @@
 # P-L125 — port del bucle de mejora P-L120..P-L123 a la linea Jetson (0.4.298)
 
-## Dictamen
+## Dictamen (cierre)
 
-`deployed` en Jetson (ver cierre). Sin cambios de trading, riesgo, sizing,
+`deployed` en Jetson 17-sep-2026 ~13:48 Europe/Madrid. Sin cambios de trading, riesgo, sizing,
 broker, ejecucion ni credenciales. Sin backfill ni reescritura.
 
 ## Contexto
@@ -45,3 +45,8 @@ Windows (0.4.230). La linea Jetson habia relajado gobernanza
 - `AGENTE_BOLSA_IMAGE` se fija por entorno en la invocacion (los `.env` son
   600/root); release copiado a `/opt/agente-bolsa/releases/0.4.298/deploy/`.
 - Rollback: relanzar con `0.4.297-arm64` (imagen conservada).
+
+## Observacion 600 s
+
+- 11:37:47Z-11:47:39Z: 0 reinicios, 0 OOMKilled, memoria estable (~5,4 GiB libres), web 200/200, scheduler 0.4.298 verificado en vivo, whale-copy y copyradar intactos.
+
