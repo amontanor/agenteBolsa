@@ -2505,3 +2505,16 @@ reconciliación manual ni cambios de política.
 - Informe: `docs/informe_p_l140b_spy_unico.md`.
 - Siguiente: revision → merge P-L130→P-L140 → suite → verificado
   visual con operador → port Jetson.
+
+### P-L140C — contrato baseline conservado (candidato 0.4.244, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS cerrado; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl140c_baseline_contract`, rama
+  `codex/pl140c-baseline-contract`, base `b6e1a48c`, version `0.4.244`.
+  Commit: `0d53944c` (fix + bump + pin).
+- La suite de integracion detecto el import P-L63 roto; helpers puros
+  restaurados verbatim, contenedor fuera. Leccion: integrar pronto.
+- QA: p63 11, bateria 145, Ruff/NUL/diff/config verdes.
+- Informe: `docs/informe_p_l140c_baseline_contract.md`.
+- Siguiente: merge a `codex/astra` → suite completa → port Jetson.
