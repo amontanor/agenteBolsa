@@ -771,5 +771,5 @@ def test_version_policy_requires_bump():
     if dist:
         # Con PYTHONPATH al src del worktree, leemos __init__.py
         import agente_bolsa
-        # P-L124 is the current candidate after the improvement-loop change.
-        assert agente_bolsa.__version__ == "0.4.230"
+        # P-L130 is the current candidate after the dataclass ledger fix.
+        assert agente_bolsa.__version__ == "0.4.234"

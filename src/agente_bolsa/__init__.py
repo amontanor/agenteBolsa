@@ -54,4 +54,5 @@ __all__ = ["__version__"]
 # P-L126: catalogo v4.1 y linea Mejora hoy en UI (0.4.231).
 # P-L127: recorte de barras futuras y capture post-cierre SPY.
 # P-L128: regla de retire por sangria lenta 10d (0.4.233).
-__version__ = "0.4.233"
+# P-L130: accept dataclass recommendations in selection ledger decision rows (0.4.234).
+__version__ = "0.4.234"
