@@ -2368,3 +2368,17 @@ reconciliación manual ni cambios de política.
   fila P-L130.
 - Siguiente: revision operador → `merge --no-ff` a `codex/astra` en
   ventana cerrada → suite completa → port Jetson `0.4.305+arm64`.
+
+### P-L131 — coste calibrado en scoreboard (candidato 0.4.235, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS abierto; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl131_calibrated_costs`, rama
+  `codex/pl131-calibrated-costs`, base `e24f34e1`, version `0.4.235`.
+  Commits: `461ee0dd` (tests, rojo 4/4), `35958530` (feat + bump + pins).
+- Solo observacional: mediana `signal_to_fill_bps`, umbral 10, corte
+  200; bandas 10/20 y criterio intactos; schema 2→3 aditivo.
+- QA: focales 9, regresiones 19-55, Ruff/NUL/diff/config verdes. Suite
+  pendiente de ventana cerrada.
+- Informe: `docs/informe_p_l131_costes_calibrados.md`.
+- Siguiente: merge conjunto P-L130+P-L131 → suite → port Jetson.

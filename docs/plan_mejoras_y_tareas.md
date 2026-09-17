@@ -4218,3 +4218,19 @@ sizing, política o producción en esta auditoría.
 - Informe: `docs/informe_p_l130_funnel_dataclass.md`.
 - Siguiente: revision operador → `merge --no-ff` a `codex/astra` en
   ventana cerrada → suite completa → port Jetson `0.4.305+arm64`.
+
+## P-L131 — coste calibrado en learning scoreboard (candidato Windows 0.4.235, listo para revision)
+
+- Worktree `pl131_calibrated_costs`, rama
+  `codex/pl131-calibrated-costs`, base `e24f34e1` (P-L130). Dictamen
+  `ready_for_review`; XNYS abierto, sin merge/despliegue/push.
+- `_calibrated_cost`: mediana `signal_to_fill_bps` (P-L33B) con umbral
+  10 muestras y corte |bps|<=200; sin muestra,
+  `expectancy_net_calibrated` queda `unavailable`. Bandas 10/20 bps,
+  `_evaluation` y criterio intactos; schema 2→3 aditivo.
+- Bump `0.4.234` → `0.4.235`; pins `test_p59c` y schema actualizados.
+- QA aislada: focales 9 passed, regresiones 19-55 passed, Ruff/NUL/diff
+  verdes, `validate-agent-config ok=true`. Suite completa pendiente.
+- Informe: `docs/informe_p_l131_costes_calibrados.md`.
+- Siguiente: merge conjunto P-L130+P-L131 a `codex/astra` en ventana
+  cerrada → suite completa → port Jetson `0.4.306+arm64`.
