@@ -4200,3 +4200,21 @@ sizing, política o producción en esta auditoría.
   Ejemplo real: 210 caracteres frente a ~600.
 - Rama Windows `codex/pl129-tgcompact` (0.4.234). Informe:
   `docs/informe_p_l129_telegram_compacto.md`.
+
+## P-L130 — funnel dataclass + attachment fail-open (candidato Windows 0.4.234, listo para revision)
+
+- Worktree `pl130_funnel_dataclass_fix`, rama
+  `codex/pl130-funnel-dataclass-fix`, base `c40ac2fd`. Dictamen
+  `ready_for_review`; XNYS abierto, sin merge/despliegue/push.
+- Port byte-identico (`diff-count=0`) de dos fixes upstream nunca
+  integrados: `6d6a8e67` (`_build_decision_row` acepta dataclass via
+  `_mapping`, 1 linea) y `927e830e` (contadores funnel con
+  `.get(key, 0) + 1`, cierra el `KeyError` visto 52 veces en Jetson).
+- Pin de version preexistente roto en base (`0.4.230` vs base real
+  `0.4.233`) corregido a `0.4.234`; bump `0.4.233` → `0.4.234`.
+- QA aislada: focales 60 passed, regresiones 80-91 passed, Ruff/NUL/diff
+  verdes, `validate-agent-config ok=true`, smoke temporal exit=0.
+  Suite completa pendiente de ventana cerrada.
+- Informe: `docs/informe_p_l130_funnel_dataclass.md`.
+- Siguiente: revision operador → `merge --no-ff` a `codex/astra` en
+  ventana cerrada → suite completa → port Jetson `0.4.305+arm64`.

@@ -2348,3 +2348,23 @@ reconciliación manual ni cambios de política.
 - Siguiente unico paso: en sesion elevada ejecutar `stack_up.ps1`, doble
   salud separada 75 s, y cerrar `informe_p_l124` a `deployed` verificado.
   No hacer merge, push ni re-sellar kernel sin confirmacion.
+
+### P-L130 — funnel dataclass + attachment fail-open (candidato 0.4.234, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS abierto (sesion 2026-09-17, cierre
+  22:00 Europe/Madrid); sin merge, despliegue, push ni escritura productiva.
+- Worktree `pl130_funnel_dataclass_fix`, rama
+  `codex/pl130-funnel-dataclass-fix`, base `c40ac2fd`, version `0.4.234`.
+  Commits: `fb11b7bb` (tests, rojo 5/5 confirmado), `e96f263a` (fix
+  ledger + bump + pin), `5ddcb923` (fix contadores funnel + 2 tests).
+- Port byte-identico (`diff-count=0`) de `6d6a8e67` y `927e830e`
+  (rama `codex/pl95-funnel-attachment-fix`, nunca integrada): 1 linea
+  `_mapping()` en `_build_decision_row` + contadores `.get(key, 0) + 1`.
+  Cierra el `KeyError` de P-L95 en la linea Windows.
+- QA aislada: focales 60 passed, regresiones 80-91 passed, Ruff/NUL/diff
+  verdes, `validate-agent-config ok=true`, smoke temporal exit=0. Suite
+  completa pendiente de ventana cerrada.
+- Informe: `docs/informe_p_l130_funnel_dataclass.md`; plan maestro con
+  fila P-L130.
+- Siguiente: revision operador → `merge --no-ff` a `codex/astra` en
+  ventana cerrada → suite completa → port Jetson `0.4.305+arm64`.
