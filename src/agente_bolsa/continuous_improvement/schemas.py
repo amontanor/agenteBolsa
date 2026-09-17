@@ -136,6 +136,8 @@ class ExperimentContract(BaseModel):
     target_paths: list[str]
     rollback: str
     evidence_as_of: str = ""
+    improvement_direction: str = "increase"
+    origin: dict[str, Any] = Field(default_factory=dict)
 
 
 class ImprovementProposalPayload(BaseModel):
