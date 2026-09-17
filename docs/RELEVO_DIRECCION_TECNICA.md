@@ -2425,3 +2425,18 @@ reconciliación manual ni cambios de política.
   pendiente de ventana cerrada.
 - Informe: `docs/informe_p_l134_uplift_llm.md`.
 - Siguiente: merge conjunto P-L130→P-L134 → suite → port Jetson.
+
+### P-L135 — linkage orden-plan (candidato 0.4.239, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS abierto; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl135_order_linkage`, rama `codex/pl135-order-linkage`,
+  base `5d7d998f`, version `0.4.239`. Commits: `382e79a7` (tests, rojo
+  4/4), `9b2cfcbe` (feat + bump + pin).
+- Lector aditivo en `Store` + health fail-open; ruta de submit sin
+  cambios (ya plan-first). Sin enlace → `legacy_unverified`.
+- QA: focales 4, regresiones 70, Ruff/NUL/diff/config verdes. Suite
+  pendiente de ventana cerrada.
+- Informe: `docs/informe_p_l135_linkage_ordenes.md`.
+- Siguiente: merge conjunto P-L130→P-L135 → suite → medir cobertura
+  real → port Jetson.

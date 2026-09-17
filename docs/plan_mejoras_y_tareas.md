@@ -4284,3 +4284,21 @@ sizing, política o producción en esta auditoría.
 - Informe: `docs/informe_p_l134_uplift_llm.md`.
 - Siguiente: merge conjunto P-L130→P-L134 a `codex/astra` en ventana
   cerrada → suite completa → port Jetson.
+
+## P-L135 — cobertura de linkage orden-plan (candidato Windows 0.4.239, listo para revision)
+
+- Worktree `pl135_order_linkage`, rama `codex/pl135-order-linkage`,
+  base `5d7d998f` (P-L134). Dictamen `ready_for_review`; XNYS abierto,
+  sin merge/despliegue/push.
+- `Store.order_plan_linkage_summary`: LEFT JOIN por `plan_id` exacto,
+  filled canonico, ventana recent 30d; sin enlace →
+  `legacy_unverified`, nunca reconstruido. Cableado fail-open a
+  `production_health` (completa S3 de P-L133).
+- Ruta activa ya persiste plan-antes-de-submit (las 63 son legacy por
+  inspeccion de codigo, no verificado en produccion).
+- Bump `0.4.238` → `0.4.239`; pin `test_p59c` actualizado.
+- QA aislada: focales 4 passed, regresiones 70 passed, Ruff/NUL/diff
+  verdes, `validate-agent-config ok=true`. Suite completa pendiente.
+- Informe: `docs/informe_p_l135_linkage_ordenes.md`.
+- Siguiente: merge conjunto P-L130→P-L135 a `codex/astra` en ventana
+  cerrada → suite completa → medir cobertura real → port Jetson.
