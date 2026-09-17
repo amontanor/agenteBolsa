@@ -4171,3 +4171,8 @@ sizing, política o producción en esta auditoría.
 - Incidente intermedio propio (doble patch duplico parser CLI) con rollback
   inmediato y reconstruccion con guardas. Sin impacto.
 - Informe: `docs/informe_p_l125_port_jetson.md`.
+
+## P-L126 — catalogo v4.1 y linea Mejora hoy en UI (Jetson 0.4.299 / Windows 0.4.231)
+
+- Desplegado en Jetson antes de la apertura con salud 1+2 y 0 reinicios/OOM.
+- Informe: `docs/informe_p_l126_ui_mejora.md`.
