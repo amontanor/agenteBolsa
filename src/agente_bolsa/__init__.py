@@ -64,4 +64,5 @@ __all__ = ["__version__"]
 # P-L137: outcome maturation trimmed to completed XNYS sessions (0.4.241).
 # P-L140A: Mis inversiones strip with day P/L over invested as primary (0.4.242).
 # P-L140B: single SPY alpha, leaderboard moved to Config, baseline removed (0.4.243).
-__version__ = "0.4.243"
+# P-L140C: baseline pure helpers retained for P-L63R1 tooltip contract, still unrendered (0.4.244).
+__version__ = "0.4.244"

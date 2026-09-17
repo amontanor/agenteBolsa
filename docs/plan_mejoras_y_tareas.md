@@ -4383,3 +4383,14 @@ sizing, política o producción en esta auditoría.
 - Informe: `docs/informe_p_l140b_spy_unico.md`.
 - Siguiente: revision → merge conjunto P-L130→P-L140 a `codex/astra`
   → suite completa → verificado visual con operador → port Jetson.
+
+## P-L140C — helpers del baseline conservados por contrato (candidato Windows 0.4.244, listo para revision)
+
+- Worktree `pl140c_baseline_contract`, rama
+  `codex/pl140c-baseline-contract`, base `b6e1a48c` (merge P-L140B).
+  Dictamen `ready_for_review`; XNYS cerrado, sin merge/despliegue/push.
+- Restaura verbatim series+chart puros (contrato P-L63R1); contenedor
+  sigue fuera del Dashboard. Bump `0.4.243` → `0.4.244`.
+- QA: p63 11 passed, bateria 145 passed, Ruff/NUL/diff/config verdes.
+- Informe: `docs/informe_p_l140c_baseline_contract.md`.
+- Siguiente: merge a `codex/astra` → suite completa → port Jetson.
