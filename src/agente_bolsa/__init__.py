@@ -48,5 +48,5 @@ __all__ = ["__version__"]
 # P-L89B: exact capital funnel and EOD observational carriers (0.4.226).
 # P-L89B-QA: version-policy expectation aligned with the candidate.
 # P-L120: deterministic bridge-contract provider unblocks measured CODE_CHANGE proposals (0.4.227).
-__version__ = "0.4.227"
-
+# P-L121: par de cierres SPY con autoridad EOD por sesion XNYS (0.4.228).
+__version__ = "0.4.228"

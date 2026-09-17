@@ -4107,6 +4107,17 @@ def broker_reconciliation_job(
             )
         except Exception:
             pass
+        try:
+            from .tools.spy_eod_authority import capture_spy_eod_receipt
+
+            spy_receipt = capture_spy_eod_receipt(settings, session_date)
+            result["spy_eod_receipt"] = {
+                "persisted": bool(spy_receipt.get("persisted")),
+                "comparison_status": (spy_receipt.get("receipt") or {}).get("comparison_status"),
+                "reason_codes": (spy_receipt.get("receipt") or {}).get("reason_codes", []),
+            }
+        except Exception:  # noqa: BLE001 - telemetria fail-open, nunca tumba reconciliacion.
+            result["spy_eod_receipt"] = {"persisted": False, "reason": "spy_eod_capture_failed_open"}
         return result
     except Exception as exc:  # noqa: BLE001 - no debe tumbar el scheduler.
         coordinator.stage(lease, "reconciliation", "failed", error=repr(exc))

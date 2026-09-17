@@ -523,6 +523,14 @@ def overlay_eod_benchmark(
     session_date = str(projected.get("session_date") or contract.get("session_date") or "")[:10]
     stored_benchmark = deepcopy(contract.get("benchmark") or {})
     observation = load_cached_spy_observation(settings, session_date, now=now)
+    try:
+        from .spy_eod_authority import load_spy_eod_receipt, receipt_as_observation
+
+        receipt = load_spy_eod_receipt(settings, session_date)
+    except Exception:  # noqa: BLE001 - el recibo nunca rompe el overlay.
+        receipt = None
+    if isinstance(receipt, dict) and receipt.get("comparison_status") == "comparable":
+        observation = receipt_as_observation(receipt)
     read_at = now or datetime.now(timezone.utc)
     read_at = read_at.astimezone(timezone.utc) if read_at.tzinfo else read_at.replace(tzinfo=timezone.utc)
     account = contract.get("account") or {}
@@ -652,6 +660,14 @@ def build_performance_benchmark(
         spy_observation = {"status": "unavailable", "warnings": list(status_warnings)}
     elif spy_observation is None:
         spy_observation = load_cached_spy_observation(settings, session_date, now=now)
+        try:
+            from . import spy_eod_authority as _spy_eod
+
+            _receipt = _spy_eod.load_spy_eod_receipt(settings, session_date)
+        except Exception:  # noqa: BLE001 - el recibo nunca rompe la proyeccion.
+            _receipt = None
+        if isinstance(_receipt, dict) and _receipt.get("comparison_status") == "comparable":
+            spy_observation = _spy_eod.receipt_as_observation(_receipt)
     spy = dict(spy_observation or {})
     observation_as_of = spy.get("as_of")
     if observation_as_of:
