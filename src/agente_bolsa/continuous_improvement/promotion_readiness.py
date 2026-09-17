@@ -23,6 +23,9 @@ PROMOTION_MAX_TURNOVER_PER_SESSION = 5.0
 RETIRE_MIN_MATURED = 5
 RETIRE_MAX_ALPHA_5D = -0.02
 RETIRE_MAX_PROFIT_FACTOR_5D = 0.60
+RETIRE_MIN_MATURED_10D = 20
+RETIRE_MAX_ALPHA_10D = -0.015
+RETIRE_MAX_EXPECTANCY_10D = 0.0
 PENDING_VALIDATION_TTL_DAYS = 14
 RETIRE_ACTIONABLE_KEYS = {
     ("setup", "confirmed_pattern"),
@@ -169,7 +172,15 @@ def _candidate_decision(
     if all(promote_checks.values()):
         verdict = "PROMOTE_CANDIDATE"
         action = "propose_shadow_to_active"
-    elif all(retire_checks.values()):
+    slow_bleed_10d = (
+        (kind, key) in RETIRE_ACTIONABLE_KEYS
+        and matured_10d >= RETIRE_MIN_MATURED_10D
+        and alpha_10d is not None
+        and alpha_10d <= RETIRE_MAX_ALPHA_10D
+        and expectancy_10d is not None
+        and expectancy_10d < RETIRE_MAX_EXPECTANCY_10D
+    )
+    if all(retire_checks.values()) or slow_bleed_10d:
         verdict = "RETIRE_CANDIDATE"
         action = "propose_active_to_shadow"
     else:
@@ -188,6 +199,7 @@ def _candidate_decision(
         "unavailable_metrics": unavailable_metrics,
         "promotion_checks": promote_checks,
         "retire_checks": retire_checks,
+        "slow_bleed_10d": slow_bleed_10d,
         "walk_forward": walk_forward,
     }
 
