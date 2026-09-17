@@ -4193,3 +4193,10 @@ sizing, política o producción en esta auditoría.
 - Primera prueba en vivo: human_review con 3 claves, 0 auto-degradaciones.
 - Rama Windows `codex/pl128-bleed` con tests (4+2). Informe:
   `docs/informe_p_l128_sangria_lenta.md`.
+
+## P-L129 — resumen Telegram compacto (Jetson 0.4.304)
+
+- Una linea por bloque; SP500 con diferencia y veredicto; top-3 movers.
+  Ejemplo real: 210 caracteres frente a ~600.
+- Rama Windows `codex/pl129-tgcompact` (0.4.234). Informe:
+  `docs/informe_p_l129_telegram_compacto.md`.
