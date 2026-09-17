@@ -50,11 +50,11 @@ def test_close_stale_validations_expires_only_old_pending(tmp_path):
     assert any(d["reason"] == "pending_validation_expired" for d in decisions)
 
 
-def _applied(applied_id, updated_days_ago, *, status="APPLIED", impact="PENDING"):
+def _applied(applied_id, updated_days_ago, *, status="APPLIED", impact="PENDING", proposal="ci_prop_x"):
     return {
         "applied_change_id": applied_id,
         "initiative_id": None,
-        "proposal_id": "ci_prop_x",
+        "proposal_id": proposal,
         "cycle_id": "ci_cycle_x",
         "status": status,
         "change_type": "CODE_CHANGE",
@@ -70,13 +70,12 @@ def _applied(applied_id, updated_days_ago, *, status="APPLIED", impact="PENDING"
     }
 
 
-def test_resolve_applied_impacts_marks_survivors_and_rollback():
-    import json
 
-    store = _store(__import__("tempfile").mkdtemp())
+def test_resolve_applied_impacts_marks_survivors_and_rollback(tmp_path):
+    store = _store(tmp_path)
     store.save_continuous_improvement_applied_change(_applied("ci_applied_old", 20))
     store.save_continuous_improvement_applied_change(_applied("ci_applied_new", 2))
-    store.save_continuous_improvement_applied_change(_applied("ci_applied_rb", 20, status="ROLLED_BACK"))
+    store.save_continuous_improvement_applied_change(_applied("ci_applied_rb", 20, status="ROLLED_BACK", proposal="ci_prop_other"))
     result = resolve_applied_impacts(store, clean_days=15)
     assert result["passed"] == ["ci_applied_old"]
     assert result["failed"] == []
