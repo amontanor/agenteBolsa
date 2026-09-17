@@ -2475,3 +2475,18 @@ reconciliación manual ni cambios de política.
   P-L137 en produccion y `sufficient_sample` en uplift. Pre-registro
   §6 + checklist de promocion congelados antes de mirar resultados.
   Sin sizing hasta revision humana.
+
+### P-L140A — franja Mis inversiones (candidato 0.4.242, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS cerrado; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl140a_mis_inversiones`, rama
+  `codex/pl140a-mis-inversiones`, base `a6655e10`, version `0.4.242`.
+  Commits: `587f711e` (tests), `e7244de2` (feat + bump + pin).
+- Solo `web_app.py`: helper puro + franja de 4 tarjetas, misma fuente
+  ya cargada. Sin broker nuevo, sin escrituras, sin trading.
+- QA: focales 7 (render headless incluido), regresiones 128,
+  Ruff/NUL/diff/config verdes. Suite pendiente de integracion.
+- Informe: `docs/informe_p_l140a_mis_inversiones.md`.
+- Siguiente: P-L140B sobre esta rama → merge P-L130→P-L140 → suite →
+  port Jetson.

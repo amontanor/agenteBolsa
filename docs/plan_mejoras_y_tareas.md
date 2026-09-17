@@ -4352,3 +4352,18 @@ sizing, política o producción en esta auditoría.
   drawdown/cola no se promociona. Orden shadow → guarded → active.
 - Este lote futuro no toca sizing hasta superar el checklist con
   revision humana. Sin codigo ni version en este apunte.
+
+## P-L140A — franja Mis inversiones (candidato Windows 0.4.242, listo para revision)
+
+- Worktree `pl140a_mis_inversiones`, rama
+  `codex/pl140a-mis-inversiones`, base `a6655e10` (P-L137). Dictamen
+  `ready_for_review`; XNYS cerrado, sin merge/despliegue/push.
+- `_invested_day_metric` puro: primario % sobre invertido, secundario
+  % sobre equity, cobertura; `n/d` sin dato. Franja de 4 tarjetas con
+  la fuente ya cargada (sin broker nuevo).
+- Bump `0.4.241` → `0.4.242`; pin `test_p59c` actualizado.
+- QA: focales 7 passed (incluye render headless), regresiones 128
+  passed, Ruff/NUL/diff/config verdes. Suite completa pendiente.
+- Informe: `docs/informe_p_l140a_mis_inversiones.md`.
+- Siguiente: P-L140B sobre esta rama → revision → merge conjunto
+  P-L130→P-L140 → suite → port Jetson.
