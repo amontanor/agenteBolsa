@@ -2454,3 +2454,17 @@ reconciliación manual ni cambios de política.
 - Informe: `docs/informe_p_l136_flujos_caja.md`.
 - Siguiente: merge conjunto P-L130→P-L136 → suite → cableado PMR →
   port Jetson.
+
+### P-L137 — sellos de sesion en maduracion (candidato 0.4.241, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS abierto; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl137_session_seals`, rama `codex/pl137-session-seals`,
+  base `c785b0b1`, version `0.4.241`. Commits: `7cd1bdd2` (tests),
+  `726d223b` (feat + bump + pin).
+- Recorte same-day con calendario real, fallback degradado, paridad
+  probada con historia cerrada.
+- QA: focales 4, regresiones 97, Ruff/NUL/diff/config verdes. Suite
+  pendiente de ventana cerrada.
+- Informe: `docs/informe_p_l137_sellos_sesion.md`.
+- Siguiente: merge conjunto P-L130→P-L137 → suite → port Jetson.

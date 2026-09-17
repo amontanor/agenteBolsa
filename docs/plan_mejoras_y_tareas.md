@@ -4319,3 +4319,19 @@ sizing, política o producción en esta auditoría.
 - Informe: `docs/informe_p_l136_flujos_caja.md`.
 - Siguiente: merge conjunto P-L130→P-L136 a `codex/astra` en ventana
   cerrada → suite completa → cableado PMR → port Jetson.
+
+## P-L137 — maduracion recortada a sesiones completas (candidato Windows 0.4.241, listo para revision)
+
+- Worktree `pl137_session_seals`, rama `codex/pl137-session-seals`,
+  base `c785b0b1` (P-L136). Dictamen `ready_for_review`; XNYS abierto,
+  sin merge/despliegue/push.
+- `trim_to_completed_sessions`: recorta la barra mutable same-day
+  antes de madurar outcomes (mismo bug P-L71/P-L127, en universo);
+  calendario real con fallback weekday degradado; contadores aditivos.
+  Paridad bit-identica con historia cerrada.
+- Bump `0.4.240` → `0.4.241`; pin `test_p59c` actualizado.
+- QA aislada: focales 4 passed, regresiones 97 passed, Ruff/NUL/diff
+  verdes, `validate-agent-config ok=true`. Suite completa pendiente.
+- Informe: `docs/informe_p_l137_sellos_sesion.md`.
+- Siguiente: merge conjunto P-L130→P-L137 a `codex/astra` en ventana
+  cerrada → suite completa → port Jetson.
