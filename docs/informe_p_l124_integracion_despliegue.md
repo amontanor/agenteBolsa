@@ -54,3 +54,9 @@ del cambio intencional del `.env`.
 - Pendiente operador (elevado): `Disable-ScheduledTask AgenteBolsaScheduler,
   AgenteBolsaWeb` para evitar rearranque de Windows antes de la apertura
   15:30. Futuros despliegues van al pipeline Jetson, nunca downgrade a 0.4.230.
+
+## Cierre split-brain (17-sep-2026, 13:13 Europe/Madrid)
+
+- Tareas Windows deshabilitadas por el operador; `stack_status` 13:13:
+  todo PARADO, Jetson `agente-bolsa-{web,scheduler,auxiliary}-1` healthy.
+- Instancia unica restaurada. Apertura 15:30 solo con Jetson 0.4.297.
