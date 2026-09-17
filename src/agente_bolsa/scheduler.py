@@ -4292,7 +4292,7 @@ def weekly_learning_review_job(
         try:
             from .continuous_improvement.promotion_loop import sync_promotion_policies
 
-            promotion_sync = sync_promotion_policies(settings, store)
+            promotion_sync = sync_promotion_policies(store, settings)
             report["promotion_sync"] = promotion_sync
         except Exception as exc:  # noqa: BLE001 - la sincronizacion nunca tumba la revision semanal.
             log_system_event(settings.logs_dir, "promotion_sync_failed", {"error": repr(exc)})
