@@ -41,3 +41,16 @@ del cambio intencional del `.env`.
 - Operador confirma: el cambio del .env es el paso a DeepSeek V4.1 Flash (verificado en .env: IMPROVEMENT_LLM_MODEL=deepseek-v4.1-flash, roles decision/sentiment iguales, postura paper/live-false intacta).
 - kernel-seal ejecutado con autorizacion explicita: ok=true, iolations=[], sello 2026-09-17T10:28:48Z sobre kernel/broker/execution + .env actual.
 
+
+## Split-brain Windows/Jetson (17-sep-2026, 12:58 Europe/Madrid)
+
+- El despliegue Windows 0.4.230 creo doble instancia activa: Jetson corre
+  `agente-bolsa:0.4.297-arm64` (healthy, 28h) y Windows 0.4.230 arranco 12:19.
+- 0 ordenes ejecutadas en Windows (mercado cerrado); 4 eventos de ciclo sin
+  trading. Sin dano.
+- Decision: Jetson es la linea autoritativa (mas nueva, sana, instruccion
+  permanente del operador). Stack Windows detenido (`stack_down`,
+  PARADO verificado 12:58). Codigo 0.4.230 preservado en repo/ramas.
+- Pendiente operador (elevado): `Disable-ScheduledTask AgenteBolsaScheduler,
+  AgenteBolsaWeb` para evitar rearranque de Windows antes de la apertura
+  15:30. Futuros despliegues van al pipeline Jetson, nunca downgrade a 0.4.230.
