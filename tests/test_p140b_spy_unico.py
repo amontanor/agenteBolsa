@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from agente_bolsa.web_app import _spy_alpha_summary
 
@@ -57,7 +57,7 @@ def test_leaderboard_block_renders_without_gain_headless() -> None:
 
     assert not app.exception
     assert any("Leaderboard" in str(item.value) for item in app.markdown)
-    assert app.button(key="leaderboard_submit_gain")[0].disabled is True
+    assert app.button(key="leaderboard_submit_gain").disabled is True
 
 
 def test_leaderboard_block_enables_submit_with_gain_headless() -> None:
@@ -75,4 +75,4 @@ def test_leaderboard_block_enables_submit_with_gain_headless() -> None:
     app.run()
 
     assert not app.exception
-    assert app.button(key="leaderboard_submit_gain")[0].disabled is False
+    assert app.button(key="leaderboard_submit_gain").disabled is False

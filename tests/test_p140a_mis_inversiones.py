@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from agente_bolsa.web_app import _invested_day_metric
 
+
 def test_primary_pct_over_invested() -> None:
     metric = _invested_day_metric(50.0, 5000.0, equity_pct=0.0007)
 
@@ -49,8 +50,6 @@ def test_full_coverage_needs_no_warning() -> None:
 
 def test_investments_group_renders_strip_headless() -> None:
     from streamlit.testing.v1 import AppTest
-
-    from agente_bolsa import web_app
 
     def _script() -> None:
         from agente_bolsa import web_app as _web_app
