@@ -65,7 +65,7 @@ def test_learning_scoreboard_marks_pending_without_executed_cohort(tmp_path, mon
     assert report["evaluation"]["status"] == "pending_no_executed_cohort"
     assert report["evaluation"]["criterion_verbatim"] == LEARNING_SCOREBOARD_CRITERION
     assert report["weekly_rows"] == []
-    assert report["schema_version"] == 2
+    assert report["schema_version"] == 3
     assert report["period"]["to"] is not None
 
 
