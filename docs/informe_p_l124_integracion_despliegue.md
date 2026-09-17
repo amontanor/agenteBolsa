@@ -35,3 +35,9 @@ del cambio intencional del `.env`.
 - Supervisores auxiliares: catch-up con exit 0 al arrancar; PARADO en reposo es su estado normal; flags lock_orphan por PID reutilizado (falso positivo conocido).
 - Kernel: violacion preexistente solo en .env, sin re-sellar. Postura paper/live-false/auto-apply-false.
 
+
+## Re-sellado de kernel (17-sep-2026, 12:28 Europe/Madrid)
+
+- Operador confirma: el cambio del .env es el paso a DeepSeek V4.1 Flash (verificado en .env: IMPROVEMENT_LLM_MODEL=deepseek-v4.1-flash, roles decision/sentiment iguales, postura paper/live-false intacta).
+- kernel-seal ejecutado con autorizacion explicita: ok=true, iolations=[], sello 2026-09-17T10:28:48Z sobre kernel/broker/execution + .env actual.
+
