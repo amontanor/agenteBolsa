@@ -4268,3 +4268,19 @@ sizing, política o producción en esta auditoría.
 - Informe: `docs/informe_p_l133_misfire_health.md`.
 - Siguiente: merge conjunto P-L130→P-L133 a `codex/astra` en ventana
   cerrada → suite completa → port Jetson.
+
+## P-L134 — reporte read-only de uplift LLM (candidato Windows 0.4.238, listo para revision)
+
+- Worktree `pl134_llm_uplift`, rama `codex/pl134-llm-uplift`, base
+  `06b8e6d1` (P-L133). Dictamen `ready_for_review`; XNYS abierto, sin
+  merge/despliegue/push.
+- Nuevo `tools/llm_uplift.py`: expectancy LLM vs deterministicas sobre
+  ejecutadas maduras, agrupacion solo por flag causal `llm_selected`
+  (embebido o join exacto por `best_signal_id`); source-text jamas
+  como proxy. Pre-registro: 30 maduras, 10 por brazo, cobertura 0.70.
+- Bump `0.4.237` → `0.4.238`; pin `test_p59c` actualizado.
+- QA aislada: focales 4 passed, regresiones 55 passed, Ruff/NUL/diff
+  verdes, `validate-agent-config ok=true`. Suite completa pendiente.
+- Informe: `docs/informe_p_l134_uplift_llm.md`.
+- Siguiente: merge conjunto P-L130→P-L134 a `codex/astra` en ventana
+  cerrada → suite completa → port Jetson.

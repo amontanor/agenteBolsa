@@ -2411,3 +2411,17 @@ reconciliación manual ni cambios de política.
   pendiente de ventana cerrada.
 - Informe: `docs/informe_p_l133_misfire_health.md`.
 - Siguiente: merge conjunto P-L130→P-L133 → suite → port Jetson.
+
+### P-L134 — reporte de uplift LLM (candidato 0.4.238, 17-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS abierto; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl134_llm_uplift`, rama `codex/pl134-llm-uplift`, base
+  `06b8e6d1`, version `0.4.238`. Commits: `d69b0bf5` (modulo + 4
+  tests), `5db22b69` (bump + pin).
+- Solo lectura: brazos por flag causal, pre-registro 30/10/0.70,
+  veredicto sin promotion. Anti-proxy probado.
+- QA: focales 4, regresiones 55, Ruff/NUL/diff/config verdes. Suite
+  pendiente de ventana cerrada.
+- Informe: `docs/informe_p_l134_uplift_llm.md`.
+- Siguiente: merge conjunto P-L130→P-L134 → suite → port Jetson.
