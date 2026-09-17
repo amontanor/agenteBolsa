@@ -771,5 +771,5 @@ def test_version_policy_requires_bump():
     if dist:
         # Con PYTHONPATH al src del worktree, leemos __init__.py
         import agente_bolsa
-        # P-L137 is the current candidate after the session-sealed maturation.
-        assert agente_bolsa.__version__ == "0.4.241"
+        # P-L140A is the current candidate after the Mis inversiones strip.
+        assert agente_bolsa.__version__ == "0.4.242"

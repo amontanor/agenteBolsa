@@ -363,6 +363,42 @@ def _today_pl_display(
     return display
 
 
+def _invested_day_metric(
+    intraday_pl: Any,
+    invested: Any,
+    equity_pct: Any | None = None,
+    *,
+    known: int = 0,
+    total: int = 0,
+) -> dict[str, Any]:
+    """P/L del dia sobre capital invertido (primario) + equity (secundario).
+
+    P-L140A: el primario responde "son rentables mis inversiones" con la
+    misma fuente que la tarjeta intradia existente (snapshot Alpaca).
+    Sin invertido o sin dato, primario "n/d", nunca division por cero.
+    """
+
+    amount = _num(intraday_pl)
+    base = _num(invested)
+    if amount is None or base is None or base <= 0:
+        return {
+            "amount": _money_or_na(amount),
+            "primary_pct": "n/d",
+            "secondary": f"{_pct_signed_or_na(equity_pct)} sobre equity",
+            "tone": "neutral",
+            "coverage": f"{known}/{total} posiciones",
+        }
+    pct = amount / base
+    tone = "good" if amount > 0 else "bad" if amount < 0 else "neutral"
+    return {
+        "amount": _money(amount),
+        "primary_pct": _pct_signed(pct),
+        "secondary": f"{_pct_signed_or_na(equity_pct)} sobre equity",
+        "tone": tone,
+        "coverage": f"{known}/{total} posiciones",
+    }
+
+
 def _today_pl_metric_payload(
     today_pl: Any,
     invested: Any,
@@ -1438,6 +1474,44 @@ def _account_group(
                 <div class="account-kpi"><span>Ganancia/pérdida de la cartera actual hoy</span><strong>{intraday_amount}</strong><em>{intraday_coverage}</em></div>
                 <div class="account-kpi"><span>Posiciones</span><strong>{positions_count}</strong><em>&nbsp;</em></div>
                 <div class="account-kpi"><span>Ordenes</span><strong>{orders_count}</strong><em>&nbsp;</em></div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _investments_group(
+    *,
+    invested: float | None,
+    invested_pct: float | None,
+    intraday_pl: float | None,
+    intraday_known: int,
+    intraday_total: int,
+    open_pl: float | None,
+    cash: float | None,
+    today_equity_pct: float | None,
+) -> None:
+    """Franja "Mis inversiones": una fuente, un denominador (P-L140A)."""
+
+    day = _invested_day_metric(
+        intraday_pl, invested, today_equity_pct,
+        known=intraday_known, total=intraday_total,
+    )
+    base = _num(invested)
+    open_pct = (open_pl / base) if (_num(open_pl) is not None and base) else None
+    open_tone = "good" if (_num(open_pl) or 0.0) > 0 else "bad" if (_num(open_pl) or 0.0) < 0 else "neutral"
+    st.markdown(
+        f"""
+        <div class="account-strip">
+            <div class="account-title">
+                <span>Mis inversiones · misma fuente que la tabla de posiciones</span>
+            </div>
+            <div class="account-kpis">
+                <div class="account-kpi"><span>Invertido</span><strong>{_money_or_na(invested)}</strong><em>{_pct(invested_pct) if _num(invested_pct) is not None else "n/d"} del equity</em></div>
+                <div class="account-kpi {day["tone"]}"><span>P/L día sobre invertido</span><strong>{day["amount"]} {day["primary_pct"]}</strong><em>{escape(day["secondary"])} · {escape(day["coverage"])}</em></div>
+                <div class="account-kpi {open_tone}"><span>P/L total abiertas</span><strong>{_money_or_na(open_pl)} {_pct_signed_or_na(open_pct)}</strong><em>sobre invertido · desde entrada</em></div>
+                <div class="account-kpi"><span>Cash</span><strong>{_money_or_na(cash)}</strong><em>&nbsp;</em></div>
             </div>
         </div>
         """,
@@ -5387,6 +5461,16 @@ def page_dashboard() -> None:
         today_detail=today_detail,
         position_intraday=position_intraday,
         opening_context=opening_context,
+    )
+    _investments_group(
+        invested=_num(exposure),
+        invested_pct=_num(exposure_pct),
+        intraday_pl=_num(position_intraday.get("amount")),
+        intraday_known=int(position_intraday.get("known") or 0),
+        intraday_total=int(position_intraday.get("total") or 0),
+        open_pl=_portfolio_open_pl(portfolio, stats.get("unrealized_pl") if stats else None),
+        cash=current_cash,
+        today_equity_pct=today_pct,
     )
 
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)

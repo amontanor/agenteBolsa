@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from agente_bolsa.web_app import _invested_day_metric
 
-
 def test_primary_pct_over_invested() -> None:
     metric = _invested_day_metric(50.0, 5000.0, equity_pct=0.0007)
 
@@ -46,3 +45,32 @@ def test_full_coverage_needs_no_warning() -> None:
     metric = _invested_day_metric(10.0, 5000.0, equity_pct=0.0, known=4, total=4)
 
     assert metric["coverage"] == "4/4 posiciones"
+
+
+def test_investments_group_renders_strip_headless() -> None:
+    from streamlit.testing.v1 import AppTest
+
+    from agente_bolsa import web_app
+
+    def _script() -> None:
+        from agente_bolsa import web_app as _web_app
+
+        _web_app._investments_group(
+            invested=5000.0,
+            invested_pct=0.07,
+            intraday_pl=50.0,
+            intraday_known=4,
+            intraday_total=4,
+            open_pl=120.0,
+            cash=65000.0,
+            today_equity_pct=0.0007,
+        )
+
+    app = AppTest.from_function(_script)
+    app.run()
+
+    assert not app.exception
+    html = "".join(item.value for item in app.markdown)
+    assert "Mis inversiones" in html
+    assert "+1.00%" in html
+    assert "+0.07% sobre equity" in html
