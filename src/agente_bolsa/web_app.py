@@ -129,6 +129,7 @@ LLM_PROVIDER_CATALOG = {
             "kimi-k2.6",
             "deepseek-v4-pro",
             "deepseek-v4-flash",
+            "deepseek-v4.1-flash",
             "mimo-v2.5",
             "mimo-v2.5-pro",
         ],
@@ -4430,6 +4431,15 @@ def _render_autonomy_panel(store: Any, settings: Any) -> None:
             f"iq_score: {state.get('iq_score')} | lecciones activas: {state.get('active_lessons')} | "
             f"promociones abiertas: {state.get('promotions_open')} | tesis: {thesis.get('stance')}"
         )
+        improvement = state.get("improvement") or {}
+        real = improvement.get("real_improvement") or {}
+        learn = improvement.get("daily_learning") or {}
+        cov = (improvement.get("system_vs_spy") or {}).get("coverage") or {}
+        st.caption(
+            f"Mejora hoy: {improvement.get('verdict', 'n/d')} "
+            f"(aplicados={real.get('applied_today', 0)}, obs={learn.get('observations_today', 0)}, "
+            f"SPY comparables={cov.get('sessions_comparable', 0)}/{cov.get('sessions_total', 0)})."
+        )
         try:
             from .tools.naive_benchmarks import edge_report as _edge_report
 
@@ -8236,6 +8246,7 @@ def page_config() -> None:
         {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "kimi-k2.6"},
         {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "deepseek-v4-pro"},
         {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "deepseek-v4-flash"},
+        {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "deepseek-v4.1-flash"},
         {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "mimo-v2.5"},
         {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "mimo-v2.5-pro"},
         {"proveedor": "mimo", "base_url": "https://token-plan-ams.xiaomimimo.com/v1", "modelo": "mimo-v2.5"},
