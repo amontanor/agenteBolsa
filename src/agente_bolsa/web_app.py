@@ -4428,6 +4428,49 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
             unsafe_allow_html=True,
         )
 
+# P-L140C: estos dos helpers puros se conservan por el contrato de tooltips
+# explicitos P-L63R1 (tests/test_p63_april_equity_contract.py). El contenedor
+# duplicado del Dashboard se retiro en P-L140B; no los re-conectes a paginas.
+def _performance_baseline_series(
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], float | None, float | None]:
+    cumulative_pnl: float | None = None
+    cumulative_spy: float | None = None
+    chart_rows = []
+    consumer_read_at = datetime.now(timezone.utc)
+    for row in rows:
+        canonical = _canonical_daily_vs_spy_row(row, consumer_read_at=consumer_read_at)
+        pnl = canonical["system_pct"] if canonical["comparison_status"] == "comparable" else None
+        spy = canonical["spy_pct"] if canonical["comparison_status"] == "comparable" else None
+        if pnl is not None:
+            cumulative_pnl = (1.0 + (cumulative_pnl or 0.0)) * (1.0 + pnl) - 1.0
+        if spy is not None:
+            cumulative_spy = (1.0 + (cumulative_spy or 0.0)) * (1.0 + spy) - 1.0
+        chart_rows.append(
+            {
+                "fecha": row.get("session_date"),
+                "Sistema": round(cumulative_pnl, 6) if pnl is not None and cumulative_pnl is not None else None,
+                "SPY": round(cumulative_spy, 6) if spy is not None and cumulative_spy is not None else None,
+                "iq_score": _num(row.get("iq_score")),
+            }
+        )
+    return chart_rows, cumulative_pnl, cumulative_spy
+
+
+def _performance_baseline_chart(frame: pd.DataFrame) -> Any:
+    tooltip = [
+        alt.Tooltip("fecha:N", title="Fecha"),
+        alt.Tooltip("retorno_acumulado:Q", title="% ganancias", format="+.2%"),
+        alt.Tooltip("serie:N", title="Serie"),
+    ]
+    x = alt.X("fecha:N", title=None, axis=alt.Axis(labelAngle=0, labelOverlap=True))
+    y = alt.Y("retorno_acumulado:Q", title="% ganancias", axis=alt.Axis(format="+.1%"))
+    color = alt.Color("serie:N", title=None)
+    line = alt.Chart(frame).mark_line(strokeWidth=2.5).encode(x=x, y=y, color=color, tooltip=tooltip)
+    points = alt.Chart(frame).mark_point(size=70, filled=True).encode(x=x, y=y, color=color, tooltip=tooltip)
+    return line + points
+
+
 def _render_autonomy_panel(store: Any, settings: Any) -> None:
     """Pestana de autonomia y freno humano (T4.2)."""
 
