@@ -4176,3 +4176,12 @@ sizing, política o producción en esta auditoría.
 
 - Desplegado en Jetson antes de la apertura con salud 1+2 y 0 reinicios/OOM.
 - Informe: `docs/informe_p_l126_ui_mejora.md`.
+
+## P-L127 — Telegram recibe el SP500 (Jetson 0.4.300, Windows 0.4.232 en rama)
+
+- Recorte de barras futuras + capture post-cierre + backfill: 9/9 sesiones
+  comparables; ejemplo 16-sep SPY -0,441%. Telegram de esta noche ya comparable.
+- Rama `codex/pl127-spy-fix` (Windows, sin merge a produccion Windows por
+  alcance solo-Jetson). Lote B/C en observacion: sin admisiones con mercado
+  cerrado; sync semanal viernes.
+- Informes: `docs/informe_p_l127_telegram_sp500.md` (en rama).
