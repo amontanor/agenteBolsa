@@ -4,7 +4,7 @@
 
 ## Dictamen
 
-`partially_verified_deploy_pending_startup` (merge + QA verdes; arranque bloqueado por tareas deshabilitadas sin elevacion).
+`deployed`.
 
 ## Alcance
 
@@ -27,3 +27,11 @@ del cambio intencional del `.env`.
 - Suite post-merge: pendiente al redactar (ver cierre).
 - Ruff, NUL, diff-check, config `ok=true`, smoke aislado: verdes.
 - Paridad de protegidos objeto-a-objeto contra la base.
+
+## Cierre productivo P-L124 (17-sep-2026, 12:19-12:22 Europe/Madrid)
+
+- Merge 83e366d9, v0.4.230. Suite post-merge 2531 passed, 2 preexistentes clasificados.
+- Salud 1 (12:19:47) y salud 2 (12:21:25, +98 s): scheduler unico (61240, lock 62356 ok), web unica (7404, 8501 HTTP True), 0 criticas + 3 warnings preexistentes, lease vacio, 138 ordenes sin cambios, 0 ordenes hoy.
+- Supervisores auxiliares: catch-up con exit 0 al arrancar; PARADO en reposo es su estado normal; flags lock_orphan por PID reutilizado (falso positivo conocido).
+- Kernel: violacion preexistente solo en .env, sin re-sellar. Postura paper/live-false/auto-apply-false.
+
