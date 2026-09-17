@@ -4,8 +4,12 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from apscheduler.events import EVENT_JOB_MAX_INSTANCES, EVENT_JOB_MISSED
-from apscheduler.events import JobExecutionEvent, JobSubmissionEvent
+from apscheduler.events import (
+    EVENT_JOB_MAX_INSTANCES,
+    EVENT_JOB_MISSED,
+    JobExecutionEvent,
+    JobSubmissionEvent,
+)
 
 from agente_bolsa import scheduler
 from agente_bolsa.config import Settings

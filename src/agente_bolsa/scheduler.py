@@ -487,6 +487,29 @@ def _reporter(settings: Settings, store: Store, verbose: bool) -> EventReporter:
     return EventReporter(store, verbose=verbose)
 
 
+def _skip_delay_seconds(scheduled: Any) -> float | None:
+    """Seconds between the scheduled run time and now; None if unparseable.
+
+    P-L133: measures misfire delay at detection time. Naive datetimes are
+    assumed UTC. Small clock-skew negatives clamp to 0.0.
+    """
+
+    moment: datetime | None = None
+    if isinstance(scheduled, datetime):
+        moment = scheduled
+    elif isinstance(scheduled, str):
+        try:
+            moment = datetime.fromisoformat(scheduled)
+        except ValueError:
+            return None
+    if moment is None:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    delay = (datetime.now(timezone.utc) - moment).total_seconds()
+    return round(max(0.0, delay), 1)
+
+
 def _persist_scheduler_control_event(settings: Settings, store: Store, event: Any) -> None:
     """Hace duraderos los skips que APScheduler emite antes de ejecutar el job."""
 
@@ -512,6 +535,7 @@ def _persist_scheduler_control_event(settings: Settings, store: Store, event: An
             "reason": reason,
             "scheduled_run_time": scheduled_text,
             "timestamp": scheduled_text,
+            "delay_seconds": _skip_delay_seconds(scheduled),
         }
         canonical = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
         payload["content_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
