@@ -1770,3 +1770,572 @@ solo cuando una lectura SSH autenticada confirme host, montaje, I/O y Docker.
 Bloqueo local adicional: Docker Desktop `4.33.1` no levanta el engine porque
 requiere `WSL update required` y la actualizacion elevada fue denegada. No
 ejecutar `wsl --update` automaticamente; requiere autoridad administrativa.
+
+## P-L90-CUTOVER-R10 - cierre de identidad y OOM (13-ago-2026 22:41 CEST)
+
+Dictamen vigente: `precondition_not_met`. No declarar desplegada la Raspberry y
+no iniciar Jetson.
+
+La lectura actual confirma que Windows sigue en HEAD `3ebff4e2`/tree
+`d4071dcb`/v0.4.226 y detenido. Raspberry ejecuta realmente la imagen
+`0.4.241-arm64`, revision `1e5c3c32`, pero su Compose/env efectivo contiene la
+etiqueta `0.4.229-arm64`. La candidata cargada `0.4.230-arm64` es
+`42b8dfc1`/tree `7c204e6c`/digest `sha256:c9745ce0...`; su merge-base es el
+antiguo `0e4e1194`, no el Windows actual. Frente a la base actual elimina
+preflight, snapshot y documentacion operativa, por lo que no se puede usar sin
+reconstruccion exacta.
+
+La causa de los reinicios ya esta demostrada: Docker events registran `oom`,
+`die exitCode=137` y `start`; dmesg registra OOM del memory cgroup. El contador
+del scheduler llego a 9 y el preflight estricto marco `ok=false` por reinicios
+y memoria disponible de 118 MiB. Los solapamientos/missed de APScheduler y
+errores LLM 429 son factores de carga, no causa primaria confirmada.
+
+El USB sigue sano (`/dev/sda1`, ext4/rw, UUID esperado), pero no se hizo nuevo
+snapshot frio porque no se detuvieron escritores. `whale-copy` fue restaurado
+healthy tras su stop/start exclusivo y queda fuera de la paridad; su watchdog
+con permisos defectuosos es deuda separada.
+
+Siguiente encargo: candidato desde el HEAD Windows exacto, Compose/env/runtime
+inmutables y caracterizacion observacional de jobs/LLM/SQLite. No cambiar
+trading, riesgo, politica, locks ni SQLite; no desplegar ni migrar a Jetson
+hasta superar preflight, snapshot y estabilidad prolongada.
+
+## P-L90R10 - relevo candidato ARM64 (13-ago-2026)
+
+Dictamen: `precondition_not_met`; candidato local `ready_for_jetson` como
+fuente de build, Raspberry no desplegada. Base Windows exacta
+`3ebff4e2`/`d4071dcb`, worktree
+`C:\Antonio\Bref\agenteBolsa_worktrees\pl90r10_arm64_oom_guard`, commit
+`d8629489`, tree `9159be36`, v0.4.242.
+
+La mitigación única es `SCHEDULER_MAX_WORKERS=2` en el executor APScheduler.
+Mantiene jobs/cadencias y las garantías de trading. La suite final dio
+`2524 passed, 1 skipped, 1 warning`; focales, smoke fake, Ruff/NUL/diff y
+config aislada pasaron. Los archivos protegidos y carriers P-L89B son
+idénticos a la base. Compose, entrypoint, supervisor auxiliar, sonda ligera y
+preflight parametrizado forman la capa ARM64; no hay digest porque Docker
+Desktop/WSL no tiene engine utilizable.
+
+### Relectura read-only 13-ago-2026 23:31 CEST
+
+Preflight Jetson 14-ago-2026: TCP/22 en `192.168.1.186` responde y la consola
+local confirmó la huella `MD5 73:81:ac:da:43:ad:f5:ad:f9:4e:c0:5b:a6:49:54:1a`.
+El acceso remoto desde Windows falla por `Permission denied
+(publickey,password)`; no hay clave autorizada y no se usa contraseña en logs.
+No transferir ni ejecutar comandos remotos hasta habilitar autenticación.
+Windows también aparece con scheduler/lock vivos; mantener
+`precondition_not_met` y resolver ambas precondiciones en la próxima ventana
+segura.
+
+Raspberry sigue en 0.4.241-arm64. El core responde healthy, pero scheduler
+`restart=23`, consumo 907.6 MiB/1 GiB y 286 MiB disponibles con swap elevada;
+no cumple el gate de estabilidad. `/dev/sda1` ext4/rw y `mmcblk0p2` siguen
+intactos; `whale-copy` healthy e independiente. Mantener
+`precondition_not_met`: no snapshot, corte, reinicio, limpieza de locks ni
+Jetson hasta builder/digest, preflight y datos fríos válidos.
+
+Raspberry sigue en 0.4.241 con historial OOM/exit 137/restarts y presión de
+memoria; Windows está detenido y recuperable. No ejecutar snapshot, stack,
+SQLite/WAL/SHM, locks ni `whale-copy` en este relevo. Falta recuperar un
+builder ARM64, comprobar digest/Compose, repetir preflight con restart=0,
+crear snapshot frío y demostrar salud >=600 s. Jetson queda pendiente de IP,
+SSH y preflight propio; no copiar ni arrancar allí todavía.
+
+## P-L90R10-JETSON - host preparado, build listo, persistencia pendiente (14-ago-2026)
+
+Dictamen vigente: `authority_required` / `precondition_not_met`. El destino de
+esta fase es el Jetson Orin Nano por Wi-Fi `192.168.1.186`; no se usa la IP
+Ethernet `.187` porque la interfaz está sin enlace. SSH por clave funciona.
+
+El host está preparado sin mutaciones de agenteBolsa: Ubuntu 24.04.4,
+aarch64, JetPack/L4T R39.2.1, GPU Orin operativa, Docker 29.1.3, Compose
+2.40.3, buildx 0.30.1, unos 7.3 GiB RAM, sin swap y unos 424 GiB libres en
+NVMe ext4/rw. `docker ps` está vacío; no hay contenedores, volúmenes,
+imágenes agenteBolsa ni otro proyecto Docker que inventariar o detener.
+
+Fuente de build exacta: worktree
+`C:\Antonio\Bref\agenteBolsa_worktrees\pl90r10_arm64_oom_guard`, commit
+`d4dcb075db8f8a5285a1f2e35cfe23fb64c55df9`, tree
+`5d311ccceb62a7a95c950f6d3237d527a36e6a1d`, v0.4.242. Imagen nativa
+`agente-bolsa:0.4.242-arm64`, digest
+`sha256:42a7b88d7f4f31c9c434795b8b6eea09ceeed1d27458622db96a71a384303a42`,
+config digest `sha256:9efde97ca3aa27aedbfbc7795b239f62e3c08ecce443786da6f3b95768568d51`.
+El bundle de build sin secretos ni datos tiene SHA-256
+`46a0ddfdf3958a3ab3fbd1a6f2b5d63066cdfb62708f045cfbd608be3e4b740`.
+Compose candidato valida con `config --quiet`; todavía no se ha hecho `up`.
+
+Bloqueo exacto: las rutas persistentes recomendadas (`/opt/agente-bolsa`,
+`/etc/agente-bolsa`, `/var/lib/agente-bolsa`, `/var/backups/agente-bolsa`)
+requieren `sudo` y la sesión Codex no dispone de elevación no interactiva.
+No improvisar ownership, no copiar secretos por SCP y no iniciar el stack con
+el env de ejemplo. El operador debe ejecutar en el Jetson, desde su terminal:
+
+```bash
+sudo sh -c 'install -d -o root -g root -m 0755 /opt/agente-bolsa /etc/agente-bolsa /var/backups/agente-bolsa; install -d -o antonio -g antonio -m 0750 /opt/agente-bolsa/releases /var/lib/agente-bolsa'
+```
+
+Después debe confirmar que las rutas existen y provisionar manualmente
+`/etc/agente-bolsa/application.env` mediante el mecanismo seguro aprobado,
+con permisos `600`, sin pegar credenciales en el chat. No detener Windows ni
+Raspberry, no crear snapshot ni copiar SQLite hasta que ese env esté listo y
+se confirme la ventana segura; Windows/Raspberry permanecen como rollback.
+
+La orden fue ejecutada correctamente. La sesión remota confirmó ownership y
+permisos de las cinco rutas y `application.env` sigue ausente. Se dejaron solo
+los cuatro archivos Compose no secretos en
+`/opt/agente-bolsa/releases/0.4.242/deploy/`; el stack sigue sin contenedores.
+Siguiente acción única del operador: provisionar el env efectivo aprobado en
+`/etc/agente-bolsa/application.env` con permisos `600` por el canal seguro
+existente. No pegar credenciales en el chat. Hasta confirmarlo, no detener
+Windows/Raspberry, no crear snapshot y no ejecutar `docker compose up`.
+
+La auditoría posterior clasificó el `application.env.example` como plantilla
+no productiva: contiene placeholders de `OPENCODE_API_KEY` e
+`IMPROVEMENT_LLM_API_KEY`, fija `AUTO_PAPER_TRADING=false` y
+`REQUIRE_HUMAN_APPROVAL=true`, y no incluye todas las claves efectivas de
+Windows. La comparación redacted de Windows confirmó `TRADING_MODE=paper`,
+`BROKER=alpaca`, `ALPACA_PAPER=true`, `AUTO_PAPER_TRADING=true`,
+`REQUIRE_HUMAN_APPROVAL=false`, `ALLOW_LIVE_TRADING=false` y
+`ALLOW_AUTO_APPLY_IMPROVEMENTS=false`, además de sus parámetros efectivos de
+LLM y mejora continua, sin imprimir valores secretos.
+
+La identidad final remota queda reconciliada: imagen
+`agente-bolsa@sha256:42a7b88d7f4f31c9c434795b8b6eea09ceeed1d27458622db96a71a384303a42`,
+`linux/arm64`, revision `d4dcb075db8f8a5285a1f2e35cfe23fb64c55df9`.
+Compose redacted: proyecto/red `agente-bolsa`/`agente-bolsa-net`, servicios
+`init-db`, `scheduler`, `auxiliary`, `web`, datos
+`/var/lib/agente-bolsa:/data` y panel `0.0.0.0:8081 -> 8501`; ningún contenedor
+está iniciado.
+
+Bloqueo vigente: falta transferir el `.env` efectivo por un mecanismo seguro y
+aprobado. No sintetizarlo desde el example ni copiarlo automáticamente. El
+único paso pendiente del operador es autorizar/ejecutar esa transferencia sin
+mostrar secretos; después se validará de nuevo en redacted y se continuará con
+snapshot frío y corte controlado.
+Bloqueo operativo actualizado: `sudo -n true` devuelve `no` y
+`/etc/agente-bolsa/application.env` sigue ausente. No se transfirió el secreto
+ni se dejó staging temporal. Ejecutar desde PowerShell el bloque siguiente;
+la sesión SSH pedirá la contraseña de sudo directamente al operador, nunca a
+Codex ni al chat:
+
+```powershell
+$JetsonKey="$env:USERPROFILE\.ssh\codex_jetson_ed25519"
+$Stage="/tmp/agente-bolsa.application.env.$PID"
+$Target="antonio@192.168.1.186"
+$Copied=$false
+try {
+    scp -i $JetsonKey -o IdentitiesOnly=yes "C:\Antonio\Bref\agenteBolsa\.env" "${Target}:$Stage"
+    if ($LASTEXITCODE -ne 0) { throw "scp falló; no continuar" }
+    $Copied=$true
+    $Remote="sudo install -o root -g root -m 600 $Stage /etc/agente-bolsa/application.env; rc=`$?; rm -f $Stage; exit `$rc"
+    ssh -tt -i $JetsonKey -o IdentitiesOnly=yes $Target $Remote
+    if ($LASTEXITCODE -ne 0) { throw "instalación remota falló" }
+} finally {
+    if ($Copied) { ssh -i $JetsonKey -o IdentitiesOnly=yes $Target "rm -f $Stage" 2>$null | Out-Null }
+}
+```
+
+Después de ese único paso, no arrancar manualmente nada: devolver el control a
+Codex para validar hash redacted, flags PAPER y Compose antes del snapshot.
+Snapshot/corte 2026-08-14: Windows se detuvo con `stack_down.ps1
+-IncludeScheduled`; scheduler/web quedaron parados y no se borró el lock
+huérfano. Receipt local:
+`C:\Antonio\Bref\agenteBolsa_backups\jetson-cutover-20260814-1457\receipt.json`.
+SQLite/WAL/SHM pasaron `quick_check` e `integrity_check`; hashes SQLite/WAL/SHM
+`b3345059...2857` / `8dc6275d...41ae9` / `94eef1e3...be0e`. La misma terna y
+receipt fueron copiadas al volumen Jetson y revalidadas remotamente con los
+mismos hashes e integridad correcta.
+
+No iniciar manualmente el stack todavía: el env es `root:root 600` y el
+Compose necesita `sudo` interactivo. Ejecutar en el Jetson este único comando;
+pedirá la contraseña solo en la terminal local y no imprime secretos:
+
+```bash
+cd /opt/agente-bolsa/releases/0.4.242 && sudo sh -c 'docker compose --env-file /etc/agente-bolsa/application.env -f deploy/docker-compose.yml -f deploy/docker-compose.raspberry.override.yml config --quiet && docker compose --env-file /etc/agente-bolsa/application.env -f deploy/docker-compose.yml -f deploy/docker-compose.raspberry.override.yml up -d'
+```
+
+Después devolver el control a Codex sin ejecutar `run-once`, `job-once`,
+`decide-once`, `down` global ni tocar whale-copy. Windows permanece detenido
+para impedir dos schedulers.
+
+El intento falló antes de `up`: se usó incorrectamente el env de servicio como
+`--env-file` de Compose y se resolvió la ruta por defecto inexistente
+`deploy/deploy/application.env.example`. `docker ps` sigue vacío y el env
+continúa `root:root 600`. Reintentar solo con `deploy/deploy.env.example` como
+archivo de interpolación; este referencia el env real protegido.
+Diagnóstico del fallo `init-db`: el contenedor recibió `DATA_DIR=data` y el
+entrypoint intentó crear `data` bajo un root filesystem `read_only`; el bind
+`/data` no era el problema. Corrección mínima ya transferida y con hash
+coincidente: `DATA_DIR: /data` explícito en los cuatro servicios del override,
+commit `1d09ce13` / tree `414e4999`, override SHA-256
+`08ee9b4957c7307bbdc9316a919c211809a730bfc7c299db5fa7ba70bc588a93`. La
+imagen `sha256:42a7b88d...` y la SQLite no cambiaron.
+
+El primer intento dejó `init-db` en exit 1 y los demás contenedores en Created;
+no hay servicios activos. Ejecutar en Jetson, con sudo interactivo, el mismo
+Compose usando el override corregido:
+
+```bash
+cd /opt/agente-bolsa/releases/0.4.242 && sudo sh -c 'docker compose --env-file deploy/deploy.env.example -f deploy/docker-compose.yml -f deploy/docker-compose.raspberry.override.yml config --quiet && docker compose --env-file deploy/deploy.env.example -f deploy/docker-compose.yml -f deploy/docker-compose.raspberry.override.yml up -d'
+```
+
+No ejecutar `down` global ni borrar volúmenes; después devolver el control para
+inspección de `init-db`, scheduler, web y auxiliary.
+Hallazgo posterior al primer arranque: la ruta de datos efectiva es
+`/var/lib/agente-bolsa/state/agente_bolsa.sqlite3`, no la raíz del bind. El
+primer `init-db` creó una SQLite nueva de 581632 bytes; no era la histórica.
+Los cuatro contenedores se detuvieron selectivamente. La copia generada y sus
+sidecars se conservaron en
+`/var/lib/agente-bolsa/misconfigured-initdb-20260814-1531/`; no se borró nada.
+La snapshot original se restauró en `state/` y mantiene los hashes del
+receipt, con `quick_check` e `integrity_check` correctos.
+
+Ejecutar de nuevo el comando Compose corregido del lote. El gate posterior
+obligatorio es confirmar que `state/agente_bolsa.sqlite3` mide 1803337728 bytes
+y conserva el hash `b3345059...02857`, antes de declarar desplegado.
+
+### Relevo final Jetson 2026-08-14
+
+Dictamen actual: `partially_verified_kernel_unsealed`. El Compose corregido ya
+está arriba en `192.168.1.186`; no declarar `deployed` todavía.
+
+Hechos verificados:
+
+- `agente-bolsa:0.4.242-arm64`, digest
+  `sha256:42a7b88d7f4f31c9c434795b8b6eea09ceeed1d27458622db96a71a384303a42`,
+  commit de imagen `d4dcb075`, tree funcional `5d311cc`;
+- override Compose operativo en commit `1d09ce13`, tree `414e4999`, con
+  `DATA_DIR=/data` explícito en los cuatro servicios;
+- env root-only instalado y verificado redacted, SHA-256
+  `8e9bef2d8130071d9f9cb4796365ad32d97a3176be540867c2c5531679ed0171`, con
+  PAPER activo y live/auto-apply desactivados;
+- `init-db` terminó `0`; scheduler, auxiliary y web `healthy`,
+  `RestartCount=0`, `OOMKilled=false`; scheduler único y sonda ligera verde;
+- raíz, `/health`, `/_stcore/health` y `/kindle` devuelven `200` local y por
+  LAN `192.168.1.186:8081`; listener único en `0.0.0.0:8081`;
+- snapshot fría y sidecars validados, SQLite efectiva íntegra, sin backfill,
+  VACUUM, checkpoint ni reparación; Windows sigue detenido como rollback;
+- Raspberry y `whale-copy` permanecen intactos.
+
+Bloqueo restante: `docker exec agente-bolsa-scheduler-1 python -m
+agente_bolsa.main kernel-status --json` devuelve `unsealed`, sin violaciones,
+porque falta `state/kernel_manifest.json` en Jetson. Los hashes efectivos de
+`kernel.py`, `broker.py` y `execution.py` coinciden con Windows, cuyo estado es
+`ok`; el manifiesto Windows validado tiene SHA-256
+`0542cc1028a216bca711dfb6921878888fb9bcfd04d5e26e3672a86eb87e8ce3`.
+No ejecutar `kernel-seal` ni copiarlo sin decisión/autoridad explícita. La
+instancia PAPER está viva y sana operacionalmente, pero el cierre formal queda
+pendiente de resolver este gate.
+
+### Bloqueo confirmado del manifiesto
+
+El procedimiento canónico (`kernel-seal`) calcula también el hash de `.env`.
+En Jetson la configuración efectiva está en `/etc/agente-bolsa/application.env`
+con `root:root 600`, mientras que los contenedores no root solo reciben sus
+variables mediante `env_file`; `/app/.env` no existe. Montar el fichero como
+`/app/.env:ro` no es solución con estos permisos porque el proceso no podría
+leerlo. No cambiar permisos, usuario del contenedor, código protegido ni
+copiar secretos.
+
+Se preparó y revirtió un ensayo local de Compose; no se transfirió ni se
+reinició Jetson. El candidato vuelve a tree `414e4999` con HEAD de revert
+`714e5942`. El runtime remoto sigue siendo el previamente validado, con
+`kernel-status=unsealed` y sin violaciones. Dictamen de cierre:
+`authority_required / precondition_not_met`. Resolver exige una decisión humana
+sobre una integración protegida para que el kernel verifique el env efectivo, o
+aceptar formalmente `unsealed`; hasta entonces no liberar `whale-copy`.
+
+### Relevo P-L90R10B antes del corte Jetson
+
+La candidata `0.4.243` está implementada y construida en ARM64. Código de
+imagen: commit `bf3306bf`, tree `42fa1270`; imagen/index digest
+`sha256:8d36f420b668f6b1be6826d81296b846cf03d2b46e098ad7ada6a78cfcf21fbe`.
+El Compose usa el secret efímero Docker derivado de
+`/etc/agente-bolsa/application.env` y expone al proceso no root la ruta
+`/run/secrets/application.env` mediante `AGENTE_BOLSA_KERNEL_ENV_PATH`.
+No se cambia el modo `root:root 600` ni se persiste una copia del secreto.
+
+Focales `70 passed`, Ruff/NUL/diff verdes. La suite completa se intentó una
+única vez y terminó por timeout a los 604 s sin resultado; el proceso hijo fue
+detenido selectivamente. No repetirla por inercia. El runtime Jetson sigue en
+`0.4.242`, sano y sin reinicio; Windows continúa detenido como rollback.
+
+Staging remoto pendiente de aplicar:
+
+- `/tmp/agente-bolsa-v0.4.243-override.yml`, SHA-256
+  `feded9b7fad919873752811685464bf5ab1f2083466d70e546a6570275c9004f`;
+- `/tmp/agente-bolsa-v0.4.243-deploy.env`, SHA-256
+  `3b4ae56c82da9ae6229c31fb968122326f31a2a6f1075cd1742a8b3732450ef3`.
+
+El operador debe ejecutar con `sudo` interactivo el bloque de instalación,
+`config`, recreación exclusiva del Compose agenteBolsa y después devolver la
+salida. Hasta validar secret accesible, `kernel-seal`, `kernel-status=ok` y dos
+healthchecks nuevos, el dictamen no es `deployed` y no se libera whale-copy.
+
+Comando único pendiente, con contraseña solo cuando `sudo` la solicite:
+
+```powershell
+$JetsonKey="$env:USERPROFILE\.ssh\codex_jetson_ed25519"
+ssh -t -i $JetsonKey -o IdentitiesOnly=yes antonio@192.168.1.186 `
+  "mkdir -p /opt/agente-bolsa/releases/0.4.243; cp -a /tmp/agente-bolsa-v0.4.243-bf3306bf/source/. /opt/agente-bolsa/releases/0.4.243/; cp /tmp/agente-bolsa-v0.4.243-override.yml /opt/agente-bolsa/releases/0.4.243/deploy/docker-compose.raspberry.override.yml; cp /tmp/agente-bolsa-v0.4.243-deploy.env /opt/agente-bolsa/releases/0.4.243/deploy/deploy.env.example; sudo sh -c 'cd /opt/agente-bolsa/releases/0.4.243 && docker compose --env-file deploy/deploy.env.example -f deploy/docker-compose.yml -f deploy/docker-compose.raspberry.override.yml config --quiet && docker compose --env-file deploy/deploy.env.example -f deploy/docker-compose.yml -f deploy/docker-compose.raspberry.override.yml up -d --force-recreate'"
+```
+
+El comando no usa `docker compose down` global, no toca `whale-copy` y solo
+recrea el namespace `agente-bolsa`.
+
+### Relevo actual P-L90R10B/C — 2026-08-14 21:26 Europe/Madrid
+
+Dictamen: `precondition_not_met / rollback_required`. El runtime Jetson
+`0.4.243` no es aceptable: web y auxiliary están healthy e init-db=0, pero el
+scheduler reinicia con `exit=0`, `RestartCount=15`, `OOMKilled=false`. La
+causa demostrada es `state/scheduler.lock` legado (`pid=7`, token nulo,
+creado 18:13:54Z) cuyo PID fue reutilizado tras el contenedor iniciado
+19:12:58Z. No apartar ese lock hasta XNYS cerrado y sin escritor activo; hacerlo
+solo con esta evidencia de stale/PID reuse, nunca a ciegas.
+
+La prueba de permisos también es concluyente: el secret bind desde
+`/etc/agente-bolsa/application.env` (`root:root 600`) no es legible por
+`uid=1000(app)`. La candidata `0.4.244` añade el carrier no secreto
+`AGENTE_BOLSA_KERNEL_ENV_SHA256` y conserva `kernel-seal` estricto sobre el
+fichero real. No cambiar permisos, no usar root como servicio y no persistir
+copias del secreto.
+
+Artefacto listo pero aún no desplegado:
+
+- commit `84b85501b67b750a28e1cbb75775322852a99bc7`, tree
+  `f66f4cc10a1e3e4d2645e58e753f7a53a2881523`, v0.4.244;
+- imagen ARM64 manifest/index
+  `sha256:22afb9c8846e3b9dbb1417fef51ffa33da20d4b0dd4c02ace1acc7844edcc021`,
+  config `sha256:06c37a2059f4f7c7eba31f708899e8f40c29e5f228b4072d4f0524bab627c`;
+- bundle SHA-256
+  `aaf8ab067af082b08d7f723cde5472074fafefb5c564a4dd9a6e40ce54ec19f1`;
+- focales/regresiones `72 passed`, Ruff/NUL/diff verdes;
+- release staging `/opt/agente-bolsa/releases/0.4.244`, sin recreación aún.
+
+XNYS sigue abierto hasta las 22:00. No se hizo snapshot fría nueva ni corte;
+la snapshot anterior se conserva, pero no se presenta como fotografía final.
+Windows está detenido como fallback; Raspberry, `whale-copy` y ngrok no se han
+modificado. No liberar `whale-copy`.
+
+Siguiente secuencia única tras cierre: comprobar postmarket/leases/jobs
+terminales y recursos; detener canónicamente solo escritores agenteBolsa;
+crear snapshot fría SQLite/WAL/SHM con receipt e integridad; apartar el lock
+stale demostrado; validar `compose config` como root sin revelar el env;
+recrear solo el proyecto agenteBolsa con 0.4.244; ejecutar `kernel-seal` una
+vez como root dentro del scheduler; comprobar `kernel-status=ok`, PAPER,
+listener/scheduler únicos, lock/heartbeat, HTTP local/LAN y dos healthchecks
+separados >=75 s. Ante cualquier fallo: detener solo agenteBolsa Jetson y
+conservar Windows para rollback auditable.
+
+### Cierre P-L90R10C - Jetson 2026-08-14 21:48 Europe/Madrid
+
+Dictamen final: `deployed`. AgenteBolsa queda como unica instancia activa en
+Jetson `192.168.1.186`, v0.4.244 ARM64, commit
+`84b85501b67b750a28e1cbb75775322852a99bc7`, tree
+`f66f4cc10a1e3e4d2645e58e753f7a53a2881523`, manifest/index
+`sha256:22afb9c8846e3b9dbb1417fef51ffa33da20d4b0dd4c02ace1acc7844edcc021`.
+Windows permanece detenido como fallback; Raspberry, whale-copy y ngrok no se
+han modificado.
+
+Kernel sellado y verificado: `kernel-status --json=ok`, sin violaciones,
+carrier `/run/secrets/application.env`, env externo `root:root 600`, hash
+redacted conservado. Dos lecturas separadas (19:44:40Z y 19:48:35Z) dejaron
+web, auxiliary y scheduler healthy, `RestartCount=0`, `OOMKilled=false`,
+`init-db=0`, sonda de scheduler retorno 0 y flags PAPER/live/auto-apply
+correctos. `/`, `/health`, `/_stcore/health` y `/kindle` respondieron 200 por
+LAN en `192.168.1.186:8081`; `/health` es el shell HTML y `/_stcore/health` la
+sonda real de Streamlit.
+
+Snapshot frio validado: receipt v2 en
+`/home/antonio/agente-bolsa-backups/p-l90r10c-20260814T2126Z/receipt.json`,
+quick/integrity correctos, journal WAL y SHA-256
+`b47857b7048d87b7b1448c651dd83b9c0867e5168fa6d9a0e9e012552aaf18fb`.
+No hubo `database locked`, OOM/exit137 ni ordenes inesperadas observadas; no
+se ejecutaron trabajos manuales. La suite completa previa agoto 604 s y no se
+repitio; la limitacion queda registrada en el informe.
+
+Handoff: el lote de whale-copy puede liberarse ahora como tarea independiente,
+pero debe hacer su propio inventario, Compose/namespace/puertos, preflight,
+healthchecks y rollback. No reutilizar este informe como prueba de salud de
+whale-copy ni ejecutar un `docker compose down` global.
+
+### Relevo P-L90R10D - preflight Jetson 2026-08-14 22:59 Europe/Madrid
+
+XNYS cerrado. Candidata 0.4.245: commit `1e400e9a`, tree `474eb223`, imagen
+ARM64 `sha256:7a2266d86b5726bbb5cec4b9c1c139eafa553cf87d8bdcd4da851eeafd1763c2`.
+Fix Linux de lock/PID reutilizado probado dentro de la imagen; `18 passed`,
+Ruff/NUL/diff verdes. Snapshot fria v2 integra en
+`/home/antonio/agente-bolsa-backups/p-l90r10d-20260814T203544Z/receipt.json`,
+hash `98d1ae5c1397d4870966f6c438fbfeedfe598e916ecc8fbcc0955913ddfdadf6`.
+
+Jetson sano en almacenamiento, Docker, Compose, memoria disponible e I/O;
+los contenedores antiguos estan detenidos y Windows continua como rollback.
+El corte esta bloqueado unicamente porque Compose no puede leer el env
+`root:root 600` sin sudo interactivo (`sudo -n` no disponible). No modificar
+permisos, locks, SQLite ni otros proyectos. Siguiente paso: ejecutar el bloque
+sudo exacto, y despues comprobar kernel, PAPER, scheduler estable y dos
+healthchecks separados >=75 s.
+
+### Cierre P-L90R10D - Fase 2 Jetson 2026-08-14 23:12 Europe/Madrid
+
+Dictamen: `deployed`. v0.4.245 ARM64 esta estable en Jetson como unica
+instancia agenteBolsa. Commit `1e400e9a`, tree `474eb223`, imagen
+`sha256:7a2266d86b5726bbb5cec4b9c1c139eafa553cf87d8bdcd4da851eeafd1763c2`.
+Arranque `21:01:38Z`; cierre de observacion `21:12:11Z`.
+
+Scheduler, auxiliary y web healthy, restart 0, sin OOM, init-db 0, probe de
+scheduler 0 y lock PID/token coherente. Kernel `ok`, carrier externo correcto,
+env root:600 y flags PAPER verificados. Dos lecturas separadas mas de 75 s y
+observacion de mas de 10 minutos sin database locked ni errores OOM/137.
+Raiz, `/health`, `/_stcore/health` y `/kindle` devolvieron 200 localmente y
+por LAN en `192.168.1.186:8081`.
+
+Snapshot rollback v2: receipt
+`/home/antonio/agente-bolsa-backups/p-l90r10d-20260814T203544Z/receipt.json`,
+hash `98d1ae5c1397d4870966f6c438fbfeedfe598e916ecc8fbcc0955913ddfdadf6`,
+quick/integrity OK. No se tocaron Windows, Raspberry, whale-copy ni ngrok.
+
+Handoff: ventana Docker liberada para el lote independiente de whale-copy. Ese
+lote debe hacer su propio preflight y no usar `docker compose down` global.
+
+### Relevo P-L90R10E - corte Windows pendiente de elevacion 2026-08-15 02:08 Europe/Madrid
+
+Dictamen actual: `precondition_not_met`. XNYS esta cerrado y el Jetson
+`192.168.1.186` permanece sano con agenteBolsa v0.4.245 y whale-copy healthy,
+pero la sesion Windows actual no esta elevada. No se ha ejecutado la parada
+canonica ni se han deshabilitado tareas. El checkout sigue en HEAD
+`3ebff4e298d67472a9c26380dc407f9f5210639b`, tree
+`d4071dcb23b6560711eadec069e7a5796adc8f11`, conservando cambios documentales y
+`.playwright-cli/` preexistentes.
+
+Read-only Windows: Scheduler/Web estan parados, sin listeners del proyecto ni
+procesos persistentes agenteBolsa/whale-copy. El scheduler lock PID `13140` es
+un huerfano de propietario muerto y no se ha limpiado. `AgenteBolsaScheduler`,
+`AgenteBolsaWeb` y `AgenteBolsaDBMaintenance` figuran `Ready` y habilitadas;
+DBMaintenance ejecuta `-Mode apply` y tiene proxima ejecucion el 2026-08-16 a
+las 03:00, por lo que bloquea la ventana de rollback hasta deshabilitarse. La
+lectura SQLite no muestra jobs/runtime activos; el laboratorio esta `IDLE` y el
+ultimo lease postmarket observado esta liberado. No existe escritor Windows de
+whale-copy.
+
+Receipt local validada:
+`C:\Antonio\Bref\agenteBolsa_backups\jetson-cutover-20260814-1457\receipt.json`,
+`status=ok`, quick/integrity OK, hash
+`b33450595512f9d697d3bd4a1767a9586abdec142b22274cb76673e7f7002857`.
+Receipt remota de rollback: `/home/antonio/agente-bolsa-backups/p-l90r10d-20260814T203544Z/receipt.json`,
+hash `98d1ae5c1397d4870966f6c438fbfeedfe598e916ecc8fbcc0955913ddfdadf6`.
+
+Siguiente paso unico: el operador debe abrir PowerShell como administrador y
+ejecutar el bloque documentado en el informe P-L90R10E: `stack_status.ps1`,
+`stack_down.ps1 -IncludeScheduled` y `Disable-ScheduledTask` para Scheduler,
+Web y DBMaintenance. Despues, la tarea principal verificara exclusividad
+Windows y dejara el host conservado siete dias como rollback. No tocar Jetson,
+Raspberry, whale-copy, ngrok, SQLite ni locks mientras la elevacion no este
+resuelta.
+
+### Cierre P-L90R10E - Windows detenido 2026-08-15 08:33 Europe/Madrid
+
+Dictamen: `deployed_windows_stopped`. Tras la elevacion correcta, las tareas
+`AgenteBolsaScheduler`, `AgenteBolsaWeb` y `AgenteBolsaDBMaintenance` quedaron
+`Disabled`/`Enabled=False`. `stack_status.ps1` confirma Scheduler/Web parados;
+no hay procesos Python persistentes ni listeners Windows del proyecto. El
+laboratorio esta `IDLE` y el ultimo lease observado esta liberado. El lock
+huerfano PID `13140` permanece intacto y documentado, sin limpieza manual.
+
+Jetson `192.168.1.186` no se toco: systemd activo, cuatro contenedores healthy,
+restart 0, OOM false y `/`, `/health`, `/_stcore/health`, `/kindle` con HTTP 200
+local/LAN. Windows queda preservado siete dias como rollback. No se modificaron
+Raspberry, whale-copy, ngrok, SQLite, configuracion ni credenciales; no hubo
+push. Las receipts local/remota y sus hashes estan en el informe P-L90R10E.
+
+Siguiente control: durante siete dias observar exclusivamente Jetson y mantener
+Windows sin autoarranque. Para rollback, habilitar las tareas y usar los
+helpers canonicos solo con un lote operativo autorizado y preflight completo.
+
+### Relevo P-L90R10F - ngrok pendiente de instalación 2026-08-15 09:02 Europe/Madrid
+
+#### Cierre P-L90R10F - ngrok desplegado 2026-08-15 09:16 Europe/Madrid
+
+Dictamen final: `deployed_ngrok`. Un unico agente ngrok esta `enabled/active`
+con dos endpoints HTTPS y un solo proceso:
+
+- agenteBolsa: `https://fbd3-2a0c-5a84-780b-aa00-9951-66f7-f23f-b066.ngrok-free.app`
+  -> `127.0.0.1:8081`
+- whale-copy: `https://43dc-2a0c-5a84-780b-aa00-9951-66f7-f23f-b066.ngrok-free.app`
+  -> `127.0.0.1:8082`
+
+Desde Windows, ambas URLs respondieron 200 en sus sondas externas. AgenteBolsa
+respondio 200 en `/`, `/health`, `/_stcore/health` y `/kindle`; whale-copy en
+`/`, `/ready` y `/health`. El interstitial HTML del plan Free se salto solo con
+el header documentado de prueba; no se inventaron credenciales.
+
+Configuracion/token: `/etc/ngrok/ngrok-auth.yml` y
+`/etc/ngrok/ngrok-endpoints.yml`, `root:root 600`; copia de usuario y staging
+temporales eliminados. El listener de inspeccion queda en `127.0.0.1:4040`;
+no se abrio firewall ni puertos entrantes. Los cuatro contenedores permanecen
+healthy, restart 0, OOM false y PAPER/live/auto-apply invariantes.
+
+El wrapper `jetson-ops` es valido y su rama `logs` esta completa. Su alias
+historico consulta `ngrok.service`, que sigue `not-found`; la unidad real
+aislada y habilitada es `ngrok-agente-bolsa-whale.service`. Rollback:
+`sudo systemctl disable --now ngrok-agente-bolsa-whale.service`; reactivacion:
+`sudo systemctl enable --now ngrok-agente-bolsa-whale.service`.
+
+Dictamen historico del preflight inicial: `needs_authority`. AgenteBolsa y whale-copy estan sanos en Jetson
+`192.168.1.186`; destinos confirmados: `127.0.0.1:8081` y
+`127.0.0.1:8082`. HTTP local de ambos devuelve 200 y los cuatro contenedores
+permanecen healthy, restart 0, OOM false. Ngrok no esta instalado ni activo,
+por lo que no se ha modificado ningun servicio ni se ha expuesto ningun puerto.
+
+La documentación oficial actual permite hasta tres endpoints online en Free,
+un dominio dev y recomienda un solo agente con varios endpoints mediante
+`endpoints` y `ngrok start --all`; el plan Free añade un interstitial al tráfico
+HTML. Dos túneles HTTP caben en ese límite, sujeto a la cuenta real una vez
+autenticada.
+
+Ejecutar en una terminal del Jetson como `antonio` con sudo interactivo; no
+introducir el token en chat:
+
+```bash
+set -eu
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir"' EXIT
+curl -fL --proto '=https' --tlsv1.2 \
+  -o "$tmpdir/ngrok.tgz" \
+  https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-arm64.tgz
+tar -xzf "$tmpdir/ngrok.tgz" -C "$tmpdir"
+sudo install -o root -g root -m 0755 "$tmpdir/ngrok" /usr/local/bin/ngrok
+ngrok version
+```
+
+Despues de la instalación, se provisionara el authtoken por el canal seguro
+aprobado y se creara la configuración root:root 600 y una unica unidad ngrok;
+no se iniciara nada antes de verificar la configuración redacted.
+
+### Relevo P-L95 — auditoría de observación 2026-08-26/27
+
+Dictamen: `needs_observational_fix`. La corrección aislada del funnel está en
+`C:\Antonio\Bref\agenteBolsa_worktrees\pl95_funnel_attachment_fix_final`,
+candidato `0.4.255`, worktree final limpio, HEAD
+`fe4fae3a7e3ba6c1920d0fdcc0b472905558ebfa`, tree
+`d68cbce83f680b046f9ba5ee393239eda41f94a3`, sin diff en objetos protegidos.
+El árbol funcional validado es `2f84b805...`. Suite completa única:
+`2570 passed, 1 skipped, 1 warning`; el último commit fue solo documental y
+no requiere repetir suite.
+
+Producción Jetson no cambió: `0.4.254-arm64`, scheduler/web/aux healthy,
+`RestartCount=0`, `OOMKilled=false`, PAPER activo, live/auto-apply false,
+kernel válido. El último fallo productivo del funnel sigue siendo
+`KeyError('recommendation_attachment_unavailable')`. EOD y SPY permanecen
+`unavailable` por carriers/timestamps incompletos; el scheduler mantiene
+misfires de `1`–`13` segundos; `whale-copy-jetson` está `unhealthy` y queda
+fuera de este lote. El perfil read-only detecta además `1713/2291` outcomes
+recientes (`74.8%`) vacíos y `63` órdenes `filled` antiguas sin fila enlazable
+en `order_plans`; el linaje no es suficiente para sizing.
+
+Siguiente acción, solo en ventana cerrada y con autorización operativa: validar
+preflight, integrar P-L95 con `merge --no-ff`, desplegar, comprobar desaparición
+del error y realizar dos healthchecks separados. Después tratar EOD, SPY y
+misfires en lotes independientes. Sizing sigue bloqueado; no hacer backfill,
+reconciliación manual ni cambios de política.
