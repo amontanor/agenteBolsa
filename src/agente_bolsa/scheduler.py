@@ -4127,9 +4127,9 @@ def broker_reconciliation_job(
         except Exception:
             pass
         try:
-            from .tools.spy_eod_authority import capture_spy_eod_receipt
+            from .tools.spy_eod_authority import refresh_and_capture_spy_eod
 
-            spy_receipt = capture_spy_eod_receipt(settings, session_date)
+            spy_receipt = refresh_and_capture_spy_eod(settings, session_date)
             result["spy_eod_receipt"] = {
                 "persisted": bool(spy_receipt.get("persisted")),
                 "comparison_status": (spy_receipt.get("receipt") or {}).get("comparison_status"),
