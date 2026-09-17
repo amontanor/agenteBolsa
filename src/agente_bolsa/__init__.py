@@ -51,4 +51,3 @@ __all__ = ["__version__"]
 # P-L121: par de cierres SPY con autoridad EOD por sesion XNYS (0.4.228).
 # P-L122: cierre determinista del bucle de promocion (0.4.229).
 __version__ = "0.4.229"
-
