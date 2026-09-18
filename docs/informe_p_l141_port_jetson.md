@@ -103,7 +103,19 @@ Verificado byte a byte contra la linea Windows donde aplica:
 3. Oleada 2 diurna: scoreboard/signal_learning/web_app/storage con
    tests adaptados. Sin push salvo peticion.
 
-## Anexo: poda de imagenes 18-sep (autorizada por el operador)
+## Adenda: verificacion LLM post-despliegue (18-sep ~08:00Z)
+- Cero `MissingSessionID` en 2 h de logs (era continuo antes).
+- Probe `chat_for_role("decision")` en el scheduler 0.4.305: el
+  primer intento con `max_tokens=50` fallo por contrato (contenido
+  truncado por probe rana, no por el sistema).
+- Probe directo al endpoint del rol (`opencode-zen` rotulado sobre
+  `zen/go/v1`, `deepseek-v4.1-flash` del operador): `finish_reason`
+  `stop`, contenido exacto `{"action": "hold"}`. Ruteo + cabeceras +
+  modelo OK end-to-end.
+- `zen free` (`deepseek-v4-flash-free`) sigue 400 `Model is
+  unavailable` (capacidad del tier gratuito, conocido); la cadena cae
+  a go, que funciona. Fallback local qwen con `Connection refused`
+  (preexistente, fuera de alcance).
 
 - Conservadas: 0.4.303 (rollback), 0.4.304 (actual), 0.4.305 (candidata).
 - Incidente propio: el primer filtro borro tambien la 0.4.305 recien
