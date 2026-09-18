@@ -4491,3 +4491,11 @@ sizing, política o producción en esta auditoría.
 - Informe: docs/informe_p_l146_spy_hero.md.
 - Siguiente: suite completa del arbol final + port Jetson si se autoriza.
 
+
+## P-L149 � veto a toxicos + cuota sin_patron (candidato 0.4.251, listo para revision)
+
+- Dictamen: ready_for_review. Rama codex/pl149-selection-guards. XNYS abierto: sin despliegue.
+- Veto score>=18/ret20>=20% (eximen excepciones); cuota 1 sin_patron|strong etiquetada.
+- QA: 8 focales + 146 regresiones (154 passed); version_policy, Ruff/NUL/diff verdes.
+- Informe: docs/informe_p_l149_selection_guards.md.
+
