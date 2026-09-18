@@ -27,7 +27,13 @@ denominadores.
 - Ruff, `check_no_nulls.py` (512 archivos), `git diff --check` verdes.
 - Omitidos: suite completa, smoke, config/kernel (integración).
 
-## Límites
+## Integración (18-sep, `9fc75525`, versión `0.4.248`)
+
+- Mergeado con P-L143. Suite por bloques: ver
+  `docs/informe_p_l143_spy_cent_tolerance.md` (mismas excepciones
+  preexistentes). Dictamen: `ready_for_closed_market_deployment`.
+
+## Límites (nota histórica: redactado pre-merge)
 
 - Base `535f94ca` sin P-L143; el merge conjunto ordena versiones
   `0.4.247` + `0.4.248` sin solape.
