@@ -65,4 +65,5 @@ __all__ = ["__version__"]
 # P-L140A: Mis inversiones strip with day P/L over invested as primary (0.4.242).
 # P-L140B: single SPY alpha, leaderboard moved to Config, baseline removed (0.4.243).
 # P-L140C: baseline pure helpers retained for P-L63R1 tooltip contract, still unrendered (0.4.244).
-__version__ = "0.4.244"
+# P-L139: misfire grace on intraday jobs so late runs execute (0.4.245).
+__version__ = "0.4.245"
