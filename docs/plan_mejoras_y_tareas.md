@@ -4444,3 +4444,19 @@ sizing, política o producción en esta auditoría.
 - QA: focales 1 + regresiones 8/47, Ruff/NUL/diff/config verdes.
 - Informe: `docs/informe_p_l139_misfire_grace.md`.
 - Siguiente: P-L142 → merge → suite → port Jetson → corte.
+
+## P-L142 — cabeceras de sesion del proveedor Go/Zen (candidato Windows 0.4.246, listo para revision)
+
+- Worktree `pl142_provider_session`, rama
+  `codex/pl142-provider-session`, base `0796d003` (P-L139). Dictamen
+  `ready_for_review`; XNYS cerrado, sin merge/despliegue/push.
+- Causa: 400 `MissingSessionID` porque no se enviaba sesion ni UA
+  propio (contrato verificado en docs del proveedor). Fix: sesion
+  UUID5 estable por dia+ambito y `User-Agent: agente-bolsa/<ver>` en
+  router (decision) y `llm_client` (mejora), SDK y urllib.
+- Sin cambiar proveedor/modelo/reintentos/prompts/trading/riesgo.
+- Bump `0.4.245` → `0.4.246`; pin `test_p59c` + 4 fakes adaptados.
+- QA: focales 6, regresiones 68+82, Ruff/NUL/diff/config verdes.
+- Informe: `docs/informe_p_l142_sesion_proveedor.md`.
+- Siguiente: merge P-L139+P-L142 → suite → port Jetson → corte con
+  verificacion del 400 en logs.

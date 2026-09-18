@@ -2554,3 +2554,17 @@ reconciliación manual ni cambios de política.
 - QA: focales 1, regresiones 8/47, Ruff/NUL/diff/config verdes.
 - Informe: `docs/informe_p_l139_misfire_grace.md`.
 - Siguiente: P-L142 (sesion LLM) → merge → suite → port → corte.
+
+### P-L142 — sesion del proveedor (candidato 0.4.246, 18-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS cerrado; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl142_provider_session`, rama
+  `codex/pl142-provider-session`, base `0796d003`, version `0.4.246`.
+  Commits: `b82ad1ae` (tests), `6edb351f` (feat + bump + pin + fakes).
+- Transporte LLM: sesion estable + UA propio en router y CI, SDK y
+  urllib. Contrato de docs oficiales.
+- QA: focales 6, regresiones 68+82, Ruff/NUL/diff/config verdes.
+- Informe: `docs/informe_p_l142_sesion_proveedor.md`.
+- Siguiente: merge P-L139+P-L142 → suite → port Jetson → corte con
+  verificacion del 400 en logs.
