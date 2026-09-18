@@ -128,3 +128,28 @@ Verificado byte a byte contra la linea Windows donde aplica:
 - Snapshots 17G: el operador pidio explicacion antes de decidir;
   propuesta standing: conservar 3 recientes + pre-corte, borrar 6 de
   agosto (~11G).
+
+## Adenda: vigilancia 18-sep ~09:40Z (sin mutaciones)
+
+- Dictamen `deployed` intacto. XNYS cerrado, apertura 15:30 CEST.
+  Lock `owner_alive`, `pid_alive`, `token_match`. Ciclos omitidos
+  por mercado cerrado (correcto). Postmarket `skipped`
+  `market_not_ready` (normal pre-sesion).
+- `auxiliary unhealthy` = latch por diseno: `ci_digest` fallo a las
+  06:30Z y `healthcheck` falla todo el dia. Heartbeats frescos
+  09:33Z. Proxima pasada esta noche.
+- Causa real del fallo `ci_digest` NO son cabeceras. Traceback en
+  `/var/lib/agente-bolsa/logs/ci_digest.supervisor.log`:
+  `sqlite3.OperationalError: database or disk is full` en
+  `build_lab_digest` via `build_research_mode_usage` via
+  `store.continuous_improvement_cycles(limit=5000)`. Mismo error en
+  `post_market_review_failed` 04:01Z sesion 2026-09-17.
+- Disco NO lleno: 112G usados, 322G libres (26%). `/tmp` 256M libre.
+  DB 2.8G sana: `page_count` 715697, `freelist` 0, SELECT exacto
+  2337 filas en 0.06 s ahora. Causa nocturna transitoria =
+  `unavailable`; vigilar esta noche, sin reparacion a ciegas.
+- `whale-copy` 2631 timeouts = red Hyperliquid (`TimeoutError`,
+  ajeno). `restarts=24`, fuera de alcance, no tocar.
+- Limpieza propuesta (sin borrar, falta autorizacion): snapshots
+  19G, backups 3.4G, imagenes reclamables 21.92GB, build cache
+  25.47GB.
