@@ -6,7 +6,7 @@ import os
 
 from .agent_config import load_agent_config, load_task_config, validate_agent_task_config
 from .config import Settings
-from .llm_router import select_preferred_endpoint
+from .llm_router import provider_client_headers, select_preferred_endpoint
 
 
 def _enabled_crew_agents(agent_config: dict[str, dict[str, object]], task_config: dict[str, dict[str, object]]) -> list[str]:
@@ -51,6 +51,10 @@ def build_crew(settings: Settings):
     if not validation["ok"]:
         raise RuntimeError("Configuracion de agentes/tareas invalida: " + " | ".join(validation["errors"]))
 
+    # P-L147: Console Go/Zen exige x-opencode-session tambien en crews.
+    # CrewAI LLM fusiona additional_params en litellm; extra_headers viaja
+    # al cliente OpenAI. Vacio para proveedores que no lo necesitan.
+    crew_headers = provider_client_headers(endpoint.provider, scope="crew")
     shared_llm = LLM(
         model=endpoint.model,
         base_url=endpoint.base_url,
@@ -58,6 +62,7 @@ def build_crew(settings: Settings):
         temperature=settings.llm_temperature,
         max_tokens=settings.llm_max_tokens,
         timeout=settings.llm_timeout_seconds,
+        additional_params={"extra_headers": crew_headers} if crew_headers else {},
     )
 
     enabled_agents = _enabled_crew_agents(agent_config, task_config)

@@ -4491,3 +4491,12 @@ sizing, política o producción en esta auditoría.
 - Informe: docs/informe_p_l146_spy_hero.md.
 - Siguiente: suite completa del arbol final + port Jetson si se autoriza.
 
+
+## P-L147 � cabeceras de sesion en CrewAI LLM (candidato 0.4.249, listo para revision)
+
+- Dictamen: ready_for_review. Rama codex/pl147-crew-session-headers. XNYS abierto: sin despliegue.
+- Causa: crews sin x-opencode-session (30 MissingSessionID 18-sep); 3/3 compras fallback.
+- Fix: extra_headers via additional_params litellm; scope crew.
+- QA: 2 focales + version_policy; Ruff/NUL/diff verdes.
+- Informe: docs/informe_p_l147_crew_session.md.
+
