@@ -4460,3 +4460,18 @@ sizing, política o producción en esta auditoría.
 - Informe: `docs/informe_p_l142_sesion_proveedor.md`.
 - Siguiente: merge P-L139+P-L142 → suite → port Jetson → corte con
   verificacion del 400 en logs.
+
+## P-L141 — port Jetson 0.4.305 (imagen verificada; CORTE BLOQUEADO)
+
+- Dictamen: `precondition_not_met` para el corte. Imagen
+  `agente-bolsa:0.4.305-arm64` (`54a713d4fac0`) construida por splice
+  desde 0.4.304 y verificada (version/grace/crew/headers).
+- Contenido: grace 120 + delay, cabeceras Go/Zen, crew fail-open,
+  modulos nuevos durmientes. P-L130 ya existia en Jetson. Oleada 2
+  (scoreboard/signal_learning/web_app/storage) diferida diurna.
+- Bloqueo: postmarket 17-sep `failed` (`database or disk is full`
+  bajo presion de memoria: 109M libres, sin swap, whale-copy OOM x4;
+  disco OK 309G). Sin reparar a ciegas, sin cortar bajo presion.
+- Informe: `docs/informe_p_l141_port_jetson.md`.
+- Siguiente: operador alivia memoria → postmarket terminal por ruta
+  normal → preflight + snapshot + corte + doble salud + oleada 2.
