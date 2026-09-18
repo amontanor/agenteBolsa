@@ -1,4 +1,4 @@
-# P-L141 — port Jetson 0.4.305 (imagen construida y verificada; corte BLOQUEADO)
+# P-L141 — port Jetson 0.4.305 (DESPLEGADO 18-sep-2026)
 
 Dictamen: `precondition_not_met` para el corte. XNYS cerrado; sin
 merge productivo pendiente (P-L139/P-L142 ya en `codex/astra`
@@ -50,7 +50,27 @@ Verificado byte a byte contra la linea Windows donde aplica:
   grace 120, `_settle_tracker` x5, cabeceras.
 - Dockerfile y bundle en `/tmp/ab305` del Jetson (auditable).
 
-## Corte BLOQUEADO (precondition_not_met, 18-sep ~07:00Z)
+## Corte EJECUTADO 18-sep (~07:50Z) — dictamen `deployed`
+
+- Precondiciones: XNYS cerrado; postmarket `failed` terminal conocido
+  (causa infra en estudio, sin reintento manual); escritores detenidos
+  via `systemctl stop`; snapshot frio `cold-pre-0.4.305-20260918T0745Z`
+  (`quick_check`/`integrity_check` ok, sha256 `7de4e39c...`).
+- Preflight `jetson-ops diagnose` fallaba por hash stale de
+  `application.env` (operador subio modelos a v4.1-flash el 17-sep):
+  hash actualizado a `4e60333c...` con backup `jetson-ops.bak-p141`
+  (precedente documentado). PAPER/live/auto-apply verificados.
+- Selector `AGENTE_BOLSA_IMAGE` 0.4.297 → `0.4.305-arm64` (backup
+  `runtime.env.bak-p141`); `deploy-agente-bolsa` recreo (gate 120 s
+  justo en primer arranque; verde a los +3 min).
+- Doble salud: HTTP / y /health 200/200; scheduler+web healthy,
+  RestartCount 0, OOM false; lock owner_alive/token_match; kernel
+  `ok=true violations=[]` (el sello resuelve con el env actual);
+  version runtime 0.4.305; 0 ordenes, 0 `database is locked`, 0
+  Traceback/KeyError/terminal_conflict/MissingSessionID desde boot.
+- Residual conocido (no bloqueante): auxiliary `unhealthy` por latch
+  `ci_digest failed` de las 06:30Z (pre-corte; las cabeceras 0.4.305
+  deben sanar la causa 400 en la proxima pasada).
 
 1. Postmarket sesion 17-sep terminal `failed` (04:01Z) con
    `OperationalError('database or disk is full')`, causa infra sin
