@@ -4510,3 +4510,13 @@ sizing, política o producción en esta auditoría.
 - Rama codex/pl148-sizing-tiers, candidato f8c745bb, QA 209 passed.
 - En espera de decision: el estudio de edge negativo era sobre cohorte fallback; con P-L147 los crews vuelven y la cohorte cambia. Medir 5 sesiones antes de subir tamano.
 
+
+## P-L307 � corte Jetson 0.4.307 (P-L147 + P-L149) DEPLOYED
+
+- Dictamen: deployed 18-sep ~23:20Z. Imagen sha256:0f3d6baaa656ad60e5.
+- crew.py y trade_decision.py Jetson divergen de Windows: parche por ancla (2 y 9 hunks).
+- Snapshot cold-pre-0.4.307-20260918T2320Z ok; selector backup bak-p147.
+- Doble salud verde: HTTP x4 200, kernel True, PAPER, lock coherente.
+- Informe: docs/informe_p_l307_jetson.md.
+- Siguiente: medir crews autenticando + compras LLM/no-fallback; decidir P-L148 tras 5 sesiones.
+
