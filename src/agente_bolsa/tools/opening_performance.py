@@ -558,6 +558,16 @@ def load_cached_spy_open_observations(
                 paired_open_price=artifact_open_prices.get(session_date),
             )
 
+    def _comparison_price(price: Any) -> Any:
+        # P-L143: group by cent-rounded price for comparability only.
+        # Persisted evidence keeps the exact float; only the grouping
+        # signature tolerates sub-cent provider revisions (auto_adjust).
+        if isinstance(price, bool):
+            return price
+        if isinstance(price, (int, float)) and price == price:
+            return round(float(price), 2)
+        return price
+
     def _resolve_open(
         candidates_by_session: Mapping[str, list[dict[str, Any]]],
     ) -> tuple[dict[str, dict[str, Any]], dict[str, list[dict[str, Any]]]]:
@@ -579,7 +589,7 @@ def load_cached_spy_open_observations(
             unique: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
             for candidate in candidates:
                 signature = (
-                    candidate.get("price"),
+                    _comparison_price(candidate.get("price")),
                     candidate.get("price_basis"),
                 )
                 unique.setdefault(signature, []).append(candidate)
