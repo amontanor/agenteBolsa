@@ -2568,3 +2568,14 @@ reconciliación manual ni cambios de política.
 - Informe: `docs/informe_p_l142_sesion_proveedor.md`.
 - Siguiente: merge P-L139+P-L142 → suite → port Jetson → corte con
   verificacion del 400 en logs.
+
+### P-L141 — port 0.4.305 listo, corte BLOQUEADO (18-sep-2026 ~07:00Z)
+
+- Dictamen: `precondition_not_met`. Imagen verificada en Jetson;
+  cero mutaciones en servicios/datos (solo `docker build`).
+- Bloqueo: postmarket `failed` (SQLITE_FULL bajo presion de memoria:
+  109M libres/sin swap, whale-copy OOM x4, disco OK). No cortar ni
+  reparar a ciegas; whale-copy es del operador.
+- Informe: `docs/informe_p_l141_port_jetson.md`.
+- Siguiente: operador + memoria sana + postmarket terminal →
+  preflight/snapshot/corte/doble salud → oleada 2.
