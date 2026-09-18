@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
 
@@ -20,6 +21,10 @@ ZEN_MODEL = "deepseek-v4-flash-free"
 GO_PROVIDER = "opencode-go"
 GO_BASE_URL = "https://opencode.ai/zen/go/v1"
 GO_MODEL = "deepseek-v4-flash"
+
+# P-L142: el proveedor Go/Zen exige una sesion estable por conversacion
+# (cabecera x-opencode-session) y un User-Agent propio, no generico de SDK.
+OPENCODE_SESSION_HEADER = "x-opencode-session"
 
 
 @dataclass(frozen=True)
@@ -143,14 +148,50 @@ def configured_llm_endpoints(settings: Settings) -> list[LLMEndpoint]:
     return unique
 
 
-def build_openai_client(endpoint: LLMEndpoint, timeout_seconds: int):
+def build_openai_client(endpoint: LLMEndpoint, timeout_seconds: int, *, scope: str = "shared"):
     from openai import OpenAI
 
+    headers = provider_client_headers(endpoint.provider, scope=scope)
     return OpenAI(
         api_key=endpoint.api_key,
         base_url=endpoint.base_url,
         timeout=timeout_seconds,
+        default_headers=headers or None,
     )
+
+
+def provider_user_agent() -> str:
+    from . import __version__
+
+    return f"agente-bolsa/{__version__}"
+
+
+def provider_session_id(
+    provider: str | None, *, scope: str = "shared", today: date | str | None = None
+) -> str | None:
+    """Stable per-day session id for Go/Zen routing; None for other providers."""
+
+    key = str(provider or "").strip().lower()
+    if key not in {ZEN_PROVIDER, GO_PROVIDER}:
+        return None
+    if today is None:
+        day = datetime.now(timezone.utc).date().isoformat()
+    elif isinstance(today, str):
+        day = today[:10]
+    else:
+        day = today.isoformat()
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"agente-bolsa:{key}:{scope}:{day}"))
+
+
+def provider_client_headers(
+    provider: str | None, *, scope: str = "shared", today: date | str | None = None
+) -> dict[str, str]:
+    """Routing headers for Go/Zen; empty for providers that need none."""
+
+    session_id = provider_session_id(provider, scope=scope, today=today)
+    if session_id is None:
+        return {}
+    return {OPENCODE_SESSION_HEADER: session_id, "User-Agent": provider_user_agent()}
 
 
 def classify_llm_client_error(exc: Exception) -> str:
@@ -328,6 +369,7 @@ def chat_for_role(
         temperature=temp,
         max_tokens=tokens,
         timeout_seconds=int(timeout),
+        scope=role_lc or "shared",
     )
 
 
@@ -356,6 +398,7 @@ def _complete_with_endpoints(
     temperature: float,
     max_tokens: int | None,
     timeout_seconds: int,
+    scope: str = "shared",
 ) -> tuple[Any, LLMEndpoint, list[dict[str, Any]]]:
     attempts: list[dict[str, Any]] = []
     last_error: Exception | None = None
@@ -380,7 +423,7 @@ def _complete_with_endpoints(
         )
         for retry_index in range(retry_attempts + 1):
             try:
-                client = build_openai_client(endpoint, timeout_seconds)
+                client = build_openai_client(endpoint, timeout_seconds, scope=scope)
                 request_kwargs = {
                     "model": endpoint.model,
                     "temperature": temperature,
