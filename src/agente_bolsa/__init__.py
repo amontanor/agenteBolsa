@@ -69,4 +69,5 @@ __all__ = ["__version__"]
 # P-L142: stable provider session headers for Go/Zen routing (0.4.246).
 # P-L143: cent-rounded SPY open grouping for comparability, evidence untouched (0.4.247).
 # P-L146: one-glance daily Sistema-vs-SPY hero verdict reusing canonical rows (0.4.248).
-__version__ = "0.4.248"
+# P-L147: provider session headers also in CrewAI LLM so Go/Zen crews authenticate (0.4.249).
+__version__ = "0.4.249"
