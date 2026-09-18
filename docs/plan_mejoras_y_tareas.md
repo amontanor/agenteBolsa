@@ -4475,3 +4475,11 @@ sizing, política o producción en esta auditoría.
 - Informe: `docs/informe_p_l141_port_jetson.md`.
 - Siguiente: operador alivia memoria → postmarket terminal por ruta
   normal → preflight + snapshot + corte + doble salud + oleada 2.
+
+## P-L146 � tarjeta heroe diaria Sistema vs SPY (candidato 0.4.248, listo para revision)
+
+- Dictamen: ready_for_review. Rama codex/pl146-spy-hero.
+- Veredicto unico con mismos denominadores: gana/empata/pierde/sin-dato-con-motivo.
+- QA: 6 focales + 76 web_app (82 passed); version_policy, Ruff/NUL/diff verdes.
+- Informe: docs/informe_p_l146_spy_hero.md.
+
