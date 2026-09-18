@@ -68,4 +68,5 @@ __all__ = ["__version__"]
 # P-L139: misfire grace on intraday jobs so late runs execute (0.4.245).
 # P-L142: stable provider session headers for Go/Zen routing (0.4.246).
 # P-L143: cent-rounded SPY open grouping for comparability, evidence untouched (0.4.247).
-__version__ = "0.4.247"
+# P-L146: one-glance daily Sistema-vs-SPY hero verdict reusing canonical rows (0.4.248).
+__version__ = "0.4.248"

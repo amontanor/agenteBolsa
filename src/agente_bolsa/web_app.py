@@ -4321,11 +4321,131 @@ def _render_opening_omissions(opening_context: dict[str, Any]) -> None:
         )
 
 
+def _spy_hero_verdict(opening_context: dict[str, Any]) -> dict[str, Any]:
+    """Answer 'does the portfolio beat SPY' in one verdict, same denominators.
+
+    Pure function over ``opening_context``: reuses ``_opening_comparable_metric``
+    for the live session and the canonical table rows otherwise. Never invents
+    a comparison; unavailable stays unavailable with its exact reason.
+    """
+
+    metric = _opening_comparable_metric(opening_context)
+    rows = list(opening_context.get("rows") or [])
+    if metric["system_status"] == "available" or metric["spy_status"] == "comparable":
+        system_pct = metric["system_pct"]
+        spy_pct = metric["spy_pct"]
+        if metric["spy_status"] == "comparable" and system_pct is not None and spy_pct is not None:
+            if abs(system_pct - spy_pct) < 0.00005:
+                headline, tone = "Empate hoy con SPY", "neutral"
+            elif system_pct > spy_pct:
+                headline, tone = "Hoy ganas a SPY", "good"
+            else:
+                headline, tone = "Hoy SPY te gana", "bad"
+            state = "comparable"
+        else:
+            headline, tone = "Hoy sin dato SPY", "neutral"
+            state = "unavailable"
+        return {
+            "state": state,
+            "headline": headline,
+            "tone": tone,
+            "session_label": "Sesión en curso",
+            "system_pct": system_pct,
+            "spy_pct": spy_pct,
+            "reason": metric["spy_reason"],
+            "spy_as_of": metric["spy_as_of"],
+        }
+    finals = [row for row in rows if row.get("status") == "final"]
+    if not finals:
+        return {
+            "state": "empty",
+            "headline": "Sin sesiones comparables todavía",
+            "tone": "neutral",
+            "session_label": None,
+            "system_pct": None,
+            "spy_pct": None,
+            "reason": "no_final_sessions",
+            "spy_as_of": None,
+        }
+    row = finals[-1]
+    system_pct = _num(row.get("system_pct"))
+    spy_pct = _num(row.get("spy_pct"))
+    if (
+        row.get("comparison_status") != "comparable"
+        or system_pct is None
+        or spy_pct is None
+    ):
+        return {
+            "state": "unavailable",
+            "headline": "Última sesión sin dato SPY",
+            "tone": "neutral",
+            "session_label": f"Sesión {row.get('session_date')}",
+            "system_pct": system_pct,
+            "spy_pct": None,
+            "reason": row.get("comparison_reason") or "not_comparable",
+            "spy_as_of": None,
+        }
+    if abs(system_pct - spy_pct) < 0.00005:
+        headline, tone = "Empate con SPY", "neutral"
+    elif system_pct > spy_pct:
+        headline, tone = "Ganaste a SPY", "good"
+    else:
+        headline, tone = "SPY ganó", "bad"
+    return {
+        "state": "comparable",
+        "headline": headline,
+        "tone": tone,
+        "session_label": f"Sesión {row.get('session_date')}",
+        "system_pct": system_pct,
+        "spy_pct": spy_pct,
+        "reason": None,
+        "spy_as_of": row.get("spy_end_at"),
+    }
+
+
+def _render_spy_hero_card(opening_context: dict[str, Any]) -> None:
+    """Render the one-glance daily verdict above the detail table."""
+
+    verdict = _spy_hero_verdict(opening_context)
+    tone = verdict["tone"]
+    color = {"good": "var(--ab-good)", "bad": "var(--ab-bad)"}.get(tone, "var(--ab-muted)")
+    system_text = _pct_signed_or_na(verdict["system_pct"])
+    spy_text = _pct_signed_or_na(verdict["spy_pct"]) if verdict["state"] == "comparable" else "n/d"
+    detail_bits = [bit for bit in (verdict["session_label"], _spy_hero_reason_text(verdict)) if bit]
+    st.markdown(
+        "<div class='spy-hero' style='border-left:4px solid "
+        + color
+        + ";padding:10px 14px;margin-bottom:12px;'>"
+        + "<div style='font-size:1.15rem;font-weight:700;'>"
+        + escape(verdict["headline"])
+        + "</div>"
+        + "<div>Sistema "
+        + escape(system_text)
+        + " · SPY "
+        + escape(spy_text)
+        + "</div>"
+        + ("<div class='section-subtitle'>" + escape(" · ".join(detail_bits)) + "</div>" if detail_bits else "")
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _spy_hero_reason_text(verdict: dict[str, Any]) -> str | None:
+    reason = verdict.get("reason")
+    if verdict["state"] == "comparable":
+        as_of = verdict.get("spy_as_of")
+        return f"SPY as_of {as_of}" if as_of else None
+    if not reason:
+        return None
+    return f"SPY n/d: {reason}"
+
+
 def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
     """Render one exact opening-to-opening rowset without pending rows."""
 
     canonical_rows = list(opening_context.get("rows") or [])
     with st.container(border=True):
+        _render_spy_hero_card(opening_context)
         title_col, control_col = st.columns([3, 1])
         with title_col:
             _section_title(

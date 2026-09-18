@@ -4476,12 +4476,18 @@ sizing, política o producción en esta auditoría.
 - Siguiente: operador alivia memoria → postmarket terminal por ruta
   normal → preflight + snapshot + corte + doble salud + oleada 2.
 
-## P-L143 � tolerancia a centimo en aperturas SPY (candidato 0.4.247, listo para revision)
+## P-L143 — tolerancia a centimo en aperturas SPY (0.4.247, mergeado)
 
 - Dictamen: ready_for_review. Rama codex/pl143-spy-cent-tolerance.
 - Causa: igualdad exacta de float declaraba spy_open_conflict ante revisiones sub-centimo (auto_adjust).
 - Fix: agrupacion por precio redondeado a centimo solo para comparar; evidencia exacta intacta.
 - QA: 2 focales + 48 regresiones (50 passed); version_policy, Ruff/NUL/diff verdes.
 - Informe: docs/informe_p_l143_spy_cent_tolerance.md.
-- Siguiente: merge --no-ff tras P-L146 o antes segun orden; suite completa en integracion.
+## P-L146 — tarjeta heroe diaria Sistema vs SPY (0.4.248, mergeado)
+
+- Dictamen: ready_for_review. Rama codex/pl146-spy-hero.
+- Veredicto unico con mismos denominadores: gana/empata/pierde/sin-dato-con-motivo.
+- QA: 6 focales + 76 web_app (82 passed); version_policy, Ruff/NUL/diff verdes.
+- Informe: docs/informe_p_l146_spy_hero.md.
+- Siguiente: suite completa del arbol final + port Jetson si se autoriza.
 
