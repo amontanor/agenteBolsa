@@ -1,4 +1,4 @@
-from agente_bolsa.config import Settings
+﻿from agente_bolsa.config import Settings
 from agente_bolsa.llm_router import (
     _retry_delay_seconds,
     build_llm_identity,
@@ -206,7 +206,7 @@ def test_router_honors_retry_after_before_fallback(monkeypatch):
     class _Client:
         chat = _Chat()
 
-    monkeypatch.setattr("agente_bolsa.llm_router.build_openai_client", lambda *_args: _Client())
+    monkeypatch.setattr("agente_bolsa.llm_router.build_openai_client", lambda *_args, **_kwargs: _Client())
     monkeypatch.setattr("agente_bolsa.llm_router.time.sleep", lambda seconds: sleeps.append(seconds))
 
     _response, _endpoint, attempts = chat_for_role(
@@ -263,7 +263,7 @@ def test_zen_failure_calls_go_once_without_retry_and_marks_identity(monkeypatch)
 
             return type("Chat", (), {"completions": _Completions()})()
 
-    monkeypatch.setattr("agente_bolsa.llm_router.build_openai_client", lambda endpoint, _timeout: _Client(endpoint))
+    monkeypatch.setattr("agente_bolsa.llm_router.build_openai_client", lambda endpoint, _timeout, **_kwargs: _Client(endpoint))
 
     response, endpoint, attempts = chat_for_role(
         "decision",
@@ -316,7 +316,7 @@ def test_zen_empty_content_is_a_single_attempt_failure_that_reaches_go(monkeypat
                 {"completions": type("Completions", (), {"create": self._response})()},
             )()
 
-    monkeypatch.setattr("agente_bolsa.llm_router.build_openai_client", lambda endpoint, _timeout: _Client(endpoint))
+    monkeypatch.setattr("agente_bolsa.llm_router.build_openai_client", lambda endpoint, _timeout, **_kwargs: _Client(endpoint))
 
     response, endpoint, _attempts = chat_for_role(
         "decision",
@@ -394,7 +394,7 @@ def test_chat_for_role_selects_role_endpoint_and_records_role(tmp_path, monkeypa
                     captured.update(kwargs)
                     return _Resp()
 
-    monkeypatch.setattr("agente_bolsa.llm_router.build_openai_client", lambda endpoint, timeout: _Client())
+    monkeypatch.setattr("agente_bolsa.llm_router.build_openai_client", lambda endpoint, timeout, **_kwargs: _Client())
 
     response, endpoint, _attempts = chat_for_role(
         "decision",

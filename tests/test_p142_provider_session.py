@@ -79,3 +79,42 @@ def test_openai_client_has_no_session_headers_for_other_providers(monkeypatch) -
     build_openai_client(endpoint, 30, scope="decision")
 
     assert captured.get("default_headers") in (None, {})
+
+
+def test_improvement_client_sends_session_headers_for_go(tmp_path) -> None:
+    from agente_bolsa.config import Settings
+    from agente_bolsa.continuous_improvement.llm_client import ImprovementLLMClient
+
+    settings = Settings(
+        DATA_DIR=tmp_path,
+        DATABASE_PATH=tmp_path / "state" / "test.sqlite3",
+        AGENT_LOGS_DIR=tmp_path / "logs" / "agents",
+        ALLOW_LIVE_TRADING=False,
+        ALLOW_AUTO_APPLY_IMPROVEMENTS=False,
+    )
+    client = ImprovementLLMClient(settings)
+
+    headers = client._request_headers("opencode-go", "test-token")
+
+    assert headers["Authorization"] == "Bearer test-token"
+    assert headers["x-opencode-session"] == provider_session_id(GO_PROVIDER, scope="improvement")
+    assert headers["User-Agent"].startswith("agente-bolsa/")
+
+
+def test_improvement_client_keeps_mimo_contract(tmp_path) -> None:
+    from agente_bolsa.config import Settings
+    from agente_bolsa.continuous_improvement.llm_client import ImprovementLLMClient
+
+    settings = Settings(
+        DATA_DIR=tmp_path,
+        DATABASE_PATH=tmp_path / "state" / "test.sqlite3",
+        AGENT_LOGS_DIR=tmp_path / "logs" / "agents",
+        ALLOW_LIVE_TRADING=False,
+        ALLOW_AUTO_APPLY_IMPROVEMENTS=False,
+    )
+    client = ImprovementLLMClient(settings)
+
+    headers = client._request_headers("mimo", "test-token")
+
+    assert headers["api-key"] == "test-token"
+    assert "x-opencode-session" not in headers

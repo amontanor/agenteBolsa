@@ -12,6 +12,7 @@ from openai import OpenAI
 from pydantic import BaseModel
 
 from agente_bolsa.config import Settings
+from agente_bolsa.llm_router import provider_client_headers
 from agente_bolsa.logging_utils import log_system_event
 from agente_bolsa.models import new_id
 
@@ -492,6 +493,7 @@ class ImprovementLLMClient:
 
     def _request_headers(self, provider: str, api_key: str | None) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
+        headers.update(provider_client_headers(provider, scope="improvement"))
         if not api_key:
             return headers
         provider_key = provider.strip().lower()
@@ -505,10 +507,15 @@ class ImprovementLLMClient:
         return provider.strip().lower() in {"opencode", "opencode-go", "opencode-zen", "openai", "openai-local"}
 
     def _sdk_chat_completion_content(self, endpoint: _ImprovementEndpoint, body: dict[str, Any]) -> str:
-        default_headers = None
+        default_headers: dict[str, str] | None = dict(
+            provider_client_headers(endpoint.provider, scope="improvement")
+        ) or None
         provider_key = endpoint.provider.strip().lower()
         if provider_key == "mimo" and endpoint.api_key:
-            default_headers = {"api-key": endpoint.api_key}
+            default_headers = {
+                **(default_headers or {}),
+                "api-key": endpoint.api_key,
+            }
         client = OpenAI(
             api_key=endpoint.api_key or "missing",
             base_url=endpoint.base_url,
