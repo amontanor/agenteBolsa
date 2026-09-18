@@ -82,3 +82,17 @@ Verificado byte a byte contra la linea Windows donde aplica:
    `terminal_conflict`.
 3. Oleada 2 diurna: scoreboard/signal_learning/web_app/storage con
    tests adaptados. Sin push salvo peticion.
+
+## Anexo: poda de imagenes 18-sep (autorizada por el operador)
+
+- Conservadas: 0.4.303 (rollback), 0.4.304 (actual), 0.4.305 (candidata).
+- Incidente propio: el primer filtro borro tambien la 0.4.305 recien
+  construida; reconstruida en 1.2 s desde `/tmp/ab305` (nuevo ID
+  `0e59b76b...`, labels verificados). Sin impacto: la imagen es
+  reproducible desde el bundle versionado.
+- Resultado: imagenes 53G → 30G; disco 125G → 109G usados (325G
+  libres, 26%). Quedan 25G reclamables en build cache (no tocado:
+  fuera del alcance autorizado).
+- Snapshots 17G: el operador pidio explicacion antes de decidir;
+  propuesta standing: conservar 3 recientes + pre-corte, borrar 6 de
+  agosto (~11G).
