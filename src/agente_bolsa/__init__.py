@@ -70,4 +70,6 @@ __all__ = ["__version__"]
 # P-L143: cent-rounded SPY open grouping for comparability, evidence untouched (0.4.247).
 # P-L146: one-glance daily Sistema-vs-SPY hero verdict reusing canonical rows (0.4.248).
 # P-L147: provider session headers also in CrewAI LLM so Go/Zen crews authenticate (0.4.249).
-__version__ = "0.4.249"
+# P-L148: reservado para sizing por tramos Fase 1 (0.4.250, en espera).
+# P-L149: guarded veto of toxic extremes + sin_patron quota in fallback (0.4.251).
+__version__ = "0.4.251"

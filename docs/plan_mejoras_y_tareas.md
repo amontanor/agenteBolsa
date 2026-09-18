@@ -4492,11 +4492,21 @@ sizing, política o producción en esta auditoría.
 - Siguiente: suite completa del arbol final + port Jetson si se autoriza.
 
 
-## P-L147 � cabeceras de sesion en CrewAI LLM (candidato 0.4.249, listo para revision)
+## P-L147 — cabeceras de sesion en CrewAI LLM (0.4.249, mergeado)
 
-- Dictamen: ready_for_review. Rama codex/pl147-crew-session-headers. XNYS abierto: sin despliegue.
-- Causa: crews sin x-opencode-session (30 MissingSessionID 18-sep); 3/3 compras fallback.
+- Rama codex/pl147-crew-session-headers. Causa: crews sin x-opencode-session (103 MissingSessionID 18-sep); 3/3 compras fallback.
 - Fix: extra_headers via additional_params litellm; scope crew.
 - QA: 2 focales + version_policy; Ruff/NUL/diff verdes.
 - Informe: docs/informe_p_l147_crew_session.md.
+
+## P-L149 — veto a toxicos + cuota sin_patron (0.4.251, mergeado)
+
+- Rama codex/pl149-selection-guards. Veto score>=18/ret20>=20% (eximen excepciones); cuota 1 sin_patron|strong etiquetada.
+- QA: 8 focales + 146 regresiones (154 passed); version_policy, Ruff/NUL/diff verdes.
+- Informe: docs/informe_p_l149_selection_guards.md.
+
+## P-L148 — sizing por tramos Fase 1 (0.4.250 RESERVADO, en espera)
+
+- Rama codex/pl148-sizing-tiers, candidato f8c745bb, QA 209 passed.
+- En espera de decision: el estudio de edge negativo era sobre cohorte fallback; con P-L147 los crews vuelven y la cohorte cambia. Medir 5 sesiones antes de subir tamano.
 

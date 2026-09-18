@@ -155,6 +155,16 @@ class Settings(BaseSettings):
         default=20,
         alias="SETUP_EDGE_BIAS_MIN_SAMPLES",
     )
+    # P-L149 guarded: veto a extremos toxicos medidos (score>=18: -4.99% 10d;
+    # return_20d>=20%: cohorte de cola). Excluye del pool fallback con razon
+    # auditable; reversible por flag. Default ON acotado.
+    toxic_veto_enabled: bool = Field(default=True, alias="TOXIC_VETO_ENABLED")
+    toxic_score_cap: float = Field(default=18.0, alias="TOXIC_SCORE_CAP")
+    toxic_return_20d_cap: float = Field(default=0.20, alias="TOXIC_RETURN_20D_CAP")
+    # P-L149 guarded: cuota de K plazas para el mejor sin_patron|strong
+    # (edge +0.16% neto medido) dentro del limite de recomendaciones.
+    sin_patron_quota_enabled: bool = Field(default=True, alias="SIN_PATRON_QUOTA_ENABLED")
+    sin_patron_quota: int = Field(default=1, alias="SIN_PATRON_QUOTA")
     entry_quality_gate_enabled: bool = Field(default=True, alias="ENTRY_QUALITY_GATE_ENABLED")
     entry_quality_min_score: int = Field(default=12, alias="ENTRY_QUALITY_MIN_SCORE")
     entry_quality_max_rsi: float = Field(default=85.0, alias="ENTRY_QUALITY_MAX_RSI")

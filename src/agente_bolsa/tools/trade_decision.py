@@ -41,7 +41,7 @@ from agente_bolsa.tools.research_evidence import (
 )
 from agente_bolsa.tools.retention import latest_report_path
 from agente_bolsa.tools.risk import OrderProposal, RiskManager
-from agente_bolsa.tools.setup_edge import load_setup_edge_table
+from agente_bolsa.tools.setup_edge import load_setup_edge_table, setup_quality_key
 from agente_bolsa.tools.signal_learning import _indicator_tags
 
 LOGGER = logging.getLogger(__name__)
@@ -4316,6 +4316,75 @@ def _confirmed_pattern_shadow_signals(
     }
 
 
+def _toxic_veto_reason(
+    settings: Settings,
+    *,
+    score: float,
+    return_20d: float | None,
+) -> str | None:
+    """Veto P-L149 a extremos con retorno medido negativo (estudio jun-2026)."""
+
+    if not bool(getattr(settings, "toxic_veto_enabled", False)):
+        return None
+    if score >= float(getattr(settings, "toxic_score_cap", 18.0)):
+        return "toxic_extreme_score"
+    cap = float(getattr(settings, "toxic_return_20d_cap", 0.20))
+    if return_20d is not None and return_20d >= cap:
+        return "toxic_extreme_momentum"
+    return None
+
+
+def _sin_patron_quota_order(
+    settings: Settings,
+    eligible: list[dict[str, Any]],
+    limit: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Garantiza K plazas al mejor sin_patron|strong (P-L149 guarded).
+
+    Solo reordena dentro del pool elegible: si ningún finalista es
+    sin_patron|strong, el mejor por score entra por el último finalista.
+    Nunca inventa candidatos ni amplía el límite.
+    """
+
+    report: dict[str, Any] = {
+        "quota_enabled": bool(getattr(settings, "sin_patron_quota_enabled", False)),
+        "quota_target": int(getattr(settings, "sin_patron_quota", 1) or 0),
+        "quota_filled": [],
+        "quota_dropped": [],
+        "quota_inert_reason": None,
+    }
+    if not report["quota_enabled"] or report["quota_target"] <= 0 or not eligible:
+        report["quota_inert_reason"] = "disabled_or_empty"
+        return eligible, report
+    finalists = list(eligible[:limit])
+    if any(setup_quality_key({**dict(item.get("technical_state") or {}), **item}) == "sin_patron|strong" for item in finalists):
+        report["quota_inert_reason"] = "already_present"
+        return eligible, report
+    pool = [
+        item
+        for item in eligible[limit:]
+        if setup_quality_key({**dict(item.get("technical_state") or {}), **item}) == "sin_patron|strong"
+    ]
+    if not pool:
+        report["quota_inert_reason"] = "no_quota_candidate"
+        return eligible, report
+    pool.sort(
+        key=lambda item: (
+            float(item.get("selection_score") or item.get("rank_priority_score") or -999.0),
+            float(item.get("score") or 0.0),
+        ),
+        reverse=True,
+    )
+    filled = pool[: report["quota_target"]]
+    kept = finalists[: len(finalists) - len(filled)]
+    dropped = finalists[len(kept) :]
+    rest = [item for item in eligible[limit:] if item not in filled]
+    ordered = kept + filled + dropped + rest
+    report["quota_filled"] = [str(item.get("symbol") or "") for item in filled]
+    report["quota_dropped"] = [str(item.get("symbol") or "") for item in dropped]
+    return ordered, report
+
+
 def deterministic_trade_fallback_recommendations(
     settings: Settings,
     portfolio: PortfolioSnapshot,
@@ -4327,6 +4396,7 @@ def deterministic_trade_fallback_recommendations(
     learning_mode_config: dict[str, Any] | None = None,
     daily_learning_digest: dict[str, Any] | None = None,
     operational_response_context: dict[str, Any] | None = None,
+    selection_report: dict[str, Any] | None = None,
 ) -> list[TradeRecommendation]:
     """Fallback puro; los contextos operativos se inyectan desde el ciclo."""
 
@@ -4346,6 +4416,7 @@ def deterministic_trade_fallback_recommendations(
     open_order_symbols = {order.symbol.upper() for order in portfolio.open_orders}
     recommendation_limit = max(1, int(limit or _effective_trade_recommendation_limit(settings, technical_context)))
     eligible: list[dict[str, Any]] = []
+    vetoed: list[dict[str, str]] = []
     for candidate in list((technical_context or {}).get("selected_candidates", []) or []):
         if not isinstance(candidate, dict):
             continue
@@ -4366,6 +4437,9 @@ def deterministic_trade_fallback_recommendations(
         score = _float(candidate.get("score")) or 0.0
         close = _float(technical_state.get("close"))
         sma20 = _float(technical_state.get("sma_20"))
+        # P-L149: las excepciones de extension deliberadas eximen del veto
+        # toxico; el veto solo muerde extremos sin tesis de seguimiento.
+        has_extension_exception = False
         if close and sma20:
             sma20_distance = (close - sma20) / sma20
             has_extension_exception = any(
@@ -4443,6 +4517,14 @@ def deterministic_trade_fallback_recommendations(
                 float(settings.entry_quality_low_score_volume_rebound_min_score),
             )
         if score < fallback_min_score:
+            continue
+        veto_reason = _toxic_veto_reason(
+            settings,
+            score=score,
+            return_20d=_float(technical_state.get("return_20d")),
+        )
+        if veto_reason is not None and not has_extension_exception:
+            vetoed.append({"symbol": symbol, "reason": veto_reason})
             continue
         risk = candidate.get("risk_plan", {}) or {}
         candidate_recommendation = TradeRecommendation(
@@ -4539,12 +4621,23 @@ def deterministic_trade_fallback_recommendations(
                 eligible = original_eligible
         except Exception as exc:  # noqa: BLE001 - reordenar nunca debe romper el fallback
             log_swallow(LOGGER, "priorizar fallback con opportunity ranker", exc)
+    eligible, quota_report = _sin_patron_quota_order(settings, eligible, recommendation_limit)
+    quota_symbols = set(quota_report["quota_filled"])
+    if selection_report is not None:
+        selection_report["toxic_vetoed"] = vetoed
+        selection_report["toxic_veto_count"] = len(vetoed)
+        selection_report["quota"] = quota_report
     recommendations: list[TradeRecommendation] = []
     for item in eligible[:recommendation_limit]:
         selection_score = _float(item.get("selection_score"))
         confidence = max(
             float(settings.min_llm_confidence_to_trade),
             min(0.78, 0.66 + max(0.0, selection_score or 0.0)),
+        )
+        quota_suffix = (
+            " Cuota sin_patron|strong (guarded P-L149)."
+            if str(item.get("symbol") or "").upper() in quota_symbols
+            else ""
         )
         recommendations.append(
             TradeRecommendation(
@@ -4555,7 +4648,7 @@ def deterministic_trade_fallback_recommendations(
                     f"{'Fallback determinista por fallo del LLM' if llm_failed else 'Fallback determinista'}: "
                     "candidato strong seleccionado "
                     f"rank={item.get('selection_rank')}, score={item.get('score')}, "
-                    f"selection_score={item.get('selection_score')}."
+                    f"selection_score={item.get('selection_score')}.{quota_suffix}"
                 ),
                 entry_price=item.get("entry_price"),
                 stop_loss=item.get("stop_loss"),
@@ -4599,6 +4692,7 @@ def augment_recommendations_with_deterministic_fallback(
             "fallback_candidates": 0,
             "blocked_reason": block_reason,
         }
+    fallback_selection_report: dict[str, Any] = {}
     fallback_recommendations = deterministic_trade_fallback_recommendations(
         settings,
         portfolio,
@@ -4608,6 +4702,7 @@ def augment_recommendations_with_deterministic_fallback(
         learning_mode_config=learning_mode_config,
         daily_learning_digest=daily_learning_digest,
         operational_response_context=operational_response_context,
+        selection_report=fallback_selection_report,
     )
     if not fallback_recommendations:
         return recommendations, {"added": [], "replaced_holds": [], "fallback_candidates": 0}
@@ -4682,6 +4777,9 @@ def augment_recommendations_with_deterministic_fallback(
         "non_buy_count": non_buy_count,
         "recommendation_limit": recommendation_limit,
         "capacity_fill_reason_code": fill_reason_code if added else None,
+        "toxic_vetoed": fallback_selection_report.get("toxic_vetoed", []),
+        "toxic_veto_count": fallback_selection_report.get("toxic_veto_count", 0),
+        "sin_patron_quota": fallback_selection_report.get("quota", {}),
     }
 
 

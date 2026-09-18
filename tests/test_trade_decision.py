@@ -428,7 +428,7 @@ def test_deterministic_trade_fallback_uses_selected_candidates_without_llm():
         positions=[],
         open_orders=[],
     )
-    candidate = _selection_candidate("FSLR", score=18, volume_zscore_20=1.2)
+    candidate = _selection_candidate("FSLR", score=17, volume_zscore_20=1.2)
     candidate["selection_score"] = 0.04
     candidate["selection_rank"] = 1
     context = {"selected_candidates": [candidate]}
@@ -825,7 +825,7 @@ def test_augment_recommendations_replaces_hold_and_respects_buy_capacity():
         positions=[],
         open_orders=[],
     )
-    leader = _selection_candidate("SNDK", score=18, volume_zscore_20=1.4)
+    leader = _selection_candidate("SNDK", score=17, volume_zscore_20=1.4)
     leader["selection_score"] = 0.09
     leader["selection_rank"] = 1
     fill = _selection_candidate("DDOG", score=17, volume_zscore_20=1.1)
