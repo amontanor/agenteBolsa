@@ -771,5 +771,5 @@ def test_version_policy_requires_bump():
     if dist:
         # Con PYTHONPATH al src del worktree, leemos __init__.py
         import agente_bolsa
-        # P-L142 is the current candidate after the provider session headers.
-        assert agente_bolsa.__version__ == "0.4.246"
+        # P-L149 is the current candidate (toxic veto + sin_patron quota).
+        assert agente_bolsa.__version__ == "0.4.251"
