@@ -44,6 +44,25 @@ revisión de proveedor tras `auto_adjust` (p. ej. `739.969970703125` vs
 - Dictamen: `ready_for_closed_market_deployment` (Windows). Sin push,
   sin despliegue, sin Jetson todavía.
 
+## Corte Jetson 0.4.306 EJECUTADO 18-sep (~13:10Z) — `deployed`
+
+- Autorización explícita del operador (Windows intacto: tareas
+  programadas deshabilitadas a propósito, no tocar).
+- Splice `FROM 0.4.305-arm64`: `opening_performance.py` completo
+  (diff Jetson↔Windows = solo hunk P-L143, 12 líneas), héroe P-L146
+  aplicado por ancla (web_app Jetson divergente, full-COPY prohibido;
+  helpers verificados), versión `0.4.306`. Incidente: BOM colado por
+  `Set-Content UTF8`, eliminado (`chr(65279)`), `py_compile` OK.
+- Imagen `a149c682...`, labels `0.4.306/port-p143-p146-0.4.306`.
+  Verificado en contenedor efímero: versión + `cent` + `hero`.
+- Snapshot frío `cold-pre-0.4.306-20260918T1100Z` ok. Hallazgo:
+  `systemctl stop` no-op (unidad inactiva desde 09:35, contenedores
+  fuera de systemd); parada por `compose stop` canónico + `WRITERS_STOPPED`.
+- Selector → `0.4.306-arm64` (backup `runtime.env.bak-p143`).
+  Doble salud: HTTP 200/200, scheduler+web healthy restarts=0,
+  kernel True sin violaciones, PAPER/live-off/auto-off, 0 órdenes,
+  0 locks, 0 errores. Residual: `auxiliary unhealthy` (latch ci_digest).
+
 ## Límites pendientes
 
 - `_resolve_current` mantiene igualdad exacta de `paired_open_price`;
