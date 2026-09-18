@@ -4428,3 +4428,19 @@ sizing, política o producción en esta auditoría.
   rollback; no se arranca (doble instancia prohibida).
 - Siguiente: P-L139 urgente (misfires grace, crew_observer fail-open,
   proveedor LLM 400) → P-L141 port Jetson → corte canonico.
+
+## P-L139 — grace de misfire en jobs intradia (candidato Windows 0.4.245, listo para revision)
+
+- Worktree `pl139_scheduler_rescue`, rama
+  `codex/pl139-scheduler-rescue`, base `39195b78`. Dictamen
+  `ready_for_review`; XNYS cerrado, sin merge/despliegue/push.
+- Causa verificada en Jetson: 22/22 ciclos `missed` por grace default
+  1 s frente a despertares 1.4-2.7 s. Fix: 300/120/120 con coalesce
+  intacto. No toca cadencias, trading ni protegidos.
+- Fuera de alcance (documentado): coste 36 s del fill watcher,
+  400 `x-opencode-session` (P-L142), `crew_observer` solo-Jetson (nota
+  P-L141).
+- Bump `0.4.244` → `0.4.245`; pin `test_p59c` actualizado.
+- QA: focales 1 + regresiones 8/47, Ruff/NUL/diff/config verdes.
+- Informe: `docs/informe_p_l139_misfire_grace.md`.
+- Siguiente: P-L142 → merge → suite → port Jetson → corte.

@@ -2541,3 +2541,16 @@ reconciliación manual ni cambios de política.
 - Auditoria Jetson del dia: scheduler vivo pero 22/22 ciclos `missed`
   (grace 1 s), 1 ciclo `failed` (crew→observer), LLM mejora caido
   (400 + fallback), 0 recs/ordenes. P-L139 urgente siguiente.
+
+### P-L139 — grace de misfire (candidato 0.4.245, 18-sep-2026)
+
+- Dictamen: `ready_for_review`. XNYS cerrado; sin merge, despliegue,
+  push ni escritura productiva.
+- Worktree `pl139_scheduler_rescue`, rama
+  `codex/pl139-scheduler-rescue`, base `39195b78`, version `0.4.245`.
+  Commits: `06b2c557` (tests), `0baf7aa3` (feat + bump + pin).
+- Solo `scheduler.py`: grace 300/120/120, coalesce intacto. Causa
+  verificada en produccion Jetson (22/22 missed).
+- QA: focales 1, regresiones 8/47, Ruff/NUL/diff/config verdes.
+- Informe: `docs/informe_p_l139_misfire_grace.md`.
+- Siguiente: P-L142 (sesion LLM) → merge → suite → port → corte.
