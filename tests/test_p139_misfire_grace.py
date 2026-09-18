@@ -28,6 +28,7 @@ def test_intraday_jobs_survive_observed_wake_latency(tmp_path: Path) -> None:
     latencia observada sin aceptar ciclos rancios (coalesce intacto)."""
 
     settings = _settings(tmp_path)
+    settings.trade_fill_watch_enabled = True
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()
     built = scheduler.build_scheduler(settings, store, use_crew=False, verbose=False)
@@ -39,4 +40,7 @@ def test_intraday_jobs_survive_observed_wake_latency(tmp_path: Path) -> None:
             assert job.coalesce is True
             assert job.max_instances == 1
     finally:
-        built.shutdown(wait=False)
+        try:
+            built.shutdown(wait=False)
+        except Exception:  # noqa: BLE001 - nunca se arranco en el test.
+            pass

@@ -4369,6 +4369,10 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         max_instances=1,
         coalesce=True,
         replace_existing=True,
+        # P-L139: el default de APScheduler (1 s) descarta runs con la
+        # latencia de despertar observada (1.4-2.7 s). 120 s cubre el
+        # retraso sin aceptar vigilancia rancia (coalesce intacto).
+        misfire_grace_time=120,
     )
     scheduler.add_job(
         market_cycle_job,
@@ -4380,6 +4384,10 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         max_instances=1,
         coalesce=True,
         replace_existing=True,
+        # P-L139: 22/22 runs perdidos en produccion con 1.4-2.7 s de
+        # retraso. 300 s << cadencia de 15 min: el ciclo corre tarde
+        # antes que no correr; coalesce evita backlog.
+        misfire_grace_time=300,
     )
     if settings.trade_fill_watch_enabled:
         scheduler.add_job(
@@ -4392,6 +4400,10 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
             max_instances=1,
             coalesce=True,
             replace_existing=True,
+            # P-L139: mismo fundamento que portfolio_watch. No corrige que
+            # cada pasada cueste ~36 s con cadencia de 30 s (eso pide
+            # cadencia o coste, otro lote); evita descartar las tardias.
+            misfire_grace_time=120,
         )
     scheduler.add_job(
         closed_market_technical_study_job,
