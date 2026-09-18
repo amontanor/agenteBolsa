@@ -4475,3 +4475,13 @@ sizing, política o producción en esta auditoría.
 - Informe: `docs/informe_p_l141_port_jetson.md`.
 - Siguiente: operador alivia memoria → postmarket terminal por ruta
   normal → preflight + snapshot + corte + doble salud + oleada 2.
+
+## P-L143 � tolerancia a centimo en aperturas SPY (candidato 0.4.247, listo para revision)
+
+- Dictamen: ready_for_review. Rama codex/pl143-spy-cent-tolerance.
+- Causa: igualdad exacta de float declaraba spy_open_conflict ante revisiones sub-centimo (auto_adjust).
+- Fix: agrupacion por precio redondeado a centimo solo para comparar; evidencia exacta intacta.
+- QA: 2 focales + 48 regresiones (50 passed); version_policy, Ruff/NUL/diff verdes.
+- Informe: docs/informe_p_l143_spy_cent_tolerance.md.
+- Siguiente: merge --no-ff tras P-L146 o antes segun orden; suite completa en integracion.
+
