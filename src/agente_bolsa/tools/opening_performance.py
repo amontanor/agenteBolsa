@@ -614,6 +614,7 @@ def load_cached_spy_open_observations(
 
         resolved: dict[str, dict[str, Any]] = {}
         conflicts: dict[str, list[dict[str, Any]]] = {}
+        superseded_sessions: list[str] = []
         for session_date, candidates in candidates_by_session.items():
             # P-L153: quarantine partial intraday bars when settled
             # candidates exist. A daily bar downloaded while its session
@@ -639,6 +640,24 @@ def load_cached_spy_open_observations(
                 continue
             if len(unique) > 1:
                 if len(authority_groups) != 1:
+                    # P-L153b: yfinance revises adjusted history on every
+                    # download, so settled artifacts genuinely disagree
+                    # across days. Without any dedicated authority, the
+                    # newest settled revision is the best knowledge; older
+                    # ones are superseded, not conflicting. Two discordant
+                    # authorities stay in conflict (real problem).
+                    # Real conflicts survive only without any settled data.
+                    if not authority_groups and settled:
+                        newest = max(
+                            settled,
+                            key=lambda item: (
+                                str(item.get("cache_created_at") or ""),
+                                str((item.get("provenance") or {}).get("cache_id") or ""),
+                            ),
+                        )
+                        resolved[session_date] = newest
+                        superseded_sessions.append(session_date)
+                        continue
                     conflicts[session_date] = sorted(
                         [candidate for group in unique.values() for candidate in group],
                         key=lambda item: (
@@ -659,7 +678,7 @@ def load_cached_spy_open_observations(
                     str((item.get("provenance") or {}).get("cache_id") or ""),
                 ),
             )
-        return resolved, conflicts
+        return resolved, conflicts, superseded_sessions
 
     def _resolve_current(
         candidates_by_session: Mapping[str, list[dict[str, Any]]],
@@ -697,7 +716,7 @@ def load_cached_spy_open_observations(
             )
         return resolved, warnings
 
-    opens, open_conflicts = _resolve_open(open_candidates)
+    opens, open_conflicts, superseded_sessions = _resolve_open(open_candidates)
     currents, current_warnings = _resolve_current(current_candidates, opens)
     conflicts = open_conflicts
     warnings: list[str] = []
@@ -705,6 +724,8 @@ def load_cached_spy_open_observations(
         warnings.append("conflicting_session_open_observations")
     if quarantined_open_sessions(open_candidates):
         warnings.append("partial_session_bars_quarantined")
+    if superseded_sessions:
+        warnings.append("superseded_open_revisions_ignored")
     warnings.extend(current_warnings)
     expected_session = _expected_open_session(current)
     current_price = currents.get(expected_session or "")

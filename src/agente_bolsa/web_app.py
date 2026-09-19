@@ -2532,9 +2532,7 @@ def _portfolio_value_series_from_alpaca(
     ]
     current_value = _num(current_equity)
     current_date = observed_at.astimezone(ZoneInfo(timezone_name)).date().isoformat()
-    # P-L153: sin punto provisional en fin de semana/festivo; un sábado con
-    # 0.00% aplana la gráfica y contamina el periodo con un día sin sesión.
-    if current_value is not None and current_date >= start_date and not _outside_trading_session(observed_at):
+    if current_value is not None and current_date >= start_date:
         observations.append((current_date, True, observed_at, round(current_value, 2)))
     if not observations:
         return pd.DataFrame()

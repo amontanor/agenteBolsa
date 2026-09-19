@@ -24,8 +24,10 @@ hace bien en no fusionarlas: hay que elegir, no promediar.
 - `_position_rows(blank_intraday=True)` desde el dashboard con el mismo
   criterio de la tarjeta (cero de proveedor + mercado cerrado): el P/L
   día por posición muestra `n/d`, no `$0.00`.
-- Serie de equity: sin punto provisional en día sin sesión (sábado con
-  0.00% aplanaba gráfica y periodo).
+- Revertido antes del merge: se probó omitir el punto provisional en
+  día sin sesión, pero rompe el contrato P-L63 (el equity actual siempre
+  se anexa; `test_p63` exige `pl == -961.83` con el punto actual). El
+  punto sábado con 0.00% es medida real, no ruido: se conserva.
 
 ## QA
 

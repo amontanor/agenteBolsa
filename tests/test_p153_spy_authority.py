@@ -112,13 +112,13 @@ def test_partial_bar_quarantined_when_settled_exists(tmp_path):
     assert "partial_session_bars_quarantined" in observed["warnings"]
 
 
-def test_genuine_settled_disagreement_still_conflicts(tmp_path):
+def test_genuine_unsettled_disagreement_still_conflicts(tmp_path):
     _write_cache(
-        tmp_path, "settled-a", created_at="2026-09-17T21:00:00+00:00",
+        tmp_path, "partial-a", created_at="2026-09-17T10:00:00+00:00",
         open_price=759.5, requested_symbols=["SPY"],
     )
     _write_cache(
-        tmp_path, "settled-b", created_at=SETTLED_AFTER,
+        tmp_path, "partial-b", created_at="2026-09-17T11:00:00+00:00",
         open_price=763.15, requested_symbols=["SPY"],
     )
 
@@ -127,6 +127,30 @@ def test_genuine_settled_disagreement_still_conflicts(tmp_path):
     )
 
     assert SESSION_DATE in observed["conflicts"]
+
+
+def test_newest_settled_revision_wins_over_older(tmp_path):
+    _write_cache(
+        tmp_path, "partial-old", created_at="2026-09-17T13:37:34+00:00",
+        open_price=759.5, requested_symbols=["SPY"],
+    )
+    _write_cache(
+        tmp_path, "settled-old", created_at="2026-09-17T21:00:00+00:00",
+        open_price=763.15, requested_symbols=["SPY"],
+    )
+    _write_cache(
+        tmp_path, "settled-new", created_at="2026-09-19T09:32:00+00:00",
+        open_price=761.26, requested_symbols=["SPY"],
+    )
+
+    observed = load_cached_spy_open_observations(
+        _settings(tmp_path), now=datetime(2026, 9, 19, 12, 0, tzinfo=timezone.utc)
+    )
+
+    assert SESSION_DATE not in observed["conflicts"]
+    assert observed["opens"][0]["price"] == 761.26
+    assert "superseded_open_revisions_ignored" in observed["warnings"]
+    assert "partial_session_bars_quarantined" in observed["warnings"]
 
 
 def test_position_day_blanked_when_requested():
