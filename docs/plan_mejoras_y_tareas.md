@@ -4527,3 +4527,10 @@ sizing, política o producción en esta auditoría.
 - all_zero de Alpaca = n/d mercado cerrado; as_of acotado a sesion real; tarjeta Hoy (realizado/compras/ventas).
 - QA: 10 focales + 141 regresiones (151 passed); Ruff/NUL/diff verdes.
 - Informe: docs/informe_p_l152_dashboard_today.md.
+
+## P-L152 - dashboard Hoy y corte Jetson 0.4.308 DEPLOYED
+
+- Merge 9c3a6225 (0.4.252). Jetson sha256:8c3ed2ec422dcd211f.
+- web_app Jetson por anclas (8 hunks); equity_metrics copia; doble salud verde.
+- Suite 22 chunks: 2 fallos preexistentes en base 6d262af8 (ajenos).
+- Informe: docs/informe_p_l152_dashboard_today.md.

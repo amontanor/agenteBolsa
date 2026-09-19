@@ -1,47 +1,46 @@
-# P-L152 — dashboard "Hoy", ceros honestos y dedup SPY (candidato 0.4.252)
+# P-L152 — dashboard "Hoy" + corte Jetson 0.4.308 — `deployed`
 
-Dictamen: `ready_for_review`. Sábado 19-sep-2026, XNYS cerrado; trabajo
-aislado en worktree, sin broker/red/LLM en pruebas, sin despliegue.
+Dictamen: `deployed`. Ejecutado sábado 19-sep-2026 (~09:08 CEST),
+XNYS cerrado.
 
-## Causa
+## Candidato Windows
 
-El dashboard mostraba datos engañosos fuera de sesión y ocultaba el
-desglose de "hoy":
+- Merge `--no-ff` a producción: HEAD `9c3a6225`, versión `0.4.252`.
+- Suite completa por bloques (22 chunks): todos verdes salvo 2 fallos
+  **preexistentes** reproducidos en base `6d262af8` sin este lote:
+  `test_learning_mode.py::test_learning_mode_relaxes_partial_market_state_only_when_enabled`
+  y `test_p71_eod_authority.py::test_future_bar_in_an_otherwise_valid_cache_is_rejected`
+  (entorno de test; ajenos a P-L152).
+- Ruff/NUL/diff verdes. Focales P-L152 (10) verdes.
 
-1. "Ganancia/pérdida de la cartera actual hoy: $0.00" con 5 posiciones:
-   Alpaca devuelve `unrealized_intraday_pl=0` con mercado cerrado; era
-   un cero supuesto, no una medida.
-2. `as_of` del P/L diario cruzaba el fin de semana ("17/09 → 19/09"),
-   sugiriendo un cierre que no existe.
-3. El héroe "Hoy sin dato SPY" se repetía como fila en la tabla.
-4. No había desglose realizado/abierto ni compras/ventas de la sesión.
+## Contenido portado a Jetson
 
-## Cambio
+- **web_app.py** (Jetson diverge de Windows): parche por anclas de 8
+  hunks — `_intraday_metric_display`, `_outside_trading_session`,
+  `_today_breakdown`, `_render_today_breakdown`, dedup fila en curso,
+  `market_open` en `_account_group` y `as_of` acotado a sesión real.
+  `py_compile` OK.
+- **equity_metrics.py**: copia directa (idéntico), con campo `all_zero`.
+- **__init__.py** → `0.4.308`.
+- Incidente propio: dos builds iniciales llevaban el `equity_metrics.py`
+  viejo (bundle no recopiado tras el primer fallo de copia); detectado
+  verificando `all_zero` en el contenedor y reconstruido `--no-cache`.
+  Imagen final `sha256:8c3ed2ec422dcd211f`.
 
-- `position_intraday_pl_reconciliation` (equity_metrics): nuevo campo
-  `all_zero`; si todas las posiciones están a 0 y el total es completo,
-  el status pasa a `unavailable` (cero de proveedor ≠ ganancia real).
-- `_intraday_metric_display`: con mercado cerrado y `all_zero`, muestra
-  `n/d · mercado cerrado`; con mercado abierto conserva el `$0.00` real.
-- `_outside_trading_session` + `_daily_equity_detail`: fuera de sesión
-  etiqueta `cierre {start} · leído {end} (mercado cerrado)`.
-- `_today_breakdown` + tarjeta "Hoy": variación de equity, realizado
-  hoy (con conocidos/sin P/L), compras y ventas de la sesión vigente,
-  reutilizando `history.days`/`history.trades` y la apertura ya cargada.
-- `_render_daily_vs_spy_table`: omite la fila en curso no comparable
-  (ya responde el héroe).
+## Corte y salud
 
-## QA
+- Preflight `diagnose` ok; escritores detenidos por `compose stop`
+  (`WRITERS_STOPPED`); snapshot frío
+  `cold-pre-0.4.308-20260919T0708Z` ok.
+- Selector → `0.4.308-arm64` (backup `runtime.env.bak-p152`);
+  `deploy-agente-bolsa` verde a la primera.
+- Doble salud: HTTP x4 = 200, 3 contenedores healthy restarts=0,
+  version `0.4.308`, kernel True sin violaciones, PAPER/live-off/
+  auto-off, lock owner_alive/token_match, 0 órdenes, 0 locks.
 
-- Nuevos: `tests/test_p152_dashboard_today.py` (10 tests).
-- Regresiones: web_app, daily equity P-L81, position P-L73, dashboard
-  cards P-L87, frescura P-L62, version policy. Total: 151 passed.
-- Ajuste de contrato P-L81 (`all_zero` en el dict) y pin de versión
-  P-L59C a 0.4.252. Ruff, NUL, diff verdes.
-- Omitidos (fin de semana): suite completa, smoke, config/kernel.
+## Efecto visible
 
-## Límites
-
-- No añade fuente nueva ni persistencia; cero llamadas extra al broker.
-- El desglose hoy depende de la apertura exacta ya cargada; sin ella,
-  `n/d`.
+El dashboard (Windows y Jetson) ahora: dice `n/d · mercado cerrado` en
+vez de `$0.00` con el mercado cerrado, acota el `as_of` a la última
+sesión real, añade la tarjeta "Hoy" (equity + realizado + compras +
+ventas de la sesión) y elimina el duplicado del héroe SPY.
