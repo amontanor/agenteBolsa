@@ -1659,7 +1659,12 @@ def _position_purchase_sort_key(item: dict[str, Any]) -> tuple[int, float, str, 
     return (0, -parsed.timestamp(), broker_order_id, symbol)
 
 
-def _position_rows(history: dict[str, Any], *, local_timezone: str = "Europe/Madrid") -> list[dict[str, Any]]:
+def _position_rows(
+    history: dict[str, Any],
+    *,
+    local_timezone: str = "Europe/Madrid",
+    blank_intraday: bool = False,
+) -> list[dict[str, Any]]:
     risk_levels = history.get("risk_levels", {})
     rows = []
     for item in history.get("open_positions", []):
@@ -1668,6 +1673,9 @@ def _position_rows(history: dict[str, Any], *, local_timezone: str = "Europe/Mad
         purchase = resolve_position_purchase(history, symbol, item.get("qty"))
         purchase_time = purchase.get("purchase_timestamp")
         purchase_date, purchase_clock = _position_purchase_display(purchase_time, local_timezone)
+        # P-L153: un 0.00 de proveedor con mercado cerrado no es medida.
+        day_pl = None if blank_intraday else item.get("unrealized_intraday_pl")
+        day_plpc = None if blank_intraday else item.get("unrealized_intraday_plpc")
         rows.append(
             {
                 "Simbolo": symbol,
@@ -1685,8 +1693,8 @@ def _position_rows(history: dict[str, Any], *, local_timezone: str = "Europe/Mad
                 "Actual": item.get("current_price"),
                 "P/L $": item.get("unrealized_pl"),
                 "P/L %": item.get("unrealized_plpc"),
-                "P/L día $": item.get("unrealized_intraday_pl"),
-                "P/L día %": item.get("unrealized_intraday_plpc"),
+                "P/L día $": day_pl,
+                "P/L día %": day_plpc,
                 "P/L fuente": "alpaca_position_snapshot",
                 "Stop": item.get("stop_loss"),
                 "Take": item.get("take_profit"),
@@ -2524,7 +2532,9 @@ def _portfolio_value_series_from_alpaca(
     ]
     current_value = _num(current_equity)
     current_date = observed_at.astimezone(ZoneInfo(timezone_name)).date().isoformat()
-    if current_value is not None and current_date >= start_date:
+    # P-L153: sin punto provisional en fin de semana/festivo; un sábado con
+    # 0.00% aplana la gráfica y contamina el periodo con un día sin sesión.
+    if current_value is not None and current_date >= start_date and not _outside_trading_session(observed_at):
         observations.append((current_date, True, observed_at, round(current_value, 2)))
     if not observations:
         return pd.DataFrame()
@@ -5635,7 +5645,23 @@ def page_dashboard() -> None:
         # This is a read-only Store lookup and does not add a broker request.
         history["executed_buy_lots_by_symbol"] = store.executed_buy_lots_by_symbol()
         stats = history.get("current_statistics", {})
-        position_rows = _position_rows(history, local_timezone=settings.local_timezone)
+        # P-L153: mismo criterio que la tarjeta (cero de proveedor con
+        # mercado cerrado no es medida): blanquea el P/L día por posición.
+        _day_values = [
+            _num(item.get("unrealized_intraday_pl"))
+            for item in history.get("open_positions", [])
+        ]
+        _blank_intraday = (
+            bool(_day_values)
+            and all(value == 0.0 for value in _day_values if value is not None)
+            and all(value is not None for value in _day_values)
+            and not bool(market.get("is_open"))
+        )
+        position_rows = _position_rows(
+            history,
+            local_timezone=settings.local_timezone,
+            blank_intraday=_blank_intraday,
+        )
     except Exception as exc:  # noqa: BLE001
         st.warning(f"No se pudo leer historico/P/L: {exc}")
     try:
