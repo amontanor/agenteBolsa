@@ -90,11 +90,19 @@ def position_intraday_pl_reconciliation(positions: Iterable[Any] | None) -> dict
     known = len(values)
     total = len(items)
     status = "complete" if known == total else "partial" if known else "unavailable"
+    # P-L152: a provider can return 0.00 for every position outside a session
+    # even though the field exists. That is "not measured yet", not a real
+    # zero, so the dashboard must not print "$0.00". Distinguish it explicitly
+    # and let presentation label it as unavailable.
+    all_zero = bool(values) and all(value == 0.0 for value in values)
+    if status == "complete" and all_zero:
+        status = "unavailable"
     return {
         "amount": round(sum(values), 4) if values else None if total else 0.0,
         "known": known,
         "total": total,
         "status": status,
+        "all_zero": all_zero,
         "source": "portfolio_snapshot",
     }
 

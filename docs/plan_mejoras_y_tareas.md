@@ -4520,3 +4520,10 @@ sizing, política o producción en esta auditoría.
 - Informe: docs/informe_p_l307_jetson.md.
 - Siguiente: medir crews autenticando + compras LLM/no-fallback; decidir P-L148 tras 5 sesiones.
 
+
+## P-L152 - dashboard Hoy, ceros honestos y dedup SPY (candidato 0.4.252, listo para revision)
+
+- Rama codex/pl152-dashboard-today. Sin fuente nueva, sin llamada extra al broker.
+- all_zero de Alpaca = n/d mercado cerrado; as_of acotado a sesion real; tarjeta Hoy (realizado/compras/ventas).
+- QA: 10 focales + 141 regresiones (151 passed); Ruff/NUL/diff verdes.
+- Informe: docs/informe_p_l152_dashboard_today.md.
