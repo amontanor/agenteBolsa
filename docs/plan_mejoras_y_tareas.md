@@ -4540,3 +4540,10 @@ sizing, política o producción en esta auditoría.
 - Rama codex/pl153-spy-authority. Cuarentena de barras parciales intradia; P/L dia n/d en cerrado; sin punto de fin de semana.
 - QA: 10 focales + regresiones SPY/dashboard/version (57 passed en bateria); Ruff/diff verdes.
 - Informe: docs/informe_p_l153_spy_authority.md.
+
+## P-L153b + corte Jetson 0.4.310 DEPLOYED
+
+- newest-wins sin autoridad (merge 6f48c83f). Jetson sha256:9ffd565d0519729526.
+- Tabla SPY: 1/36 -> 35/2 (2 account_open_unavailable genuinas).
+- Reinicio host 12:06-12:19 causa unavailable; snapshot script persistente en /home/antonio/bin/.
+- Informe: docs/informe_p_l153_spy_authority.md.

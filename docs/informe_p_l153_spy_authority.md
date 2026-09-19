@@ -41,6 +41,26 @@ hace bien en no fusionarlas: hay que elegir, no promediar.
   (byte 0x97, fichero no tocado por este lote).
 - Omitidos (fin de semana): suite completa, smoke, config/kernel.
 
+## Corte Jetson 0.4.310 EJECUTADO (20-sep ~00:35 CEST) — `deployed`
+
+- Splice `FROM 0.4.309`: `opening_performance.py` copia directa (diff
+  Jetson↔Windows = solo hunks P-L153b), `web_app.py` con revert del
+  provisional ya aplicado en el bundle, `__init__` → `0.4.310`.
+- Imagen `sha256:9ffd565d0519729526` (labels 0.4.310/port-p153b-0.4.310),
+  verificada en efímero: versión + newest-wins + blank + sin skip.
+- Snapshot frío `cold-pre-0.4.310-20260919T2230Z` ok; selector con backup
+  `runtime.env.bak-p153`; `deploy` verde a la primera; doble salud
+  (HTTP x4 200, healthy restarts=0, kernel True, PAPER/live-off/auto-off,
+  lock coherente, 0 órdenes, 0 locks).
+- Incidente: corte intermedio sin snapshot (script en /tmp volatilizado
+  por reinicio del host ~12:06–12:19 CEST, causa `unavailable`; DB
+  verificada `quick_check=ok`, 497.037 eventos, 206 órdenes). Lección:
+  `sqlite_cold_snapshot.py` ahora también en `/home/antonio/bin/`
+  (persistente).
+- Verificación funcional en scheduler: **35 filas, 2 omitidas** (eran
+  1/36). Las 2 restantes son `account_open_unavailable` genuinas
+  (06→07 y 07→10 ago, sin equity de apertura). Tabla recuperada.
+
 ## Límites
 
 - Si solo hay barras parciales para una sesión, se conservan (sin dato
