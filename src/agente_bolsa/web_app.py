@@ -441,8 +441,32 @@ def _daily_equity_detail(metric: dict[str, Any]) -> str:
         reason = str(metric.get("reason") or "datos no disponibles")
         return f"P/L diario de cartera · n/d · {reason}"
     start = _daily_equity_session_display_date(metric.get("window_start")) or "último cierre Alpaca"
+    # P-L152: fuera de sesión el extremo "ahora" caía en el día natural
+    # (p. ej. sábado) y sugería un cierre que no existe. Se etiqueta el
+    # último cierre real y la fecha de lectura por separado.
     end = _daily_equity_display_date(metric.get("window_end")) or "ahora"
+    if _outside_trading_session(metric.get("window_end")):
+        return f"Equity actual − último cierre Alpaca · cierre {start} · leído {end} (mercado cerrado)"
     return f"Equity actual − último cierre Alpaca · {start} → {end}"
+
+
+def _outside_trading_session(value: Any) -> bool:
+    """True when the timestamp falls on a non-session day (weekend/holiday)."""
+
+    parsed = _parse_utc_timestamp(value)
+    if parsed is None:
+        return False
+    market_date = parsed.astimezone(ZoneInfo("America/New_York")).date().isoformat()
+    try:
+        schedule = MarketCalendar().session_schedule(market_date, market_date)
+    except Exception:  # noqa: BLE001 - calendar failures must not break the card
+        return False
+    if schedule is None:
+        return False
+    try:
+        return market_date not in {str(index.date()) for index, _row in schedule.iterrows()}
+    except AttributeError:
+        return False
 
 
 def _json(value: Any) -> str:
@@ -1353,6 +1377,31 @@ def _opening_comparable_metric(opening_context: dict[str, Any] | None) -> dict[s
     }
 
 
+def _intraday_metric_display(
+    position_intraday: dict[str, Any] | None,
+    *,
+    market_open: bool | None,
+) -> tuple[str, str]:
+    """Honest display for the intraday position P/L card (P-L152).
+
+    A provider zero with the market closed means "not measured", never a real
+    zero gain. Keep the number only when it is a genuine measurement.
+    """
+
+    metric = position_intraday or {}
+    amount = metric.get("amount")
+    coverage = (
+        f"{metric.get('known', 0)}/{metric.get('total', 0)} posiciones"
+        if metric
+        else "n/d"
+    )
+    if metric.get("all_zero") and market_open is not True:
+        return "n/d · mercado cerrado", coverage
+    if amount is None:
+        return "n/d", coverage
+    return _money(amount), coverage
+
+
 def _account_group(
     *,
     initial_equity: float | None,
@@ -1372,6 +1421,7 @@ def _account_group(
     today_detail: str | None = None,
     position_intraday: dict[str, Any] | None = None,
     opening_context: dict[str, Any] | None = None,
+    market_open: bool | None = None,
 ) -> None:
     equity_summary = equity_summary or {}
     position_intraday = position_intraday or {}
@@ -1379,15 +1429,9 @@ def _account_group(
     today_tone = "good" if (today_pl or 0.0) > 0 else "bad" if (today_pl or 0.0) < 0 else "neutral"
     today_metric = _today_pl_metric_payload(today_pl, exposure, today_pct, period_caption=today_detail)
     today_display = today_metric["display"]
-    intraday_amount = (
-        _money(position_intraday.get("amount"))
-        if position_intraday.get("amount") is not None
-        else "n/d"
-    )
-    intraday_coverage = (
-        f"{position_intraday.get('known', 0)}/{position_intraday.get('total', 0)} posiciones"
-        if position_intraday
-        else "n/d"
+    intraday_amount, intraday_coverage = _intraday_metric_display(
+        position_intraday,
+        market_open=market_open,
     )
     tone_class = f"account-pl {total_tone}"
     today_class = f"account-kpi {today_tone}"
@@ -1686,6 +1730,111 @@ def _sales_since_open_rows(
         "opening_at": opening_at.isoformat(),
         "rows": rows,
     }
+
+
+def _today_breakdown(
+    history: dict[str, Any],
+    opening_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Realized + open + buy/sell notional for the current session (P-L152).
+
+    Reuses the exact opening already loaded by the dashboard and the
+    ``history.days`` grouping; no extra broker request.
+    """
+
+    account_current = (opening_context or {}).get("account_current") or {}
+    opening_at = _parse_utc_timestamp(account_current.get("system_start_at"))
+    empty = {
+        "status": "unavailable",
+        "reason": "opening_unavailable",
+        "realized_pl": None,
+        "buy_notional": None,
+        "sell_notional": None,
+        "buy_count": 0,
+        "sell_count": 0,
+        "realized_known": 0,
+        "realized_unknown": 0,
+    }
+    if opening_at is None:
+        return empty
+    opening_date = opening_at.astimezone(ZoneInfo("Europe/Madrid")).date().isoformat()
+    day = next(
+        (item for item in list(history.get("days") or []) if str(item.get("date") or "") == opening_date),
+        None,
+    )
+    session_trades = [
+        trade
+        for trade in list(history.get("trades") or [])
+        if (_parse_utc_timestamp(trade.get("time")) or datetime.min.replace(tzinfo=timezone.utc)) >= opening_at
+    ]
+    buys = [trade for trade in session_trades if str(trade.get("side") or "").lower() == "buy"]
+    sells = [trade for trade in session_trades if str(trade.get("side") or "").lower() == "sell"]
+    realized_values = [_num(trade.get("realized_pl")) for trade in sells]
+    realized_known = [value for value in realized_values if value is not None]
+    return {
+        "status": "available",
+        "reason": None,
+        "opening_at": opening_at.isoformat(),
+        "realized_pl": round(sum(realized_known), 2) if realized_known else None,
+        "buy_notional": (
+            round(sum(_num(trade.get("notional")) or 0.0 for trade in buys), 2) if buys else 0.0
+        ),
+        "sell_notional": (
+            round(sum(_num(trade.get("notional")) or 0.0 for trade in sells), 2) if sells else 0.0
+        ),
+        "buy_count": len(buys),
+        "sell_count": len(sells),
+        "realized_known": len(realized_known),
+        "realized_unknown": len(realized_values) - len(realized_known),
+        "day_realized_pl": _num(day.get("realized_pl")) if day else None,
+    }
+
+
+def _render_today_breakdown(
+    history: dict[str, Any],
+    opening_context: dict[str, Any] | None,
+    *,
+    today_pl: float | None,
+    today_pct: float | None,
+) -> None:
+    breakdown = _today_breakdown(history, opening_context)
+    _section_title(
+        "Hoy",
+        "Sesión en curso desde la última apertura XNYS. Reutiliza el histórico ya cargado; sin lectura extra del broker.",
+    )
+    if breakdown["status"] != "available":
+        st.info("n/d — apertura XNYS no disponible")
+        return
+    realized = breakdown["realized_pl"]
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        tone = "good" if (today_pl or 0.0) > 0 else "bad" if (today_pl or 0.0) < 0 else "neutral"
+        _compact_metric(
+            "Variación de equity hoy",
+            _money_or_na(today_pl),
+            _pct_signed_or_na(today_pct),
+            tone,
+        )
+    with c2:
+        tone = "good" if (realized or 0.0) > 0 else "bad" if (realized or 0.0) < 0 else "neutral"
+        _compact_metric(
+            "Realizado hoy",
+            _money_or_na(realized),
+            f"{breakdown['realized_known']} conocidos · {breakdown['realized_unknown']} sin P/L",
+            tone,
+        )
+    with c3:
+        _compact_metric(
+            "Compras hoy",
+            _money(breakdown["buy_notional"]),
+            f"{breakdown['buy_count']} fills",
+        )
+    with c4:
+        _compact_metric(
+            "Ventas hoy",
+            _money(breakdown["sell_notional"]),
+            f"{breakdown['sell_count']} fills",
+        )
 
 
 def _render_sales_since_open(history: dict[str, Any], opening_context: dict[str, Any]) -> None:
@@ -4503,8 +4652,12 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
         _render_opening_omissions(opening_context)
         html_rows = []
         for row in reversed(visible_rows):
-            system_text = f"{_pct_signed_or_na(row['system_pct'])}<span>{_money_or_na(row['system_delta'])}</span>"
             comparison_status = row.get("comparison_status") or ("comparable" if row["status"] == "final" else "unavailable")
+            # P-L152: la fila en curso ya se responde en la tarjeta heroe de
+            # arriba; aqui solo aporta ruido duplicado cuando no es comparable.
+            if row.get("status") != "final" and comparison_status != "comparable":
+                continue
+            system_text = f"{_pct_signed_or_na(row['system_pct'])}<span>{_money_or_na(row['system_delta'])}</span>"
             spy_text = _pct_signed_or_na(row["spy_pct"]) if comparison_status == "comparable" else "n/d"
             if comparison_status != "comparable" or row.get("system_pct") is None or row.get("spy_pct") is None:
                 winner = "No comparable"
@@ -5576,6 +5729,7 @@ def page_dashboard() -> None:
         today_detail=today_detail,
         position_intraday=position_intraday,
         opening_context=opening_context,
+        market_open=bool(market.get("is_open")),
     )
     _investments_group(
         invested=_num(exposure),
@@ -5628,6 +5782,15 @@ def page_dashboard() -> None:
                 open_pl = _portfolio_open_pl(portfolio, stats.get("unrealized_pl") if stats else None)
                 open_tone = "good" if (open_pl or 0.0) > 0 else "bad" if (open_pl or 0.0) < 0 else "neutral"
                 _compact_metric("P/L abierto", _money(open_pl), tone=open_tone)
+
+        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            _render_today_breakdown(
+                history,
+                opening_context,
+                today_pl=today_total,
+                today_pct=today_pct,
+            )
 
         st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
         with st.container(border=True):

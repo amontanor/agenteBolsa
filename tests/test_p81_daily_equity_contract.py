@@ -100,6 +100,7 @@ def test_position_intraday_pl_is_secondary_reconciliation_with_partial_coverage(
         "known": 2,
         "total": 3,
         "status": "partial",
+        "all_zero": False,
         "source": "portfolio_snapshot",
     }
 
