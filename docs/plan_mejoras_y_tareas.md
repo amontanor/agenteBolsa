@@ -4534,3 +4534,9 @@ sizing, política o producción en esta auditoría.
 - web_app Jetson por anclas (8 hunks); equity_metrics copia; doble salud verde.
 - Suite 22 chunks: 2 fallos preexistentes en base 6d262af8 (ajenos).
 - Informe: docs/informe_p_l152_dashboard_today.md.
+
+## P-L153 - autoridad temporal SPY + tarjetas honestas (candidato 0.4.253, listo para revision)
+
+- Rama codex/pl153-spy-authority. Cuarentena de barras parciales intradia; P/L dia n/d en cerrado; sin punto de fin de semana.
+- QA: 10 focales + regresiones SPY/dashboard/version (57 passed en bateria); Ruff/diff verdes.
+- Informe: docs/informe_p_l153_spy_authority.md.

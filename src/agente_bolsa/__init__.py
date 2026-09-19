@@ -73,4 +73,5 @@ __all__ = ["__version__"]
 # P-L148: reservado para sizing por tramos Fase 1 (0.4.250, en espera).
 # P-L149: guarded veto of toxic extremes + sin_patron quota in fallback (0.4.251).
 # P-L152: dashboard today breakdown, honest closed-market zeros, SPY hero dedup (0.4.252).
-__version__ = "0.4.252"
+# P-L153: session-aware SPY open authority, blank closed-market day P/L, no weekend point (0.4.253).
+__version__ = "0.4.253"

@@ -85,6 +85,35 @@ def _session_open_at(session_date: str) -> datetime:
     return local.astimezone(timezone.utc)
 
 
+def _session_settled_at(session_date: str) -> datetime:
+    """End of the regular session plus a capture grace window (P-L153).
+
+    Daily bars downloaded before this instant were still forming and their
+    OHLC gets revised after the close. Such partial-bar candidates are
+    quarantined whenever a settled candidate exists for the session.
+    """
+
+    return _session_open_at(session_date) + timedelta(hours=6, minutes=45)
+
+
+def _candidate_settled(session_date: str, candidate: Mapping[str, Any]) -> bool:
+    """True when the candidate cannot be a partial intraday bar."""
+
+    provenance = candidate.get("provenance") or {}
+    if provenance.get("authority") == "explicit_benchmark_open":
+        return True
+    created = provenance.get("cache_created_at") or candidate.get("cache_created_at")
+    if not isinstance(created, str) or not created.strip():
+        return True
+    try:
+        created_at = datetime.fromisoformat(created.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    return created_at.astimezone(timezone.utc) >= _session_settled_at(session_date)
+
+
 def _expected_open_session(now: datetime) -> str | None:
     current = now.astimezone(timezone.utc)
     market_date = current.astimezone(MARKET_TIMEZONE).date()
@@ -586,6 +615,14 @@ def load_cached_spy_open_observations(
         resolved: dict[str, dict[str, Any]] = {}
         conflicts: dict[str, list[dict[str, Any]]] = {}
         for session_date, candidates in candidates_by_session.items():
+            # P-L153: quarantine partial intraday bars when settled
+            # candidates exist. A daily bar downloaded while its session
+            # was still forming gets revised after the close; treating it
+            # as equal evidence manufactures conflicts (e.g. 759.5 vs
+            # 763.15 for 2026-09-17).
+            settled = [item for item in candidates if _candidate_settled(session_date, item)]
+            if settled and len(settled) < len(candidates):
+                candidates = settled
             unique: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
             for candidate in candidates:
                 signature = (
@@ -666,6 +703,8 @@ def load_cached_spy_open_observations(
     warnings: list[str] = []
     if open_conflicts:
         warnings.append("conflicting_session_open_observations")
+    if quarantined_open_sessions(open_candidates):
+        warnings.append("partial_session_bars_quarantined")
     warnings.extend(current_warnings)
     expected_session = _expected_open_session(current)
     current_price = currents.get(expected_session or "")
@@ -681,6 +720,19 @@ def load_cached_spy_open_observations(
         "warnings": warnings,
         "conflicts": conflicts,
     }
+
+
+def quarantined_open_sessions(
+    candidates_by_session: Mapping[str, list[dict[str, Any]]],
+) -> list[str]:
+    """Sessions where partial intraday bars were dropped (P-L153)."""
+
+    quarantined: list[str] = []
+    for session_date, candidates in candidates_by_session.items():
+        settled = [item for item in candidates if _candidate_settled(session_date, item)]
+        if settled and len(settled) < len(candidates):
+            quarantined.append(session_date)
+    return sorted(quarantined)
 
 
 def build_open_to_open_rows(
