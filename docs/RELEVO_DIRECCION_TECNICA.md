@@ -1,5 +1,31 @@
 # Relevo de direccion tecnica — agenteBolsa
 
+## Prioridad vigente - P-L154, 22-sep-2026
+
+Dictamen: ready_for_implementation para P-L154-A (caracterizacion), sin
+promocion economica aprobada. Este bloque prevalece sobre secuencias historicas.
+Informe unico: `docs/informe_p_l154_rendimiento_vs_spy.md`; backlog en plan maestro.
+
+- Produccion auditada Jetson .310; imagen
+  sha256:9ffd565d051972952601ccc1b6408eaaa6b8493c46d6143b2dd6b0438712194a.
+  Checkout local .253, HEAD 694359a6, tree 230e405c; no son equivalentes.
+  Etiqueta port-p141-0.4.305: reconstruir procedencia antes de editar.
+- 21-sep: 92,811590% efectivo. Comparacion 9-21-sep: equity -0,226486%,
+  SPY +0,533151%, ocho intervalos; flujos no verificados.
+- Resumen principal excluye learning_experiment; otras fuentes terminan 7-jul.
+  Existe apartado separado: verificar consumidores, no asumir truncado.
+  Controles comparables 0/78. CI: 192/200 PROSA, cero contratos completos
+  y cero experimentos en el ultimo digest.
+- Secuencia: A base/caracterizacion; B evidencia reciente/identidad exacta;
+  C retorno/costes/atribucion; D challenger de seleccion; E capital/core SPY
+  shadow; F propuestas verificables. Una tarea Luna nueva por lote; Astra revisa.
+- No activar P-L148 por cinco sesiones ni ampliar limites. Core disabled;
+  P-L138 requiere atribucion y ensayo separado de una sola regla.
+- Primera release B+C observacional con QA y despliegue cerrado N3.
+  Politicas requieren OOS, control y revision posterior. Automatizacion pausada.
+- Luna auditora: 01a0c94d-dc10-7023-936a-6dca1444f089; auditoria completada tras
+  limite de uso; needs_fix medicion/consumo. Astra reviso dictamen y mantiene sizing. No hay implementacion ni despliegue P-L154.
+
 ### P-L70 — resumen diario Telegram UX (candidato 0.4.203)
 
 - Base `87d29018`/árbol `fd690a93`; worktree aislado

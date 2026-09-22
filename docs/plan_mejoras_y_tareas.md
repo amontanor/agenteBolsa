@@ -1,5 +1,46 @@
 # Plan maestro de mejoras y tareas — agenteBolsa
 
+## Prioridad vigente - P-L154: rendimiento frente a SPY (22-sep-2026)
+
+Informe unico: `docs/informe_p_l154_rendimiento_vs_spy.md`. Este bloque define
+la nueva secuencia; las entradas posteriores conservan historia, no prioridad.
+Auditoria N0 terminada; no implementacion ni promocion economica aprobada
+por este informe. Produccion auditada Jetson `.310`, checkout local `.253`:
+objetos/imagen exactos en el informe, sin asumir equivalencia.
+
+Hallazgos: efectivo 92,811590% al 21-sep; equity -0,226486% frente a SPY
++0,533151% entre aperturas 9 y 21-sep (8 intervalos, flujos no verificados).
+Resumen principal excluye learning_experiment; las otras fuentes terminan
+el 7-jul. Cohorte reciente separada, controles comparables 0/78. Ultimo digest
+CI: 192/200 propuestas PROSA, cero contratos completos y cero experimentos.
+
+| Lote | Estado | Alcance y aceptacion |
+| --- | --- | --- |
+| P-L154-A | ready_for_implementation | Base exacta .310, productores/consumidores por cohorte y caracterizacion reproducible; primer encargo, sin politica |
+| P-L154-B | planned | Evidencia reciente, IDs exactos, temporalidad, cobertura y exclusiones; paridad activa |
+| P-L154-C | planned | Retorno de cartera, flujos, costes, benchmark y atribucion del capital ocioso |
+| P-L154-D | planned | Una abstencion shadow por expectativa neta conservadora negativa, control y OOS |
+| P-L154-E | planned | Core SPY/satelite en replay y shadow; limites intactos, sin activacion |
+| P-L154-F | planned | Contratos de propuesta, evaluador determinista y resultado durable; utilidad marginal del LLM |
+
+Secuencia A -> B -> C -> D -> E -> F, una tarea Luna nativa nueva por lote,
+modelo/esfuerzo explicitos segun AGENTS y revision Astra. No Muse ni Planner.
+Primera release B+C observacional tras QA cerrado; siguientes releases shadow
+sin promocion automatica. Sin tablas, servicios, dependencias ni protegidos nuevos.
+
+Luna cerro auditoria needs_fix; Astra contrasto consumidores. B+C conservan
+entradas de ranking/sizing activos. D1 caracteriza contexto reciente en shadow;
+D2 ensaya abstencion por separado. Conectar datos nuevos a trading es N3.
+
+P-L148 sigue en espera: cinco sesiones no demuestran edge ni autorizan sizing.
+P-L149 se evalua con cohortes/versiones separadas; una sola ablacion por ensayo.
+P-L138 se abre despues de atribucion/B-D con seleccion y sizing invariantes.
+Al menos tres ventanas OOS validas, purga/embargo y bloques por sesion; costes
+explicitos, mejora neta con intervalo favorable y riesgo no peor. Si falta
+muestra: collecting. Core sigue disabled; 5% por posicion tambien afecta SPY.
+No ampliar limites para alcanzar el benchmark sin decision humana explicita.
+Seguimiento automatico permanece pausado. Siguiente unico encargo: P-L154-A.
+
 ## P-L70 — rediseño UX del resumen diario Telegram (candidato 0.4.203)
 
 - Worktree aislado `pl70_telegram_summary_ux`, rama
