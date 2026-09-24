@@ -12,12 +12,13 @@ from typing import Any
 
 from ._utils import log_swallow
 from .config import Settings
+from .llm_model_ids import DEEPSEEK_V4_1_FLASH_MODEL_ID, normalize_model_id
 
 LOGGER = logging.getLogger(__name__)
 
 ZEN_PROVIDER = "opencode-zen"
 ZEN_BASE_URL = "https://opencode.ai/zen/v1"
-ZEN_MODEL = "deepseek-v4-flash-free"
+ZEN_MODEL = DEEPSEEK_V4_1_FLASH_MODEL_ID
 GO_PROVIDER = "opencode-go"
 GO_BASE_URL = "https://opencode.ai/zen/go/v1"
 GO_MODEL = "deepseek-v4-flash"
@@ -87,7 +88,7 @@ def primary_llm_endpoint(settings: Settings) -> LLMEndpoint:
             name=f"primary:{selector}",
             api_key=str(settings.opencode_api_key or "").strip(),
             base_url=settings.opencode_api_base,
-            model=settings.opencode_model,
+            model=normalize_model_id(settings.opencode_model) or settings.opencode_model,
             provider=selector,
             preflight=settings.llm_primary_preflight_enabled,
         )
@@ -104,7 +105,7 @@ def primary_llm_endpoint(settings: Settings) -> LLMEndpoint:
         name="primary:custom",
         api_key=str(settings.openai_api_key or "").strip(),
         base_url=settings.openai_api_base,
-        model=settings.openai_model,
+        model=normalize_model_id(settings.openai_model) or settings.openai_model,
         provider="custom",
         preflight=settings.llm_primary_preflight_enabled,
     )
@@ -131,7 +132,8 @@ def configured_llm_endpoints(settings: Settings) -> list[LLMEndpoint]:
                 name="local_fallback",
                 api_key=str(settings.llm_local_fallback_api_key or "local-llama").strip(),
                 base_url=settings.llm_local_fallback_api_base,
-                model=settings.llm_local_fallback_model,
+                model=normalize_model_id(settings.llm_local_fallback_model)
+                or settings.llm_local_fallback_model,
                 provider="openai-local",
                 preflight=settings.llm_local_fallback_preflight_enabled,
                 fallback_used=True,
@@ -265,7 +267,7 @@ def role_endpoints(settings: Settings, role: str) -> list[LLMEndpoint]:
                 name=f"role:{role}",
                 api_key=str(api_key or primary_llm_endpoint(settings).api_key or "").strip(),
                 base_url=base,
-                model=model,
+                model=normalize_model_id(model) or model,
                 provider=primary_llm_endpoint(settings).provider,
                 preflight=settings.llm_primary_preflight_enabled,
             )
@@ -277,7 +279,7 @@ def role_endpoints(settings: Settings, role: str) -> list[LLMEndpoint]:
                 name=f"role:{role}",
                 api_key=primary.api_key,
                 base_url=primary.base_url,
-                model=model,
+                model=normalize_model_id(model) or model,
                 provider=primary.provider,
                 preflight=settings.llm_primary_preflight_enabled,
             )
@@ -292,7 +294,7 @@ def role_endpoints(settings: Settings, role: str) -> list[LLMEndpoint]:
                 name="role:deep",
                 api_key=improvement_key,
                 base_url=settings.improvement_llm_base_url,
-                model=settings.improvement_llm_model,
+                model=normalize_model_id(settings.improvement_llm_model) or settings.improvement_llm_model,
                 provider=settings.improvement_llm_provider,
                 preflight=False,
             )

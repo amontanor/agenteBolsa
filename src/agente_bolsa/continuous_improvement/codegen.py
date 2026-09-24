@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from agente_bolsa.llm_model_ids import normalize_model_id
 from agente_bolsa.models import new_id
 
 from .experiments import AutoApplyCodeAgent, CodeDiffPreviewAgent
@@ -588,11 +589,12 @@ def _codegen_max_tokens(settings: Settings) -> int:
 def _codegen_model(settings: Settings) -> str:
     override = os.environ.get("IMPROVEMENT_LLM_CODEGEN_MODEL", "").strip()
     if override:
-        return override
+        return normalize_model_id(override) or override
     configured = str(getattr(settings, "improvement_llm_model", "") or "").strip()
     if configured.lower().startswith("glm-"):
-        return str(getattr(settings, "improvement_llm_orchestrator_model", "") or configured)
-    return configured
+        selected = str(getattr(settings, "improvement_llm_orchestrator_model", "") or configured)
+        return normalize_model_id(selected) or selected
+    return normalize_model_id(configured) or configured
 
 
 def create_demo_codegen_proposal(store: Store) -> str:

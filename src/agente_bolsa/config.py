@@ -7,10 +7,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from agente_bolsa._utils import log_swallow
+from agente_bolsa.llm_model_ids import DEEPSEEK_V4_1_FLASH_MODEL_ID, normalize_model_id
 
 LOGGER = logging.getLogger(__name__)
 
@@ -18,13 +19,31 @@ LOGGER = logging.getLogger(__name__)
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    @field_validator(
+        "opencode_model",
+        "openai_model",
+        "mimo_model",
+        "llm_local_fallback_model",
+        "secondary_review_llm_model",
+        "llm_role_fast_model",
+        "llm_role_sentiment_model",
+        "llm_role_decision_model",
+        "llm_role_deep_model",
+        "improvement_llm_model",
+        "improvement_llm_orchestrator_model",
+        mode="before",
+    )
+    @classmethod
+    def normalize_retired_model_ids(cls, value: str | None) -> str | None:
+        return normalize_model_id(value)
+
     llm_model_selector: Literal["opencode", "opencode-go", "opencode-zen", "mimo", "custom"] = Field(
         default="opencode-zen",
         alias="LLM_MODEL_SELECTOR",
     )
     opencode_api_key: str | None = Field(default=None, alias="OPENCODE_API_KEY")
     opencode_api_base: str = Field(default="https://opencode.ai/zen/v1", alias="OPENCODE_API_BASE")
-    opencode_model: str = Field(default="deepseek-v4-flash-free", alias="OPENCODE_MODEL")
+    opencode_model: str = Field(default=DEEPSEEK_V4_1_FLASH_MODEL_ID, alias="OPENCODE_MODEL")
     mimo_api_key: str | None = Field(default=None, alias="MIMO_API_KEY")
     mimo_api_base: str = Field(default="https://token-plan-ams.xiaomimimo.com/v1", alias="MIMO_API_BASE")
     mimo_model: str = Field(default="mimo-v2.5-pro", alias="MIMO_MODEL")
@@ -35,7 +54,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("OPENAI_API_BASE", "OPENAI_BASE_URL", "LLM_BASE_URL"),
     )
     openai_model: str = Field(
-        default="deepseek-v4-flash-free",
+        default=DEEPSEEK_V4_1_FLASH_MODEL_ID,
         validation_alias=AliasChoices("OPENAI_MODEL_NAME", "OPENAI_MODEL", "LLM_MODEL"),
     )
     llm_primary_preflight_enabled: bool = Field(default=True, alias="LLM_PRIMARY_PREFLIGHT_ENABLED")
@@ -794,7 +813,10 @@ class Settings(BaseSettings):
         alias="IMPROVEMENT_LLM_BASE_URL",
     )
     improvement_llm_api_key: str | None = Field(default=None, alias="IMPROVEMENT_LLM_API_KEY")
-    improvement_llm_model: str = Field(default="deepseek-v4-flash-free", alias="IMPROVEMENT_LLM_MODEL")
+    improvement_llm_model: str = Field(
+        default=DEEPSEEK_V4_1_FLASH_MODEL_ID,
+        alias="IMPROVEMENT_LLM_MODEL",
+    )
     improvement_llm_orchestrator_provider: str | None = Field(
         default="opencode-zen",
         alias="IMPROVEMENT_LLM_ORCHESTRATOR_PROVIDER",
@@ -808,7 +830,7 @@ class Settings(BaseSettings):
         alias="IMPROVEMENT_LLM_ORCHESTRATOR_API_KEY",
     )
     improvement_llm_orchestrator_model: str = Field(
-        default="deepseek-v4-flash-free",
+        default=DEEPSEEK_V4_1_FLASH_MODEL_ID,
         alias="IMPROVEMENT_LLM_ORCHESTRATOR_MODEL",
     )
     improvement_llm_temperature: float = Field(default=0.2, alias="IMPROVEMENT_LLM_TEMPERATURE")

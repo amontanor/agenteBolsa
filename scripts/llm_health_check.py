@@ -16,13 +16,20 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
 SRC_PATH = ROOT / "src"
+
+def _normalize_model_id(model: str | None) -> str | None:
+    if str(SRC_PATH) not in sys.path:
+        sys.path.insert(0, str(SRC_PATH))
+    from agente_bolsa.llm_model_ids import normalize_model_id
+
+    return normalize_model_id(model)
 
 
 @dataclass(frozen=True)
@@ -116,30 +123,34 @@ def build_probe_specs(env: dict[str, str]) -> list[ProbeSpec]:
     if selector in ("opencode", "opencode-go", "opencode-zen"):
         prim_base = cfg(env, "OPENCODE_API_BASE", "https://opencode.ai/zen/v1")
         prim_key = cfg(env, "OPENCODE_API_KEY")
-        prim_model = cfg(env, "OPENCODE_MODEL", "deepseek-v4-flash-free")
+        prim_model = _normalize_model_id(cfg(env, "OPENCODE_MODEL", "deepseek-v4.1-flash")) or ""
     else:
         prim_base = cfg(env, "OPENAI_API_BASE")
         prim_key = cfg(env, "OPENAI_API_KEY")
-        prim_model = cfg(env, "OPENAI_MODEL_NAME")
+        prim_model = _normalize_model_id(cfg(env, "OPENAI_MODEL_NAME")) or ""
 
     decision_base = cfg(env, "LLM_ROLE_DECISION_BASE_URL") or prim_base
     decision_key = cfg(env, "LLM_ROLE_DECISION_API_KEY") or prim_key
-    decision_model = cfg(env, "LLM_ROLE_DECISION_MODEL") or prim_model
+    decision_model = _normalize_model_id(cfg(env, "LLM_ROLE_DECISION_MODEL") or prim_model) or ""
     sentiment_base = cfg(env, "LLM_ROLE_SENTIMENT_BASE_URL") or prim_base
     sentiment_key = cfg(env, "LLM_ROLE_SENTIMENT_API_KEY") or prim_key
-    sentiment_model = cfg(env, "LLM_ROLE_SENTIMENT_MODEL") or prim_model
+    sentiment_model = _normalize_model_id(cfg(env, "LLM_ROLE_SENTIMENT_MODEL") or prim_model) or ""
     deep_base = cfg(env, "LLM_ROLE_DEEP_BASE_URL") or cfg(env, "IMPROVEMENT_LLM_BASE_URL") or prim_base
     deep_key = cfg(env, "LLM_ROLE_DEEP_API_KEY") or cfg(env, "IMPROVEMENT_LLM_API_KEY") or prim_key
-    deep_model = cfg(env, "LLM_ROLE_DEEP_MODEL") or cfg(env, "IMPROVEMENT_LLM_MODEL") or prim_model
+    deep_model = _normalize_model_id(
+        cfg(env, "LLM_ROLE_DEEP_MODEL") or cfg(env, "IMPROVEMENT_LLM_MODEL") or prim_model
+    ) or ""
     improvement_base = cfg(env, "IMPROVEMENT_LLM_BASE_URL")
     improvement_key = cfg(env, "IMPROVEMENT_LLM_API_KEY") or prim_key
-    improvement_model = cfg(env, "IMPROVEMENT_LLM_MODEL")
+    improvement_model = _normalize_model_id(cfg(env, "IMPROVEMENT_LLM_MODEL")) or ""
     codegen_base = cfg(env, "IMPROVEMENT_LLM_CODEGEN_BASE_URL") or improvement_base
     codegen_key = cfg(env, "IMPROVEMENT_LLM_CODEGEN_API_KEY") or improvement_key
-    codegen_model = cfg(env, "IMPROVEMENT_LLM_CODEGEN_MODEL")
+    codegen_model = _normalize_model_id(cfg(env, "IMPROVEMENT_LLM_CODEGEN_MODEL")) or ""
     if not codegen_model and improvement_model.lower().startswith("glm-"):
-        codegen_model = cfg(env, "IMPROVEMENT_LLM_ORCHESTRATOR_MODEL") or prim_model
-    codegen_model = codegen_model or improvement_model
+        codegen_model = _normalize_model_id(
+            cfg(env, "IMPROVEMENT_LLM_ORCHESTRATOR_MODEL") or prim_model
+        ) or ""
+    codegen_model = _normalize_model_id(codegen_model or improvement_model) or ""
 
     sentiment_messages = [
         {
@@ -240,6 +251,10 @@ def build_probe_specs(env: dict[str, str]) -> list[ProbeSpec]:
 
 
 def ping_provider(spec: ProbeSpec, timeout: float) -> dict[str, Any]:
+    normalized_model = _normalize_model_id(spec.model) or spec.model
+    if normalized_model != spec.model:
+        spec = replace(spec, model=normalized_model)
+
     result: dict[str, Any] = {
         "provider": spec.provider,
         "role": spec.role,

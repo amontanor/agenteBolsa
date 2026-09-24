@@ -14,7 +14,7 @@ import json
 import sys
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
@@ -22,8 +22,18 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
+SRC_PATH = Path(__file__).resolve().parents[1] / "src"
+
+
+def _normalize_model_id(model: str) -> str:
+    if str(SRC_PATH) not in sys.path:
+        sys.path.insert(0, str(SRC_PATH))
+    from agente_bolsa.llm_model_ids import normalize_model_id
+
+    return normalize_model_id(model) or model
+
 DEFAULT_PROVIDER = "opencode-zen"
-DEFAULT_MODEL = "deepseek-v4-flash-free"
+DEFAULT_MODEL = "deepseek-v4.1-flash"
 DEFAULT_BASE_URL = "https://opencode.ai/zen/v1"
 DEFAULT_ENDPOINT = f"{DEFAULT_BASE_URL}/chat/completions"
 GO_PROVIDER = "opencode-go"
@@ -278,6 +288,10 @@ def _result(
 
 def run_probe(config: ProbeConfig, transport: ProbeTransport | None = None) -> dict[str, Any]:
     """Execute exactly one request or zero when local configuration is invalid."""
+
+    normalized_model = _normalize_model_id(config.model)
+    if normalized_model != config.model:
+        config = replace(config, model=normalized_model)
 
     if not config.provider.strip() or not config.model.strip() or not config.endpoint.startswith("https://"):
         return _result(

@@ -119,7 +119,7 @@ LEADERBOARD_MODEL = "AMR"
 LLM_PROVIDER_CATALOG = {
     "opencode-zen": {
         "base_url": "https://opencode.ai/zen/v1",
-        "models": ["deepseek-v4-flash-free"],
+        "models": ["deepseek-v4.1-flash"],
     },
     "opencode-go": {
         "base_url": "https://opencode.ai/zen/go/v1",

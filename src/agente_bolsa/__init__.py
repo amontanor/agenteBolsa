@@ -96,7 +96,8 @@ __all__ = ["__version__"]
 # P-L147: crew session headers + P-L149 selection guards (0.4.307).
 # P-L152: dashboard Hoy, ceros honestos fuera de sesion, dedup heroe SPY (0.4.308).
 # P-L153: autoridad temporal SPY, P/L dia n/d en cerrado, sin punto finde (0.4.309).
+# P-L157: migrar el ID retirado de OpenCode Zen en llamadas efectivas (0.4.311).
 # P-L141: port linea Windows 0.4.234-0.4.246 (funnel dataclass/KeyError, costes calibrados,
 # cobertura same-cycle, misfire delays/health, uplift LLM, linkage, flujos EOD, sellos de sesion,
 # dashboard Mis inversiones/SPY unico, grace 300/120/120, sesion proveedor Go/Zen, crew fail-open) (0.4.305).
-__version__ = "0.4.310"
+__version__ = "0.4.311"

@@ -12,6 +12,7 @@ from openai import OpenAI
 from pydantic import BaseModel
 
 from agente_bolsa.config import Settings
+from agente_bolsa.llm_model_ids import normalize_model_id
 from agente_bolsa.llm_router import provider_client_headers
 from agente_bolsa.logging_utils import log_system_event
 from agente_bolsa.models import new_id
@@ -90,7 +91,8 @@ class ImprovementLLMClient:
         normalize_response: bool = True,
     ) -> LLMJsonResult:
         llm_call_id = new_id("ci_llm")
-        model_name = model or self.settings.improvement_llm_model
+        selected_model = model or self.settings.improvement_llm_model
+        model_name = normalize_model_id(selected_model) or selected_model
         endpoints = self._endpoints(model_name, route=route)
         primary = endpoints[0]
         request_preview = {
@@ -233,6 +235,7 @@ class ImprovementLLMClient:
         )
 
     def _endpoints(self, model_name: str, *, route: str = "agents") -> list[_ImprovementEndpoint]:
+        model_name = normalize_model_id(model_name) or model_name
         is_orchestrator = route == "orchestrator"
         provider = (
             self.settings.improvement_llm_orchestrator_provider
@@ -276,7 +279,8 @@ class ImprovementLLMClient:
                     provider="openai-local",
                     base_url=self.settings.llm_local_fallback_api_base,
                     api_key=self.settings.llm_local_fallback_api_key,
-                    model=self.settings.llm_local_fallback_model,
+                    model=normalize_model_id(self.settings.llm_local_fallback_model)
+                    or self.settings.llm_local_fallback_model,
                     fallback_used=True,
                 )
             )
