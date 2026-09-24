@@ -256,11 +256,56 @@ despliegue: concedida; no se solicita de nuevo.
 
 ### Dictamen final y siguiente paso
 
-`precondition_not_met`: (1) Zen 403/1010 para el modelo nuevo con la clave
-vigente; (2) suite completa roja tambien en base (requiere lotes de reparacion
-separados, sin mezclar); (3) procedimiento canonico Jetson (build `.311`
-nativo + snapshot frio + `jetson-ops`) no ejecutado esta ventana.
+`precondition_not_met` (anoche): (1) falso 403/1010 por artefacto de sonda
+(ver R1: el modelo SI responde); (2) suite completa roja tambien en base
+(requiere lotes de reparacion separados, sin mezclar); (3) procedimiento
+canonico Jetson (build nativo + snapshot frio + `jetson-ops`) no ejecutado.
 Sin corte, sin push, sin cambios en principal (sucio preexistente intacto).
-Siguiente: resolver provision del modelo en Zen; lotes aparte para deriva de
-suite; re-verificar leases/lock frescos y repetir N3 sobre arbol final antes
-de cualquier corte futuro.
+Siguiente (ver R1 abajo): build `.312`, leases/lock frescos y N3 final.
+
+## P-L157-R1 25-sep: el ID es correcto; el fallback Go estaba mal (ARREGLADO)
+
+### Los modelos existen de verdad
+
+- Documentacion oficial Zen (`opencode.ai/docs/zen`, lista de precios y
+  `models.dev`): `deepseek-v4-flash-free` (free, tiempo limitado, 200K
+  contexto), `deepseek-v4-flash` (pago $0.14/$0.28), `deepseek-v4.1-flash`
+  (pago, release sep-2026). Los tres IDs son reales; ninguno estaba inventado.
+- `GET /models` en Zen con cliente OpenAI real: 42 modelos; IDs deepseek:
+  `['deepseek-v4-pro', 'deepseek-v4.1-flash']`. El free ya no se lista
+  (retirado) y `deepseek-v4-flash` tampoco aparece en Zen.
+- Conclusion: migrar a `deepseek-v4.1-flash` era lo correcto. El 403
+  `error code: 1010` de anoche fue un artefacto de mi sonda (urllib con
+  User-Agent generico, bloqueado por Cloudflare), NO del modelo. Queda
+  corregido aqui; el dictamen `precondition_not_met` por ese motivo CAE.
+
+### Verificacion viva con cliente real (clave productiva, sin revelarla)
+
+- Zen + `deepseek-v4.1-flash` -> OK (`finish=length` con max_tokens=8).
+- Zen + `deepseek-v4-flash` -> 403 `Model access is disabled`.
+- Zen + `deepseek-v4-flash-free` -> 400 `Model is unavailable`.
+- Go (con cabecera `x-opencode-session` + UA propio, como P-L147) +
+  `deepseek-v4.1-flash` -> OK. Go + `deepseek-v4-flash` -> 403 disabled.
+
+### Fallo real encontrado y corregido (R1)
+
+- El fallback Go tenia hardcodeado el ID muerto `deepseek-v4-flash` en
+  `llm_router.py:GO_MODEL`, `llm_client.py:271` y los scripts
+  `check_opencode_zen_failover.py` / `check_opencode_go_deepseek.py`.
+  Con el primario caido, el fallback tambien fallaba (403).
+- Fix R1 (version `0.4.312`): los cuatro puntos usan el ID vivo
+  `deepseek-v4.1-flash`. Cadena efectiva comprobada en candidato:
+  `opencode-zen|deepseek-v4.1-flash` -> `opencode-go|deepseek-v4.1-flash` ->
+  `openai-local|qwen3.6-27b`. Ambos niveles Zen/Go verificados en vivo.
+- Catalogos UI (`web_app.py:126-136`, `:8599-8611`) listan opciones y se
+  conservan; ningun default activo usaba el ID muerto salvo los corregidos.
+- Tests R1: 217 passed (router, improvement, failover, go-deepseek,
+  health-check, p78b, web_app); Ruff y `git diff --check` verdes.
+  Commits `54b3ba19` (fix+version) y `257b9f26` (tests). Suite completa no
+  repetida para R1: los 217 cubren el area tocada y el estado rojo
+  preexistente de base no cambia con este lote.
+- Coste: el free era $0; `v4.1-flash` es de pago (~$0.30/$1.20 por 1M).
+  Vigilar `llm_usage` tras desplegar.
+- Dictamen R1: `ready_for_closed_market_deployment` PENDIENTE de: build
+  `.312` nativo + snapshot frio + `jetson-ops`, leases/lock frescos y
+  repeticion de N3 sobre el arbol final. Sin corte ni push en esta ventana.

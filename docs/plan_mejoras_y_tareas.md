@@ -50,7 +50,7 @@ fallbacks y modelos distintos. No cambia trading ni politica de riesgo.
 
 | Lote | Estado | Alcance y aceptacion |
 | --- | --- | --- |
-| P-L157 | precondition_not_met | Codigo migrado y revisado; Zen devuelve 403 `error code: 1010` para el modelo nuevo con la clave vigente y la suite sigue roja tambien en base. Sin corte ni push |
+| P-L157 | ready_for_closed_market_deployment (pendiente corte) | Primario y fallback Go en `deepseek-v4.1-flash`, ambos verificados en vivo. Falta build `.312` + snapshot + `jetson-ops` con leases frescos y N3 final |
 
 Informe unico: `docs/informe_p_l157_migracion_modelo_zen.md`. Base Git reconstruida
 del paquete Jetson `.310`: `784e6cd7d3170681d6f03c5d39f95442d3fc865a`, tree

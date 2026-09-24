@@ -28,11 +28,8 @@ Informe unico: `docs/informe_p_l154_rendimiento_vs_spy.md`; backlog en plan maes
 
 ### P-L157 — migracion exacta de modelo Zen (candidato 0.4.311)
 
-- Dictamen de direccion 24-sep noche: `precondition_not_met`. Autorizacion de
-  modelo y despliegue concedida por el usuario. Sin corte ni push: Zen
-  devuelve 403 `error code: 1010` para `deepseek-v4.1-flash` con la clave
-  vigente y la suite sigue roja tambien en base. Evidencia completa en
-  `docs/informe_p_l157_migracion_modelo_zen.md` (`## Revision de direccion`).
+- Dictamen de direccion 24-sep noche: `precondition_not_met` (ver R1 abajo:
+  el motivo 403/1010 era artefacto de sonda; el modelo SI responde).
 - Base: HEAD `784e6cd7d3170681d6f03c5d39f95442d3fc865a`, tree
   `58fc1824e387b6e72c432119a6c1b60d2b8fb05d`, paquete reconstruido `.310`.
   Etiqueta de imagen `82708495d8b9c7942d461daed38efee54b0aeaf7` no es objeto
@@ -61,11 +58,13 @@ Informe unico: `docs/informe_p_l154_rendimiento_vs_spy.md`; backlog en plan maes
   unavailable; no se repararon. El `schedule-status` de esta tarea uso
   `DATA_DIR` temporal y mostro `missing_lock`/`database_missing`, por lo que no
   clasifica el runtime local. Mantener sin cambios hasta preflight autorizado.
-- Siguiente paso: resolver provision de `deepseek-v4.1-flash` en Zen (403/1010
-  con clave vigente); lotes separados para la deriva de suite, sin mezclar.
-  Despues, con leases/lock frescos y N3 repetido sobre el arbol final,
-  re-evaluar el corte. Postmarket terminal `completed` + leases liberados ya
-  demostrados esta noche (run `pmr_64be403886f2` 20:23:07Z).
+- R1 25-sep (version `0.4.312`, commits `54b3ba19`+`257b9f26`): el ID
+  `v4.1-flash` existe y responde en vivo en Zen y Go; el 403/1010 previo era
+  artefacto de sonda urllib. Fallo real corregido: fallback Go hardcodeado
+  al ID muerto (403 en produccion) en router, `llm_client` y ambos scripts.
+  217 focales verdes; Ruff/diff verdes. Dictamen R1:
+  `ready_for_closed_market_deployment` pendiente de build `.312`, snapshot,
+  `jetson-ops`, leases frescos y N3 final. Ojo coste: el free era $0.
 
 ### P-L70 — resumen diario Telegram UX (candidato 0.4.203)
 
