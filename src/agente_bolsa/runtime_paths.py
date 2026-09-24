@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 
@@ -19,6 +20,9 @@ def managed_python_path(root: Path | None = None) -> Path:
 
 def require_managed_python(root: Path | None = None) -> Path:
     python_path = managed_python_path(root)
-    if not python_path.exists():
-        raise FileNotFoundError(f"No existe el interprete gestionado del proyecto: {python_path}")
-    return python_path
+    if python_path.exists():
+        return python_path
+    container_mode = os.getenv("AGENTE_BOLSA_CONTAINER", "").strip().lower()
+    if container_mode in {"1", "true", "yes"}:
+        return Path(sys.executable)
+    raise FileNotFoundError(f"No existe el interprete gestionado del proyecto: {python_path}")

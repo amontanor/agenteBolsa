@@ -20,6 +20,7 @@ from agente_bolsa.storage import Store
 from .agents import (
     RECENTLY_REJECTED_DUPLICATE_REASON,
     SPECIALIST_AGENT_CLASSES,
+    SPECIALIST_RESPONSE_MODELS,
     ChiefInvestmentOrchestratorAgent,
     DataCollectorAgent,
     PerformanceEvaluatorAgent,
@@ -829,8 +830,15 @@ class ContinuousImprovementLabRuntime:
 
     def _normalize_autonomous_backlog(self) -> None:
         proposals = self.store.continuous_improvement_proposals(limit=5000)
+        if not proposals:
+            return
+        initiatives = {
+            str(initiative.get("initiative_key") or ""): initiative
+            for initiative in self.store.continuous_improvement_initiatives(limit=5000)
+            if str(initiative.get("initiative_key") or "")
+        }
+        grouped: dict[str, list[dict[str, Any]]] = {}
         for proposal in proposals:
-            current_status = str(proposal.get("status") or "")
             payload = proposal.get("payload") or {}
             initiative_key = str(payload.get("initiative_key") or "").strip()
             domain = (
@@ -845,12 +853,19 @@ class ContinuousImprovementLabRuntime:
             topic = initiative_key.split(":", 1)[-1] if ":" in initiative_key else initiative_key
             if not initiative_key or is_generated_ci_reference(topic):
                 initiative_key = canonical_key
-            initiative = self.store.continuous_improvement_initiative_by_key(initiative_key)
+            grouped.setdefault(initiative_key, []).append(proposal)
+
+        proposals_requiring_status_update: dict[str, list[dict[str, Any]]] = {}
+        for initiative_key, initiative_proposals in grouped.items():
+            proposal = initiative_proposals[0]
+            payload = proposal.get("payload") or {}
+            initiative = initiatives.get(initiative_key)
+            proposal_ids = [item["proposal_id"] for item in initiative_proposals]
             if not initiative:
-                initiative_id = new_id("ci_init")
-                self.store.upsert_continuous_improvement_initiative(
+                requested_initiative_id = new_id("ci_init")
+                initiative_id, _inserted = self.store.upsert_continuous_improvement_initiative(
                     {
-                        "initiative_id": initiative_id,
+                        "initiative_id": requested_initiative_id,
                         "initiative_key": initiative_key,
                         "title": initiative_title_from_key(initiative_key),
                         "domain": "trading" if initiative_key.startswith("trading:") else "software",
@@ -870,34 +885,58 @@ class ContinuousImprovementLabRuntime:
                         "linked_event_ids": [],
                         "linked_task_ids": [],
                         "linked_hypothesis_ids": [],
-                        "linked_proposal_ids": [proposal.get("proposal_id")] if proposal.get("proposal_id") else [],
+                        "linked_proposal_ids": proposal_ids,
                         "linked_validation_ids": [],
-                        "latest_decision": {"decision": current_status or "PENDING", "source": "autonomy_normalizer"},
+                        "latest_decision": {
+                            "decision": str(proposal.get("status") or "") or "PENDING",
+                            "source": "autonomy_normalizer",
+                        },
                         "next_action": "Esperar validacion objetiva y autoapply si supera los gates.",
                     }
                 )
-                initiative = self.store.continuous_improvement_initiative_by_key(initiative_key)
-            if initiative:
-                self.store.append_continuous_improvement_initiative_links(
-                    initiative["initiative_id"],
-                    proposal_ids=[proposal["proposal_id"]],
-                )
-            if current_status in {"REQUIRES_HUMAN_REVIEW", "WAITING_HUMAN_REVIEW"}:
-                next_status = "PENDING"
+                initiative = {"initiative_id": initiative_id, "initiative_key": initiative_key}
+                initiatives[initiative_key] = initiative
+            else:
+                existing_proposal_ids = {
+                    str(item)
+                    for item in initiative.get("linked_proposal_ids", []) or []
+                    if str(item)
+                }
+                missing_proposal_ids = [item for item in proposal_ids if item not in existing_proposal_ids]
+                if missing_proposal_ids:
+                    self.store.append_continuous_improvement_initiative_links(
+                        initiative["initiative_id"],
+                        proposal_ids=missing_proposal_ids,
+                    )
+                    initiative["linked_proposal_ids"] = [
+                        *list(initiative.get("linked_proposal_ids", []) or []),
+                        *missing_proposal_ids,
+                    ]
+            proposals_requiring_status_update[initiative_key] = [
+                item
+                for item in initiative_proposals
+                if str(item.get("status") or "") in {"REQUIRES_HUMAN_REVIEW", "WAITING_HUMAN_REVIEW"}
+            ]
+
+        for initiative_key in grouped:
+            initiative = initiatives.get(initiative_key)
+            status_updates = proposals_requiring_status_update.get(initiative_key, [])
+            for proposal in status_updates:
+                current_status = str(proposal.get("status") or "")
                 self.store.update_continuous_improvement_proposal_status(
                     proposal["proposal_id"],
-                    status=next_status,
+                    status="PENDING",
                     actor="AutonomyNormalizer",
                     reason="La autonomia ya no usa revision humana; la propuesta vuelve al pipeline automatico.",
                     payload={"normalized_from": current_status, "initiative_key": initiative_key},
                 )
-                if initiative:
-                    self.store.update_continuous_improvement_initiative(
-                        initiative["initiative_id"],
-                        status="VALIDATING",
-                        latest_decision={"decision": next_status, "source": "AutonomyNormalizer"},
-                        next_action="Revalidar y promover a READY_TO_APPLY o REJECTED.",
-                    )
+            if status_updates and initiative:
+                self.store.update_continuous_improvement_initiative(
+                    initiative["initiative_id"],
+                    status="VALIDATING",
+                    latest_decision={"decision": "PENDING", "source": "AutonomyNormalizer"},
+                    next_action="Revalidar y promover a READY_TO_APPLY o REJECTED.",
+                )
 
     def run_once(
         self,
@@ -907,16 +946,6 @@ class ContinuousImprovementLabRuntime:
         trigger_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.store.ensure_schema()
-        self._normalize_autonomous_backlog()
-        # Ciclo de vida (Etapa 7): caduca tareas muertas y cierra/expira
-        # iniciativas estancadas ANTES de planificar trabajo nuevo, para que el
-        # backlog refleje trabajo real y no se acumulen tareas de 7-8 dias.
-        try:
-            from .lifecycle import run_lifecycle
-
-            run_lifecycle(self.store, self.settings)
-        except Exception as exc:  # noqa: BLE001 - el lifecycle nunca bloquea el ciclo.
-            log_system_event(self.settings.logs_dir, "ci_lifecycle_failed", {"error": repr(exc)})
         if not self.settings.continuous_improvement_enabled:
             return {"ok": False, "status": "DISABLED", "reason": "CONTINUOUS_IMPROVEMENT_ENABLED=false"}
         cooldown_active, cooldown_payload = self._cooldown_state()
@@ -929,6 +958,16 @@ class ContinuousImprovementLabRuntime:
                 payload={**cooldown_payload, "mode": mode},
             )
             return {"ok": False, "status": "COOLDOWN", **cooldown_payload}
+        self._normalize_autonomous_backlog()
+        # Ciclo de vida (Etapa 7): caduca tareas muertas y cierra/expira
+        # iniciativas estancadas ANTES de planificar trabajo nuevo, para que el
+        # backlog refleje trabajo real y no se acumulen tareas de 7-8 dias.
+        try:
+            from .lifecycle import run_lifecycle
+
+            run_lifecycle(self.store, self.settings)
+        except Exception as exc:  # noqa: BLE001 - el lifecycle nunca bloquea el ciclo.
+            log_system_event(self.settings.logs_dir, "ci_lifecycle_failed", {"error": repr(exc)})
         market_allowed, market_reason, market_payload = self._market_window()
         research_config: dict[str, Any] = {}
         if not market_allowed:
@@ -1049,39 +1088,59 @@ class ContinuousImprovementLabRuntime:
                     event = self.store.continuous_improvement_event(task["event_id"])
                     if not event:
                         continue
+                    specialist_name = str(task["agent_name"])
+                    llm_capable = (
+                        self.settings.improvement_llm_enabled
+                        and specialist_name in {str(item.value) for item in SPECIALIST_RESPONSE_MODELS}
+                    )
                     task_run = AgentRunTracker(
                         self.store,
-                        role=str(task["agent_name"]),
-                        agent_name=str(task["agent_name"]),
+                        role=specialist_name,
+                        agent_name=specialist_name,
                         task_name="continuous_improvement_agent_task",
                         cycle_id=cycle_id,
-                        execution_kind="deterministic",
+                        execution_kind="llm" if llm_capable else "deterministic",
                         input_refs=[task["task_id"], event["event_id"]],
                         retry_of=(task.get("payload") or {}).get("retry_of"),
                     )
                     initiative_id = self._initiative_id_for_task(task)
                     if research_mode and not self._research_safe_task(task, event, research_config):
+                        task_result = {
+                            "status": "BLOCKED",
+                            "reason": "research_mode_excludes_trading_paths",
+                            "agent_run_id": task_run.agent_run_id,
+                        }
                         self.store.update_continuous_improvement_task(
                             task["task_id"],
                             status=TaskStatus.CANCELLED.value,
                             finished_at=datetime.now(timezone.utc).isoformat(),
-                            result={"status": "BLOCKED", "reason": "research_mode_excludes_trading_paths"},
+                            result=task_result,
                         )
                         self._record_agent_event(
                             agent=task["agent_name"],
                             event_type="lab_research_task_blocked",
                             cycle_id=cycle_id,
-                            payload={"task_id": task["task_id"], "event_id": event["event_id"], "agent_name": task["agent_name"]},
+                            payload={
+                                "task_id": task["task_id"],
+                                "event_id": event["event_id"],
+                                "agent_name": task["agent_name"],
+                                "agent_run_id": task_run.agent_run_id,
+                            },
                         )
                         task_run.block(reason="research_mode_excludes_trading_paths")
                         continue
                     skip_reason = self._should_skip_task(task=task, event=event, context=context)
                     if skip_reason:
+                        task_result = {
+                            "status": "SKIPPED",
+                            "reason": skip_reason,
+                            "agent_run_id": task_run.agent_run_id,
+                        }
                         self.store.update_continuous_improvement_task(
                             task["task_id"],
                             status=TaskStatus.CANCELLED.value,
                             finished_at=datetime.now(timezone.utc).isoformat(),
-                            result={"status": "SKIPPED", "reason": skip_reason},
+                            result=task_result,
                         )
                         self._record_agent_event(
                             agent=task["agent_name"],
@@ -1094,6 +1153,7 @@ class ContinuousImprovementLabRuntime:
                                 "reason": skip_reason,
                                 "status": "CANCELLED",
                                 "initiative_id": initiative_id,
+                                "agent_run_id": task_run.agent_run_id,
                             },
                         )
                         self._record_initiative_message(
@@ -1127,6 +1187,7 @@ class ContinuousImprovementLabRuntime:
                             "focus": (task.get("payload") or {}).get("focus"),
                             "status": "RUNNING",
                             "initiative_id": initiative_id,
+                            "agent_run_id": task_run.agent_run_id,
                         },
                     )
                     self._record_initiative_message(
@@ -1152,6 +1213,7 @@ class ContinuousImprovementLabRuntime:
                     agent = agent_cls(self.settings, self.client)
                     try:
                         result = agent.run(context, event, task.get("payload") or {})
+                        result = {**result, "agent_run_id": task_run.agent_run_id}
                         self.store.update_continuous_improvement_task(
                             task["task_id"],
                             status=TaskStatus.COMPLETED.value,
@@ -1165,10 +1227,19 @@ class ContinuousImprovementLabRuntime:
                         task_run.fail(reason=exc, error_code="ci_task_failed")
                         raise
                     llm_payload = result.get("llm") or {}
-                    task_run.execution_kind = "llm" if llm_payload.get("ok") else "deterministic"
-                    task_run.model = llm_payload.get("model")
+                    llm_provider = str(llm_payload.get("provider") or "").strip() or None
+                    llm_model = str(llm_payload.get("model") or "").strip() or None
+                    llm_ok = bool(llm_payload.get("ok")) and str(llm_provider or "").lower() not in {
+                        "disabled",
+                        "mock",
+                    }
+                    task_run.set_effective_identity(
+                        provider=llm_provider,
+                        model=llm_model,
+                        execution_kind="llm" if llm_ok else "deterministic",
+                    )
                     task_run.add_outputs(
-                        output_refs=[task["task_id"]],
+                        output_refs=[task["task_id"], llm_payload.get("llm_call_id")],
                         llm_calls=1 if llm_payload.get("llm_call_id") and llm_payload.get("ok") else 0,
                     )
                     task_run.succeed()
@@ -1182,6 +1253,7 @@ class ContinuousImprovementLabRuntime:
                             "summary": ((result.get("response") or {}).get("summary") or "")[:240],
                             "status": "COMPLETED",
                             "initiative_id": initiative_id,
+                            "agent_run_id": task_run.agent_run_id,
                         },
                     )
                     self._record_initiative_message(
@@ -1197,6 +1269,7 @@ class ContinuousImprovementLabRuntime:
                             "llm": result.get("llm") or {},
                             "response": result.get("response") or {},
                             "status": "COMPLETED",
+                            "agent_run_id": task_run.agent_run_id,
                         },
                     )
                     if initiative_id:
@@ -1230,6 +1303,17 @@ class ContinuousImprovementLabRuntime:
                         self.store.update_continuous_improvement_event(event["event_id"], status="COMPLETED")
 
             self.store.update_continuous_improvement_cycle(cycle_id, status=CycleStatus.CALLING_LLM.value)
+            llm_run = AgentRunTracker(
+                self.store,
+                role="chief_investment_orchestrator",
+                agent_name="ChiefInvestmentOrchestratorAgent",
+                task_name="continuous_improvement_llm",
+                cycle_id=cycle_id,
+                execution_kind="llm",
+                provider=self.settings.improvement_llm_orchestrator_provider,
+                model=self.settings.improvement_llm_orchestrator_model,
+                input_refs=[cycle_id],
+            )
             self._record_agent_event(
                 agent="ChiefInvestmentOrchestratorAgent",
                 event_type="lab_llm_call_started",
@@ -1237,9 +1321,29 @@ class ContinuousImprovementLabRuntime:
                 payload={
                     "provider": self.settings.improvement_llm_provider,
                     "model": self.settings.improvement_llm_orchestrator_model,
+                    "agent_run_id": llm_run.agent_run_id,
                 },
             )
-            llm_result = self.strategist.propose(context, evaluation)
+            try:
+                llm_result = self.strategist.propose(context, evaluation)
+            except TimeoutError as exc:
+                llm_run.timeout(reason=exc, error_code="continuous_improvement_llm_timeout")
+                raise
+            except Exception as exc:
+                llm_run.fail(reason=exc, error_code="continuous_improvement_llm_failed")
+                raise
+            llm_run.add_outputs(output_refs=[llm_result.llm_call_id] if llm_result.llm_call_id else [])
+            llm_run.set_effective_identity(
+                provider=llm_result.provider,
+                model=llm_result.model,
+            )
+            if llm_result.ok:
+                llm_run.succeed()
+            else:
+                llm_run.fail(
+                    reason=llm_result.error or "continuous_improvement_llm_failed",
+                    error_code="continuous_improvement_llm_failed",
+                )
             llm_usage = record_improvement_llm_usage(
                 self.store,
                 self.settings,
@@ -1290,6 +1394,7 @@ class ContinuousImprovementLabRuntime:
                     "context_limit_tokens": llm_result.context_limit_tokens,
                     "context_compacted": llm_result.context_compacted,
                     "truncation_report": llm_result.truncation_report,
+                    "agent_run_id": llm_run.agent_run_id,
                 },
             )
 

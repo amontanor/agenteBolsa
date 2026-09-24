@@ -1,4 +1,5 @@
 daily_research:
+  layer: "research"
   description: "Actualizar datos, resumir contexto y generar observaciones medibles."
   expected_output: "Observaciones estructuradas con evidencia y simbolos afectados."
   owner_agent: "market_data_researcher"
@@ -8,6 +9,9 @@ daily_research:
     - market_regime_strategist
     - technical_analyst
     - fundamental_analyst
+    - web_research_agent
+    - fundamental_filings_agent
+    - opportunity_scout
   prompt_template: "Actualiza el estado del universo {universe} usando solo datos verificables del snapshot siguiente. No inventes precios, fechas ni fundamentales que no esten en el snapshot. Fecha del ciclo: {current_date}. Snapshot: {market_snapshot}. Estado de mercado obligatorio: {market_state}. Contexto tecnico adicional del escaneo amplio: {technical_context}. Devuelve observaciones tecnicas y de contexto. No propongas operaciones sin reglas medibles."
   requires:
     - "market_snapshot"
@@ -18,6 +22,7 @@ daily_research:
   enabled: true
 
 hypothesis_generation:
+  layer: "research"
   description: "Convertir observaciones en hipotesis falsables."
   expected_output: "Lista JSON de hipotesis candidatas."
   owner_agent: "hypothesis_generator"
@@ -32,6 +37,7 @@ hypothesis_generation:
   enabled: true
 
 portfolio_committee:
+  layer: "committee"
   description: "Integrar mercado, oportunidades y parametros vigentes en un dictamen trazable."
   expected_output: "Dictamen estructurado con regimen, oportunidades prioritarias, parametros a vigilar, validaciones requeridas y condiciones de rollback."
   owner_agent: "decision_committee"
@@ -39,6 +45,7 @@ portfolio_committee:
     - decision_committee
     - opportunity_scout
     - parameter_calibration_specialist
+    - portfolio_manager
   prompt_template: "Actua como comite experto sobre el perfil operativo vigente. Usa el snapshot, estado de mercado, dictamen determinista, contexto tecnico y parametros actuales para decidir si el perfil oportunista esta justificado. Dictamen determinista obligatorio: {deterministic_review_summary}. Identifica oportunidades accionables, riesgos de sobreextension, parametros a monitorizar y expertos adicionales necesarios. No propongas live trading."
   requires:
     - "market_snapshot"
@@ -50,11 +57,13 @@ portfolio_committee:
   enabled: true
 
 validation:
+  layer: "validation"
   description: "Probar hipotesis con backtest, walk-forward, costes y fuera de muestra."
   expected_output: "Decision de validacion con metricas minimas y razones de rechazo."
   owner_agent: "quant_backtester"
   agents:
     - quant_backtester
+    - parameter_calibration_specialist
   prompt_template: "Evalua las hipotesis. Penaliza sobreajuste, pocos trades, coste no modelado y dependencia de un unico periodo. Usa el estado de mercado para detectar sensibilidad por regimen."
   requires:
     - "hypotheses"
@@ -64,6 +73,7 @@ validation:
   enabled: true
 
 risk_review:
+  layer: "validation"
   description: "Aplicar limites de riesgo y decidir si alguna propuesta puede pasar a paper trading."
   expected_output: "Aprobaciones o rechazos de riesgo con checks concretos."
   owner_agent: "risk_manager"
@@ -80,12 +90,14 @@ risk_review:
   enabled: true
 
 post_mortem:
+  layer: "learning"
   description: "Evaluar resultados y proponer mejoras controladas."
   expected_output: "Post-mortem y backlog de mejoras priorizado."
   owner_agent: "post_trade_analyst"
   agents:
     - post_trade_analyst
     - self_improvement_engineer
+    - post_market_review_agent
   prompt_template: "Resume aprendizajes del ciclo y propone mejoras controladas para investigar. Las mejoras de codigo deben quedar como propuesta, no como cambio productivo activo. Mantén la estrategia champion congelada y trata nuevas ideas como challenger/shadow hasta que pasen su paquete de validacion."
   requires:
     - "market_state"

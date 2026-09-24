@@ -47,31 +47,56 @@ __all__ = ["__version__"]
 # P-L88: coherent opening-to-now System/SPY UI and portfolio-point percentages (0.4.225).
 # P-L89B: exact capital funnel and EOD observational carriers (0.4.226).
 # P-L89B-QA: version-policy expectation aligned with the candidate.
-# P-L120: deterministic bridge-contract provider unblocks measured CODE_CHANGE proposals (0.4.227).
-# P-L121: par de cierres SPY con autoridad EOD por sesion XNYS (0.4.228).
-# P-L122: cierre determinista del bucle de promocion (0.4.229).
-# P-L123: dedupe de lecciones y cuadro de mejora diaria (0.4.230).
-# P-L126: catalogo v4.1 y linea Mejora hoy en UI (0.4.231).
-# P-L127: recorte de barras futuras y capture post-cierre SPY.
-# P-L128: regla de retire por sangria lenta 10d (0.4.233).
-# P-L130: accept dataclass recommendations in selection ledger decision rows (0.4.234).
-# P-L131: calibrated execution cost in learning scoreboard, 10/20bps bands intact (0.4.235).
-# P-L132: same-cycle control coverage per week and explicit control cost basis (0.4.236).
-# P-L133: misfire delays, per-job skip summary and outcome emptiness in health (0.4.237).
-# P-L134: read-only LLM uplift report over causal llm_selected flag (0.4.238).
-# P-L135: order-plan linkage coverage with legacy_unverified gaps (0.4.239).
-# P-L136: append-only external cash-flow ledger feeding EOD flow coverage (0.4.240).
-# P-L137: outcome maturation trimmed to completed XNYS sessions (0.4.241).
-# P-L140A: Mis inversiones strip with day P/L over invested as primary (0.4.242).
-# P-L140B: single SPY alpha, leaderboard moved to Config, baseline removed (0.4.243).
-# P-L140C: baseline pure helpers retained for P-L63R1 tooltip contract, still unrendered (0.4.244).
-# P-L139: misfire grace on intraday jobs so late runs execute (0.4.245).
-# P-L142: stable provider session headers for Go/Zen routing (0.4.246).
-# P-L143: cent-rounded SPY open grouping for comparability, evidence untouched (0.4.247).
-# P-L146: one-glance daily Sistema-vs-SPY hero verdict reusing canonical rows (0.4.248).
-# P-L147: provider session headers also in CrewAI LLM so Go/Zen crews authenticate (0.4.249).
-# P-L148: reservado para sizing por tramos Fase 1 (0.4.250, en espera).
-# P-L149: guarded veto of toxic extremes + sin_patron quota in fallback (0.4.251).
-# P-L152: dashboard today breakdown, honest closed-market zeros, SPY hero dedup (0.4.252).
-# P-L153: session-aware SPY open authority, blank closed-market day P/L, no weekend point (0.4.253).
-__version__ = "0.4.253"
+# P-L90R10: bound cross-job scheduler concurrency after Raspberry cgroup OOM evidence (0.4.242).
+# P-L90R10B: explicit external env carrier for kernel integrity on ARM64 (0.4.243).
+# P-L90R10C: non-secret digest carrier for root:root 600 local secret mounts (0.4.244).
+# P-L90R10D: Linux scheduler start token and safe legacy-lock recovery (0.4.245).
+# P-L84B: prospective agent contract carrier through signal execution gates (0.4.246).
+# P-L90R11: default market-data cache follows configured DATA_DIR (0.4.250).
+# P-L91: read-only Jetson storage watchdog sampler with JSON telemetry (0.4.251).
+# P-L92: digest drops stale missing_report kill-switch reasons when artifact exists (0.4.252).
+# P-L93: TTL cache for dashboard hot-path loaders (snapshot/histories/calendar/events) (0.4.253).
+# P-L94: intraday scan failure no longer kills the market cycle silently (0.4.254).
+# P-L95: capital funnel attachment counters remain fail-open for every carrier label (0.4.255).
+# P-L96: canonical selection ledger consumes dataclass recommendations without iterable coercion (0.4.256).
+# P-L96R1: close effective identity, fallback lineage, report refs and intraday misfire safety (0.4.258).
+# P-L97: explicit operational conclusions for the agent group without claiming predictive value (0.4.260).
+# P-L98: align agent catalog identities and expose configured secondary crew agents (0.4.261).
+# P-L98R1: never impute legacy empty outputs to succeeded (0.4.262).
+# P-L99: connect legacy role crosswalk to productivity and group health consumers (0.4.263).
+# P-L100: normalize direct legacy aggregates at the group-review boundary (0.4.264).
+# P-L101: preserve producer-agent lineage through signal outcomes and learning (0.4.265).
+# P-L102: direction-correct, bounded, agent-scoped learning feedback (0.4.266).
+# P-L103: deterministic specialists consume exact learning feedback slices (0.4.267).
+# P-L104: structured, non-authoritative specialist evidence packets (0.4.268).
+# P-L105: direction-corrected weekly learning scoreboard (0.4.269).
+# P-L106: canonical comparable hit-rate metrics (0.4.270).
+# P-L107: refresh learning outcomes during empty broker reconciliation (0.4.271).
+# P-L108: inspect the exact requested Raspberry candidate image (0.4.272).
+# P-L109: separate Jetson mount source and snapshot target host gates (0.4.273).
+# P-L110: structured CrewAI participant observability without decision authority (0.4.274).
+# P-L111: contextual CrewAI execution evidence without decision authority (0.4.275).
+# P-L113: structured advisory group, challenger shadow and paper capital ladder.
+# P-L114: canonical latest readers ignore generic reporter rows.
+# P-L115: deterministic, read-only validation backlog governance (0.4.278).
+# P-L116: unify the Jetson release lineage with advisory improvements.
+# P-L117-B1: revalidation preserves authority status and lesson evidence (0.4.282).
+# P-L117-D1-R1: producer output carries consumable window observations (0.4.284).
+# P-L117-M-R2: make backward guarded-stage rejection explicit (0.4.293).
+# P-L117-N2-R1: bounded, validated and fail-open prospective capture (0.4.294).
+# P-L118-N2-R2: canonical validation provenance and stable shadow identities (0.4.296).
+# P-L118-N2-R3: unresolved receipts stay descriptive until canonical evidence resolves (0.4.297).
+# P-L125: port del bucle de mejora P-L120..P-L123 sobre la linea Jetson (0.4.298).
+# P-L126: catalogo v4.1 y linea Mejora hoy en UI (0.4.299).
+# P-L127: recorte de barras futuras y capture post-cierre SPY (0.4.300).
+# P-L128: regla de retire por sangria lenta 10d (0.4.301).
+# P-L128fix: orden sync scheduler (0.4.302).
+# P-L128fix2: sync evalua de verdad (0.4.303).
+# P-L129: resumen Telegram compacto (0.4.304).
+# P-L147: crew session headers + P-L149 selection guards (0.4.307).
+# P-L152: dashboard Hoy, ceros honestos fuera de sesion, dedup heroe SPY (0.4.308).
+# P-L153: autoridad temporal SPY, P/L dia n/d en cerrado, sin punto finde (0.4.309).
+# P-L141: port linea Windows 0.4.234-0.4.246 (funnel dataclass/KeyError, costes calibrados,
+# cobertura same-cycle, misfire delays/health, uplift LLM, linkage, flujos EOD, sellos de sesion,
+# dashboard Mis inversiones/SPY unico, grace 300/120/120, sesion proveedor Go/Zen, crew fail-open) (0.4.305).
+__version__ = "0.4.310"

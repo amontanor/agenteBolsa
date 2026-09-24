@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import math
-import statistics
 from collections import defaultdict
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -16,7 +14,13 @@ from agente_bolsa.storage import Store
 from .edge_analysis import _build_spy_forward_returns
 from .learning_mode import LEARNING_EXPERIMENT_SOURCE
 from .reporting import write_json_report
-from .signal_learning import _num
+from .signal_learning import (
+    LEARNING_NET_10BPS_COST,
+    LEARNING_NET_20BPS_COST,
+    _learning_metric_record,
+    _mature_signed_return_with_reason,
+    _num,
+)
 
 LEARNING_SCOREBOARD_CRITERION = (
     "el sistema aprende si la expectancy neta media de las semanas 5-8 supera a "
@@ -30,48 +34,6 @@ LEARNING_SCOREBOARD_CRITERION = (
 
 def _round(value: float | None, digits: int = 4) -> float | None:
     return None if value is None else round(float(value), digits)
-
-
-MIN_CALIBRATION_SAMPLES = 10
-MAX_CALIBRATION_ABS_BPS = 200.0
-
-
-def _calibrated_cost(executed: list[dict[str, Any]]) -> dict[str, Any]:
-    """Median signal_to_fill_bps over executed snapshots; assumption fallback.
-
-    P-L131: the scoreboard no longer presents fixed 10/20 bps as the only
-    truth. With >= MIN_CALIBRATION_SAMPLES finite snapshots (|bps| <= 200)
-    the cost rate is the observed median; otherwise the calibrated column
-    stays unavailable and the 10 bps band remains explicitly labelled as
-    an assumption, never as measured cost.
-    """
-
-    samples: list[float] = []
-    for row in executed:
-        snapshot = (row.get("execution") or {}).get("execution_snapshot") or {}
-        bps = (snapshot.get("metrics") or {}).get("signal_to_fill_bps")
-        if isinstance(bps, bool) or not isinstance(bps, (int, float)):
-            continue
-        value = float(bps)
-        if not math.isfinite(value) or abs(value) > MAX_CALIBRATION_ABS_BPS:
-            continue
-        samples.append(value)
-    if len(samples) < MIN_CALIBRATION_SAMPLES:
-        return {
-            "cost_basis": "assumption_10bps",
-            "cost_bps": 10.0,
-            "cost_rate": 0.001,
-            "calibration_samples": len(samples),
-            "calibrated": False,
-        }
-    median_bps = round(float(statistics.median(samples)), 2)
-    return {
-        "cost_basis": "calibrated",
-        "cost_bps": median_bps,
-        "cost_rate": median_bps / 10_000.0,
-        "calibration_samples": len(samples),
-        "calibrated": True,
-    }
 
 
 def _week_index(first_day: date, current_day: date) -> int:
@@ -114,14 +76,14 @@ def _resolved_end_date(end_date: str | None) -> str:
     return datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).date().isoformat()
 
 
-def _mature_return(row: dict[str, Any], horizon: int) -> float | None:
+def _mature_return_with_reason(row: dict[str, Any], horizon: int) -> tuple[float | None, str | None]:
     outcome = row.get("outcome") or {}
-    if str(outcome.get("source") or "").strip().lower() == "trade_memory":
-        return None
-    maturity = outcome.get("matured_horizons") or {}
-    if not bool(maturity.get(f"{horizon}d")):
-        return None
-    return _num(outcome.get(f"return_{horizon}d"))
+    return _mature_signed_return_with_reason(row, outcome, horizon)
+
+
+def _mature_return(row: dict[str, Any], horizon: int) -> float | None:
+    value, _reason = _mature_return_with_reason(row, horizon)
+    return value
 
 
 def _daily_portfolio_returns(items: list[dict[str, Any]], *, horizon: int, cost: float) -> list[float]:
@@ -170,11 +132,44 @@ def _cohort_rows(
         "low_sample_daily_quota_exhausted",
     }
 
-    def source_ids(row: dict[str, Any]) -> set[str]:
+    def exact_signal_id(row: dict[str, Any]) -> str | None:
+        features = row.get("features") if isinstance(row.get("features"), dict) else {}
+        lineage = features.get("decision_lineage") if isinstance(features.get("decision_lineage"), dict) else {}
+        for container in (row, features, lineage):
+            for key in ("signal_id", "best_signal_id"):
+                value = str(container.get(key) or "").strip()
+                if value:
+                    return value
+        return None
+
+    def explicit_cycle_id(row: dict[str, Any]) -> str | None:
+        features = row.get("features") if isinstance(row.get("features"), dict) else {}
+        lineage = features.get("decision_lineage") if isinstance(features.get("decision_lineage"), dict) else {}
+        control_set = features.get("comparable_control_set") if isinstance(features.get("comparable_control_set"), dict) else {}
+        for container in (row, lineage, control_set):
+            value = str(container.get("cycle_id") or "").strip()
+            if value:
+                return value
+        return None
+
+    def verified_control_ids(row: dict[str, Any]) -> set[str]:
+        features = row.get("features") if isinstance(row.get("features"), dict) else {}
+        control_set = features.get("comparable_control_set")
+        if not isinstance(control_set, dict) or control_set.get("status") != "verified":
+            return set()
+        treatment = control_set.get("treatment") if isinstance(control_set.get("treatment"), dict) else {}
+        if str(treatment.get("signal_id") or "").strip() != str(exact_signal_id(row) or ""):
+            return set()
+        row_cycle_id = explicit_cycle_id(row)
+        control_cycle_id = str(control_set.get("cycle_id") or "").strip()
+        if not row_cycle_id or not control_cycle_id or row_cycle_id != control_cycle_id:
+            return set()
         return {
-            str(item).removesuffix(":shadow")
-            for item in list(row.get("source_run_ids") or [])
-            if str(item).strip()
+            str(control.get("signal_id") or "").strip()
+            for control in control_set.get("controls") or []
+            if isinstance(control, dict)
+            and control.get("gate_eligibility") == "verified"
+            and str(control.get("signal_id") or "").strip()
         }
 
     def eligible_capacity_control(row: dict[str, Any]) -> bool:
@@ -193,12 +188,14 @@ def _cohort_rows(
         return (rank if rank is not None else 1e9, -(score or 0.0), str(row.get("observation_id") or ""))
 
     for item in executed:
-        item_sources = source_ids(item)
+        control_ids = verified_control_ids(item)
+        item_cycle_id = explicit_cycle_id(item)
         candidates = [
             row
             for row in all_control
-            if str(row.get("signal_date") or "") == str(item.get("signal_date") or "")
-            and bool(item_sources.intersection(source_ids(row)))
+            if exact_signal_id(row) in control_ids
+            and item_cycle_id is not None
+            and explicit_cycle_id(row) == item_cycle_id
             and eligible_capacity_control(row)
         ]
         selected = sorted(candidates, key=control_sort_key)[:3]
@@ -217,15 +214,9 @@ def _weekly_rows(
     since_date: str,
     end_date: str | None,
     horizon: int = 5,
-    calibration: dict[str, Any] | None = None,
-    matches: dict[str, list[str]] | None = None,
 ) -> list[dict[str, Any]]:
     if not rows:
         return []
-    calibration = calibration or {"cost_basis": "assumption_10bps", "calibrated": False,
-                                  "calibration_samples": 0}
-    matched_by_id = matches or {}
-    calibrated_rate = float(calibration["cost_rate"]) if calibration.get("calibrated") else None
     first_day = date.fromisoformat(since_date)
     benchmark = _build_spy_forward_returns(settings, start=since_date, end=end_date)
     grouped: dict[int, list[dict[str, Any]]] = {}
@@ -240,22 +231,24 @@ def _weekly_rows(
     weekly = []
     for week in sorted(grouped):
         items = grouped[week]
+        gross_values = []
         costs_10 = []
         costs_20 = []
-        costs_cal = []
         alpha_values = []
         hit_flags = []
+        gross_hit_flags = []
         for item in items:
             value = _mature_return(item, horizon)
             if value is None:
                 continue
-            net_10 = value - 0.001
-            net_20 = value - 0.002
+            metric = _learning_metric_record(value)
+            gross_values.append(value)
+            net_10 = float(metric["net_return_10bps"])
+            net_20 = value - LEARNING_NET_20BPS_COST
             costs_10.append(net_10)
             costs_20.append(net_20)
-            if calibrated_rate is not None:
-                costs_cal.append(value - calibrated_rate)
-            hit_flags.append(net_10 > 0)
+            hit_flags.append(bool(metric["hit_rate_net_10bps"]))
+            gross_hit_flags.append(bool(metric["gross_gt_1pct"]))
             spy_return = benchmark.get((str(item.get("signal_date") or ""), horizon))
             if spy_return is not None:
                 alpha_values.append(net_10 - spy_return)
@@ -263,21 +256,10 @@ def _weekly_rows(
         for item in control_grouped.get(week, []):
             value = _mature_return(item, horizon)
             if value is not None:
-                control_values.append(value - 0.001)
-        daily_returns = _daily_portfolio_returns(items, horizon=horizon, cost=0.001)
+                control_values.append(value - LEARNING_NET_10BPS_COST)
+        daily_returns = _daily_portfolio_returns(items, horizon=horizon, cost=LEARNING_NET_10BPS_COST)
         expectancy_10 = _round(_mean(costs_10))
         expectancy_20 = _round(_mean(costs_20))
-        expectancy_cal = _round(_mean(costs_cal)) if calibrated_rate is not None and costs_cal else None
-        # Cobertura same-cycle por semana: ejecutados maduros con/sin control
-        # apareado (misma fecha + fuente + motivo de capacidad, espejo de
-        # la elegibilidad P-L31B). Sin union por simbolo.
-        mature_ids = [
-            str(item.get("observation_id") or "")
-            for item in items
-            if _mature_return(item, horizon) is not None
-        ]
-        matched = sum(1 for obs_id in mature_ids if matched_by_id.get(obs_id))
-        unmatched = len(mature_ids) - matched
         alpha_net = _round(_mean(alpha_values))
         portfolio_drawdown = _round(_max_drawdown(daily_returns), 4)
         control_expectancy = _round(_mean(control_values))
@@ -285,16 +267,20 @@ def _weekly_rows(
             {
                 "week": week,
                 "label": _week_label(week),
+                "metric_scope": "full_policy",
                 "n": len(costs_10),
+                "signed_gross_return": _round(_mean(gross_values)),
+                "net_return_10bps": expectancy_10,
                 "expectancy_net_10bps": expectancy_10,
                 "expectancy_net_20bps": expectancy_20,
-                "expectancy_net_calibrated": expectancy_cal,
-                "cost_basis": calibration.get("cost_basis"),
-                "calibration_samples": calibration.get("calibration_samples"),
-                "control_cost_basis": "assumption_10bps",
-                "matched_executed": matched,
-                "unmatched_executed": unmatched,
                 "hit_rate": _round(sum(1 for flag in hit_flags if flag) / len(hit_flags), 4) if hit_flags else None,
+                "hit_rate_net_10bps": _round(sum(1 for flag in hit_flags if flag) / len(hit_flags), 4) if hit_flags else None,
+                "gross_gt_1pct": {
+                    "hits": sum(1 for flag in gross_hit_flags if flag),
+                    "rate": _round(sum(1 for flag in gross_hit_flags if flag) / len(gross_hit_flags), 4)
+                    if gross_hit_flags
+                    else None,
+                },
                 "profit_factor": _round(_profit_factor(costs_10), 4),
                 "alpha_vs_spy": alpha_net,
                 "max_drawdown": portfolio_drawdown,
@@ -323,10 +309,20 @@ def _data_quality(
         }
         for horizon in (1, 3, 5, 10)
     }
+    all_rows = [*executed, *control]
     contaminated = sum(
         str((row.get("outcome") or {}).get("source") or "").strip().lower() == "trade_memory"
-        for row in [*executed, *control]
+        for row in all_rows
     )
+    direction_exclusions_by_horizon: dict[str, dict[str, int]] = {}
+    for horizon in (1, 3, 5, 10):
+        direction_exclusions = defaultdict(int)
+        for row in all_rows:
+            _value, reason = _mature_return_with_reason(row, horizon)
+            if reason in {"direction_unavailable", "exit_position_direction_unavailable"}:
+                direction_exclusions[reason] += 1
+        direction_exclusions_by_horizon[f"{horizon}d"] = dict(sorted(direction_exclusions.items()))
+    direction_exclusions = direction_exclusions_by_horizon["5d"]
     verified_lineage = sum(
         str((((row.get("features") or {}).get("decision_lineage") or {}).get("lineage_status")) or "")
         == "verified"
@@ -346,7 +342,15 @@ def _data_quality(
     return {
         "eligible_executed": len(executed),
         "eligible_control": len(control),
+        "metric_scope": "full_policy",
+        "eligible_denominator": (
+            "explicit mature outcome + return available + valid direction + "
+            "source is not trade_memory"
+        ),
         "excluded_trade_memory_as_forward": contaminated,
+        "excluded_direction_unavailable_as_forward": sum(direction_exclusions.values()),
+        "excluded_direction_by_reason": dict(sorted(direction_exclusions.items())),
+        "excluded_direction_by_horizon": direction_exclusions_by_horizon,
         "maturity_by_horizon": maturity,
         "lineage_coverage": {
             "verified": verified_lineage,
@@ -354,12 +358,22 @@ def _data_quality(
             "pct": _round(verified_lineage / len(executed), 4) if executed else None,
         },
         "control_coverage": {
-            "method": "same_cycle_eligible_next_best",
+            "method": "verified_comparable_control_set",
             "status": "available" if matched_executed else "unavailable",
+            "comparability_status": (
+                "verified"
+                if executed and matched_executed == len(executed)
+                else "partial"
+                if matched_executed
+                else "not_comparable"
+                if executed
+                else "unavailable"
+            ),
             "matched_executed": matched_executed,
             "total_executed": len(executed),
             "pct": _round(matched_executed / len(executed), 4) if executed else None,
             "matched_control_observations": len(control),
+            "unmatched_executed": max(0, len(executed) - matched_executed),
         },
         "blocked_candidates": dict(sorted(blocked_counts.items())),
         "secondary_controls": {
@@ -390,7 +404,12 @@ def _execution_quality(executed: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _evaluation(weekly_rows: list[dict[str, Any]], *, executed_total: int = 0) -> dict[str, Any]:
+def _evaluation(
+    weekly_rows: list[dict[str, Any]],
+    *,
+    executed_total: int = 0,
+    control_coverage_status: str = "unavailable",
+) -> dict[str, Any]:
     valid = [row for row in weekly_rows if row.get("expectancy_net_10bps") is not None]
     slope = _linear_slope(
         [(int(row["week"]), float(row["expectancy_net_10bps"])) for row in valid if row.get("expectancy_net_10bps") is not None]
@@ -404,8 +423,11 @@ def _evaluation(weekly_rows: list[dict[str, Any]], *, executed_total: int = 0) -
         [float(row["control_expectancy_net_10bps"]) for row in control_5_8 if row.get("control_expectancy_net_10bps") is not None]
     )
     enough_window = len(weeks_1_4) == 4 and len(weeks_5_8) == 4
-    beats_counterfactual = (
-        avg_5_8 is not None and control_avg_5_8 is not None and avg_5_8 > control_avg_5_8
+    beats_counterfactual = bool(
+        control_coverage_status == "verified"
+        and avg_5_8 is not None
+        and control_avg_5_8 is not None
+        and avg_5_8 > control_avg_5_8
     )
     learns = bool(
         enough_window
@@ -433,6 +455,7 @@ def _evaluation(weekly_rows: list[dict[str, Any]], *, executed_total: int = 0) -
         "weeks_5_8_expectancy_net_10bps": _round(avg_5_8),
         "weekly_slope_expectancy_net_10bps": _round(slope, 6),
         "beats_counterfactual": beats_counterfactual,
+        "control_coverage_status": control_coverage_status,
         "counterfactual_expectancy_weeks_5_8": _round(control_avg_5_8),
         "learns": learns,
     }
@@ -454,25 +477,36 @@ def build_learning_scoreboard(
         since_date=since_date,
         end_date=resolved_end_date,
     )
-    calibration = _calibrated_cost(executed)
     weekly_rows = _weekly_rows(
         settings,
         executed,
         control,
         since_date=since_date,
         end_date=resolved_end_date,
-        calibration=calibration,
-        matches=matches,
     )
-    evaluation = _evaluation(weekly_rows, executed_total=len(executed))
     data_quality = _data_quality(executed, control, matches, all_control)
+    evaluation = _evaluation(
+        weekly_rows,
+        executed_total=len(executed),
+        control_coverage_status=data_quality["control_coverage"]["comparability_status"],
+    )
     report = {
-        "schema_version": 3,
+        "schema_version": 2,
         "run_id": run_id,
+        "metric_scope": "full_policy",
         "as_of": datetime.now(timezone.utc).isoformat(),
         "period": {"from": since_date, "to": resolved_end_date},
+        "metric_contract": {
+            "signed_gross_return": "direction-corrected mature forward return",
+            "net_return_10bps": "signed_gross_return minus 0.001",
+            "hit_rate_net_10bps": "net_return_10bps > 0",
+            "gross_gt_1pct": "historical gross signed return > 0.01; not canonical hit",
+            "eligible_denominator": (
+                "matured + return available + valid direction + source is not trade_memory"
+            ),
+            "control": "verified comparable_control_set with exact signal_id and cycle_id",
+        },
         "cohort": LEARNING_EXPERIMENT_SOURCE,
-        "cost_calibration": calibration,
         "weekly_rows": weekly_rows,
         "data_quality": data_quality,
         "maturity_by_horizon": data_quality["maturity_by_horizon"],
@@ -513,13 +547,7 @@ def format_learning_scoreboard(report: dict[str, Any]) -> str:
     for row in report.get("weekly_rows") or []:
         lines.append(
             f"  - {row['label']}: n={row['n']} exp10={row.get('expectancy_net_10bps')} "
-            f"exp20={row.get('expectancy_net_20bps')} exp_cal={row.get('expectancy_net_calibrated')} "
-            f"hit={row.get('hit_rate')} pf={row.get('profit_factor')} "
+            f"exp20={row.get('expectancy_net_20bps')} hit={row.get('hit_rate')} pf={row.get('profit_factor')} "
             f"alpha={row.get('alpha_vs_spy')} dd={row.get('max_drawdown')} control_exp10={row.get('control_expectancy_net_10bps')}"
         )
-    calibration = report.get("cost_calibration") or {}
-    lines.append(
-        f"cost_basis={calibration.get('cost_basis')} "
-        f"cost_bps={calibration.get('cost_bps')} samples={calibration.get('calibration_samples')}"
-    )
     return "\n".join(lines)

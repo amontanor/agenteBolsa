@@ -27,6 +27,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised by import-only test 
     IntervalTrigger = None  # type: ignore[assignment]
 
 from ._utils import log_swallow
+from .agent_run import AgentRunTracker, safe_data_ref
 from .config import Settings
 from .continuous_improvement.digest import build_lab_digest, format_lab_digest_text
 from .continuous_improvement.runtime import ContinuousImprovementLabRuntime
@@ -133,6 +134,14 @@ from .tools.time_stop_policy import (
 from .tools.trade_decision import _annotate_technical_context_with_learning
 from .tools.universe import resolve_study_universe
 
+SCHEDULER_MAX_WORKERS = 2
+# P-L141: el grace intradia de 1 s descartaba runs con la latencia de
+# despertar observada en produccion (1.4-2.7 s): 22/22 ciclos missed el
+# 17-sep. 120 s cubre el retraso con 40x de margen sin aceptar trabajo
+# rancio (coalesce intacto en cada job). MAX_WORKERS se conserva en 2 a
+# la espera de medir contencion (no tocar concurrencia y timing a la vez).
+SCHEDULER_INTRADAY_MISFIRE_GRACE_SECONDS = 120
+SCHEDULER_BACKGROUND_MISFIRE_GRACE_SECONDS = 300
 LOGGER = logging.getLogger(__name__)
 OPERATIONAL_HEALTH_REFRESH_INTERVAL_MINUTES = 45
 _PORTFOLIO_UNSET = object()
@@ -177,6 +186,17 @@ def _process_start_token(pid: int) -> str | None:
             finally:
                 kernel32.CloseHandle(handle)
         except Exception:
+            return None
+    if os.name != "nt":
+        # Linux expone un identificador de inicio monotono en /proc/<pid>/stat
+        # (campo 22). Es necesario para distinguir un PID reutilizado de su
+        # propietario anterior cuando el contenedor conserva scheduler.lock.
+        try:
+            raw = Path(f"/proc/{int(pid)}/stat").read_text(encoding="utf-8")
+            closing_paren = raw.rfind(")")
+            fields = raw[closing_paren + 2 :].split()
+            return fields[19]
+        except (OSError, ValueError, IndexError):
             return None
     return None
 
@@ -261,7 +281,11 @@ def _lock_matches_running_process(
     if pid == current_pid and current_token and expected_token:
         return expected_token == current_token
     if pid == current_pid and not expected_token:
-        return True
+        # Un lock antiguo sin token no puede demostrar que este mismo PID sea
+        # su propietario: en un contenedor nuevo el PID puede haberse
+        # reutilizado. Si el proceso actual ya dispone de token, recuperar el
+        # lock es seguro y el siguiente payload quedara protegido.
+        return current_token is None
     if expected_token is None:
         return True
     return _process_start_token(pid) == expected_token
@@ -407,9 +431,10 @@ def _acquire_scheduler_lock(settings: Settings, store: Store | None = None) -> t
                 event_id=f"scheduler_lock_conflict:malformed:{current_pid}",
             )
             return False, "Scheduler lock malformado; no se puede recuperar con seguridad"
+        legacy_same_pid = existing_pid == current_pid and not diagnosis.get("expected_token") and current_token
         if diagnosis["status"] == "owner_alive" and not (
             existing_pid == current_pid and diagnosis.get("token_match") and current_token
-        ):
+        ) and not legacy_same_pid:
             _persist_scheduler_lock_marker(
                 store,
                 "ownership_conflict",
@@ -490,8 +515,8 @@ def _reporter(settings: Settings, store: Store, verbose: bool) -> EventReporter:
 def _skip_delay_seconds(scheduled: Any) -> float | None:
     """Seconds between the scheduled run time and now; None if unparseable.
 
-    P-L133: measures misfire delay at detection time. Naive datetimes are
-    assumed UTC. Small clock-skew negatives clamp to 0.0.
+    P-L141 port of the Windows P-L133 probe: measures misfire delay at
+    detection time so grace tuning stays evidence-driven.
     """
 
     moment: datetime | None = None
@@ -911,6 +936,7 @@ def _compact_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         "signal_date": candidate.get("signal_date") or candidate.get("last_date") or technical_state.get("last_date"),
         "signal_strategy_name": candidate.get("signal_strategy_name"),
         "signal_strategy_version": candidate.get("signal_strategy_version"),
+        "producer_agent_contract": candidate.get("producer_agent_contract"),
         "strategy_name": candidate.get("strategy_name"),
         "strategy_version": candidate.get("strategy_version"),
         "last_date": candidate.get("last_date") or technical_state.get("last_date"),
@@ -946,6 +972,7 @@ def _compact_scan_context(report: dict[str, Any], selected_candidates: list[dict
     return {
         "source": "intraday_technical_scan",
         "run_id": report.get("run_id"),
+        "producer_agent_contract": report.get("producer_agent_contract"),
         "path": report.get("path"),
         "symbols_scanned": report.get("symbols_scanned"),
         "symbols_with_data": report.get("symbols_with_data"),
@@ -2188,183 +2215,215 @@ def market_cycle_job(
     cycle_settings = settings
     technical_context: dict[str, Any] | None = None
     learning_penalty_shadow: dict[str, Any] | None = None
+    selected_candidates: list[dict[str, Any]] = []
+    selected_symbols: list[str] = []
+    ranked_context: dict[str, Any] | None = None
     if settings.intraday_technical_scan_enabled:
-        timing.start("technical_analysis")
-        universe_name = settings.intraday_technical_scan_universe or settings.closed_market_study_universe
-        max_symbols = settings.intraday_technical_scan_max_symbols or settings.closed_market_study_max_symbols
-        reporter.emit(
-            "technical_analyst",
-            "intraday_technical_scan_started",
-            run_id,
-            f"Escaneo tecnico intradia iniciado: {universe_name}, max {max_symbols} simbolos.",
-            {"universe": universe_name, "max_symbols": max_symbols},
-        )
-        symbols = resolve_study_universe(
-            universe_name,
-            settings.universe,
-            max_symbols,
-            settings.data_dir / "cache",
-        )
-        report = build_closed_market_technical_study(
-            symbols,
-            settings.data_dir / "reports",
-            run_id,
-            benchmark_symbol=settings.benchmark_symbol,
-            store=store,
-            learning_mode_config=active_learning_mode(settings),
-            persist_report=False,
-        )
-        signal_source = learning_mode_source(settings=settings, default_source="intraday_scan")
-        prepared_signal_identity = prepare_signal_candidate_identities(
-            report,
-            source=signal_source,
-        )
-        selected_candidates, selected_symbols = _selected_candidates(report, settings)
-        report["selected_candidates"] = selected_candidates
-        ranked_context = report.pop("_learning_penalty_ranked_context", None)
-        try:
-            from .tools.market_state import load_latest_market_state
-
-            latest_market_state = load_latest_market_state(settings.data_dir / "reports")
-            if latest_market_state:
-                report["market_state"] = latest_market_state
-        except Exception as exc:  # noqa: BLE001 - el ledger no debe romper el ciclo.
-            log_swallow(LOGGER, "adjuntar regimen al ledger intradia", exc)
-        signals_saved = record_signal_candidates(
+        technical_run = AgentRunTracker(
             store,
-            report,
-            source=signal_source,
-            prepared_identity=prepared_signal_identity,
+            role="technical_analyst",
+            agent_name="technical_analyst",
+            task_name="intraday_technical_scan",
+            cycle_id=run_id,
+            execution_kind="system",
+            input_refs=[run_id],
         )
-        learning_penalty_shadow = _prepare_learning_penalty_cycle_shadow(
-            settings,
-            reporter,
-            ranked_context,
-            selected_candidates,
-            run_id,
-        )
-        report = write_json_report(
-            report,
-            settings.data_dir / "reports",
-            "closed_market_technical_study",
-            run_id,
-            latest_filename="latest_closed_market_technical_study.json",
-            manifest={"market_data": report.get("market_data", {})},
-        )
-        top_longs = ", ".join(item["symbol"] for item in report["top_longs"][:5]) or "sin candidatos"
-        top_shorts = ", ".join(item["symbol"] for item in report["top_shorts"][:5]) or "sin candidatos"
-        reporter.emit(
-            "technical_analyst",
-            "intraday_technical_scan_completed",
-            run_id,
-            f"Escaneo tecnico listo. Largos: {top_longs}. Cortos: {top_shorts}.",
-            {
-                "path": report["path"],
-                "symbols_scanned": report["symbols_scanned"],
-                "symbols_with_data": report["symbols_with_data"],
-                "signals_saved": signals_saved,
-                "selected_symbols": selected_symbols,
-                "analysis_plan_counts": report["analysis_plan_counts"],
-            },
-        )
-        technical_context = _compact_scan_context(report, selected_candidates)
-
+        timing.start("technical_analysis")
         try:
-            breakout_symbols = merge_breakout_universe(symbols, settings.breakout_watchlist)
-            breakout_report = build_breakout_scan(
-                breakout_symbols,
+            universe_name = settings.intraday_technical_scan_universe or settings.closed_market_study_universe
+            max_symbols = settings.intraday_technical_scan_max_symbols or settings.closed_market_study_max_symbols
+            reporter.emit(
+                "technical_analyst",
+                "intraday_technical_scan_started",
+                run_id,
+                f"Escaneo tecnico intradia iniciado: {universe_name}, max {max_symbols} simbolos.",
+                {"universe": universe_name, "max_symbols": max_symbols},
+            )
+            symbols = resolve_study_universe(
+                universe_name,
+                settings.universe,
+                max_symbols,
+                settings.data_dir / "cache",
+            )
+            report = build_closed_market_technical_study(
+                symbols,
                 settings.data_dir / "reports",
                 run_id,
+                benchmark_symbol=settings.benchmark_symbol,
+                store=store,
+                learning_mode_config=active_learning_mode(settings),
+                persist_report=False,
+                producer_agent_contract=technical_run.producer_contract(),
             )
-            confirmed = breakout_report.get("confirmed", [])
-            tradable = [item for item in confirmed if item.get("tradable")]
-            watch = breakout_report.get("watch", [])
-            blocked = breakout_report.get("blocked_or_failed", [])
-            confirmed_text = ", ".join(
-                f"{item['symbol']} ({item['risk_level']})" for item in confirmed[:5]
-            ) or "ninguna"
-            watch_text = ", ".join(item["symbol"] for item in watch[:5]) or "ninguna"
-            reporter.emit(
-                "technical_analyst",
-                "intraday_breakout_scan_completed",
-                run_id,
-                (
-                    "Rupturas revisadas. "
-                    f"Confirmadas: {confirmed_text}. Vigilancia: {watch_text}. "
-                    f"Operables conservadoras: {len(tradable)}; bloqueadas/fallidas: {len(blocked)}."
-                ),
-                {
-                    "path": breakout_report["path"],
-                    "symbols_scanned": breakout_report["symbols_scanned"],
-                    "confirmed": confirmed[:10],
-                    "watch": watch[:10],
-                    "tradable_symbols": [item["symbol"] for item in tradable[:10]],
-                    "blocked_or_failed_count": len(blocked),
-                    "warnings": breakout_report["warnings"][:10],
-                },
+            signal_source = learning_mode_source(settings=settings, default_source="intraday_scan")
+            prepared_signal_identity = prepare_signal_candidate_identities(
+                report,
+                source=signal_source,
             )
-            if technical_context is not None:
-                technical_context["breakout_scan_path"] = breakout_report["path"]
-                technical_context["breakout_confirmed"] = confirmed[:5]
-                technical_context["breakout_watch"] = watch[:5]
-        except Exception as exc:  # noqa: BLE001 - breakout scan must not block the cycle.
-            reporter.emit(
-                "technical_analyst",
-                "intraday_breakout_scan_failed",
-                run_id,
-                f"Escaneo de rupturas fallido: {exc}",
-                {"error": repr(exc)},
-            )
+            selected_candidates, selected_symbols = _selected_candidates(report, settings)
+            report["selected_candidates"] = selected_candidates
+            ranked_context = report.pop("_learning_penalty_ranked_context", None)
+            try:
+                from .tools.market_state import load_latest_market_state
 
-        if settings.news_sentiment_enabled and settings.intraday_news_sentiment_enabled and use_crew and selected_candidates:
-            reporter.emit(
-                "macro_news_researcher",
-                "intraday_news_sentiment_started",
-                run_id,
-                f"Validando noticias intradia para {len(selected_candidates)} candidatos tecnicos.",
-                {
-                    "symbols": [item["symbol"] for item in selected_candidates],
-                    "news_items_per_symbol": settings.news_items_per_symbol,
-                },
+                latest_market_state = load_latest_market_state(settings.data_dir / "reports")
+                if latest_market_state:
+                    report["market_state"] = latest_market_state
+            except Exception as exc:  # noqa: BLE001 - el ledger no debe romper el ciclo.
+                log_swallow(LOGGER, "adjuntar regimen al ledger intradia", exc)
+            signals_saved = record_signal_candidates(
+                store,
+                report,
+                source=signal_source,
+                prepared_identity=prepared_signal_identity,
             )
-            sentiment_report = analyze_news_sentiment_for_candidates(
+            learning_penalty_shadow = _prepare_learning_penalty_cycle_shadow(
                 settings,
+                reporter,
+                ranked_context,
                 selected_candidates,
-                settings.data_dir / "reports",
                 run_id,
-                max_news_items=settings.news_items_per_symbol,
             )
-            supportive = [
-                item["symbol"]
-                for item in sentiment_report["results"]
-                if item.get("sentiment", {}).get("supports_technical_setup")
-            ]
-            reporter.emit(
-                "macro_news_researcher",
-                "intraday_news_sentiment_completed",
+            report = write_json_report(
+                report,
+                settings.data_dir / "reports",
+                "closed_market_technical_study",
                 run_id,
-                f"Noticias intradia listas. Apoyan tesis: {', '.join(supportive) or 'sin apoyos claros'}.",
+                latest_filename="latest_closed_market_technical_study.json",
+                manifest={"market_data": report.get("market_data", {})},
+            )
+            top_longs = ", ".join(item["symbol"] for item in report["top_longs"][:5]) or "sin candidatos"
+            top_shorts = ", ".join(item["symbol"] for item in report["top_shorts"][:5]) or "sin candidatos"
+            reporter.emit(
+                "technical_analyst",
+                "intraday_technical_scan_completed",
+                run_id,
+                f"Escaneo tecnico listo. Largos: {top_longs}. Cortos: {top_shorts}.",
                 {
-                    "path": sentiment_report["path"],
-                    "symbols_analyzed": sentiment_report["symbols_analyzed"],
-                    "supportive": supportive,
-                    "warnings": sentiment_report["warnings"][:10],
+                    "path": report["path"],
+                    "symbols_scanned": report["symbols_scanned"],
+                    "symbols_with_data": report["symbols_with_data"],
+                    "signals_saved": signals_saved,
+                    "selected_symbols": selected_symbols,
+                    "analysis_plan_counts": report["analysis_plan_counts"],
                 },
             )
-            if technical_context is not None:
-                technical_context["news_sentiment_path"] = sentiment_report["path"]
-                technical_context["news_supportive_symbols"] = supportive
+            technical_context = _compact_scan_context(report, selected_candidates)
 
-        if selected_symbols:
-            cycle_settings = settings.model_copy(update={"default_universe": ",".join(selected_symbols)})
+            try:
+                breakout_symbols = merge_breakout_universe(symbols, settings.breakout_watchlist)
+                breakout_report = build_breakout_scan(
+                    breakout_symbols,
+                    settings.data_dir / "reports",
+                    run_id,
+                )
+                confirmed = breakout_report.get("confirmed", [])
+                tradable = [item for item in confirmed if item.get("tradable")]
+                watch = breakout_report.get("watch", [])
+                blocked = breakout_report.get("blocked_or_failed", [])
+                confirmed_text = ", ".join(
+                    f"{item['symbol']} ({item['risk_level']})" for item in confirmed[:5]
+                ) or "ninguna"
+                watch_text = ", ".join(item["symbol"] for item in watch[:5]) or "ninguna"
+                reporter.emit(
+                    "technical_analyst",
+                    "intraday_breakout_scan_completed",
+                    run_id,
+                    (
+                        "Rupturas revisadas. "
+                        f"Confirmadas: {confirmed_text}. Vigilancia: {watch_text}. "
+                        f"Operables conservadoras: {len(tradable)}; bloqueadas/fallidas: {len(blocked)}."
+                    ),
+                    {
+                        "path": breakout_report["path"],
+                        "symbols_scanned": breakout_report["symbols_scanned"],
+                        "confirmed": confirmed[:10],
+                        "watch": watch[:10],
+                        "tradable_symbols": [item["symbol"] for item in tradable[:10]],
+                        "blocked_or_failed_count": len(blocked),
+                        "warnings": breakout_report["warnings"][:10],
+                    },
+                )
+                if technical_context is not None:
+                    technical_context["breakout_scan_path"] = breakout_report["path"]
+                    technical_context["breakout_confirmed"] = confirmed[:5]
+                    technical_context["breakout_watch"] = watch[:5]
+            except Exception as exc:  # noqa: BLE001 - breakout scan must not block the cycle.
+                reporter.emit(
+                    "technical_analyst",
+                    "intraday_breakout_scan_failed",
+                    run_id,
+                    f"Escaneo de rupturas fallido: {exc}",
+                    {"error": repr(exc)},
+                )
+
+            if settings.news_sentiment_enabled and settings.intraday_news_sentiment_enabled and use_crew and selected_candidates:
+                reporter.emit(
+                    "macro_news_researcher",
+                    "intraday_news_sentiment_started",
+                    run_id,
+                    f"Validando noticias intradia para {len(selected_candidates)} candidatos tecnicos.",
+                    {
+                        "symbols": [item["symbol"] for item in selected_candidates],
+                        "news_items_per_symbol": settings.news_items_per_symbol,
+                    },
+                )
+                sentiment_report = analyze_news_sentiment_for_candidates(
+                    settings,
+                    selected_candidates,
+                    settings.data_dir / "reports",
+                    run_id,
+                    max_news_items=settings.news_items_per_symbol,
+                )
+                supportive = [
+                    item["symbol"]
+                    for item in sentiment_report["results"]
+                    if item.get("sentiment", {}).get("supports_technical_setup")
+                ]
+                reporter.emit(
+                    "macro_news_researcher",
+                    "intraday_news_sentiment_completed",
+                    run_id,
+                    f"Noticias intradia listas. Apoyan tesis: {', '.join(supportive) or 'sin apoyos claros'}.",
+                    {
+                        "path": sentiment_report["path"],
+                        "symbols_analyzed": sentiment_report["symbols_analyzed"],
+                        "supportive": supportive,
+                        "warnings": sentiment_report["warnings"][:10],
+                    },
+                )
+                if technical_context is not None:
+                    technical_context["news_sentiment_path"] = sentiment_report["path"]
+                    technical_context["news_supportive_symbols"] = supportive
+
+            if selected_symbols:
+                cycle_settings = settings.model_copy(update={"default_universe": ",".join(selected_symbols)})
+                reporter.emit(
+                    "orchestrator",
+                    "intraday_candidate_universe_selected",
+                    run_id,
+                    f"Ciclo LLM usara candidatos tecnicos: {', '.join(selected_symbols)}.",
+                    {"selected_symbols": selected_symbols},
+                )
+            timing.finish("technical_analysis")
+            technical_run.add_outputs(output_refs=[run_id])
+            technical_run.succeed()
+        except Exception as exc:  # noqa: BLE001 - el escaneo nunca debe matar el ciclo en silencio.
+            technical_run.fail(reason=exc, error_code="intraday_technical_scan_failed")
             reporter.emit(
-                "orchestrator",
-                "intraday_candidate_universe_selected",
+                "technical_analyst",
+                "intraday_technical_scan_failed",
                 run_id,
-                f"Ciclo LLM usara candidatos tecnicos: {', '.join(selected_symbols)}.",
-                {"selected_symbols": selected_symbols},
+                f"Escaneo tecnico intradia fallido; el ciclo continua sin contexto tecnico: {exc}",
+                {"error": repr(exc), "error_type": type(exc).__name__},
             )
-        timing.finish("technical_analysis")
+            timing.fail("technical_analysis", exc)
+            technical_context = None
+            learning_penalty_shadow = None
+            ranked_context = None
+            selected_candidates = []
+            selected_symbols = []
+            cycle_settings = settings
     else:
         timing.skip("technical_analysis", "escaneo tecnico intradia desactivado")
 
@@ -2497,45 +2556,62 @@ def closed_market_technical_study_job(
             {"done": done, "total": total, "with_data": with_data},
         )
 
-    report = build_closed_market_technical_study(
-        symbols,
-        settings.data_dir / "reports",
-        run_id,
-        progress_callback=_progress,
-        benchmark_symbol=settings.benchmark_symbol,
-        store=store,
-        learning_mode_config=active_learning_mode(settings),
-        persist_report=False,
-    )
-    signal_source = learning_mode_source(settings=settings, default_source="closed_market_study")
-    prepared_signal_identity = prepare_signal_candidate_identities(
-        report,
-        source=signal_source,
-    )
-    selected_candidates, selected_symbols = _selected_candidates(report, settings)
-    report["selected_candidates"] = selected_candidates
-    ranked_context = report.pop("_learning_penalty_ranked_context", None)
-    learning_penalty_shadow = _prepare_learning_penalty_cycle_shadow(
-        settings,
-        reporter,
-        ranked_context,
-        selected_candidates,
-        run_id,
+    technical_run = AgentRunTracker(
+        store,
+        role="technical_analyst",
+        agent_name="technical_analyst",
+        task_name="closed_market_technical_study",
+        cycle_id=run_id,
+        execution_kind="system",
+        input_refs=[run_id],
     )
     try:
-        from .tools.market_state import load_latest_market_state
+        report = build_closed_market_technical_study(
+            symbols,
+            settings.data_dir / "reports",
+            run_id,
+            progress_callback=_progress,
+            benchmark_symbol=settings.benchmark_symbol,
+            store=store,
+            learning_mode_config=active_learning_mode(settings),
+            persist_report=False,
+            producer_agent_contract=technical_run.producer_contract(),
+        )
+        signal_source = learning_mode_source(settings=settings, default_source="closed_market_study")
+        prepared_signal_identity = prepare_signal_candidate_identities(
+            report,
+            source=signal_source,
+        )
+        selected_candidates, selected_symbols = _selected_candidates(report, settings)
+        report["selected_candidates"] = selected_candidates
+        ranked_context = report.pop("_learning_penalty_ranked_context", None)
+        learning_penalty_shadow = _prepare_learning_penalty_cycle_shadow(
+            settings,
+            reporter,
+            ranked_context,
+            selected_candidates,
+            run_id,
+        )
+        try:
+            from .tools.market_state import load_latest_market_state
 
-        latest_market_state = load_latest_market_state(settings.data_dir / "reports")
-        if latest_market_state:
-            report["market_state"] = latest_market_state
-    except Exception as exc:  # noqa: BLE001 - el ledger no debe romper el estudio.
-        log_swallow(LOGGER, "adjuntar regimen al estudio de mercado cerrado", exc)
-    signals_saved = record_signal_candidates(
-        store,
-        report,
-        source=signal_source,
-        prepared_identity=prepared_signal_identity,
-    )
+            latest_market_state = load_latest_market_state(settings.data_dir / "reports")
+            if latest_market_state:
+                report["market_state"] = latest_market_state
+        except Exception as exc:  # noqa: BLE001 - el ledger no debe romper el estudio.
+            log_swallow(LOGGER, "adjuntar regimen al estudio de mercado cerrado", exc)
+        signals_saved = record_signal_candidates(
+            store,
+            report,
+            source=signal_source,
+            prepared_identity=prepared_signal_identity,
+            producer_agent_contract=technical_run.producer_contract(),
+        )
+    except Exception as exc:
+        technical_run.fail(reason=exc, error_code="closed_market_technical_study_failed")
+        raise
+    technical_run.add_outputs(output_refs=[run_id])
+    technical_run.succeed()
     original_report_path = report.get("path")
     report = write_json_report(
         report,
@@ -2721,38 +2797,55 @@ def opportunity_snapshot_job(
         settings.closed_market_study_max_symbols,
         settings.data_dir / "cache",
     )
-    report = build_closed_market_technical_study(
-        symbols,
-        settings.data_dir / "reports",
-        run_id,
-        top_n=20,
-        benchmark_symbol=settings.benchmark_symbol,
-        store=store,
-        learning_mode_config=active_learning_mode(settings),
-        persist_report=False,
-    )
-    annotated_report = _annotate_technical_context_with_learning(
-        report,
-        load_daily_learning_context(settings.data_dir),
-        load_operational_response_context(settings.data_dir),
-        settings.data_dir,
-        settings=settings,
-    )
-    report["selected_candidates"] = annotated_report.get("selected_candidates", [])
-    report["selection_metadata"] = annotated_report.get("selection_metadata", {})
-    try:
-        from .tools.market_state import load_latest_market_state
-
-        latest_market_state = load_latest_market_state(settings.data_dir / "reports")
-        if latest_market_state:
-            report["market_state"] = latest_market_state
-    except Exception as exc:  # noqa: BLE001 - el snapshot no debe fallar por regimen ausente.
-        log_swallow(LOGGER, "adjuntar regimen al snapshot de oportunidades", exc)
-    record_signal_candidates(
+    technical_run = AgentRunTracker(
         store,
-        report,
-        source=learning_mode_source(settings=settings, default_source="opportunity_snapshot"),
+        role="technical_analyst",
+        agent_name="technical_analyst",
+        task_name="opportunity_snapshot_technical_study",
+        cycle_id=run_id,
+        execution_kind="system",
+        input_refs=[run_id],
     )
+    try:
+        report = build_closed_market_technical_study(
+            symbols,
+            settings.data_dir / "reports",
+            run_id,
+            top_n=20,
+            benchmark_symbol=settings.benchmark_symbol,
+            store=store,
+            learning_mode_config=active_learning_mode(settings),
+            persist_report=False,
+            producer_agent_contract=technical_run.producer_contract(),
+        )
+        annotated_report = _annotate_technical_context_with_learning(
+            report,
+            load_daily_learning_context(settings.data_dir),
+            load_operational_response_context(settings.data_dir),
+            settings.data_dir,
+            settings=settings,
+        )
+        report["selected_candidates"] = annotated_report.get("selected_candidates", [])
+        report["selection_metadata"] = annotated_report.get("selection_metadata", {})
+        try:
+            from .tools.market_state import load_latest_market_state
+
+            latest_market_state = load_latest_market_state(settings.data_dir / "reports")
+            if latest_market_state:
+                report["market_state"] = latest_market_state
+        except Exception as exc:  # noqa: BLE001 - el snapshot no debe fallar por regimen ausente.
+            log_swallow(LOGGER, "adjuntar regimen al snapshot de oportunidades", exc)
+        record_signal_candidates(
+            store,
+            report,
+            source=learning_mode_source(settings=settings, default_source="opportunity_snapshot"),
+            producer_agent_contract=technical_run.producer_contract(),
+        )
+    except Exception as exc:
+        technical_run.fail(reason=exc, error_code="opportunity_snapshot_technical_study_failed")
+        raise
+    technical_run.add_outputs(output_refs=[run_id])
+    technical_run.succeed()
     original_report_path = report.get("path")
     report = write_json_report(
         report,
@@ -3244,19 +3337,37 @@ def post_market_review_job(
     calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
     should_run, status = calendar.should_run_daily_study()
     reporter = _reporter(settings, store, verbose)
+    postmarket_run = AgentRunTracker(
+        store,
+        role="post_trade_analyst",
+        agent_name="post_trade_analyst",
+        task_name="post_market_review",
+        cycle_id=run_id,
+        execution_kind="system",
+        input_refs=[run_id],
+    )
     if not should_run and not force:
         session_date = datetime.fromisoformat(status.now_market).date().isoformat()
         coordinator = PostmarketCoordinator(settings, store)
-        lease = coordinator.acquire(session_date=session_date, run_id=run_id, trigger=trigger)
+        try:
+            lease = coordinator.acquire(session_date=session_date, run_id=run_id, trigger=trigger)
+        except Exception as exc:
+            postmarket_run.fail(reason=exc, error_code="post_market_review_coordination_failed")
+            raise
         if lease.effective:
             coordinator.terminal(lease, "skipped", reason="market_not_ready")
+        postmarket_run.skip(reason=lease.reason or "market_not_ready")
         _set_job_status(store, "post_market_review", status="skipped", run_id=run_id, started_at=started_at, detail="mercado aun no apto para review")
         return None
 
     session_date = datetime.fromisoformat(status.now_market).date().isoformat()
     coordinator = PostmarketCoordinator(settings, store)
     effective_trigger = "manual_test" if force and trigger == "scheduled" else trigger
-    lease = coordinator.acquire(session_date=session_date, run_id=run_id, trigger=effective_trigger)
+    try:
+        lease = coordinator.acquire(session_date=session_date, run_id=run_id, trigger=effective_trigger)
+    except Exception as exc:
+        postmarket_run.fail(reason=exc, error_code="post_market_review_coordination_failed")
+        raise
     if not lease.effective:
         _set_job_status(
             store,
@@ -3266,6 +3377,7 @@ def post_market_review_job(
             started_at=started_at,
             detail=lease.reason or "coordinacion no adquirida",
         )
+        postmarket_run.skip(reason=lease.reason or "coordinacion no adquirida")
         return None
     current_stage = "coordination"
     coordinator.stage(lease, "coordination", "completed")
@@ -3545,8 +3657,20 @@ def post_market_review_job(
                 "measurement_pipeline_path": measurement_pipeline.get("path"),
             },
         )
+        postmarket_run.add_outputs(
+            output_refs=[
+                run_id,
+                safe_data_ref(report.get("path"), data_dir=settings.data_dir),
+                safe_data_ref(measurement_pipeline.get("path"), data_dir=settings.data_dir),
+            ]
+        )
+        postmarket_run.succeed()
         return report
     except Exception as exc:  # noqa: BLE001 - scheduler must keep running.
+        try:
+            postmarket_run.fail(reason=exc, error_code="post_market_review_failed")
+        except Exception:
+            pass
         coordinator.stage(lease, current_stage, "failed", error=repr(exc))
         coordinator.terminal(lease, "failed", reason=f"stage_{current_stage}_failed", error=repr(exc))
         try:
@@ -4355,7 +4479,15 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
     if BackgroundScheduler is None or CronTrigger is None or IntervalTrigger is None:
         raise RuntimeError("APScheduler no esta instalado. Instala las dependencias del proyecto para usar schedule.")
     local_tz = ZoneInfo(settings.local_timezone)
-    scheduler = BackgroundScheduler(timezone=local_tz)
+    # Raspberry evidence shows the default APScheduler pool can overlap
+    # several memory-heavy jobs until the 1 GiB cgroup is exhausted. Keep the
+    # same jobs, cadences and per-job max_instances/coalescing semantics while
+    # bounding cross-job concurrency for every platform.
+    scheduler = BackgroundScheduler(
+        timezone=local_tz,
+        executors={"default": {"type": "threadpool", "max_workers": SCHEDULER_MAX_WORKERS}},
+        job_defaults={"misfire_grace_time": SCHEDULER_INTRADAY_MISFIRE_GRACE_SECONDS},
+    )
     scheduler.add_listener(
         lambda event: _persist_scheduler_control_event(settings, store, event),
         EVENT_JOB_MAX_INSTANCES | EVENT_JOB_MISSED,
@@ -4369,10 +4501,6 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         max_instances=1,
         coalesce=True,
         replace_existing=True,
-        # P-L139: el default de APScheduler (1 s) descarta runs con la
-        # latencia de despertar observada (1.4-2.7 s). 120 s cubre el
-        # retraso sin aceptar vigilancia rancia (coalesce intacto).
-        misfire_grace_time=120,
     )
     scheduler.add_job(
         market_cycle_job,
@@ -4384,10 +4512,6 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         max_instances=1,
         coalesce=True,
         replace_existing=True,
-        # P-L139: 22/22 runs perdidos en produccion con 1.4-2.7 s de
-        # retraso. 300 s << cadencia de 15 min: el ciclo corre tarde
-        # antes que no correr; coalesce evita backlog.
-        misfire_grace_time=300,
     )
     if settings.trade_fill_watch_enabled:
         scheduler.add_job(
@@ -4400,10 +4524,6 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
             max_instances=1,
             coalesce=True,
             replace_existing=True,
-            # P-L139: mismo fundamento que portfolio_watch. No corrige que
-            # cada pasada cueste ~36 s con cadencia de 30 s (eso pide
-            # cadencia o coste, otro lote); evita descartar las tardias.
-            misfire_grace_time=120,
         )
     scheduler.add_job(
         closed_market_technical_study_job,
@@ -4414,6 +4534,7 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         name="Closed-market technical study",
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=SCHEDULER_BACKGROUND_MISFIRE_GRACE_SECONDS,
         replace_existing=True,
     )
     scheduler.add_job(
@@ -4425,6 +4546,7 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         name="Daily study checker once per closed session",
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=SCHEDULER_BACKGROUND_MISFIRE_GRACE_SECONDS,
         replace_existing=True,
     )
     scheduler.add_job(
@@ -4436,6 +4558,7 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         name="Post-market trade review once per closed session",
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=SCHEDULER_BACKGROUND_MISFIRE_GRACE_SECONDS,
         replace_existing=True,
     )
     scheduler.add_job(
@@ -4447,6 +4570,7 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         name="Broker order reconciliation after session",
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=SCHEDULER_BACKGROUND_MISFIRE_GRACE_SECONDS,
         replace_existing=True,
     )
     scheduler.add_job(
@@ -4458,6 +4582,7 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         name="Operational health refresh",
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=SCHEDULER_BACKGROUND_MISFIRE_GRACE_SECONDS,
         replace_existing=True,
     )
     scheduler.add_job(
@@ -4469,6 +4594,7 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         name="Friday learning review",
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=SCHEDULER_BACKGROUND_MISFIRE_GRACE_SECONDS,
         replace_existing=True,
     )
     scheduler.add_job(
@@ -4480,6 +4606,7 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         name="Pre-earnings informative study before US close",
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=SCHEDULER_BACKGROUND_MISFIRE_GRACE_SECONDS,
         replace_existing=True,
     )
     overnight_hour, overnight_minute = _daily_hour_minute(settings.overnight_learning_time_local)
@@ -4492,6 +4619,7 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         name="Overnight learning heartbeat",
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=SCHEDULER_BACKGROUND_MISFIRE_GRACE_SECONDS,
         replace_existing=True,
     )
     telegram_hour, telegram_minute = _daily_hour_minute(settings.telegram_daily_summary_time_local)
@@ -4504,6 +4632,7 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         name="Telegram daily portfolio summary",
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=SCHEDULER_BACKGROUND_MISFIRE_GRACE_SECONDS,
         replace_existing=True,
     )
     if settings.continuous_improvement_schedule_enabled:
@@ -4516,6 +4645,7 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
             name="Continuous improvement resident lab tick",
             max_instances=1,
             coalesce=True,
+            misfire_grace_time=SCHEDULER_BACKGROUND_MISFIRE_GRACE_SECONDS,
             replace_existing=True,
         )
     for slot_time in settings.opportunity_snapshot_times:
@@ -4529,6 +4659,7 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
             name=f"Opportunity snapshot {slot_time}",
             max_instances=1,
             coalesce=True,
+            misfire_grace_time=SCHEDULER_BACKGROUND_MISFIRE_GRACE_SECONDS,
             replace_existing=True,
         )
     scheduler.add_job(
@@ -4540,6 +4671,7 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         name="Agents health + opportunities watchdog",
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=SCHEDULER_BACKGROUND_MISFIRE_GRACE_SECONDS,
         replace_existing=True,
     )
     return scheduler

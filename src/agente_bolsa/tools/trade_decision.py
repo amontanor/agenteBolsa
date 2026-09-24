@@ -23,6 +23,8 @@ from agente_bolsa.models import (
     new_id,
 )
 from agente_bolsa.storage import Store
+from agente_bolsa.tools.capital_ladder import cap_notional_for_ladder, load_capital_ladder
+from agente_bolsa.tools.challenger_policy import score_challenger_candidate
 from agente_bolsa.tools.daily_learning import load_daily_learning_context
 from agente_bolsa.tools.learning_mode import LEARNING_EXPERIMENT_SOURCE, active_learning_mode
 from agente_bolsa.tools.operational_health import (
@@ -2594,6 +2596,7 @@ def _annotate_technical_context_with_learning(
             "rank_priority_score": priority.get("rank_priority_score"),
             "rank_priority_components": priority.get("rank_priority_components"),
             "rank_priority_reason": priority.get("rank_priority_reason"),
+            "challenger_shadow": score_challenger_candidate(candidate, daily_learning_digest),
         }
 
     annotated = dict(base_context)
@@ -4339,12 +4342,7 @@ def _sin_patron_quota_order(
     eligible: list[dict[str, Any]],
     limit: int,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Garantiza K plazas al mejor sin_patron|strong (P-L149 guarded).
-
-    Solo reordena dentro del pool elegible: si ningún finalista es
-    sin_patron|strong, el mejor por score entra por el último finalista.
-    Nunca inventa candidatos ni amplía el límite.
-    """
+    """Garantiza K plazas al mejor sin_patron|strong (P-L149 guarded)."""
 
     report: dict[str, Any] = {
         "quota_enabled": bool(getattr(settings, "sin_patron_quota_enabled", False)),
@@ -4848,6 +4846,7 @@ def build_buy_order_plans(
         settings=settings,
     )
     portfolio_risk_context = _portfolio_risk_context(settings, portfolio)
+    capital_ladder = load_capital_ladder(settings.data_dir)
     planned_buy_exposure = 0.0
     planned_buy_risk_amount = 0.0
     market_state_block_reason = _effective_market_state_block_reason(settings, market_state)
@@ -5079,6 +5078,38 @@ def build_buy_order_plans(
                     recommendation,
                 )
             continue
+
+        # Stage 0 is observational: not even rounding or rejection metadata
+        # may differ from the champion without a separate operator approval.
+        if (
+            capital_ladder.get("active_stage", 0) > 0
+            and capital_ladder.get("human_approved") is True
+            and capital_ladder.get("status") == "active"
+        ):
+            ladder_notional, ladder_checks = cap_notional_for_ladder(
+                equity=portfolio.portfolio_value,
+                desired_notional=notional,
+                current_exposure=portfolio_risk_context["current_portfolio_exposure"],
+                pending_exposure=portfolio_risk_context["pending_portfolio_exposure"],
+                planned_exposure=planned_buy_exposure,
+                ladder=capital_ladder,
+            )
+            if ladder_checks["capped"] or ladder_checks["stage"] > 0:
+                sizing_checks["capital_ladder"] = ladder_checks
+            notional = ladder_notional
+            if notional <= 0:
+                if rejected is not None:
+                    _record_rejection(
+                        {
+                            "symbol": recommendation.symbol,
+                            "action": recommendation.action,
+                            "stage": "capital_ladder",
+                            "reason": "capital_ladder_exposure_cap",
+                            "checks": sizing_checks,
+                        },
+                        recommendation,
+                    )
+                continue
 
         qty, execution_notional, execution_checks = _buy_qty_and_notional_for_execution(
             settings,

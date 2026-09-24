@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 SCHEMA_VERSION = "p-l30b.decision-context.v1"
+AGENT_CONTRACT_SCHEMA = "p-l84b.agent-contract.v1"
 DECISION_SOURCES = frozenset(
     {"llm", "fallback", "capacity_fill", "hold_override", "deterministic", "unknown"}
 )
@@ -56,10 +57,16 @@ def _as_dict(value: Any) -> dict[str, Any]:
             "source",
             "strategy_name",
             "decision_origin",
-            "capacity_fill_reason_code",
-            "decision_lineage",
-            "tags",
-            "soft_override_reasons",
+        "capacity_fill_reason_code",
+        "decision_lineage",
+        "tags",
+        "soft_override_reasons",
+        "direction",
+        "probability",
+        "evidence_refs",
+        "latency_seconds",
+        "confidence",
+        "time_horizon",
         )
     }
 
@@ -82,6 +89,14 @@ def _hash_payload(value: Mapping[str, Any], *, exclude: set[str] | None = None) 
     excluded = exclude or set()
     payload = {key: item for key, item in value.items() if key not in excluded}
     return hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()[:32]
+
+
+def _snapshot_content_hash(snapshot: Mapping[str, Any]) -> str:
+    body = dict(snapshot)
+    contract = body.get("agent_contract")
+    if isinstance(contract, Mapping):
+        body["agent_contract"] = {**contract, "as_of": None}
+    return _hash_payload(body, exclude={"captured_at", "content_hash"})
 
 
 def _contains_prohibited(value: Any, path: str = "snapshot") -> str | None:
@@ -188,6 +203,59 @@ def normalize_llm_selected(value: Any) -> bool | None:
     return None
 
 
+def _build_agent_contract(
+    recommendation: Mapping[str, Any],
+    *,
+    cycle_id: str,
+    agent_run_id: str | None,
+    captured_at: datetime,
+    decision_source: str,
+    llm_response_status: str,
+    llm_provider: str | None,
+    llm_requested_model: str | None,
+    llm_effective_model: str | None,
+    llm_fallback_used: bool | None,
+    fallback_reason: str | None,
+) -> dict[str, Any]:
+    """Build the prospective agent carrier without inventing unavailable fields."""
+
+    raw_source = f"{recommendation.get('source') or ''} {recommendation.get('decision_origin') or ''}".lower()
+    deterministic = "deterministic" in raw_source and not llm_provider
+    effective_provider = llm_provider or ("deterministic" if deterministic else None)
+    effective_model = llm_effective_model or ("deterministic-rules" if deterministic else None)
+    requested_provider = llm_provider if not llm_fallback_used else None
+    requested_model = llm_requested_model
+    fields = {
+        "direction": recommendation.get("direction"),
+        "probability": recommendation.get("probability"),
+        "evidence_refs": recommendation.get("evidence_refs"),
+        "latency_seconds": recommendation.get("latency_seconds"),
+    }
+    return {
+        "schema_version": AGENT_CONTRACT_SCHEMA,
+        "agent_name": "trade_decision",
+        "agent_run_id": agent_run_id,
+        "cycle_id": cycle_id,
+        "as_of": captured_at.isoformat(),
+        "decision_source": decision_source,
+        "horizon": recommendation.get("time_horizon"),
+        "decision": recommendation.get("action"),
+        "confidence": recommendation.get("confidence"),
+        "fields": fields,
+        "field_status": {
+            key: "available" if value is not None else "unavailable"
+            for key, value in fields.items()
+        },
+        "status": llm_response_status,
+        "requested_identity": {"provider": requested_provider, "model": requested_model},
+        "effective_identity": {"provider": effective_provider, "model": effective_model},
+        "fallback": {
+            "used": llm_fallback_used,
+            "reason": fallback_reason,
+        },
+    }
+
+
 def build_decision_context_snapshot(
     recommendation: Any,
     *,
@@ -272,7 +340,20 @@ def build_decision_context_snapshot(
         "captured_at": captured.isoformat(),
         "pre_decision_only": True,
     }
-    snapshot["content_hash"] = _hash_payload(snapshot, exclude={"captured_at", "content_hash"})
+    snapshot["agent_contract"] = _build_agent_contract(
+        rec,
+        cycle_id=cycle_id,
+        agent_run_id=agent_run_id,
+        captured_at=captured,
+        decision_source=normalized,
+        llm_response_status=llm_response_status,
+        llm_provider=llm_provider,
+        llm_requested_model=llm_requested_model or llm_model,
+        llm_effective_model=llm_effective_model or llm_model,
+        llm_fallback_used=llm_fallback_used,
+        fallback_reason=reason,
+    )
+    snapshot["content_hash"] = _snapshot_content_hash(snapshot)
     validate_decision_context_snapshot(snapshot)
     return snapshot
 
@@ -294,6 +375,18 @@ def validate_decision_context_snapshot(snapshot: Mapping[str, Any]) -> None:
         raise ValueError("llm_response_status_invalid")
     if snapshot.get("decision_source") == "fallback" and not snapshot.get("fallback_reason"):
         raise ValueError("fallback_reason_required")
+    contract = snapshot.get("agent_contract") or {}
+    if not isinstance(contract, Mapping):
+        raise ValueError("agent_contract_invalid")
+    if contract:
+        if contract.get("schema_version") != AGENT_CONTRACT_SCHEMA:
+            raise ValueError("agent_contract_schema_version_invalid")
+        if contract.get("cycle_id") != snapshot.get("cycle_id"):
+            raise ValueError("agent_contract_cycle_mismatch")
+        if _parse_utc(contract.get("as_of")) != _parse_utc(snapshot.get("captured_at")):
+            raise ValueError("agent_contract_as_of_mismatch")
+        if contract.get("decision_source") != snapshot.get("decision_source"):
+            raise ValueError("agent_contract_source_mismatch")
     _parse_utc(snapshot.get("captured_at"))
     market_ref = snapshot.get("market_state_ref") or {}
     if market_ref.get("status") == "available":
@@ -304,7 +397,7 @@ def validate_decision_context_snapshot(snapshot: Mapping[str, Any]) -> None:
     prohibited = _contains_prohibited(snapshot)
     if prohibited:
         raise ValueError(f"decision_context_post_decision_field:{prohibited}")
-    expected = _hash_payload(snapshot, exclude={"captured_at", "content_hash"})
+    expected = _snapshot_content_hash(snapshot)
     if snapshot.get("content_hash") != expected:
         raise ValueError("decision_context_content_hash_invalid")
 

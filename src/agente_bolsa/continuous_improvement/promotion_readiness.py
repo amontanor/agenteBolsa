@@ -26,7 +26,11 @@ RETIRE_MAX_PROFIT_FACTOR_5D = 0.60
 RETIRE_MIN_MATURED_10D = 20
 RETIRE_MAX_ALPHA_10D = -0.015
 RETIRE_MAX_EXPECTANCY_10D = 0.0
-PENDING_VALIDATION_TTL_DAYS = 14
+# Kept as a compatibility fallback for direct callers without Settings. The
+# runtime path always takes CI_VALIDATION_BACKLOG_TTL_DAYS from Settings.
+PENDING_VALIDATION_TTL_DAYS = 2.0
+VALIDATION_BACKLOG_SCHEMA_VERSION = "ci_validation_backlog.v1"
+VALIDATION_BACKLOG_SAMPLE_LIMIT = 100
 RETIRE_ACTIONABLE_KEYS = {
     ("setup", "confirmed_pattern"),
     ("tag", "rsi:60_75"),
@@ -204,35 +208,132 @@ def _candidate_decision(
     }
 
 
-def _validation_backlog(store: Store) -> dict[str, Any]:
-    validations = store.continuous_improvement_validations(limit=100000)
-    now = datetime.now(timezone.utc)
-    status_counts = Counter(str(item.get("status") or "UNKNOWN") for item in validations)
-    stale_pending = []
-    for item in validations:
-        if str(item.get("status") or "") != "PENDING":
-            continue
+def _parse_validation_created_at(value: Any) -> tuple[datetime | None, str | None]:
+    """Parse an observed timestamp without guessing a missing timezone."""
+
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value or "").strip()
+        if not text:
+            return None, "created_at_missing"
         try:
-            created = datetime.fromisoformat(str(item.get("created_at")).replace("Z", "+00:00"))
-        except ValueError:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None, "created_at_invalid"
+    if parsed.tzinfo is None:
+        return None, "created_at_timezone_missing"
+    return parsed.astimezone(timezone.utc), None
+
+
+def _validation_backlog_ttl_days(settings: Settings | None) -> float | None:
+    raw = getattr(settings, "ci_validation_backlog_ttl_days", PENDING_VALIDATION_TTL_DAYS)
+    try:
+        ttl_days = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(ttl_days) or ttl_days < 0:
+        return None
+    return ttl_days
+
+
+def _validation_backlog(
+    store: Store,
+    settings: Settings | None = None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Classify pending validations without changing their persisted state.
+
+    A pending row is effective only when its creation timestamp is valid,
+    timezone-aware, not in the future, and younger than the configured TTL.
+    Invalid temporal data remains explicitly unavailable instead of being
+    silently treated as fresh or stale.
+    """
+
+    validations = store.continuous_improvement_validations(limit=100000)
+    observed_at = now or datetime.now(timezone.utc)
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=timezone.utc)
+    else:
+        observed_at = observed_at.astimezone(timezone.utc)
+    ttl_days = _validation_backlog_ttl_days(settings)
+    status_counts = Counter(str(item.get("status") or "UNKNOWN").strip().upper() for item in validations)
+    stale_pending: list[dict[str, Any]] = []
+    effective_pending_sample: list[dict[str, Any]] = []
+    unavailable_pending: list[dict[str, Any]] = []
+    pending_count = 0
+    effective_pending_count = 0
+
+    for item in validations:
+        status = str(item.get("status") or "").strip().upper()
+        if status != "PENDING":
             continue
-        age_days = (now - created).days
-        if age_days >= PENDING_VALIDATION_TTL_DAYS:
+        pending_count += 1
+        created, parse_reason = _parse_validation_created_at(item.get("created_at"))
+        base = {
+            "validation_id": item.get("validation_id"),
+            "proposal_id": item.get("proposal_id"),
+            "created_at": item.get("created_at"),
+        }
+        if parse_reason:
+            unavailable_pending.append({**base, "reason": parse_reason})
+            continue
+        if created > observed_at:
+            unavailable_pending.append({**base, "reason": "created_at_in_future"})
+            continue
+        if ttl_days is None:
+            unavailable_pending.append({**base, "reason": "ttl_invalid"})
+            continue
+
+        age_seconds = (observed_at - created).total_seconds()
+        age_days = round(age_seconds / 86400, 6)
+        if age_seconds >= ttl_days * 86400:
             stale_pending.append(
                 {
-                    "validation_id": item.get("validation_id"),
-                    "proposal_id": item.get("proposal_id"),
+                    **base,
                     "age_days": age_days,
+                    "age_seconds": round(age_seconds, 3),
+                    "ttl_days": ttl_days,
                     "recommended_status": "EXPIRED_PENDING",
-                    "reason": f"pending validation older than {PENDING_VALIDATION_TTL_DAYS} days",
+                    "reason": f"pending validation at least {ttl_days:g} days old",
                 }
             )
+            continue
+
+        effective_pending_count += 1
+        if len(effective_pending_sample) < VALIDATION_BACKLOG_SAMPLE_LIMIT:
+            effective_pending_sample.append(
+                {
+                    **base,
+                    "age_days": age_days,
+                }
+            )
+
+    backlog_status = "unavailable" if ttl_days is None else "partial" if unavailable_pending else "available"
+    denominator = {
+        "total": len(validations),
+        "pending": pending_count,
+        "stale_pending": len(stale_pending),
+        "effective_pending": effective_pending_count,
+        "unavailable_pending": len(unavailable_pending),
+    }
     return {
+        "schema_version": VALIDATION_BACKLOG_SCHEMA_VERSION,
+        "status": backlog_status,
+        "as_of": observed_at.isoformat(),
+        "ttl_days": ttl_days,
         "total": len(validations),
         "status_counts": dict(status_counts),
-        "pending": status_counts.get("PENDING", 0),
+        "pending": pending_count,
         "stale_pending": stale_pending,
+        "stale_pending_count": len(stale_pending),
+        "effective_pending": effective_pending_count,
+        "effective_pending_sample": effective_pending_sample,
+        "unavailable_pending": unavailable_pending,
+        "unavailable_pending_count": len(unavailable_pending),
         "recommended_closures": len(stale_pending),
+        "denominators": denominator,
     }
 
 
@@ -285,5 +386,5 @@ def evaluate_promotion_readiness(
         "evaluations": evaluations,
         "promotion_candidates": [item for item in evaluations if item["verdict"] == "PROMOTE_CANDIDATE"],
         "retire_candidates": [item for item in evaluations if item["verdict"] == "RETIRE_CANDIDATE"],
-        "validation_backlog": _validation_backlog(store),
+        "validation_backlog": _validation_backlog(store, settings),
     }

@@ -7,7 +7,10 @@ from typing import Any
 
 import yaml
 
+from .agent_registry import AGENTS
+
 ALLOWED_AGENT_STATUSES = {"active", "support", "disabled"}
+ALLOWED_TASK_LAYERS = {"research", "validation", "committee", "learning"}
 
 
 def _config_dir() -> Path:
@@ -54,6 +57,7 @@ def load_task_config(config_dir: Path | None = None) -> dict[str, dict[str, Any]
             "prompt_template": str(raw.get("prompt_template") or raw.get("description") or "").strip(),
             "owner_agent": str(raw.get("owner_agent") or (agents[0] if agents else "")).strip(),
             "agents": agents,
+            "layer": str(raw.get("layer") or "research").strip().lower(),
             "requires": [str(item).strip() for item in list(raw.get("requires") or []) if str(item).strip()],
             "produces": [str(item).strip() for item in list(raw.get("produces") or []) if str(item).strip()],
             "enabled": bool(raw.get("enabled", True)),
@@ -72,6 +76,13 @@ def validate_agent_task_config(
     agent_usage: dict[str, set[str]] = {name: set() for name in agent_config}
 
     for agent_name, config in agent_config.items():
+        registry_entry = AGENTS.get(agent_name)
+        if registry_entry is None:
+            errors.append(f"agent:{agent_name}: no existe en agent_registry")
+        elif config["lane"] != registry_entry.lane:
+            errors.append(
+                f"agent:{agent_name}: lane {config['lane']!r} no coincide con registry {registry_entry.lane!r}"
+            )
         if config["status"] not in ALLOWED_AGENT_STATUSES:
             errors.append(f"agent:{agent_name}: status invalido {config['status']!r}")
         for key in ("role", "goal", "backstory", "lane"):
@@ -85,6 +96,8 @@ def validate_agent_task_config(
             errors.append(f"task:{task_name}: falta expected_output")
         if not config["prompt_template"]:
             errors.append(f"task:{task_name}: falta prompt_template")
+        if config["layer"] not in ALLOWED_TASK_LAYERS:
+            errors.append(f"task:{task_name}: layer invalida {config['layer']!r}")
         if not config["owner_agent"]:
             errors.append(f"task:{task_name}: falta owner_agent")
         if not config["agents"]:
@@ -112,6 +125,9 @@ def validate_agent_task_config(
         if has_task and config["status"] == "support":
             warnings.append(f"agent:{agent_name}: support referenciado por tareas activas")
 
+    for agent_name in sorted(set(AGENTS) - set(agent_config)):
+        errors.append(f"agent:{agent_name}: falta en agents.yaml")
+
     enabled_tasks = {name for name, config in task_config.items() if config["enabled"]}
     disabled_task_agents = sorted(
         {
@@ -134,6 +150,7 @@ def validate_agent_task_config(
             "active_agents": sum(1 for config in agent_config.values() if config["status"] == "active"),
             "support_agents": sum(1 for config in agent_config.values() if config["status"] == "support"),
             "disabled_agents": sum(1 for config in agent_config.values() if config["status"] == "disabled"),
+            "registry_agents": len(AGENTS),
         },
         "agent_usage": {agent_name: sorted(task_names) for agent_name, task_names in agent_usage.items() if task_names},
     }

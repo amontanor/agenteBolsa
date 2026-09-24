@@ -238,10 +238,11 @@ def revalidate_lessons(
     }
     transitions: list[dict[str, Any]] = []
     for lesson in store.distilled_lessons(limit=500):
-        if (lesson.get("source_refs") or {}).get("duplicate_of"):
-            continue  # P-L123: los duplicados retirados no se reactivan.
-        if lesson["status"] == "RETIRED":
+        status = str(lesson.get("status") or "")
+        if status not in {"ACTIVE", "WEAKENED"}:
             continue
+        if (lesson.get("source_refs") or {}).get("duplicate_of"):
+            continue  # P-L125: los duplicados retirados no se reactivan.
         setup = str((lesson.get("source_refs") or {}).get("setup") or "")
         agg = aggregates.get(setup)
         if agg is None or not agg.get("decided"):
@@ -249,13 +250,14 @@ def revalidate_lessons(
         winners = int(agg.get("winners") or 0)
         decided = int(agg.get("decided") or 0)
         confidence = round(winners / decided, 4) if decided else 0.0
-        new_status = lesson["status"]
+        new_status = status
         if confidence < RETIRE_CONFIDENCE:
-            new_status = "RETIRED" if lesson["status"] == "WEAKENED" else "WEAKENED"
+            new_status = "RETIRED" if status == "WEAKENED" else "WEAKENED"
         elif confidence < WEAK_CONFIDENCE:
             new_status = "WEAKENED"
         else:
-            new_status = "ACTIVE"
+            new_status = "ACTIVE" if status == "ACTIVE" else "WEAKENED"
+        source_refs = {**(lesson.get("source_refs") or {}), "setup": setup, "aggregate": agg}
         store.upsert_distilled_lesson(
             {
                 "lesson_id": lesson["lesson_id"],
@@ -265,11 +267,11 @@ def revalidate_lessons(
                 "contradicting_cases": max(0, decided - winners),
                 "confidence": confidence,
                 "status": new_status,
-                "source_refs": {"setup": setup, "aggregate": agg},
+                "source_refs": source_refs,
             }
         )
-        if new_status != lesson["status"]:
-            transitions.append({"lesson_id": lesson["lesson_id"], "from": lesson["status"], "to": new_status})
+        if new_status != status:
+            transitions.append({"lesson_id": lesson["lesson_id"], "from": status, "to": new_status})
     return {"revalidated": True, "transitions": transitions}
 
 

@@ -1,4 +1,4 @@
-﻿"""Local Streamlit dashboard for the trading agent."""
+"""Local Streamlit dashboard for the trading agent."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import subprocess
+import time
 from contextlib import closing
 from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
@@ -144,6 +145,68 @@ PRIMARY_LLM_SELECTORS = ["opencode-zen", "opencode-go", "mimo", "custom"]
 
 def _settings():
     return get_settings()
+
+
+_DASHBOARD_CACHE_TTL_SECONDS = 60
+_dashboard_cache: dict[str, tuple[float, Any]] = {}
+
+
+def _dashboard_cache_get(key: str) -> Any | None:
+    """Devuelve el valor cacheado si no ha expirado; None en caso contrario."""
+
+    entry = _dashboard_cache.get(key)
+    if entry is None:
+        return None
+    stored_at, value = entry
+    if (time.monotonic() - stored_at) > _DASHBOARD_CACHE_TTL_SECONDS:
+        _dashboard_cache.pop(key, None)
+        return None
+    return value
+
+
+def _dashboard_cache_put(key: str, value: Any) -> Any:
+    _dashboard_cache[key] = (time.monotonic(), value)
+    return value
+
+
+def _cached_alpaca_portfolio_snapshot(broker_client: Any) -> Any:
+    cached = _dashboard_cache_get("alpaca_portfolio_snapshot")
+    if cached is not None:
+        return cached
+    return _dashboard_cache_put(
+        "alpaca_portfolio_snapshot", broker_client.alpaca_portfolio_snapshot()
+    )
+
+
+def _cached_alpaca_portfolio_history(
+    broker_client: Any, *, period: str, timeframe: str
+) -> Any:
+    key = f"alpaca_history:{period}:{timeframe}"
+    cached = _dashboard_cache_get(key)
+    if cached is not None:
+        return cached
+    return _dashboard_cache_put(
+        key, broker_client.alpaca_portfolio_history(period=period, timeframe=timeframe)
+    )
+
+
+def _cached_market_status() -> dict[str, Any]:
+    settings = _settings()
+    cached = _dashboard_cache_get("market_calendar_status")
+    if cached is not None:
+        return cached
+    status = MarketCalendar(
+        settings.market_calendar, settings.local_timezone
+    ).status().as_dict()
+    return _dashboard_cache_put("market_calendar_status", status)
+
+
+def _cached_latest_events(store: Store, limit: int = 400) -> list[Any]:
+    key = f"latest_events:{limit}"
+    cached = _dashboard_cache_get(key)
+    if cached is not None:
+        return cached
+    return _dashboard_cache_put(key, store.latest_events(limit))
 
 
 def _provider_base_url(provider: str) -> str:
@@ -363,42 +426,6 @@ def _today_pl_display(
     return display
 
 
-def _invested_day_metric(
-    intraday_pl: Any,
-    invested: Any,
-    equity_pct: Any | None = None,
-    *,
-    known: int = 0,
-    total: int = 0,
-) -> dict[str, Any]:
-    """P/L del dia sobre capital invertido (primario) + equity (secundario).
-
-    P-L140A: el primario responde "son rentables mis inversiones" con la
-    misma fuente que la tarjeta intradia existente (snapshot Alpaca).
-    Sin invertido o sin dato, primario "n/d", nunca division por cero.
-    """
-
-    amount = _num(intraday_pl)
-    base = _num(invested)
-    if amount is None or base is None or base <= 0:
-        return {
-            "amount": _money_or_na(amount),
-            "primary_pct": "n/d",
-            "secondary": f"{_pct_signed_or_na(equity_pct)} sobre equity",
-            "tone": "neutral",
-            "coverage": f"{known}/{total} posiciones",
-        }
-    pct = amount / base
-    tone = "good" if amount > 0 else "bad" if amount < 0 else "neutral"
-    return {
-        "amount": _money(amount),
-        "primary_pct": _pct_signed(pct),
-        "secondary": f"{_pct_signed_or_na(equity_pct)} sobre equity",
-        "tone": tone,
-        "coverage": f"{known}/{total} posiciones",
-    }
-
-
 def _today_pl_metric_payload(
     today_pl: Any,
     invested: Any,
@@ -441,32 +468,10 @@ def _daily_equity_detail(metric: dict[str, Any]) -> str:
         reason = str(metric.get("reason") or "datos no disponibles")
         return f"P/L diario de cartera · n/d · {reason}"
     start = _daily_equity_session_display_date(metric.get("window_start")) or "último cierre Alpaca"
-    # P-L152: fuera de sesión el extremo "ahora" caía en el día natural
-    # (p. ej. sábado) y sugería un cierre que no existe. Se etiqueta el
-    # último cierre real y la fecha de lectura por separado.
     end = _daily_equity_display_date(metric.get("window_end")) or "ahora"
     if _outside_trading_session(metric.get("window_end")):
         return f"Equity actual − último cierre Alpaca · cierre {start} · leído {end} (mercado cerrado)"
     return f"Equity actual − último cierre Alpaca · {start} → {end}"
-
-
-def _outside_trading_session(value: Any) -> bool:
-    """True when the timestamp falls on a non-session day (weekend/holiday)."""
-
-    parsed = _parse_utc_timestamp(value)
-    if parsed is None:
-        return False
-    market_date = parsed.astimezone(ZoneInfo("America/New_York")).date().isoformat()
-    try:
-        schedule = MarketCalendar().session_schedule(market_date, market_date)
-    except Exception:  # noqa: BLE001 - calendar failures must not break the card
-        return False
-    if schedule is None:
-        return False
-    try:
-        return market_date not in {str(index.date()) for index, _row in schedule.iterrows()}
-    except AttributeError:
-        return False
 
 
 def _json(value: Any) -> str:
@@ -1377,16 +1382,31 @@ def _opening_comparable_metric(opening_context: dict[str, Any] | None) -> dict[s
     }
 
 
+def _outside_trading_session(value: Any) -> bool:
+    """True when the timestamp falls on a non-session day (weekend/holiday)."""
+
+    parsed = _parse_utc_timestamp(value)
+    if parsed is None:
+        return False
+    market_date = parsed.astimezone(ZoneInfo("America/New_York")).date().isoformat()
+    try:
+        schedule = MarketCalendar().session_schedule(market_date, market_date)
+    except Exception:  # noqa: BLE001 - calendar failures must not break the card
+        return False
+    if schedule is None:
+        return False
+    try:
+        return market_date not in {str(index.date()) for index, _row in schedule.iterrows()}
+    except AttributeError:
+        return False
+
+
 def _intraday_metric_display(
     position_intraday: dict[str, Any] | None,
     *,
     market_open: bool | None,
 ) -> tuple[str, str]:
-    """Honest display for the intraday position P/L card (P-L152).
-
-    A provider zero with the market closed means "not measured", never a real
-    zero gain. Keep the number only when it is a genuine measurement.
-    """
+    """Honest display for the intraday position P/L card (P-L152)."""
 
     metric = position_intraday or {}
     amount = metric.get("amount")
@@ -1396,7 +1416,7 @@ def _intraday_metric_display(
         else "n/d"
     )
     if metric.get("all_zero") and market_open is not True:
-        return "n/d · mercado cerrado", coverage
+        return "n/d \u00b7 mercado cerrado", coverage
     if amount is None:
         return "n/d", coverage
     return _money(amount), coverage
@@ -1525,44 +1545,6 @@ def _account_group(
     )
 
 
-def _investments_group(
-    *,
-    invested: float | None,
-    invested_pct: float | None,
-    intraday_pl: float | None,
-    intraday_known: int,
-    intraday_total: int,
-    open_pl: float | None,
-    cash: float | None,
-    today_equity_pct: float | None,
-) -> None:
-    """Franja "Mis inversiones": una fuente, un denominador (P-L140A)."""
-
-    day = _invested_day_metric(
-        intraday_pl, invested, today_equity_pct,
-        known=intraday_known, total=intraday_total,
-    )
-    base = _num(invested)
-    open_pct = (open_pl / base) if (_num(open_pl) is not None and base) else None
-    open_tone = "good" if (_num(open_pl) or 0.0) > 0 else "bad" if (_num(open_pl) or 0.0) < 0 else "neutral"
-    st.markdown(
-        f"""
-        <div class="account-strip">
-            <div class="account-title">
-                <span>Mis inversiones · misma fuente que la tabla de posiciones</span>
-            </div>
-            <div class="account-kpis">
-                <div class="account-kpi"><span>Invertido</span><strong>{_money_or_na(invested)}</strong><em>{_pct(invested_pct) if _num(invested_pct) is not None else "n/d"} del equity</em></div>
-                <div class="account-kpi {day["tone"]}"><span>P/L día sobre invertido</span><strong>{day["amount"]} {day["primary_pct"]}</strong><em>{escape(day["secondary"])} · {escape(day["coverage"])}</em></div>
-                <div class="account-kpi {open_tone}"><span>P/L total abiertas</span><strong>{_money_or_na(open_pl)} {_pct_signed_or_na(open_pct)}</strong><em>sobre invertido · desde entrada</em></div>
-                <div class="account-kpi"><span>Cash</span><strong>{_money_or_na(cash)}</strong><em>&nbsp;</em></div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def _dashboard_header(
     market: dict[str, Any],
     settings: Any,
@@ -1673,9 +1655,6 @@ def _position_rows(
         purchase = resolve_position_purchase(history, symbol, item.get("qty"))
         purchase_time = purchase.get("purchase_timestamp")
         purchase_date, purchase_clock = _position_purchase_display(purchase_time, local_timezone)
-        # P-L153: un 0.00 de proveedor con mercado cerrado no es medida.
-        day_pl = None if blank_intraday else item.get("unrealized_intraday_pl")
-        day_plpc = None if blank_intraday else item.get("unrealized_intraday_plpc")
         rows.append(
             {
                 "Simbolo": symbol,
@@ -1693,8 +1672,8 @@ def _position_rows(
                 "Actual": item.get("current_price"),
                 "P/L $": item.get("unrealized_pl"),
                 "P/L %": item.get("unrealized_plpc"),
-                "P/L día $": day_pl,
-                "P/L día %": day_plpc,
+                "P/L día $": None if blank_intraday else item.get("unrealized_intraday_pl"),
+                "P/L día %": None if blank_intraday else item.get("unrealized_intraday_plpc"),
                 "P/L fuente": "alpaca_position_snapshot",
                 "Stop": item.get("stop_loss"),
                 "Take": item.get("take_profit"),
@@ -1744,11 +1723,7 @@ def _today_breakdown(
     history: dict[str, Any],
     opening_context: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Realized + open + buy/sell notional for the current session (P-L152).
-
-    Reuses the exact opening already loaded by the dashboard and the
-    ``history.days`` grouping; no extra broker request.
-    """
+    """Realized + open + buy/sell notional for the current session (P-L152)."""
 
     account_current = (opening_context or {}).get("account_current") or {}
     opening_at = _parse_utc_timestamp(account_current.get("system_start_at"))
@@ -1808,7 +1783,7 @@ def _render_today_breakdown(
     breakdown = _today_breakdown(history, opening_context)
     _section_title(
         "Hoy",
-        "Sesión en curso desde la última apertura XNYS. Reutiliza el histórico ya cargado; sin lectura extra del broker.",
+        "Sesón en curso desde la última apertura XNYS. Reutiliza el histórico ya cargado; sin lectura extra del broker.",
     )
     if breakdown["status"] != "available":
         st.info("n/d — apertura XNYS no disponible")
@@ -2059,7 +2034,7 @@ def _kindle_raw_model() -> dict[str, Any]:
     as_of = datetime.now(timezone.utc)
     portfolio: PortfolioSnapshot | None = None
     try:
-        portfolio = broker_client.alpaca_portfolio_snapshot()
+        portfolio = _cached_alpaca_portfolio_snapshot(broker_client)
     except Exception as exc:  # noqa: BLE001 - presentation remains n/d.
         LOGGER.warning("No se pudo leer cartera para /kindle: %s", exc)
     return _kindle_view_model(portfolio, {}, as_of=as_of)
@@ -2090,13 +2065,14 @@ def page_kindle() -> None:
     broker_client = BrokerClientFactory(settings)
     as_of = datetime.now(timezone.utc)
     portfolio: PortfolioSnapshot | None = None
-    opening_context: dict[str, Any] = {}
     try:
-        portfolio = broker_client.alpaca_portfolio_snapshot()
+        portfolio = _cached_alpaca_portfolio_snapshot(broker_client)
     except Exception as exc:  # noqa: BLE001 - presentation remains available as n/d.
         LOGGER.warning("No se pudo leer cartera para /kindle: %s", exc)
     try:
-        intraday_history = broker_client.alpaca_portfolio_history(period="2W", timeframe="15Min")
+        intraday_history = _cached_alpaca_portfolio_history(
+            broker_client, period="2W", timeframe="15Min"
+        )
         opening_context = opening_performance_context(
             settings,
             store,
@@ -4121,39 +4097,6 @@ def _daily_vs_spy_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _spy_alpha_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Alpha acumulado sobre las mismas filas finales comparables (P-L140B).
-
-    Misma serie y ventana que la tabla Sistema vs SPY: solo sesiones
-    `final` + `comparable` con ambos porcentajes. Composicion geometrica.
-    Sin filas comparables, todo `None`: nunca se inventa alpha.
-    """
-
-    finals = [
-        row
-        for row in rows
-        if row.get("status", "final") == "final"
-        and row.get("comparison_status", "comparable") == "comparable"
-        and _num(row.get("system_pct")) is not None
-        and _num(row.get("spy_pct")) is not None
-    ]
-    if not finals:
-        return {"n": 0, "system_cum": None, "spy_cum": None, "alpha": None}
-    system_cum = 1.0
-    spy_cum = 1.0
-    for row in finals:
-        system_cum *= 1.0 + float(row["system_pct"])
-        spy_cum *= 1.0 + float(row["spy_pct"])
-    system_cum = round(system_cum - 1.0, 6)
-    spy_cum = round(spy_cum - 1.0, 6)
-    return {
-        "n": len(finals),
-        "system_cum": system_cum,
-        "spy_cum": spy_cum,
-        "alpha": round(system_cum - spy_cum, 6),
-    }
-
-
 def _daily_vs_spy_window_label(value: int | None) -> str:
     if value is None:
         return "Desde inicio"
@@ -4629,8 +4572,7 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
             _render_opening_omissions(opening_context)
             return
         summary = _daily_vs_spy_summary(visible_rows)
-        alpha = _spy_alpha_summary(visible_rows)
-        c1, c2, c3, c4, c5 = st.columns(5)
+        c1, c2, c3, c4 = st.columns(4)
         suffix = f"{summary['final']} finales · {summary['visible_total']} visibles"
         with c1:
             _compact_metric("Dias sistema superior", summary["system_wins"], suffix, "good")
@@ -4640,14 +4582,6 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
             _compact_metric("Empates", summary["ties"], suffix, "neutral")
         with c4:
             _compact_metric("En curso", summary["in_progress"], suffix, "neutral")
-        with c5:
-            alpha_tone = "good" if (alpha["alpha"] or 0.0) > 0 else "bad" if (alpha["alpha"] or 0.0) < 0 else "neutral"
-            _compact_metric(
-                "Alpha acumulado",
-                _pct_signed_or_na(alpha["alpha"]),
-                f"{alpha['n']} sesiones finales",
-                alpha_tone,
-            )
         chart = _daily_vs_spy_chart(visible_rows)
         if chart is not None:
             st.altair_chart(chart, width="stretch")
@@ -4709,9 +4643,7 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
             unsafe_allow_html=True,
         )
 
-# P-L140C: estos dos helpers puros se conservan por el contrato de tooltips
-# explicitos P-L63R1 (tests/test_p63_april_equity_contract.py). El contenedor
-# duplicado del Dashboard se retiro en P-L140B; no los re-conectes a paginas.
+
 def _performance_baseline_series(
     rows: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], float | None, float | None]:
@@ -4750,6 +4682,56 @@ def _performance_baseline_chart(frame: pd.DataFrame) -> Any:
     line = alt.Chart(frame).mark_line(strokeWidth=2.5).encode(x=x, y=y, color=color, tooltip=tooltip)
     points = alt.Chart(frame).mark_point(size=70, filled=True).encode(x=x, y=y, color=color, tooltip=tooltip)
     return line + points
+
+
+def _render_performance_baseline(store: Any) -> None:
+    """Grafico de equity vs SPY acumulado e iq_score (T0.2)."""
+
+    try:
+        rows = store.performance_daily(limit=0, readonly=True)
+    except Exception:  # noqa: BLE001 - vista degradable.
+        rows = []
+    with st.container(border=True):
+        _section_title("Baseline de rendimiento e iq_score", None)
+        if not rows:
+            st.markdown(
+                "<div class='empty-box'>Sin baseline todavia. Se genera tras el review post-mercado.</div>",
+                unsafe_allow_html=True,
+            )
+            return
+
+        chart_rows, cum_pnl, cum_spy = _performance_baseline_series(rows)
+        frame = pd.DataFrame(chart_rows)
+        latest = rows[-1]
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            _compact_metric("iq_score", latest.get("iq_score"))
+        with m2:
+            cumulative_alpha = round(cum_pnl - cum_spy, 6) if cum_pnl is not None and cum_spy is not None else None
+            _compact_metric("Alpha acumulado", _pct(cumulative_alpha))
+        with m3:
+            _compact_metric("Sharpe 60", latest.get("sharpe_60"))
+        if alt is None:
+            st.dataframe(frame, width="stretch", hide_index=True)
+            return
+        long_frame = frame.melt(
+            id_vars=["fecha"],
+            value_vars=["Sistema", "SPY"],
+            var_name="serie",
+            value_name="retorno_acumulado",
+        )
+        equity_chart = _performance_baseline_chart(long_frame)
+        st.altair_chart(equity_chart.properties(height=240), width="stretch")
+        iq_chart = (
+            alt.Chart(frame)
+            .mark_line(color="#7c3aed", strokeWidth=2.5)
+            .encode(
+                x=alt.X("fecha:N", title=None, axis=alt.Axis(labelAngle=0, labelOverlap=True)),
+                y=alt.Y("iq_score:Q", title="iq_score", scale=alt.Scale(domain=[0, 100])),
+                tooltip=[alt.Tooltip("fecha:N", title="Fecha"), alt.Tooltip("iq_score:Q", title="iq_score")],
+            )
+        )
+        st.altair_chart(iq_chart.properties(height=200), width="stretch")
 
 
 def _render_autonomy_panel(store: Any, settings: Any) -> None:
@@ -5614,15 +5596,15 @@ def page_dashboard() -> None:
     settings = _settings()
     store = _store()
     runtime = ContinuousImprovementLabRuntime(settings, store)
-    market = MarketCalendar(settings.market_calendar, settings.local_timezone).status().as_dict()
-    latest_ci_llm_result = _latest_ci_llm_result(store.latest_events(400))
+    market = _cached_market_status()
+    latest_ci_llm_result = _latest_ci_llm_result(_cached_latest_events(store, 400))
 
     portfolio = None
     portfolio_error = None
     broker_client = BrokerClientFactory(settings)
     account_read_at = datetime.now(timezone.utc)
     try:
-        portfolio = broker_client.alpaca_portfolio_snapshot()
+        portfolio = _cached_alpaca_portfolio_snapshot(broker_client)
     except Exception as exc:  # noqa: BLE001
         portfolio_error = str(exc)
     db_status = store.status()
@@ -5643,8 +5625,6 @@ def page_dashboard() -> None:
         # This is a read-only Store lookup and does not add a broker request.
         history["executed_buy_lots_by_symbol"] = store.executed_buy_lots_by_symbol()
         stats = history.get("current_statistics", {})
-        # P-L153: mismo criterio que la tarjeta (cero de proveedor con
-        # mercado cerrado no es medida): blanquea el P/L día por posición.
         _day_values = [
             _num(item.get("unrealized_intraday_pl"))
             for item in history.get("open_positions", [])
@@ -5663,14 +5643,16 @@ def page_dashboard() -> None:
     except Exception as exc:  # noqa: BLE001
         st.warning(f"No se pudo leer historico/P/L: {exc}")
     try:
-        portfolio_history = broker_client.alpaca_portfolio_history(
+        portfolio_history = _cached_alpaca_portfolio_history(
+            broker_client,
             period=PORTFOLIO_HISTORY_PERIOD,
             timeframe="1D",
         )
     except Exception as exc:  # noqa: BLE001
         st.warning(f"No se pudo leer portfolio history de Alpaca para el grafico: {exc}")
     try:
-        intraday_portfolio_history = broker_client.alpaca_portfolio_history(
+        intraday_portfolio_history = _cached_alpaca_portfolio_history(
+            broker_client,
             period="2W",
             timeframe="15Min",
         )
@@ -5712,7 +5694,6 @@ def page_dashboard() -> None:
     account_total_pl = _num(full_equity_summary.get("pl"))
     account_total_pct = _num(full_equity_summary.get("pl_pct"))
     account_initial_equity = _num(full_equity_summary.get("start_value"))
-    st.session_state["leaderboard_total_pct"] = account_total_pct
 
     _dashboard_header(
         market,
@@ -5755,16 +5736,9 @@ def page_dashboard() -> None:
         opening_context=opening_context,
         market_open=bool(market.get("is_open")),
     )
-    _investments_group(
-        invested=_num(exposure),
-        invested_pct=_num(exposure_pct),
-        intraday_pl=_num(position_intraday.get("amount")),
-        intraday_known=int(position_intraday.get("known") or 0),
-        intraday_total=int(position_intraday.get("total") or 0),
-        open_pl=_portfolio_open_pl(portfolio, stats.get("unrealized_pl") if stats else None),
-        cash=current_cash,
-        today_equity_pct=today_pct,
-    )
+
+    st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+    _render_leaderboard_controls(store, account_total_pct)
 
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
 
@@ -5968,8 +5942,8 @@ def page_dashboard() -> None:
         _render_autonomy_panel(store, settings)
 
     with st.expander("Rendimiento avanzado"):
-        # P-L140B: la comparativa Sistema vs SPY vive una sola vez arriba
-        # (tabla apertura->apertura + alpha). El baseline duplicado se retira.
+        _render_performance_baseline(store)
+        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
         with st.container(border=True):
             _render_profitability_scoreboard_panel(settings, store)
 
@@ -6001,7 +5975,7 @@ def page_portfolio() -> None:
     _page_header("Cartera", "Posiciones, ordenes abiertas, stops, takes y motivos guardados por el sistema.")
     broker_client = BrokerClientFactory(settings)
     try:
-        portfolio = broker_client.alpaca_portfolio_snapshot()
+        portfolio = _cached_alpaca_portfolio_snapshot(broker_client)
     except Exception as exc:  # noqa: BLE001
         st.error(f"No se pudo leer Alpaca: {exc}")
         return
@@ -8707,13 +8681,6 @@ def page_config() -> None:
         _metric_card("Backup SQLite", summary.get("size_bytes") if summary else "-")
     st.subheader("SQLite")
     st.json(store.status())
-    st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
-    st.subheader("LLM Trading Leaderboard")
-    st.caption(
-        "La ganancia actual se publica desde aqui cuando antes se ha visitado el Dashboard "
-        "en la misma sesion (el valor viaja en memoria, sin llamadas nuevas al broker)."
-    )
-    _render_leaderboard_controls(store, st.session_state.get("leaderboard_total_pct"))
 
 
 def _render_manual_navigation() -> None:

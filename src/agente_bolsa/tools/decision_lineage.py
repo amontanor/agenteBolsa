@@ -75,6 +75,9 @@ def build_decision_lineage(
     candidate = candidate or {}
     strategy_name = strategy_name or str(candidate.get("strategy_name") or "").strip()
     strategy_version = str(candidate.get("strategy_version") or "").strip() or None
+    producer_agent_contract = candidate.get("producer_agent_contract")
+    if not isinstance(producer_agent_contract, dict):
+        producer_agent_contract = None
     cohort = str(getattr(recommendation, "cohort", "") or default_cohort or "").strip() or None
     identity = canonical_identity(candidate)
     signal_id = identity["signal_id"]
@@ -103,6 +106,7 @@ def build_decision_lineage(
         "policy_version": policy_version,
         "strategy_name": identity["signal_strategy_name"] or strategy_name or None,
         "strategy_version": identity["signal_strategy_version"] or strategy_version,
+        "producer_agent_contract": dict(producer_agent_contract) if producer_agent_contract else None,
         "decision_source": decision_source,
         "cohort": cohort,
         "low_sample_exploration": low_sample,

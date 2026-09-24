@@ -19,6 +19,7 @@ from .continuous_improvement.api import run_api_server
 from .continuous_improvement.digest import build_lab_digest, format_lab_digest_text
 from .continuous_improvement.experiments import AutoApplyCodeAgent
 from .continuous_improvement.orchestrator import ContinuousImprovementOrchestrator
+from .continuous_improvement.promotion_readiness import evaluate_promotion_readiness
 from .continuous_improvement.research_agenda import (
     add_research_hypothesis,
     close_research_hypothesis,
@@ -2516,6 +2517,30 @@ def command_learning_promotions(args: argparse.Namespace) -> None:
         print(f"  - [{item['status']}] {item['policy_id']} | promoted_at={item.get('promoted_at') or '-'}")
 
 
+def command_promotion_readiness(args: argparse.Namespace) -> None:
+    """Read promotion evidence and validation backlog without applying changes."""
+
+    settings = get_settings()
+    configure_logging(settings.logs_dir, settings.log_level)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    report = evaluate_promotion_readiness(settings, store, since_date=args.start)
+    if args.json:
+        _print_json({"ok": True, **report})
+        return
+    backlog = report.get("validation_backlog", {}) or {}
+    print("PROMOTION READINESS")
+    print(f"since_date={report.get('since_date')} | backlog_status={backlog.get('status')}")
+    print(
+        "validations="
+        f"{backlog.get('total', 0)} | pending={backlog.get('pending', 0)} | "
+        f"stale={backlog.get('stale_pending_count', 0)} | "
+        f"effective={backlog.get('effective_pending', 0)} | "
+        f"unavailable={backlog.get('unavailable_pending_count', 0)}"
+    )
+    print(f"recommended_closures={backlog.get('recommended_closures', 0)} | mode=read_only")
+
+
 def command_spy_eod_coverage(args: argparse.Namespace) -> None:
     """Cobertura de pares de cierres SPY con autoridad EOD (P-L121, read-only)."""
     from .tools.spy_eod_authority import spy_eod_coverage
@@ -4080,6 +4105,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     learning_promotions.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
     learning_promotions.set_defaults(func=command_learning_promotions)
+
+    promotion_readiness = subparsers.add_parser(
+        "promotion-readiness",
+        help="Audita la evidencia de promocion y clasifica el backlog CI sin cambiar estados.",
+    )
+    promotion_readiness.add_argument(
+        "--from",
+        dest="start",
+        default="2026-04-01",
+        help="Fecha inicial YYYY-MM-DD para la evidencia de promocion.",
+    )
+    promotion_readiness.add_argument("--json", action="store_true", help="Devuelve el informe en JSON.")
+    promotion_readiness.set_defaults(func=command_promotion_readiness)
 
     spy_eod_coverage = subparsers.add_parser(
         "spy-eod-coverage",

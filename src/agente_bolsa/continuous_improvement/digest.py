@@ -10,10 +10,12 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
+from agente_bolsa.agent_config import load_agent_config
 from agente_bolsa.agent_run import build_agent_run_productivity
 from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.adaptive_tuning import adaptive_governance_status
+from agente_bolsa.tools.agent_group_review import build_agent_group_conclusions
 from agente_bolsa.tools.canonical_operation_telemetry import canonical_operation_telemetry_digest
 from agente_bolsa.tools.capital_deployment_funnel_shadow import capital_deployment_funnel_digest
 from agente_bolsa.tools.comparable_controls import build_comparable_control_quality
@@ -101,6 +103,19 @@ def build_lab_digest(
     low_sample_usage = _learning_mode_low_sample_snapshot(store, data_dir, now=now)
     learning_experiment = (load_daily_learning_context(data_dir).get("learning_experiment_yesterday") or {})
     llm_decision_quality = build_llm_decision_quality(store, now=now)
+    agent_run_productivity = build_agent_run_productivity(store, now=now)
+    try:
+        expected_agent_roles = [
+            name
+            for name, config in load_agent_config().items()
+            if str(config.get("status") or "").lower() != "disabled"
+        ]
+    except Exception:
+        expected_agent_roles = []
+    agent_group_conclusions = build_agent_group_conclusions(
+        agent_run_productivity,
+        expected_roles=expected_agent_roles,
+    )
 
     rejection_counts = {
         "self_safety": 0,
@@ -225,7 +240,8 @@ def build_lab_digest(
             experiments=experiments,
             artifacts=store.continuous_improvement_proposal_artifacts(limit=50000),
         ),
-        "agent_run_productivity": build_agent_run_productivity(store, now=now),
+        "agent_run_productivity": agent_run_productivity,
+        "agent_group_conclusions": agent_group_conclusions,
         "decision_context_quality": build_decision_context_quality(store, now=now, days=days),
         "comparable_control_quality": build_comparable_control_quality(store),
         "gate_effectiveness_quality": gate_report,
@@ -525,19 +541,52 @@ def _market_cycle_safety_snapshot(store: Store, *, now: datetime) -> dict[str, A
     }
 
 
+_MISSING_REPORT_REASON_RE = re.compile(
+    r"^missing_report:(?P<scope>[^:]+):\s*No existe\s+(?P<filename>\S+\.json)\.?$"
+)
+
+
+def _drop_missing_report_reasons_now_present(
+    reasons: list[str], data_dir: Path
+) -> tuple[list[str], list[str]]:
+    """Separa razones ``missing_report`` cuyo artefacto ya existe en disco.
+
+    El contexto de bloqueo proviene de ``latest_operational_health.json``, un
+    informe que el refresher periodico (45 min) puede haber generado ANTES de
+    que el job del ciclo escribiera el artefacto. Si el fichero referenciado ya
+    existe al construir el digest, la razon esta obsoleta y no debe renderizarse
+    como ALERTA de kill-switch. Solo afecta al rendering del digest; la
+    semantica fail-closed de ``load_operational_block_context``
+    (``block_new_buys``/``block_buy_execution``) queda intacta.
+    """
+    kept: list[str] = []
+    dropped: list[str] = []
+    reports_dir = data_dir / "reports"
+    for reason in reasons:
+        match = _MISSING_REPORT_REASON_RE.match(reason)
+        if match and (reports_dir / match.group("filename")).is_file():
+            dropped.append(reason)
+            continue
+        kept.append(reason)
+    return kept, dropped
+
+
 def _kill_switch_safety_snapshot(data_dir: Path, *, now: datetime) -> dict[str, Any]:
     block = load_operational_block_context(data_dir, now=now)
     reference_at = _parse_iso_datetime(block.get("as_of"))
     age_minutes = None
     if reference_at is not None:
         age_minutes = max(0, int((now - reference_at).total_seconds() // 60))
-    reasons = [str(item).strip() for item in block.get("reasons", []) if str(item).strip()]
+    raw_reasons = [str(item).strip() for item in block.get("reasons", []) if str(item).strip()]
+    reasons, stale_missing = _drop_missing_report_reasons_now_present(raw_reasons, data_dir)
+    active = bool(block.get("kill_switch_active")) and bool(reasons)
     return {
-        "active": bool(block.get("kill_switch_active")),
+        "active": active,
         "reason": reasons[0] if reasons else "",
         "age_minutes": age_minutes,
         "as_of": block.get("as_of"),
         "available": bool(block.get("available")),
+        "stale_missing_report_reasons_dropped": stale_missing,
     }
 
 
@@ -987,6 +1036,25 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
     learning_experiment = digest.get("learning_experiment_yesterday") or {}
     llm_quality = digest.get("llm_decision_quality") or {}
     llm_summary = llm_quality.get("summary") or {}
+    agent_productivity = digest.get("agent_run_productivity") or {}
+    agent_group = digest.get("agent_group_conclusions") or {}
+    agent_roles = agent_productivity.get("runs_by_role") or {}
+    agent_attention = []
+    for role, role_report in agent_roles.items():
+        states = role_report.get("states") or {}
+        if states.get("failed") or states.get("timeout") or states.get("blocked") or states.get("started"):
+            agent_attention.append(
+                (
+                    role,
+                    int(role_report.get("runs") or 0),
+                    int(states.get("failed") or 0),
+                    int(states.get("timeout") or 0),
+                    int(states.get("blocked") or 0),
+                    int(states.get("started") or 0),
+                    int(role_report.get("outputs") or 0),
+                )
+            )
+    agent_attention.sort(key=lambda item: (-item[2], -item[3], -item[4], item[0]))
     director = digest.get("director_brief") or {}
     decision_requested = director.get("decision_requested") or {}
     evaluation = (director.get("results") or {}).get("evaluation") or {}
@@ -1031,6 +1099,57 @@ def format_lab_digest_text(digest: dict[str, Any]) -> str:
             f"unknown={_none_text(llm_summary.get('unknown_decisions'))}"
         ),
         f"- decision solicitada: {decision_requested.get('question', 'Sin dato')}",
+        "",
+        "Grupo de agentes (runs trazables)",
+        (
+            "- ejecuciones: "
+            f"total={_none_text(agent_productivity.get('total_runs'))} | "
+            f"terminales={_none_text(agent_productivity.get('terminal_runs'))} | "
+            f"abiertas={_none_text(agent_productivity.get('open_runs'))} | "
+            f"huerfanas={_none_text(agent_productivity.get('orphan_runs'))} | "
+            f"invalidas={_none_text(agent_productivity.get('invalid_runs'))}"
+        ),
+        (
+            "- estados: "
+            f"ok={_none_text(agent_productivity.get('succeeded'))} | "
+            f"fallos={_none_text(agent_productivity.get('failed'))} | "
+            f"timeouts={_none_text(agent_productivity.get('timeout'))} | "
+            f"bloqueos={_none_text(agent_productivity.get('blocked'))} | "
+            f"skips={_none_text(agent_productivity.get('skipped'))} | "
+            f"fallbacks_recuperados={_none_text(agent_productivity.get('recovered_fallback_runs'))}"
+        ),
+        (
+            "- trazabilidad: "
+            f"propuestas={_none_text(agent_productivity.get('runs_with_proposals'))} | "
+            f"cobertura={_none_text(agent_productivity.get('attribution_link_coverage'))} | "
+            f"salidas_vacias={_none_text(agent_productivity.get('empty_output_count'))}"
+        ),
+        (
+            "- dictamen operativo: "
+            f"estado={_none_text(agent_group.get('execution_status'))} | "
+            f"calidad={_none_text(agent_group.get('quality_status'))} | "
+            f"roles_degradados={_none_text((agent_group.get('summary') or {}).get('roles_degraded'))} | "
+            f"sin_datos={_none_text((agent_group.get('summary') or {}).get('roles_no_data'))}"
+        ),
+        *[
+            (
+                f"  - {role}: runs={runs} fallos={failed} timeouts={timeouts} "
+                f"bloqueos={blocked} abiertas={open_runs} outputs={outputs}"
+            )
+            for role, runs, failed, timeouts, blocked, open_runs, outputs in agent_attention[:8]
+        ],
+        *[
+            (
+                f"  - dictamen {item.get('role')}: {item.get('status')} | "
+                f"{item.get('conclusion')}"
+            )
+            for item in (agent_group.get("roles") or [])
+            if item.get("status") != "healthy"
+        ][:8],
+        *[
+            f"- acción grupo: {action}"
+            for action in (agent_group.get("recommended_actions") or [])[:3]
+        ],
         "",
         "Gobernanza de configuración adaptativa",
         f"- estado: {adaptive_governance.get('status', 'unavailable')}",

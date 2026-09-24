@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import logging
+from collections.abc import Mapping
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
@@ -15,9 +16,16 @@ from zoneinfo import ZoneInfo
 from . import __version__
 from .agent_run import AgentRunTracker
 from .config import Settings
-from .crew import build_crew
+from .crew import build_crew, build_crew_task_manifest
+from .crew_observer import CrewTaskObserver
+from .crewai_context import crew_execution_context
 from .eventing import AgentPhase, EventReporter
-from .llm_router import build_llm_identity, select_preferred_endpoint, unavailable_llm_identity
+from .llm_router import (
+    build_llm_identity,
+    configured_llm_endpoints,
+    select_preferred_endpoint,
+    unavailable_llm_identity,
+)
 from .logging_utils import log_system_event
 from .market_calendar import MarketCalendar
 from .models import Hypothesis, new_id
@@ -51,6 +59,7 @@ from .tools.decision_lineage import build_decision_lineage
 from .tools.deterministic_reviewer import recommendation_input_fingerprint, review_recommendations
 from .tools.execution import submit_paper_order_plan
 from .tools.gate_evaluation import collect_gate_path
+from .tools.h_capture import build_prediction_capture, persist_h_capture_event
 from .tools.learning_mode import (
     LEARNING_EXPERIMENT_SOURCE,
     LOW_SAMPLE_EXPLORATION_TAG,
@@ -702,6 +711,99 @@ def _decision_context_snapshot_for_recommendation(
     if signal_id and signal_link_status == "verified":
         store.attach_decision_context_snapshot(signal_id, snapshot)
     return copy_snapshot(snapshot)
+
+
+def _explicit_recommendation_prediction(recommendation: Any, snapshot: dict[str, Any]) -> dict[str, Any] | None:
+    value = getattr(recommendation, "prospective_prediction", None)
+    if isinstance(value, dict):
+        return dict(value)
+    value = snapshot.get("prospective_prediction") if isinstance(snapshot, dict) else None
+    return dict(value) if isinstance(value, dict) else None
+
+
+def _candidate_id_for_recommendation(
+    technical_context: dict[str, Any] | None,
+    *,
+    lineage: Mapping[str, Any],
+) -> str | None:
+    expected_signal_id = str(lineage.get("signal_id") or "").strip()
+    expected_capture_id = str(lineage.get("signal_capture_id") or "").strip()
+    expected_source_run_id = str(lineage.get("signal_source_run_id") or "").strip()
+    expected_candidate_id = str(lineage.get("candidate_id") or "").strip()
+    if not expected_signal_id or not expected_capture_id or not expected_source_run_id:
+        return None
+
+    candidate_records: set[tuple[str, str, str, str]] = set()
+    candidates_by_id: dict[str, set[tuple[str, str, str]]] = {}
+    for bucket in ("selected_candidates", "top_longs", "top_shorts", "all_candidates"):
+        for candidate in list((technical_context or {}).get(bucket) or []):
+            if not isinstance(candidate, dict):
+                continue
+            candidate_id = str(candidate.get("candidate_id") or "").strip()
+            identity = (
+                str(candidate.get("signal_id") or "").strip(),
+                str(candidate.get("signal_capture_id") or "").strip(),
+                str(candidate.get("signal_source_run_id") or "").strip(),
+            )
+            candidate_records.add((candidate_id, *identity))
+            if candidate_id:
+                candidates_by_id.setdefault(candidate_id, set()).add(identity)
+
+    expected_identity = (expected_signal_id, expected_capture_id, expected_source_run_id)
+    if expected_candidate_id:
+        identities = candidates_by_id.get(expected_candidate_id, set())
+        if len(identities) != 1 or next(iter(identities)) != expected_identity:
+            return None
+        return expected_candidate_id
+
+    matching_records = [
+        record for record in candidate_records
+        if record[1:] == expected_identity
+    ]
+    if any(len(candidates_by_id.get(record[0], set())) != 1 for record in matching_records if record[0]):
+        return None
+    return matching_records[0][0] if len(matching_records) == 1 and matching_records[0][0] else None
+
+
+def _persist_decision_prediction_capture(
+    store: Store,
+    *,
+    recommendation: Any,
+    snapshot: dict[str, Any],
+    technical_context: dict[str, Any] | None,
+    cycle_id: str,
+    agent_run_id: str | None,
+) -> None:
+    try:
+        lineage = dict(getattr(recommendation, "decision_lineage", {}) or {})
+        prediction = _explicit_recommendation_prediction(recommendation, snapshot)
+        payload = build_prediction_capture(
+            lineage={
+                "cycle_id": cycle_id,
+                "agent_run_id": agent_run_id,
+                "agent_name": "trade_decision_agent" if agent_run_id else None,
+                "signal_id": lineage.get("signal_id"),
+                "signal_capture_id": lineage.get("signal_capture_id"),
+                "signal_source_run_id": lineage.get("signal_source_run_id"),
+                "candidate_id": _candidate_id_for_recommendation(
+                    technical_context,
+                    lineage=lineage,
+                ),
+                "source_event_id": prediction.get("source_event_id") if prediction else None,
+                "source_event_content_hash": (
+                    prediction.get("source_event_content_hash") or prediction.get("source_content_hash")
+                    if prediction
+                    else None
+                ),
+            },
+            prediction=prediction,
+            capture_observed_at=snapshot.get("captured_at"),
+            producer_stage="decision",
+            calendar_name="XNYS",
+        )
+        persist_h_capture_event(store, payload)
+    except Exception:  # noqa: BLE001 - shadow observation cannot change execution.
+        logging.getLogger(__name__).exception("No se pudo persistir captura prospectiva de decisión")
 
 
 def _separate_strategy_paused_plans(
@@ -1373,6 +1475,15 @@ def _persist_selection_ledger_shadow(
 ) -> dict[str, Any]:
     """Capture the exact cycle funnel once, without authority over trading."""
 
+    tracker = AgentRunTracker(
+        store,
+        role="self_improvement_engineer",
+        agent_name="self_improvement_engineer",
+        task_name="canonical_selection_ledger_shadow",
+        cycle_id=run_id,
+        execution_kind="deterministic",
+        input_refs=[run_id],
+    )
     try:
         payload = build_canonical_selection_ledger(
             run_id,
@@ -1398,6 +1509,11 @@ def _persist_selection_ledger_shadow(
                 "policy_mode": "shadow_only",
             },
         )
+        tracker.add_outputs(output_refs=[payload.get("event_id") or run_id])
+        if payload.get("status") == "unavailable" or persisted.get("status") == "failed":
+            tracker.fail(reason="canonical_selection_ledger_unavailable", error_code="shadow_unavailable")
+        else:
+            tracker.succeed()
         return {
             "status": payload.get("status"),
             "persist_status": persisted.get("status"),
@@ -1406,6 +1522,7 @@ def _persist_selection_ledger_shadow(
             "denominators": payload.get("denominators"),
         }
     except Exception as exc:  # noqa: BLE001 - telemetry is fail-open by contract.
+        tracker.fail(reason=exc, error_code="canonical_selection_ledger_failed")
         reporter.emit(
             "self_improvement_engineer",
             "canonical_selection_ledger_failed",
@@ -1436,8 +1553,18 @@ def _persist_capital_deployment_funnel_shadow(
 ) -> dict[str, Any]:
     """Persist P-L54B after the active route; every failure is fail-open."""
 
+    tracker = AgentRunTracker(
+        store,
+        role="risk_manager",
+        agent_name="risk_manager",
+        task_name="capital_deployment_funnel_shadow",
+        cycle_id=run_id,
+        execution_kind="deterministic",
+        input_refs=[run_id],
+    )
     try:
         if not str(run_id or "").strip():
+            tracker.skip(reason="cycle_id_unavailable")
             return {
                 "status": "unavailable",
                 "persist_status": "skipped",
@@ -1470,6 +1597,11 @@ def _persist_capital_deployment_funnel_shadow(
                 "policy_mode": "shadow_only",
             },
         )
+        tracker.add_outputs(output_refs=[payload.get("event_id") or run_id])
+        if payload.get("status") == "unavailable" or persisted.get("status") == "failed":
+            tracker.fail(reason="capital_deployment_funnel_unavailable", error_code="shadow_unavailable")
+        else:
+            tracker.succeed()
         return {
             "status": payload.get("status"),
             "persist_status": persisted.get("status"),
@@ -1481,6 +1613,7 @@ def _persist_capital_deployment_funnel_shadow(
             "detail_omitted": payload.get("detail_omitted"),
         }
     except Exception as exc:  # noqa: BLE001 - shadow telemetry cannot alter trading.
+        tracker.fail(reason=exc, error_code="capital_deployment_funnel_failed")
         reporter.emit(
             "risk_manager",
             "capital_deployment_funnel_shadow_failed",
@@ -1595,6 +1728,9 @@ def _auto_paper_trade(
         }
 
     capital_account = None
+    decision_run: AgentRunTracker | None = None
+    decision_agent_run_id = agent_run_id
+    decision_capture_agent_run_id: str | None = None
     try:
         portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
         capital_account = account_projection_from_portfolio_snapshot(portfolio)
@@ -1622,8 +1758,45 @@ def _auto_paper_trade(
                 "effective_max_daily_buy_orders": max(settings.max_daily_buy_orders, effective_recommendation_limit),
             },
         )
-        with optional_measure(timing, "llm_decision", "structured_recommendations"):
-            decision = request_trade_recommendations(settings, portfolio, decision_context, sentiment_context, rebalance_context, market_state)
+        decision_run = AgentRunTracker(
+            store,
+            role="trade_decision_agent",
+            agent_name="trade_decision_agent",
+            task_name="structured_trade_recommendations",
+            cycle_id=run_id,
+            execution_kind="llm",
+            parent_run_id=agent_run_id,
+            input_refs=[run_id, decision_context.get("run_id")],
+        )
+        try:
+            with optional_measure(timing, "llm_decision", "structured_recommendations"):
+                decision = request_trade_recommendations(
+                    settings,
+                    portfolio,
+                    decision_context,
+                    sentiment_context,
+                    rebalance_context,
+                    market_state,
+                )
+        except TimeoutError as exc:
+            decision_run.timeout(reason=exc, error_code="structured_trade_recommendations_timeout")
+            raise
+        except Exception as exc:
+            decision_run.fail(reason=exc, error_code="structured_trade_recommendations_failed")
+            raise
+        llm_identity = decision.get("llm_identity") or unavailable_llm_identity("identity_unavailable")
+        decision_run.set_effective_identity(
+            provider=llm_identity.get("provider"),
+            model=llm_identity.get("effective_model") or llm_identity.get("requested_model"),
+        )
+        decision_run.add_outputs(
+            output_refs=[run_id],
+            llm_calls=1 if llm_identity.get("status") == "ok" else 0,
+        )
+        decision_run.succeed()
+        decision_capture_agent_run_id = decision_run.agent_run_id
+        if agent_run_id is not None:
+            decision_agent_run_id = decision_run.agent_run_id
     except Exception as exc:  # noqa: BLE001 - bad LLM JSON or broker read must not stop scheduler.
         if settings.deterministic_trade_fallback_enabled and "portfolio" in locals() and "decision_context" in locals():
             fallback_recommendations = deterministic_trade_fallback_recommendations(
@@ -1637,6 +1810,23 @@ def _auto_paper_trade(
                 daily_learning_digest=daily_learning_digest,
                 operational_response_context=operational_response_context,
             )
+            fallback_run = AgentRunTracker(
+                store,
+                role="trade_decision_agent",
+                agent_name="trade_decision_agent",
+                task_name="deterministic_trade_fallback",
+                cycle_id=run_id,
+                execution_kind="fallback",
+                parent_run_id=decision_run.agent_run_id if decision_run is not None else agent_run_id,
+                retry_of=decision_run.agent_run_id if decision_run is not None else agent_run_id,
+                input_refs=[run_id, decision_context.get("run_id")],
+                fallback_reason=f"structured_trade_recommendations_failed:{type(exc).__name__}",
+            )
+            fallback_run.add_outputs(output_refs=[run_id])
+            fallback_run.succeed()
+            if agent_run_id is not None:
+                decision_agent_run_id = fallback_run.agent_run_id
+            decision_capture_agent_run_id = fallback_run.agent_run_id
             reporter.emit(
                 "execution_agent",
                 "paper_auto_trade_llm_fallback",
@@ -1796,6 +1986,7 @@ def _auto_paper_trade(
     }
     snapshotted_recommendations = []
     recommendation_records: list[tuple[str, Any, dict[str, Any]]] = []
+    decision_capture_requests: list[tuple[Any, dict[str, Any]]] = []
     for recommendation in reviewed_recommendations:
         review_row = next(
             (item for item in deterministic_review if item["symbol"] == recommendation.symbol and item["action"] == recommendation.action),
@@ -1820,11 +2011,12 @@ def _auto_paper_trade(
             cycle_id=run_id,
             source_run_id=decision_context.get("run_id"),
             market_state=market_state,
-            agent_run_id=agent_run_id,
+            agent_run_id=decision_agent_run_id,
             fallback_error=decision.get("fallback_error"),
             llm_identity=llm_identity,
             identity_key=f"{run_id}|{recommendation.symbol}|{recommendation.action}|{fingerprint}",
         )
+        decision_capture_requests.append((recommendation, snapshot))
         recommendation_id = new_id("rec")
         recommendation = replace(
             recommendation,
@@ -1844,6 +2036,17 @@ def _auto_paper_trade(
             )
         )
     reviewed_recommendations = snapshotted_recommendations
+
+    def _flush_decision_prediction_captures() -> None:
+        for recommendation, snapshot in decision_capture_requests:
+            _persist_decision_prediction_capture(
+                store,
+                recommendation=recommendation,
+                snapshot=snapshot,
+                technical_context=decision_context,
+                cycle_id=run_id,
+                agent_run_id=decision_capture_agent_run_id,
+            )
 
     with optional_measure(timing, "deterministic_gates", "entry_quality_gate"):
         quality_recommendations, entry_quality_gate = _apply_entry_quality_gate(
@@ -2176,6 +2379,7 @@ def _auto_paper_trade(
                     effective_max_daily_buy_orders=effective_daily_limit,
                     cycle_id=run_id,
                 )
+            _flush_decision_prediction_captures()
             return {
                 "submitted": [],
                 "failed": [],
@@ -2256,6 +2460,7 @@ def _auto_paper_trade(
                 effective_max_daily_buy_orders=effective_daily_limit,
                 cycle_id=run_id,
             )
+        _flush_decision_prediction_captures()
         actions = ", ".join(
             f"{item.symbol}:{item.action}:{item.confidence:.2f}" for item in reviewed_recommendations
         ) or "sin recomendaciones"
@@ -2400,6 +2605,7 @@ def _auto_paper_trade(
                 }
             )
 
+    _flush_decision_prediction_captures()
     buys = [item for item in submitted if item["side"].lower() == "buy"]
     sells = [item for item in submitted if item["side"].lower() == "sell"]
     buy_text = " || ".join(_submitted_order_summary(item) for item in buys) or "ninguna"
@@ -2486,6 +2692,85 @@ def _auto_paper_trade(
     }
 
 
+def _same_llm_endpoint(left: Any, right: Any) -> bool:
+    return (
+        str(getattr(left, "base_url", "")).rstrip("/"),
+        str(getattr(left, "model", "")),
+        str(getattr(left, "api_key", "")),
+    ) == (
+        str(getattr(right, "base_url", "")).rstrip("/"),
+        str(getattr(right, "model", "")),
+        str(getattr(right, "api_key", "")),
+    )
+
+
+def _crew_provider_failure_retryable(exc: Exception) -> bool:
+    """Retry CrewAI only for bounded provider-availability failures."""
+
+    try:
+        status_code = int(getattr(exc, "status_code", 0) or 0)
+    except (TypeError, ValueError):
+        status_code = 0
+    response = getattr(exc, "response", None)
+    response_status = getattr(response, "status_code", None)
+    if status_code in {408, 429, 500, 502, 503, 504} and response is not None:
+        return True
+    if response_status in {408, 429, 500, 502, 503, 504}:
+        return True
+    message = str(exc).lower()
+    # Do not retry arbitrary task/configuration errors merely because their
+    # prose contains words such as "rate limit".  The model-unavailable form
+    # is the provider error observed on Jetson; the remaining markers are
+    # explicit transport/provider responses.
+    return any(
+        marker in message
+        for marker in (
+            "model is unavailable",
+            "model unavailable",
+            "upstream request failed",
+            "too many requests",
+            "rate_limit",
+            "rate limit exceeded",
+            "rate limit reached",
+            "error code: 408",
+            "error code: 429",
+            "error code: 500",
+            "error code: 502",
+            "error code: 503",
+            "error code: 504",
+            "http 408",
+            "http 429",
+            "http 500",
+            "http 502",
+            "http 503",
+            "http 504",
+            "503 service unavailable",
+            "502 bad gateway",
+        )
+    )
+
+
+def _crew_endpoints(
+    settings: Settings,
+    preferred: Any,
+    preflight_attempts: list[dict[str, Any]] | None = None,
+) -> list[Any]:
+    """Return preferred endpoint followed by configured, distinct fallbacks."""
+
+    unavailable_names = {
+        str(item.get("name") or "")
+        for item in preflight_attempts or []
+        if item.get("available") is False
+    }
+    endpoints = [] if preferred.name in unavailable_names else [preferred]
+    for endpoint in configured_llm_endpoints(settings):
+        if endpoint.name in unavailable_names:
+            continue
+        if not any(_same_llm_endpoint(endpoint, existing) for existing in endpoints):
+            endpoints.append(endpoint)
+    return endpoints
+
+
 def run_observable_cycle(
     settings: Settings,
     store: Store,
@@ -2531,6 +2816,15 @@ def run_observable_cycle(
         _compact_technical_context_for_prompt(technical_context or {}) if technical_context else {},
         ensure_ascii=True,
     )
+    snapshot_run = AgentRunTracker(
+        store,
+        role="market_data_researcher",
+        agent_name="market_data_researcher",
+        task_name="market_snapshot",
+        cycle_id=run_id,
+        execution_kind="system",
+        input_refs=[run_id],
+    )
     try:
         reporter.emit(
             "market_data_researcher",
@@ -2544,6 +2838,8 @@ def run_observable_cycle(
                 provider=settings.market_data_provider, fmp_api_key=settings.fmp_api_key,
             )
         market_snapshot_prompt = compact_snapshot_for_prompt(market_snapshot, max_chars=2500)
+        snapshot_run.add_outputs(output_refs=[run_id])
+        snapshot_run.succeed()
         reporter.emit(
             "market_data_researcher",
             "market_snapshot_completed",
@@ -2552,6 +2848,7 @@ def run_observable_cycle(
             {"path": market_snapshot.get("path"), "warnings": market_snapshot.get("warnings", [])},
         )
     except Exception as exc:  # noqa: BLE001 - CrewAI can still run, but it must know data is missing.
+        snapshot_run.fail(reason=exc, error_code="market_snapshot_failed")
         json_safe_error = {"error": str(exc)}
         market_snapshot_prompt = json.dumps(json_safe_error, ensure_ascii=True)
         reporter.emit(
@@ -2562,6 +2859,15 @@ def run_observable_cycle(
             json_safe_error,
         )
 
+    state_run = AgentRunTracker(
+        store,
+        role="market_regime_strategist",
+        agent_name="market_regime_strategist",
+        task_name="market_state",
+        cycle_id=run_id,
+        execution_kind="deterministic",
+        input_refs=[run_id],
+    )
     try:
         reporter.emit(
             "market_regime_strategist",
@@ -2572,6 +2878,8 @@ def run_observable_cycle(
         with timing.measure("report_generation", "market_state_report"):
             market_state = build_market_state(settings, settings.data_dir / "reports", run_id, market_snapshot=market_snapshot)
         market_state_prompt = compact_market_state_for_prompt(market_state, max_chars=2500)
+        state_run.add_outputs(output_refs=[run_id])
+        state_run.succeed()
         state_quality = ((market_state.get("data_quality") or {}).get("status") or "UNKNOWN").upper()
         event_type = "market_state_completed" if state_quality == "GOOD" else "market_state_degraded"
         reporter.emit(
@@ -2588,6 +2896,7 @@ def run_observable_cycle(
             },
         )
     except Exception as exc:  # noqa: BLE001
+        state_run.fail(reason=exc, error_code="market_state_failed")
         market_state_prompt = json.dumps({"error": str(exc)}, ensure_ascii=True)
         reporter.emit(
             "market_regime_strategist",
@@ -2600,6 +2909,15 @@ def run_observable_cycle(
     # P-L49B Phase A is strictly in-memory and receives only the market
     # objects already constructed for this cycle.  It is not supplied to any
     # active decision function.
+    data_quality_run = AgentRunTracker(
+        store,
+        role="market_data_researcher",
+        agent_name="market_data_researcher",
+        task_name="data_quality_decision_shadow",
+        cycle_id=run_id,
+        execution_kind="deterministic",
+        input_refs=[run_id],
+    )
     data_quality_shadow = _capture_data_quality_decision_shadow(
         run_id=run_id,
         market_snapshot=market_snapshot,
@@ -2607,8 +2925,15 @@ def run_observable_cycle(
         technical_context=technical_context,
         reporter=reporter,
     )
+    if data_quality_shadow is None:
+        data_quality_run.fail(reason="data_quality_shadow_unavailable", error_code="shadow_unavailable")
+    else:
+        data_quality_run.add_outputs(output_refs=[run_id])
+        data_quality_run.succeed()
 
     crew_result: str | None = None
+    crew_execution_parent_id: str | None = None
+    crew_observability: dict[str, Any] | None = None
     if use_crew:
         endpoint, _attempts = select_preferred_endpoint(settings)
         crew_run = AgentRunTracker(
@@ -2618,9 +2943,11 @@ def run_observable_cycle(
             task_name="crew_cycle",
             cycle_id=run_id,
             execution_kind="llm",
+            provider=endpoint.provider,
             model=endpoint.model,
             input_refs=[run_id],
         )
+        crew_execution_parent_id = crew_run.agent_run_id
         reporter.emit(
             "orchestrator",
             "crew_started",
@@ -2628,59 +2955,176 @@ def run_observable_cycle(
             f"Lanzando CrewAI contra {endpoint.model} en {endpoint.base_url}.",
             {"llm_identity": build_llm_identity(endpoint)},
         )
-        try:
-            crew = build_crew(settings)
-            crew_stdout_path = settings.logs_dir / f"crew_stdout_{run_id}.log"
-            crew_stdout_path.parent.mkdir(parents=True, exist_ok=True)
-            with timing.measure("llm_decision", "crew_reasoning"):
-                with crew_stdout_path.open("w", encoding="utf-8") as crew_stdout:
-                    logging.disable(logging.INFO)
-                    try:
-                        with redirect_stdout(crew_stdout), redirect_stderr(crew_stdout):
-                            result = crew.kickoff(
-                            inputs={
-                                "universe": ", ".join(settings.universe),
-                                "cycle_id": run_id,
-                                "current_date": datetime.now(timezone.utc).date().isoformat(),
-                                "market_snapshot": market_snapshot_prompt,
-                                "market_state": market_state_prompt,
-                                "technical_context": technical_context_prompt,
-                                "deterministic_review_summary": (
-                                    "Pendiente; la revision determinista se ejecuta antes de "
-                                    "convertir recomendaciones en planes de orden."
-                                ),
-                            }
-                            )
-                    finally:
-                        logging.disable(logging.NOTSET)
-            crew_result = str(result)
-            crew_run.add_outputs(output_refs=[f"data/logs/{crew_stdout_path.name}"])
-            crew_run.succeed()
-            reporter.emit(
-                "orchestrator",
-                "crew_completed",
-                run_id,
-                "CrewAI completo el ciclo de razonamiento.",
-                {
-                    "result_preview": crew_result[:1000],
-                    "crew_stdout_path": str(crew_stdout_path),
-                    "llm_identity": build_llm_identity(endpoint),
-                },
+        crew_endpoints = _crew_endpoints(settings, endpoint, _attempts)
+        attempted_endpoints: list[dict[str, Any]] = []
+        last_exc: Exception | None = None
+        previous_attempt_run = crew_run
+        if not crew_endpoints:
+            crew_run.fail(
+                reason="all_crew_endpoints_unavailable",
+                error_code="crew_provider_unavailable",
             )
-        except Exception as exc:
-            crew_run.fail(reason=exc, error_code="crew_failed")
             crew_run.fallback_started(reason="direct_llm_decision")
             reporter.emit(
                 "orchestrator",
                 "crew_failed",
                 run_id,
-                f"CrewAI fallo: {exc}. Se continua con decision LLM directa para no perder el ciclo.",
+                "CrewAI omitido: todos los endpoints quedaron no disponibles en preflight; se continua con decision LLM directa.",
                 {
-                    "error": str(exc),
+                    "error": "all_crew_endpoints_unavailable",
                     "fallback": "direct_llm_decision",
-                    "llm_identity": build_llm_identity(endpoint, status="failed", reason="crew_failed"),
+                    "attempted_endpoints": attempted_endpoints,
+                    "crew_observability": crew_observability,
                 },
             )
+        for attempt_index, attempt_endpoint in enumerate(crew_endpoints, start=1):
+            attempt_run = crew_run
+            if attempt_index > 1:
+                fallback_reason = (
+                    "crew_provider_failure:"
+                    f"{type(last_exc).__name__ if last_exc is not None else 'unknown'}"
+                )
+                previous_attempt_run.fallback_started(reason=fallback_reason)
+                attempt_run = AgentRunTracker(
+                    store,
+                    role="crew_orchestrator",
+                    agent_name="orchestrator",
+                    task_name="crew_cycle_fallback",
+                    cycle_id=run_id,
+                    execution_kind="fallback",
+                    parent_run_id=previous_attempt_run.agent_run_id,
+                    retry_of=previous_attempt_run.agent_run_id,
+                    provider=attempt_endpoint.provider,
+                    model=attempt_endpoint.model,
+                    input_refs=[run_id],
+                    fallback_reason=fallback_reason,
+                )
+                reporter.emit(
+                    "orchestrator",
+                    "crew_fallback_started",
+                    run_id,
+                    f"Reintentando CrewAI contra {attempt_endpoint.model} en {attempt_endpoint.base_url}.",
+                    {
+                        "retry_of": previous_attempt_run.agent_run_id,
+                        "attempt": attempt_index,
+                        "llm_identity": build_llm_identity(attempt_endpoint, status="fallback"),
+                    },
+                )
+            log_suffix = "" if attempt_index == 1 else f"_attempt{attempt_index}"
+            crew_stdout_path = settings.logs_dir / f"crew_stdout_{run_id}{log_suffix}.log"
+            task_observer = CrewTaskObserver(
+                store,
+                cycle_id=run_id,
+                parent_run_id=attempt_run.agent_run_id,
+                model=attempt_endpoint.model,
+                candidate_ids={
+                    str(item["candidate_id"])
+                    for item in ((technical_context or {}).get("all_candidates") or [])
+                    if isinstance(item, dict) and item.get("candidate_id")
+                },
+            )
+            try:
+                with crew_execution_context(
+                    cycle_id=run_id, crew_agent_run_id=attempt_run.agent_run_id,
+                    attempt=attempt_index, fallback=attempt_index > 1,
+                    task_observer=task_observer,
+                ):
+                    crew = build_crew(settings, endpoint=attempt_endpoint)
+                try:
+                    reporter.emit(
+                        "orchestrator",
+                        "crew_participant_manifest",
+                        run_id,
+                        "Manifiesto de participantes CrewAI registrado.",
+                        {
+                            "cycle_id": run_id,
+                            "agent_run_id": attempt_run.agent_run_id,
+                            "crew_agent_run_id": attempt_run.agent_run_id,
+                            "attempt": attempt_index,
+                            "fallback": attempt_index > 1,
+                            "manifest": build_crew_task_manifest(),
+                            "crew_result_consumed_by": [],
+                            "active_decision_route": "structured_trade_recommendations",
+                        },
+                    )
+                except Exception as exc:  # noqa: BLE001 - telemetry is fail-open.
+                    logging.getLogger(__name__).debug(
+                        "Crew participant manifest telemetry skipped: %s", exc
+                    )
+                crew_stdout_path.parent.mkdir(parents=True, exist_ok=True)
+                with crew_execution_context(
+                    cycle_id=run_id,
+                    crew_agent_run_id=attempt_run.agent_run_id,
+                    attempt=attempt_index,
+                    fallback=attempt_index > 1,
+                    task_observer=task_observer,
+                ):
+                    with timing.measure("llm_decision", f"crew_reasoning_attempt_{attempt_index}"):
+                        with crew_stdout_path.open("w", encoding="utf-8") as crew_stdout:
+                            logging.disable(logging.INFO)
+                            try:
+                                with redirect_stdout(crew_stdout), redirect_stderr(crew_stdout):
+                                    result = crew.kickoff(
+                                        inputs={
+                                            "universe": ", ".join(settings.universe),
+                                            "cycle_id": run_id,
+                                            "current_date": datetime.now(timezone.utc).date().isoformat(),
+                                            "market_snapshot": market_snapshot_prompt,
+                                            "market_state": market_state_prompt,
+                                            "technical_context": technical_context_prompt,
+                                            "deterministic_review_summary": (
+                                                "Pendiente; la revision determinista se ejecuta antes de "
+                                                "convertir recomendaciones en planes de orden."
+                                            ),
+                                        }
+                                    )
+                            finally:
+                                logging.disable(logging.NOTSET)
+                crew_result = str(result)
+                crew_observability = task_observer.finalize()
+                attempt_run.add_outputs(output_refs=[f"data/logs/{crew_stdout_path.name}"])
+                attempt_run.succeed()
+                crew_execution_parent_id = attempt_run.agent_run_id
+                reporter.emit(
+                    "orchestrator",
+                    "crew_completed",
+                    run_id,
+                    "CrewAI completo el ciclo de razonamiento.",
+                    {
+                        "result_preview": crew_result[:1000],
+                        "crew_stdout_path": str(crew_stdout_path),
+                        "attempt": attempt_index,
+                        "fallback": attempt_index > 1,
+                        "llm_identity": build_llm_identity(attempt_endpoint),
+                        "crew_observability": crew_observability,
+                    },
+                )
+                break
+            except Exception as exc:
+                crew_observability = task_observer.finalize(failed=True, reason="crew_failed")
+                last_exc = exc
+                attempted_endpoints.append(
+                    build_llm_identity(attempt_endpoint, status="failed", reason="crew_failed")
+                )
+                attempt_run.fail(reason=exc, error_code="crew_failed")
+                next_endpoint_available = attempt_index < len(crew_endpoints)
+                if next_endpoint_available and _crew_provider_failure_retryable(exc):
+                    previous_attempt_run = attempt_run
+                    continue
+                attempt_run.fallback_started(reason="direct_llm_decision")
+                reporter.emit(
+                    "orchestrator",
+                    "crew_failed",
+                    run_id,
+                    f"CrewAI fallo: {exc}. Se continua con decision LLM directa para no perder el ciclo.",
+                    {
+                        "error": str(exc),
+                        "fallback": "direct_llm_decision",
+                        "attempted_endpoints": attempted_endpoints,
+                        "llm_identity": build_llm_identity(endpoint, status="failed", reason="crew_failed"),
+                    },
+                )
+                break
     else:
         crew_run = AgentRunTracker(
             store,
@@ -2702,6 +3146,16 @@ def run_observable_cycle(
 
     auto_result = None
     if use_crew:
+        execution_run = AgentRunTracker(
+            store,
+            role="execution_agent",
+            agent_name="execution_agent",
+            task_name="paper_auto_trade",
+            cycle_id=run_id,
+            execution_kind="system",
+            parent_run_id=crew_execution_parent_id,
+            input_refs=[run_id],
+        )
         try:
             auto_result = _auto_paper_trade(
                 settings,
@@ -2713,11 +3167,34 @@ def run_observable_cycle(
                 market_state,
                 learning_penalty_shadow=learning_penalty_shadow,
                 data_quality_shadow=data_quality_shadow,
-                agent_run_id=crew_run.agent_run_id,
+                agent_run_id=execution_run.agent_run_id,
                 timing=timing,
                 selection_ledger_phase_a=selection_ledger_phase_a,
             )
+            if auto_result is None:
+                execution_run.skip(reason="auto_paper_trading_disabled")
+            else:
+                execution_run.add_outputs(
+                    output_refs=[
+                        run_id,
+                        *[
+                            item.get("broker_order_id")
+                            for item in auto_result.get("submitted", [])
+                            if isinstance(item, dict)
+                        ],
+                    ]
+                )
+                if auto_result.get("blocked"):
+                    execution_run.block(reason=auto_result["blocked"])
+                elif auto_result.get("failed"):
+                    execution_run.fail(
+                        reason="paper_order_submission_failed",
+                        error_code="paper_order_submission_failed",
+                    )
+                else:
+                    execution_run.succeed()
         except Exception as exc:
+            execution_run.fail(reason=exc, error_code="paper_auto_trade_failed")
             timing.finalize("failed", error=exc)
             raise
         if learning_penalty_shadow is not None and (
@@ -2816,6 +3293,7 @@ def run_observable_cycle(
     return {
         "cycle_id": run_id,
         "crew_result": crew_result,
+        "crew_observability": crew_observability,
         "used_crew": use_crew,
         "market_state_path": (market_state or {}).get("path"),
         "market_state_quality": ((market_state or {}).get("data_quality") or {}).get("status"),

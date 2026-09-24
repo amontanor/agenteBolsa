@@ -38,6 +38,7 @@ def build_closed_market_technical_study(
     store: Any | None = None,
     learning_mode_config: dict[str, Any] | None = None,
     persist_report: bool = True,
+    producer_agent_contract: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     end = datetime.now(timezone.utc).date() + timedelta(days=1)
     start = end - timedelta(days=lookback_days)
@@ -140,6 +141,7 @@ def build_closed_market_technical_study(
 
     report = {
         "run_id": run_id,
+        "producer_agent_contract": producer_agent_contract,
         "as_of": datetime.now(timezone.utc).isoformat(),
         "symbols_scanned": len(requested_symbols),
         "symbols_with_data": len(candidates),

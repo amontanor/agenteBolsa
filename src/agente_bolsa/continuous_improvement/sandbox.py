@@ -183,7 +183,7 @@ def run_validation_steps(
     steps = steps if steps is not None else default_validation_steps(settings)
     env = dict(os.environ)
     env["DATA_DIR"] = tempfile.mkdtemp(prefix="ci_sandbox_data_")
-    env.setdefault("PYTHONPATH", str(Path(cwd) / "src"))
+    env["PYTHONPATH"] = str((Path(cwd).resolve() / "src").resolve())
     results: list[dict[str, Any]] = []
     ok = True
     for name, command in steps:

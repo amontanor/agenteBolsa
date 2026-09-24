@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -26,6 +27,8 @@ if TYPE_CHECKING:  # pragma: no cover - solo para anotaciones de tipo.
 
 
 MANIFEST_FILENAME = "kernel_manifest.json"
+KERNEL_ENV_PATH_ENV = "AGENTE_BOLSA_KERNEL_ENV_PATH"
+KERNEL_ENV_SHA256_ENV = "AGENTE_BOLSA_KERNEL_ENV_SHA256"
 
 
 @dataclass(frozen=True)
@@ -238,14 +241,44 @@ def kernel_check_order(
 def _sha256_file(path: Path) -> str | None:
     try:
         data = path.read_bytes()
-    except (OSError, FileNotFoundError):
+    except (OSError, ValueError):
         return None
     return hashlib.sha256(data).hexdigest()
 
 
+def _effective_env_path() -> tuple[Path, bool]:
+    """Return the protected env carrier and whether it was explicitly declared."""
+
+    configured = os.environ.get(KERNEL_ENV_PATH_ENV, "").strip()
+    if configured:
+        path = Path(configured)
+        if not path.is_absolute():
+            path = _repo_root() / path
+        return path, True
+    return _repo_root() / ".env", False
+
+
+def _declared_env_sha256() -> str | None:
+    """Return a validated non-secret digest carrier, when configured."""
+
+    value = os.environ.get(KERNEL_ENV_SHA256_ENV, "").strip().lower()
+    if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+        return None
+    return value
+
+
 def _critical_file_hashes() -> dict[str, str | None]:
     root = _repo_root()
-    return {rel: _sha256_file(root / rel) for rel in _CRITICAL_RELATIVE_FILES}
+    env_path, explicit_env_path = _effective_env_path()
+    hashes = {rel: _sha256_file(root / rel) for rel in _CRITICAL_RELATIVE_FILES if rel != ".env"}
+    hashes[".env"] = _sha256_file(env_path)
+    if explicit_env_path and hashes[".env"] is None:
+        # Compose local file secrets preserve the host mode (root:root 600),
+        # so the non-root runtime cannot read the carrier directly. The digest
+        # is computed by the privileged deploy/seal step and passed as a
+        # non-secret assertion; kernel-seal still requires the real file.
+        hashes[".env"] = _declared_env_sha256()
+    return hashes
 
 
 def kernel_manifest_path(settings: Settings) -> Path:
@@ -257,11 +290,16 @@ def kernel_seal(settings: Settings) -> dict[str, Any]:
 
     from datetime import datetime, timezone
 
+    env_path, explicit_env_path = _effective_env_path()
     hashes = _critical_file_hashes()
+    if explicit_env_path and _sha256_file(env_path) is None:
+        raise RuntimeError(f"No se puede sellar el carrier de configuración: {env_path}")
     manifest = {
         "sealed_at": datetime.now(timezone.utc).isoformat(),
         "files": hashes,
     }
+    if explicit_env_path:
+        manifest["env_path"] = str(env_path)
     path = kernel_manifest_path(settings)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(manifest, indent=2, ensure_ascii=True), encoding="utf-8")
@@ -277,7 +315,11 @@ def kernel_integrity(settings: Settings) -> dict[str, Any]:
     """
 
     path = kernel_manifest_path(settings)
+    env_path, explicit_env_path = _effective_env_path()
     current = _critical_file_hashes()
+    env_carrier_source = "file"
+    if explicit_env_path and _sha256_file(env_path) is None and current[".env"] is not None:
+        env_carrier_source = "declared_sha256"
     if not path.exists():
         return {
             "status": "unsealed",
@@ -285,6 +327,8 @@ def kernel_integrity(settings: Settings) -> dict[str, Any]:
             "sealed_at": None,
             "violations": [],
             "files": {rel: {"expected": None, "actual": actual, "match": None} for rel, actual in current.items()},
+            "env_path": str(env_path) if explicit_env_path else None,
+            "env_carrier_source": env_carrier_source,
         }
 
     try:
@@ -303,10 +347,14 @@ def kernel_integrity(settings: Settings) -> dict[str, Any]:
     violations: list[str] = []
     for rel, actual in current.items():
         expected = expected_files.get(rel)
-        match = expected == actual
+        match = expected == actual and not (explicit_env_path and rel == ".env" and actual is None)
         files[rel] = {"expected": expected, "actual": actual, "match": match}
         if not match:
             violations.append(rel)
+
+    expected_env_path = manifest.get("env_path") if isinstance(manifest, dict) else None
+    if expected_env_path is not None and expected_env_path != str(env_path):
+        violations.append("env_path")
 
     return {
         "status": "ok" if not violations else "violation",
@@ -314,4 +362,6 @@ def kernel_integrity(settings: Settings) -> dict[str, Any]:
         "sealed_at": manifest.get("sealed_at") if isinstance(manifest, dict) else None,
         "violations": violations,
         "files": files,
+        "env_path": str(env_path) if explicit_env_path else None,
+        "env_carrier_source": env_carrier_source,
     }

@@ -268,6 +268,13 @@ def reconcile_broker_orders(
     result["checked"] = len(pending)
     result["pending"] = len(pending)
     if not pending:
+        if update_learning:
+            result["signal_outcome_update"] = update_signal_outcomes(
+                settings,
+                store,
+                since_date="2026-04-01",
+                limit=200000,
+            )
         return result
 
     changes: list[dict[str, Any]] = []

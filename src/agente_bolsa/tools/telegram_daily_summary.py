@@ -384,99 +384,72 @@ def build_daily_summary(
     return payload
 
 
-def format_daily_summary(payload: Mapping[str, Any]) -> str:
+def format_daily_summary(payload) -> str:
+    """Resumen compacto P-L129: una linea por bloque, sin redundancia."""
     comparison_status = str(payload.get("comparison_status") or "unavailable")
-    comparison_suffix = (
-        ""
-        if comparison_status == "comparable"
-        else " · En curso"
-        if comparison_status == "in_progress"
-        else " · Provisional"
-        if comparison_status == "provisional"
-        else ""
-    )
-    total_coverage = _mapping(payload.get("open_total_pl_coverage"))
-    today_coverage = _mapping(payload.get("open_today_pl_coverage"))
-    total_count = len(list(payload.get("positions") or []))
-    opening_contract = payload.get("schema_version") == OPENING_SCHEMA_VERSION
-    variation_label = "Variación desde apertura XNYS" if opening_contract else "Variación de equity hoy"
-    if payload.get("account_daily_return_source") == "alpaca_account.last_equity":
-        variation_label = "P/L diario de cartera"
-    benchmark_label = (
-        str(_mapping(payload.get("benchmark")).get("instrument_label") or "SPY (ETF S&P 500)")
-        if comparison_status == "unavailable"
-        else "SP500"
-    )
-    equity_lines = [
-        f"• {variation_label}: {_money(payload.get('equity_delta'))} "
-        f"({_pct(payload.get('account_daily_return'))})"
-    ]
-    if payload.get("equity_delta") is None and payload.get("account_daily_return") is not None:
-        equity_lines = [
-            f"• {variation_label}: importe n/d",
-            f"• Porcentaje disponible (legacy): {_pct(payload.get('account_daily_return'))}",
+    status_word = {
+        "comparable": "comparable",
+        "in_progress": "en curso",
+        "provisional": "provisional",
+    }.get(comparison_status, "n/d")
+    spy_daily_return = payload.get("spy_daily_return")
+    difference = payload.get("comparison_difference")
+    if spy_daily_return is None:
+        spy_line = "SP500 n/d (sin datos comparables)"
+    else:
+        spy_line = "SP500 " + _pct(spy_daily_return)
+        if difference is not None and comparison_status in {"comparable", "provisional", "in_progress"}:
+            direction = "por debajo" if difference < 0 else "por encima"
+            spy_line += " - vas " + _pp(abs(difference)) + " " + direction
+        spy_line += " (" + status_word + ")"
+    positions = list(payload.get("positions") or [])
+    def _mover_key(item):
+        for field in ("today_pl", "total_pl"):
+            value = item.get(field)
+            if isinstance(value, (int, float)):
+                return abs(value)
+        return -1.0
+    movers = sorted(positions, key=_mover_key, reverse=True)
+    total_count = len(positions)
+    if not movers:
+        positions_block = ["Sin posiciones abiertas."]
+    else:
+        shown = []
+        for item in movers[:3]:
+            pl = item.get("today_pl")
+            pl = pl if isinstance(pl, (int, float)) else item.get("total_pl")
+            shown.append(str(item.get("symbol", "?")) + " " + _money(pl))
+        partial = any(
+            str((payload.get(key) or {}).get("status") or "") == "partial"
+            for key in ("open_total_pl_coverage", "open_today_pl_coverage")
+        )
+        positions_block = [
+            "Abiertas (" + str(total_count) + "): total " + _money(payload.get("open_total_pl"))
+            + " - hoy " + _money(payload.get("open_today_pl"))
+            + (" - parcial" if partial else ""),
+            "Top: " + " - ".join(shown) + ((" - +" + str(total_count - 3) + " mas") if total_count > 3 else ""),
         ]
-    if payload.get("account_daily_return_source") == "alpaca_account.last_equity" and payload.get("equity_delta") is None:
-        equity_lines = [f"- {variation_label}: n/d (cierre XNYS anterior no disponible)"]
-    base_lines = [
-        f"📊 Resumen · {_date_label(payload.get('session_date'))}",
+    full_lines = [
+        "Resumen " + _date_label(payload.get("session_date")),
         "",
-        "💼 Cuenta",
-        f"• Equity: {_balance(payload.get('equity'))}",
-        *equity_lines,
-        f"• {benchmark_label}: {_pct(payload.get('spy_daily_return'))}{comparison_suffix}",
-        f"• Diferencia: {_pp(payload.get('comparison_difference'))}{comparison_suffix}",
-        "• Referencia: SPY (ETF S&P 500)",
+        "Cuenta",
+        "- Equity: " + _balance(payload.get("equity"))
+        + " (" + _money(payload.get("equity_delta")) + " / " + _pct(payload.get("account_daily_return")) + ")",
+        "- " + spy_line,
         "",
-        f"📈 Posiciones abiertas · {total_count}",
-        f"• P/L abierto total ({total_coverage.get('known', 0)}/{total_coverage.get('total', total_count)}): "
-        f"{_money(payload.get('open_total_pl'))}"
-        f"{' · parcial' if total_coverage.get('status') == 'partial' else ''}",
-        f"• Variación abierta hoy ({today_coverage.get('known', 0)}/{today_coverage.get('total', total_count)}): "
-        f"{_money(payload.get('open_today_pl'))}"
-        f"{' · parcial' if today_coverage.get('status') == 'partial' else ''}",
-    ]
-    groups = _grouped_positions(payload)
-    if not groups:
-        base_lines.extend(["", "Sin posiciones abiertas."])
-    warning = None
-    if comparison_status == "in_progress":
-        warning = "⏳ Intervalo en curso: apertura XNYS → observación más reciente."
-    elif comparison_status == "provisional":
-        warning = "⚠️ Comparación provisional: SP500 no tiene base histórica plenamente comparable."
+    ] + positions_block
+    if comparison_status == "provisional":
+        full_lines.extend(["", "SP500 provisional: base no plenamente comparable."])
     elif comparison_status == "unavailable":
-        warning = "⚠️ Comparación SP500: n/d por falta de datos comparables."
-    if warning:
-        base_lines.extend(["", warning])
-    full_lines = list(base_lines)
-    for _key, label, items in groups:
-        full_lines.extend(["", f"{label} · {len(items)}"])
-        full_lines.extend(_position_line(item) for item in items)
-    full_text = "\n".join(full_lines)
+        full_lines.extend(["", "SP500 n/d por falta de datos comparables."])
+    full_text = chr(10).join(full_lines)
     if _telegram_utf16_units(full_text) <= TELEGRAM_MESSAGE_LIMIT_UNITS:
         return full_text
-
-    footer_template = "\n\n⚠️ Mensaje abreviado: se muestran {visible}/{total} posiciones; y {omitted} posiciones más."
-    visible_lines = list(base_lines)
-    visible = 0
-    total = sum(len(items) for _key, _label, items in groups)
-    for _key, label, items in groups:
-        heading = f"{label} · {len(items)}"
-        group_lines: list[str] = []
-        for item in items:
-            line = _position_line(item)
-            candidate = "\n".join(visible_lines + ["", heading, *group_lines, line])
-            footer = footer_template.format(visible=visible + 1, total=total, omitted=total - visible - 1)
-            if _telegram_utf16_units(candidate + footer) > TELEGRAM_MESSAGE_LIMIT_UNITS:
-                break
-            group_lines.append(line)
-            visible += 1
-        if group_lines:
-            visible_lines.extend(["", heading, *group_lines])
-    footer = footer_template.format(visible=visible, total=total, omitted=total - visible)
-    return "\n".join(visible_lines) + footer
-
-
+    footer_template = chr(10) + chr(10) + "Mensaje abreviado: {omitted} posiciones omitidas."
+    visible_lines = list(full_lines)
+    while visible_lines and _telegram_utf16_units(chr(10).join(visible_lines) + footer_template.format(omitted=total_count)) > TELEGRAM_MESSAGE_LIMIT_UNITS:
+        visible_lines.pop()
+    return chr(10).join(visible_lines) + footer_template.format(omitted=total_count)
 def send_telegram_message(
     *,
     token: str,

@@ -8,7 +8,7 @@ import math
 import sqlite3
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import asdict
 from datetime import datetime, timezone
 from itertools import islice
@@ -999,10 +999,16 @@ class Store:
             self.database_path.parent.mkdir(parents=True, exist_ok=True)
             self._db_dir_ready = True
 
-    def connect(self) -> sqlite3.Connection:
+    def connect(self, *, timeout_seconds: float = 30.0) -> sqlite3.Connection:
         self._ensure_db_dir()
-        conn = sqlite3.connect(self.database_path, timeout=30.0)
-        conn.execute("PRAGMA busy_timeout=30000")
+        try:
+            timeout = float(timeout_seconds)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("sqlite_timeout_seconds_invalid") from exc
+        if not math.isfinite(timeout) or timeout < 0:
+            raise ValueError("sqlite_timeout_seconds_invalid")
+        conn = sqlite3.connect(self.database_path, timeout=timeout)
+        conn.execute(f"PRAGMA busy_timeout={int(timeout * 1000)}")
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -1083,17 +1089,35 @@ class Store:
         event_type: str,
         cycle_id: str | None,
         payload: dict[str, Any],
+        lock_timeout_seconds: float | None = None,
+        idempotent_on_content_hash: bool = False,
     ) -> dict[str, Any]:
         """Persiste un evento sin reemplazo silencioso.
 
         Es la ruta para contratos nuevos que requieren historial durable. La
         escritura es corta, idempotente para el mismo payload y publica un
         evento de conflicto si el mismo ``event_id`` llega con otro contenido.
+        ``lock_timeout_seconds`` permite a la telemetría shadow fallar abierto
+        sin esperar el timeout de producción cuando SQLite está bloqueado.
+        ``idempotent_on_content_hash`` se reserva para contratos cuyo hash
+        excluye campos de observación volátiles.
         """
         encoded = _dumps(payload)
         candidate_hash = str(payload.get("content_hash") or "")
         now = _utc_iso()
-        with self.connect() as conn:
+        def same_payload(existing_payload: dict[str, Any]) -> bool:
+            return _dumps(existing_payload) == encoded or (
+                idempotent_on_content_hash
+                and bool(candidate_hash)
+                and str(existing_payload.get("content_hash") or "") == candidate_hash
+            )
+
+        connection = (
+            self.connect()
+            if lock_timeout_seconds is None
+            else self.connect(timeout_seconds=lock_timeout_seconds)
+        )
+        with connection as conn:
             existing = conn.execute(
                 "SELECT payload_json FROM agent_events WHERE event_id = ?",
                 (event_id,),
@@ -1104,7 +1128,7 @@ class Store:
                     existing_payload = json.loads(existing_json)
                 except (TypeError, json.JSONDecodeError):
                     existing_payload = {}
-                if _dumps(existing_payload) == encoded:
+                if same_payload(existing_payload):
                     return {"status": "idempotent", "event_id": event_id, "content_hash": candidate_hash}
                 existing_hash = str(existing_payload.get("content_hash") or "")
                 conflict_id = f"{event_id}:conflict:{candidate_hash or 'unknown'}"
@@ -1146,7 +1170,7 @@ class Store:
                     raced_payload = json.loads(raced_json)
                 except (TypeError, json.JSONDecodeError):
                     raced_payload = {}
-                if _dumps(raced_payload) == encoded:
+                if same_payload(raced_payload):
                     return {"status": "idempotent", "event_id": event_id, "content_hash": candidate_hash}
                 raced_hash = str(raced_payload.get("content_hash") or "")
                 conflict_id = f"{event_id}:conflict:{candidate_hash or 'unknown'}"
@@ -1924,10 +1948,11 @@ class Store:
                     SELECT event_id, event_type, payload_json, created_at
                     FROM agent_events
                     WHERE event_type = ?
+                      AND event_id GLOB ?
                     ORDER BY created_at DESC, event_id DESC
                     LIMIT 1
                     """,
-                    ("canonical_selection_ledger",),
+                    ("canonical_selection_ledger", "canonical_selection_ledger:*"),
                 ).fetchone()
         finally:
             self.close_read_connection()
@@ -2101,10 +2126,11 @@ class Store:
                     SELECT event_id, event_type, payload_json, created_at
                     FROM agent_events
                     WHERE event_type = ?
+                      AND event_id GLOB ?
                     ORDER BY created_at DESC, event_id DESC
                     LIMIT 1
                     """,
-                    ("capital_deployment_funnel_shadow",),
+                    ("capital_deployment_funnel_shadow", "capital_deployment_funnel_shadow:*"),
                 ).fetchone()
         finally:
             self.close_read_connection()
@@ -2544,7 +2570,9 @@ class Store:
         *,
         event_type_prefix: str | None = None,
         cycle_id: str | None = None,
-        limit: int = 50000,
+        agent_run_id: str | None = None,
+        limit: int | None = 50000,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         """Read recent append-only events, including agent-run telemetry."""
         query = """
@@ -2559,8 +2587,16 @@ class Store:
         if cycle_id:
             query += " AND cycle_id = ?"
             params.append(cycle_id)
-        query += " ORDER BY created_at DESC LIMIT ?"
-        params.append(max(1, int(limit)))
+        if agent_run_id:
+            query += " AND json_extract(payload_json, '$.agent_run_id') = ?"
+            params.append(agent_run_id)
+        query += " ORDER BY created_at DESC, event_id DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(max(1, int(limit)))
+            if int(offset) > 0:
+                query += " OFFSET ?"
+                params.append(int(offset))
         with self.connect() as conn:
             rows = conn.execute(query, params).fetchall()
         return list(reversed([
@@ -2574,6 +2610,57 @@ class Store:
             }
             for row in rows
         ]))
+
+    def iter_agent_events(
+        self,
+        *,
+        event_type_prefix: str | None = None,
+        cycle_id: str | None = None,
+        agent_run_id: str | None = None,
+        limit: int | None = 50000,
+        batch_size: int = 5000,
+    ) -> Iterator[dict[str, Any]]:
+        """Stream append-only events in chronological order.
+
+        Lifecycle reports can outgrow the historical 50,000-row read window.
+        Keep the SQLite cursor bounded with ``fetchmany`` so complete audits do
+        not turn a Jetson healthcheck into an unbounded in-memory load.
+        """
+
+        query = """
+            SELECT event_id, agent, event_type, cycle_id, payload_json, created_at
+            FROM agent_events
+            WHERE 1 = 1
+        """
+        params: list[Any] = []
+        if event_type_prefix:
+            query += " AND event_type LIKE ?"
+            params.append(f"{event_type_prefix}%")
+        if cycle_id:
+            query += " AND cycle_id = ?"
+            params.append(cycle_id)
+        if agent_run_id:
+            query += " AND json_extract(payload_json, '$.agent_run_id') = ?"
+            params.append(agent_run_id)
+        query += " ORDER BY created_at ASC, event_id ASC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(max(1, int(limit)))
+        with self.connect() as conn:
+            cursor = conn.execute(query, params)
+            while True:
+                rows = cursor.fetchmany(max(1, int(batch_size)))
+                if not rows:
+                    break
+                for row in rows:
+                    yield {
+                        "event_id": row["event_id"],
+                        "agent": row["agent"],
+                        "event_type": row["event_type"],
+                        "cycle_id": row["cycle_id"],
+                        "payload": json.loads(row["payload_json"] or "{}"),
+                        "created_at": row["created_at"],
+                    }
 
     def pending_broker_orders(self, *, limit: int = 25) -> list[dict[str, Any]]:
         """Read the bounded local order set eligible for an intraday poll.
@@ -6172,47 +6259,6 @@ class Store:
         with self.connect() as conn:
             row = conn.execute(query, params).fetchone()
         return int(row["count"] or 0)
-
-    def order_plan_linkage_summary(self, *, recent_days: int = 30) -> dict[str, Any]:
-        """Coverage of broker orders joined to a persisted order plan (P-L135, read-only).
-
-        Rows without a matching plan are historical evidence gaps: counted as
-        `legacy_unverified`, never reconstructed by symbol/date.
-        """
-
-        from datetime import timedelta
-
-        from .tools.canonical_trade_attribution import FILLED_STATUSES
-
-        window = max(1, int(recent_days))
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=window)).isoformat()
-        with self.connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT b.status AS status, b.created_at AS created_at,
-                       CASE WHEN p.plan_id IS NULL THEN 0 ELSE 1 END AS has_plan
-                FROM broker_orders b LEFT JOIN order_plans p ON p.plan_id = b.plan_id
-                """
-            ).fetchall()
-
-        def _summarize(items: list[Any]) -> dict[str, Any]:
-            filled = [row for row in items if str(row["status"] or "").lower() in FILLED_STATUSES]
-            with_plan = sum(1 for row in filled if row["has_plan"])
-            without_plan = len(filled) - with_plan
-            return {
-                "total": len(items),
-                "filled": len(filled),
-                "filled_with_plan": with_plan,
-                "filled_without_plan": without_plan,
-                "coverage": round(with_plan / len(filled), 4) if filled else None,
-            }
-
-        recent = [row for row in rows if str(row["created_at"] or "") >= cutoff]
-        summary = _summarize(rows)
-        summary["recent"] = _summarize(recent)
-        summary["recent_days"] = window
-        summary["unverified_label"] = "legacy_unverified"
-        return summary
 
     def create_continuous_improvement_cycle(self, item: dict[str, Any]) -> None:
         from .continuous_improvement.persistence_compaction import (

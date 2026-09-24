@@ -33,6 +33,10 @@ def run_agents_healthcheck(
     Devuelve un resumen. No propaga excepciones: la vigilancia nunca debe romper
     el ciclo del scheduler.
     """
+    from agente_bolsa.agent_config import load_agent_config
+    from agente_bolsa.agent_run import build_agent_run_productivity
+
+    from .agent_group_review import build_agent_group_conclusions
     from .llm_degraded_watchdog import evaluate as _watchdog_evaluate
     from .opportunity_ranker import rank_opportunities, snapshot_from_technical_study
 
@@ -43,6 +47,28 @@ def run_agents_healthcheck(
         watchdog = _watchdog_evaluate(settings.database_path)
     except Exception as exc:  # noqa: BLE001 - degradar sin romper
         watchdog = {"degraded": None, "error": str(exc)}
+
+    # The LLM watchdog alone cannot explain whether the deterministic agents,
+    # shadows, and execution boundary actually ran. Keep this read-only and
+    # publish the lifecycle reconstruction alongside the watchdog.
+    try:
+        agent_run_productivity = build_agent_run_productivity(store, now=now)
+    except Exception as exc:  # noqa: BLE001 - healthcheck must remain fail-open
+        agent_run_productivity = {"status": "unavailable", "error": str(exc)}
+
+    try:
+        expected_roles = [
+            name
+            for name, config in load_agent_config().items()
+            if str(config.get("status") or "").lower() != "disabled"
+        ]
+    except Exception as exc:  # noqa: BLE001 - config visibility must not break healthcheck
+        expected_roles = []
+        log_swallow(LOGGER, "cargar roles esperados del grupo", exc)
+    agent_group_conclusions = build_agent_group_conclusions(
+        agent_run_productivity,
+        expected_roles=expected_roles,
+    )
 
     # --- Oportunidades (universo amplio si esta disponible) ---
     reports_dir = settings.data_dir / "reports"
@@ -63,7 +89,13 @@ def run_agents_healthcheck(
         reports_dir.mkdir(parents=True, exist_ok=True)
         (reports_dir / "latest_agents_healthcheck.json").write_text(
             json.dumps(
-                {"as_of": now.isoformat(), "watchdog": watchdog, "opportunities": opportunities},
+                {
+                    "as_of": now.isoformat(),
+                    "watchdog": watchdog,
+                    "agent_run_productivity": agent_run_productivity,
+                    "agent_group_conclusions": agent_group_conclusions,
+                    "opportunities": opportunities,
+                },
                 ensure_ascii=False,
                 indent=2,
             ),
@@ -98,5 +130,7 @@ def run_agents_healthcheck(
     return {
         "degraded": watchdog.get("degraded") if isinstance(watchdog, dict) else None,
         "watchdog": watchdog,
+        "agent_run_productivity": agent_run_productivity,
+        "agent_group_conclusions": agent_group_conclusions,
         "opportunities_count": opp_count,
     }

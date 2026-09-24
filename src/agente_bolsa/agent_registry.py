@@ -38,6 +38,42 @@ AGENTS: dict[str, AgentInfo] = {
     "self_improvement_engineer": AgentInfo("IMPR", "Mejora", "learning"),
 }
 
+# AgentName belongs to the historical continuous-improvement contract and uses
+# CamelCase values. Keep the old values stable; only map names whose modern
+# counterpart is demonstrated by the same responsibility. ``None`` is
+# intentional: an unmapped legacy identity must not be guessed or collapsed.
+LEGACY_AGENT_NAME_CROSSWALK: dict[str, str | None] = {
+    "OrchestratorAgent": "orchestrator",
+    "ChiefInvestmentOrchestratorAgent": None,
+    "MarketEstimatorAgent": None,
+    "MarketRegimeAgent": "market_regime_strategist",
+    "TechnicalAnalystAgent": "technical_analyst",
+    "TechnicalEdgeAgent": None,
+    "SentimentAnalystAgent": None,
+    "StrategyEvaluatorAgent": None,
+    "ParameterCalibrationAgent": "parameter_calibration_specialist",
+    "PreEarningsSpecialistAgent": None,
+    "RiskGuardAgent": None,
+    "RiskCapitalAgent": None,
+    "DataQualityAgent": None,
+    "ProgrammerAgent": None,
+    "SoftwareReliabilityAgent": None,
+    "ExperimentDesignerAgent": None,
+    "DecisionCommitteeAgent": "decision_committee",
+    "ValidationAgent": None,
+    "ReportAgent": None,
+}
+
+
+def canonical_agent_id(value: object) -> str | None:
+    """Return a modern registry ID without rewriting unknown history."""
+
+    raw = getattr(value, "value", value)
+    name = str(raw or "").strip()
+    if name in AGENTS:
+        return name
+    return LEGACY_AGENT_NAME_CROSSWALK.get(name)
+
 
 def agent_info(agent: str) -> AgentInfo:
     return AGENTS.get(agent, AgentInfo("AGNT", agent.replace("_", " "), "unknown"))

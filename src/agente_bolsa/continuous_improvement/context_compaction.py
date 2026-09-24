@@ -225,6 +225,22 @@ def _compact_real_context(
                 _compact_value(item, string_limit=string_limit, list_limit=8, depth=0, metadata=metadata, path="learning.observations")
                 for item in truncate_list(learning.get("observations"), 30)
             ],
+            "agent_learning": _compact_value(
+                learning.get("agent_learning") or {},
+                string_limit=string_limit,
+                list_limit=10,
+                depth=0,
+                metadata=metadata,
+                path="learning.agent_learning",
+            ),
+            "collection": _compact_value(
+                learning.get("collection") or {},
+                string_limit=string_limit,
+                list_limit=8,
+                depth=0,
+                metadata=metadata,
+                path="learning.collection",
+            ),
             "policy_candidates": [
                 _compact_value(item, string_limit=string_limit, list_limit=8, depth=0, metadata=metadata, path="learning.policy_candidates")
                 for item in truncate_list(learning.get("policy_candidates"), 20)

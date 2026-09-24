@@ -19,7 +19,14 @@ from .llm_degraded_watchdog import evaluate as evaluate_llm_watchdog
 from .pre_earnings import load_pre_earnings_learning_context
 from .reporting import write_json_report
 from .rr_cohort import rr_cohort_digest_summary, sync_rr_cohort_observations
-from .signal_learning import HORIZONS, _indicator_tags, _num, update_signal_outcomes
+from .signal_learning import (
+    HORIZONS,
+    _agent_contract_from_signal,
+    _indicator_tags,
+    _num,
+    build_agent_learning_scoreboard,
+    update_signal_outcomes,
+)
 from .time_stop_policy import shadow_time_stop_digest_summary
 
 DEFAULT_DAILY_LEARNING_START = "2026-04-01"
@@ -243,6 +250,27 @@ def _observation_payload(group: list[dict[str, Any]]) -> dict[str, Any]:
         explanation_parts.append("solo candidata/no seleccionada")
     explanation = "; ".join(explanation_parts)
     observation_features = dict(best.get("features", {}) or {})
+    agent_contributors: dict[str, dict[str, Any]] = {}
+    for row in group:
+        contract, attribution_status, agent_role = _agent_contract_from_signal(row)
+        if contract is None or attribution_status != "verified":
+            continue
+        agent_name = str(contract.get("canonical_agent_id") or contract.get("agent_name") or "").strip()
+        agent_run_id = str(contract.get("agent_run_id") or "").strip()
+        if not agent_name or not agent_run_id:
+            continue
+        identity_key = f"{agent_role}:{agent_name}:{agent_run_id}"
+        agent_contributors[identity_key] = {
+            "agent_role": agent_role,
+            **contract,
+        }
+    observation_features["agent_contributors"] = [
+        agent_contributors[key]
+        for key in sorted(agent_contributors)
+    ]
+    observation_features["agent_attribution_status"] = (
+        "verified" if agent_contributors else "unavailable"
+    )
     if executed:
         observation_features["decision_lineage"] = dict(
             (executed[0].get("features") or {}).get("decision_lineage") or {}
@@ -1319,6 +1347,7 @@ def _build_digest(
     pre_earnings_context: dict[str, Any] | None = None,
     same_session_ledger: dict[str, Any] | None = None,
     learning_experiment_section: dict[str, Any] | None = None,
+    agent_learning: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     stats_1d = _feature_bucket_stats(observations, 1, min_samples=3)
     stats_3d = _feature_bucket_stats(observations, 3, min_samples=3)
@@ -1406,6 +1435,7 @@ def _build_digest(
         "setup_priors_3d": priors_3d[:20],
         "confidence_calibration_3d": confidence_3d,
         "prior_accuracy_3d": prior_accuracy_3d[:20],
+        "agent_learning": agent_learning or build_agent_learning_scoreboard([]),
         "entry_quality_filter_calibration_3d": entry_quality_filter_calibration_3d,
         "backtest_filter_calibration_3d": backtest_filter_calibration_3d,
         "pre_earnings": pre_earnings_context or {"available": False},
@@ -1484,6 +1514,7 @@ def build_learning_daily_run(
         pre_earnings_context,
         same_session_ledger,
         learning_experiment_section,
+        build_agent_learning_scoreboard(rows),
     )
     digest["rr_cohort"] = rr_cohort_digest_summary(store)
     digest["execution_quality"] = execution_quality_digest_summary(store)
@@ -1577,6 +1608,11 @@ def build_learning_digest_report(
         since_date=since_date,
         end_date=end_date,
     )
+    signal_rows = store.signal_outcomes(limit=LEDGER_LIMIT, since_date=since_date)
+    if end_date:
+        signal_rows = [
+            row for row in signal_rows if str(row.get("signal_date") or "")[:10] <= str(end_date)[:10]
+        ]
     digest = _build_digest(
         observations,
         health,
@@ -1585,6 +1621,7 @@ def build_learning_digest_report(
         pre_earnings_context,
         None,
         learning_experiment_section,
+        build_agent_learning_scoreboard(signal_rows),
     )
     digest["rr_cohort"] = rr_cohort_digest_summary(store)
     digest["execution_quality"] = execution_quality_digest_summary(store)
@@ -1680,6 +1717,7 @@ def load_daily_learning_context(data_dir: Path) -> dict[str, Any]:
         "setup_priors_3d": payload.get("setup_priors_3d", [])[:20],
         "confidence_calibration_3d": payload.get("confidence_calibration_3d", [])[:8],
         "prior_accuracy_3d": payload.get("prior_accuracy_3d", [])[:20],
+        "agent_learning": payload.get("agent_learning") or build_agent_learning_scoreboard([]),
         "entry_quality_filter_calibration_3d": payload.get("entry_quality_filter_calibration_3d", {}),
         "backtest_filter_calibration_3d": payload.get("backtest_filter_calibration_3d", {}),
     }

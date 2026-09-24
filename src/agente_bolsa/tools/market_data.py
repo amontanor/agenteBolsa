@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import date, datetime, timezone
 from hashlib import sha1
@@ -40,25 +41,29 @@ def _date_text(value: str | datetime | None) -> str:
     return str(value)[:10]
 
 
-def _settings_market_data_defaults() -> tuple[str, str | None]:
+def _settings_market_data_defaults() -> tuple[str, str | None, Path]:
+    fallback_data_dir = Path(os.getenv("DATA_DIR", "data")).expanduser()
     try:
         from agente_bolsa.config import get_settings
 
         settings = get_settings()
-        return str(settings.market_data_provider or "auto"), settings.fmp_api_key
+        data_dir = Path(getattr(settings, "data_dir", fallback_data_dir)).expanduser()
+        return str(settings.market_data_provider or "auto"), settings.fmp_api_key, data_dir
     except Exception:
-        return "auto", None
+        return "auto", None, fallback_data_dir
 
 
-def _normalize_provider(provider: str | None, fmp_api_key: str | None) -> tuple[str, str | None]:
-    default_provider, default_fmp_api_key = _settings_market_data_defaults()
+def _normalize_provider(provider: str | None, fmp_api_key: str | None) -> tuple[str, str | None, Path]:
+    default_provider, default_fmp_api_key, data_dir = _settings_market_data_defaults()
     requested = str(provider or default_provider or "auto").strip().lower()
     api_key = fmp_api_key if fmp_api_key is not None else default_fmp_api_key
     if requested not in {"auto", "yfinance", "fmp"}:
         requested = "auto"
     if requested == "auto":
-        return ("fmp", api_key) if api_key else ("yfinance", api_key)
-    return requested, api_key
+        selected = ("fmp", api_key) if api_key else ("yfinance", api_key)
+    else:
+        selected = (requested, api_key)
+    return (*selected, data_dir)
 
 
 def _request_key(
@@ -289,9 +294,9 @@ def download_daily_prices_with_metadata(
     normalized = [str(symbol).upper() for symbol in symbols if str(symbol).strip()]
     if not normalized:
         raise MarketDataValidationError("lista de simbolos vacia")
-    selected_provider, resolved_fmp_api_key = _normalize_provider(provider, fmp_api_key)
+    selected_provider, resolved_fmp_api_key, configured_data_dir = _normalize_provider(provider, fmp_api_key)
 
-    cache_root = cache_dir or Path("data/cache/market_data")
+    cache_root = cache_dir or configured_data_dir / "cache" / "market_data"
     cache_key = _request_key(normalized, start, end, provider=selected_provider)
     max_age_seconds = _cache_max_age_seconds(end)
     if not force_refresh:

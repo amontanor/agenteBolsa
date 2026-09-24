@@ -14,6 +14,12 @@ from agente_bolsa.models import new_id
 from agente_bolsa.storage import Store
 
 from ..tools.learning_mode import LEARNING_MODE_GOVERNED_KEYS
+from ..tools.signal_learning import (
+    AGENT_LEARNING_SIGNAL_LIMIT,
+    build_agent_learning_feedback,
+    build_agent_learning_scoreboard,
+    build_structured_agent_evidence_packet,
+)
 from .aggressiveness_gate import (
     AGGRESSIVENESS_REQUIRES_EDGE_EVIDENCE,
     assess_aggressiveness_evidence,
@@ -487,6 +493,8 @@ def _compact_signal(item: dict[str, Any]) -> dict[str, Any]:
         "exit_policy_v2_return": exit_policy.get("return_pct"),
         "verdict": outcome.get("verdict"),
         "outcome_available": outcome.get("available"),
+        "producer_agent_contract": features.get("producer_agent_contract"),
+        "execution_link_status": features.get("execution_link_status"),
         "created_at": item.get("created_at"),
     }
 
@@ -505,6 +513,7 @@ def _compact_observation(item: dict[str, Any]) -> dict[str, Any]:
         "blocked_backtest": item.get("blocked_backtest"),
         "executed_buy": item.get("executed_buy"),
         "duplicate_count": item.get("duplicate_count"),
+        "agent_contributors": (item.get("features") or {}).get("agent_contributors", []),
         "explanation": item.get("explanation"),
         "created_at": item.get("created_at"),
     }
@@ -536,8 +545,30 @@ class DataCollectorAgent:
         latest_cycle = store.latest_continuous_improvement_cycle()
         if latest_cycle and latest_cycle.get("cycle_id") == cycle_id:
             latest_cycle = None
-        signals = store.signal_outcomes(limit=160, since_date=since)
-        observations = store.learning_observations(since_date=since, limit=160)
+        signal_limit = AGENT_LEARNING_SIGNAL_LIMIT
+        observation_limit = 160
+        signals = store.signal_outcomes(limit=signal_limit, since_date=since)
+        observations = store.learning_observations(since_date=since, limit=observation_limit)
+        collection_as_of = datetime.now(timezone.utc).isoformat()
+        collection_window = {"since_date": since, "days": 14}
+        signal_collection = {
+            "returned_rows": len(signals),
+            "total_rows": None,
+            "limit": signal_limit,
+            "limit_reached": len(signals) >= signal_limit,
+            "completeness": "unknown_if_below_limit",
+            "window": collection_window,
+            "as_of": collection_as_of,
+        }
+        observation_collection = {
+            "returned_rows": len(observations),
+            "total_rows": None,
+            "limit": observation_limit,
+            "limit_reached": len(observations) >= observation_limit,
+            "completeness": "unknown_if_below_limit",
+            "window": collection_window,
+            "as_of": collection_as_of,
+        }
         def _runtime_error_event(item: dict[str, Any]) -> bool:
             event_type = str(item.get("event_type", "")).lower()
             payload_text = str(item.get("payload_json", "")).lower()
@@ -553,7 +584,7 @@ class DataCollectorAgent:
         ][:30]
         return {
             "cycle_id": cycle_id,
-            "collected_at": datetime.now(timezone.utc).isoformat(),
+            "collected_at": collection_as_of,
             "source": "sqlite_and_reports",
             "settings": {
                 "trading_mode": settings.trading_mode,
@@ -610,6 +641,11 @@ class DataCollectorAgent:
             "learning": {
                 "signals": [_compact_signal(item) for item in signals],
                 "observations": [_compact_observation(item) for item in observations],
+                "collection": {
+                    "signals": signal_collection,
+                    "observations": observation_collection,
+                },
+                "agent_learning": build_agent_learning_scoreboard(signals, collection=signal_collection),
                 "policy_candidates": store.learning_policy_candidates(limit=100),
                 "distilled_lessons": store.distilled_lessons(limit=100),
             },
@@ -630,8 +666,18 @@ class PerformanceEvaluatorAgent:
         return score_dynamic_agents(store)
 
     def evaluate(self, context: dict[str, Any]) -> dict[str, Any]:
-        signals = context.get("learning", {}).get("signals", []) or []
-        observations = context.get("learning", {}).get("observations", []) or []
+        learning = context.get("learning", {}) or {}
+        signals = learning.get("signals", []) or []
+        observations = learning.get("observations", []) or []
+        scoreboard = learning.get("agent_learning")
+        if not isinstance(scoreboard, dict):
+            scoreboard = build_agent_learning_scoreboard(
+                signals,
+                collection=(learning.get("collection") or {}).get("signals")
+                if isinstance(learning.get("collection"), dict)
+                else None,
+            )
+        agent_learning_feedback = build_agent_learning_feedback(scoreboard)
         recent_errors = context.get("events", {}).get("recent_errors", []) or []
         executed = [item for item in observations if item.get("executed_buy")]
         micro = [item for item in observations if str(item.get("decision") or "") in {"approved_buy_micro", "executed_buy_micro"}]
@@ -654,7 +700,22 @@ class PerformanceEvaluatorAgent:
                 {
                     "kind": "insufficient_outcomes",
                     "severity": "LOW",
-                    "detail": "Hay señales recientes, pero pocos resultados maduros para medir impacto.",
+                    "detail": (
+                        "Hay señales recientes, pero pocos resultados maduros para medir impacto; "
+                        f"agent_learning={scoreboard.get('status', 'unavailable')}"
+                    ),
+                }
+            )
+        if signals and not (agent_learning_feedback.get("actionability") or {}).get("usable_for_agent_learning", False):
+            blockers.append(
+                {
+                    "kind": "agent_learning_not_actionable",
+                    "severity": "LOW",
+                    "detail": "; ".join(
+                        (agent_learning_feedback.get("actionability") or {}).get("blockers") or [
+                            "faltan outcomes maduros y controles same-cycle"
+                        ]
+                    ),
                 }
             )
         if len(blocked_entry) > max(5, len(observations) * 0.5):
@@ -678,9 +739,19 @@ class PerformanceEvaluatorAgent:
                 "exit_policy_v2_available": len(exit_policy_available),
                 "recent_errors": len(recent_errors),
                 "operational_incidents": len(context.get("events", {}).get("operational_incidents", []) or []),
+                "agent_learning_status": scoreboard.get("status", "unavailable"),
+                "agent_learning_quality_status": scoreboard.get("quality_status", "not_evaluable"),
+                "agent_learning_attribution_coverage": (scoreboard.get("denominators") or {}).get("attribution_coverage"),
+                "agent_learning_matured": (scoreboard.get("denominators") or {}).get("matured", 0),
+                "agent_learning_matured_with_control": (scoreboard.get("denominators") or {}).get(
+                    "matured_with_control", 0
+                ),
+                "agent_learning_actionability": (agent_learning_feedback.get("actionability") or {}).get("status", "blocked"),
             },
             "blockers": blockers,
             "data_quality": "GOOD" if outcomes_available else "PARTIAL" if signals or observations else "INSUFFICIENT",
+            "agent_learning": scoreboard,
+            "agent_learning_feedback": agent_learning_feedback,
         }
 
 
@@ -692,9 +763,143 @@ class SpecialistAgent:
         self.settings = settings
         self.client = client
 
+    def _learning_context(self, context: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        evaluation = context.get("evaluation", {}) or {}
+        scoreboard = evaluation.get("agent_learning")
+        if not isinstance(scoreboard, dict):
+            scoreboard = (context.get("learning", {}) or {}).get("agent_learning")
+        feedback = build_agent_learning_feedback(
+            scoreboard if isinstance(scoreboard, dict) else None,
+            agent_name=self.agent_name.value,
+        )
+        learning = dict(context.get("learning", {}) or {})
+        learning["agent_learning"] = feedback
+        scoped_evaluation = dict(evaluation)
+        scoped_evaluation["agent_learning"] = feedback
+        scoped_evaluation["agent_learning_feedback"] = feedback
+        return {**context, "learning": learning, "evaluation": scoped_evaluation}, feedback
+
+    def _annotate_learning_hypotheses(
+        self,
+        deterministic: dict[str, Any],
+        feedback: dict[str, Any],
+    ) -> None:
+        """Turn the exact agent slice into bounded observational hypotheses.
+
+        P-L102 made the feedback available to specialists. Keep the feedback
+        descriptive, but make the deterministic path consume it explicitly so
+        that a specialist's output records the next evidence gap instead of
+        merely echoing an opaque payload. These hypotheses cannot alter gates,
+        sizing, risk, execution, or promotion.
+        """
+
+        if not isinstance(deterministic, dict) or not isinstance(feedback, dict):
+            return
+        hypotheses = deterministic.get("hypotheses")
+        if not isinstance(hypotheses, list):
+            hypotheses = []
+            deterministic["hypotheses"] = hypotheses
+        existing_subjects = {
+            str(item.get("subject") or "").strip()
+            for item in hypotheses
+            if isinstance(item, dict)
+        }
+        slices = [item for item in feedback.get("agent_slice", []) if isinstance(item, dict)]
+        if not slices:
+            return
+
+        def total(key: str) -> int:
+            return sum(
+                int(item.get(key) or 0)
+                for item in slices
+                if type(item.get(key) or 0) is int and int(item.get(key) or 0) >= 0
+            )
+
+        signals = total("signals")
+        selection_unavailable = total("selection_unavailable")
+        execution_verified = total("execution_verified")
+        matured = total("matured")
+        matured_with_control = total("matured_with_control")
+        collection = feedback.get("collection") if isinstance(feedback.get("collection"), dict) else {}
+        collection_limit_reached = collection.get("limit_reached") is True
+
+        def add(subject: str, reason_code: str, summary: str, evidence: list[str]) -> None:
+            if subject in existing_subjects or len(hypotheses) >= 8:
+                return
+            hypotheses.append(
+                build_structured_agent_evidence_packet(
+                    feedback,
+                    reason_code=reason_code,
+                    subject=subject,
+                    summary=f"Hipotesis observacional: {summary}",
+                    confidence="LOW",
+                    evidence=evidence,
+                )
+            )
+            existing_subjects.add(subject)
+
+        if selection_unavailable:
+            add(
+                "agent_selection_observability",
+                "selection_identity_unavailable",
+                "la selección no tiene identidad booleana completa para todo el slice",
+                [
+                    f"agent={feedback.get('agent_name') or 'unavailable'}",
+                    f"signals={signals}",
+                    f"selection_unavailable={selection_unavailable}",
+                ],
+            )
+        if signals and execution_verified < signals:
+            add(
+                "agent_execution_linkage",
+                "execution_link_unverified",
+                "la cobertura de ejecución enlazada debe cerrarse antes de interpretar aciertos",
+                [
+                    f"agent={feedback.get('agent_name') or 'unavailable'}",
+                    f"signals={signals}",
+                    f"execution_verified={execution_verified}",
+                ],
+            )
+        if matured == 0:
+            add(
+                "agent_outcome_maturity",
+                "outcome_maturity_unavailable",
+                "faltan outcomes maduros direction-corrected para evaluar el agente",
+                [
+                    f"agent={feedback.get('agent_name') or 'unavailable'}",
+                    f"matured={matured}",
+                    f"quality_status={feedback.get('quality_status') or 'not_evaluable'}",
+                ],
+            )
+        elif matured_with_control < matured:
+            add(
+                "agent_same_cycle_control",
+                "same_cycle_control_unavailable",
+                "los outcomes maduros no tienen control same-cycle completo",
+                [
+                    f"agent={feedback.get('agent_name') or 'unavailable'}",
+                    f"matured={matured}",
+                    f"matured_with_control={matured_with_control}",
+                ],
+            )
+        if collection_limit_reached:
+            add(
+                "agent_learning_collection",
+                "collection_incomplete",
+                "la ventana recolectada está limitada y no permite afirmar cobertura completa",
+                [
+                    f"agent={feedback.get('agent_name') or 'unavailable'}",
+                    f"returned_rows={collection.get('returned_rows')}",
+                    f"limit={collection.get('limit')}",
+                ],
+            )
+
     def run(self, context: dict[str, Any], event: dict[str, Any], task_payload: dict[str, Any]) -> dict[str, Any]:
-        deterministic = self._deterministic(context, event, task_payload)
-        llm_result = self._maybe_llm(context, event, task_payload, deterministic)
+        scoped_context, agent_learning_feedback = self._learning_context(context)
+        deterministic = self._deterministic(scoped_context, event, task_payload)
+        self._annotate_learning_hypotheses(deterministic, agent_learning_feedback)
+        deterministic["agent_learning_feedback"] = agent_learning_feedback
+        llm_result = self._maybe_llm(scoped_context, event, task_payload, deterministic)
         response = deterministic
         if llm_result.payload is not None:
             response = llm_result.payload.model_dump()
@@ -704,6 +909,7 @@ class SpecialistAgent:
             "deterministic": deterministic,
             "llm": llm_result.model_dump(),
             "response": response,
+            "agent_learning_feedback": agent_learning_feedback,
         }
 
     def _maybe_llm(
