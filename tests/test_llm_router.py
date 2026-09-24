@@ -44,7 +44,7 @@ def test_zen_primary_adds_exact_go_fallback_before_local_fallback():
 
     assert [(item.provider, item.model, item.fallback_used) for item in endpoints] == [
         ("opencode-zen", "deepseek-v4.1-flash", False),
-        ("opencode-go", "deepseek-v4-flash", True),
+        ("opencode-go", "deepseek-v4.1-flash", True),
         ("openai-local", "qwen3.6-27b", True),
     ]
     assert endpoints[1].base_url == "https://opencode.ai/zen/go/v1"
@@ -324,7 +324,7 @@ def test_zen_empty_content_is_a_single_attempt_failure_that_reaches_go(monkeypat
         messages=[{"role": "user", "content": "hi"}],
     )
 
-    assert response.model == "deepseek-v4-flash"
+    assert response.model == "deepseek-v4.1-flash"
     assert endpoint.provider == "opencode-go"
     assert calls == ["opencode-zen", "opencode-go"]
 

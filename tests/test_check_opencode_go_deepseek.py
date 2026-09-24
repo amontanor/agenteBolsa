@@ -64,7 +64,7 @@ def test_success_uses_exact_endpoint_model_and_one_request():
 
     assert result["ok"] is True
     assert result["provider"] == "opencode-go"
-    assert result["model"] == "deepseek-v4-flash"
+    assert result["model"] == "deepseek-v4.1-flash"
     assert result["endpoint_host"] == "opencode.ai"
     assert result["endpoint_path"] == "/zen/go/v1/chat/completions"
     assert result["finish_reason"] == "stop"
@@ -164,7 +164,7 @@ def test_config_from_existing_settings_uses_opencode_aliases_without_db():
     settings = SimpleNamespace(
         llm_model_selector="opencode-go",
         opencode_api_base="https://opencode.ai/zen/go/v1",
-        opencode_model="deepseek-v4-flash",
+        opencode_model="deepseek-v4.1-flash",
         opencode_api_key="hidden-key",
     )
 

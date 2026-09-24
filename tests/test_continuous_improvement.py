@@ -376,7 +376,7 @@ def test_improvement_zen_chain_inserts_one_shot_go_before_local(tmp_path):
 
     assert [(item.provider, item.model, item.fallback_used) for item in endpoints] == [
         ("opencode-zen", "deepseek-v4.1-flash", False),
-        ("opencode-go", "deepseek-v4-flash", True),
+        ("opencode-go", "deepseek-v4.1-flash", True),
         ("openai-local", "qwen3.6-27b", True),
     ]
     assert client._use_openai_sdk("opencode-zen") is True
