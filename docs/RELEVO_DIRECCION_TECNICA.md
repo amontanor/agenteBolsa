@@ -1,6 +1,6 @@
 # Relevo de direccion tecnica — agenteBolsa
 
-## Prioridad vigente - P-L154, 22-sep-2026
+## Prioridad vigente - P-L154; lote tecnico P-L157, 24-sep-2026
 
 Dictamen: ready_for_implementation para P-L154-A (caracterizacion), sin
 promocion economica aprobada. Este bloque prevalece sobre secuencias historicas.
@@ -25,6 +25,35 @@ Informe unico: `docs/informe_p_l154_rendimiento_vs_spy.md`; backlog en plan maes
   Politicas requieren OOS, control y revision posterior. Automatizacion pausada.
 - Luna auditora: 01a0c94d-dc10-7023-936a-6dca1444f089; auditoria completada tras
   limite de uso; needs_fix medicion/consumo. Astra reviso dictamen y mantiene sizing. No hay implementacion ni despliegue P-L154.
+
+### P-L157 — migracion exacta de modelo Zen (candidato 0.4.311)
+
+- Dictamen provisional: `partially_verified_open_market`. XNYS verificado abierto
+  por `schedule-status` a `2026-09-24T19:43:10Z`; pruebas focales temporales, sin
+  LLM/red/broker. No hubo suite completa, smoke, integracion ni despliegue.
+- Base: HEAD `784e6cd7d3170681d6f03c5d39f95442d3fc865a`, tree
+  `58fc1824e387b6e72c432119a6c1b60d2b8fb05d`, paquete reconstruido `.310`.
+  La imagen declara source hash `82708495d8b9c7942d461daed38efee54b0aeaf7`;
+  no se ha probado equivalencia exacta con la reconstruccion Git.
+- P-L157 migra el ID exacto retirado en Settings, roles, agentes CI, orquestador,
+  codegen, probes y selector UI. Proveedor Zen, endpoint, fallback Go/local y
+  modelos distintos siguen iguales. Version candidata `0.4.311`.
+- Commits separados: caracterizacion `6c68b33f194ceaa84e3154866ef9fa4425f35ba5`;
+  implementacion `bea56fb7992103ff267edbf1a6ac693fcc047233`, tree funcional
+  `9995ff90a6116c5a84b15d98e78ac77135fc073d`. Documentacion queda en commit aparte.
+- `config.py` protegido tiene cambios propuestos y requiere revision explicita
+  de direccion; ver inventario de lineas en
+  `docs/informe_p_l157_migracion_modelo_zen.md`. No integrar antes de aprobarlo.
+- Focales: `21 passed in 2.65s`; Ruff focal y `git diff --check` pasan. El
+  `check_no_nulls.py` reproduce byte `0x97` no UTF-8 ya presente en el plan base
+  `.310`; escaneo raw NUL de 18 archivos cambiados: cero.
+- El encargo comunico scheduler local `stale_dead_owner` y `runtime_state`
+  unavailable; no se repararon. El `schedule-status` de esta tarea uso
+  `DATA_DIR` temporal y mostro `missing_lock`/`database_missing`, por lo que no
+  clasifica el runtime local. Mantener sin cambios hasta preflight autorizado.
+- Siguiente paso: direccion revisa config protegida y candidato; despues, con
+  XNYS cerrado, terminal postmarket, leases/jobs inactivos, PAPER y gates N3
+  satisfechos, ejecutar validacion completa aislada. Despliegue no autorizado.
 
 ### P-L70 — resumen diario Telegram UX (candidato 0.4.203)
 

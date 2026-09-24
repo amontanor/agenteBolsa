@@ -39,7 +39,25 @@ Al menos tres ventanas OOS validas, purga/embargo y bloques por sesion; costes
 explicitos, mejora neta con intervalo favorable y riesgo no peor. Si falta
 muestra: collecting. Core sigue disabled; 5% por posicion tambien afecta SPY.
 No ampliar limites para alcanzar el benchmark sin decision humana explicita.
-Seguimiento automatico permanece pausado. Siguiente unico encargo: P-L154-A.
+Seguimiento automatico permanece pausado. Siguiente lote de la secuencia economica: P-L154-A.
+
+### P-L157 - migracion exacta del ID DeepSeek V4 Flash retirado (candidato 0.4.311)
+
+Lote tecnico independiente asignado el 24-sep-2026. Normaliza solo el ID exacto
+`deepseek-v4-flash-free` a `deepseek-v4.1-flash` en Settings y fronteras efectivas
+de roles, laboratorio, codegen, probes y UI. Conserva proveedor Zen, endpoint,
+fallbacks y modelos distintos. No cambia trading ni politica de riesgo.
+
+| Lote | Estado | Alcance y aceptacion |
+| --- | --- | --- |
+| P-L157 | partially_verified_open_market | Focales comprueban el payload enviado; pendiente revision humana de `config.py` protegido y validacion completa con XNYS cerrado |
+
+Informe unico: `docs/informe_p_l157_migracion_modelo_zen.md`. Base Git reconstruida
+del paquete Jetson `.310`: `784e6cd7d3170681d6f03c5d39f95442d3fc865a`, tree
+`58fc1824e387b6e72c432119a6c1b60d2b8fb05d`. El hash de fuente declarado por la
+imagen (`82708495d8b9c7942d461daed38efee54b0aeaf7`) no coincide; no se afirma
+equivalencia exacta. No integrar ni desplegar hasta resolver esta identidad,
+revisar los cambios protegidos y completar las precondiciones del informe.
 
 ## P-L70 — rediseño UX del resumen diario Telegram (candidato 0.4.203)
 
