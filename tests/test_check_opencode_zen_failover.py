@@ -79,7 +79,8 @@ def test_zen_success_is_one_request_and_reports_safe_identity():
 
     assert result["ok"] is True
     assert result["provider"] == "opencode-zen"
-    assert result["model"] == "deepseek-v4-flash-free"
+    assert result["model"] == "deepseek-v4.1-flash"
+    assert json.loads(transport.calls[0]["body"])["model"] == "deepseek-v4.1-flash"
     assert result["endpoint_path"] == "/zen/v1/chat/completions"
     assert result["requests_made"] == 1
     assert result["request_id_present"] is True
@@ -89,6 +90,16 @@ def test_zen_success_is_one_request_and_reports_safe_identity():
     assert result["captured_at"].endswith("+00:00")
     assert result["usage"]["reasoning_tokens"] == 1
     assert "secret-id" not in json.dumps(result)
+
+
+def test_retired_model_is_migrated_in_health_probe_request():
+    transport = FakeTransport([_response()])
+
+    result = MODULE.run_probe(_config(model="deepseek-v4-flash-free"), transport=transport)
+
+    assert result["model"] == "deepseek-v4.1-flash"
+    assert json.loads(transport.calls[0]["body"])["model"] == "deepseek-v4.1-flash"
+    assert transport.calls[0]["endpoint"] == "https://opencode.ai/zen/v1/chat/completions"
 
 
 def test_structured_multiturn_and_combined_modes_validate_without_network():

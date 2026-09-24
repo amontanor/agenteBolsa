@@ -43,7 +43,7 @@ def test_zen_primary_adds_exact_go_fallback_before_local_fallback():
     endpoints = configured_llm_endpoints(settings)
 
     assert [(item.provider, item.model, item.fallback_used) for item in endpoints] == [
-        ("opencode-zen", "deepseek-v4-flash-free", False),
+        ("opencode-zen", "deepseek-v4.1-flash", False),
         ("opencode-go", "deepseek-v4-flash", True),
         ("openai-local", "qwen3.6-27b", True),
     ]
@@ -364,6 +364,47 @@ def test_deep_role_uses_opencode_key_when_improvement_key_is_empty():
 
     assert endpoint.name == "role:deep"
     assert endpoint.api_key == "opencode-key"
+
+
+def test_retired_zen_model_is_sent_canonically_by_role_call(monkeypatch):
+    settings = Settings(
+        _env_file=None,
+        LLM_MODEL_SELECTOR="opencode-zen",
+        OPENCODE_API_KEY="synthetic-key",
+        OPENCODE_API_BASE="https://opencode.ai/zen/v1",
+        OPENCODE_MODEL="deepseek-v4-flash-free",
+        LLM_ROLE_DECISION_MODEL="deepseek-v4-flash-free",
+        LLM_PRIMARY_PREFLIGHT_ENABLED=False,
+        LLM_LOCAL_FALLBACK_ENABLED=False,
+    )
+    captured = {}
+
+    class _Response:
+        model = "deepseek-v4.1-flash"
+        usage = None
+        choices = [type("Choice", (), {"message": type("Message", (), {"content": "{}"})()})()]
+
+    class _Completions:
+        @staticmethod
+        def create(**kwargs):
+            captured.update(kwargs)
+            return _Response()
+
+    class _Client:
+        chat = type("Chat", (), {"completions": _Completions()})()
+
+    monkeypatch.setattr("agente_bolsa.llm_router.is_endpoint_available", lambda *_args: (True, None))
+    monkeypatch.setattr("agente_bolsa.llm_router.build_openai_client", lambda *_args, **_kwargs: _Client())
+
+    _response, endpoint, _attempts = chat_for_role(
+        "decision",
+        settings=settings,
+        messages=[{"role": "user", "content": "fixture"}],
+    )
+
+    assert captured["model"] == "deepseek-v4.1-flash"
+    assert endpoint.provider == "opencode-zen"
+    assert endpoint.base_url == "https://opencode.ai/zen/v1"
 
 
 def test_chat_for_role_selects_role_endpoint_and_records_role(tmp_path, monkeypatch):

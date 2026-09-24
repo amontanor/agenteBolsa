@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -61,3 +62,65 @@ def test_validate_probe_content_accepts_complete_sentiment_json():
 
     assert ok is True
     assert error is None
+
+
+def test_health_specs_migrate_retired_id_for_roles_and_codegen():
+    specs = MODULE.build_probe_specs(
+        {
+            "LLM_MODEL_SELECTOR": "opencode-zen",
+            "OPENCODE_MODEL": "deepseek-v4-flash-free",
+            "LLM_ROLE_DECISION_MODEL": "deepseek-v4-flash-free",
+            "LLM_ROLE_SENTIMENT_MODEL": "deepseek-v4-flash-free",
+            "LLM_ROLE_DEEP_MODEL": "deepseek-v4-flash-free",
+            "IMPROVEMENT_LLM_MODEL": "deepseek-v4-flash-free",
+            "IMPROVEMENT_LLM_CODEGEN_MODEL": "deepseek-v4-flash-free",
+            "IMPROVEMENT_LLM_ORCHESTRATOR_MODEL": "deepseek-v4-flash-free",
+        }
+    )
+
+    assert {spec.role for spec in specs} >= {"decision", "sentiment", "deep", "improvement", "codegen"}
+    assert all(spec.model == "deepseek-v4.1-flash" for spec in specs)
+
+
+def test_health_probe_migrates_model_before_sending(monkeypatch):
+    captured = {}
+
+    class _Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        @staticmethod
+        def read():
+            return json.dumps(
+                {"choices": [{"message": {"content": "OK-DECISION"}, "finish_reason": "stop"}]}
+            ).encode()
+
+    def _fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["body"] = json.loads(request.data)
+        captured["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setattr(MODULE.urllib.request, "urlopen", _fake_urlopen)
+    spec = MODULE.ProbeSpec(
+        role="decision",
+        provider="decision [opencode-zen]",
+        base_url="https://opencode.ai/zen/v1",
+        api_key="synthetic-key",
+        model="deepseek-v4-flash-free",
+        messages=[],
+        max_tokens=512,
+        expected_text="OK-DECISION",
+    )
+
+    result = MODULE.ping_provider(spec, timeout=1)
+
+    assert result["ok"] is True
+    assert result["model"] == "deepseek-v4.1-flash"
+    assert captured["body"]["model"] == "deepseek-v4.1-flash"
+    assert captured["url"] == "https://opencode.ai/zen/v1/chat/completions"

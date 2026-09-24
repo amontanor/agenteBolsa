@@ -277,7 +277,7 @@ def test_initiative_topic_key_ignores_generated_ci_identifiers():
 
 def test_improvement_llm_client_disabled_returns_valid_json_payload(tmp_path):
     settings = _settings(tmp_path)
-    assert settings.improvement_llm_orchestrator_model == "deepseek-v4-flash-free"
+    assert settings.improvement_llm_orchestrator_model == "deepseek-v4.1-flash"
     result = ImprovementLLMClient(settings).generate_json(
         [{"role": "user", "content": "context"}],
         {},
@@ -375,7 +375,7 @@ def test_improvement_zen_chain_inserts_one_shot_go_before_local(tmp_path):
     endpoints = client._endpoints("deepseek-v4-flash-free")
 
     assert [(item.provider, item.model, item.fallback_used) for item in endpoints] == [
-        ("opencode-zen", "deepseek-v4-flash-free", False),
+        ("opencode-zen", "deepseek-v4.1-flash", False),
         ("opencode-go", "deepseek-v4-flash", True),
         ("openai-local", "qwen3.6-27b", True),
     ]
@@ -507,6 +507,51 @@ def test_improvement_llm_client_generate_json_model_override_is_reflected(tmp_pa
     assert result.model == "mimo-v2.5-pro"
     assert result.request_preview["model"] == "mimo-v2.5-pro"
     assert body_calls["body"]["model"] == "mimo-v2.5-pro"
+
+
+@pytest.mark.parametrize("route", ["agents", "orchestrator"])
+def test_improvement_agent_request_migrates_retired_model_id(tmp_path, route):
+    settings = _settings(
+        tmp_path,
+        IMPROVEMENT_LLM_ENABLED=True,
+        OPENCODE_API_KEY="synthetic-key",
+        IMPROVEMENT_LLM_PROVIDER="opencode-zen",
+        IMPROVEMENT_LLM_BASE_URL="https://opencode.ai/zen/v1",
+        IMPROVEMENT_LLM_MODEL="deepseek-v4-flash-free",
+        IMPROVEMENT_LLM_ORCHESTRATOR_PROVIDER="opencode-zen",
+        IMPROVEMENT_LLM_ORCHESTRATOR_BASE_URL="https://opencode.ai/zen/v1",
+        IMPROVEMENT_LLM_ORCHESTRATOR_MODEL="deepseek-v4-flash-free",
+        IMPROVEMENT_LLM_LOCAL_FALLBACK_ENABLED=False,
+    )
+    client = ImprovementLLMClient(settings)
+    captured = {}
+
+    def _fake_sdk_call(endpoint, request_body):
+        captured["provider"] = endpoint.provider
+        captured["base_url"] = endpoint.base_url
+        captured["request_body"] = request_body
+        return json.dumps(
+            {
+                "diagnosis": {"summary": "ok", "confidence": "LOW", "data_quality": "PARTIAL"},
+                "detected_issues": [],
+                "proposals": [],
+                "recommended_next_actions": [],
+            }
+        )
+
+    client._sdk_chat_completion_content = _fake_sdk_call
+    result = client.generate_json(
+        [{"role": "user", "content": "fixture"}],
+        {},
+        model="deepseek-v4-flash-free",
+        route=route,
+    )
+
+    assert result.ok is True
+    assert captured["provider"] == "opencode-zen"
+    assert captured["base_url"] == "https://opencode.ai/zen/v1"
+    assert captured["request_body"]["model"] == "deepseek-v4.1-flash"
+    assert result.model == "deepseek-v4.1-flash"
 
 
 def test_improvement_llm_client_uses_openai_sdk_for_opencode_go(tmp_path, monkeypatch):

@@ -11,6 +11,7 @@ from agente_bolsa.llm_usage import usage_tokens
 from agente_bolsa.models import OrderSnapshot, PortfolioSnapshot, PositionSnapshot
 from agente_bolsa.storage import ORDER_PLAN_STATUS_PENDING, Store
 from agente_bolsa.web_app import (
+    LLM_PROVIDER_CATALOG,
     PORTFOLIO_CHART_WINDOWS,
     PORTFOLIO_HISTORY_PERIOD,
     _ci_conversation_groups,
@@ -59,6 +60,10 @@ from agente_bolsa.web_app import (
     _web_search_status,
     update_env_file,
 )
+
+
+def test_zen_model_catalog_uses_current_model_id():
+    assert LLM_PROVIDER_CATALOG["opencode-zen"]["models"] == ["deepseek-v4.1-flash"]
 
 
 def test_portfolio_history_period_keeps_all_available_data():
