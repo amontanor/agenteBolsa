@@ -50,14 +50,18 @@ fallbacks y modelos distintos. No cambia trading ni politica de riesgo.
 
 | Lote | Estado | Alcance y aceptacion |
 | --- | --- | --- |
-| P-L157 | partially_verified_open_market | Focales comprueban el payload enviado; pendiente revision humana de `config.py` protegido y validacion completa con XNYS cerrado |
+| P-L157 | precondition_not_met | Codigo migrado y revisado; Zen devuelve 403 `error code: 1010` para el modelo nuevo con la clave vigente y la suite sigue roja tambien en base. Sin corte ni push |
 
 Informe unico: `docs/informe_p_l157_migracion_modelo_zen.md`. Base Git reconstruida
 del paquete Jetson `.310`: `784e6cd7d3170681d6f03c5d39f95442d3fc865a`, tree
-`58fc1824e387b6e72c432119a6c1b60d2b8fb05d`. El hash de fuente declarado por la
-imagen (`82708495d8b9c7942d461daed38efee54b0aeaf7`) no coincide; no se afirma
-equivalencia exacta. No integrar ni desplegar hasta resolver esta identidad,
-revisar los cambios protegidos y completar las precondiciones del informe.
+`58fc1824e387b6e72c432119a6c1b60d2b8fb05d`. La etiqueta de fuente de la imagen
+(`82708495d8b9c7942d461daed38efee54b0aeaf7`) no es objeto Git; equivalencia
+demostrada a nivel de ficheros efectivos (sha256 identicos en `__init__`,
+`config`, `kernel`; `broker`/`execution` iguales al manifiesto). Revision
+nocturna 24-sep: `config.py` aprobado en alcance, postmarket terminal
+`completed` + leases liberados, pero Zen 403/1010 para `deepseek-v4.1-flash`
+y suite roja tambien en base: `precondition_not_met`, sin corte. No integrar
+hasta resolver provision del modelo y la deriva de suite en lotes separados.
 
 ## P-L70 — rediseño UX del resumen diario Telegram (candidato 0.4.203)
 
@@ -4570,7 +4574,7 @@ sizing, política o producción en esta auditoría.
 - En espera de decision: el estudio de edge negativo era sobre cohorte fallback; con P-L147 los crews vuelven y la cohorte cambia. Medir 5 sesiones antes de subir tamano.
 
 
-## P-L307 � corte Jetson 0.4.307 (P-L147 + P-L149) DEPLOYED
+## P-L307 — corte Jetson 0.4.307 (P-L147 + P-L149) DEPLOYED
 
 - Dictamen: deployed 18-sep ~23:20Z. Imagen sha256:0f3d6baaa656ad60e5.
 - crew.py y trade_decision.py Jetson divergen de Windows: parche por ancla (2 y 9 hunks).

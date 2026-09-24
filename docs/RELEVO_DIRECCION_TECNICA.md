@@ -28,13 +28,16 @@ Informe unico: `docs/informe_p_l154_rendimiento_vs_spy.md`; backlog en plan maes
 
 ### P-L157 — migracion exacta de modelo Zen (candidato 0.4.311)
 
-- Dictamen provisional: `partially_verified_open_market`. XNYS verificado abierto
-  por `schedule-status` a `2026-09-24T19:43:10Z`; pruebas focales temporales, sin
-  LLM/red/broker. No hubo suite completa, smoke, integracion ni despliegue.
+- Dictamen de direccion 24-sep noche: `precondition_not_met`. Autorizacion de
+  modelo y despliegue concedida por el usuario. Sin corte ni push: Zen
+  devuelve 403 `error code: 1010` para `deepseek-v4.1-flash` con la clave
+  vigente y la suite sigue roja tambien en base. Evidencia completa en
+  `docs/informe_p_l157_migracion_modelo_zen.md` (`## Revision de direccion`).
 - Base: HEAD `784e6cd7d3170681d6f03c5d39f95442d3fc865a`, tree
   `58fc1824e387b6e72c432119a6c1b60d2b8fb05d`, paquete reconstruido `.310`.
-  La imagen declara source hash `82708495d8b9c7942d461daed38efee54b0aeaf7`;
-  no se ha probado equivalencia exacta con la reconstruccion Git.
+  Etiqueta de imagen `82708495d8b9c7942d461daed38efee54b0aeaf7` no es objeto
+  Git; equivalencia demostrada por sha256 identicos en `__init__`/`config`/
+  `kernel` y `broker`/`execution` iguales al manifiesto.
 - P-L157 migra el ID exacto retirado en Settings, roles, agentes CI, orquestador,
   codegen, probes y selector UI. Proveedor Zen, endpoint, fallback Go/local y
   modelos distintos siguen iguales. Version candidata `0.4.311`.
@@ -44,16 +47,25 @@ Informe unico: `docs/informe_p_l154_rendimiento_vs_spy.md`; backlog en plan maes
 - `config.py` protegido tiene cambios propuestos y requiere revision explicita
   de direccion; ver inventario de lineas en
   `docs/informe_p_l157_migracion_modelo_zen.md`. No integrar antes de aprobarlo.
-- Focales: `21 passed in 2.65s`; Ruff focal y `git diff --check` pasan. El
-  `check_no_nulls.py` reproduce byte `0x97` no UTF-8 ya presente en el plan base
-  `.310`; escaneo raw NUL de 18 archivos cambiados: cero.
+- Focales: `21 passed in 2.65s` (Luna); direccion repitio lote ampliado:
+  `202 passed in 20.76s`. Ruff completo, `git diff --check`,
+  `validate-agent-config` (`ok=true`) y smoke `run-once --skip-crew` (ciclo
+  completed, cero ordenes) verdes. `check_no_nulls.py`: `OK (534 archivos)`
+  tras corregir el byte historico `0x97` (em-dash cp1252) a UTF-8.
+- Suite completa aislada: candidato `2578 passed, 46 failed, 1 skipped`;
+  base `2567 passed, 48 failed` (mismos 4 errores de coleccion ignorados,
+  reproducidos en base). Cero fallos nuevos, +11 pases; resto = deriva
+  preexistente. `kernel-status` aislado `unsealed` esperado; hashes iguales
+  al manifiesto productivo.
 - El encargo comunico scheduler local `stale_dead_owner` y `runtime_state`
   unavailable; no se repararon. El `schedule-status` de esta tarea uso
   `DATA_DIR` temporal y mostro `missing_lock`/`database_missing`, por lo que no
   clasifica el runtime local. Mantener sin cambios hasta preflight autorizado.
-- Siguiente paso: direccion revisa config protegida y candidato; despues, con
-  XNYS cerrado, terminal postmarket, leases/jobs inactivos, PAPER y gates N3
-  satisfechos, ejecutar validacion completa aislada. Despliegue no autorizado.
+- Siguiente paso: resolver provision de `deepseek-v4.1-flash` en Zen (403/1010
+  con clave vigente); lotes separados para la deriva de suite, sin mezclar.
+  Despues, con leases/lock frescos y N3 repetido sobre el arbol final,
+  re-evaluar el corte. Postmarket terminal `completed` + leases liberados ya
+  demostrados esta noche (run `pmr_64be403886f2` 20:23:07Z).
 
 ### P-L70 — resumen diario Telegram UX (candidato 0.4.203)
 
