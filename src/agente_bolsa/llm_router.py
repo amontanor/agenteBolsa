@@ -21,7 +21,7 @@ ZEN_BASE_URL = "https://opencode.ai/zen/v1"
 ZEN_MODEL = DEEPSEEK_V4_1_FLASH_MODEL_ID
 GO_PROVIDER = "opencode-go"
 GO_BASE_URL = "https://opencode.ai/zen/go/v1"
-GO_MODEL = "deepseek-v4-flash"
+GO_MODEL = DEEPSEEK_V4_1_FLASH_MODEL_ID
 
 # P-L142: el proveedor Go/Zen exige una sesion estable por conversacion
 # (cabecera x-opencode-session) y un User-Agent propio, no generico de SDK.

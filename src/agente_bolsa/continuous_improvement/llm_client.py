@@ -12,7 +12,7 @@ from openai import OpenAI
 from pydantic import BaseModel
 
 from agente_bolsa.config import Settings
-from agente_bolsa.llm_model_ids import normalize_model_id
+from agente_bolsa.llm_model_ids import DEEPSEEK_V4_1_FLASH_MODEL_ID, normalize_model_id
 from agente_bolsa.llm_router import provider_client_headers
 from agente_bolsa.logging_utils import log_system_event
 from agente_bolsa.models import new_id
@@ -268,7 +268,7 @@ class ImprovementLLMClient:
                     provider="opencode-go",
                     base_url="https://opencode.ai/zen/go/v1",
                     api_key=self.settings.opencode_api_key,
-                    model="deepseek-v4-flash",
+                    model=DEEPSEEK_V4_1_FLASH_MODEL_ID,
                     fallback_used=True,
                 )
             )

@@ -22,7 +22,7 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 DEFAULT_PROVIDER = "opencode-go"
-DEFAULT_MODEL = "deepseek-v4-flash"
+DEFAULT_MODEL = "deepseek-v4.1-flash"
 DEFAULT_BASE_URL = "https://opencode.ai/zen/go/v1"
 DEFAULT_ENDPOINT = f"{DEFAULT_BASE_URL}/chat/completions"
 DEFAULT_TIMEOUT_SECONDS = 20.0
@@ -196,7 +196,7 @@ def run_probe(config: ProbeConfig, transport: HealthTransport | None = None) -> 
     if not config.model.strip() or config.model != DEFAULT_MODEL:
         common.update(
             error_type="configuration_mismatch",
-            error_message="El modelo efectivo no es deepseek-v4-flash",
+            error_message="El modelo efectivo no es deepseek-v4.1-flash",
         )
         return _json_result(config=config, **common)
     if config.endpoint != DEFAULT_ENDPOINT:
