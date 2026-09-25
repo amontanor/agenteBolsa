@@ -4588,3 +4588,8 @@ sizing, política o producción en esta auditoría.
 - Tabla SPY: 1/36 -> 35/2 (2 account_open_unavailable genuinas).
 - Reinicio host 12:06-12:19 causa unavailable; snapshot script persistente en /home/antonio/bin/.
 - Informe: docs/informe_p_l153_spy_authority.md.
+
+## P-L158 (propuesto) — rendimiento del Dashboard
+
+- Estudio 25-sep-2026: docs/estudio_dashboard_rendimiento_2026-09-25.md. HAR con 5 s de connect, 270 ms en endpoints triviales y 70 s de stream (paron 47 s): ambiental por reboot-loop y carga, no coste normal (estable hoy: 15 ms / 2 ms).
+- P-L158-A propuesto: instrumentar tiempos por seccion en worktree aislado (N1); despues, refactor del tramo que mas segundos explique. Sin codigo aun.
