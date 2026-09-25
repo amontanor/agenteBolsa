@@ -199,10 +199,12 @@ class _DashboardTimer:
                 "total_seconds": round(sum(self.sections.values()), 3),
                 "sections": dict(self.sections),
             }
-            # Streamlit fija el nivel en WARNING; sin esto la linea no llega
-            # nunca al log del contenedor.
-            LOGGER.setLevel(logging.INFO)
-            LOGGER.info("dashboard_timing %s", json.dumps(payload, sort_keys=True))
+            # print() a proposito: el handler de Streamlit filtra INFO y la
+            # linea debe llegar al log del contenedor. Una linea por sesion.
+            print(
+                "dashboard_timing " + json.dumps(payload, sort_keys=True),
+                flush=True,
+            )
             return payload
         except Exception:  # noqa: BLE001 - medir jamas rompe el panel
             return {}
