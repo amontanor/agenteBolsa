@@ -31,6 +31,9 @@ def test_emit_logs_total_equal_to_section_sum(caplog):
     timer.stop("b")
     with caplog.at_level(logging.INFO):
         payload = timer.emit()
+    # El emit fija INFO en el logger del modulo para atravesar el WARNING
+    # por defecto de Streamlit en produccion.
+    assert logging.getLogger("agente_bolsa.web_app").level == logging.INFO
     assert payload["total_seconds"] == round(
         payload["sections"]["a"] + payload["sections"]["b"], 3
     )
