@@ -50,7 +50,7 @@ fallbacks y modelos distintos. No cambia trading ni politica de riesgo.
 
 | Lote | Estado | Alcance y aceptacion |
 | --- | --- | --- |
-| P-L157 | ready_for_closed_market_deployment (pendiente corte) | Primario y fallback Go en `deepseek-v4.1-flash`, ambos verificados en vivo. Falta build `.312` + snapshot + `jetson-ops` con leases frescos y N3 final |
+| P-L157 | precondition_not_met (corte por build abortado 25-sep) | Imagen `.312` de arbol incompatible (root vs cap_drop, DB path, puerto). Rollback `.310` verificado x2. Siguiente: port sobre `.310` o alinear Dockerfile; N3 fresco + corte |
 
 Informe unico: `docs/informe_p_l157_migracion_modelo_zen.md`. Base Git reconstruida
 del paquete Jetson `.310`: `784e6cd7d3170681d6f03c5d39f95442d3fc865a`, tree

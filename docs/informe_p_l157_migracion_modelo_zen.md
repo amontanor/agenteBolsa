@@ -309,3 +309,55 @@ Siguiente (ver R1 abajo): build `.312`, leases/lock frescos y N3 final.
 - Dictamen R1: `ready_for_closed_market_deployment` PENDIENTE de: build
   `.312` nativo + snapshot frio + `jetson-ops`, leases/lock frescos y
   repeticion de N3 sobre el arbol final. Sin corte ni push en esta ventana.
+
+## P-L157-R2 25-sep: intento de corte ABORTADO + rollback a .310 (incidente)
+
+Hora: 09:26-10:35 Madrid. Margen a apertura 15:30 sobrado. Autorizacion de
+despliegue vigente.
+
+### Precondiciones frescas (todas pasaban)
+
+- XNYS cerrado; postmarket 24-sep terminal `completed` + leases liberados;
+  bootstraps de hoy `skipped`/`market_not_ready` con lease liberado.
+- Jetson: 3x `.310` healthy, lock coherente, kernel `ok`, PAPER/live/auto
+  correctos. N3 arbol final: focales R1 217, suite 2578/46 (deriva
+  preexistente), Ruff/NUL(534)/diff/config/smoke verdes.
+- Build `.312` nativo desde arbol exacto `5ba5ec01` (6/6 sha256 identicos en
+  release `/opt/agente-bolsa/releases/0.4.312`): imagen `0b17852e` arm64,
+  labels version/revision/source-tree correctos, ficheros internos identicos.
+- Stop escritores (`systemctl stop agente-bolsa`, verificado) + snapshot frio
+  receipt v2 `cold-pre-0.4.312-20260925T080500Z`: DB sha256
+  `b3345059...`, `quick_check=ok`, `integrity_check=ok`, sidecars preservados.
+
+### Causa del aborto: imagen incompatible con el layout productivo
+
+- El `deploy-agente-bolsa` quedo atascado en `init-db` (Up 10 min): el
+  Dockerfile del arbol Git corre como ROOT (sin `USER`), y con
+  `cap_drop: ALL` ni root atraviesa `/data` 750 -> `Permission denied` en
+  `mkdir` y `ensure_runtime_dirs`. Ademas el entrypoint espera la DB en
+  `/data/state/` (prod la tiene en `/data/`) y sirve Streamlit en 8080
+  (prod usa 8501). Las imagenes `.305-.310` son ports (USER app), no builds
+  de este Dockerfile. Construir el arbol Git con este Dockerfile NO es
+  desplegable en Jetson.
+- Incidente propio: dos `docker run` de inspeccion arrancaron entrypoints
+  huesped (`tender_liskov`, `nifty_hodgkin`); detenidos y eliminados, sin
+  volumenes huerfanos, sin tocar datos (sin mounts). Leccion: inspeccionar
+  imagenes solo con `docker create` + `cp`, jamas `docker run`.
+
+### Rollback auditable (completado y verificado dos veces)
+
+- `docker stop/rm init-db`; selector restaurado desde
+  `runtime.env.bak-p157` a `0.4.310-arm64`; `jetson-ops deploy-agente-bolsa`
+  -> `desplegado y saludable` (init-db Exited correcto).
+- Validacion x2 separadas >75 s (la segunda tras un reboot no solicitado del
+  host ~10:22, con auto-recuperacion por systemd): 3x `.310` healthy, HTTP
+  200 en `/`, `/health`, `/kindle`, lock coherente (PID 7/token 2257),
+  kernel `ok`, version `0.4.310`, leases apareados, cero ordenes, sin
+  `database is locked`, listener unico, unidad `active`.
+- Host reiniciado dos veces sin orden (09:23 y ~10:22); stack se autolevanta.
+  Imagen `.312` eliminada (`rmi 0b17852e`) para evitar uso accidental.
+  Release `/opt/.../0.4.312`, snapshot frio y backups de selector conservados.
+- Dictamen: `precondition_not_met` para corte por build de arbol. Siguiente:
+  portar el diff R1 sobre la linea de imagen `.310` (procedimiento port) o
+  lote de alineacion Dockerfile/entrypoint a spec productiva (USER app,
+  DB en `/data`, puerto 8501); despues, gates frescos + corte. Sin push.

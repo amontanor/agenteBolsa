@@ -58,13 +58,14 @@ Informe unico: `docs/informe_p_l154_rendimiento_vs_spy.md`; backlog en plan maes
   unavailable; no se repararon. El `schedule-status` de esta tarea uso
   `DATA_DIR` temporal y mostro `missing_lock`/`database_missing`, por lo que no
   clasifica el runtime local. Mantener sin cambios hasta preflight autorizado.
-- R1 25-sep (version `0.4.312`, commits `54b3ba19`+`257b9f26`): el ID
-  `v4.1-flash` existe y responde en vivo en Zen y Go; el 403/1010 previo era
-  artefacto de sonda urllib. Fallo real corregido: fallback Go hardcodeado
-  al ID muerto (403 en produccion) en router, `llm_client` y ambos scripts.
-  217 focales verdes; Ruff/diff verdes. Dictamen R1:
-  `ready_for_closed_market_deployment` pendiente de build `.312`, snapshot,
-  `jetson-ops`, leases frescos y N3 final. Ojo coste: el free era $0.
+- R2 25-sep: corte por build de arbol ABORTADO (imagen root incompatible:
+  `cap_drop: ALL` niega `/data`, DB esperada en `/data/state` vs `/data`,
+  Streamlit 8080 vs 8501; linea prod es port con USER app). Rollback
+  auditable a `.310` verificado dos veces (HTTP 200 x3, lock, kernel,
+  leases, cero ordenes). Reboots no solicitados 09:23/~10:22 con
+  auto-recuperacion. Imagen `.312` eliminada. Dictamen:
+  `precondition_not_met` para esta via; siguiente: port del diff R1 sobre
+  `.310` o lote de alineacion Dockerfile. Sin push.
 
 ### P-L70 — resumen diario Telegram UX (candidato 0.4.203)
 
