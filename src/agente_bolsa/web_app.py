@@ -169,6 +169,42 @@ def _dashboard_cache_put(key: str, value: Any) -> Any:
     return value
 
 
+class _DashboardTimer:
+    """Registra duraciones por seccion del dashboard (P-L158-A).
+
+    Solo observacion: nunca interrumpe el render ni persiste nada.
+    """
+
+    def __init__(self) -> None:
+        self.sections: dict[str, float] = {}
+        self._starts: dict[str, float] = {}
+
+    def start(self, name: str) -> None:
+        try:
+            self._starts[name] = time.monotonic()
+        except Exception:  # noqa: BLE001 - medir jamas rompe el panel
+            pass
+
+    def stop(self, name: str) -> None:
+        try:
+            started = self._starts.pop(name, None)
+            if started is not None:
+                self.sections[name] = round(time.monotonic() - started, 3)
+        except Exception:  # noqa: BLE001 - medir jamas rompe el panel
+            pass
+
+    def emit(self) -> dict[str, Any]:
+        try:
+            payload = {
+                "total_seconds": round(sum(self.sections.values()), 3),
+                "sections": dict(self.sections),
+            }
+            LOGGER.info("dashboard_timing %s", json.dumps(payload, sort_keys=True))
+            return payload
+        except Exception:  # noqa: BLE001 - medir jamas rompe el panel
+            return {}
+
+
 def _cached_alpaca_portfolio_snapshot(broker_client: Any) -> Any:
     cached = _dashboard_cache_get("alpaca_portfolio_snapshot")
     if cached is not None:
@@ -5593,12 +5629,17 @@ def _create_manual_opportunity_plan(
 
 
 def page_dashboard() -> None:
+    timer = _DashboardTimer()
+    timer.start("total")
+    timer.start("setup")
     settings = _settings()
     store = _store()
     runtime = ContinuousImprovementLabRuntime(settings, store)
     market = _cached_market_status()
     latest_ci_llm_result = _latest_ci_llm_result(_cached_latest_events(store, 400))
+    timer.stop("setup")
 
+    timer.start("alpaca_snapshot")
     portfolio = None
     portfolio_error = None
     broker_client = BrokerClientFactory(settings)
@@ -5608,11 +5649,13 @@ def page_dashboard() -> None:
     except Exception as exc:  # noqa: BLE001
         portfolio_error = str(exc)
     db_status = store.status()
+    timer.stop("alpaca_snapshot")
     history: dict[str, Any] = {}
     stats: dict[str, Any] = {}
     position_rows: list[dict[str, Any]] = []
     portfolio_history: dict[str, Any] = {}
     intraday_portfolio_history: dict[str, Any] = {}
+    timer.start("trade_history")
     try:
         history = build_trade_history(
             settings,
@@ -5642,6 +5685,8 @@ def page_dashboard() -> None:
         )
     except Exception as exc:  # noqa: BLE001
         st.warning(f"No se pudo leer historico/P/L: {exc}")
+    timer.stop("trade_history")
+    timer.start("history_daily")
     try:
         portfolio_history = _cached_alpaca_portfolio_history(
             broker_client,
@@ -5650,6 +5695,8 @@ def page_dashboard() -> None:
         )
     except Exception as exc:  # noqa: BLE001
         st.warning(f"No se pudo leer portfolio history de Alpaca para el grafico: {exc}")
+    timer.stop("history_daily")
+    timer.start("history_intraday")
     try:
         intraday_portfolio_history = _cached_alpaca_portfolio_history(
             broker_client,
@@ -5658,9 +5705,12 @@ def page_dashboard() -> None:
         )
     except Exception as exc:  # noqa: BLE001
         st.warning(f"No se pudo leer la apertura exacta XNYS: {exc}")
+    timer.stop("history_intraday")
 
     if portfolio_error:
         st.warning(f"No se pudo leer cartera Alpaca: {portfolio_error}")
+
+    timer.start("opening_context")
 
     exposure = stats.get("exposure") if stats else None
     exposure_pct = stats.get("exposure_pct") if stats else None
@@ -5694,7 +5744,9 @@ def page_dashboard() -> None:
     account_total_pl = _num(full_equity_summary.get("pl"))
     account_total_pct = _num(full_equity_summary.get("pl_pct"))
     account_initial_equity = _num(full_equity_summary.get("start_value"))
+    timer.stop("opening_context")
 
+    timer.start("header")
     _dashboard_header(
         market,
         settings,
@@ -5704,7 +5756,9 @@ def page_dashboard() -> None:
         llm_pills=_dashboard_llm_pills(settings, store, latest_ci_llm_result),
         operational_status=_dashboard_operational_status(settings, store, latest_ci_llm_result),
     )
+    timer.stop("header")
 
+    timer.start("reports")
     latest_orders = _latest_order_details(limit=12)
     learning_digest = _latest_learning_digest()
     learning_summary = _learning_compact_summary(learning_digest)
@@ -5714,7 +5768,9 @@ def page_dashboard() -> None:
     buys = [item for item in latest_orders if item.get("side") == "buy"]
     sells = [item for item in latest_orders if item.get("side") == "sell"]
     last_order = latest_orders[0] if latest_orders else None
+    timer.stop("reports")
 
+    timer.start("kpis")
     # ===== KPIs de cuenta: prioridad maxima, ancho completo =====
     _account_group(
         initial_equity=account_initial_equity,
@@ -5739,7 +5795,9 @@ def page_dashboard() -> None:
 
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
     _render_leaderboard_controls(store, account_total_pct)
+    timer.stop("kpis")
 
+    timer.start("overview")
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
 
     # ===== Nucleo del overview: cartera (izq) + actividad (der) =====
@@ -5879,13 +5937,20 @@ def page_dashboard() -> None:
                     w_tone,
                 )
 
+    timer.stop("overview")
+
+    timer.start("spy_table")
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
     _render_daily_vs_spy_table(opening_context)
+    timer.stop("spy_table")
 
+    timer.start("sales")
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
     _render_sales_since_open(history, opening_context)
+    timer.stop("sales")
 
     # ===== Detalle avanzado: progressive disclosure (plegado por defecto) =====
+    timer.start("advanced")
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
     _section_title("Detalle avanzado", "Analitica de I+D del agente. Desplegable bajo demanda.")
 
@@ -5957,6 +6022,9 @@ def page_dashboard() -> None:
             st.dataframe(_events_dataframe(events), width="stretch", hide_index=True)
         else:
             st.info("Todavia no hay eventos registrados.")
+    timer.stop("advanced")
+    timer.stop("total")
+    timer.emit()
 
 
 
