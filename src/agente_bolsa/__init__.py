@@ -99,7 +99,8 @@ __all__ = ["__version__"]
 # P-L157: migrar el ID retirado de OpenCode Zen en llamadas efectivas (0.4.311).
 # P-L157-R1: fallback Go al ID vivo deepseek-v4.1-flash (el ID v4-flash da 403) (0.4.312).
 # P-L158-A: temporizador por seccion del dashboard, solo observacion (0.4.313).
+# P-L158-A-R1: nivel INFO efectivo para que la linea llegue al log (0.4.314).
 # P-L141: port linea Windows 0.4.234-0.4.246 (funnel dataclass/KeyError, costes calibrados,
 # cobertura same-cycle, misfire delays/health, uplift LLM, linkage, flujos EOD, sellos de sesion,
 # dashboard Mis inversiones/SPY unico, grace 300/120/120, sesion proveedor Go/Zen, crew fail-open) (0.4.305).
-__version__ = "0.4.313"
+__version__ = "0.4.314"
