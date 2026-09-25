@@ -4611,7 +4611,10 @@ sizing, política o producción en esta auditoría.
 - Reinicio host 12:06-12:19 causa unavailable; snapshot script persistente en /home/antonio/bin/.
 - Informe: docs/informe_p_l153_spy_authority.md.
 
-## P-L158-A � temporizador por seccion del Dashboard (candidato 0.4.313)
+## P-L158-A — temporizador por seccion del Dashboard (0.4.313 DEPLOYED)
+
+- Solo observacion: 14 secciones con log dashboard_timing; sin cambios de trading/UI. Informe: docs/informe_p_l158a_dashboard_timing.md.
+- Desplegado 25-sep por port sobre `.312`; doble validacion verde. La linea dashboard_timing llega con la primera carga del dashboard.
 
 - Solo observacion: 14 secciones con log dashboard_timing; sin cambios de trading/UI. Informe: docs/informe_p_l158a_dashboard_timing.md.
 

@@ -28,3 +28,20 @@ contenedor web con el desglose por seccion.
 - Despliegue previsto por port sobre `.312` (solo `web_app.py` + version),
   con snapshot frio, doble validacion y evidencia `dashboard_timing` en
   logs como prueba de funcionamiento.
+
+## Despliegue 25-sep 12:35-12:45 Madrid (dictamen `deployed`)
+
+- Via port sobre `.312` (solo `web_app.py` + version; 3-way verificado).
+  Receta: `/opt/agente-bolsa/releases/0.4.313-port/`.
+- Imagen `agente-bolsa:0.4.313-arm64` (USER app, labels exactos).
+- Corte con XNYS cerrado: stop canonico, snapshot frio receipt v2 OK
+  (DB sha256 `b3345059...`, sin escrituras intermedias), flip selector
+  (backup `.bak-p158`), `jetson-ops deploy-agente-bolsa` sano
+  (init-db Exited correcto).
+- Validacion x2 separadas >75 s: 3x healthy, HTTP 200 en `/`, `/health`,
+  `/kindle`, lock coherente, kernel `ok` (sello intacto), version `0.4.313`,
+  cero jobs/ordenes, leases apareados, sin `database is locked`, listener
+  unico, unidad `active`.
+- Prueba funcional en produccion: `_DashboardTimer` importa y mide OK en el
+  contenedor web desplegado. La linea `dashboard_timing` aparecera en logs
+  con la primera carga del dashboard (pendiente de un visitante).
