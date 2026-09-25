@@ -61,3 +61,18 @@ contenedor web con el desglose por seccion.
   `active`. Timer verificado en contenedor web (`timer_ok=True`).
 - La linea `dashboard_timing` aparece con la primera carga del dashboard
   posterior al despliegue (pendiente de visitante a la hora del corte).
+
+## Despliegue R2 25-sep ~13:10 Madrid (dictamen `deployed`)
+
+- R1 previo necesario: el handler de Streamlit filtra INFO, asi que `emit`
+  no llegaba al log; fix con `print(..., flush=True)`, version `0.4.315`.
+- Via port sobre `.314` (2 ficheros, 3-way verificado). Receta:
+  `/opt/agente-bolsa/releases/0.4.315-port/`.
+- Corte con XNYS cerrado: stop canonico, snapshot frio receipt v2 OK,
+  flip selector (backup `.bak-p158r2`), `jetson-ops deploy-agente-bolsa`
+  sano.
+- Validacion x2: 3x healthy, HTTP 200 en `/`, `/health`, `/kindle`, lock
+  coherente (PID 8), kernel `ok`, version `0.4.315`, cero jobs/ordenes,
+  logs limpios, listener unico, unidad `active`.
+- La linea `dashboard_timing` aparece con la primera carga del dashboard
+  posterior al despliegue (pendiente de visitante a la hora del corte).
