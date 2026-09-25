@@ -1,5 +1,25 @@
 # Relevo de direccion tecnica — agenteBolsa
 
+## Prioridad vigente - P-L158-B, 25-sep-2026
+
+Dictamen: `ready_for_integration_rehearsal` (N1, solo observacion). Worktree
+`C:\Antonio\Bref\agenteBolsa_worktrees\pl158b_dashboard_perf`, rama
+`codex/pl158b-dashboard-perf`, base `708f0e46` (tree `585a7557`), HEAD
+`2bd92f4b`, tree `9f9363c2`, v0.4.316. Informe unico:
+`docs/informe_p_l158b_perfil_fino.md`; backlog en plan maestro.
+
+- Sub-secciones finas dentro de opening_context (5 funciones), setup (2) y kpis
+  (2) con el `_DashboardTimer` existente; `total_seconds` = seccion envolvente
+  `total` (corrige la doble suma de P-L158-A). Cero cambios de logica, trading,
+  riesgo, UI, cache o firmas. Produccion Jetson 0.4.315-arm64 intacta.
+- QA aislada: 85 passed (p158b + p158a + test_web_app), Ruff/NUL/diff verdes.
+  Suite completa, smoke y despliegue omitidos (preapertura 15:30 Madrid; sin
+  autorizacion). Atribucion fina de opening_context: `unavailable` en local.
+- Secuencia siguiente: (1) revisar candidato; (2) ventana cerrada con postmarket
+  terminal y autorizacion explicita -> merge --no-ff + suite completa aislada;
+  (3) port Jetson + corte con snapshot frio y doble healthcheck. Nunca desplegar
+  por el worker; requiere autorizacion del operador.
+
 ## Prioridad vigente - P-L154; lote tecnico P-L157, 24-sep-2026
 
 Dictamen: ready_for_implementation para P-L154-A (caracterizacion), sin

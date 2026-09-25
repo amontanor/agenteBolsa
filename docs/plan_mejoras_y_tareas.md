@@ -4615,3 +4615,9 @@ sizing, política o producción en esta auditoría.
 
 - Solo observacion: 14 secciones con log dashboard_timing; sin cambios de trading/UI. Informe: docs/informe_p_l158a_dashboard_timing.md.
 - Desplegado 25-sep por port (0.4.313 + R1 nivel INFO 0.4.314); doble validacion verde. La linea dashboard_timing llega con la primera carga del dashboard posterior al despliegue.
+
+## P-L158-B — perfil fino de observacion del Dashboard (0.4.316, listo para integracion)
+
+- Sub-secciones dentro de opening_context (5 funciones), setup (2) y kpis (2) con el _DashboardTimer existente; total_seconds = seccion "total" (sin doble suma de la envolvente). Solo observacion N1; cero cambios de logica/trading/UI/cache.
+- QA aislada: 85 passed (p158b + p158a + test_web_app), Ruff/NUL/diff verdes. Suite completa y despliegue omitidos (preapertura; sin autorizacion).
+- Informe: docs/informe_p_l158b_perfil_fino.md. Siguiente: integracion cerrada (merge --no-ff + suite) -> port Jetson -> corte con autorizacion explicita.
