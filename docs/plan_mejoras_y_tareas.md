@@ -4610,3 +4610,8 @@ sizing, política o producción en esta auditoría.
 - Tabla SPY: 1/36 -> 35/2 (2 account_open_unavailable genuinas).
 - Reinicio host 12:06-12:19 causa unavailable; snapshot script persistente en /home/antonio/bin/.
 - Informe: docs/informe_p_l153_spy_authority.md.
+
+## P-L158-A � temporizador por seccion del Dashboard (candidato 0.4.313)
+
+- Solo observacion: 14 secciones con log dashboard_timing; sin cambios de trading/UI. Informe: docs/informe_p_l158a_dashboard_timing.md.
+
