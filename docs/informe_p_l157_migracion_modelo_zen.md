@@ -361,3 +361,59 @@ despliegue vigente.
   portar el diff R1 sobre la linea de imagen `.310` (procedimiento port) o
   lote de alineacion Dockerfile/entrypoint a spec productiva (USER app,
   DB en `/data`, puerto 8501); despues, gates frescos + corte. Sin push.
+
+## P-L157-R3 25-sep: DESPLEGADO 0.4.312 por port (dictamen `deployed`)
+
+Ventana 09:26-11:00 Madrid. XNYS cerrado todo el corte (apertura 15:30).
+
+### Via elegida: port sobre `.310` (el build de arbol era incompatible)
+
+- 3-way verificado: imagen `.310` == base `784e6cd7` en los 10 ficheros
+  runtime (sha256); `llm_model_ids.py` solo existe en candidato. Port =
+  10 ficheros del arbol final `09f54f0f`/`0776677d` sobre
+  `agente-bolsa:0.4.310-arm64` (USER app, `--chown=1000:1000`), mas
+  `pip install --no-deps --no-build-isolation -e /app` (metadata 0.4.312).
+- Receta en `/opt/agente-bolsa/releases/0.4.312-port/Dockerfile`
+  (+`port/` con los 10 ficheros de `git archive 09f54f0f`).
+- Imagen `agente-bolsa:0.4.312-arm64` ID
+  `sha256:72ad000f08f7bf63ee5f036d10e6f75180ee4cd9c860ff88ca9b18730296cf86`,
+  arm64; labels version=0.4.312, revision=09f54f0f, source-tree=0776677d,
+  port-base=.310.
+- Verificacion en imagen (sin arrancar entrypoint): 7/7 sha256 src ==
+  candidato; cadena `zen|v4.1-flash -> go|v4.1-flash -> local`;
+  `version=0.4.312`.
+
+### Corte 10:43-10:50 Madrid
+
+- Pre: 3x `.310` healthy, leases apareados (bootstrap `skipped`),
+  postmarket 24-sep `completed`, kernel `ok`, PAPER/live/auto ok.
+- `systemctl stop agente-bolsa` (verificado) + snapshot frio receipt v2
+  `cold-pre-0.4.312-port-20260925T085000Z`: DB sha256 `b3345059...`
+  (identico al anterior: cero escrituras intermedias), `quick_check=ok`,
+  `integrity_check=ok`.
+- Flip `runtime.env` a `0.4.312-arm64` (backup `.bak-p157`);
+  `application.env` INTACTO (hash gate verde; el codigo normaliza el ID
+  viejo en runtime, verificado en vivo). `jetson-ops deploy-agente-bolsa`
+  -> `desplegado y saludable` (init-db Exited correcto).
+- Validacion x2 separadas >75 s: 3x `.312` healthy, HTTP 200 en `/`,
+  `/health`, `/kindle`, lock coherente (PID 7/token 46580 y post-reboot),
+  kernel `ok` (sello intacto: `config.py` no esta en el manifiesto),
+  version `0.4.312`, cero jobs activos, leases apareados, cero ordenes,
+  sin `database is locked`, listener unico, unidad `active`.
+- Prueba viva en produccion por ruta de codigo desplegada:
+  `Settings.opencode_model` (env=free) -> efectivo
+  `opencode-zen|deepseek-v4.1-flash`; llamada real OK (`finish=length`).
+  Go fallback `v4.1-flash` verificado anoche a nivel de gateway.
+
+### Incidentes de la ventana (documentados, sin dano)
+
+- Host reiniciado 4 veces esta manana (09:12/09:17/10:18/10:29) sin orden;
+  causa sin determinar (dmesg limpio de OOM/panic/NVMe; memoria libre);
+  stack se autolevanta por systemd cada vez. Requiere seguimiento del
+  operador fuera de este lote.
+- `whale-copy` (otro proyecto) flapea healthy/unhealthy solo; no tocado.
+- Contenedores huesped de inspeccion y etiqueta `.bak-p157` / release
+  `0.4.312` (build de arbol fallido) conservados como evidencia; imagen
+  de arbol `.312` eliminada (`rmi 0b17852e`).
+- Coste: primario y fallback pasan de free ($0) a `v4.1-flash` de pago
+  (~$0.30/$1.20 por 1M). Vigilar `llm_usage` en la sesion de hoy 15:30.

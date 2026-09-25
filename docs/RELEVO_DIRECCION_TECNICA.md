@@ -58,14 +58,11 @@ Informe unico: `docs/informe_p_l154_rendimiento_vs_spy.md`; backlog en plan maes
   unavailable; no se repararon. El `schedule-status` de esta tarea uso
   `DATA_DIR` temporal y mostro `missing_lock`/`database_missing`, por lo que no
   clasifica el runtime local. Mantener sin cambios hasta preflight autorizado.
-- R2 25-sep: corte por build de arbol ABORTADO (imagen root incompatible:
-  `cap_drop: ALL` niega `/data`, DB esperada en `/data/state` vs `/data`,
-  Streamlit 8080 vs 8501; linea prod es port con USER app). Rollback
-  auditable a `.310` verificado dos veces (HTTP 200 x3, lock, kernel,
-  leases, cero ordenes). Reboots no solicitados 09:23/~10:22 con
-  auto-recuperacion. Imagen `.312` eliminada. Dictamen:
-  `precondition_not_met` para esta via; siguiente: port del diff R1 sobre
-  `.310` o lote de alineacion Dockerfile. Sin push.
+- R3 25-sep 11:00: `deployed`. Port de 10 ficheros sobre imagen `.310`
+  (3-way verificado), imagen `72ad000f...`, corte con snapshot frio,
+  doble validacion verde y llamada real `v4.1-flash` OK en produccion.
+  Reboots 09:12/09:17/10:18/10:29 sin causa determinada: seguimiento
+  operador. Vigilar coste LLM en sesion 15:30. Sin push.
 
 ### P-L70 — resumen diario Telegram UX (candidato 0.4.203)
 
