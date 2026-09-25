@@ -45,3 +45,19 @@ contenedor web con el desglose por seccion.
 - Prueba funcional en produccion: `_DashboardTimer` importa y mide OK en el
   contenedor web desplegado. La linea `dashboard_timing` aparecera en logs
   con la primera carga del dashboard (pendiente de un visitante).
+
+## Despliegue 25-sep ~13:00 Madrid (dictamen `deployed`)
+
+- R1 previo: la linea `dashboard_timing` no llegaba al log (Streamlit fija
+  WARNING); fix con `LOGGER.setLevel(INFO)` en `emit()`, version `0.4.314`.
+- Via port sobre `.313` (2 ficheros, 3-way verificado). Receta:
+  `/opt/agente-bolsa/releases/0.4.314-port/`.
+- Corte con XNYS cerrado: stop canonico, snapshot frio receipt v2 OK (DB
+  sha256 `b3345059...`), flip selector (backup `.bak-p158`),
+  `jetson-ops deploy-agente-bolsa` sano.
+- Validacion x2: 3x healthy, HTTP 200 en `/`, `/health`, `/kindle`, lock
+  coherente (PID 7), kernel `ok`, version `0.4.314`, cero jobs/ordenes,
+  leases apareados, sin `database is locked`, listener unico, unidad
+  `active`. Timer verificado en contenedor web (`timer_ok=True`).
+- La linea `dashboard_timing` aparece con la primera carga del dashboard
+  posterior al despliegue (pendiente de visitante a la hora del corte).
