@@ -6,6 +6,11 @@
 cuenta; el siguiente paso exige XNYS cerrado + postmarket terminal + autorización
 explícita del operador.
 
+Estado tras el rehearsal del 25-sep-2026 (ver sección "Rehearsal de integracion"):
+merge `--no-ff` verificado en worktree aislado (`7ad1d2e9`, tree `69be2dc5`,
+parents `708f0e46`/`17cf9de1`, v0.4.316, QA verde) -> dictamen
+`ready_for_closed_market_full_validation`, **sin desplegar**.
+
 ## Causa
 
 El temporizador P-L158-A (producción 0.4.315) agrupa en una única sección
@@ -93,6 +98,77 @@ evidencia de desglose es la medición real de P-L158-A (0.4.315):
 `opening_context` 27.6 s de ~62 s. La atribución fina a una de las cinco
 funciones queda para la primera carga real tras desplegar este lote; no se
 especula.
+
+## Rehearsal de integracion (25-sep-2026, N1, solo observacion)
+
+Fecha/hora: 2026-09-25 ~21:45-22:00 UTC (23:45-24:00 Madrid). XNYS **cerrado**;
+`next_open` 28-sep-2026 15:30+02:00. Sin red/broker/LLM/yfinance; sin tocar
+produccion, datos, config, locks ni leases.
+
+Fase 1 (read-only, Jetson por SSH con clave existente). SQLite productiva
+`/data/state/agente_bolsa.sqlite3` abierta con URI `mode=ro` y
+`PRAGMA query_only=ON` (via `docker exec`, sin escritura):
+
+- `post_market_coordination:session:2026-09-25`: `status=completed`,
+  `reason=pipeline_completed`, `run_id=pmr_a2c364c6dbc5`,
+  `finished_at=2026-09-25T20:28:09.240459+00:00`,
+  `updated_at=2026-09-25T20:28:09.240459+00:00` (terminal).
+- Lectura 21:46:33Z: `post_market_coordination:active` con `status=active`,
+  `stage=reconciliation`, `run_id=brkrec_40a7e3f65ca5`, `owner_pid=8`,
+  `updated_at=2026-09-25T21:37:31.586684+00:00` (lease activo, run en curso).
+- Lectura 21:47:35Z: **sin** claves `post_market_coordination:active` ni
+  `:reconciliation`. Evento
+  `lease_released:brkrec_40a7e3f65ca5:completed` en
+  `2026-09-25T21:46:49.517423+00:00` con
+  `released_keys=["post_market_coordination:active","post_market_coordination:reconciliation"]`;
+  terminal de reconciliacion `completed` en `21:46:45Z` (duracion 553.9 s).
+- Comprobacion adicional: 0 claves `runtime_state` con `"status": "active"` y
+  0 claves que contengan `lease`. Cadencia de reconciliacion ~15 min
+  (arranques 20:52/21:07/21:22/21:37Z; ~9,5-10 min por corrida).
+- Resultado: sesion terminal y leases vacios/terminales. Precondicion de
+  integracion satisfecha. Nota: por la cadencia, otro lease puede aparecer en
+  cualquier ventana de ~15 min; el corte final debe re-verificar en el momento.
+
+Fase 2 (rehearsal de integracion, aislado):
+
+- Worktree NUEVO
+  `C:\Antonio\Bref\agenteBolsa_worktrees\pl158br_integration_rehearsal`, rama
+  `codex/pl158b-integration-rehearsal`, base exacta `708f0e46` (tree
+  `585a7557`).
+- `git merge --no-ff 17cf9de1` -> commit de merge `7ad1d2e9`, tree
+  `69be2dc5` (identico al arbol del candidato `17cf9de1`). Parents: P1
+  `708f0e46`, P2 `17cf9de1`. Sin squash/rebase/cherry-pick/amend; `git diff
+  17cf9de1 HEAD` vacio. Version `0.4.316`; arbol limpio.
+- Protegidos: `git diff 708f0e46 HEAD` vacio para `kernel.py`, `tools/broker.py`,
+  `tools/execution.py`, `tools/risk.py`, `config.py`; blobs identicos
+  (kernel `eb0a71f938`, broker `951b7d61ff`, execution `018c52f075`, risk
+  `75c1242c2f`, config `e8c8fea58d`). Unicos `src` cambiados: `web_app.py` y
+  `__init__.py`.
+- Paridad: el diff de `web_app.py` solo contiene marcadores
+  `timer.start`/`timer.stop`, el arreglo de `emit()` (`total_seconds` = seccion
+  envolvente `total`) y el split equivalente de `setup`. Cero cambios de
+  trading, riesgo, ejecucion, UI, cache o firmas.
+
+QA aislada (DATA_DIR temporal, reloj/servicios fuera; sin red/broker/LLM):
+
+- focales del lote
+  `tests/test_p158b_dashboard_perf.py tests/test_p158a_dashboard_timing.py tests/test_web_app.py`
+  -> **85 passed** (14.90 s).
+- regresiones relacionadas
+  `tests/test_version_policy.py tests/test_p152_dashboard_today.py tests/test_dashboard_llm_helpers.py tests/test_p83d_dashboard_temporal_dates.py tests/test_p87_dashboard_cards.py tests/test_p123_dashboard_characterization.py`
+  -> **31 passed** (3.83 s).
+- `python -m ruff check src tests` -> **All checks passed!**
+- `python scripts/check_no_nulls.py` -> **OK (536 archivos)**
+- `git diff --check` -> limpio.
+
+Gates omitidos (declarados, no aprobados por omision): suite completa
+`tests/ -x -q`, smoke `run-once --skip-crew`, benchmark, `validate-agent-config
+--json`, `kernel-status --json`, despliegue/corte y doble healthcheck.
+
+Dictamen del rehearsal: `ready_for_closed_market_full_validation` (solo
+observacion N1). No desplegado; el corte exige suite completa aislada + port
+Jetson + snapshot frio + doble healthcheck, con XNYS cerrado, leases/jobs
+ausentes y autorizacion explicita del operador.
 
 ## Límites y siguiente paso
 

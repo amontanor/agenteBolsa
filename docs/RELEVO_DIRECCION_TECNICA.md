@@ -2,22 +2,30 @@
 
 ## Prioridad vigente - P-L158-B, 25-sep-2026
 
-Dictamen: `ready_for_integration_rehearsal` (N1, solo observacion). Worktree
-`C:\Antonio\Bref\agenteBolsa_worktrees\pl158b_dashboard_perf`, rama
-`codex/pl158b-dashboard-perf`, base `708f0e46` (tree `585a7557`), HEAD
-`2bd92f4b`, tree `9f9363c2`, v0.4.316. Informe unico:
-`docs/informe_p_l158b_perfil_fino.md`; backlog en plan maestro.
+Dictamen: `ready_for_closed_market_full_validation` (N1, solo observacion) tras
+el rehearsal de integracion. Candidato `codex/pl158b-dashboard-perf` HEAD
+`17cf9de1`, tree `69be2dc5`, v0.4.316. Rehearsal: worktree NUEVO
+`C:\Antonio\Bref\agenteBolsa_worktrees\pl158br_integration_rehearsal`, rama
+`codex/pl158b-integration-rehearsal`, base `708f0e46` (tree `585a7557`), merge
+--no-ff -> `7ad1d2e9` (tree `69be2dc5`, parents `708f0e46`/`17cf9de1`), limpio.
+Informe unico: `docs/informe_p_l158b_perfil_fino.md`; backlog en plan maestro.
 
 - Sub-secciones finas dentro de opening_context (5 funciones), setup (2) y kpis
   (2) con el `_DashboardTimer` existente; `total_seconds` = seccion envolvente
   `total` (corrige la doble suma de P-L158-A). Cero cambios de logica, trading,
-  riesgo, UI, cache o firmas. Produccion Jetson 0.4.315-arm64 intacta.
-- QA aislada: 85 passed (p158b + p158a + test_web_app), Ruff/NUL/diff verdes.
-  Suite completa, smoke y despliegue omitidos (preapertura 15:30 Madrid; sin
-  autorizacion). Atribucion fina de opening_context: `unavailable` en local.
-- Secuencia siguiente: (1) revisar candidato; (2) ventana cerrada con postmarket
-  terminal y autorizacion explicita -> merge --no-ff + suite completa aislada;
-  (3) port Jetson + corte con snapshot frio y doble healthcheck. Nunca desplegar
+  riesgo, UI, cache o firmas. Protegidos sin diff (blobs identicos). Produccion
+  Jetson 0.4.315-arm64 intacta.
+- Fase 1 productiva (read-only): sesion `2026-09-25` terminal `completed`
+  (`pmr_a2c364c6dbc5`, 20:28:09Z). Lease reconciliation `brkrec_40a7e3f65ca5`
+  activo 21:37:31Z; liberado `completed` 21:46:49Z. Relectura 21:47:35Z sin
+  leases active. Cadencia reconciliacion ~15 min: re-verificar en el corte.
+- QA rehearsal: 85 focales (p158b+p158a+test_web_app) + 31 regresiones
+  (version_policy/p152/dashboard_llm_helpers/p83d/p87/p123), Ruff/NUL/diff
+  verdes. Omitidos: suite completa, smoke, benchmark, validate-agent-config,
+  kernel-status, despliegue, doble salud.
+- Secuencia siguiente: (1) suite completa aislada sobre `7ad1d2e9`; (2) ventana
+  cerrada con postmarket terminal, leases/jobs ausentes y autorizacion explicita
+  -> port Jetson + corte con snapshot frio y doble healthcheck. Nunca desplegar
   por el worker; requiere autorizacion del operador.
 
 ## Prioridad vigente - P-L154; lote tecnico P-L157, 24-sep-2026

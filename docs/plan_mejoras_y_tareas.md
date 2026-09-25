@@ -4616,8 +4616,9 @@ sizing, política o producción en esta auditoría.
 - Solo observacion: 14 secciones con log dashboard_timing; sin cambios de trading/UI. Informe: docs/informe_p_l158a_dashboard_timing.md.
 - Desplegado 25-sep por port (0.4.313 + R1 nivel INFO 0.4.314); doble validacion verde. La linea dashboard_timing llega con la primera carga del dashboard posterior al despliegue.
 
-## P-L158-B — perfil fino de observacion del Dashboard (0.4.316, listo para integracion)
+## P-L158-B — perfil fino de observacion del Dashboard (0.4.316, rehearsal verificado)
 
 - Sub-secciones dentro de opening_context (5 funciones), setup (2) y kpis (2) con el _DashboardTimer existente; total_seconds = seccion "total" (sin doble suma de la envolvente). Solo observacion N1; cero cambios de logica/trading/UI/cache.
 - QA aislada: 85 passed (p158b + p158a + test_web_app), Ruff/NUL/diff verdes. Suite completa y despliegue omitidos (preapertura; sin autorizacion).
-- Informe: docs/informe_p_l158b_perfil_fino.md. Siguiente: integracion cerrada (merge --no-ff + suite) -> port Jetson -> corte con autorizacion explicita.
+- Rehearsal de integracion 25-sep (N1): worktree NUEVO `pl158br_integration_rehearsal`, rama `codex/pl158b-integration-rehearsal`, base `708f0e46`; merge --no-ff `17cf9de1` -> `7ad1d2e9` (tree `69be2dc5`, parents `708f0e46`/`17cf9de1`), v0.4.316, limpio. Protegidos sin diff (blobs identicos). QA: 85 focales + 31 regresiones, Ruff/NUL/diff verdes. Omitidos: suite completa, smoke, benchmark, validate-config, kernel-status, despliegue, doble salud. Fase 1 productiva: sesion 2026-09-25 terminal `completed` (pmr_a2c364c6dbc5); lease reconciliation brkrec_40a7e3f65ca5 activo 21:37:31Z y liberado/completed 21:46:49Z; sin leases active en la relectura.
+- Informe: docs/informe_p_l158b_perfil_fino.md. Siguiente: suite completa aislada -> port Jetson -> corte con snapshot frio y doble healthcheck, con autorizacion explicita. Dictamen: `ready_for_closed_market_full_validation`.
