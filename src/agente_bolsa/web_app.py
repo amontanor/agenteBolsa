@@ -195,8 +195,17 @@ class _DashboardTimer:
 
     def emit(self) -> dict[str, Any]:
         try:
+            # P-L158-B: la seccion envolvente "total" ya incluye a todas las
+            # demas; sumarla de nuevo duplicaba el tiempo real del script.
+            # total_seconds = valor de la seccion "total" (o suma sin "total"
+            # si no existe una seccion envolvente).
+            total = self.sections.get("total")
+            if total is None:
+                total = round(
+                    sum(v for k, v in self.sections.items() if k != "total"), 3
+                )
             payload = {
-                "total_seconds": round(sum(self.sections.values()), 3),
+                "total_seconds": total,
                 "sections": dict(self.sections),
             }
             # print() a proposito: el handler de Streamlit filtra INFO y la
@@ -5641,7 +5650,12 @@ def page_dashboard() -> None:
     store = _store()
     runtime = ContinuousImprovementLabRuntime(settings, store)
     market = _cached_market_status()
-    latest_ci_llm_result = _latest_ci_llm_result(_cached_latest_events(store, 400))
+    timer.start("setup.cached_latest_events")
+    latest_events = _cached_latest_events(store, 400)
+    timer.stop("setup.cached_latest_events")
+    timer.start("setup.latest_ci_llm_result")
+    latest_ci_llm_result = _latest_ci_llm_result(latest_events)
+    timer.stop("setup.latest_ci_llm_result")
     timer.stop("setup")
 
     timer.start("alpaca_snapshot")
@@ -5721,6 +5735,7 @@ def page_dashboard() -> None:
     exposure_pct = stats.get("exposure_pct") if stats else None
     current_equity = _num(portfolio.portfolio_value) if portfolio else _num(stats.get("equity"))
     current_cash = _num(portfolio.cash) if portfolio else _num(stats.get("cash"))
+    timer.start("opening_context.opening_performance_context")
     opening_context = opening_performance_context(
         settings,
         store,
@@ -5728,24 +5743,33 @@ def page_dashboard() -> None:
         current_equity=current_equity,
         now=account_read_at,
     )
+    timer.stop("opening_context.opening_performance_context")
     account_current = opening_context.get("account_current") or {}
+    timer.start("opening_context.daily_equity_metric_for_portfolio")
     daily_equity_metric = _daily_equity_metric_for_portfolio(
         portfolio,
         portfolio_history,
         as_of=account_read_at,
     )
+    timer.stop("opening_context.daily_equity_metric_for_portfolio")
+    timer.start("opening_context.position_intraday_pl_reconciliation")
     position_intraday = position_intraday_pl_reconciliation(
         portfolio.positions if portfolio else None
     )
+    timer.stop("opening_context.position_intraday_pl_reconciliation")
     today_total = _num(daily_equity_metric.get("daily_equity_pl"))
     today_pct = _num(daily_equity_metric.get("daily_equity_return"))
     today_detail = _daily_equity_detail(daily_equity_metric)
+    timer.start("opening_context.portfolio_value_series_from_alpaca")
     full_equity_df = _portfolio_value_series_from_alpaca(
         portfolio_history,
         current_equity,
         as_of=account_read_at,
     )
+    timer.stop("opening_context.portfolio_value_series_from_alpaca")
+    timer.start("opening_context.portfolio_equity_summary")
     full_equity_summary = _portfolio_equity_summary(full_equity_df)
+    timer.stop("opening_context.portfolio_equity_summary")
     account_total_pl = _num(full_equity_summary.get("pl"))
     account_total_pct = _num(full_equity_summary.get("pl_pct"))
     account_initial_equity = _num(full_equity_summary.get("start_value"))
@@ -5777,6 +5801,7 @@ def page_dashboard() -> None:
 
     timer.start("kpis")
     # ===== KPIs de cuenta: prioridad maxima, ancho completo =====
+    timer.start("kpis.account_group")
     _account_group(
         initial_equity=account_initial_equity,
         current_equity=current_equity,
@@ -5797,9 +5822,12 @@ def page_dashboard() -> None:
         opening_context=opening_context,
         market_open=bool(market.get("is_open")),
     )
+    timer.stop("kpis.account_group")
 
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+    timer.start("kpis.leaderboard")
     _render_leaderboard_controls(store, account_total_pct)
+    timer.stop("kpis.leaderboard")
     timer.stop("kpis")
 
     timer.start("overview")
