@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 
 from agente_bolsa.web_app import _DashboardTimer
 
@@ -23,26 +22,21 @@ def test_stop_without_start_is_tolerated():
     assert timer.emit() == {"total_seconds": 0.0, "sections": {}}
 
 
-def test_emit_logs_total_equal_to_section_sum(caplog):
+def test_emit_logs_total_equal_to_section_sum(capsys):
     timer = _DashboardTimer()
     timer.start("a")
     timer.stop("a")
     timer.start("b")
     timer.stop("b")
-    with caplog.at_level(logging.INFO):
-        payload = timer.emit()
-    # El emit fija INFO en el logger del modulo para atravesar el WARNING
-    # por defecto de Streamlit en produccion.
-    assert logging.getLogger("agente_bolsa.web_app").level == logging.INFO
+    payload = timer.emit()
+    # La linea sale por stdout a proposito (el handler de Streamlit filtra
+    # INFO y debe llegar al log del contenedor).
+    out = capsys.readouterr().out
+    assert "dashboard_timing" in out
     assert payload["total_seconds"] == round(
         payload["sections"]["a"] + payload["sections"]["b"], 3
     )
-    assert any("dashboard_timing" in message for message in caplog.messages)
-    logged = json.loads(
-        next(m for m in caplog.messages if "dashboard_timing" in m).split(
-            "dashboard_timing ", 1
-        )[1]
-    )
+    logged = json.loads(out.split("dashboard_timing ", 1)[1])
     assert logged["total_seconds"] == payload["total_seconds"]
 
 
