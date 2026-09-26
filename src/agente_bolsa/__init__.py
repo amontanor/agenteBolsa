@@ -108,4 +108,5 @@ __all__ = ["__version__"]
 # dashboard Mis inversiones/SPY unico, grace 300/120/120, sesion proveedor Go/Zen, crew fail-open) (0.4.305).
 # P-L133-R (re-add): scheduler_skip_summary + signal_outcome_emptiness observacionales fail-open (0.4.318).
 # P-L140A-R (re-add): _invested_day_metric + _investments_group, P/L dia sobre invertido (0.4.319).
-__version__ = "0.4.319"
+# P-L140B-R (re-add): _spy_alpha_summary + alpha unico, leaderboard a Config via session_state, baseline sin render (0.4.320).
+__version__ = "0.4.320"
