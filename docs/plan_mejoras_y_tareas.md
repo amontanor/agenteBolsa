@@ -4489,7 +4489,10 @@ sizing, política o producción en esta auditoría.
   autoridad. P-L137/P-L133 intactos; sin P-L140B/P-L139/scoreboard/
   politica/telemetry.
 - Bump `0.4.318` → `0.4.319`; pin `test_p59c` actualizado. Commits:
-  `60fe034a` funcional + `88ce177f` version/pin (+ docs).
+  `60fe034a` funcional + `88ce177f` version/pin + `58e9497c` docs
+  (correccion N0 26-sep-2026: la atribucion anterior dejaba `58e9497c`
+  como "(+ docs)" pendiente; HEAD/tree finales post-correccion en
+  entrega/HANDOFF; prioridad/estado sin cambios).
 - QA: focales 7 passed, combinada web/P-L152/P-L153/P-L158 113 passed,
   version 54 passed; Ruff/NUL(536)/diff/validate (`ok=true`) verdes;
   protegidos sin diff. Gates omitidos: suite, smoke, benchmark,

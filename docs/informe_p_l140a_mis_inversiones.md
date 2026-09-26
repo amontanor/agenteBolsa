@@ -77,9 +77,14 @@ leaderboard/baseline), P-L139, scoreboard, politica ni telemetry.
 
 Commits (rama `codex/pl140a-readd-0319`, base P-L133-R `baba2dd9`,
 tree base `06270950b4cd6bc1e753f4913cd1490c78df255b`, v0.4.318):
-`60fe034a` funcional + `88ce177f` version/pin (bump 0.4.319).
-HEAD `88ce177f`, tree `0b4340d58bdc20ba1f018319610ad7879e428318`,
-limpio salvo este informe/plan/relevo pendientes de commit.
+funcional `60fe034a`/tree `829fdae1` + version/pin `88ce177f`/tree
+`0b4340d5` (bump 0.4.319) + documental previo `58e9497c`/tree
+`f5cf652b` (informe/plan/relevo candidato 0.4.319).
+Correccion N0 26-sep-2026: este bloque citaba antes HEAD/tree pre-docs
+`88ce177f`/`0b4340d5` con docs pendientes; queda distinguido asi. El
+HEAD/tree finales post-correccion N0 (nuevo commit solo documental) se
+consignan en la entrega/HANDOFF; no se escribe aqui el hash del commit
+aun no creado.
 
 QA: focales P-L140A 7 passed (incluye render headless con asserts
 `Mis inversiones`, `+1.00%`, `+0.07% sobre equity`); bateria combinada

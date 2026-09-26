@@ -4,8 +4,12 @@
 
 Dictamen: `ready_for_integration_rehearsal` (N1 UI, solo presentacion).
 Worktree exclusivo `pl140a_readd_0319`, rama `codex/pl140a-readd-0319`,
-base exacta P-L133-R `baba2dd9`/tree `06270950`/v0.4.318; HEAD
-`88ce177f`, version 0.4.319, pin P-L59C actualizado.
+base exacta P-L133-R `baba2dd9`/tree `06270950`/v0.4.318; funcional
+`60fe034a` + version/pin `88ce177f`/tree `0b4340d5` (version 0.4.319, pin
+P-L59C actualizado) + documental previo `58e9497c`/tree `f5cf652b`.
+Correccion N0 26-sep-2026: la mencion anterior a `88ce177f` como
+candidato final era stale pre-docs; el HEAD/tree finales post-correccion
+N0 se consignan en la entrega/HANDOFF.
 Causa: `784e6cd7` retiro helpers/render dejando ImportError
 `_invested_day_metric` (reproducido en base); re-add campo a campo
 (+84 en `web_app.py`, mismo conteo que `e7244de2`) con snapshots ya
