@@ -1,5 +1,30 @@
 # Plan maestro de mejoras y tareas — agenteBolsa
 
+## Estado productivo 26-sep-2026 20:35 — `deployed` 0.4.320
+
+Produccion Jetson corre `agente-bolsa:0.4.320-arm64`
+(`sha256:35f1cca4871d54247d92ae5c41c6976c00da9a5c024b449218e3f5ea895f9683`),
+port de 4 ficheros de `src` sobre `0.4.316-arm64`, tree funcional
+`00e5bdea`. Doble salud `18:33:28Z`/`18:35:22Z` (114 s), kernel `ok`, 0
+leases, 0 ordenes, 0 planes, sin alertas criticas. Sin push; rollback a
+`0.4.316-arm64` preparado. Informe unico del lote en la rama candidata
+`codex/pl137-140-readd-rehearsal`:
+`docs/informe_p_l137_140_readd_rehearsal.md`.
+
+| Lote | Estado | Alcance |
+| --- | --- | --- |
+| P-L137-R | deployed 0.4.320 | Recorte de outcomes a sesiones XNYS completadas, `session_seal_degraded` explicito |
+| P-L133-R | deployed 0.4.320 | Resumen de skips por job y vaciedad de outcomes en health, fail-open |
+| P-L140A-R | deployed 0.4.320 | Franja Mis inversiones, solo lectura |
+| P-L140B-R | deployed 0.4.320 | SPY unico, leaderboard a Config, baseline duplicado sin render |
+
+Cola siguiente, en micro-lotes separados y sin mezclarla con politica
+activa: P-L80B x2, P-L131 x4, P-L132 x3, P-L134 x3, P-L135 x4, P-L139
+x1, P-L71 x3, P-L72 x1, P-L81 x1, copy Telegram x12, `learning_mode` x1,
+`learning_scoreboard` x4, `lesson_distiller` x1,
+`market_cycle_timing_integration` x1. P-L154-A conserva la prioridad
+economica. P-L148 sigue 0/5: no se activa.
+
 ## Prioridad vigente - P-L154: rendimiento frente a SPY (22-sep-2026)
 
 Informe unico: `docs/informe_p_l154_rendimiento_vs_spy.md`. Este bloque define
