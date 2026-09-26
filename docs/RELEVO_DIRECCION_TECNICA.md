@@ -1,5 +1,55 @@
 # Relevo de direccion tecnica — agenteBolsa
 
+## P-L137-R + P-L133-R + P-L140A-R + P-L140B-R desplegado 0.4.320 (26-sep-2026)
+
+Dictamen: `deployed`. Port de 4 ficheros de `src` sobre la imagen
+`0.4.316-arm64` ya productiva, con autorizacion explicita del operador
+("Si, despliega 0.4.320 ahora", 20:31). Tree funcional
+`00e5bdeadf1a7d6cd9340e76fbd9b136c3583412`; candidato
+`d39ed702ea511fc33893bfd26564d103cea44da8`/tree
+`2efe05d0173dcaa853904de25e0e6b8ed9d68470`/v0.4.320, rama
+`codex/pl137-140-readd-rehearsal`. Imagen
+`agente-bolsa:0.4.320-arm64`
+`sha256:35f1cca4871d54247d92ae5c41c6976c00da9a5c024b449218e3f5ea895f9683`,
+runtime verificado 0.4.320, port-base 0.4.316-arm64.
+
+Validacion cerrada por particiones (suite completa en un unico proceso
+detenida a las 18:57 por presupuesto 2x): A `41F/153P`, B `164P`,
+C `2310P/1 skip`, P-L45B2 `33P` -> **2660 passed, 41 failed, 1 skipped,
+0 collection errors**. Los 41 fallos son subconjunto exacto de los 46
+del baseline 0.4.316; los 4 errores de coleccion de la base
+(p133/p137/p140a/p140b) desaparecen. Nodo lento explicado:
+`test_current_sequential_baseline...[33336]` = 181,62 s aislada, con
+`storage.py` sin diff frente a la base.
+
+Corte: 0 leases antes de parar; `docker stop` de los 3 contenedores;
+backup del selector `runtime.env.bak-pl-0320`; flip a
+`AGENTE_BOLSA_IMAGE=agente-bolsa:0.4.320-arm64`;
+`jetson-ops deploy-agente-bolsa` con `init-db` `Exited(0)`. Doble salud
+`18:33:28Z` y `18:35:22Z` (114 s): healthy x3, restart 0, OOM false,
+HTTP `/`,`/health`,`/_stcore/health`,`/kindle` 200, kernel `ok` con 0
+violaciones, flags paper/live-false/auto-apply-false, lock pid 7 token
+`4298981`, listener unico 8081, 0 leases, 0 ordenes, 0 planes,
+`MAX_EVENT` 18:33:04Z -> 18:34:52Z, sin alertas criticas. Bootstrap
+`skipped`/`market_not_ready` para 26-sep (sabado). Sin migracion de
+datos, sin `kernel-seal`, sin tocar `.env`, sin `whale-copy`, sin push.
+Rollback: `AGENTE_BOLSA_IMAGE=agente-bolsa:0.4.316-arm64` + re-`up`.
+
+Mejoras del release, todas N2/N1 sin cambio de politica: P-L137 recorte
+de outcomes a sesiones XNYS completadas con `session_seal_degraded`;
+P-L133 resumen de skips por job y vaciedad de outcomes en health
+(fail-open, `pct_empty=None` con denominador 0); P-L140A franja Mis
+inversiones; P-L140B SPY unico, leaderboard a Config via
+`session_state`, baseline duplicado sin render. P-L148 sigue 0/5.
+
+Deuda de suite restante, en micro-lotes y sin mezclarla con este
+despliegue: P-L80B x2, P-L131 x4, P-L132 x3, P-L134 x3, P-L135 x4,
+P-L139 x1, P-L71 x3, P-L72 x1, P-L81 x1, copy Telegram x12,
+`learning_mode` x1, `learning_scoreboard` x4, `lesson_distiller` x1,
+`market_cycle_timing_integration` x1. P-L154-A sigue siendo la
+prioridad economica, sin cambio de politica activa. Informe unico
+`docs/informe_p_l137_140_readd_rehearsal.md`.
+
 ## Ensayo combinado P-L137+P-L133+P-L140A+P-L140B (rehearsal 0.4.320, 26-sep-2026)
 
 Dictamen: `ready_for_closed_market_full_validation` (integracion

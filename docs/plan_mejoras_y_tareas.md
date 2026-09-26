@@ -63,6 +63,45 @@ nocturna 24-sep: `config.py` aprobado en alcance, postmarket terminal
 y suite roja tambien en base: `precondition_not_met`, sin corte. No integrar
 hasta resolver provision del modelo y la deriva de suite en lotes separados.
 
+## P-L137-R + P-L133-R + P-L140A-R + P-L140B-R desplegado 0.4.320 (26-sep-2026)
+
+Estado: `deployed` en Jetson como `0.4.320-arm64` (imagen
+`sha256:35f1cca4871d54247d92ae5c41c6976c00da9a5c024b449218e3f5ea895f9683`),
+por port de 4 ficheros de `src` sobre `0.4.316-arm64`, con autorizacion
+explicita del operador. Tree funcional `00e5bdea`; candidato
+`d39ed702`/tree `2efe05d0`/v0.4.320 en
+`codex/pl137-140-readd-rehearsal`. Doble salud `18:33:28Z` y
+`18:35:22Z` (114 s): healthy x3, restart 0, OOM false, HTTP 200 en las
+cuatro rutas, kernel `ok` 0 violaciones, flags paper/live-false/
+auto-apply-false, lock pid 7 token `4298981`, listener unico, 0 leases,
+0 ordenes, 0 planes, sin alertas criticas. Sin migracion de datos, sin
+`kernel-seal`, sin tocar `.env` ni `whale-copy`, sin push. Rollback
+preparado a `0.4.316-arm64`.
+
+| Lote | Estado | Alcance y aceptacion |
+| --- | --- | --- |
+| P-L137-R | deployed en 0.4.320 | Recorte de outcomes a sesiones XNYS completadas, `session_seal_degraded` explicito; sin autoridad trading |
+| P-L133-R | deployed en 0.4.320 | Resumen de skips por job y vaciedad de outcomes en health, fail-open, `pct_empty=None` con denominador 0 |
+| P-L140A-R | deployed en 0.4.320 | Franja Mis inversiones, 4 tarjetas, misma fuente ya cargada, solo lectura |
+| P-L140B-R | deployed en 0.4.320 | SPY unico, leaderboard a Config via `session_state`, baseline duplicado sin render; helpers P-L140C conservados |
+
+Validacion: `2660 passed, 41 failed, 1 skipped, 0 collection errors` por
+particiones (A `41F/153P`, B `164P`, C `2310P/1 skip`, P-L45B2 `33P`).
+Los 41 fallos son subconjunto exacto de los 46 del baseline 0.4.316;
+los 4 errores de coleccion de la base desaparecen. P-L148 sigue 0/5.
+Informe unico: `docs/informe_p_l137_140_readd_rehearsal.md`.
+
+### Deuda de suite restante (no desplegada, micro-lotes separados)
+
+P-L80B x2, P-L131 x4, P-L132 x3, P-L134 x3, P-L135 x4, P-L139 x1,
+P-L71 x3, P-L72 x1, P-L81 x1, copy Telegram x12, `learning_mode` x1,
+`learning_scoreboard` x4, `lesson_distiller` x1,
+`market_cycle_timing_integration` x1. Clasificados el 26-sep: parte son
+contratos funcionales retirados (P-L139, P-L80B, scoreboard) y requieren
+re-add o retirada consciente; el resto son expectativas/fixtures
+obsoletas. P-L154-A conserva la prioridad economica sin cambio de
+politica activa.
+
 ### P-L137-R - re-add trim_to_completed_sessions (N2, candidato 0.4.317)
 
 Lote tecnico independiente 26-sep-2026. Re-anade el helper puro
