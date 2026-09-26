@@ -7,9 +7,10 @@ import json
 import logging
 from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -1267,6 +1268,69 @@ def _bar_date(index: Any) -> str:
     return str(index)[:10]
 
 
+def last_completed_session(
+    *, now: datetime | None = None, calendar: Any | None = None
+) -> tuple[str | None, bool]:
+    """Last XNYS session with market_close <= now (P-L137).
+
+    Returns (session_date_iso | None, degraded). Degraded means the
+    exchange calendar was unavailable and a weekday rule applied, which
+    ignores holidays.
+    """
+
+    now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    resolved = calendar
+    if resolved is None:
+        try:
+            from agente_bolsa.market_calendar import MarketCalendar
+
+            resolved = MarketCalendar()
+        except Exception:  # noqa: BLE001 - degraded fallback below.
+            resolved = None
+    if resolved is not None:
+        try:
+            schedule = resolved.session_schedule(
+                start_date=(now_utc.date() - timedelta(days=14)).isoformat(),
+                end_date=now_utc.date().isoformat(),
+            )
+        except Exception:  # noqa: BLE001 - degraded fallback below.
+            schedule = None
+        if schedule is not None and not schedule.empty:
+            closes = pd.to_datetime(schedule["market_close"], utc=True)
+            done = schedule.index[closes <= now_utc]
+            if len(done):
+                stamp = done.max()
+                day = stamp.date().isoformat() if hasattr(stamp, "date") else str(stamp)[:10]
+                return day, False
+            return None, False
+    market_now = now_utc.astimezone(ZoneInfo("America/New_York"))
+    day = market_now.date()
+    if not (day.weekday() < 5 and market_now.time() >= time(16, 0)):
+        shift = 1
+        while (day - timedelta(days=shift)).weekday() >= 5:
+            shift += 1
+        day = day - timedelta(days=shift)
+    return day.isoformat(), True
+
+
+def trim_to_completed_sessions(
+    frame: pd.DataFrame, *, now: datetime | None = None, calendar: Any | None = None
+) -> tuple[pd.DataFrame, int, str | None, bool]:
+    """Drop bars dated after the last completed session (P-L137).
+
+    A same-day (still open) bar is mutable: counting it as matured
+    forward history repeats the SPY same-day-finality bug (P-L71/P-L127)
+    on universe bars. Returns (kept_frame, trimmed, last_session, degraded).
+    """
+
+    last_completed, degraded = last_completed_session(now=now, calendar=calendar)
+    if frame.empty or last_completed is None:
+        return frame, 0, last_completed, True if last_completed is None else degraded
+    keep = frame.index.map(_bar_date) <= last_completed
+    kept = frame.loc[keep]
+    return kept, int(len(frame) - len(kept)), last_completed, degraded
+
+
 def _outcome_for_signal(signal: dict[str, Any], frame: pd.DataFrame) -> dict[str, Any]:
     features = signal.get("features", {}) or {}
     entry = _num(features.get("entry_price") or features.get("close"))
@@ -1487,6 +1551,7 @@ def update_signal_outcomes(
     *,
     limit: int = 1000,
     since_date: str = "2026-04-01",
+    now: datetime | None = None,
     observed_at: datetime | None = None,
 ) -> dict[str, Any]:
     signals = store.signal_outcomes(
@@ -1497,14 +1562,19 @@ def update_signal_outcomes(
     )
     symbols = sorted({signal["symbol"] for signal in signals})
     if not signals or not symbols:
-        return {"updated": 0, "signals": 0, "symbols": 0, "warnings": []}
+        return {"updated": 0, "signals": 0, "symbols": 0, "warnings": [],
+                "bars_trimmed_universe": 0, "last_completed_session": None,
+                "session_seal_degraded": None}
     start = min(signal["signal_date"] for signal in signals)
     end = (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
     warnings = []
     try:
         data = download_daily_prices(symbols, start=start, end=end)
     except Exception as exc:  # noqa: BLE001
-        return {"updated": 0, "signals": len(signals), "symbols": len(symbols), "warnings": [str(exc)]}
+        return {"updated": 0, "signals": len(signals), "symbols": len(symbols), "warnings": [str(exc)],
+                "bars_trimmed_universe": 0, "last_completed_session": None,
+                "session_seal_degraded": None}
+    data, bars_trimmed, last_completed, seal_degraded = trim_to_completed_sessions(data, now=now)
 
     updated = 0
     outcome_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -1548,7 +1618,9 @@ def update_signal_outcomes(
     except Exception:  # noqa: BLE001 - prospective telemetry remains fail-open.
         warnings.append("prospective_capture_observation_failed")
         LOGGER.exception("Falló observación prospectiva; se conserva outcome legacy")
-    return {"updated": updated, "signals": len(signals), "symbols": len(symbols), "warnings": warnings[:20]}
+    return {"updated": updated, "signals": len(signals), "symbols": len(symbols), "warnings": warnings[:20],
+            "bars_trimmed_universe": bars_trimmed, "last_completed_session": last_completed,
+            "session_seal_degraded": seal_degraded}
 
 
 def _bucket(value: Any, buckets: list[tuple[str, float, float]]) -> str:
