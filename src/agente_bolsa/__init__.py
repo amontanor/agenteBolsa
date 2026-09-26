@@ -106,4 +106,5 @@ __all__ = ["__version__"]
 # P-L141: port linea Windows 0.4.234-0.4.246 (funnel dataclass/KeyError, costes calibrados,
 # cobertura same-cycle, misfire delays/health, uplift LLM, linkage, flujos EOD, sellos de sesion,
 # dashboard Mis inversiones/SPY unico, grace 300/120/120, sesion proveedor Go/Zen, crew fail-open) (0.4.305).
-__version__ = "0.4.317"
+# P-L133-R (re-add): scheduler_skip_summary + signal_outcome_emptiness observacionales fail-open (0.4.318).
+__version__ = "0.4.318"
