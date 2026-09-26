@@ -1,5 +1,32 @@
 # Relevo de direccion tecnica — agenteBolsa
 
+## P-L140B-R re-add minimo (candidato 0.4.320, 26-sep-2026)
+
+Dictamen: `ready_for_integration_rehearsal` (N1 UI, solo presentacion).
+Worktree exclusivo `pl140b_readd_0320`, rama `codex/pl140b-readd-0320`,
+base exacta P-L140A-R docs-corrected `49f3b19f`/tree `041b4bbc`/
+v0.4.319. XNYS cerrado 26-sep-2026; next_open 28-sep 15:30
+Europe/Madrid. Causa reproducida en base: ImportError
+`_spy_alpha_summary` (coleccion 1 error en `test_p140b_spy_unico.py`)
++ guard p65a rojo por `_render_performance_baseline` en
+`page_dashboard`; referencia historica `1b29df23`/`10dcd62b` sin
+cherry-pick. Cambio solo `web_app.py` (+53/-6): helper puro
+(final+comparable, geometrica, `None` sin filas, nunca cero),
+quinta metrica Alpha (4→5 columnas), leaderboard Dashboard→Config
+via `session_state` sin mutar autoridad ni llamadas, llamada
+baseline retirada del expander (helpers conservados por P-L140C).
+Sin P-L139/scoreboard/politica/persistencia/fuente nueva/broker.
+P-L140A/P-L137/P-L133 y timers P-L158 intactos. Bump 0.4.319→0.4.320
++ pin P-L59C: funcional `cb2f6808` + version/pin `2a88081f` (+ docs;
+HEAD/tree finales en entrega). QA: focales 17, combinada 147,
+regresiones 37; Ruff/NUL(536)/diff/validate verdes; protegidos sin
+diff. Gates omitidos: suite, smoke, benchmark, kernel-status,
+integracion final. Informe unico ampliado
+`docs/informe_p_l140b_spy_unico.md`; plan maestro con entrada
+P-L140B-R. Siguiente: ensayo combinado de integracion en mercado
+cerrado. Sin merge, despliegue, reinicio ni push. Produccion Jetson
+0.4.316 y principal intactos.
+
 ## P-L140A-R re-add minimo (candidato 0.4.319, 26-sep-2026)
 
 Dictamen: `ready_for_integration_rehearsal` (N1 UI, solo presentacion).
