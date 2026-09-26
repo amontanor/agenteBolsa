@@ -37,6 +37,27 @@ Informe unico: `docs/informe_p_l158b_perfil_fino.md`; backlog en plan maestro.
   Jetson + corte con snapshot frio y doble healthcheck. Nunca desplegar por el
   worker.
 
+## Prioridad vigente - P-L137-R (re-add trim_to_completed_sessions), 26-sep-2026
+
+Dictamen: `ready_for_integration_rehearsal` (N2 finality outcomes). Lote unico
+de re-add puro, sin despliegue. Candidato `codex/pl137-trim-readd` HEAD
+`98d91bdc`, tree `0f2b111e`, v0.4.317; base `85e28447` (P-L158-B rehearsal,
+tree `70d487e7`, v0.4.316). Informe unico:
+`docs/informe_p_l137_trim_readd.md`; backlog en plan maestro.
+
+- Causa: `784e6cd7` (reconstruccion Jetson `.310`) elimino 4 helpers puros
+  conservando sus tests, dejando 4 errores de coleccion. Este lote re-anade
+  solo `trim_to_completed_sessions` + `last_completed_session` y el cableado
+  en `update_signal_outcomes` (recorte una vez pre-bucle, publica
+  `bars_trimmed_universe`/`last_completed_session`/`session_seal_degraded`,
+  kwarg `now`). Sin autoridad trading/riesgo/ejecucion ni politica.
+- QA: focales 4 passed; regresiones 47 passed (signal_learning 27 +
+  counterfactual_analysis 20); Ruff/NUL(536)/diff/config (`ok=true`) verdes.
+  Paridad bit-identica historia cerrada probada. Suite completa y smoke
+  omitidos (lote N2 aislado; suite roja preexistente identica en base).
+- Los otros 3 errores de coleccion (p133/p140a/p140b) y la deuda de suite
+  siguen en lotes aparte, sin mezclar. Despliegue: NO autorizado.
+
 ## Prioridad vigente - P-L154; lote tecnico P-L157, 24-sep-2026
 
 Dictamen: ready_for_implementation para P-L154-A (caracterizacion), sin

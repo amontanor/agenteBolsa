@@ -63,6 +63,27 @@ nocturna 24-sep: `config.py` aprobado en alcance, postmarket terminal
 y suite roja tambien en base: `precondition_not_met`, sin corte. No integrar
 hasta resolver provision del modelo y la deriva de suite en lotes separados.
 
+### P-L137-R - re-add trim_to_completed_sessions (N2, candidato 0.4.317)
+
+Lote tecnico independiente 26-sep-2026. Re-anade el helper puro
+`trim_to_completed_sessions` + `last_completed_session` y el cableado en
+`update_signal_outcomes` eliminados por la reconstruccion Jetson `784e6cd7`
+(que conservo los tests). Restaura el sello de sesion P-L137 (recorte de la
+barra same-day mutable antes de madurar outcomes) sin cambiar autoridad
+trading/riesgo/ejecucion ni politica.
+
+| Lote | Estado | Alcance y aceptacion |
+| --- | --- | --- |
+| P-L137-R | ready_for_integration_rehearsal (0.4.317) | Re-add puro + cableado; 4 focales test_p137 + 47 regresiones (signal_learning + counterfactual) verdes; Ruff/NUL/diff/config verdes; paridad bit-identica historia cerrada |
+
+- Worktree `pl137_trim_readd`, rama `codex/pl137-trim-readd`, base `85e28447`
+  (P-L158-B rehearsal, 0.4.316). Sin merge/despliegue/push.
+- Bump `0.4.316` -> `0.4.317`; pin `test_p59c` actualizado.
+- Informe: `docs/informe_p_l137_trim_readd.md`.
+- Siguiente: revision direccion -> ensayo de integracion aislado en ventana
+  cerrada; sin desplegar. Los otros 3 errores de coleccion (p133/p140a/p140b)
+  quedan en lotes aparte, sin mezclar.
+
 ## P-L70 — rediseño UX del resumen diario Telegram (candidato 0.4.203)
 
 - Worktree aislado `pl70_telegram_summary_ux`, rama
