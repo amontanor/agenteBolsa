@@ -84,6 +84,29 @@ trading/riesgo/ejecucion ni politica.
   cerrada; sin desplegar. Los otros 3 errores de coleccion (p133/p140a/p140b)
   quedan en lotes aparte, sin mezclar.
 
+### P-L133-R - re-add scheduler_skip_summary y signal_outcome_emptiness (N2, candidato 0.4.318)
+
+Lote tecnico independiente 26-sep-2026 sobre P-L137-R. Re-anade los 2
+helpers puros observacionales eliminados por la reconstruccion Jetson
+`784e6cd7` (que conservo `tests/test_p133_misfire_health.py`); la parte
+scheduler P-L133 (`_skip_delay_seconds`/`delay_seconds`) sobrevivio
+intacta y no se toca. Solo resumen observacional fail-open en
+`build_production_health_report`; sin alertas/gates/trading nuevos.
+
+| Lote | Estado | Alcance y aceptacion |
+| --- | --- | --- |
+| P-L133-R | ready_for_integration_rehearsal (0.4.318) | Re-add byte-identico a `30def441` (solo operational_health); 7 focales test_p133 + 91 regresiones verdes; Ruff/NUL/diff/config verdes; paridad observacional |
+
+- Worktree `pl133_skip_emptiness_readd`, rama
+  `codex/pl133-skip-emptiness-readd`, base `26f144fa` (P-L137-R, 0.4.317).
+  Sin merge/despliegue/push.
+- Bump `0.4.317` -> `0.4.318`; pin `test_p59c` actualizado; slot 0.4.318
+  libre verificado en plan principal y candidato.
+- Informe unico ampliado: `docs/informe_p_l133_misfire_health.md`.
+- Siguiente: revision direccion -> ensayo de integracion aislado en
+  ventana cerrada; sin desplegar. Los otros 2 errores de coleccion
+  (p140a/p140b) quedan en lotes aparte, sin mezclar.
+
 ## P-L70 — rediseño UX del resumen diario Telegram (candidato 0.4.203)
 
 - Worktree aislado `pl70_telegram_summary_ux`, rama

@@ -58,6 +58,34 @@ base `85e28447` (P-L158-B rehearsal, tree `70d487e7`, v0.4.316); commits
 - Los otros 3 errores de coleccion (p133/p140a/p140b) y la deuda de suite
   siguen en lotes aparte, sin mezclar. Despliegue: NO autorizado.
 
+## Prioridad vigente - P-L133-R (re-add skip/emptiness observacional), 26-sep-2026
+
+Dictamen: `ready_for_integration_rehearsal` (N2 observabilidad fail-open).
+Lote unico de re-add minimo sobre P-L137-R, sin despliegue. Candidato
+`codex/pl133-skip-emptiness-readd` v0.4.318; base `26f144fa` (P-L137-R,
+tree `1f2d90bd`, v0.4.317); commits `769e26db` (feat) + `92834f76`
+(test pin) + docs. Informe unico ampliado:
+`docs/informe_p_l133_misfire_health.md`; backlog en plan maestro.
+
+- Causa: `784e6cd7` (reconstruccion Jetson `.310`) elimino
+  `scheduler_skip_summary` + `signal_outcome_emptiness` conservando
+  `tests/test_p133_misfire_health.py` (error de coleccion). La parte
+  scheduler (`_skip_delay_seconds` + `delay_seconds`) sobrevivio intacta
+  y no se toca. Re-add byte-identico al diff `30def441` (solo
+  `operational_health.py`, 58 inserciones): 2 helpers puros read-only +
+  wiring fail-open en `build_production_health_report` (summary y
+  top-level). Sin grace P-L139, UI, costes, politica, schema ni
+  telemetria nueva; sin alertas/gates nuevos.
+- QA: focales p133 7 passed; relacionadas 91 passed (p137 +
+  operational_health + scheduler observability/lock + autonomous_operations
+  + pin p59c; combinada 98 passed); Ruff focal, NUL(536), diff,
+  validate (`ok=true`) verdes. Suite/smoke/benchmark omitidos (N2
+  aislado; deuda preexistente en lotes aparte). Missing permanece
+  `unavailable`; cero solo con denominador conocido.
+- Quedan 2 errores de coleccion (p140a/p140b) y la deuda de suite en
+  lotes aparte, sin mezclar. Siguiente: revision direccion -> ensayo de
+  integracion aislado; sin merge/despliegue/push. Despliegue: NO autorizado.
+
 ## Prioridad vigente - P-L154; lote tecnico P-L157, 24-sep-2026
 
 Dictamen: ready_for_implementation para P-L154-A (caracterizacion), sin
