@@ -63,3 +63,50 @@ natural junto a la reparacion del linkage. Este lote no toca
 3. Port mecanico a Jetson.
 
 Sin push salvo peticion explicita. Sizing/politica: sin cambios.
+
+## Re-add P-L133-R (candidato 0.4.318, 26-sep-2026)
+
+Dictamen: `ready_for_integration_rehearsal`. XNYS cerrado; sin merge,
+despliegue, push ni escritura productiva.
+
+### Causa del re-add
+
+La reconstruccion Jetson `784e6cd7` elimino `scheduler_skip_summary` y
+`signal_outcome_emptiness` de `operational_health.py` conservando
+`tests/test_p133_misfire_health.py` (error de coleccion ImportError). La
+parte scheduler (`_skip_delay_seconds` + `delay_seconds` en el payload
+`p-l45b1.scheduler-event.v1`) sobrevivio intacta y no se toca.
+
+### Cambio (solo operational_health.py, 58 inserciones)
+
+Port campo a campo del diff `30def441`, byte-identico: los 2 helpers
+puros read-only + wiring fail-open individual en
+`build_production_health_report` (summary y top-level). Sin grace P-L139,
+UI P-L140, costes/scoreboard, politica, schema DB ni telemetria nueva.
+Sin alertas ni gates nuevos; missing permanece `unavailable`
+(`pct_empty=None` con total 0; `{"status": "unavailable"}` ante fallo de
+lectura).
+
+### Commits (rama `codex/pl133-skip-emptiness-readd`, base `26f144fa`)
+
+- `769e26db` feat: re-add observacional (solo operational_health.py).
+- `92834f76` test: bump `0.4.317` -> `0.4.318` + pin version policy P-L59C
+  (slot libre verificado en plan principal y candidato).
+- Docs en commit separado (este informe + plan + relevo en candidato).
+
+### QA (XNYS cerrado; gates N2 proporcionales)
+
+- Focales `tests/test_p133_misfire_health.py`: 7 passed.
+- Relacionadas (p137 + operational_health + scheduler observability/lock
+  + autonomous_operations + pin p59c): combinada 98 passed.
+- `ruff check` focal, `scripts/check_no_nulls.py` OK (536),
+  `git diff --check` limpio, `validate-agent-config --json` aislado
+  `ok=true`.
+- Suite completa, smoke, benchmark, kernel-status: OMITIDOS (N2 aislado;
+  deuda de suite preexistente en lotes aparte, sin ocultar).
+- Protegidos sin diff; produccion Jetson 0.4.316 no tocada; sin push.
+
+### Siguiente paso
+
+Revision direccion -> ensayo de integracion aislado en ventana cerrada;
+sin merge ni despliegue desde este lote.

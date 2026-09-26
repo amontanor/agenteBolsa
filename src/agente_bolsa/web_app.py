@@ -476,6 +476,42 @@ def _today_pl_display(
     return display
 
 
+def _invested_day_metric(
+    intraday_pl: Any,
+    invested: Any,
+    equity_pct: Any | None = None,
+    *,
+    known: int = 0,
+    total: int = 0,
+) -> dict[str, Any]:
+    """P/L del dia sobre capital invertido (primario) + equity (secundario).
+
+    P-L140A: el primario responde "son rentables mis inversiones" con la
+    misma fuente que la tarjeta intradia existente (snapshot Alpaca).
+    Sin invertido o sin dato, primario "n/d", nunca division por cero.
+    """
+
+    amount = _num(intraday_pl)
+    base = _num(invested)
+    if amount is None or base is None or base <= 0:
+        return {
+            "amount": _money_or_na(amount),
+            "primary_pct": "n/d",
+            "secondary": f"{_pct_signed_or_na(equity_pct)} sobre equity",
+            "tone": "neutral",
+            "coverage": f"{known}/{total} posiciones",
+        }
+    pct = amount / base
+    tone = "good" if amount > 0 else "bad" if amount < 0 else "neutral"
+    return {
+        "amount": _money(amount),
+        "primary_pct": _pct_signed(pct),
+        "secondary": f"{_pct_signed_or_na(equity_pct)} sobre equity",
+        "tone": tone,
+        "coverage": f"{known}/{total} posiciones",
+    }
+
+
 def _today_pl_metric_payload(
     today_pl: Any,
     invested: Any,
@@ -1588,6 +1624,44 @@ def _account_group(
                 <div class="account-kpi"><span>Ganancia/pérdida de la cartera actual hoy</span><strong>{intraday_amount}</strong><em>{intraday_coverage}</em></div>
                 <div class="account-kpi"><span>Posiciones</span><strong>{positions_count}</strong><em>&nbsp;</em></div>
                 <div class="account-kpi"><span>Ordenes</span><strong>{orders_count}</strong><em>&nbsp;</em></div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _investments_group(
+    *,
+    invested: float | None,
+    invested_pct: float | None,
+    intraday_pl: float | None,
+    intraday_known: int,
+    intraday_total: int,
+    open_pl: float | None,
+    cash: float | None,
+    today_equity_pct: float | None,
+) -> None:
+    """Franja "Mis inversiones": una fuente, un denominador (P-L140A)."""
+
+    day = _invested_day_metric(
+        intraday_pl, invested, today_equity_pct,
+        known=intraday_known, total=intraday_total,
+    )
+    base = _num(invested)
+    open_pct = (open_pl / base) if (_num(open_pl) is not None and base) else None
+    open_tone = "good" if (_num(open_pl) or 0.0) > 0 else "bad" if (_num(open_pl) or 0.0) < 0 else "neutral"
+    st.markdown(
+        f"""
+        <div class="account-strip">
+            <div class="account-title">
+                <span>Mis inversiones · misma fuente que la tabla de posiciones</span>
+            </div>
+            <div class="account-kpis">
+                <div class="account-kpi"><span>Invertido</span><strong>{_money_or_na(invested)}</strong><em>{_pct(invested_pct) if _num(invested_pct) is not None else "n/d"} del equity</em></div>
+                <div class="account-kpi {day["tone"]}"><span>P/L día sobre invertido</span><strong>{day["amount"]} {day["primary_pct"]}</strong><em>{escape(day["secondary"])} · {escape(day["coverage"])}</em></div>
+                <div class="account-kpi {open_tone}"><span>P/L total abiertas</span><strong>{_money_or_na(open_pl)} {_pct_signed_or_na(open_pct)}</strong><em>sobre invertido · desde entrada</em></div>
+                <div class="account-kpi"><span>Cash</span><strong>{_money_or_na(cash)}</strong><em>&nbsp;</em></div>
             </div>
         </div>
         """,
@@ -4147,6 +4221,39 @@ def _daily_vs_spy_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _spy_alpha_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Alpha acumulado sobre las mismas filas finales comparables (P-L140B).
+
+    Misma serie y ventana que la tabla Sistema vs SPY: solo sesiones
+    `final` + `comparable` con ambos porcentajes. Composicion geometrica.
+    Sin filas comparables, todo `None`: nunca se inventa alpha.
+    """
+
+    finals = [
+        row
+        for row in rows
+        if row.get("status", "final") == "final"
+        and row.get("comparison_status", "comparable") == "comparable"
+        and _num(row.get("system_pct")) is not None
+        and _num(row.get("spy_pct")) is not None
+    ]
+    if not finals:
+        return {"n": 0, "system_cum": None, "spy_cum": None, "alpha": None}
+    system_cum = 1.0
+    spy_cum = 1.0
+    for row in finals:
+        system_cum *= 1.0 + float(row["system_pct"])
+        spy_cum *= 1.0 + float(row["spy_pct"])
+    system_cum = round(system_cum - 1.0, 6)
+    spy_cum = round(spy_cum - 1.0, 6)
+    return {
+        "n": len(finals),
+        "system_cum": system_cum,
+        "spy_cum": spy_cum,
+        "alpha": round(system_cum - spy_cum, 6),
+    }
+
+
 def _daily_vs_spy_window_label(value: int | None) -> str:
     if value is None:
         return "Desde inicio"
@@ -4622,7 +4729,8 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
             _render_opening_omissions(opening_context)
             return
         summary = _daily_vs_spy_summary(visible_rows)
-        c1, c2, c3, c4 = st.columns(4)
+        alpha = _spy_alpha_summary(visible_rows)
+        c1, c2, c3, c4, c5 = st.columns(5)
         suffix = f"{summary['final']} finales · {summary['visible_total']} visibles"
         with c1:
             _compact_metric("Dias sistema superior", summary["system_wins"], suffix, "good")
@@ -4632,6 +4740,14 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
             _compact_metric("Empates", summary["ties"], suffix, "neutral")
         with c4:
             _compact_metric("En curso", summary["in_progress"], suffix, "neutral")
+        with c5:
+            alpha_tone = "good" if (alpha["alpha"] or 0.0) > 0 else "bad" if (alpha["alpha"] or 0.0) < 0 else "neutral"
+            _compact_metric(
+                "Alpha acumulado",
+                _pct_signed_or_na(alpha["alpha"]),
+                f"{alpha['n']} sesiones finales",
+                alpha_tone,
+            )
         chart = _daily_vs_spy_chart(visible_rows)
         if chart is not None:
             st.altair_chart(chart, width="stretch")
@@ -5773,6 +5889,7 @@ def page_dashboard() -> None:
     account_total_pl = _num(full_equity_summary.get("pl"))
     account_total_pct = _num(full_equity_summary.get("pl_pct"))
     account_initial_equity = _num(full_equity_summary.get("start_value"))
+    st.session_state["leaderboard_total_pct"] = account_total_pct
     timer.stop("opening_context")
 
     timer.start("header")
@@ -5824,10 +5941,17 @@ def page_dashboard() -> None:
     )
     timer.stop("kpis.account_group")
 
+    _investments_group(
+        invested=_num(exposure),
+        invested_pct=_num(exposure_pct),
+        intraday_pl=_num(position_intraday.get("amount")),
+        intraday_known=int(position_intraday.get("known") or 0),
+        intraday_total=int(position_intraday.get("total") or 0),
+        open_pl=_portfolio_open_pl(portfolio, stats.get("unrealized_pl") if stats else None),
+        cash=current_cash,
+        today_equity_pct=today_pct,
+    )
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
-    timer.start("kpis.leaderboard")
-    _render_leaderboard_controls(store, account_total_pct)
-    timer.stop("kpis.leaderboard")
     timer.stop("kpis")
 
     timer.start("overview")
@@ -6040,8 +6164,8 @@ def page_dashboard() -> None:
         _render_autonomy_panel(store, settings)
 
     with st.expander("Rendimiento avanzado"):
-        _render_performance_baseline(store)
-        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+        # P-L140B: la comparativa Sistema vs SPY vive una sola vez arriba
+        # (tabla apertura->apertura + alpha). El baseline duplicado se retira.
         with st.container(border=True):
             _render_profitability_scoreboard_panel(settings, store)
 
@@ -8782,6 +8906,13 @@ def page_config() -> None:
         _metric_card("Backup SQLite", summary.get("size_bytes") if summary else "-")
     st.subheader("SQLite")
     st.json(store.status())
+    st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+    st.subheader("LLM Trading Leaderboard")
+    st.caption(
+        "La ganancia actual se publica desde aqui cuando antes se ha visitado el Dashboard "
+        "en la misma sesion (el valor viaja en memoria, sin llamadas nuevas al broker)."
+    )
+    _render_leaderboard_controls(store, st.session_state.get("leaderboard_total_pct"))
 
 
 def _render_manual_navigation() -> None:

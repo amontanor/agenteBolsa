@@ -1,5 +1,55 @@
 # Relevo de direccion tecnica — agenteBolsa
 
+## P-L140B-R re-add minimo (candidato 0.4.320, 26-sep-2026)
+
+Dictamen: `ready_for_integration_rehearsal` (N1 UI, solo presentacion).
+Worktree exclusivo `pl140b_readd_0320`, rama `codex/pl140b-readd-0320`,
+base exacta P-L140A-R docs-corrected `49f3b19f`/tree `041b4bbc`/
+v0.4.319. XNYS cerrado 26-sep-2026; next_open 28-sep 15:30
+Europe/Madrid. Causa reproducida en base: ImportError
+`_spy_alpha_summary` (coleccion 1 error en `test_p140b_spy_unico.py`)
++ guard p65a rojo por `_render_performance_baseline` en
+`page_dashboard`; referencia historica `1b29df23`/`10dcd62b` sin
+cherry-pick. Cambio solo `web_app.py` (+53/-6): helper puro
+(final+comparable, geometrica, `None` sin filas, nunca cero),
+quinta metrica Alpha (4→5 columnas), leaderboard Dashboard→Config
+via `session_state` sin mutar autoridad ni llamadas, llamada
+baseline retirada del expander (helpers conservados por P-L140C).
+Sin P-L139/scoreboard/politica/persistencia/fuente nueva/broker.
+P-L140A/P-L137/P-L133 y timers P-L158 intactos. Bump 0.4.319→0.4.320
++ pin P-L59C: funcional `cb2f6808` + version/pin `2a88081f` (+ docs;
+HEAD/tree finales en entrega). QA: focales 17, combinada 147,
+regresiones 37; Ruff/NUL(536)/diff/validate verdes; protegidos sin
+diff. Gates omitidos: suite, smoke, benchmark, kernel-status,
+integracion final. Informe unico ampliado
+`docs/informe_p_l140b_spy_unico.md`; plan maestro con entrada
+P-L140B-R. Siguiente: ensayo combinado de integracion en mercado
+cerrado. Sin merge, despliegue, reinicio ni push. Produccion Jetson
+0.4.316 y principal intactos.
+
+## P-L140A-R re-add minimo (candidato 0.4.319, 26-sep-2026)
+
+Dictamen: `ready_for_integration_rehearsal` (N1 UI, solo presentacion).
+Worktree exclusivo `pl140a_readd_0319`, rama `codex/pl140a-readd-0319`,
+base exacta P-L133-R `baba2dd9`/tree `06270950`/v0.4.318; funcional
+`60fe034a` + version/pin `88ce177f`/tree `0b4340d5` (version 0.4.319, pin
+P-L59C actualizado) + documental previo `58e9497c`/tree `f5cf652b`.
+Correccion N0 26-sep-2026: la mencion anterior a `88ce177f` como
+candidato final era stale pre-docs; el HEAD/tree finales post-correccion
+N0 se consignan en la entrega/HANDOFF.
+Causa: `784e6cd7` retiro helpers/render dejando ImportError
+`_invested_day_metric` (reproducido en base); re-add campo a campo
+(+84 en `web_app.py`, mismo conteo que `e7244de2`) con snapshots ya
+cargados, `n/d` si invertido<=0/missing, cero broker nuevo, sin
+persistencia ni autoridad; P-L137/P-L133 intactos, sin P-L140B/P-L139/
+scoreboard/politica/telemetry. QA: focales 7, combinada 113, version
+54; Ruff/NUL(536)/diff/validate verdes; protegidos sin diff. Gates
+omitidos: suite, smoke, benchmark, kernel-status, integracion final.
+Informe unico ampliado en `docs/informe_p_l140a_mis_inversiones.md`;
+plan maestro con entrada P-L140A-R. Siguiente: P-L140B re-add
+separado, luego ensayo combinado. Sin merge, despliegue ni push.
+Produccion Jetson 0.4.316 y principal intactos.
+
 ## Prioridad vigente - P-L158-B, 26-sep-2026
 
 Dictamen: `ready_for_closed_market_deployment` **con reserva** (N1, solo
@@ -36,6 +86,55 @@ Informe unico: `docs/informe_p_l158b_perfil_fino.md`; backlog en plan maestro.
   terminal, leases/jobs ausentes y autorizacion explicita del operador -> port
   Jetson + corte con snapshot frio y doble healthcheck. Nunca desplegar por el
   worker.
+
+## Prioridad vigente - P-L137-R (re-add trim_to_completed_sessions), 26-sep-2026
+
+Dictamen: `ready_for_integration_rehearsal` (N2 finality outcomes). Lote unico
+de re-add puro, sin despliegue. Candidato `codex/pl137-trim-readd` v0.4.317;
+base `85e28447` (P-L158-B rehearsal, tree `70d487e7`, v0.4.316); commits
+`c8ddabc7` (feat) + `98d91bdc` (test) + `1dd3d5fe` (docs). Informe unico:
+`docs/informe_p_l137_trim_readd.md`; backlog en plan maestro.
+
+- Causa: `784e6cd7` (reconstruccion Jetson `.310`) elimino 4 helpers puros
+  conservando sus tests, dejando 4 errores de coleccion. Este lote re-anade
+  solo `trim_to_completed_sessions` + `last_completed_session` y el cableado
+  en `update_signal_outcomes` (recorte una vez pre-bucle, publica
+  `bars_trimmed_universe`/`last_completed_session`/`session_seal_degraded`,
+  kwarg `now`). Sin autoridad trading/riesgo/ejecucion ni politica.
+- QA: focales 4 passed; regresiones 47 passed (signal_learning 27 +
+  counterfactual_analysis 20); Ruff/NUL(536)/diff/config (`ok=true`) verdes.
+  Paridad bit-identica historia cerrada probada. Suite completa y smoke
+  omitidos (lote N2 aislado; suite roja preexistente identica en base).
+- Los otros 3 errores de coleccion (p133/p140a/p140b) y la deuda de suite
+  siguen en lotes aparte, sin mezclar. Despliegue: NO autorizado.
+
+## Prioridad vigente - P-L133-R (re-add skip/emptiness observacional), 26-sep-2026
+
+Dictamen: `ready_for_integration_rehearsal` (N2 observabilidad fail-open).
+Lote unico de re-add minimo sobre P-L137-R, sin despliegue. Candidato
+`codex/pl133-skip-emptiness-readd` v0.4.318; base `26f144fa` (P-L137-R,
+tree `1f2d90bd`, v0.4.317); commits `769e26db` (feat) + `92834f76`
+(test pin) + docs. Informe unico ampliado:
+`docs/informe_p_l133_misfire_health.md`; backlog en plan maestro.
+
+- Causa: `784e6cd7` (reconstruccion Jetson `.310`) elimino
+  `scheduler_skip_summary` + `signal_outcome_emptiness` conservando
+  `tests/test_p133_misfire_health.py` (error de coleccion). La parte
+  scheduler (`_skip_delay_seconds` + `delay_seconds`) sobrevivio intacta
+  y no se toca. Re-add byte-identico al diff `30def441` (solo
+  `operational_health.py`, 58 inserciones): 2 helpers puros read-only +
+  wiring fail-open en `build_production_health_report` (summary y
+  top-level). Sin grace P-L139, UI, costes, politica, schema ni
+  telemetria nueva; sin alertas/gates nuevos.
+- QA: focales p133 7 passed; relacionadas 91 passed (p137 +
+  operational_health + scheduler observability/lock + autonomous_operations
+  + pin p59c; combinada 98 passed); Ruff focal, NUL(536), diff,
+  validate (`ok=true`) verdes. Suite/smoke/benchmark omitidos (N2
+  aislado; deuda preexistente en lotes aparte). Missing permanece
+  `unavailable`; cero solo con denominador conocido.
+- Quedan 2 errores de coleccion (p140a/p140b) y la deuda de suite en
+  lotes aparte, sin mezclar. Siguiente: revision direccion -> ensayo de
+  integracion aislado; sin merge/despliegue/push. Despliegue: NO autorizado.
 
 ## Prioridad vigente - P-L154; lote tecnico P-L157, 24-sep-2026
 

@@ -63,6 +63,50 @@ nocturna 24-sep: `config.py` aprobado en alcance, postmarket terminal
 y suite roja tambien en base: `precondition_not_met`, sin corte. No integrar
 hasta resolver provision del modelo y la deriva de suite en lotes separados.
 
+### P-L137-R - re-add trim_to_completed_sessions (N2, candidato 0.4.317)
+
+Lote tecnico independiente 26-sep-2026. Re-anade el helper puro
+`trim_to_completed_sessions` + `last_completed_session` y el cableado en
+`update_signal_outcomes` eliminados por la reconstruccion Jetson `784e6cd7`
+(que conservo los tests). Restaura el sello de sesion P-L137 (recorte de la
+barra same-day mutable antes de madurar outcomes) sin cambiar autoridad
+trading/riesgo/ejecucion ni politica.
+
+| Lote | Estado | Alcance y aceptacion |
+| --- | --- | --- |
+| P-L137-R | ready_for_integration_rehearsal (0.4.317) | Re-add puro + cableado; 4 focales test_p137 + 47 regresiones (signal_learning + counterfactual) verdes; Ruff/NUL/diff/config verdes; paridad bit-identica historia cerrada |
+
+- Worktree `pl137_trim_readd`, rama `codex/pl137-trim-readd`, base `85e28447`
+  (P-L158-B rehearsal, 0.4.316). Sin merge/despliegue/push.
+- Bump `0.4.316` -> `0.4.317`; pin `test_p59c` actualizado.
+- Informe: `docs/informe_p_l137_trim_readd.md`.
+- Siguiente: revision direccion -> ensayo de integracion aislado en ventana
+  cerrada; sin desplegar. Los otros 3 errores de coleccion (p133/p140a/p140b)
+  quedan en lotes aparte, sin mezclar.
+
+### P-L133-R - re-add scheduler_skip_summary y signal_outcome_emptiness (N2, candidato 0.4.318)
+
+Lote tecnico independiente 26-sep-2026 sobre P-L137-R. Re-anade los 2
+helpers puros observacionales eliminados por la reconstruccion Jetson
+`784e6cd7` (que conservo `tests/test_p133_misfire_health.py`); la parte
+scheduler P-L133 (`_skip_delay_seconds`/`delay_seconds`) sobrevivio
+intacta y no se toca. Solo resumen observacional fail-open en
+`build_production_health_report`; sin alertas/gates/trading nuevos.
+
+| Lote | Estado | Alcance y aceptacion |
+| --- | --- | --- |
+| P-L133-R | ready_for_integration_rehearsal (0.4.318) | Re-add byte-identico a `30def441` (solo operational_health); 7 focales test_p133 + 91 regresiones verdes; Ruff/NUL/diff/config verdes; paridad observacional |
+
+- Worktree `pl133_skip_emptiness_readd`, rama
+  `codex/pl133-skip-emptiness-readd`, base `26f144fa` (P-L137-R, 0.4.317).
+  Sin merge/despliegue/push.
+- Bump `0.4.317` -> `0.4.318`; pin `test_p59c` actualizado; slot 0.4.318
+  libre verificado en plan principal y candidato.
+- Informe unico ampliado: `docs/informe_p_l133_misfire_health.md`.
+- Siguiente: revision direccion -> ensayo de integracion aislado en
+  ventana cerrada; sin desplegar. Los otros 2 errores de coleccion
+  (p140a/p140b) quedan en lotes aparte, sin mezclar.
+
 ## P-L70 — rediseño UX del resumen diario Telegram (candidato 0.4.203)
 
 - Worktree aislado `pl70_telegram_summary_ux`, rama
@@ -4430,6 +4474,64 @@ sizing, política o producción en esta auditoría.
 - Informe: `docs/informe_p_l140a_mis_inversiones.md`.
 - Siguiente: P-L140B sobre esta rama → revision → merge conjunto
   P-L130→P-L140 → suite → port Jetson.
+
+## P-L140A-R — re-add minimo Mis inversiones (candidato 0.4.319, `ready_for_integration_rehearsal`)
+
+- Worktree `pl140a_readd_0319`, rama `codex/pl140a-readd-0319`, base
+  exacta P-L133-R `baba2dd9`/tree `06270950`/v0.4.318. Causa: la
+  reconstruccion `784e6cd7` retiro helpers/render dejando
+  `tests/test_p140a_mis_inversiones.py` con ImportError (reproducido
+  en base); referencia historica `66103e2f`/`e7244de2` solo para
+  diff/contrato, sin cherry-pick.
+- Solo `web_app.py` (+84): `_invested_day_metric` + `_investments_group`
+  (4 tarjetas) + wiring con snapshots ya cargados; `n/d` si
+  invertido<=0 o missing; cero broker nuevo, sin persistencia ni
+  autoridad. P-L137/P-L133 intactos; sin P-L140B/P-L139/scoreboard/
+  politica/telemetry.
+- Bump `0.4.318` → `0.4.319`; pin `test_p59c` actualizado. Commits:
+  `60fe034a` funcional + `88ce177f` version/pin + `58e9497c` docs
+  (correccion N0 26-sep-2026: la atribucion anterior dejaba `58e9497c`
+  como "(+ docs)" pendiente; HEAD/tree finales post-correccion en
+  entrega/HANDOFF; prioridad/estado sin cambios).
+- QA: focales 7 passed, combinada web/P-L152/P-L153/P-L158 113 passed,
+  version 54 passed; Ruff/NUL(536)/diff/validate (`ok=true`) verdes;
+  protegidos sin diff. Gates omitidos: suite, smoke, benchmark,
+  kernel-status, integracion final.
+- Informe: `docs/informe_p_l140a_mis_inversiones.md` (seccion Re-add).
+- Siguiente: P-L140B re-add separado, luego ensayo combinado. Sin
+  merge a principal, despliegue ni push.
+
+## P-L140B-R — re-add minimo SPY unico y leaderboard a Config (candidato 0.4.320, `ready_for_integration_rehearsal`)
+
+- Worktree exclusivo `pl140b_readd_0320`, rama
+  `codex/pl140b-readd-0320`, base exacta P-L140A-R docs-corrected
+  `49f3b19f`/tree `041b4bbc`/v0.4.319. Causa reproducida en base:
+  ImportError `_spy_alpha_summary` en `test_p140b_spy_unico.py`
+  (coleccion 1 error) + guard p65a rojo por llamada
+  `_render_performance_baseline` en `page_dashboard`; referencia
+  historica `1b29df23`/`10dcd62b` solo para contrato/diff, sin
+  cherry-pick.
+- Solo `src/agente_bolsa/web_app.py` (+53/-6): `_spy_alpha_summary`
+  puro (final+comparable, geometrica, `None` sin filas, nunca cero);
+  quinta metrica Alpha en la tabla (4→5 columnas); leaderboard a
+  Config via `st.session_state["leaderboard_total_pct"]` sin mutar
+  autoridad ni llamadas; llamada baseline retirada del expander
+  (helpers baseline conservados por contrato P-L140C). Sin P-L139,
+  scoreboard, politica, persistencia, fuente nueva ni broker/red.
+  P-L140A/P-L137/P-L133 y timers P-L158 intactos.
+- Bump `0.4.319` → `0.4.320` (slot libre); pin `test_p59c`
+  actualizado. Commits: `cb2f6808` funcional + `2a88081f`
+  version/pin (+ commit documental; HEAD/tree finales en entrega).
+- QA: focales p140b+p65a 17 passed; combinada (+p59c+p140a+web)
+  147 passed; regresiones p152/p153/p158a/p158b/version/p140a
+  37 passed; Ruff/NUL(536)/diff/validate (`ok=true`) verdes;
+  protegidos sin diff. Gates omitidos: suite, smoke, benchmark,
+  kernel-status, integracion final.
+- Informe unico ampliado: `docs/informe_p_l140b_spy_unico.md`
+  (seccion Re-add P-L140B-R).
+- Siguiente: ensayo combinado de integracion en mercado cerrado.
+  Sin merge a principal, despliegue ni push. Produccion Jetson
+  0.4.316 y principal intactos.
 
 ## P-L140B — comparativa SPY unica y leaderboard a Config (candidato Windows 0.4.243, listo para revision)
 

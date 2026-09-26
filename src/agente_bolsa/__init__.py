@@ -102,7 +102,11 @@ __all__ = ["__version__"]
 # P-L158-A-R1: nivel INFO efectivo para que la linea llegue al log (0.4.314).
 # P-L158-A-R2: print directo (el handler de Streamlit filtra INFO) (0.4.315).
 # P-L158-B: perfil fino de opening_context/setup/kpis y total_seconds sin doble suma (0.4.316).
+# P-L137-R (re-add): trim_to_completed_sessions + cableado de sellos de sesion (0.4.317).
 # P-L141: port linea Windows 0.4.234-0.4.246 (funnel dataclass/KeyError, costes calibrados,
 # cobertura same-cycle, misfire delays/health, uplift LLM, linkage, flujos EOD, sellos de sesion,
 # dashboard Mis inversiones/SPY unico, grace 300/120/120, sesion proveedor Go/Zen, crew fail-open) (0.4.305).
-__version__ = "0.4.316"
+# P-L133-R (re-add): scheduler_skip_summary + signal_outcome_emptiness observacionales fail-open (0.4.318).
+# P-L140A-R (re-add): _invested_day_metric + _investments_group, P/L dia sobre invertido (0.4.319).
+# P-L140B-R (re-add): _spy_alpha_summary + alpha unico, leaderboard a Config via session_state, baseline sin render (0.4.320).
+__version__ = "0.4.320"
