@@ -1,5 +1,24 @@
 # Relevo de direccion tecnica — agenteBolsa
 
+## P-L140A-R re-add minimo (candidato 0.4.319, 26-sep-2026)
+
+Dictamen: `ready_for_integration_rehearsal` (N1 UI, solo presentacion).
+Worktree exclusivo `pl140a_readd_0319`, rama `codex/pl140a-readd-0319`,
+base exacta P-L133-R `baba2dd9`/tree `06270950`/v0.4.318; HEAD
+`88ce177f`, version 0.4.319, pin P-L59C actualizado.
+Causa: `784e6cd7` retiro helpers/render dejando ImportError
+`_invested_day_metric` (reproducido en base); re-add campo a campo
+(+84 en `web_app.py`, mismo conteo que `e7244de2`) con snapshots ya
+cargados, `n/d` si invertido<=0/missing, cero broker nuevo, sin
+persistencia ni autoridad; P-L137/P-L133 intactos, sin P-L140B/P-L139/
+scoreboard/politica/telemetry. QA: focales 7, combinada 113, version
+54; Ruff/NUL(536)/diff/validate verdes; protegidos sin diff. Gates
+omitidos: suite, smoke, benchmark, kernel-status, integracion final.
+Informe unico ampliado en `docs/informe_p_l140a_mis_inversiones.md`;
+plan maestro con entrada P-L140A-R. Siguiente: P-L140B re-add
+separado, luego ensayo combinado. Sin merge, despliegue ni push.
+Produccion Jetson 0.4.316 y principal intactos.
+
 ## Prioridad vigente - P-L158-B, 26-sep-2026
 
 Dictamen: `ready_for_closed_market_deployment` **con reserva** (N1, solo

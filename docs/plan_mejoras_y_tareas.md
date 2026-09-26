@@ -4475,6 +4475,29 @@ sizing, política o producción en esta auditoría.
 - Siguiente: P-L140B sobre esta rama → revision → merge conjunto
   P-L130→P-L140 → suite → port Jetson.
 
+## P-L140A-R — re-add minimo Mis inversiones (candidato 0.4.319, `ready_for_integration_rehearsal`)
+
+- Worktree `pl140a_readd_0319`, rama `codex/pl140a-readd-0319`, base
+  exacta P-L133-R `baba2dd9`/tree `06270950`/v0.4.318. Causa: la
+  reconstruccion `784e6cd7` retiro helpers/render dejando
+  `tests/test_p140a_mis_inversiones.py` con ImportError (reproducido
+  en base); referencia historica `66103e2f`/`e7244de2` solo para
+  diff/contrato, sin cherry-pick.
+- Solo `web_app.py` (+84): `_invested_day_metric` + `_investments_group`
+  (4 tarjetas) + wiring con snapshots ya cargados; `n/d` si
+  invertido<=0 o missing; cero broker nuevo, sin persistencia ni
+  autoridad. P-L137/P-L133 intactos; sin P-L140B/P-L139/scoreboard/
+  politica/telemetry.
+- Bump `0.4.318` → `0.4.319`; pin `test_p59c` actualizado. Commits:
+  `60fe034a` funcional + `88ce177f` version/pin (+ docs).
+- QA: focales 7 passed, combinada web/P-L152/P-L153/P-L158 113 passed,
+  version 54 passed; Ruff/NUL(536)/diff/validate (`ok=true`) verdes;
+  protegidos sin diff. Gates omitidos: suite, smoke, benchmark,
+  kernel-status, integracion final.
+- Informe: `docs/informe_p_l140a_mis_inversiones.md` (seccion Re-add).
+- Siguiente: P-L140B re-add separado, luego ensayo combinado. Sin
+  merge a principal, despliegue ni push.
+
 ## P-L140B — comparativa SPY unica y leaderboard a Config (candidato Windows 0.4.243, listo para revision)
 
 - Worktree `pl140b_spy_leaderboard`, rama
