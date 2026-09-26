@@ -1,5 +1,53 @@
 # Plan maestro de mejoras y tareas — agenteBolsa
 
+## P-L155 — el dato de SP500 se observa y se tira a la basura (26-sep-2026)
+
+Sintoma reportado por el operador: el Telegram nocturno siempre dice
+"SP500 n/d (sin datos comparables)" y el dashboard no muestra ganancia de
+SPY. Diagnostico cerrado con evidencia de produccion.
+
+| Hecho | Evidencia |
+| --- | --- |
+| El bloque de benchmark diario esta vacio | `performance_daily` tiene 55 filas (10-jun a 25-sep) y solo 8 con `spy_pct` no nulo, del 15-jul al 28-jul, con `source="yfinance"`. Desde 2026-07-29, cero |
+| El corte es deliberado | commit `2dc59c7e` 2026-07-29 "fix: enforce EOD benchmark authority" (P-L71) introdujo `same_day_cache_not_eod`: el benchmark del mismo dia ya no puede ser comparable. Correcto, no es un fallo |
+| **El sistema si observa y si persiste recibos comparables** | 16 ficheros `spy_eod_close_*.json` del 21 al 25-sep en `/var/lib/agente-bolsa/cache/market_data`, **7 con `comparison_status="comparable"`**. El del 24-sep: `previous_close 767.8099975585938`, `close 767.1799926757812`, `daily_return -0.000820521854125067`, `eod_authority "post_session_cache"`, `price_basis "adjusted_ohlc"`, `captured_at 2026-09-25T03:56:59Z` |
+| **Causa raiz: bug de lectura** | `spy_eod_authority.py:126-146` `load_spy_eod_receipt` ordena por `sorted(glob("spy_eod_close_<yyyymmdd>_*.json"))` y devuelve el primero de `reversed(candidates)`. El sufijo es `content_hash[:8]`, no tiempo: orden alfabetico, no cronologico, y sin filtrar por `comparison_status`. Caso real 24-sep: `fdf426ce` (unavailable) tapa a `8a09005c` y `a5284111` (comparable). El overlay `performance_benchmark.py:563-567` solo acepta `comparable`, asi que cae a la cache same-day y falla. Mismo en 21-sep |
+| Defecto secundario | `spy_eod_authority.py:198-228` `refresh_and_capture_spy_eod` fija `captured = _now(now)` antes de descargar y lo reutiliza, provocando `cache_created_at_future` en 5 de los 16 recibos |
+| No es red ni proveedor | `market_cycle_spy_open_capture` de 22, 24 y 25-sep con `status="inserted"` y `cache_id` no nulo; 8 artefactos `market_data_spy_open_*`; 41 `session_open_snapshot:*`; las warnings de `performance_daily` nunca incluyen `benchmark_source_unavailable` ni `price_basis_unknown` |
+| Telegram se arregla con el fix del lector | `telegram_daily_summary.py:506` aplica `overlay_eod_benchmark` en lectura |
+| `performance_daily` necesitara otro lote | la fila se persiste el mismo dia y es append-only, asi que su `spy_pct` queda `null` para siempre aunque el recibo comparable llegue esa madrugada |
+| El dashboard no tiene superficie EOD | `_render_performance_baseline` (`web_app.py:4853`) y `_canonical_daily_vs_spy_rows` (`:4161`) definidas y nunca llamadas, borrado deliberado en P-L140B (`10dcd62b` 17-sep, `cb2f6808` 26-sep). La superficie viva es apertura-a-apertura, que si tiene SPY. Decision de producto, no defecto |
+
+### Alcance de P-L155 (N2, sin frontera protegida, sin red nueva en produccion)
+
+1. `load_spy_eod_receipt`: elegir el recibo valido mas reciente por `captured_at` y **nunca** dejar que un `unavailable` enmascare un `comparable`. Sin reescribir ficheros existentes.
+2. `refresh_and_capture_spy_eod`: tomar el reloj de captura **despues** de la descarga y cubrir tambien la sesion XNYS previa cerrada desde cachés, sin descargar para sesiones pasadas.
+
+Aceptacion: con los 4 recibos reales del 24-sep en disco, `overlay_eod_benchmark` entrega `comparison_status="comparable"` y `daily_return` no nulo, y `spy-eod-coverage` cuenta la sesion como comparable. P-L71 fail-closed intacto: una cache same-day sigue dando `unavailable`. Sin backfill, sin reenvio de sesiones ya entregadas, sin cambio de trading, sin re-sellado. Version siguiente sin colision con P-L148 (`0.4.250` reservado).
+
+### Lo que P-L155 NO arregla, y queda declarado
+
+- `performance_daily.spy_pct` append-only: necesita re-proyeccion posterior, lote aparte.
+- Superficie EOD en el dashboard: decision de producto.
+- `market_thesis.macro_quality="no_provider"`: falta la credencial `FMP_API_KEY` en `.env`, archivo protegido y accion del operador. N3, fix distinto.
+
+## Tareas programadas activas (OpenChamber)
+
+| Tarea | id | Cuándo | Que verifica |
+| --- | --- | --- | --- |
+| `post-apertura-28sep-0.4.320` | `93709ca0-b565-4410-ab4b-d82e20357b48` | 2026-09-28 16:10 Europe/Madrid | Primer ciclo real con 0.4.320: contenedores, runtime, HTTP, lock, heartbeat, kernel, flags, PMR, ciclos, logs, ordenes, observables P-L137/P-L133, y bloque SP500 con comprobacion del bug de lectura |
+| `postcierre-28sep-0.4.320-spy` | `64d204c6-c5cc-4e9d-8f74-4888036c43d7` | 2026-09-28 22:40 Europe/Madrid | Cierre de la sesion, texto exacto del Telegram del 28-sep, fila de `performance_daily`, recibos SPY y juicio explicito sobre si el overlay devolveria un comparable tapado |
+
+Ambas read-only, con el diagnostico SP500 embebido como hipotesis a verificar, no como verdad. Ninguna despliega, reinicia, hace push ni propone cambiar politica.
+
+## Cola priorizada tras el despliegue 0.4.320
+
+1. **P-L155** (N2) — bug de lectura del recibo EOD SPY. Desbloquea la medicion de alpha, que hoy es `unavailable` desde el 29-jul. Highest risk-to-information ratio: 2 funciones, sin frontera protegida, y hay 7 recibos comparables huerfanos en produccion.
+2. **Deuda de suite** en micro-lotes separados, sin mezclarla con P-L155: P-L80B x2, P-L131 x4, P-L132 x3, P-L134 x3, P-L135 x4, P-L139 x1, P-L71 x3, P-L72 x1, P-L81 x1, copy Telegram x12, `learning_mode` x1, `learning_scoreboard` x4, `lesson_distiller` x1, `market_cycle_timing_integration` x1.
+3. **P-L154-A** (N2, caracterizacion) — sigue siendo la prioridad economica. Depende de que P-L155 devuelva alpha utilizable.
+4. Decision de producto sobre la superficie EOD de SPY en el dashboard, y sobre `FMP_API_KEY`.
+5. **P-L148** permanece en 0/5. No se activa.
+
 ## Estado productivo 26-sep-2026 20:35 — `deployed` 0.4.320
 
 Produccion Jetson corre `agente-bolsa:0.4.320-arm64`

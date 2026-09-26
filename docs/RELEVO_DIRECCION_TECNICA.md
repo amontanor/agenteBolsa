@@ -1,5 +1,69 @@
 # Relevo de direccion tecnica — agenteBolsa
 
+## Secuencia siguiente (26-sep-2026 23:30 Europe/Madrid)
+
+1. **28-sep 15:30** apertura XNYS. Contenedores 0.4.320-arm64 ya en pie desde el
+   26-sep; `RestartCount` debe seguir en 0.
+2. **28-sep 16:10** corre `post-apertura-28sep-0.4.320`
+   (`93709ca0-b565-4410-ab4b-d82e20357b48`): primer ciclo real, invariantes del
+   stack y bloque SP500 con comprobacion del bug de lectura.
+3. **28-sep 22:40** corre `postcierre-28sep-0.4.320-spy`
+   (`64d204c6-c5cc-4e9d-8f74-4888036c43d7`): cierre de sesion, texto exacto del
+   Telegram, fila de `performance_daily` y juicio sobre el overlay.
+4. **P-L155** (N2) en worktree nuevo `codex/pl155-spy-eod-post-session` desde
+   `1b87e886a2f682d599ada157bd22074f0d622219`/v0.4.320: corregir
+   `load_spy_eod_receipt` para que elija por `captured_at` y no deje que un
+   `unavailable` enmascare un `comparable`, mas el reloj post-descarga en
+   `refresh_and_capture_spy_eod`. Sin frontera protegida, sin red nueva, sin
+   tocar el fail-closed de P-L71, sin backfill. Despliegue solo con
+   autorizacion explicita y ventana cerrada.
+5. Micro-lotes de deuda de suite, uno por contrato y sin mezclarlos con
+   P-L155.
+6. P-L154-A cuando P-L155 devuelva alpha utilizable. P-L148 sigue 0/5.
+
+## P-L155: el dato de SP500 existe y el lector lo descarta (26-sep-2026)
+
+Dictamen del diagnostico: `needs_fix` con lote minimo definido. Hechos:
+`performance_daily` solo tiene 8 de 55 filas con `spy_pct` (15-jul a 28-jul)
+desde que `2dc59c7e` (P-L71, 29-jul) puso el contrato en fail-closed. Pero
+en `/var/lib/agente-bolsa/cache/market_data` hay 16 recibos
+`spy_eod_close_*.json` del 21 al 25-sep y **7 son `comparable`**. El del
+24-sep lleva `daily_return -0.000820521854125067` con cierre anterior
+767.8099975585938 y cierre 767.1799926757812.
+
+Causa raiz: `src/agente_bolsa/tools/spy_eod_authority.py:126-146`
+`load_spy_eod_receipt` ordena por nombre de fichero cuyo sufijo es
+`content_hash[:8]`, devuelve el primero de `reversed(candidates)` y no filtra
+por `comparison_status`. El 24-sep, `fdf426ce` (unavailable) tapa a
+`8a09005c` y `a5284111` (comparable). El overlay de
+`performance_benchmark.py:563-567` solo acepta `comparable`, asi que
+descarta el bueno. El 21-sep tiene el mismo fallo.
+
+Defecto secundario en `spy_eod_authority.py:198-228`: el reloj de captura se
+fija antes de descargar y se reutiliza, generando
+`cache_created_at_future` en 5 de los 16 recibos.
+
+No es red: `market_cycle_spy_open_capture` de 22, 24 y 25-sep con `status`
+`inserted`, 8 artefactos de apertura y 41 `session_open_snapshot:*`. Yfinance
+funciona en Jetson.
+
+Telegram se arregla con el fix del lector porque
+`telegram_daily_summary.py:506` aplica `overlay_eod_benchmark` en lectura.
+`performance_daily` no: su fila es append-only del mismo dia y quedara con
+`spy_pct` null aunque el recibo llegue esa madrugada; eso es otro lote. El
+dashboard no tiene superficie EOD desde P-L140B por decision de producto, no
+por defecto. `macro_quality="no_provider"` es falta de `FMP_API_KEY` en
+`.env`: archivo protegido, accion del operador, fix distinto.
+
+Revision adversarial del worker `deepseek`
+(`ses_f20de2e61ffe4pPCifpfa3ooo9`): correcto en el reloj pre-descarga y en
+identificar el enmascaramiento, pero su premisa de que la recuperacion
+post-sesion "nunca se produce" queda refutada por los 7 recibos
+comparables, y presenta el bug de lectura como riesgo teorico cuando es la
+causa raiz demostrada del sintoma. Cero mutaciones; los 4 ficheros
+transitorios que escribio en `data/cache/market_data` del worktree los borro
+y el arbol quedo limpio.
+
 ## 0.4.320 desplegado en Jetson (26-sep-2026 20:35 Europe/Madrid)
 
 Dictamen: `deployed`. Port de 4 ficheros de `src`
