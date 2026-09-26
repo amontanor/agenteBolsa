@@ -90,12 +90,81 @@ locks/leases, sin push.
   broker/red/LLM/yfinance, sin SQLite productiva, sin
   servicios/locks/leases, sin reinicio, sin push.
 
+## Validacion cerrada por particiones (26-sep-2026 19:55-20:27, XNYS cerrado)
+
+Dictamen: `ready_for_closed_market_deployment` sujeto a preflight
+renovado y autorizacion explicita del operador. Sin despliegue ejecutado.
+
+### Por que no se repitio la suite completa
+
+La suite unica `pytest tests/ -q --continue-on-collection-errors` se
+detuvo a las 18:57 tras 2 h 40 min sin superar 51%, con >1,1 M handles y
+~964 MiB privados: supero el presupuesto 2x de AGENTS. Causa raiz
+aclarada, no nueva: `tests/test_p45b2_learning_observation_batch_characterization.py::test_current_sequential_baseline_records_one_connection_and_commit_per_row[33336]`
+es una caracterizacion deliberadamente lenta. Medida aislada: **181,62 s**
+para ese nodo; `storage.py` **sin diff** frente a la base 0.4.316. En la
+base 0.4.316 ese fichero tardaba 23:57 min de suite completa; aqui el
+coste esta contenido en dos ficheros. Evidencia: log
+`Temp\opencode\pl137140_slow_focus.log`.
+
+### Particiones ejecutadas (cada una una sola vez, sin solapes)
+
+| Particion | Ficheros | Resultado | Duracion |
+| --- | ---: | --- | ---: |
+| A (deuda conocida) | 18 | 41 failed, 153 passed | 13,72 s |
+| B (lotes re-add) | 10 | 164 passed | 18,60 s |
+| C (resto del arbol) | 248 | 2310 passed, 1 skipped | 573,52 s |
+| P-L45B2 (lento aislado) | 2 | 33 passed | 232,05 s |
+
+Denominador total: **2660 passed, 41 failed, 1 skipped, 0 collection
+errors**. Los 4 errores de coleccion de 0.4.316 (p133, p137, p140a,
+p140b) **desaparecen**: los simbolos re-add ya importan.
+
+### Comparacion con la base 0.4.316 (46 failed / 2586 passed / 1 skip / 4 errors)
+
+- Los 41 fallos son **subconjunto exacto** de los 46 del baseline, uno a
+  uno por node id. Cero regresiones nuevas.
+- Los 5 del baseline que ya no fallan:
+  - `test_p59c_llm_selected_authority.py::test_version_policy_requires_bump`
+    (ancla actualizada a 0.4.320 dentro del lote),
+  - `test_p65a_daily_vs_spy_contract.py::test_spy_comparison_has_single_surface_without_baseline_renderer`
+    (superficie unica P-L140B; el baseline duplicado deja de renderizarse),
+  - `test_p78b_deepseek_default.py` x2 y `test_web_research.py` x1:
+    **no reproducibles en este entorno**. El triage los atribuyo a
+    contaminacion de `os.environ` heredado (`OPENCODE_*` /
+    `TAVILY_API_KEY`) en el proceso que genero el baseline. Hecho, no
+    mejora de producto: no se claima fix.
+- El skip es el preexistente `test_score_study_regression_current_sqlite`
+  (historia SQLite local insuficiente).
+
+### Gates
+
+Verde en este cierre: `git diff --check` limpio; sin `pytest` activo
+tras cerrar; particiones A/B/C y P-L45B2 con codigo de salida 1 solo en
+A (por la deuda preexistente) y 0 en B, C y P-L45B2.
+
+Heredados por identidad exacta del tree funcional `00e5bdea` (sin cambio
+semantico posterior): Ruff `All checks passed`, `check_no_nulls.py` OK
+(536 archivos), `validate-agent-config --json` `ok=true`, smoke aislado
+`run-once --skip-crew` exit 0 con 52 eventos y 0 ordenes/planes,
+kernel temporal `unsealed` esperado. Gates NO repetidos aqui: suite
+completa en un unico proceso, benchmark 33.336 (medido y contenido en la
+particion P-L45B2), `kernel-status` productivo, preflight productivo,
+corte y doble salud.
+
+### Estado Git al cierre
+
+HEAD `ffa4dbe7b95c9bf32c25c09b1caf2e2af7b32953`, tree
+`1df99159a5f79e8891cc8ad7c06fba465a801fae`, v0.4.320, arbol limpio. Este
+commit documental no cambia `src`, `tests` ni version. Principal
+`c0b6578e6af9a6c41f49e6c1b92b51c55d203de8` / tree `c4ee7c8f` / v0.4.253
+limpio. Produccion Jetson 0.4.316 intacta: `/` y `/health` 200 (1522 B)
+leidos el 26-sep 20:18. Sin broker/red/LLM operativo, sin SQLite
+productiva, sin locks/leases tocados, sin push.
+
 ## Siguiente paso minimo (sin ejecutar)
 
-Una sola validacion completa del arbol funcional definitivo
-(`00e5bdeadf1a7d6cd9340e76fbd9b136c3583412`) con XNYS cerrado y
-precondiciones frescas (postmarket terminal, leases vacios,
-paper/live/auto-apply, kernel, configuracion, margen). Despliegue
-solo con evidencia final suficiente y autorizacion explicita del
-operador transmitida por `direccion`. Principal (`c0b6578e`) y
-produccion Jetson 0.4.316 intactos.
+Preflight productivo fresco (postmarket terminal, leases vacios, sin
+jobs/pytest activos, paper/live/auto-apply, kernel, margen) y
+autorizacion explicita del operador; solo entonces corte y doble salud.
+Sin push.
