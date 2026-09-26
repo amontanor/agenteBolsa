@@ -4552,7 +4552,7 @@ sizing, política o producción en esta auditoría.
 - En espera de decision: el estudio de edge negativo era sobre cohorte fallback; con P-L147 los crews vuelven y la cohorte cambia. Medir 5 sesiones antes de subir tamano.
 
 
-## P-L307 � corte Jetson 0.4.307 (P-L147 + P-L149) DEPLOYED
+## P-L307 � corte Jetson 0.4.307 (P-L147 + P-L149) DEPLOYED
 
 - Dictamen: deployed 18-sep ~23:20Z. Imagen sha256:0f3d6baaa656ad60e5.
 - crew.py y trade_decision.py Jetson divergen de Windows: parche por ancla (2 y 9 hunks).
@@ -4593,3 +4593,5 @@ sizing, política o producción en esta auditoría.
 
 - Estudio 25-sep-2026: docs/estudio_dashboard_rendimiento_2026-09-25.md. HAR con 5 s de connect, 270 ms en endpoints triviales y 70 s de stream (paron 47 s): ambiental por reboot-loop y carga, no coste normal (estable hoy: 15 ms / 2 ms).
 - P-L158-A propuesto: instrumentar tiempos por seccion en worktree aislado (N1); despues, refactor del tramo que mas segundos explique. Sin codigo aun.
+- P-L158-A `deployed` 0.4.315 (temporizador dashboard, 14 secciones, linea `dashboard_timing`); primera medicion real 25-sep: 4 cargas ~62s (`opening_context` 27.6s + doble conteo de `total` 62.5s).
+- P-L158-B `deployed` 0.4.316 (26-sep-2026, solo-observacional N1): perfil fino opening_context/setup/kpis + `total_seconds` = seccion `total`. Rehearsal `7ad1d2e9` (tree `69be2dc5`) + docs `6aab5028` + validacion `85e28447` en rama `codex/pl158b-integration-rehearsal`; suite roja identica en base (46F/4E, delta +4 tests nuevos), smoke exit 0. Corte por port sobre 0.4.315: imagen `e3fbc6975cb3`, snapshot frio `cold-pre-0.4.316-20260926T130722Z` (integrity ok), selector `0.4.316-arm64`, doble salud verde (HTTP 200, lock, kernel ok, leases 0, 0 ordenes). Informe unico en candidato: `docs/informe_p_l158b_perfil_fino.md`.

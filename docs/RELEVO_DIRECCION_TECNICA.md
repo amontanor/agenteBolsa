@@ -1,5 +1,9 @@
 # Relevo de direccion tecnica — agenteBolsa
 
+## P-L158-B desplegado 0.4.316 (26-sep-2026)
+
+Dictamen: `deployed`. Perfil fino dashboard solo-observacional (N1). Rehearsal `7ad1d2e9` (tree `69be2dc5`) + validacion `85e28447` en `codex/pl158b-integration-rehearsal`; suite roja identica en base (46F/4E, +4 tests nuevos), smoke exit 0. Corte por port sobre 0.4.315 con autorizacion `go` del operador: snapshot frio `cold-pre-0.4.316-20260926T130722Z` (integrity ok), imagen `e3fbc6975cb3` (runtime 0.4.316, LABELs revision merge/source-tree/port-base), selector `0.4.316-arm64` con backup, doble salud verde (HTTP 200, lock pid 7/token 2377158, kernel ok 0 violaciones, leases 0, 0 ordenes, listener unico). Incidencia propia: sonda `--help` a `jetson-ops` provoco un redespliegue 0.4.315 sin dano (verificado sano); no sondar el wrapper con flags. Deuda suite preexistente a lotes aparte. Sin push.
+
 ## Prioridad vigente - P-L154, 22-sep-2026
 
 Dictamen: ready_for_implementation para P-L154-A (caracterizacion), sin
