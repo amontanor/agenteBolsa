@@ -40,9 +40,9 @@ Informe unico: `docs/informe_p_l158b_perfil_fino.md`; backlog en plan maestro.
 ## Prioridad vigente - P-L137-R (re-add trim_to_completed_sessions), 26-sep-2026
 
 Dictamen: `ready_for_integration_rehearsal` (N2 finality outcomes). Lote unico
-de re-add puro, sin despliegue. Candidato `codex/pl137-trim-readd` HEAD
-`98d91bdc`, tree `0f2b111e`, v0.4.317; base `85e28447` (P-L158-B rehearsal,
-tree `70d487e7`, v0.4.316). Informe unico:
+de re-add puro, sin despliegue. Candidato `codex/pl137-trim-readd` v0.4.317;
+base `85e28447` (P-L158-B rehearsal, tree `70d487e7`, v0.4.316); commits
+`c8ddabc7` (feat) + `98d91bdc` (test) + `1dd3d5fe` (docs). Informe unico:
 `docs/informe_p_l137_trim_readd.md`; backlog en plan maestro.
 
 - Causa: `784e6cd7` (reconstruccion Jetson `.310`) elimino 4 helpers puros
