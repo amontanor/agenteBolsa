@@ -1,5 +1,30 @@
 # Relevo de direccion tecnica — agenteBolsa
 
+## Ensayo combinado P-L137+P-L133+P-L140A+P-L140B (rehearsal 0.4.320, 26-sep-2026)
+
+Dictamen: `ready_for_closed_market_full_validation` (integracion
+aislada N2/N1, sin validacion completa ni despliegue). Worktree
+NUEVO exclusivo `pl137_140_readd_rehearsal`, rama
+`codex/pl137-140-readd-rehearsal`, base exacta P-L158-B
+`85e28447`/tree `70d487e7`/v0.4.316. Merge `--no-ff` `338136fa`
+(parents `85e28447`+`09980875`) del candidato extremo exacto
+`09980875`/tree `00e5bdea`/v0.4.320, sin conflictos; tree del
+merge identico al candidato (diff vacio). XNYS cerrado 26-sep;
+next_open 28-sep 15:30 Europe/Madrid. Cero cambios
+`src/tests/version`; protegidos/`.env` sin diff. Paridad por
+fuente: recorte P-L137 pre-bucle, health P-L133 fail-open sin
+alertas, UI P-L140 solo lectura (baseline sin render, leaderboard
+via `session_state`), timers P-L158 intactos, denominadores
+missing/`unavailable` intactos. QA: 186 passed combinados
+(solapes declarados), Ruff/NUL(536)/diff/validate verdes. Gates
+omitidos: suite, smoke, benchmark, kernel-status, validacion
+completa, despliegue, doble salud. Informe unico
+`docs/informe_p_l137_140_readd_rehearsal.md`; plan maestro con
+entrada del ensayo. Siguiente: una sola validacion completa del
+arbol `00e5bdea` con precondiciones frescas; despliegue solo con
+autorizacion explicita. Sin push. Produccion Jetson 0.4.316 y
+principal intactos.
+
 ## P-L140B-R re-add minimo (candidato 0.4.320, 26-sep-2026)
 
 Dictamen: `ready_for_integration_rehearsal` (N1 UI, solo presentacion).

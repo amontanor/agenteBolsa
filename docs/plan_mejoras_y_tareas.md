@@ -4533,6 +4533,36 @@ sizing, política o producción en esta auditoría.
   Sin merge a principal, despliegue ni push. Produccion Jetson
   0.4.316 y principal intactos.
 
+## P-L137+133+140A+140B-R — ensayo combinado de integracion (rehearsal 0.4.320, `ready_for_closed_market_full_validation`)
+
+- Worktree NUEVO exclusivo `pl137_140_readd_rehearsal`, rama
+  `codex/pl137-140-readd-rehearsal`, base exacta P-L158-B
+  `85e28447`/tree `70d487e7`/v0.4.316. Merge `--no-ff`
+  `338136fa` (parents `85e28447`+`09980875`) del candidato
+  extremo exacto `09980875`/tree `00e5bdea`/v0.4.320 (cadena
+  P-L137 `26f144fa` + P-L133 `baba2dd9` + P-L140A
+  docs-corrected `49f3b19f` + P-L140B), sin conflictos; tree del
+  merge `00e5bdea` identico al candidato (diff vacio). Cero
+  cambios `src/tests/version` en este lote; protegidos/`.env`
+  sin diff.
+- Paridad verificada por fuente: recorte P-L137 antes del bucle
+  outcomes; health P-L133 fail-open sin alertas
+  (`pct_empty=None`, excepciones `unavailable`); UI P-L140 solo
+  lectura (misma fuente/denominador, baseline sin render,
+  leaderboard via `session_state`); timers P-L158 intactos;
+  missing/`unavailable` sin ceros inventados.
+- QA: bateria minima combinada 186 passed (p137+p133+p140a+
+  p140b+p65a+p158a/p158b+operational_health+web_app+version/
+  p59c; solapes declarados, no sumados como unicos); Ruff/
+  NUL(536)/diff/validate (`ok=true`) verdes. Gates omitidos:
+  suite, smoke, benchmark, kernel-status, validacion cerrada
+  completa, despliegue, doble salud.
+- Informe unico: `docs/informe_p_l137_140_readd_rehearsal.md`.
+- Siguiente: una sola validacion completa del arbol `00e5bdea`
+  con XNYS cerrado y precondiciones frescas; despliegue solo
+  con evidencia suficiente y autorizacion explicita. Sin push.
+  Produccion Jetson 0.4.316 y principal intactos.
+
 ## P-L140B — comparativa SPY unica y leaderboard a Config (candidato Windows 0.4.243, listo para revision)
 
 - Worktree `pl140b_spy_leaderboard`, rama
