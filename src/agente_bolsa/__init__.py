@@ -107,4 +107,5 @@ __all__ = ["__version__"]
 # cobertura same-cycle, misfire delays/health, uplift LLM, linkage, flujos EOD, sellos de sesion,
 # dashboard Mis inversiones/SPY unico, grace 300/120/120, sesion proveedor Go/Zen, crew fail-open) (0.4.305).
 # P-L133-R (re-add): scheduler_skip_summary + signal_outcome_emptiness observacionales fail-open (0.4.318).
-__version__ = "0.4.318"
+# P-L140A-R (re-add): _invested_day_metric + _investments_group, P/L dia sobre invertido (0.4.319).
+__version__ = "0.4.319"
