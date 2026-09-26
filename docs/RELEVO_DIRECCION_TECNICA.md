@@ -1,32 +1,41 @@
 # Relevo de direccion tecnica — agenteBolsa
 
-## Prioridad vigente - P-L158-B, 25-sep-2026
+## Prioridad vigente - P-L158-B, 26-sep-2026
 
-Dictamen: `ready_for_closed_market_full_validation` (N1, solo observacion) tras
-el rehearsal de integracion. Candidato `codex/pl158b-dashboard-perf` HEAD
-`17cf9de1`, tree `69be2dc5`, v0.4.316. Rehearsal: worktree NUEVO
-`C:\Antonio\Bref\agenteBolsa_worktrees\pl158br_integration_rehearsal`, rama
-`codex/pl158b-integration-rehearsal`, base `708f0e46` (tree `585a7557`), merge
---no-ff -> `7ad1d2e9` (tree `69be2dc5`, parents `708f0e46`/`17cf9de1`), limpio.
+Dictamen: `ready_for_closed_market_deployment` **con reserva** (N1, solo
+observacion) tras la validacion completa aislada del 26-sep. Candidato
+`codex/pl158b-integration-rehearsal` HEAD `6aab5028`, tree `0de7b35c`,
+v0.4.316 (merge --no-ff `7ad1d2e9`; base `708f0e46`, tree `585a7557`).
 Informe unico: `docs/informe_p_l158b_perfil_fino.md`; backlog en plan maestro.
+**Este lote no propone corte.**
 
 - Sub-secciones finas dentro de opening_context (5 funciones), setup (2) y kpis
   (2) con el `_DashboardTimer` existente; `total_seconds` = seccion envolvente
   `total` (corrige la doble suma de P-L158-A). Cero cambios de logica, trading,
   riesgo, UI, cache o firmas. Protegidos sin diff (blobs identicos). Produccion
   Jetson 0.4.315-arm64 intacta.
+- Suite completa aislada 26-sep (sabado, XNYS cerrado), sin `-x` y con
+  `--continue-on-collection-errors`: candidato `6aab5028` 46 failed/2586
+  passed/1 skipped/105 warnings/4 errors en 1437.59 s; base `708f0e46` 46
+  failed/2582 passed/1 skipped/105 warnings/4 errors en 886.98 s. Fallos y
+  errores identicos entre ambos; delta +4 = tests nuevos
+  `tests/test_p158b_dashboard_perf.py`. 4 errores de coleccion preexistentes
+  (test_p133/test_p137/test_p140a/test_p140b, simbolos ausentes en `src`) y 1
+  skip preexistente (`test_score_study_regression_current_sqlite`). Benchmark
+  P-L45 omitido por coste.
+- Smoke aislado `run-once --skip-crew`: exit 0, ciclo `20260926-080243`,
+  `used_crew=false`, `broker_orders=0`, `order_plans=0`, `agent_events=52`.
+  Ruff/NUL/diff/config verdes; `kernel-status=unsealed` esperado en `DATA_DIR`
+  temporal.
 - Fase 1 productiva (read-only): sesion `2026-09-25` terminal `completed`
-  (`pmr_a2c364c6dbc5`, 20:28:09Z). Lease reconciliation `brkrec_40a7e3f65ca5`
-  activo 21:37:31Z; liberado `completed` 21:46:49Z. Relectura 21:47:35Z sin
-  leases active. Cadencia reconciliacion ~15 min: re-verificar en el corte.
-- QA rehearsal: 85 focales (p158b+p158a+test_web_app) + 31 regresiones
-  (version_policy/p152/dashboard_llm_helpers/p83d/p87/p123), Ruff/NUL/diff
-  verdes. Omitidos: suite completa, smoke, benchmark, validate-agent-config,
-  kernel-status, despliegue, doble salud.
-- Secuencia siguiente: (1) suite completa aislada sobre `7ad1d2e9`; (2) ventana
-  cerrada con postmarket terminal, leases/jobs ausentes y autorizacion explicita
-  -> port Jetson + corte con snapshot frio y doble healthcheck. Nunca desplegar
-  por el worker; requiere autorizacion del operador.
+  (`pmr_a2c364c6dbc5`, 20:28:09Z); 0 leases activos en la relectura.
+- Reserva: la deuda de suite (46 failed + 4 errores de coleccion) es
+  preexistente e identica en la base 0.4.315; se repara en lotes aparte y no se
+  oculta con skip/xfail ni se aprueba por omision.
+- Secuencia siguiente (no ejecutada en este lote): ventana cerrada con postmarket
+  terminal, leases/jobs ausentes y autorizacion explicita del operador -> port
+  Jetson + corte con snapshot frio y doble healthcheck. Nunca desplegar por el
+  worker.
 
 ## Prioridad vigente - P-L154; lote tecnico P-L157, 24-sep-2026
 

@@ -170,6 +170,50 @@ observacion N1). No desplegado; el corte exige suite completa aislada + port
 Jetson + snapshot frio + doble healthcheck, con XNYS cerrado, leases/jobs
 ausentes y autorizacion explicita del operador.
 
+## Validacion completa aislada y smoke (26-sep-2026)
+
+Fecha/hora: 2026-09-26 ~10:25 Madrid (08:25Z), sabado; XNYS **cerrado**
+(`schedule-status`: `is_open=false`, `next_open=2026-09-28T15:30:00+02:00`).
+Worktree aislado `pl158br_integration_rehearsal`, sin `DATA_DIR`/SQLite
+productiva y sin red/broker/LLM/yfinance. No se toco produccion, principal,
+datos, config, locks ni leases. La evidencia procede de la sesion
+`ses_f23616655ffe3pmtziGgijpUWb`; no se re-ejecuto nada en este lote.
+
+Suite completa aislada (lanzada **sin** `-x` y con
+`--continue-on-collection-errors`: el `-x` abortaba en la coleccion
+preexistente):
+
+| Arbol | HEAD | Tree | Resultado | Duracion |
+| --- | --- | --- | --- | --- |
+| Candidato | `6aab5028` | `0de7b35c` | 46 failed, 2586 passed, 1 skipped, 105 warnings, 4 errors | 1437.59 s |
+| Base | `708f0e46` | `585a7557` | 46 failed, 2582 passed, 1 skipped, 105 warnings, 4 errors | 886.98 s |
+
+- Conjuntos de fallos y errores **identicos** entre candidato y base
+  (comparados uno a uno). Delta `+4 passed` = los 4 tests nuevos
+  `tests/test_p158b_dashboard_perf.py` aportados por el candidato.
+- 4 errores de coleccion **preexistentes** (base y HEAD): `test_p133`,
+  `test_p137`, `test_p140a` y `test_p140b` (simbolos ausentes en `src` en
+  ambos arboles).
+- 1 skip **preexistente**: `test_score_study_regression_current_sqlite`.
+- Benchmark P-L45 (33.336 observaciones) **omitido** por coste declarado.
+
+Smoke aislado `run-once --skip-crew` (exit 0): ciclo `20260926-080243`,
+`used_crew=false`, `broker_orders=0`, `order_plans=0`, `agent_events=52`.
+
+Gates estaticos: Ruff, `scripts/check_no_nulls.py`, `git diff --check` y
+validacion de configuracion **verdes**. `kernel-status` = `unsealed`
+**esperado** en `DATA_DIR` temporal (no describe produccion; no hay manifiesto
+productivo en ese entorno).
+
+Fase 1 productiva (read-only): postmarket de la sesion 25-sep `completed` a las
+20:28Z (`run_id=pmr_a2c364c6dbc5`); 0 leases activos en la relectura.
+
+Dictamen de la validacion completa: `ready_for_closed_market_deployment`
+**con reserva**: la deuda de suite (46 failed + 4 errores de coleccion) es
+preexistente e identica en la base 0.4.315, se documenta aqui y se repara en
+lotes aparte; no se oculta con skip/xfail ni se aprueba por omision. Este lote
+no propone corte.
+
 ## Límites y siguiente paso
 
 Siguiente paso único (sin ejecutarlo): integrar `codex/pl158b-dashboard-perf`
