@@ -771,5 +771,5 @@ def test_version_policy_requires_bump():
     if dist:
         # Con PYTHONPATH al src del worktree, leemos __init__.py
         import agente_bolsa
-        # P-L153 is the current candidate (session-aware SPY authority).
-        assert agente_bolsa.__version__ == "0.4.253"
+        # P-L137-R (re-add) is the current candidate (session-sealed maturation).
+        assert agente_bolsa.__version__ == "0.4.317"
