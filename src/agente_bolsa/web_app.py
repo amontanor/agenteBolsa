@@ -4221,6 +4221,39 @@ def _daily_vs_spy_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _spy_alpha_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Alpha acumulado sobre las mismas filas finales comparables (P-L140B).
+
+    Misma serie y ventana que la tabla Sistema vs SPY: solo sesiones
+    `final` + `comparable` con ambos porcentajes. Composicion geometrica.
+    Sin filas comparables, todo `None`: nunca se inventa alpha.
+    """
+
+    finals = [
+        row
+        for row in rows
+        if row.get("status", "final") == "final"
+        and row.get("comparison_status", "comparable") == "comparable"
+        and _num(row.get("system_pct")) is not None
+        and _num(row.get("spy_pct")) is not None
+    ]
+    if not finals:
+        return {"n": 0, "system_cum": None, "spy_cum": None, "alpha": None}
+    system_cum = 1.0
+    spy_cum = 1.0
+    for row in finals:
+        system_cum *= 1.0 + float(row["system_pct"])
+        spy_cum *= 1.0 + float(row["spy_pct"])
+    system_cum = round(system_cum - 1.0, 6)
+    spy_cum = round(spy_cum - 1.0, 6)
+    return {
+        "n": len(finals),
+        "system_cum": system_cum,
+        "spy_cum": spy_cum,
+        "alpha": round(system_cum - spy_cum, 6),
+    }
+
+
 def _daily_vs_spy_window_label(value: int | None) -> str:
     if value is None:
         return "Desde inicio"
@@ -4696,7 +4729,8 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
             _render_opening_omissions(opening_context)
             return
         summary = _daily_vs_spy_summary(visible_rows)
-        c1, c2, c3, c4 = st.columns(4)
+        alpha = _spy_alpha_summary(visible_rows)
+        c1, c2, c3, c4, c5 = st.columns(5)
         suffix = f"{summary['final']} finales · {summary['visible_total']} visibles"
         with c1:
             _compact_metric("Dias sistema superior", summary["system_wins"], suffix, "good")
@@ -4706,6 +4740,14 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
             _compact_metric("Empates", summary["ties"], suffix, "neutral")
         with c4:
             _compact_metric("En curso", summary["in_progress"], suffix, "neutral")
+        with c5:
+            alpha_tone = "good" if (alpha["alpha"] or 0.0) > 0 else "bad" if (alpha["alpha"] or 0.0) < 0 else "neutral"
+            _compact_metric(
+                "Alpha acumulado",
+                _pct_signed_or_na(alpha["alpha"]),
+                f"{alpha['n']} sesiones finales",
+                alpha_tone,
+            )
         chart = _daily_vs_spy_chart(visible_rows)
         if chart is not None:
             st.altair_chart(chart, width="stretch")
@@ -5847,6 +5889,7 @@ def page_dashboard() -> None:
     account_total_pl = _num(full_equity_summary.get("pl"))
     account_total_pct = _num(full_equity_summary.get("pl_pct"))
     account_initial_equity = _num(full_equity_summary.get("start_value"))
+    st.session_state["leaderboard_total_pct"] = account_total_pct
     timer.stop("opening_context")
 
     timer.start("header")
@@ -5909,9 +5952,6 @@ def page_dashboard() -> None:
         today_equity_pct=today_pct,
     )
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
-    timer.start("kpis.leaderboard")
-    _render_leaderboard_controls(store, account_total_pct)
-    timer.stop("kpis.leaderboard")
     timer.stop("kpis")
 
     timer.start("overview")
@@ -6124,8 +6164,8 @@ def page_dashboard() -> None:
         _render_autonomy_panel(store, settings)
 
     with st.expander("Rendimiento avanzado"):
-        _render_performance_baseline(store)
-        st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+        # P-L140B: la comparativa Sistema vs SPY vive una sola vez arriba
+        # (tabla apertura->apertura + alpha). El baseline duplicado se retira.
         with st.container(border=True):
             _render_profitability_scoreboard_panel(settings, store)
 
@@ -8866,6 +8906,13 @@ def page_config() -> None:
         _metric_card("Backup SQLite", summary.get("size_bytes") if summary else "-")
     st.subheader("SQLite")
     st.json(store.status())
+    st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+    st.subheader("LLM Trading Leaderboard")
+    st.caption(
+        "La ganancia actual se publica desde aqui cuando antes se ha visitado el Dashboard "
+        "en la misma sesion (el valor viaja en memoria, sin llamadas nuevas al broker)."
+    )
+    _render_leaderboard_controls(store, st.session_state.get("leaderboard_total_pct"))
 
 
 def _render_manual_navigation() -> None:
