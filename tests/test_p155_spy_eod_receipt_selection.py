@@ -77,6 +77,12 @@ def _write_receipt_file(settings, receipt, suffix):
     return path
 
 
+def _clear_price_caches(settings) -> None:
+    root = Path(settings.data_dir) / "cache" / "market_data"
+    for stale in list(root.glob("market_data_*.pkl")) + list(root.glob("market_data_*.json")):
+        stale.unlink()
+
+
 def _production_session_20260924(settings):
     """Cuatro recibos de la sesion 2026-09-24 con la distribucion de produccion.
 
@@ -91,6 +97,10 @@ def _production_session_20260924(settings):
     )
     assert comparable_early["comparison_status"] == "comparable"
     _write_receipt_file(settings, comparable_early, "8a09005c")
+    # Segunda captura EOD con cache distinta: `captured_at` no entra en
+    # `content_hash`, asi que dos recibos solo difieren en el reloj si el
+    # contenido de la cache tambien difiere, igual que en produccion.
+    _write_price_cache(settings, created_at="2026-09-25T02:00:00+00:00", name="eod")
     comparable_late = build_spy_eod_receipt(
         settings, SESSION, now=datetime(2026, 9, 25, 22, 5, 47, tzinfo=timezone.utc)
     )
@@ -98,8 +108,7 @@ def _production_session_20260924(settings):
     _write_receipt_file(settings, comparable_late, "a5284111")
 
     # El recibo comparable mas reciente es el que debe ganar.
-    (Path(settings.data_dir) / "cache" / "market_data" / "market_data_eod.pkl").unlink()
-    (Path(settings.data_dir) / "cache" / "market_data" / "market_data_eod.json").unlink()
+    _clear_price_caches(settings)
 
     # Cache same-day: P-L71 sigue cerrada, produce unavailable.
     _write_price_cache(settings, created_at="2026-09-24T21:00:00+00:00", name="same_day")
@@ -108,6 +117,7 @@ def _production_session_20260924(settings):
     )
     assert unavailable_early["comparison_status"] == "unavailable"
     _write_receipt_file(settings, unavailable_early, "37277f9b")
+    _write_price_cache(settings, created_at="2026-09-24T21:30:00+00:00", name="same_day")
     unavailable_late = build_spy_eod_receipt(
         settings, SESSION, now=datetime(2026, 9, 26, 21, 33, 2, tzinfo=timezone.utc)
     )
@@ -137,14 +147,15 @@ def test_a1_gana_el_comparable_mas_reciente_por_captured_at(tmp_path):
 
     receipt = load_spy_eod_receipt(settings, SESSION)
 
-    assert receipt["content_hash"] == comparable_late["content_hash"]
-    assert receipt["content_hash"] != comparable_early["content_hash"]
+    assert receipt["captured_at"] == comparable_late["captured_at"]
+    assert receipt["captured_at"] > comparable_early["captured_at"]
 
 
 # --- A2: dos comparables y comparable vs unavailable -----------------------
 
 
 def _write_named_receipt(settings, suffix, *, now, comparable, cache_created_at):
+    _clear_price_caches(settings)
     if comparable:
         _write_price_cache(settings, created_at=cache_created_at, name="eod")
     else:

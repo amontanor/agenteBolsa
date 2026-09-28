@@ -771,5 +771,5 @@ def test_version_policy_requires_bump():
     if dist:
         # Con PYTHONPATH al src del worktree, leemos __init__.py
         import agente_bolsa
-        # P-L140B-R (re-add) is the current candidate (alpha SPY unico, leaderboard a Config, baseline sin render).
-        assert agente_bolsa.__version__ == "0.4.320"
+        # P-L155 is the current candidate (lector EOD de SPY por reloj, reloj de captura post-descarga).
+        assert agente_bolsa.__version__ == "0.4.321"

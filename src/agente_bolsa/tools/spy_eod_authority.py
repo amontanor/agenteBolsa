@@ -6,6 +6,12 @@ post-sesion. Reutiliza la autoridad EOD de P-L71
 y nunca inventa una sesion ausente. Sin par real de cierres de sesiones
 XNYS estrictamente consecutivas, el recibo queda `unavailable` con razones
 explicitas; los cierres ausentes son `None`, jamas cero.
+
+P-L155: el lector elige por reloj de captura y no por nombre de fichero. El
+sufijo del nombre es `content_hash[:8]`, no tiempo, asi que el orden alfabetico
+no puede decidir y un `unavailable` no puede tapar un `comparable`. El
+productor toma el reloj de captura despues de la descarga para que la cache
+recien escrita no nazca con `cache_created_at_future`.
 """
 from __future__ import annotations
 
@@ -25,10 +31,27 @@ from .performance_benchmark import (
 
 SPY_EOD_RECEIPT_SCHEMA = "p-l121.spy-eod-close.v1"
 RECEIPT_PREFIX = "spy_eod_close_"
+_FAR_PAST = datetime.min.replace(tzinfo=timezone.utc)
 
 
 def _cache_root(settings: Any) -> Path:
     return Path(settings.data_dir) / "cache" / "market_data"
+
+
+def _parse_utc(value: Any) -> datetime | None:
+    """Normaliza un instante a UTC; `None` si no es un ISO-8601 parseable."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text[-1] in {"Z", "z"}:
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _stable_hash(payload: dict[str, Any]) -> str:
@@ -123,12 +146,50 @@ def capture_spy_eod_receipt(settings: Any, session_date: str, *, now: datetime |
     return {"persisted": True, "receipt": receipt, "path": str(path)}
 
 
+def _receipt_precedence(receipt: dict[str, Any]) -> tuple[Any, ...]:
+    """Precedencia de un recibo valido de la misma sesion (P-L155).
+
+    Orden de mayor a menor:
+
+    1. `comparison_status == "comparable"`: un `unavailable` nunca enmascara
+       un `comparable` de la misma sesion, sea cual sea su reloj.
+    2. `captured_at` mas reciente en UTC. El nombre del fichero NO entra: su
+       sufijo es `content_hash[:8]`, un identificador de contenido truncado,
+       no un reloj.
+    3. Desempate determinista y explicito, sin reloj del sistema: gana el
+       `content_hash` completo mayor, que es identidad canonica del contenido
+       del recibo; si tambien empata, gana el `receipt_path` mayor. Un
+       `captured_at` ausente o no parseable ordena por debajo de cualquier
+       `captured_at` presente, pero sigue desempataado por el mismo par
+       (`content_hash`, `receipt_path`), nunca por el hash truncado del
+       nombre.
+    """
+    comparable = str(receipt.get("comparison_status") or "") == "comparable"
+    captured = _parse_utc(receipt.get("captured_at"))
+    return (
+        1 if comparable else 0,
+        1 if captured is not None else 0,
+        captured or _FAR_PAST,
+        str(receipt.get("content_hash") or ""),
+        str(receipt.get("receipt_path") or ""),
+    )
+
+
 def load_spy_eod_receipt(settings: Any, session_date: str) -> dict[str, Any] | None:
-    """Lee el recibo mas reciente y lo valida; `None` si no hay valido."""
+    """Lee el recibo valido mas autoritativo de la sesion; `None` si no hay.
+
+    La validacion de `schema_version`, `session_date` y `content_hash` se
+    mantiene: un recibo invalido se ignora como hoy. Entre los validos gana el
+    `comparable` mas reciente por `captured_at`; un `unavailable` solo se
+    devuelve si no existe ningun `comparable` de la sesion. El desempate
+    determinista esta declarado en `_receipt_precedence`. La funcion es
+    estrictamente de lectura: no reescribe, no borra y no renombra ficheros.
+    """
     root = _cache_root(settings)
     stem = f"{RECEIPT_PREFIX}{session_date.replace('-', '')}_"
     candidates = sorted(root.glob(f"{stem}*.json")) if root.exists() else []
-    for path in reversed(candidates):
+    valid: list[dict[str, Any]] = []
+    for path in candidates:
         try:
             receipt = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -142,8 +203,10 @@ def load_spy_eod_receipt(settings: Any, session_date: str) -> dict[str, Any] | N
         if receipt.get("content_hash") != _stable_hash(receipt):
             continue
         receipt["receipt_path"] = str(path)
-        return receipt
-    return None
+        valid.append(receipt)
+    if not valid:
+        return None
+    return max(valid, key=_receipt_precedence)
 
 
 def spy_eod_coverage(settings: Any, start: str, end: str, *, now: datetime | None = None) -> dict[str, Any]:
@@ -195,28 +258,48 @@ def receipt_as_observation(receipt: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _capture_clock(entry: datetime, meta: Any) -> datetime:
+    """Reloj de captura posterior a la descarga (P-L155).
+
+    `entry` es el reloj con el que se entro a la funcion. El reloj de captura
+    se vuelve a leer DESPUES de la descarga y, si la propia descarga declara un
+    `created_at` posterior, se avanza hasta ese instante: la cache recien
+    escrita no puede quedar por delante del reloj del recibo y producir
+    `cache_created_at_future`. Con `now` explicito sigue siendo determinista
+    (maximo de la entrada y del `created_at` declarado); con `now=None` el reloj
+    real se lee aqui, ya descargada la cache.
+    """
+    captured = _now(entry)
+    downloaded = _parse_utc(meta.get("created_at")) if isinstance(meta, dict) else None
+    if downloaded is not None and downloaded > captured:
+        return downloaded
+    return captured
+
+
 def refresh_and_capture_spy_eod(settings: Any, session_date: str, *, now: datetime | None = None) -> dict[str, Any]:
     """Descarga la ventana exacta [previa, sesion] y persiste el recibo (P-L127).
 
     Fail-open total: cualquier fallo de red, validacion o I/O devuelve un
-    resumen no persistido sin lanzar. Nunca inventa cierres.
+    resumen no persistado sin lanzar. Nunca inventa cierres. La sesion se
+    evalua cerrada ANTES de descargar; el reloj del recibo se toma despues
+    (P-L155).
     """
     from .market_data import download_daily_prices_with_metadata
 
-    captured = _now(now)
+    entry = _now(now)  # reloj de entrada; el de captura se toma tras la descarga.
     try:
         previous = previous_xnys_session(session_date)
     except (TypeError, ValueError):
         return {"persisted": False, "reason": "invalid_session_date", "receipt": None}
     if previous is None:
         return {"persisted": False, "reason": "missing_previous_xnys_session", "receipt": None}
-    status, _ = session_status(session_date, now=captured)
+    status, _ = session_status(session_date, now=entry)
     if status != "closed":
         return {"persisted": False, "reason": "session_not_closed", "receipt": None}
     symbol = str(getattr(settings, "benchmark_symbol", "SPY") or "SPY").upper()
     try:
         end = (date.fromisoformat(session_date) + timedelta(days=1)).isoformat()
-        download_daily_prices_with_metadata(
+        _frame, download_meta = download_daily_prices_with_metadata(
             [symbol],
             previous,
             end,
@@ -225,7 +308,9 @@ def refresh_and_capture_spy_eod(settings: Any, session_date: str, *, now: dateti
         )
     except Exception as exc:  # noqa: BLE001 - red caida no tumba reconciliacion.
         return {"persisted": False, "reason": f"fetch_failed_open:{type(exc).__name__}", "receipt": None}
-    captured_result = capture_spy_eod_receipt(settings, session_date, now=captured)
+    captured_result = capture_spy_eod_receipt(
+        settings, session_date, now=_capture_clock(entry, download_meta)
+    )
     receipt = captured_result.get("receipt") or {}
     if not captured_result.get("persisted") or receipt.get("comparison_status") != "comparable":
         return {
