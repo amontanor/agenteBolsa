@@ -1,5 +1,39 @@
 # Plan maestro de mejoras y tareas — agenteBolsa
 
+## P-L155: lector de recibos EOD de SPY y reloj del productor (candidato 0.4.321)
+
+Informe unico: `docs/informe_p_l155_lector_spy_eod.md`. Lote N2 acotado a
+`src/agente_bolsa/tools/spy_eod_authority.py` y sus tests. Sin politica activa,
+sin trading, sin esquema ni tablas, sin despliegue.
+
+Causa raiz: `load_spy_eod_receipt` elegia recibo por nombre de fichero, cuyo
+sufijo es `content_hash[:8]` y no tiempo, y no filtraba por
+`comparison_status`. En 2026-09-24 el `unavailable`
+`spy_eod_close_20260924_fdf426ce.json` tapa los dos `comparable`
+(`8a09005c`, `a5284111`); en 2026-09-21 `f75e14ac` tapa `c2f95286` y
+`c6cfa128`. El overlay descarta el no comparable, cae a cache same-day y falla
+con `same_day_cache_not_eod`, y el Telegram sale con SP500 n/d. Defecto
+secundario: `refresh_and_capture_spy_eod` fijaba el reloj de captura antes de
+descargar y 5 de los 18 recibos de produccion nacen con
+`cache_created_at_future`.
+
+| Lote | Estado | Alcance y aceptacion |
+| --- | --- | --- |
+| P-L155 | ready_for_integration_rehearsal (0.4.321) | Lector por `captured_at` con `comparable` sobre `unavailable` y desempate determinista declarado; reloj de captura post-descarga. A1-A9 pasan; 96 focales, regresion amplia sin regresiones; Ruff, NUL y diff verdes |
+
+Candidato `1de86db07875cc3a3002b96dda8cb31de3912ce1`/tree
+`30563d7ffa54b4d569ff63a60b4e409e4b491a37` sobre base exacta
+`1b87e886a2f682d599ada157bd22074f0d622219`, caracterizacion en
+`7a5829202b2d79160feb112c32b53fdf37db4a8a` (7 tests en rojo contra la base).
+Suite completa, benchmark de 33.336 observaciones, smoke,
+`validate-agent-config`, `kernel-status` y despliegue **omitidos y no
+aprobados**. Los 17 fallos de la regresion amplia son copy de Telegram
+preexistente, verificados tambien contra la base, y quedan como micro-lote
+separado junto a la deuda de suite. `0.4.321` no estaba reservado; P-L148
+sigue reservado en 0.4.250 y en espera 0/5. Siguiente paso: ensayo de
+integracion con `merge --no-ff` y paridad exacta de los cuatro ficheros
+efectivos. Produccion sigue en `0.4.320-arm64` y no se toca.
+
 ## Prioridad vigente - P-L154: rendimiento frente a SPY (22-sep-2026)
 
 Informe unico: `docs/informe_p_l154_rendimiento_vs_spy.md`. Este bloque define

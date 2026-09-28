@@ -1,5 +1,80 @@
 # Relevo de direccion tecnica — agenteBolsa
 
+## P-L155: lector de recibos EOD de SPY y reloj del productor (28-sep-2026)
+
+Dictamen: `ready_for_integration_rehearsal`. Worktree exclusivo
+`pl155_spy_eod_post_session`, rama `codex/pl155-spy-eod-post-session`, base
+exacta `1b87e886a2f682d599ada157bd22074f0d622219`/tree
+`e7246bb057a9b75f0a94086824f9469ff0f8cee2`/v0.4.320. XNYS cerrado a las
+12:49:33Z con `next_open` 2026-09-28 15:30 Europe/Madrid. Produccion NO tocada:
+sigue `agente-bolsa:0.4.320-arm64` en el Jetson 192.168.1.186, sin SSH, sin
+docker, sin despliegue, sin push. Checkout principal y worktree
+`pl155-deepseek` intactos.
+
+Causa raiz: `load_spy_eod_receipt` ordenaba por nombre de fichero, cuyo sufijo
+es `content_hash[:8]` y no tiempo, y no filtraba por `comparison_status`.
+`reversed` empezaba por el `unavailable` `spy_eod_close_20260924_fdf426ce.json`
+y tapaba los `comparable` `8a09005c` y `a5284111`; el overlay caia a la cache
+same-day y el Telegram salia con SP500 n/d. El productor fijaba el reloj de
+captura antes de descargar, dejando 5 de 18 recibos con
+`cache_created_at_future`.
+
+Cambios, solo en `src/agente_bolsa/tools/spy_eod_authority.py`: precedencia
+`comparable` sobre `unavailable`, luego `captured_at` mas reciente en UTC, con
+desempate determinista declarado en `_receipt_precedence` (`content_hash`
+completo, luego `receipt_path`); validacion de `schema_version`,
+`session_date` y `content_hash` intacta y lectura estrictamente append-only.
+`_capture_clock` toma el reloj de captura despues de la descarga, avanzado
+hasta el `created_at` declarado; `session_status` se sigue evaluando antes de
+descargar y no se descarga con la sesion abierta. Firma publica sin cambios,
+fail-open intacto. Bump 0.4.321. Ningun archivo protegido modificado.
+
+Commits: caracterizacion `7a5829202b2d79160feb112c32b53fdf37db4a8a` (7 tests
+en rojo contra la base) y funcional
+`1de86db07875cc3a3002b96dda8cb31de3912ce1`/tree
+`30563d7ffa54b4d569ff63a60b4e409e4b491a37`; el hash del commit de
+documentacion lo registra direccion. Ficheros: `spy_eod_authority.py`
+(+94/-9), `__init__.py` (bump), `tests/test_p155_spy_eod_receipt_selection.py`
+(nuevo, 15 tests) y pin de version en
+`tests/test_p59c_llm_selected_authority.py`.
+
+Pruebas: focal del lote 15 passed; focales relacionadas 96 passed; regresion
+amplia filtrada por overlay, spy, eod, benchmark, telegram y performance:
+candidato 17 failed / 308 passed frente a base 23 failed / 302 passed, con
+`Compare-Object` de las listas `FAILED` sin ninguna entrada solo en candidato.
+Ruff, `check_no_nulls` (537 archivos) y `git diff --check` verdes. CLI
+`spy-eod-coverage --json` aislado responde `ok: true` y `receipt_missing` con
+`DATA_DIR` vacio.
+
+A1-A9 pasan. A6 paridad total: el diff no toca `performance_daily`, candidatos,
+scores, ranks, gates, sizing, planes, ordenes, precios, stops, exposicion ni
+limites. A7 sin backfill, sin reescritura, sin esquema ni tablas. A8
+`0.4.321` no estaba reservado y no colisiona con P-L148 (0.4.250).
+
+Gates omitidos y NO aprobados: suite completa, benchmark de 33.336
+observaciones, smoke `run-once --skip-crew`, `validate-agent-config --json`,
+`kernel-status --json` y despliegue. Justificacion: lote N2 sobre un unico
+lector, presupuesto proporcional, margen operativo corto y `storage.py` sin
+diff. Los 17 fallos de la regresion amplia son copy de Telegram preexistente,
+reproducidos tambien contra la base, y se dejan como micro-lote separado sin
+`skip` ni `xfail`. Defecto de test preexistente detectado:
+`test_p127_spy_slice_characterization.py::test_refresh_open_session_never_downloads`
+parchea un simbolo que la funcion importa dentro del cuerpo, asi que su doble
+es ineffective; A4 lo cubre parcheando `agente_bolsa.tools.market_data`.
+
+Limitacion declarada: la fixture de A1 replica los nombres y la distribucion
+de `comparison_status` exactos de produccion con contenido generado por el
+productor real; los `content_hash` interiores no coinciden con los del Jetson
+y los `captured_at` reales de produccion siguen `unavailable` para este lote.
+El defecto es de orden por nombre, que depende solo del nombre y del estado.
+
+Siguiente paso minimo, sin ejecutar: ensayo de integracion con `merge --no-ff`
+de `1de86db07875cc3a3002b96dda8cb31de3912ce1` sobre la base exacta, tree del
+merge con los cuatro ficheros efectivos identicos al candidato, y repetir alli
+regresion amplia mas Ruff, NUL y `git diff --check`. Precondiciones: XNYS
+cerrado, sin leases ni jobs activos, arboles limpios, version sin colision.
+Informe unico: `docs/informe_p_l155_lector_spy_eod.md`.
+
 ## P-L137-R + P-L133-R + P-L140A-R + P-L140B-R desplegado 0.4.320 (26-sep-2026)
 
 Dictamen: `deployed`. Port de 4 ficheros de `src` sobre la imagen
