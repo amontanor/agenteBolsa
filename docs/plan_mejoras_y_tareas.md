@@ -125,6 +125,41 @@ Los 41 fallos son subconjunto exacto de los 46 del baseline 0.4.316;
 los 4 errores de coleccion de la base desaparecen. P-L148 sigue 0/5.
 Informe unico: `docs/informe_p_l137_140_readd_rehearsal.md`.
 
+## P-L155 implementado, `ready_for_integration_rehearsal` (28-sep-2026)
+
+Worktree `pl155_spy_eod_post_session`, rama `codex/pl155-spy-eod-post-session`,
+base `1b87e886`/tree `e7246bb0`/v0.4.320. HEAD `147e9370`/tree
+`4a0db435`/**v0.4.321**, limpio. Commits `7a582920` caracterizacion (rota
+contra la base), `1de86db0` funcional + bump, `147e9370` documentacion.
+
+| Lote | Estado | Alcance |
+| --- | --- | --- |
+| P-L155 | ready_for_integration_rehearsal (0.4.321) | Lector de recibos EOD SPY por reloj de captura y productor con reloj post-descarga |
+
+- Lector: `_receipt_precedence` explicito. `comparable` sobre `unavailable`,
+  luego `captured_at` mas reciente, luego desempate determinista por
+  `content_hash` y `receipt_path`. El hash truncado del nombre nunca decide.
+  Un `unavailable` ya no puede tapar un `comparable` de la misma sesion.
+- Productor: `_capture_clock` relee el reloj despues de descargar y lo
+  adelanta al `created_at` declarado, con lo que la cache recien escrita ya no
+  nace con `cache_created_at_future`. Firma publica sin cambios.
+- Diffstat 7 ficheros, 898/12. Protegidos sin diff. `performance_benchmark.py`,
+  `web_app.py`, `telegram_daily_summary.py`, `market_data.py` y `scheduler.py`
+  sin diff. Paridad de trading intacta.
+- Verificado por direccion: focal `15 passed`; focales relacionadas
+  `3 failed, 41 passed`, con los 3 fallos de `test_p71_eod_authority.py`
+  **reproducidos identicos en la base `1b87e886`**, luego preexistentes de
+  copy de Telegram y micro-lote aparte.
+- Gates del worker: Ruff, `check_no_nulls` (537), `git diff --check` verdes.
+  Omitidos y no aprobados: suite completa, benchmark 33.336, smoke,
+  `validate-agent-config`, `kernel-status`, despliegue.
+- Limite: la fixture replica los nombres y estados reales de 2026-09-24 con
+  contenido del productor real; no se ejecuto nada en Jetson. P-L71 fail-closed
+  intacto. Sin backfill ni reenvio.
+- Informe unico: `docs/informe_p_l155_lector_spy_eod.md`. Siguiente: ensayo de
+  integracion con `merge --no-ff` en ventana cerrada, luego despliegue solo con
+  autorizacion. Sin push.
+
 ### Deuda de suite restante (no desplegada, micro-lotes separados)
 
 P-L80B x2, P-L131 x4, P-L132 x3, P-L134 x3, P-L135 x4, P-L139 x1,
