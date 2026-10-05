@@ -443,15 +443,19 @@ def build_trade_history(
     limit: int = 100,
     start_date: str | None = DEFAULT_HISTORY_START_DATE,
     scope: str = "account",
+    portfolio: PortfolioSnapshot | None = None,
+    fills: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     broker = BrokerClientFactory(settings)
-    portfolio = broker.alpaca_portfolio_snapshot()
+    if portfolio is None:
+        portfolio = broker.alpaca_portfolio_snapshot()
     warnings = []
-    fills = []
-    try:
-        fills = broker.alpaca_trade_activities(limit=max(limit, 100))
-    except Exception as exc:  # noqa: BLE001 - local order fallback is still useful.
-        warnings.append(f"No se pudieron leer fills de Alpaca: {exc}")
+    if fills is None:
+        fills = []
+        try:
+            fills = broker.alpaca_trade_activities(limit=max(limit, 100))
+        except Exception as exc:  # noqa: BLE001 - local order fallback is still useful.
+            warnings.append(f"No se pudieron leer fills de Alpaca: {exc}")
 
     agent_scope = _local_agent_order_scope(settings.database_path)
     account_fill_count = len(fills)

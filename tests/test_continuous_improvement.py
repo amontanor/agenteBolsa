@@ -173,7 +173,7 @@ def test_improvement_llm_client_builds_mimo_request_shape(tmp_path):
         temperature=0.2,
         max_tokens=6000,
     )
-    headers = client._request_headers("mimo")
+    headers = client._request_headers("mimo", settings.improvement_llm_api_key)
 
     assert body["model"] == "mimo-v2.5"
     assert body["max_completion_tokens"] == 6000

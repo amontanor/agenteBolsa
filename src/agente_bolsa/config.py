@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     )
     openai_model: str = Field(
         default="qwen3.6-27b",
+        validation_alias=AliasChoices("OPENAI_MODEL_NAME", "OPENAI_MODEL", "LLM_MODEL"),
+    )
     llm_primary_preflight_enabled: bool = Field(default=True, alias="LLM_PRIMARY_PREFLIGHT_ENABLED")
     llm_fallback_enabled: bool = Field(default=True, alias="LLM_FALLBACK_ENABLED")
     llm_fallback_api_key: str | None = Field(default=None, alias="LLM_FALLBACK_API_KEY")
@@ -29,8 +31,6 @@ class Settings(BaseSettings):
     )
     llm_fallback_reasoning_effort: str | None = Field(default="low", alias="LLM_FALLBACK_REASONING_EFFORT")
     llm_fallback_model: str = Field(default="gemini-3.5-flash", alias="LLM_FALLBACK_MODEL")
-        validation_alias=AliasChoices("OPENAI_MODEL_NAME", "OPENAI_MODEL", "LLM_MODEL"),
-    )
     llm_temperature: float = Field(default=0.2, alias="LLM_TEMPERATURE")
     llm_max_tokens: int | None = Field(default=1200, alias="LLM_MAX_TOKENS")
     llm_timeout_seconds: int = Field(default=120, alias="LLM_TIMEOUT_SECONDS")

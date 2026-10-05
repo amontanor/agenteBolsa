@@ -7,6 +7,8 @@ import os
 import signal
 import subprocess
 import sys
+from hashlib import sha256
+from time import perf_counter
 from dataclasses import asdict
 from datetime import datetime
 from html import escape
@@ -30,6 +32,7 @@ except ModuleNotFoundError:  # pragma: no cover - import-only test environments 
 
 from agente_bolsa import __version__
 from agente_bolsa.config import get_settings
+from agente_bolsa.dashboard_loading import DashboardLoadState
 from agente_bolsa.continuous_improvement.orchestrator import ContinuousImprovementOrchestrator
 from agente_bolsa.continuous_improvement.runtime import ContinuousImprovementLabRuntime
 from agente_bolsa.eventing import EventReporter
@@ -61,7 +64,6 @@ from agente_bolsa.tools.pre_earnings import (
     target_after_close_session,
     update_pre_earnings_outcomes,
 )
-from agente_bolsa.tools.retention import cleanup_runtime_data
 from agente_bolsa.tools.signal_learning import build_learning_status, update_signal_outcomes
 from agente_bolsa.tools.trade_decision import (
     _annotate_technical_context_with_learning,
@@ -84,10 +86,21 @@ def _settings():
 
 def _store() -> Store:
     settings = _settings()
-    cleanup_runtime_data(settings)
     store = Store(settings.database_path, settings.agent_logs_dir)
-    store.ensure_schema()
+    schema_key = str(settings.database_path.resolve())
+    if st.session_state.get("web_schema_path") != schema_key or not settings.database_path.exists():
+        store.ensure_schema()
+        st.session_state["web_schema_path"] = schema_key
     return store
+
+
+def _dashboard_state() -> DashboardLoadState:
+    # Session cache also invalidates when account, endpoint or configuration changes.
+    settings_key = sha256(_settings().model_dump_json().encode()).hexdigest()
+    if st.session_state.get("dashboard_settings_key") != settings_key:
+        st.session_state["dashboard_settings_key"] = settings_key
+        st.session_state["dashboard_load"] = DashboardLoadState()
+    return st.session_state["dashboard_load"]
 
 
 def _sidebar_version_label() -> str:
@@ -1827,44 +1840,67 @@ def _setup_page() -> None:
 def page_dashboard() -> None:
     settings = _settings()
     store = _store()
+    state = _dashboard_state()
+    interval = int(st.session_state.get("refresh_interval_seconds", 30))
+    if state.update(settings, refresh_after=interval or float("inf")):
+        # Reconfigure the fragment: poll only while a request is in flight.
+        st.rerun()
+    for error in state.errors:
+        st.warning(f"No se pudo actualizar Alpaca: {error}")
+    if state.loading:
+        elapsed = int(perf_counter() - state.started_at)
+        text = f"Consultando Alpaca en segundo plano ({elapsed}s)."
+        if state.data and state.data.get("portfolio") is not None:
+            text += " Se mantiene visible la ultima cartera recibida."
+        if elapsed >= 10:
+            st.warning(text + " La respuesta del broker esta tardando mas de lo habitual.")
+        else:
+            st.info(text)
+    data = state.data or {}
+    portfolio = data.get("portfolio")
+    if portfolio is None:
+        _page_header("Resumen operativo", "Actividad local disponible mientras se carga la cartera.")
+        if not state.loading:
+            st.info("Cartera no disponible. Pulsa Refrescar para reintentar.")
+        with st.container(border=True):
+            _section_title("Compras y ventas recientes", None)
+            _compact_order_list(_latest_order_details(limit=12), max_items=3)
+        with st.container(border=True):
+            _section_title("Actividad del sistema", None)
+            events = _latest_relevant_events(store, limit=6)
+            if events:
+                st.dataframe(pd.DataFrame(events), width="stretch", hide_index=True)
+            else:
+                st.info("Sin eventos relevantes recientes.")
+        return
+    data_caption = f"Datos Alpaca: {_local_datetime(data.get('fetched_at'))}"
+    if "total" in data.get("timings", {}):
+        data_caption += f" | Ultima carga: {data['timings']['total']:.1f}s"
+    elif state.loading:
+        data_caption += " | Cartera recibida; cargando operaciones y grafico."
+    st.caption(data_caption)
     market = MarketCalendar(settings.market_calendar, settings.local_timezone).status().as_dict()
-
-    portfolio = None
-    portfolio_error = None
-    try:
-        portfolio = BrokerClientFactory(settings).alpaca_portfolio_snapshot()
-    except Exception as exc:  # noqa: BLE001
-        portfolio_error = str(exc)
-    db_status = store.status()
-    history: dict[str, Any] = {}
-    stats: dict[str, Any] = {}
-    position_rows: list[dict[str, Any]] = []
-    portfolio_history: dict[str, Any] = {}
-    try:
-        history = build_trade_history(settings, limit=1000, start_date=DEFAULT_START_DATE)
-        stats = history.get("current_statistics", {})
-        position_rows = _position_rows(history)
-    except Exception as exc:  # noqa: BLE001
-        st.warning(f"No se pudo leer historico/P/L: {exc}")
-    try:
-        portfolio_history = BrokerClientFactory(settings).alpaca_portfolio_history(period="3M", timeframe="1D")
-    except Exception as exc:  # noqa: BLE001
-        st.warning(f"No se pudo leer portfolio history de Alpaca para el grafico: {exc}")
-
-    if portfolio_error:
-        st.warning(f"No se pudo leer cartera Alpaca: {portfolio_error}")
+    history = data.get("history", {})
+    stats = history.get("current_statistics", {})
+    position_rows = _position_rows(history)
+    if not history:
+        position_rows = _position_rows({"open_positions": [asdict(p) for p in portfolio.positions]})
+    portfolio_history = data.get("portfolio_history", {})
 
     exposure = stats.get("exposure") if stats else None
     exposure_pct = stats.get("exposure_pct") if stats else None
-    total_pl = _num(stats.get("total_pl")) if stats else 0.0
-    total_pct = _num(stats.get("total_plpc_on_equity")) if stats else 0.0
+    if not stats:
+        exposure = sum(abs(p.market_value) for p in portfolio.positions)
+        exposure_pct = exposure / portfolio.portfolio_value if portfolio.portfolio_value else None
+    total_pl = _num(stats.get("total_pl"))
+    total_pct = _num(stats.get("total_plpc_on_equity"))
     current_equity = _num(portfolio.portfolio_value) if portfolio else _num(stats.get("equity"))
     current_cash = _num(portfolio.cash) if portfolio else _num(stats.get("cash"))
     today_change = _latest_daily_equity_change(history, current_equity, portfolio_history)
-    today_total = _num(today_change.get("pl")) or 0.0
-    today_pct = _num(today_change.get("pl_pct")) or 0.0
+    today_total = _num(today_change.get("pl")) if history or portfolio_history else None
+    today_pct = _num(today_change.get("pl_pct")) if history or portfolio_history else None
     initial_equity = round(current_equity - total_pl, 2) if current_equity is not None and total_pl is not None else None
-    today_tone = "good" if today_total > 0 else "bad" if today_total < 0 else "neutral"
+    today_tone = "good" if (today_total or 0) > 0 else "bad" if (today_total or 0) < 0 else "neutral"
     total_tone = "good" if (total_pl or 0) > 0 else "bad" if (total_pl or 0) < 0 else "neutral"
 
     _dashboard_header(
@@ -1939,11 +1975,11 @@ def page_dashboard() -> None:
                     visible_tone,
                 )
             with p3:
-                open_pl = _num(stats.get("unrealized_pl")) if stats else 0.0
+                open_pl = sum(p.unrealized_pl for p in portfolio.positions)
                 _compact_metric("P/L abierto", _money(open_pl), tone="good" if open_pl > 0 else "bad" if open_pl < 0 else "neutral")
             with p4:
-                realized_pl = _num(stats.get("realized_pl")) if stats else 0.0
-                _compact_metric("P/L realizado", _money(realized_pl), tone="good" if realized_pl > 0 else "bad" if realized_pl < 0 else "neutral")
+                realized_pl = _num(stats.get("realized_pl"))
+                _compact_metric("P/L realizado", _money(realized_pl), tone="good" if (realized_pl or 0) > 0 else "bad" if (realized_pl or 0) < 0 else "neutral")
 
     with main_right:
         with st.container(border=True):
@@ -2030,8 +2066,7 @@ def page_dashboard() -> None:
 
     with st.expander("Ver log completo reciente"):
         st.caption(
-            f"Broker: {settings.broker} ({'paper' if settings.alpaca_paper else 'live'}). "
-            f"Ordenes locales registradas: {db_status['tables'].get('broker_orders', 0)}."
+            f"Broker: {settings.broker} ({'paper' if settings.alpaca_paper else 'live'})."
         )
         events = store.latest_events(20)
         if events:
@@ -4700,10 +4735,6 @@ def _latest_ci_llm_result(events: list[dict[str, Any]]) -> dict[str, Any]:
         if not current_cycle_id.startswith("ci_cycle_"):
             continue
         if item.get("agent") not in {"ImprovementStrategistAgent", "ChiefInvestmentOrchestratorAgent"}:
-            "provider": payload.get("provider"),
-            "model": payload.get("model"),
-            "base_url": payload.get("base_url"),
-            "fallback_used": bool(payload.get("fallback_used")),
             continue
         if item.get("event_type") != "lab_llm_call_completed":
             continue
@@ -4712,6 +4743,10 @@ def _latest_ci_llm_result(events: list[dict[str, Any]]) -> dict[str, Any]:
             "status": str(payload.get("status") or "").lower(),
             "error": payload.get("error"),
             "created_at": item.get("created_at"),
+            "provider": payload.get("provider"),
+            "model": payload.get("model"),
+            "base_url": payload.get("base_url"),
+            "fallback_used": bool(payload.get("fallback_used")),
         }
     return {}
 
@@ -4838,6 +4873,7 @@ def page_continuous_improvement() -> None:
         st.write(f"Proveedor: {settings.improvement_llm_provider}")
         st.write(f"Modelo especialistas: {settings.improvement_llm_model}")
         st.write(f"Modelo orquestador: {settings.improvement_llm_orchestrator_model}")
+        st.caption(f"Ruta activa CI: {_ci_llm_route_label(settings, latest_llm_result)}")
         st.write(f"Heartbeat: {_local_datetime((runtime_state or {}).get('heartbeat_at'))}")
         st.write(f"Autogestionado: {'activo' if settings.continuous_improvement_schedule_enabled else 'desactivado'}")
         st.write(f"Scheduler web: {'activo' if schedule_status.get('running') else 'parado'}")
@@ -4850,7 +4886,6 @@ def page_continuous_improvement() -> None:
             runtime.enqueue_event(
                 event_type="manual_ui_event",
                 source="streamlit",
-    st.caption(f"Ruta activa CI: {_ci_llm_route_label(settings, latest_llm_result)}")
                 domain="software-improvement",
                 payload={"requested_at": datetime.now(ZoneInfo("UTC")).isoformat()},
                 force_unique=True,
@@ -4867,6 +4902,8 @@ def page_continuous_improvement() -> None:
         )
     with right:
         st.subheader("Ultimo ciclo")
+        st.write(f"Fallback local CI: {'activo' if settings.improvement_llm_local_fallback_enabled else 'off'}")
+        st.write(f"Ruta LLM activa: {_ci_llm_route_label(settings, latest_llm_result)}")
         if latest:
             summary = (latest.get("evaluation") or {}).get("summary", {})
             m1, m2, m3, m4 = st.columns(4)
@@ -4874,8 +4911,6 @@ def page_continuous_improvement() -> None:
                 _metric_card("Estado", latest.get("status"))
             with m2:
                 _metric_card("Senales", summary.get("signals", 0))
-        st.write(f"Fallback local CI: {'activo' if settings.improvement_llm_local_fallback_enabled else 'off'}")
-        st.write(f"Ruta LLM activa: {_ci_llm_route_label(settings, latest_llm_result)}")
             with m3:
                 _metric_card("Errores", summary.get("recent_errors", 0))
             with m4:
@@ -5263,7 +5298,8 @@ def main() -> None:
     )
     _render_sidebar_version()
     if st.sidebar.button("Refrescar"):
-        st.session_state.selected_page = page
+        if page == "Dashboard":
+            _dashboard_state().refresh_requested = True
         st.rerun()
 
     pages = {
@@ -5287,6 +5323,11 @@ def main() -> None:
         "Comandos": page_commands,
         "Configuracion": page_config,
     }
+    if page == "Dashboard":
+        state = _dashboard_state()
+        state.update(_settings(), refresh_after=refresh_interval_seconds or float("inf"))
+        if state.loading:
+            refresh_interval_seconds = 1
     _render_refreshable_page(pages[page], refresh_interval_seconds)
 
 

@@ -2,6 +2,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 from agente_bolsa.config import Settings
+from agente_bolsa import __version__
 from agente_bolsa.llm_usage import usage_tokens
 from agente_bolsa.models import OrderSnapshot, PortfolioSnapshot, PositionSnapshot
 from agente_bolsa.storage import Store
@@ -200,7 +201,7 @@ def test_latest_daily_equity_change_falls_back_to_estimated_series():
 
 
 def test_sidebar_version_label_uses_semantic_version():
-    assert _sidebar_version_label() == "v0.1.6"
+    assert _sidebar_version_label() == f"v{__version__}"
 
 
 def test_local_datetime_renders_spain_dst_from_utc():
