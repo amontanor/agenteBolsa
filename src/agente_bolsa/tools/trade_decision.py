@@ -5338,10 +5338,31 @@ def build_order_plans(
     *,
     dry_run: bool = True,
     rejected: list[dict[str, Any]] | None = None,
+    exit_rejections: list[dict[str, Any]] | None = None,
     market_state: dict[str, Any] | None = None,
     ignore_operational_kill_switch: bool = False,
 ) -> list[OrderPlan]:
     """Build buy and long-position sell/reduce/exit plans."""
+
+    def record_exit_rejection(
+        recommendation: TradeRecommendation, reason: str, checks: dict[str, Any]
+    ) -> None:
+        if exit_rejections is None:
+            return
+        row = {
+            "symbol": recommendation.symbol,
+            "action": recommendation.action,
+            "stage": "exit_plan_guard",
+            "reason": reason,
+            "checks": checks,
+        }
+        for key in ("candidate_id", "signal_capture_id", "signal_id", "cycle_id"):
+            value = (recommendation.decision_lineage or {}).get(key)
+            if value:
+                row[key] = value
+        if recommendation.recommendation_id:
+            row["recommendation_id"] = recommendation.recommendation_id
+        exit_rejections.append(row)
 
     plans = build_buy_order_plans(
         settings,
@@ -5355,21 +5376,34 @@ def build_order_plans(
     total_plan_limit = _effective_buy_plan_limit(settings, recommendations)
     open_order_symbols = {order.symbol.upper() for order in portfolio.open_orders}
 
-    for recommendation in recommendations:
+    for index, recommendation in enumerate(recommendations):
         if len(plans) >= total_plan_limit:
+            for remaining in recommendations[index:]:
+                if remaining.action in {"sell", "reduce", "exit"}:
+                    record_exit_rejection(remaining, "cycle_plan_limit_reached", {
+                        "effective_max_orders_per_cycle": total_plan_limit,
+                        "exit_policy_evaluated": False,
+                    })
             break
         if recommendation.action not in {"sell", "reduce", "exit"}:
             continue
         if recommendation.symbol in open_order_symbols:
+            record_exit_rejection(recommendation, "symbol_has_open_order", {})
             continue
         if recommendation.confidence < settings.min_llm_confidence_to_trade:
+            record_exit_rejection(recommendation, "below_min_llm_confidence_to_trade", {
+                "confidence": recommendation.confidence,
+                "min_llm_confidence_to_trade": settings.min_llm_confidence_to_trade,
+            })
             continue
         position = _position_for_symbol(portfolio, recommendation.symbol)
         if position is None or position.qty <= 0:
+            record_exit_rejection(recommendation, "position_unavailable_or_not_positive", {})
             continue
 
         exit_allowed, exit_reason, exit_checks = _is_exceptional_llm_exit(settings, recommendation, position)
         if not exit_allowed:
+            record_exit_rejection(recommendation, exit_checks["blocked_by"], exit_checks)
             continue
 
         if recommendation.action == "reduce":
@@ -5385,10 +5419,17 @@ def build_order_plans(
             qty = position.qty
 
         if qty <= 0:
+            record_exit_rejection(recommendation, "no_reduction_required", {
+                "target_exposure_pct": recommendation.target_exposure_pct,
+                "calculated_qty": qty,
+            })
             continue
 
         safe_qty = _floor_qty(qty)
         if safe_qty <= 0:
+            record_exit_rejection(recommendation, "quantity_below_execution_precision", {
+                "calculated_qty": qty, "executable_qty": safe_qty,
+            })
             continue
 
         notional = round(safe_qty * position.current_price, 2)
