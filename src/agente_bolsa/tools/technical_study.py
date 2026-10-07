@@ -27,6 +27,69 @@ def _float(value: Any, precision: int = 4) -> float | None:
     return round(float(value), precision)
 
 
+def _normalized_symbols(values: list[str]) -> set[str]:
+    return {value.strip().upper() for value in values if isinstance(value, str) and value.strip()}
+
+
+def build_symbol_coverage(
+    requested_symbols: list[str],
+    market_data_metadata: Any,
+    candidates: list[dict[str, Any]],
+    benchmark_symbol: str = "SPY",
+) -> dict[str, Any]:
+    """Describe unique requested-symbol coverage, independently of strategy output.
+
+    Only canonical download metadata establishes delivery. Candidate counters
+    describe all active candidates before presentation truncation, never coverage.
+    """
+    requested = _normalized_symbols(requested_symbols)
+    result = {
+        "status": "unavailable",
+        "reason": "missing_delivery_metadata",
+        "requested_symbols_count": len(requested),
+        "delivered_symbols_count": None,
+        "coverage_ratio": None,
+        "candidate_count": len(candidates),
+        "unique_candidate_symbols_count": len(
+            _normalized_symbols([candidate.get("symbol") for candidate in candidates])
+        ),
+    }
+    if not isinstance(market_data_metadata, dict) or "symbols_with_data" not in market_data_metadata:
+        return result
+    delivered_values = market_data_metadata["symbols_with_data"]
+    if not isinstance(delivered_values, list) or any(
+        not isinstance(value, str) or not value.strip() for value in delivered_values
+    ):
+        result["reason"] = "invalid_delivery_metadata"
+        return result
+    delivered = _normalized_symbols(delivered_values)
+    allowed = requested | _normalized_symbols([benchmark_symbol])
+    contradictory = bool(delivered - allowed)
+    if "symbols_with_data_count" in market_data_metadata:
+        count = market_data_metadata["symbols_with_data_count"]
+        contradictory |= type(count) is not int or count != len(delivered)
+    if "missing_symbols" in market_data_metadata:
+        missing_values = market_data_metadata["missing_symbols"]
+        if not isinstance(missing_values, list) or any(
+            not isinstance(value, str) or not value.strip() for value in missing_values
+        ):
+            contradictory = True
+        else:
+            contradictory |= bool(delivered & _normalized_symbols(missing_values))
+    if contradictory:
+        result["reason"] = "contradictory_delivery_metadata"
+        return result
+    if not requested:
+        result["reason"] = "empty_requested_symbols"
+        return result
+    delivered_count = len(delivered & requested)
+    result.update(
+        status="available", reason=None, delivered_symbols_count=delivered_count,
+        coverage_ratio=delivered_count / len(requested),
+    )
+    return result
+
+
 def build_closed_market_technical_study(
     symbols: list[str],
     output_dir: Path,
@@ -145,6 +208,9 @@ def build_closed_market_technical_study(
         "as_of": datetime.now(timezone.utc).isoformat(),
         "symbols_scanned": len(requested_symbols),
         "symbols_with_data": len(candidates),
+        "symbol_coverage": build_symbol_coverage(
+            requested_symbols, market_data_meta, candidates, benchmark_symbol,
+        ),
         "benchmark_symbol": benchmark_symbol,
         "benchmark_return_20d": benchmark_return_20d,
         "market_data": market_data_meta,
