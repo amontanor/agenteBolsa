@@ -2929,3 +2929,12 @@ reconciliación manual ni cambios de política.
 - Informe: `docs/informe_p_l141_port_jetson.md`.
 - Siguiente: operador + memoria sana + postmarket terminal →
   preflight/snapshot/corte/doble salud → oleada 2.
+
+## 7-oct-2026 — diagnóstico observacional del vigilante (N2 aislado)
+
+- Rama codex/oct07-exit-observation, base exacta1adc3cec/.321; sin release ni despliegue.
+- Bloque stop_take_observation en eventos completed existentes, reutilizando cartera/planes ya cargados. Sin nuevas consultas, sin cambiar salidas ni afirmar protección del broker.
+- Distingue ausencia de origen/niveles, orden abierta, dato inválido, snapshot ausente y cartera vacía. Lookup legacy declarado, sin IDs inferidos.
+- 62 focales/regresiones passed; paridad completa de plan enviado/eventos con diagnóstico normal/fallido; Ruff/NUL/diff verdes. Revisión independiente sin bloqueantes.
+- Informe único docs/informe_oct07_stop_take_observation.md. Integración/gates proporcionales/versionado pendientes tras cierre; no subir exposición ni reparar históricos.
+- Automatizaciones existentes actualizadas: validación aislada 7-oct23:00 y estudio solo lectura12-oct10:00 Madrid incluyen este lote y cobertura de símbolos; no despliegue.
