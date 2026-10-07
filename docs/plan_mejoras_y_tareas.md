@@ -4863,3 +4863,14 @@ sizing, política o producción en esta auditoría.
 - Rehearsal de integracion 25-sep (N1): worktree NUEVO `pl158br_integration_rehearsal`, rama `codex/pl158b-integration-rehearsal`, base `708f0e46`; merge --no-ff `17cf9de1` -> `7ad1d2e9` (tree `69be2dc5`, parents `708f0e46`/`17cf9de1`), v0.4.316, limpio. Protegidos sin diff (blobs identicos). QA: 85 focales + 31 regresiones, Ruff/NUL/diff verdes. Omitidos: suite completa, smoke, benchmark, validate-config, kernel-status, despliegue, doble salud. Fase 1 productiva: sesion 2026-09-25 terminal `completed` (pmr_a2c364c6dbc5); lease reconciliation brkrec_40a7e3f65ca5 activo 21:37:31Z y liberado/completed 21:46:49Z; sin leases active en la relectura.
 - Informe: docs/informe_p_l158b_perfil_fino.md. Siguiente: suite completa aislada -> port Jetson -> corte con snapshot frio y doble healthcheck, con autorizacion explicita. Dictamen: `ready_for_closed_market_full_validation`.
 - Validacion completa aislada 26-sep (sabado, XNYS cerrado; sesion `ses_f23616655ffe3pmtziGgijpUWb`, sin re-ejecutar nada): suite candidato `6aab5028` (tree `0de7b35c`) 46 failed/2586 passed/1 skipped/105 warnings/4 errors en 1437.59 s; base `708f0e46` (tree `585a7557`) 46 failed/2582 passed/1 skipped/105 warnings/4 errors en 886.98 s. Fallos y errores identicos (delta +4 = tests nuevos `tests/test_p158b_dashboard_perf.py`); 4 errores de coleccion preexistentes (test_p133/test_p137/test_p140a/test_p140b, simbolos ausentes en `src`) y 1 skip preexistente (`test_score_study_regression_current_sqlite`); suite sin `-x` con `--continue-on-collection-errors`; benchmark P-L45 omitido por coste. Smoke aislado `run-once --skip-crew` exit 0 (ciclo `20260926-080243`, used_crew=false, broker_orders=0, order_plans=0, agent_events=52). Ruff/NUL/diff/config verdes; kernel-status `unsealed` esperado en DATA_DIR temporal. Fase 1 read-only: postmarket 25-sep `completed` 20:28Z (`pmr_a2c364c6dbc5`), 0 leases activos. Dictamen `ready_for_closed_market_deployment` con reserva (deuda de suite preexistente identica en base 0.4.315, a reparar en lotes aparte). Sin corte propuesto en este lote.
+
+
+## OCT07 — cobertura real de símbolos (N2, candidato aislado)
+
+- Dictamen: `ready_for_integration_rehearsal`; rama `codex/oct07-symbol-coverage`,
+  base runtime `1adc3cec` / versión `0.4.321`. Sin bump ni despliegue.
+- Bloque `symbol_coverage` canónico, separado de candidatos; legacy intacto.
+- QA: 27 focales verdes, paridad completa del informe contra fuente base, Ruff/NUL/diff.
+- Informe único: `docs/informe_oct07_symbol_coverage.md`.
+- Siguiente: revisión e integración aislada, resolver reserva/divergencia `.340`,
+  gates proporcionales y ventana operativa autorizada. Suite/smoke omitidos.

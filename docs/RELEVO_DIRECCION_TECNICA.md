@@ -2929,3 +2929,14 @@ reconciliación manual ni cambios de política.
 - Informe: `docs/informe_p_l141_port_jetson.md`.
 - Siguiente: operador + memoria sana + postmarket terminal →
   preflight/snapshot/corte/doble salud → oleada 2.
+
+
+## OCT07 — cobertura real de símbolos (N2, candidato aislado)
+
+- Dictamen: `ready_for_integration_rehearsal`; rama `codex/oct07-symbol-coverage`,
+  base runtime `1adc3cec` / versión `0.4.321`. Sin bump ni despliegue.
+- Bloque `symbol_coverage` canónico, separado de candidatos; legacy intacto.
+- QA: 27 focales verdes, paridad completa del informe contra fuente base, Ruff/NUL/diff.
+- Informe único: `docs/informe_oct07_symbol_coverage.md`.
+- Siguiente: revisión e integración aislada, resolver reserva/divergencia `.340`,
+  gates proporcionales y ventana operativa autorizada. Suite/smoke omitidos.
