@@ -884,6 +884,8 @@ def build_post_market_review(
         portfolio = broker.alpaca_portfolio_snapshot()
     else:
         portfolio = portfolio_snapshot
+    if portfolio is None:
+        raise RuntimeError("post_market_portfolio_unavailable")
     timings["portfolio_snapshot_seconds"] = round(time.perf_counter() - started, 3)
 
     started = time.perf_counter()
