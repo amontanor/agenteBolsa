@@ -2929,3 +2929,13 @@ reconciliación manual ni cambios de política.
 - Informe: `docs/informe_p_l141_port_jetson.md`.
 - Siguiente: operador + memoria sana + postmarket terminal →
   preflight/snapshot/corte/doble salud → oleada 2.
+
+## Auditoría 7-oct-2026 — integridad postmarket y salidas (candidatos aislados)
+
+- Usuario autoriza avanzar con mejoras válidas sin comprometer integridad. Producción observada .321; divergencia con recibos .340 pendiente. No desplegado.
+- Postmarket: guard de cartera ausente, 24 focales/regresiones verdes; rama codex/oct07-postmarket, informe docs/informe_oct07_postmarket.md en worktree bolsa-oct07-321.
+- Salidas: carrier EXIT separado de rechazos BUY y evento fail-open; 38 focales/regresiones verdes; 1 fallo de integración reproducido en base. Rama codex/oct07-exit-audit, informe docs/informe_oct07_exit_audit.md en worktree bolsa-exit-audit-oct07.
+- Pendiente antes de release: paridad ciclo/consumidores, gates completos proporcionales, reserva de versión e integración; nunca interpretar focales como despliegue aprobado.
+- Prioridad: APO sin orden protectora nested ni origen local recuperable por vigilante; conservar unavailable y exigir IDs exactos. Veto textual de rotación reproducido con negación, sin cambiar política activa.
+- Siguientes lotes separados: diagnóstico adquisición de snapshot, latencia/proveedor, denominadores y controles prospectivos de oportunidades. No subir exposición ni promover evidencia inmadura.
+- Validación aislada programada 7-oct 23:00 Madrid condicionada a cierre/precondiciones; revisión solo lectura 12-oct 10:00 Madrid. Ambas pausan tras el intento/entrega.
