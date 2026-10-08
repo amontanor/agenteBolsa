@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
+from datetime import datetime, timezone
 from types import SimpleNamespace
+
+import pytest
 
 from agente_bolsa.config import Settings
 from agente_bolsa.cycle_runner import _rejection_payload_for_plan
+from agente_bolsa.models import OrderPlan, RiskDecision, TradeRecommendation
 from agente_bolsa.storage import Store
+from agente_bolsa.tools.comparable_controls import (
+    build_comparable_control_sets,
+    candidate_id_for,
+    validate_comparable_control_set,
+)
 from agente_bolsa.tools.daily_learning import _materialize_observations
+from agente_bolsa.tools.decision_context import build_decision_context_snapshot
 from agente_bolsa.tools.learning_scoreboard import _cohort_rows
 from agente_bolsa.tools.signal_learning import (
     update_signal_decisions,
@@ -91,9 +102,17 @@ def _save_signal(
     )
 
 
-def _raw_observation(row: dict, *, executed: bool, verified_control_ids=()) -> dict:
+def _raw_observation(
+    row: dict,
+    *,
+    executed: bool,
+    verified_control_ids=(),
+    comparable_control_set: dict | None = None,
+) -> dict:
     features = dict(row["features"])
-    if verified_control_ids:
+    if comparable_control_set is not None:
+        features["comparable_control_set"] = comparable_control_set
+    elif verified_control_ids:
         # Fixture explícito de comparabilidad; capacidad por sí sola no basta.
         features["comparable_control_set"] = {
             "status": "verified",
@@ -118,6 +137,121 @@ def _raw_observation(row: dict, *, executed: bool, verified_control_ids=()) -> d
         "orders_same_day": int(executed),
         "created_at": "2026-08-03T13:30:00+00:00",
     }
+
+
+def _canonical_market_state(cycle_id: str = "cycle-1") -> dict[str, object]:
+    return {
+        "run_id": cycle_id,
+        "as_of": "2026-08-03T13:30:00+00:00",
+        "prompt_version": "market_state.v2",
+        "market_regime": "neutral",
+        "volatility_regime": "normal",
+        "risk_posture": "balanced",
+        "data_quality": {"status": "GOOD"},
+    }
+
+
+def _canonical_recommendation(
+    symbol: str,
+    rank: int,
+    *,
+    cycle_id: str = "cycle-1",
+    signal_date: str = "2026-08-03",
+) -> TradeRecommendation:
+    signal_id = f"learning_experiment:{signal_date}:CONTROL_CONTRACT:{symbol}"
+    recommendation = TradeRecommendation(
+        symbol=symbol,
+        action="buy",
+        confidence=0.8,
+        reason="contract fixture",
+        entry_price=100.0 + rank,
+        stop_loss=95.0 + rank,
+        take_profit=115.0 + rank,
+        source="deterministic_fixture",
+        decision_lineage={
+            "signal_id": signal_id,
+            "cycle_id": cycle_id,
+            "candidate_id": candidate_id_for(cycle_id, signal_id, "scan-1"),
+            "candidate_rank": rank,
+        },
+    )
+    snapshot = build_decision_context_snapshot(
+        recommendation,
+        cycle_id=cycle_id,
+        source_run_id="scan-1",
+        market_state=_canonical_market_state(cycle_id),
+        captured_at=datetime(2026, 8, 3, 13, 30, tzinfo=timezone.utc),
+        signal_id=signal_id,
+        signal_link_status="verified",
+        identity_key=f"{cycle_id}|{symbol}",
+    )
+    return replace(recommendation, decision_context_snapshot=snapshot)
+
+
+def _canonical_plan(recommendation: TradeRecommendation) -> OrderPlan:
+    return OrderPlan(
+        symbol=recommendation.symbol,
+        side="buy",
+        notional=100.0,
+        qty=1.0,
+        entry_price=recommendation.entry_price or 0.0,
+        stop_loss=recommendation.stop_loss or 0.0,
+        take_profit=recommendation.take_profit or 0.0,
+        recommendation=recommendation,
+        risk_decision=RiskDecision(True, "ok", {}),
+    )
+
+
+def _canonical_verified_pair() -> tuple[TradeRecommendation, TradeRecommendation, dict]:
+    treatment = _canonical_recommendation("TREATMENT", 1)
+    control = _canonical_recommendation("CONTROL", 2)
+    recommendations = [treatment, control]
+    gate_rows = [
+        {
+            "symbol": item.symbol,
+            "action": "buy",
+            "approved": True,
+            "candidate_id": item.decision_lineage.get("candidate_id"),
+            "signal_id": item.decision_lineage.get("signal_id"),
+            "checks": {"observed_value": 1, "threshold": 0},
+        }
+        for item in recommendations
+    ]
+    rejected = [
+        {
+            "symbol": control.symbol,
+            "action": "buy",
+            "stage": "cycle_order_limit",
+            "reason": "max_orders_per_cycle_reached",
+            "candidate_id": control.decision_lineage.get("candidate_id"),
+            "signal_id": control.decision_lineage.get("signal_id"),
+        }
+    ]
+    control_sets = build_comparable_control_sets(
+        cycle_id="cycle-1",
+        recommendations=recommendations,
+        plans=[_canonical_plan(treatment)],
+        rejected_order_plans=rejected,
+        all_recommendations=recommendations,
+        deterministic_review=gate_rows,
+        adversarial_review=gate_rows,
+        entry_quality_gate=gate_rows,
+        backtest_gate=gate_rows,
+        strategy_pause_gate=gate_rows,
+        geometry_gate=gate_rows,
+        risk_eligibility_gate=gate_rows,
+        duplicate_symbol_gate=gate_rows,
+        already_held_gate=gate_rows,
+        low_sample_gate=gate_rows,
+        captured_at=datetime(2026, 8, 3, 13, 30, tzinfo=timezone.utc),
+    )
+    control_set = control_sets[treatment.decision_lineage["signal_id"]]
+    validate_comparable_control_set(control_set)
+    assert control_set["status"] == "verified"
+    assert [item["signal_id"] for item in control_set["controls"]] == [
+        control.decision_lineage["signal_id"]
+    ]
+    return treatment, control, control_set
 
 
 def test_execution_carrier_requires_exact_recommendation_identity(tmp_path):
@@ -459,3 +593,83 @@ def test_exact_carrier_is_idempotent_and_conflicts_are_append_only(tmp_path):
         ).fetchall()
     assert len(conflicts) == 1
     assert json.loads(conflicts[0]["payload_json"])["status"] == "conflict"
+
+
+@pytest.mark.parametrize("case", ["POSITIVE", "DATE", "SOURCE", "REASON", "DECISION", "IDENTITY"])
+def test_canonical_control_contract_is_one_to_one(tmp_path, case, monkeypatch):
+    """Use one valid producer set, changing exactly one consumer field per negative."""
+
+    assert _isolated_settings(tmp_path, monkeypatch).data_dir == tmp_path
+    treatment, control, control_set = _canonical_verified_pair()
+    store = _store(tmp_path)
+    treatment_id = treatment.decision_lineage["signal_id"]
+    canonical_control_id = control.decision_lineage["signal_id"]
+    actual_control_id = canonical_control_id
+    control_date = "2026-08-03"
+    control_source_run_id = "cycle-1"
+    control_decision = "approved_buy"
+    execution = {
+        "status": "approved_not_planned",
+        "signal_id": canonical_control_id,
+        "source_run_id": control_source_run_id,
+        "cycle_id": control_source_run_id,
+    }
+    if case == "DATE":
+        control_date = "2026-08-04"
+    elif case == "SOURCE":
+        control_source_run_id = "cycle-2"
+        execution["source_run_id"] = control_source_run_id
+        execution["cycle_id"] = control_source_run_id
+    elif case == "REASON":
+        execution = {
+            "status": "plan_rejected",
+            "reason": "operator_note",
+            "signal_id": canonical_control_id,
+            "source_run_id": control_source_run_id,
+            "cycle_id": control_source_run_id,
+        }
+    elif case == "DECISION":
+        control_decision = "candidate"
+    elif case == "IDENTITY":
+        actual_control_id = f"{canonical_control_id}:OTHER"
+        execution["signal_id"] = actual_control_id
+
+    _save_signal(store, signal_id=treatment_id, symbol=treatment.symbol)
+    _save_signal(
+        store,
+        signal_id=actual_control_id,
+        symbol=control.symbol,
+        signal_date=control_date,
+        source_run_id=control_source_run_id,
+        decision=control_decision,
+        gate={"execution": execution},
+    )
+    treatment_row = store.signal_outcome_by_id(treatment_id)
+    control_row = store.signal_outcome_by_id(actual_control_id)
+    _materialize_observations(
+        store,
+        [
+            _raw_observation(
+                treatment_row,
+                executed=True,
+                comparable_control_set=control_set,
+            ),
+            _raw_observation(control_row, executed=False),
+        ],
+    )
+
+    executed, matched_controls, matches, _all_controls = _cohort_rows(
+        store,
+        since_date="2026-08-03",
+        end_date="2026-08-05",
+    )
+    assert len(executed) == 1
+    treatment_observation_id = executed[0]["observation_id"]
+    if case == "POSITIVE":
+        assert [row["symbol"] for row in matched_controls] == ["CONTROL"]
+        assert matches[treatment_observation_id] == [
+            "2026-08-03:CONTROL:learning_experiment"
+        ]
+    else:
+        assert matched_controls == []
+        assert matches[treatment_observation_id] == []
