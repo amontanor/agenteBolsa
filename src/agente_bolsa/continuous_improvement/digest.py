@@ -155,7 +155,13 @@ def build_lab_digest(
 
     attention = [item for item in ready_to_apply if item["has_diff"]]
     workspace = data_dir.parent if (data_dir.parent / ".git").exists() else None
-    approval_requests = ready_for_human_approval_requests(store, limit=200, workspace=workspace)
+    approval_requests = ready_for_human_approval_requests(
+        store,
+        limit=200,
+        workspace=workspace,
+        proposals=proposals,
+        applied_changes=applied_changes,
+    )
     research_agenda = build_research_agenda_snapshot(data_dir, experiments, now=now)
     director_brief = _director_brief(
         data_dir=data_dir,
@@ -850,6 +856,8 @@ def ready_for_human_approval_requests(
     *,
     limit: int = 200,
     workspace: Path | None = None,
+    proposals: list[dict[str, Any]] | None = None,
+    applied_changes: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     query = """
         SELECT artifact_id, proposal_id, artifact_type, content_text, payload_json,
@@ -859,10 +867,16 @@ def ready_for_human_approval_requests(
         ORDER BY updated_at DESC
         LIMIT ?
     """
-    proposals = {str(item.get("proposal_id")): item for item in store.continuous_improvement_proposals(limit=50000)}
+    proposals = proposals if proposals is not None else store.continuous_improvement_proposals(limit=50000)
+    proposals_by_id = {str(item.get("proposal_id")): item for item in proposals}
+    applied_changes = (
+        applied_changes
+        if applied_changes is not None
+        else store.continuous_improvement_applied_changes(limit=50000)
+    )
     applied_or_rolled_back = {
         str(item.get("proposal_id"))
-        for item in store.continuous_improvement_applied_changes(limit=50000)
+        for item in applied_changes
         if item.get("proposal_id") and str(item.get("status") or "").upper() in {"APPLIED", "ROLLED_BACK"}
     }
     rows: list[Any]
@@ -875,7 +889,7 @@ def ready_for_human_approval_requests(
             continue
         if workspace is not None and not validate_diff_provenance(workspace, payload)["valid"]:
             continue
-        proposal = proposals.get(str(row["proposal_id"])) or {}
+        proposal = proposals_by_id.get(str(row["proposal_id"])) or {}
         proposal_status = str(proposal.get("status") or "").upper()
         if (
             str(row["proposal_id"]) in applied_or_rolled_back
