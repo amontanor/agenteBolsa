@@ -207,7 +207,9 @@ def test_persistence_is_append_only_and_two_processes_are_idempotent(tmp_path: P
     store.close_read_connection()
     context = multiprocessing.get_context("spawn")
     with context.Pool(2) as pool:
-        results = pool.map(_persist_worker, [(str(tmp_path / "state.sqlite"), final)] * 2)
+        # A dead worker must fail the check instead of respawning forever.
+        # Pool.__exit__ terminates remaining children when get raises TimeoutError.
+        results = pool.map_async(_persist_worker, [(str(tmp_path / "state.sqlite"), final)] * 2).get(timeout=45)
     assert sorted(results) == ["idempotent", "inserted"]
     check = Store(tmp_path / "state.sqlite", tmp_path / "logs")
     events = check.data_quality_decision_shadow_events(limit=20)
