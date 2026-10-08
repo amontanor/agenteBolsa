@@ -184,7 +184,7 @@ def test_future_cache_and_mixed_price_basis_are_rejected(tmp_path, monkeypatch):
     assert {"cache_created_at_future", "price_basis_field_mismatch"}.issubset(observed["warnings"])
 
 
-def test_future_bar_in_an_otherwise_valid_cache_is_rejected(tmp_path, monkeypatch):
+def test_future_bar_is_trimmed_without_changing_the_closed_session_pair(tmp_path, monkeypatch):
     cache_root = tmp_path / "cache" / "market_data"
     frame = pd.DataFrame(
         {"Close": [739.09, 740.94, 741.20]},
@@ -207,8 +207,13 @@ def test_future_bar_in_an_otherwise_valid_cache_is_rejected(tmp_path, monkeypatc
         now=datetime(2026, 7, 29, 5, 0, tzinfo=timezone.utc),
     )
 
-    assert observed["status"] == "unavailable"
-    assert "future_spy_bar" in observed["warnings"]
+    # P-L127: recortar futuro, conservar exclusivamente el par cerrado.
+    assert observed["status"] == "available"
+    assert observed["future_bars_ignored"] == 1
+    assert observed["previous_close"] == 739.09
+    assert observed["close"] == 740.94
+    assert observed["daily_return"] == pytest.approx(740.94 / 739.09 - 1)
+    assert observed["warnings"] == []
 
 
 def _stored_performance_row() -> dict:

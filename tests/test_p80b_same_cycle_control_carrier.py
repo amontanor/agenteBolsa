@@ -91,7 +91,17 @@ def _save_signal(
     )
 
 
-def _raw_observation(row: dict, *, executed: bool) -> dict:
+def _raw_observation(row: dict, *, executed: bool, verified_control_ids=()) -> dict:
+    features = dict(row["features"])
+    if verified_control_ids:
+        # Fixture explícito de comparabilidad; capacidad por sí sola no basta.
+        features["comparable_control_set"] = {
+            "status": "verified",
+            "cycle_id": row["features"]["decision_lineage"]["cycle_id"],
+            "treatment": {"signal_id": row["signal_id"]},
+            "controls": [{"signal_id": control_id, "gate_eligibility": "verified"}
+                         for control_id in verified_control_ids],
+        }
     return {
         "signal_id": row["signal_id"],
         "source_run_id": row["source_run_id"],
@@ -99,7 +109,7 @@ def _raw_observation(row: dict, *, executed: bool) -> dict:
         "symbol": row["symbol"],
         "signal_date": row["signal_date"],
         "decision": row["decision"],
-        "features": row["features"],
+        "features": features,
         "gate": row["gate"],
         "outcome": {},
         "score": row["features"].get("score"),
@@ -258,7 +268,7 @@ def test_capacity_rejection_carrier_is_allowlisted_and_identity_exact(tmp_path):
     _materialize_observations(
         store,
         [
-            _raw_observation(treatment, executed=True),
+            _raw_observation(treatment, executed=True, verified_control_ids=[allowlisted_id, rejected_id]),
             _raw_observation(allowlisted, executed=False),
             _raw_observation(rejected, executed=False),
         ],
@@ -328,7 +338,7 @@ def test_carrier_materializes_and_unlocks_only_exact_same_cycle_control(tmp_path
     materialized = _materialize_observations(
         store,
         [
-            _raw_observation(treatment, executed=True),
+            _raw_observation(treatment, executed=True, verified_control_ids=[control_id]),
             _raw_observation(control, executed=False),
         ],
     )
