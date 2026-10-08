@@ -485,7 +485,7 @@ def _persist_signal_outcome_captures(
             signals_by_id[signal_id] = signal
 
         calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
-        frame_by_signal: dict[str, pd.DataFrame] = {}
+        frame_by_symbol: dict[str, pd.DataFrame] = {}
         for row in _iter_signal_prediction_events(store, signals):
             if not validate_h_capture_event(row, expected_event_type=PREDICTION_EVENT_TYPE):
                 LOGGER.warning("Se descarta evento H inválido antes de observar outcome: %s", row.get("event_id"))
@@ -504,11 +504,12 @@ def _persist_signal_outcome_captures(
                 )
                 continue
             try:
-                if signal_id not in frame_by_signal:
-                    frame_by_signal[signal_id] = _symbol_frame(data, str(signal.get("symbol") or ""))
+                symbol = str(signal.get("symbol") or "")
+                if symbol not in frame_by_symbol:
+                    frame_by_symbol[symbol] = _symbol_frame(data, symbol)
                 payload = build_outcome_capture(
                     prediction_event,
-                    price_frame=frame_by_signal[signal_id],
+                    price_frame=frame_by_symbol[symbol],
                     observed_at=observed_at,
                     market_calendar=calendar,
                     outcome_source_ref={
@@ -1578,10 +1579,14 @@ def update_signal_outcomes(
 
     updated = 0
     outcome_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
+    frame_by_symbol: dict[str, pd.DataFrame] = {}
     outcomes_to_save: dict[str, dict[str, Any]] = {}
     for signal in signals:
         try:
-            frame = _symbol_frame(data, signal["symbol"]).dropna(how="all")
+            symbol = signal["symbol"]
+            if symbol not in frame_by_symbol:
+                frame_by_symbol[symbol] = _symbol_frame(data, symbol).dropna(how="all")
+            frame = frame_by_symbol[symbol]
             if frame.empty:
                 continue
             features = signal.get("features", {}) or {}
