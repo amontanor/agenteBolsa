@@ -290,33 +290,12 @@ def _known_data_pipeline_artifact(path: Path, payload: Any, *, session_date: str
     if _artifact_session_date(payload, calendar) != session_date:
         return False
     name = path.name
-    if name.startswith("market_snapshot_"):
-        return (
-            isinstance(payload.get("benchmark"), str)
-            and bool(payload.get("benchmark"))
-            and isinstance(payload.get("symbols"), dict)
-            and bool(payload.get("symbols"))
-        )
     if name.startswith("market_state_"):
         return (
             isinstance(payload.get("run_id"), str)
             and bool(payload.get("run_id"))
             and isinstance(payload.get("data_quality"), dict)
             and isinstance(payload.get("benchmark"), str)
-        )
-    if name.startswith("breakout_scan_"):
-        return (
-            isinstance(payload.get("run_id"), str)
-            and bool(payload.get("run_id"))
-            and isinstance(payload.get("market_data"), dict)
-            and isinstance(payload.get("alerts"), list)
-        )
-    if name.startswith("closed_market_technical_study_"):
-        return (
-            isinstance(payload.get("run_id"), str)
-            and bool(payload.get("run_id"))
-            and isinstance(payload.get("market_data"), dict)
-            and isinstance(payload.get("symbol_coverage"), dict)
         )
     return False
 
@@ -347,7 +326,7 @@ def _fresh_data_pipeline_artifact(
         return None
 
     reports_dir = data_dir / "reports"
-    candidates: list[tuple[Path, datetime]] = []
+    selected: tuple[Path, datetime, datetime] | None = None
     for pattern in DATA_PIPELINE_REPORT_PATTERNS:
         for path in reports_dir.glob(pattern):
             if not path.is_file() or path.name.endswith(".manifest.json"):
@@ -356,29 +335,39 @@ def _fresh_data_pipeline_artifact(
                 observed_at = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
             except OSError:
                 continue
-            candidates.append((path, observed_at))
-    candidates.sort(key=lambda item: item[1], reverse=True)
-    for path, observed_at in candidates:
-        if observed_at > now or observed_at <= health_as_of:
-            continue
-        age_seconds = (now - observed_at).total_seconds()
-        if age_seconds < 0 or age_seconds > DATA_PIPELINE_MAX_STALE_SECONDS:
-            continue
-        payload = _load_json(path)
-        if not _known_data_pipeline_artifact(
-            path,
-            payload,
-            session_date=session_date,
-            calendar=calendar,
-        ):
-            continue
-        return {
-            "path": str(path),
-            "observed_at": observed_at.isoformat(),
-            "age_seconds": round(age_seconds, 3),
-            "session_date": session_date,
-        }
-    return None
+            if observed_at > now or observed_at <= health_as_of:
+                continue
+            age_seconds = (now - observed_at).total_seconds()
+            if age_seconds < 0 or age_seconds > DATA_PIPELINE_MAX_STALE_SECONDS:
+                continue
+            if selected is not None and observed_at <= selected[1]:
+                continue
+            payload = _load_json(path)
+            captured_at = _parse_aware_datetime(payload.get("as_of")) if isinstance(payload, dict) else None
+            if captured_at is None or captured_at > now or captured_at <= health_as_of:
+                continue
+            captured_age_seconds = (now - captured_at).total_seconds()
+            if captured_age_seconds < 0 or captured_age_seconds > DATA_PIPELINE_MAX_STALE_SECONDS:
+                continue
+            if not _known_data_pipeline_artifact(
+                path,
+                payload,
+                session_date=session_date,
+                calendar=calendar,
+            ):
+                continue
+            selected = (path, observed_at, captured_at)
+    if selected is None:
+        return None
+    path, observed_at, captured_at = selected
+    age_seconds = (now - observed_at).total_seconds()
+    return {
+        "path": str(path),
+        "observed_at": observed_at.isoformat(),
+        "captured_at": captured_at.isoformat(),
+        "age_seconds": round(age_seconds, 3),
+        "session_date": session_date,
+    }
 
 
 def _kernel_integrity_settings(data_dir: Path) -> Any:
@@ -442,7 +431,9 @@ def load_operational_block_context(
     settings: Settings | Any | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    reference_now = now.astimezone(timezone.utc) if now is not None and now.tzinfo else datetime.now(timezone.utc)
+    reference_now = datetime.now(timezone.utc) if now is None else None
+    if now is not None and now.tzinfo is not None and now.utcoffset() is not None:
+        reference_now = now.astimezone(timezone.utc)
     override = load_persistent_kill_switch(data_dir)
     if override:
         if _is_kernel_integrity_override(override):
@@ -478,6 +469,8 @@ def load_operational_block_context(
             ],
             "reasons": [reason],
         }
+    if reference_now is None:
+        return _invalid_health_block("reloj now sin zona horaria")
     path = data_dir / "reports" / "latest_operational_health.json"
     if not path.exists():
         return {
