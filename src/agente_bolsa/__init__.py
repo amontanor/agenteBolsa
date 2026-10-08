@@ -116,4 +116,5 @@ __all__ = ["__version__"]
 # Oct08: restore explicit 300/120/120-second intraday scheduler grace.
 # Oct08: LLM uplift fixtures aligned with direction-corrected maturity contract.
 # Oct08: combined corrective candidate, separate from isolated reservations.
+# Oct08 N2: preserve recovered postmarket/reconciliation identity across sessions (0.4.344).
 __version__ = "0.4.348"
