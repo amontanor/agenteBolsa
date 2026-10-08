@@ -39,3 +39,9 @@ no se ocultaron con skip/xfail. Suite completa integrada sigue pendiente.
 
 La recuperación operativa anterior y sus recibos pertenecen al informe de
 integración; este lote no vuelve a limpiar leases ni modifica históricos.
+
+Reproducción adicional sobre archive de base exacta 1adc3cec, con los tres
+archivos de tests originales y src originales: 11 failed, 1 passed in 1.86s.
+Confirma ausencia de cost_calibration/matched_executed y el desacuerdo de schema,
+además de fixtures sin dirección/contratos. Evidencia local en ef99:
+goal_scoreboard_base.txt. No se ejecuta otra suite completa sobre esa base.
