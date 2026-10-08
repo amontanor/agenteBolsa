@@ -113,5 +113,5 @@ __all__ = ["__version__"]
 # unavailable, y el productor toma el reloj de captura despues de la descarga.
 # Oct07/08: seven-lot integration candidate; reserved after .340/.341 artifacts.
 # Oct08: restore scoreboard v3 costs and coverage while preserving exact controls.
-# Oct08 N2: preserve recovered postmarket/reconciliation identity across sessions (0.4.345).
-__version__ = "0.4.345"
+# Oct08 N2: preserve recovered postmarket/reconciliation identity across sessions (0.4.346).
+__version__ = "0.4.346"

@@ -381,9 +381,11 @@ class PostmarketCoordinator:
         with self.store.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             active_row = conn.execute("SELECT value_json FROM runtime_state WHERE key = ?", (ACTIVE_KEY,)).fetchone()
+            reconciliation_row = conn.execute("SELECT value_json FROM runtime_state WHERE key = ?", (RECONCILIATION_KEY,)).fetchone()
             session_row = conn.execute("SELECT value_json FROM runtime_state WHERE key = ?", (session_key,)).fetchone()
             last_row = conn.execute("SELECT value_json FROM runtime_state WHERE key = ?", ("post_market_review_last_session",)).fetchone()
             active = json.loads(active_row[0]) if active_row else None
+            reconciliation = json.loads(reconciliation_row[0]) if reconciliation_row else None
             session_state = json.loads(session_row[0]) if session_row else None
             last_session = json.loads(last_row[0]) if last_row else None
             if isinstance(last_session, str) and last_session >= session_date:
@@ -403,26 +405,41 @@ class PostmarketCoordinator:
                     # final runtime-state release.  Do not steal that lease.
                     reason = "postmarket_already_running"
                 elif terminal_status in {"completed", "failed", "skipped"}:
-                    reason = "terminal_lease_recovered"
-                    recovered_run_id = active_run_id or None
-                    recovered_started_at = str(active.get("started_at") or "") or None
-                    recovered_owner = dict(active)
-                    recovered_session_date = str(active.get("session_date") or "") or None
-                    recovery_event_type = "terminal_lease_recovered"
-                    recovered_terminal_status = terminal_status
-                    effective = True
+                    if isinstance(reconciliation, dict) and reconciliation.get("status") == "active" and _owner_is_live(
+                        reconciliation, current_pid=pid, current_token=token
+                    ):
+                        reason = "reconciliation_already_running"
+                    else:
+                        reason = "terminal_lease_recovered"
+                        recovered_run_id = active_run_id or None
+                        recovered_started_at = str(active.get("started_at") or "") or None
+                        recovered_owner = dict(active)
+                        recovered_session_date = str(active.get("session_date") or "") or None
+                        recovery_event_type = "terminal_lease_recovered"
+                        recovered_terminal_status = terminal_status
+                        effective = True
                 else:
                     # Lease muerto: se recupera de forma determinista y se
                     # deja constancia del propietario sustituido.
-                    reason = "owner_token_mismatch_recovered" if active_pid == pid and active_token and active_token != token else "dead_owner_recovered"
-                    recovered_run_id = str(active.get("run_id") or "") or None
-                    recovered_started_at = str(active.get("started_at") or "") or None
-                    recovered_owner = dict(active)
-                    recovered_session_date = str(active.get("session_date") or "") or None
-                    recovery_event_type = "stale_lease_recovered"
-                    effective = True
+                    if isinstance(reconciliation, dict) and reconciliation.get("status") == "active" and _owner_is_live(
+                        reconciliation, current_pid=pid, current_token=token
+                    ):
+                        reason = "reconciliation_already_running"
+                    else:
+                        reason = "owner_token_mismatch_recovered" if active_pid == pid and active_token and active_token != token else "dead_owner_recovered"
+                        recovered_run_id = str(active.get("run_id") or "") or None
+                        recovered_started_at = str(active.get("started_at") or "") or None
+                        recovered_owner = dict(active)
+                        recovered_session_date = str(active.get("session_date") or "") or None
+                        recovery_event_type = "stale_lease_recovered"
+                        effective = True
             else:
-                effective = True
+                if isinstance(reconciliation, dict) and reconciliation.get("status") == "active" and _owner_is_live(
+                    reconciliation, current_pid=pid, current_token=token
+                ):
+                    reason = "reconciliation_already_running"
+                else:
+                    effective = True
             if effective:
                 if recovered_owner:
                     self._release_recovered_session_view(conn, recovered_owner)
@@ -666,13 +683,18 @@ class PostmarketCoordinator:
                 if _owner_is_live(pmr, current_pid=pid, current_token=token):
                     reason = "postmarket_already_running"
                 elif pmr_terminal in {"completed", "failed", "skipped"}:
-                    conn.execute("DELETE FROM runtime_state WHERE key = ? AND value_json = ?", (ACTIVE_KEY, pmr_row[0]))
-                    recovered_run_id = pmr_run_id or None
-                    recovered_owner = dict(pmr)
-                    recovered_session_date = str(pmr.get("session_date") or "") or None
-                    recovery_event_type = "terminal_lease_recovered"
-                    recovered_terminal_status = pmr_terminal
-                    effective = True
+                    if isinstance(recon, dict) and recon.get("status") == "active" and _owner_is_live(
+                        recon, current_pid=pid, current_token=token
+                    ):
+                        reason = "reconciliation_already_running"
+                    else:
+                        conn.execute("DELETE FROM runtime_state WHERE key = ? AND value_json = ?", (ACTIVE_KEY, pmr_row[0]))
+                        recovered_run_id = pmr_run_id or None
+                        recovered_owner = dict(pmr)
+                        recovered_session_date = str(pmr.get("session_date") or "") or None
+                        recovery_event_type = "terminal_lease_recovered"
+                        recovered_terminal_status = pmr_terminal
+                        effective = True
                 else:
                     reason = "postmarket_already_running"
             elif isinstance(recon, dict) and recon.get("status") == "active":

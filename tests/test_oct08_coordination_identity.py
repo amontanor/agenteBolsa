@@ -318,3 +318,72 @@ def test_terminal_of_postmarket_does_not_release_conflicting_reconciliation_leas
     PostmarketCoordinator(settings, store).terminal(pmr_lease, "failed", reason="late")
 
     assert store.get_runtime_value(RECONCILIATION_KEY) == recon_state
+
+
+def test_postmarket_does_not_start_while_live_reconciliation_exists(
+    tmp_path: Path, monkeypatch
+) -> None:
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    recon_state = {
+        "status": "active",
+        "session_date": "2026-10-08",
+        "run_id": "recon-owner",
+        "owner_pid": 12345,
+        "owner_process_token": "recon-token",
+        "owner_token": "recon-token",
+    }
+    monkeypatch.setattr(coordination, "_pid_alive", lambda pid: pid == 12345)
+    store.set_runtime_value(RECONCILIATION_KEY, recon_state)
+
+    lease = PostmarketCoordinator(settings, store).acquire(
+        session_date="2026-10-08", run_id="pmr-new", trigger="scheduled"
+    )
+
+    assert lease.effective is False
+    assert lease.reason == "reconciliation_already_running"
+    assert store.get_runtime_value(RECONCILIATION_KEY) == recon_state
+    assert store.get_runtime_value(ACTIVE_KEY) is None
+
+
+def test_reconciliation_does_not_overwrite_live_reconciliation_after_terminal_pmr(
+    tmp_path: Path, monkeypatch
+) -> None:
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    pmr_state = _dead_state(session_date="2026-10-07", run_id="pmr-terminal")
+    recon_state = {
+        "status": "active",
+        "session_date": "2026-10-08",
+        "run_id": "recon-owner",
+        "owner_pid": 12345,
+        "owner_process_token": "recon-token",
+        "owner_token": "recon-token",
+    }
+    monkeypatch.setattr(coordination, "_pid_alive", lambda pid: pid == 12345)
+    store.set_runtime_value(ACTIVE_KEY, pmr_state)
+    store.set_runtime_value(RECONCILIATION_KEY, recon_state)
+    store.record_append_only_event(
+        event_id="pmr:pmr-terminal:terminal:failed",
+        event_type="postmarket_run",
+        cycle_id="pmr-terminal",
+        payload={
+            "schema_version": "p-l45b1.postmarket-run.v1",
+            "session_date": "2026-10-07",
+            "run_id": "pmr-terminal",
+            "stage": "terminal",
+            "status": "failed",
+            "content_hash": "pmr-terminal-hash",
+        },
+    )
+
+    lease = PostmarketCoordinator(settings, store).acquire_reconciliation(
+        session_date="2026-10-08", run_id="recon-new", trigger="scheduled"
+    )
+
+    assert lease.effective is False
+    assert lease.reason == "reconciliation_already_running"
+    assert store.get_runtime_value(RECONCILIATION_KEY) == recon_state
+    assert store.get_runtime_value(ACTIVE_KEY) == pmr_state
