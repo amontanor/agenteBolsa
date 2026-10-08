@@ -231,6 +231,20 @@ def test_live_owner_on_old_session_is_not_recovered_or_released(
     monkeypatch.setattr(coordination, "_pid_alive", lambda pid: pid == 12345)
     store.set_runtime_value(ACTIVE_KEY, old_state)
     store.set_runtime_value(f"{SESSION_KEY_PREFIX}{old_session}", old_state)
+    terminal_payload = {
+        "schema_version": "p-l45b1.postmarket-run.v1",
+        "session_date": old_session,
+        "run_id": "pmr-live",
+        "stage": "terminal",
+        "status": "failed",
+        "content_hash": "live-terminal-hash",
+    }
+    store.record_append_only_event(
+        event_id="pmr:pmr-live:terminal:failed",
+        event_type="postmarket_run",
+        cycle_id="pmr-live",
+        payload=terminal_payload,
+    )
 
     lease = PostmarketCoordinator(settings, store).acquire(
         session_date="2026-10-08", run_id="pmr-new", trigger="scheduled"
@@ -239,3 +253,68 @@ def test_live_owner_on_old_session_is_not_recovered_or_released(
     assert lease.effective is False
     assert lease.reason == "postmarket_already_running"
     assert store.get_runtime_value(f"{SESSION_KEY_PREFIX}{old_session}") == old_state
+    assert [
+        item["payload"]
+        for item in _events(store)
+        if item["event_id"] == "pmr:pmr-live:terminal:failed"
+    ] == [terminal_payload]
+
+
+def test_missing_recovered_session_is_unavailable_and_old_view_is_preserved(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    old_session = "2026-10-07"
+    new_session = "2026-10-08"
+    active_state = _dead_state(session_date=old_session, run_id="pmr-missing-session")
+    active_state.pop("session_date")
+    old_view = _dead_state(session_date=old_session, run_id="pmr-missing-session")
+    store.set_runtime_value(ACTIVE_KEY, active_state)
+    store.set_runtime_value(f"{SESSION_KEY_PREFIX}{old_session}", old_view)
+
+    lease = PostmarketCoordinator(settings, store).acquire(
+        session_date=new_session, run_id="pmr-new", trigger="scheduled"
+    )
+
+    assert lease.effective is True
+    recovered = [
+        item
+        for item in _events(store)
+        if item["event_id"] == "pmr:pmr-missing-session:terminal:failed"
+    ]
+    assert recovered and recovered[0]["payload"]["session_date"] == "unavailable"
+    markers = [
+        item
+        for item in _events(store)
+        if item["event_id"] == "stale_lease_recovered:pmr-missing-session:pmr-new"
+    ]
+    assert markers and markers[0]["payload"]["session_date"] == "unavailable"
+    assert store.get_runtime_value(f"{SESSION_KEY_PREFIX}{old_session}") == old_view
+
+
+def test_terminal_of_postmarket_does_not_release_conflicting_reconciliation_lease(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    recon_state = {
+        "status": "active",
+        "session_date": "2026-10-08",
+        "run_id": "recon-owner",
+        "owner_pid": 222,
+        "owner_process_token": "recon-token",
+        "owner_token": "recon-token",
+    }
+    store.set_runtime_value(RECONCILIATION_KEY, recon_state)
+    pmr_lease = CoordinationLease(
+        run_id="pmr-owner",
+        session_date="2026-10-08",
+        trigger="scheduled",
+        owner_pid=111,
+        owner_token="pmr-token",
+        effective=True,
+        status="started",
+    )
+
+    PostmarketCoordinator(settings, store).terminal(pmr_lease, "failed", reason="late")
+
+    assert store.get_runtime_value(RECONCILIATION_KEY) == recon_state

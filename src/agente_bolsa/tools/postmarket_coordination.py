@@ -453,7 +453,7 @@ class PostmarketCoordinator:
             else:
                 status = "skipped"
         if recovered_run_id and recovered_owner:
-            recovered_identity_session = recovered_session_date or session_date
+            recovered_identity_session = recovered_session_date or "unavailable"
             if recovery_event_type != "terminal_lease_recovered":
                 recovered = self._event(
                     run_id=recovered_run_id,
@@ -724,7 +724,7 @@ class PostmarketCoordinator:
                     (RECONCILIATION_KEY, encoded, started),
                 )
         if recovered_run_id and recovered_owner:
-            recovered_identity_session = recovered_session_date or session_date
+            recovered_identity_session = recovered_session_date or "unavailable"
             if recovery_event_type != "terminal_lease_recovered":
                 recovered = self._event(
                     run_id=recovered_run_id,
