@@ -11,10 +11,11 @@ despliegue productivo.
 - Rama: `codex/oct08-coordination-identity`
 - Base exacta: `ab28bd86193ef48a18d1f058e2f79492721c1412`
 - Tree de base: `daa3f125e2da5b0504924dce5a6858764a9aa1f9`
-- HEAD funcional final: `f84e275a5d002bd27afeb25e0988c337ca7d002e`
-- Tree funcional final: `b6de6405f5231dae905ceece2bf5202211e8a69b`
-- Versión: `0.4.346` (se atravesaron `.344` y `.345` en commits intermedios; el
-  plan no contenía reserva previa)
+- HEAD funcional final: `5d3883b149c1b8f29c9848fb43afdd31295e7ed8`
+- Tree funcional final: `39258fac990f37a31267b88d98622098dcd2e777`
+- Versión final: `0.4.344`, conforme a la reserva explícita del encargo.
+  `.345` y `.346` fueron bumps transitorios de commits intermedios durante la
+  revisión del mismo candidato; no se publicaron como candidatos.
 - Informe único del lote: este archivo.
 - El plan maestro y el relevo compartidos no se modificaron.
 
@@ -22,10 +23,12 @@ Commits separados:
 
 - `2962e6a6` — caracterización focal de identidad y recuperación.
 - `ca311574` — corrección funcional y bump de versión a `0.4.344`.
-- `79dcfacd` — sesión ausente como `unavailable`, conflicto PMR/recon y bump
-  final a `0.4.345`.
-- `f84e275a` — guard de dueño vivo entre PMR/reconciliación y bump final a
-  `0.4.346`.
+- `79dcfacd` — sesión ausente como `unavailable` y conflicto PMR/recon; bump
+  transitorio a `0.4.345` durante la revisión.
+- `f84e275a` — guard de dueño vivo entre PMR/reconciliación; bump transitorio a
+  `0.4.346` durante la revisión.
+- `5d3883b1` — preservación de vistas terminales y renumeración final a
+  `0.4.344`.
 
 ## Causa y contrato corregido
 
@@ -43,7 +46,10 @@ El cambio es acotado:
   del adquirente. El marker añade `replacement_session_date` para la sesión que
   toma el lease;
 - la vista de sesión anterior sólo se elimina mediante compare-and-swap cuando
-  coinciden exactamente `run_id`, PID y token del propietario recuperado;
+  coinciden exactamente `run_id`, PID y token del propietario recuperado, y su
+  estado actual es `active`;
+- una vista anterior ya `completed`, `failed` o `skipped` se conserva aunque
+  coincida la identidad, porque es la última vista terminal válida;
 - terminal sólo marca la vista de sesión si la vista actual conserva esa misma
   identidad exacta;
 - dueño vivo, PID reutilizado con token distinto y vista conflictiva no se
@@ -70,8 +76,10 @@ Después del cambio:
 
 - `tests/test_oct08_coordination_identity.py` más las regresiones
   `test_p45b_postmarket_reliability.py`, `test_p45b1_integration_qa.py` y
-  `test_p45b2_integration_qa.py`, además de `test_version_policy.py`:
-  `35 passed in 17.77s`;
+  `test_p45b2_integration_qa.py`, además de `test_version_policy.py`, antes del
+  ajuste documental de numeración: `35 passed in 17.77s`;
+- tras preservar vistas terminales y renumerar a `.344`, focales de identidad y
+  `test_version_policy.py`: `12 passed in 1.37s`;
 - Ruff focal sobre coordinador y pruebas: `All checks passed!`;
 - `scripts/check_no_nulls.py`: `OK (545 archivos)`;
 - `git diff --check`: verde;
