@@ -9,6 +9,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Iterable, Iterator
+from contextlib import closing
 from dataclasses import asdict
 from datetime import datetime, timezone
 from itertools import islice
@@ -2646,21 +2647,21 @@ class Store:
         if limit is not None:
             query += " LIMIT ?"
             params.append(max(1, int(limit)))
-        with self.connect() as conn:
-            cursor = conn.execute(query, params)
-            while True:
-                rows = cursor.fetchmany(max(1, int(batch_size)))
-                if not rows:
-                    break
-                for row in rows:
-                    yield {
-                        "event_id": row["event_id"],
-                        "agent": row["agent"],
-                        "event_type": row["event_type"],
-                        "cycle_id": row["cycle_id"],
-                        "payload": json.loads(row["payload_json"] or "{}"),
-                        "created_at": row["created_at"],
-                    }
+        with closing(self.connect()) as conn, conn:
+            with closing(conn.execute(query, params)) as cursor:
+                while True:
+                    rows = cursor.fetchmany(max(1, int(batch_size)))
+                    if not rows:
+                        break
+                    for row in rows:
+                        yield {
+                            "event_id": row["event_id"],
+                            "agent": row["agent"],
+                            "event_type": row["event_type"],
+                            "cycle_id": row["cycle_id"],
+                            "payload": json.loads(row["payload_json"] or "{}"),
+                            "created_at": row["created_at"],
+                        }
 
     def pending_broker_orders(self, *, limit: int = 25) -> list[dict[str, Any]]:
         """Read the bounded local order set eligible for an intraday poll.
