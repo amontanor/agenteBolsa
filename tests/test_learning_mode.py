@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from agente_bolsa.config import Settings
 from agente_bolsa.cycle_runner import (
     _apply_backtest_gate,
@@ -27,6 +29,7 @@ from agente_bolsa.tools.trade_decision import (
 
 def _settings(tmp_path) -> Settings:
     return Settings(
+        _env_file=None,
         DATA_DIR=tmp_path,
         DATABASE_PATH=tmp_path / "state" / "test.sqlite3",
         AGENT_LOGS_DIR=tmp_path / "logs" / "agents",
@@ -172,11 +175,13 @@ def test_signal_outcomes_exclude_learning_experiment_by_default(tmp_path):
     assert {row["signal_id"] for row in cohort_rows} == {"real", "learn"}
 
 
-def test_learning_mode_relaxes_partial_market_state_only_when_enabled(tmp_path):
+@pytest.mark.parametrize(("score", "expected_count"), [(17, 1), (18, 0)])
+def test_learning_mode_relaxes_partial_market_state_only_when_enabled(tmp_path, score, expected_count):
     candidate = {
         "symbol": "FRT",
         "direction": "long",
-        "score": 18,
+        # Aislar calidad parcial del veto independiente de score extremo.
+        "score": score,
         "selection_score": 0.04,
         "selection_rank": 1,
         "setup_quality": "strong",
@@ -213,8 +218,9 @@ def test_learning_mode_relaxes_partial_market_state_only_when_enabled(tmp_path):
     )
 
     assert blocked == []
-    assert len(allowed) == 1
-    assert allowed[0].symbol == "FRT"
+    assert len(allowed) == expected_count
+    if allowed:
+        assert allowed[0].symbol == "FRT"
 
 
 def test_learning_mode_caps_per_trade_notional(tmp_path, monkeypatch):
