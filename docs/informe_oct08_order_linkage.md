@@ -45,6 +45,7 @@ en `ca876b97`).
 - Implementación + bump + pin de versión: `ce950742d99abd8021cfea643de2ec893a5d50c6`.
 - Optimización agregada read-only: `8dc3b307`.
 - QA focal de límites: `b58c5b88`.
+- QA determinista del borde `>=` UTC: `fd775291`.
 - El informe original se actualiza ahora en un commit documental separado.
 - Sin push, merge, despliegue, reinicio ni escritura de producción.
 
@@ -53,8 +54,9 @@ en `ca876b97`).
 - Focal directa: `tests/test_p135_order_linkage.py` — **4 passed**.
 - Revisión posterior a la optimización: `tests/test_p135_order_linkage.py` —
   **6 passed**, incluyendo estados `FILLED`/`partially_filled`, cutoff
-  lexicográfico UTC, enlace ausente, tienda vacía, no mutación y DB ausente sin
-  creación.
+  lexicográfico UTC congelado (una fila exactamente en cutoff y otra un
+  microsegundo antes), enlace ausente, tienda vacía, no mutación y DB ausente
+  sin creación.
 - Regresiones relacionadas (`p135`, `p59c`, `p133`, `operational_health`,
   `order_plan_expiration`) sobre el candidato previo a la optimización —
   **70 passed**.
