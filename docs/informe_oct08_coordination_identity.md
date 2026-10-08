@@ -11,10 +11,10 @@ despliegue productivo.
 - Rama: `codex/oct08-coordination-identity`
 - Base exacta: `ab28bd86193ef48a18d1f058e2f79492721c1412`
 - Tree de base: `daa3f125e2da5b0504924dce5a6858764a9aa1f9`
-- HEAD funcional final: `79dcfacd588ca2e4e56d4e99ed6de8d7378d7ef5`
-- Tree funcional final: `f91848a2667008210390931d7b2fefdb8190f2ef`
-- Versión: `0.4.345` (se atravesó `.344` en un commit intermedio; el plan no
-  contenía reserva previa)
+- HEAD funcional final: `f84e275a5d002bd27afeb25e0988c337ca7d002e`
+- Tree funcional final: `b6de6405f5231dae905ceece2bf5202211e8a69b`
+- Versión: `0.4.346` (se atravesaron `.344` y `.345` en commits intermedios; el
+  plan no contenía reserva previa)
 - Informe único del lote: este archivo.
 - El plan maestro y el relevo compartidos no se modificaron.
 
@@ -24,6 +24,8 @@ Commits separados:
 - `ca311574` — corrección funcional y bump de versión a `0.4.344`.
 - `79dcfacd` — sesión ausente como `unavailable`, conflicto PMR/recon y bump
   final a `0.4.345`.
+- `f84e275a` — guard de dueño vivo entre PMR/reconciliación y bump final a
+  `0.4.346`.
 
 ## Causa y contrato corregido
 
@@ -46,6 +48,9 @@ El cambio es acotado:
   identidad exacta;
 - dueño vivo, PID reutilizado con token distinto y vista conflictiva no se
   roban ni se liberan;
+- un PMR no inicia mientras exista una reconciliación viva, y una
+  reconciliación no sobrescribe una reconciliación viva aunque haya un terminal
+  PMR residual;
 - el evento terminal ya existente se conserva sin sobrescritura ni conflicto;
   la idempotencia sigue siendo la de `Store.record_append_only_event`;
 - no se toca `agent_events` histórico ni `post_market_review_last_session`.
@@ -66,7 +71,7 @@ Después del cambio:
 - `tests/test_oct08_coordination_identity.py` más las regresiones
   `test_p45b_postmarket_reliability.py`, `test_p45b1_integration_qa.py` y
   `test_p45b2_integration_qa.py`, además de `test_version_policy.py`:
-  `33 passed in 17.58s`;
+  `35 passed in 17.77s`;
 - Ruff focal sobre coordinador y pruebas: `All checks passed!`;
 - `scripts/check_no_nulls.py`: `OK (545 archivos)`;
 - `git diff --check`: verde;
@@ -74,7 +79,8 @@ Después del cambio:
 
 Los nuevos casos también cubren un dueño vivo que ya tiene un terminal antiguo
 sin robarlo, una vista de sesión ausente que debe seguir `unavailable`, y un
-terminal PMR que no libera un lease de reconciliación con otra identidad.
+terminal PMR que no libera un lease de reconciliación con otra identidad, y los
+dos sentidos del conflicto con un lease vivo PMR/reconciliación.
 
 Los fixtures usan `Settings(_env_file=None)`, `PYTHONPATH` del worktree,
 SQLite temporal y propietarios sintéticos; no usan red, broker, LLM, yfinance,
