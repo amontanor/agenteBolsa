@@ -153,7 +153,7 @@ def test_telegram_uses_official_daily_equity_when_snapshot_carries_last_equity()
 
     assert payload["account_daily_return_source"] == "alpaca_account.last_equity"
     assert payload["daily_equity_pl"] == 5.0
-    assert "P/L diario de cartera: +5.00 USD" in format_daily_summary(payload)
+    assert "(+5.00 USD / +0.50%)" in format_daily_summary(payload)
 
 
 def test_current_opening_point_uses_visual_as_of_and_dashed_connector():

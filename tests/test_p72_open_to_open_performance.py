@@ -195,8 +195,8 @@ def test_context_and_telegram_share_the_same_opening_denominator(tmp_path) -> No
     assert payload["account_daily_return"] == pytest.approx(-0.00043610, abs=1e-8)
     assert payload["spy_daily_return"] == pytest.approx(0.00225921, abs=1e-8)
     assert payload["comparison_status"] == "in_progress"
-    assert "Variación desde apertura XNYS: -30.82 USD (-0.04%)" in text
-    assert "SP500: +0.23% · En curso" in text
+    assert "(-30.82 USD / -0.04%)" in text
+    assert "SP500 +0.23%" in text and "(en curso)" in text
 
 
 def test_daily_table_renders_only_complete_rows_newest_first() -> None:

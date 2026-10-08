@@ -333,7 +333,7 @@ def test_ui_and_telegram_use_same_eod_overlay_contract(tmp_path, monkeypatch):
     assert ui_row["instrument_label"] == "SPY (ETF S&P 500)"
     assert payload["benchmark"]["status"] == "comparable"
     assert payload["benchmark"]["daily_return"] == pytest.approx(ui_row["spy_pct"])
-    assert "SPY (ETF S&P 500)" in telegram.format_daily_summary(payload)
+    assert "SP500 +0.25%" in telegram.format_daily_summary(payload)
 
 
 def test_telegram_publish_projects_eod_overlay_in_real_consumer_boundary(tmp_path, monkeypatch):
@@ -445,7 +445,7 @@ def test_telegram_publish_without_authoritative_cache_never_falls_back_to_stale_
     assert first["status"] == "sent"
     assert second["status"] == "idempotent"
     assert len(sent) == 1
-    assert "SPY (ETF S&P 500): n/d" in sent[0]["text"]
+    assert "SP500 n/d (sin datos comparables)" in sent[0]["text"]
     assert "-0.30%" not in sent[0]["text"]
 
 

@@ -82,11 +82,11 @@ def test_build_and_format_daily_summary_keeps_denominators_separate():
     assert payload["open_today_pl"] == pytest.approx(15)
     text = telegram.format_daily_summary(payload)
     assert "Equity: 10,000.00 USD" in text
-    assert "Variación de equity hoy: importe n/d" in text
-    assert "Porcentaje disponible (legacy): +0.27%" in text
-    assert "SP500: +0.50% · Provisional" in text
-    assert "🟢 En beneficio · 1" in text
-    assert "• AAA  Total +100.00 USD (+11.11%) · Hoy +25.00 USD (+2.50%)" in text
+    assert "(n/d / +0.27%)" in text
+    assert payload["account_daily_return_source"] == "legacy_percentage"
+    assert "SP500 +0.50%" in text and "(provisional)" in text
+    assert payload["position_groups"] == {"profit": 1, "loss": 1}
+    assert "AAA +25.00 USD" in text
 
 
 def test_p70_characterizes_base_summary_ux_defects_before_redesign():
@@ -98,13 +98,11 @@ def test_p70_characterizes_base_summary_ux_defects_before_redesign():
 
     text = telegram.format_daily_summary(payload)
 
-    # La caracterización histórica quedó en b5b3fec4; aquí se fija el
-    # contrato corregido para que la regresión no vuelva a la presentación
-    # plana de 0.4.202.
+    # P-L129 mantiene el payload completo y muestra un resumen compacto.
     assert "Equity: 70,638.81 USD" in text
-    assert "🟢 En beneficio · 1" in text
-    assert "🔴 En pérdida · 1" in text
-    assert "P/L abierto total (2/2): +50.00 USD" in text
+    assert payload["position_groups"] == {"profit": 1, "loss": 1}
+    assert "Abiertas (2): total +50.00 USD - hoy +15.00 USD" in text
+    assert "AAA +25.00 USD" in text and "BBB -10.00 USD" in text
 
 
 def _acceptance_portfolio(*, previous_close_equity: float | None = 70_534.69) -> PortfolioSnapshot:
@@ -209,8 +207,8 @@ def test_p70_reads_anonymized_performance_daily_payload_without_promoting_provis
     assert payload["benchmark_as_of"] is None
     assert "benchmark_source_unavailable" in payload["comparison_reason_codes"]
     assert "benchmark_as_of_unavailable" in payload["comparison_reason_codes"]
-    assert "SP500: -0.30% · Provisional" in text
-    assert "Comparación provisional:" in text
+    assert "SP500 -0.30%" in text and "(provisional)" in text
+    assert "SP500 provisional: base no plenamente comparable." in text
     assert "ganador" not in text.lower()
 
 
@@ -251,16 +249,16 @@ def test_p70_acceptance_contract_reconciles_account_and_all_positions():
     assert payload["position_groups"] == {"profit": 6, "loss": 2}
     assert "Equity: 70,638.81 USD" in text
     assert "Equity: +70,638.81 USD" not in text
-    assert "Variación de equity hoy: +100.22 USD (+0.14%)" in text
-    assert "SP500: -0.30%" in text
-    assert "Diferencia: +0.44 pp" in text
-    assert "P/L abierto total (8/8): +85.54 USD" in text
-    assert "Variación abierta hoy (8/8): +73.87 USD" in text
-    assert "🟢 En beneficio · 6" in text
-    assert "🔴 En pérdida · 2" in text
+    assert "(+100.22 USD / +0.14%)" in text
+    assert "SP500 -0.30%" in text
+    assert "+0.44 pp por encima (comparable)" in text
+    assert "Abiertas (8): total +85.54 USD - hoy +73.87 USD" in text
+    assert len(payload["positions"]) == 8
     assert "P/L abierto hoy" not in text
-    assert "KHC  Total +42.94 USD (+4.32%) · Hoy +40.28 USD (+4.04%)" in text
-    assert "UNP  Total -37.25 USD (-4.02%) · Hoy -9.35 USD (-1.04%)" in text
+    assert "Top: KHC +40.28 USD - VTR -19.70 USD - TMO +17.27 USD - +5 mas" in text
+    unp = next(row for row in payload["positions"] if row["symbol"] == "UNP")
+    assert unp["total_pl"] == pytest.approx(-37.25)
+    assert unp["today_pl"] == pytest.approx(-9.35)
 
 
 def test_p70_preserves_numeric_provisional_benchmark_without_declaring_winner():
@@ -278,10 +276,10 @@ def test_p70_preserves_numeric_provisional_benchmark_without_declaring_winner():
 
     assert payload["comparison_status"] == "provisional"
     assert payload["comparison_difference"] is not None
-    assert "SP500: +0.50% · Provisional" in text
-    assert "Diferencia:" in text and "· Provisional" in text
+    assert "SP500 +0.50%" in text and "(provisional)" in text
+    assert "+0.36 pp por debajo (provisional)" in text
     assert "ganador" not in text.lower()
-    assert "Comparación provisional:" in text
+    assert "SP500 provisional: base no plenamente comparable." in text
 
 
 def test_p70_missing_equity_pair_keeps_legacy_percentage_but_not_amount():
@@ -298,8 +296,7 @@ def test_p70_missing_equity_pair_keeps_legacy_percentage_but_not_amount():
     assert payload["equity_delta"] is None
     assert payload["account_daily_return_source"] == "legacy_percentage"
     text = telegram.format_daily_summary(payload)
-    assert "Variación de equity hoy: importe n/d" in text
-    assert "Porcentaje disponible (legacy): +0.27%" in text
+    assert "(n/d / +0.27%)" in text
 
 
 def test_p70_partial_position_coverage_does_not_turn_missing_into_zero():
@@ -335,10 +332,9 @@ def test_p70_partial_position_coverage_does_not_turn_missing_into_zero():
     assert payload["open_today_pl"] == pytest.approx(2.0)
     assert payload["open_today_pl_coverage"] == {"known": 1, "total": 2, "status": "partial"}
     text = telegram.format_daily_summary(payload)
-    assert "P/L abierto total (1/2): +0.00 USD · parcial" in text
-    assert "Variación abierta hoy (1/2): +2.00 USD · parcial" in text
-    assert "⚠️ Datos incompletos · 1" in text
-    assert "MISSING  Total n/d (n/d) · Hoy n/d (n/d)" in text
+    assert "Abiertas (2): total +0.00 USD - hoy +2.00 USD - parcial" in text
+    assert payload["position_groups"]["incomplete"] == 1
+    assert "MISSING n/d" in text
 
 
 def test_p70_large_portfolio_is_explicitly_bounded_without_losing_payload_positions():
@@ -364,11 +360,9 @@ def test_p70_large_portfolio_is_explicitly_bounded_without_losing_payload_positi
 
     assert len(payload["positions"]) == 100
     assert telegram._telegram_utf16_units(text) <= telegram.TELEGRAM_MESSAGE_LIMIT_UNITS
-    assert "Mensaje abreviado:" in text
-    assert "posiciones más" in text
-    match = re.search(r"se muestran (\d+)/(\d+) posiciones; y (\d+) posiciones más", text)
+    match = re.search(r"Top: (.*?) - \+(\d+) mas", text)
     assert match
-    visible, total, omitted = (int(value) for value in match.groups())
+    visible, total, omitted = len(match.group(1).split(" - ")), len(payload["positions"]), int(match.group(2))
     assert total == 100
     assert visible + omitted == total
 
@@ -401,9 +395,9 @@ def test_p70_telegram_limit_uses_utf16_units_and_never_emits_empty_group_heading
     text = telegram.format_daily_summary(payload)
 
     assert telegram._telegram_utf16_units(text) <= telegram.TELEGRAM_MESSAGE_LIMIT_UNITS
-    match = re.search(r"se muestran (\d+)/(\d+) posiciones; y (\d+) posiciones más", text)
+    match = re.search(r"Top: (.*?) - \+(\d+) mas", text)
     assert match
-    visible, total, omitted = (int(value) for value in match.groups())
+    visible, total, omitted = len(match.group(1).split(" - ")), len(payload["positions"]), int(match.group(2))
     assert total == 120
     assert visible + omitted == total
     for heading in ("🟢 En beneficio", "🔴 En pérdida", "⚪ Sin cambio", "⚠️ Datos incompletos"):
@@ -439,7 +433,7 @@ def test_p70_empty_unicode_and_non_finite_values_are_explicitly_unavailable():
     json.dumps(payload, allow_nan=False)
     text = telegram.format_daily_summary(payload)
     assert "Sin posiciones abiertas." in text
-    assert "Comparación SP500: n/d" in text
+    assert "SP500 n/d (sin datos comparables)" in text
 
     unicode_position = PositionSnapshot(
         symbol="ÑANDÚ",
@@ -478,7 +472,8 @@ def test_missing_intraday_values_are_unavailable_not_zero():
 
     assert payload["account_daily_return"] is None
     assert payload["open_today_pl"] is None
-    assert "Variación abierta hoy (0/1): n/d" in telegram.format_daily_summary(payload)
+    assert payload["open_today_pl_coverage"] == {"known": 0, "total": 1, "status": "unavailable"}
+    assert "Abiertas (1): total +0.00 USD - hoy n/d" in telegram.format_daily_summary(payload)
 
 
 class _Response:
