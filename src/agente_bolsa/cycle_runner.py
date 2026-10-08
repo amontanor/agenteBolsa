@@ -2092,6 +2092,7 @@ def _auto_paper_trade(
             {"source_run_id": decision_context.get("run_id"), "updated": learned_decisions},
         )
     rejected_order_plans: list[dict[str, Any]] = []
+    exit_rejections: list[dict[str, Any]] = []
     plan_records: list[dict[str, Any]] = []
     ordered_records: list[dict[str, Any]] = []
     failed_records: list[dict[str, Any]] = []
@@ -2116,9 +2117,21 @@ def _auto_paper_trade(
             gated_recommendations,
             dry_run=True,
             rejected=rejected_order_plans,
+            exit_rejections=exit_rejections,
             market_state=market_state,
             ignore_operational_kill_switch=learning_shadow_only,
         )
+    if exit_rejections:
+        try:
+            reporter.emit(
+                "risk_manager",
+                "exit_plan_rejections",
+                run_id,
+                "Motivos de salidas descartadas registrados sin modificar los planes.",
+                {"cycle_id": run_id, "rejections": exit_rejections},
+            )
+        except Exception as exc:  # noqa: BLE001 - observational evidence is fail-open.
+            logging.getLogger(__name__).debug("Exit rejection audit unavailable: %s", exc)
     effective_plan_limit = _effective_buy_plan_limit(settings, gated_recommendations)
     effective_daily_limit = _effective_daily_buy_limit(settings, plans)
     approved_buys = sorted({item.symbol for item in gated_recommendations if str(item.action).lower() == "buy"})

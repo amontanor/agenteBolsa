@@ -113,6 +113,72 @@ def _segments(report):
     return {stage: {segment["name"] for segment in item.get("segments", [])} for stage, item in report["stages"].items()}
 
 
+def test_exit_audit_wiring_is_fail_open_and_separate(monkeypatch, tmp_path):
+    import agente_bolsa.cycle_runner as runner
+
+    monkeypatch.setattr(runner, "new_id", lambda prefix: f"{prefix}_exact")
+    def run_mode(mode):
+        calls = _patch_trading_flow(monkeypatch)
+        original_builder = runner.build_order_plans
+        emitted = []
+        consumer_rejections = []
+        submissions = []
+
+        def builder(*args, **kwargs):
+            assert kwargs["rejected"] is not kwargs["exit_rejections"]
+            if mode != "empty":
+                kwargs["exit_rejections"].append({
+                    "symbol": "AAPL", "action": "exit", "recommendation_id": "exit-exact",
+                    "reason": "no_objective_exception", "signal_id": "shared-signal",
+                })
+            return original_builder(*args, **kwargs)
+
+        class Reporter:
+            def emit(self, _agent, event_type, _cycle, _message, payload=None):
+                if event_type == "exit_plan_rejections":
+                    emitted.append(payload)
+                    if mode == "fail":
+                        raise RuntimeError("audit_sink_unavailable")
+
+        def gates(**kwargs):
+            consumer_rejections.append(list(kwargs["rejected_order_plans"]))
+            return {}
+
+        def signal_status(*args, **kwargs):
+            consumer_rejections.append(list(kwargs["rejected_order_plans"]))
+            calls.append("update_signal_execution_status")
+            return 1
+
+        def submit(_settings, plan, **kwargs):
+            submissions.append({
+                **{key: plan[key] for key in ("plan_id", "cycle_id", "symbol", "side", "notional", "approved", "dry_run")},
+                "economics": {key: plan["payload"][key] for key in (
+                    "symbol", "side", "notional", "qty", "entry_price", "stop_loss", "take_profit",
+                    "micro_experiment", "size_multiplier", "backtest_soft_override", "soft_override_reasons",
+                )},
+            })
+            calls.append("submit_paper_order_plan")
+            return {"id": "broker-1", "status": "accepted"}
+
+        monkeypatch.setattr(runner, "build_order_plans", builder)
+        monkeypatch.setattr(runner, "collect_gate_path", gates)
+        monkeypatch.setattr(runner, "update_signal_execution_status", signal_status)
+        monkeypatch.setattr(runner, "submit_paper_order_plan", submit)
+        store = _StoreSpy()
+        settings = Settings(_env_file=None, DATA_DIR=tmp_path / mode,
+                            AUTO_PAPER_TRADING=True, REQUIRE_HUMAN_APPROVAL=False)
+        result = runner._auto_paper_trade(settings, store, Reporter(), "cycle",
+                                          {"run_id": "source"}, {}, {})
+        assert result["rejected_order_plans"] == []
+        assert consumer_rejections and all(rows == [] for rows in consumer_rejections)
+        assert "update_signal_execution_status" in calls
+        assert len(emitted) == (0 if mode == "empty" else 1)
+        assert len(submissions) == 1
+        return result, calls, submissions
+    runs = [run_mode(mode) for mode in ("empty", "record", "fail")]
+    assert runs[0] == runs[1] == runs[2]
+
+
 def test_auto_paper_trade_assigns_real_calls_to_the_required_segments(monkeypatch, tmp_path):
     timing = MarketCycleTiming(tmp_path, "integration")
     _result, calls, store = _run(monkeypatch, tmp_path, timing=timing)
