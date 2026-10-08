@@ -85,7 +85,7 @@ def test_filters_limits_and_batch_size_preserved(reader):
     assert_closed(opened)
 
 
-def test_sql_failure_closes_connection(reader, monkeypatch):
+def test_sql_failure_closes_connection(reader):
     store, opened = reader
     with closing(store.connect()) as conn, conn:
         conn.execute("DROP TABLE agent_events")
@@ -93,3 +93,22 @@ def test_sql_failure_closes_connection(reader, monkeypatch):
     with pytest.raises(sqlite3.OperationalError, match="no such table"):
         list(store.iter_agent_events())
     assert_closed(opened)
+
+
+def test_closing_reader_does_not_close_independent_writer(reader):
+    store, opened = reader
+    iterator = store.iter_agent_events(limit=None, batch_size=1)
+    assert next(iterator)["event_id"] == "a"
+    reader_connection = opened[0]
+    with closing(store.connect()) as writer, writer:
+        writer.execute(
+            "INSERT INTO agent_events VALUES (?, ?, ?, ?, ?, ?)",
+            ("new", "test", "capture_outcome", "cycle-1", "{}", "2026-10-08"),
+        )
+        writer.commit()
+        assert [event["event_id"] for event in iterator] == ["b", "c"]
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            reader_connection.execute("SELECT 1")
+        assert writer.execute(
+            "SELECT event_type FROM agent_events WHERE event_id='new'"
+        ).fetchone()[0] == "capture_outcome"
