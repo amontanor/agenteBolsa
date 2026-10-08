@@ -25,6 +25,8 @@ usa un carrier canónico válido y separa también `IDENTITY`.
 - Base declarada: `1adc3cec2b68a6a02eb8b3dd38e78846f1120cc2`.
 - Commit de caracterización: `4e383a906025887ede3be8897f9321a9cbc8c799`.
 - Tree tras caracterización: `88fe6f1cd7171b9a04e1783b728deddfe10d27ed`.
+- HEAD final tras documentación: `d00da0bed66f5e577b7f11f305832e2ef223d6e2`.
+- Tree final: `cd6f78eada8b426085bcac93a45f84d6c7c39d29`.
 - Cambios permitidos: `tests/test_p80b_same_cycle_control_carrier.py` y este
   informe. No hay cambios en `src/`, versión, configuración, `.env`, archivos
   protegidos, Telegram, producción o datos persistentes.
