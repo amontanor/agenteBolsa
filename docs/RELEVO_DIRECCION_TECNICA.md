@@ -70,6 +70,27 @@ explícita; diagnosticar recursos/cierre y auxiliar sin forzar salud; cerrar sal
 LLM. La autorización de despliegue persiste, pero no se eluden estos gates.
 
 
+
+### Relevo inmediato tras QA focal .352
+
+HEAD documental b15e553160f89b2bbbebcfba5a3a11ab5da82a5d mantiene src/tests
+idénticos al HEAD funcional7dce37e1 ya probado. Nueva lectura directa del PID7:
+VmRSS1725200kB,VmSwap2057708kB,9threads,estado sleeping; cgroup
+memory.current2146594816,memory.swap.current2107727872,max452174,oom0,oom_kill0.
+Fuente ef99goal_fix_0352_live_memory.txt. El comando devolvió1 solo porque
+/proc/pressure/memory no existe; los campos /proc/7 y cgroup sí se obtuvieron.
+No inferir causa del reinicio ni pool quieto de ese estado sleeping.
+
+Se ha solicitado al operador una excepción acotada al gate de AGENTS: ejecutar
+fullsuite/smoke SOLO en Windows, sin producción, mientras PMR8 no es terminal.
+Pendiente de respuesta: el tiempo transcurrido no equivale a autorización.
+La pregunta de saldo LLM también sigue pendiente. No ejecutar esos gates
+dependientes hasta respuesta o hasta cumplir todas las precondiciones.
+
+Auditoría de siguiente optimización asignada a Luna: solo propuesta de iteración
+y acumuladores para decision_context_quality, sin editar el candidato ni reducir
+históricos/denominadores. No confundir esa propuesta con un fix integrado.
+
 ## Evidencia adicional de QA y operación nocturna
 
 Commit test-only c7619f57 acota Pool.map_async.get a45s en P49BR1; mantiene
