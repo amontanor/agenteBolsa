@@ -9,6 +9,7 @@ from agente_bolsa.storage import Store
 
 def _settings(tmp_path: Path) -> Settings:
     return Settings(
+        _env_file=None,
         DATA_DIR=tmp_path,
         DATABASE_PATH=tmp_path / "state" / "test.sqlite3",
         AGENT_LOGS_DIR=tmp_path / "logs" / "agents",
