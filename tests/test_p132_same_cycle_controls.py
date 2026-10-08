@@ -8,6 +8,7 @@ from agente_bolsa.tools.learning_scoreboard import build_learning_scoreboard
 
 def _settings(tmp_path):
     return Settings(
+        _env_file=None,
         DATA_DIR=tmp_path,
         DATABASE_PATH=tmp_path / "state" / "test.sqlite3",
         AGENT_LOGS_DIR=tmp_path / "logs" / "agents",
@@ -29,7 +30,7 @@ def _executed(signal_date, symbol, *, return_5d=0.02, source="cycle-a"):
         "approved_buy": True,
         "executed_buy": True,
         "duplicate_count": 0,
-        "features": {},
+        "features": {"direction": "long", "decision_lineage": {"cycle_id": source}},
         "gate": {},
         "outcome": {"return_5d": return_5d, "matured_horizons": {"5d": True}},
         "execution": {},
@@ -62,10 +63,20 @@ def _build(tmp_path, monkeypatch, rows):
     )
 
 
+def _verified_pair(executed, control):
+    executed["features"]["comparable_control_set"] = {
+        "status": "verified",
+        "cycle_id": "cycle-a",
+        "treatment": {"signal_id": executed["best_signal_id"]},
+        "controls": [{"signal_id": control["best_signal_id"], "gate_eligibility": "verified"}],
+    }
+    return [executed, control]
+
+
 def test_matched_week_reports_coverage_and_control_cost_basis(tmp_path, monkeypatch):
     report = _build(
         tmp_path, monkeypatch,
-        [_executed("2026-07-07", "EXEC"), _control("2026-07-07", "CTRL")],
+        _verified_pair(_executed("2026-07-07", "EXEC"), _control("2026-07-07", "CTRL")),
     )
     row = report["weekly_rows"][0]
 
@@ -91,14 +102,19 @@ def test_unmatched_executed_counted_without_hiding(tmp_path, monkeypatch):
 def test_mixed_week_separates_matched_from_unmatched(tmp_path, monkeypatch):
     report = _build(
         tmp_path, monkeypatch,
-        [
-            _executed("2026-07-07", "EXEC"),
-            _executed("2026-07-07", "ALONE", source="cycle-b"),
-            _control("2026-07-07", "CTRL"),
-        ],
+        _verified_pair(_executed("2026-07-07", "EXEC"), _control("2026-07-07", "CTRL"))
+        + [_executed("2026-07-07", "ALONE", source="cycle-b")],
     )
     row = report["weekly_rows"][0]
 
     assert row["matched_executed"] == 1
     assert row["unmatched_executed"] == 1
     assert row["n"] == 2
+
+
+def test_same_cycle_without_verified_contract_remains_unmatched(tmp_path, monkeypatch):
+    report = _build(tmp_path, monkeypatch,
+                    [_executed("2026-07-07", "EXEC"), _control("2026-07-07", "CTRL")])
+    assert report["weekly_rows"][0]["matched_executed"] == 0
+    assert report["weekly_rows"][0]["control_n"] == 0
+    assert report["control_coverage"]["comparability_status"] != "verified"
