@@ -1,5 +1,19 @@
 # Plan maestro de mejoras y tareas — agenteBolsa
 
+## 8-oct-2026: candidato aislado de memoria en outcomes
+
+Dictamen `partially_verified_outcome_memory_candidate`; informe único
+`docs/informe_oct08_outcome_memory.md`. Base `1adc3cec`/v0.4.321, rama
+`codex/oct08-outcome-memory`. Cachés locales por símbolo exacto en capturas H
+y loop legacy; identidad, linaje y fallos por fila conservados. QA: 12 passed,
+Ruff focal/NUL/diff verdes. Paridad de payloads completos con reloj fijo.
+No RAM productiva medida ni causalidad operativa demostrada; el loop legacy
+retiene ahora un marco por símbolo, tradeoff documentado. Producción intacta.
+Bump/reserva diferidos al coordinador; no release. Validación completa y
+operativa omitida y no aprobada: lease postmarket activo comunicado 08:33 Madrid.
+Siguiente paso: revisión, reserva/bump y ventana cerrada sin leases/jobs activos.
+
+
 ## P-L155: lector de recibos EOD de SPY y reloj del productor (candidato 0.4.321)
 
 Informe unico: `docs/informe_p_l155_lector_spy_eod.md`. Lote N2 acotado a
