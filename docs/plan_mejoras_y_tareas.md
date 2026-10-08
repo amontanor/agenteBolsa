@@ -1,5 +1,18 @@
 # Plan maestro de mejoras y tareas — agenteBolsa
 
+## 8-oct-2026: cierre del ensayo combinado de siete mejoras
+
+Dictamen `partially_verified_integration_candidate`; informe vigente
+`docs/informe_oct08_integration.md`, rama `codex/oct08-integration-rehearsal`.
+HEAD funcional probado `5f2f530d2eab5b72c171a3fc0bd1afc1f9ddf5c4`:
+87 casos focales distintos pasan, Ruff/NUL/diff verdes, protegidos idénticos.
+Incluye los cuatro lotes del 7-oct y memoria, cierre lector y dedup del 8-oct.
+Las notas de candidatos que siguen son históricas; el ensayo ya está realizado.
+No release ni despliegue: lease activo a las 08:33 Madrid, validación operativa
+`precondition_not_met`. Pendientes identidad .321/.340, reserva/bump, gates
+completos y fallo económico de base documentado. Siguiente optimización:
+consulta histórica/índice en lote separado, sin cap ni cambio de atomicidad.
+
 ## 8 octubre 2026: exclusión local de estudios duplicados
 
 Candidato N2 `ready_for_integration_rehearsal`, rama

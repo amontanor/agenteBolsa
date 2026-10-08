@@ -1,5 +1,18 @@
 # Relevo de direccion tecnica — agenteBolsa
 
+## 8-oct-2026: estado vigente del ensayo conjunto
+
+Siete lotes reunidos en `codex/oct08-integration-rehearsal`; informe único
+`docs/informe_oct08_integration.md`. Dictamen `partially_verified_integration_candidate`:
+87 casos distintos pasan, Ruff/NUL/diff verdes y protegidos sin cambios.
+HEAD funcional probado `5f2f530d2eab5b72c171a3fc0bd1afc1f9ddf5c4`;
+las notas inferiores de ensayo pendiente quedan como historia de los lotes.
+Producción intacta. Último preflight 08:33 Madrid: lease postmarket activo;
+validación operativa `precondition_not_met`, automatización de cierre PAUSED.
+No repetir focales sin nueva causa. Antes de release: nuevo preflight completo,
+resolver identidad .321/.340, reservar/bump y gates pendientes, incluido fallo
+económico reproducido en base. No reiniciar ni forzar postmarket implícitamente.
+
 ## 8 octubre 2026: exclusión local de estudios duplicados
 
 Candidato N2 `ready_for_integration_rehearsal`, rama
