@@ -11,7 +11,7 @@ import time
 from collections.abc import Iterable, Iterator
 from contextlib import closing
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from itertools import islice
 from pathlib import Path
 from typing import Any
@@ -6260,6 +6260,79 @@ class Store:
         with self.connect() as conn:
             row = conn.execute(query, params).fetchone()
         return int(row["count"] or 0)
+
+    def order_plan_linkage_summary(self, *, recent_days: int = 30) -> dict[str, Any]:
+        """Coverage of broker orders joined to a persisted order plan (P-L135, read-only).
+
+        Rows without a matching plan are historical evidence gaps: counted as
+        ``legacy_unverified``, never reconstructed by symbol/date.
+        """
+
+        from .tools.canonical_trade_attribution import FILLED_STATUSES
+
+        window = max(1, int(recent_days))
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=window)).isoformat()
+        filled_statuses = tuple(sorted(str(status).lower() for status in FILLED_STATUSES))
+        status_placeholders = ", ".join("?" for _ in filled_statuses)
+        query = f"""
+            WITH classified AS (
+                SELECT
+                    CASE WHEN lower(COALESCE(b.status, '')) IN ({status_placeholders})
+                         THEN 1 ELSE 0 END AS is_filled,
+                    CASE WHEN p.plan_id IS NULL THEN 0 ELSE 1 END AS has_plan,
+                    CASE WHEN b.created_at >= ? THEN 1 ELSE 0 END AS is_recent
+                FROM broker_orders AS b
+                LEFT JOIN order_plans AS p ON p.plan_id = b.plan_id
+            )
+            SELECT
+                COUNT(*) AS total,
+                COALESCE(SUM(is_filled), 0) AS filled,
+                COALESCE(SUM(CASE WHEN is_filled = 1 AND has_plan = 1 THEN 1 ELSE 0 END), 0)
+                    AS filled_with_plan,
+                COALESCE(SUM(CASE WHEN is_filled = 1 AND has_plan = 0 THEN 1 ELSE 0 END), 0)
+                    AS filled_without_plan,
+                COALESCE(SUM(is_recent), 0) AS recent_total,
+                COALESCE(SUM(CASE WHEN is_recent = 1 AND is_filled = 1 THEN 1 ELSE 0 END), 0)
+                    AS recent_filled,
+                COALESCE(SUM(CASE WHEN is_recent = 1 AND is_filled = 1 AND has_plan = 1 THEN 1 ELSE 0 END), 0)
+                    AS recent_filled_with_plan,
+                COALESCE(SUM(CASE WHEN is_recent = 1 AND is_filled = 1 AND has_plan = 0 THEN 1 ELSE 0 END), 0)
+                    AS recent_filled_without_plan
+            FROM classified
+        """
+        cursor = self.read_connection().cursor()
+        try:
+            cursor.execute(query, (*filled_statuses, cutoff))
+            row = cursor.fetchone()
+        finally:
+            cursor.close()
+
+        if row is None:  # pragma: no cover - aggregate query always returns one row.
+            raise RuntimeError("order_plan_linkage_summary_empty_aggregate")
+
+        def _summarize(total: Any, filled: Any, with_plan: Any, without_plan: Any) -> dict[str, Any]:
+            total_count = int(total or 0)
+            filled_count = int(filled or 0)
+            with_plan_count = int(with_plan or 0)
+            without_plan_count = int(without_plan or 0)
+            return {
+                "total": total_count,
+                "filled": filled_count,
+                "filled_with_plan": with_plan_count,
+                "filled_without_plan": without_plan_count,
+                "coverage": round(with_plan_count / filled_count, 4) if filled_count else None,
+            }
+
+        summary = _summarize(row["total"], row["filled"], row["filled_with_plan"], row["filled_without_plan"])
+        summary["recent"] = _summarize(
+            row["recent_total"],
+            row["recent_filled"],
+            row["recent_filled_with_plan"],
+            row["recent_filled_without_plan"],
+        )
+        summary["recent_days"] = window
+        summary["unverified_label"] = "legacy_unverified"
+        return summary
 
     def create_continuous_improvement_cycle(self, item: dict[str, Any]) -> None:
         from .continuous_improvement.persistence_compaction import (

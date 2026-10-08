@@ -1068,6 +1068,10 @@ def build_production_health_report(
         outcome_emptiness: dict[str, Any] = signal_outcome_emptiness(store)
     except Exception:  # noqa: BLE001 - observability must stay fail-open.
         outcome_emptiness = {"status": "unavailable"}
+    try:
+        order_linkage: dict[str, Any] = store.order_plan_linkage_summary()
+    except Exception:  # noqa: BLE001 - observability must stay fail-open.
+        order_linkage = {"status": "unavailable"}
 
     continuous_improvement_summary = {
         "enabled": settings.continuous_improvement_enabled,
@@ -1183,6 +1187,7 @@ def build_production_health_report(
             "market_cycle_timing": market_cycle_timing,
             "scheduler_skips": scheduler_skips,
             "outcome_emptiness": outcome_emptiness,
+            "order_linkage": order_linkage,
         },
         "operational_health": operational_report,
         "alerts": alerts,
@@ -1191,6 +1196,7 @@ def build_production_health_report(
         "scheduler_coherence": scheduler_coherence,
         "scheduler_skips": scheduler_skips,
         "outcome_emptiness": outcome_emptiness,
+        "order_linkage": order_linkage,
         "market_data_quality": market_data_quality,
         "llm_quality": llm_quality,
         "llm_decision_quality": {
