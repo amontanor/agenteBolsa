@@ -11,6 +11,7 @@ from agente_bolsa.tools.learning_scoreboard import (
 
 def _settings(tmp_path):
     return Settings(
+        _env_file=None,
         DATA_DIR=tmp_path,
         DATABASE_PATH=tmp_path / "state" / "test.sqlite3",
         AGENT_LOGS_DIR=tmp_path / "logs" / "agents",
@@ -40,7 +41,7 @@ def _observation(
         "approved_buy": executed,
         "executed_buy": executed,
         "duplicate_count": 0,
-        "features": {},
+        "features": {"direction": "long"},
         "gate": {},
         "outcome": {
             "return_5d": return_5d,
@@ -69,6 +70,16 @@ def test_learning_scoreboard_marks_pending_without_executed_cohort(tmp_path, mon
     assert report["period"]["to"] is not None
 
 
+def _verified_pair(treatment, control, cycle_id):
+    for row in (treatment, control):
+        row["features"].setdefault("decision_lineage", {})["cycle_id"] = cycle_id
+    treatment["features"]["comparable_control_set"] = {
+        "status": "verified", "cycle_id": cycle_id,
+        "treatment": {"signal_id": treatment["best_signal_id"]},
+        "controls": [{"signal_id": control["best_signal_id"], "gate_eligibility": "verified"}],
+    }
+
+
 def test_learning_scoreboard_evaluates_pre_registered_criterion_with_synthetic_data(tmp_path, monkeypatch):
     settings = _settings(tmp_path)
     store = Store(settings.database_path, settings.agent_logs_dir)
@@ -94,6 +105,7 @@ def test_learning_scoreboard_evaluates_pre_registered_criterion_with_synthetic_d
         control["gate"] = {
             "execution": {"status": "plan_rejected", "reason": "max_orders_per_cycle_reached"}
         }
+        _verified_pair(executed, control, f"cycle-{index}")
         store.upsert_learning_observation(executed)
         store.upsert_learning_observation(control)
 
@@ -197,7 +209,7 @@ def test_learning_scoreboard_uses_only_same_cycle_eligible_capacity_controls(tmp
     store.ensure_schema()
     executed = _observation("2026-07-07", "EXEC", executed=True, return_5d=0.03)
     executed["source_run_ids"] = ["cycle-a"]
-    executed["features"] = {"decision_lineage": {"lineage_status": "verified"}}
+    executed["features"]["decision_lineage"] = {"lineage_status": "verified"}
     eligible = _observation("2026-07-07", "NEXT", executed=False, return_5d=0.01)
     eligible["source_run_ids"] = ["cycle-a"]
     eligible["decision"] = "approved_buy"
@@ -213,6 +225,8 @@ def test_learning_scoreboard_uses_only_same_cycle_eligible_capacity_controls(tmp
     other_cycle["gate"] = {
         "execution": {"status": "plan_rejected", "reason": "max_orders_per_cycle_reached"}
     }
+    _verified_pair(executed, eligible, "cycle-a")
+    other_cycle["features"]["decision_lineage"] = {"cycle_id": "cycle-b"}
     for row in (executed, eligible, blocked, other_cycle):
         store.upsert_learning_observation(row)
     monkeypatch.setattr(

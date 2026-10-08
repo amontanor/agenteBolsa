@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+
 from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.learning_mode import LEARNING_EXPERIMENT_SOURCE
@@ -8,6 +10,7 @@ from agente_bolsa.tools.learning_scoreboard import build_learning_scoreboard
 
 def _settings(tmp_path):
     return Settings(
+        _env_file=None,
         DATA_DIR=tmp_path,
         DATABASE_PATH=tmp_path / "state" / "test.sqlite3",
         AGENT_LOGS_DIR=tmp_path / "logs" / "agents",
@@ -32,7 +35,7 @@ def _observation(signal_date, symbol, *, return_5d, slippage_bps=None):
         "approved_buy": True,
         "executed_buy": True,
         "duplicate_count": 0,
-        "features": {},
+        "features": {"direction": "long"},
         "gate": {},
         "outcome": {"return_5d": return_5d, "matured_horizons": {"5d": True}},
         "execution": execution,
@@ -99,3 +102,39 @@ def test_outlier_beyond_200bps_excluded(tmp_path, monkeypatch):
 
     assert report["cost_calibration"]["calibration_samples"] == 10
     assert report["cost_calibration"]["cost_bps"] == 20.0
+
+
+def test_invalid_samples_do_not_calibrate_or_mutate_inputs():
+    from agente_bolsa.tools.learning_scoreboard import _calibrated_cost
+
+    invalid = [True, False, "30", None, float("inf"), float("-inf"), 201.0]
+    rows = [_observation("2026-07-07", str(index), return_5d=0.02, slippage_bps=value)
+            for index, value in enumerate(invalid)]
+    before = copy.deepcopy(rows)
+    result = _calibrated_cost(rows)
+    assert result["calibration_samples"] == 0
+    assert result["calibrated"] is False
+    assert rows == before
+
+
+def test_calibrated_column_preserves_short_direction(tmp_path, monkeypatch):
+    rows = [_observation("2026-07-07", f"S{i}", return_5d=0.02, slippage_bps=30.0)
+            for i in range(10)]
+    for row in rows:
+        row["features"]["direction"] = "short"
+    report = _build(tmp_path, monkeypatch, rows)
+    assert report["weekly_rows"][0]["signed_gross_return"] == -0.02
+    assert report["weekly_rows"][0]["expectancy_net_calibrated"] == -0.023
+    assert report["weekly_rows"][0]["expectancy_net_10bps"] == -0.021
+
+
+def test_missing_direction_stays_unavailable_even_with_calibrated_fills(tmp_path, monkeypatch):
+    rows = [_observation("2026-07-07", f"S{i}", return_5d=0.02, slippage_bps=30.0)
+            for i in range(10)]
+    for row in rows:
+        row["features"].pop("direction")
+    report = _build(tmp_path, monkeypatch, rows)
+    assert report["cost_calibration"]["calibrated"] is True
+    assert report["weekly_rows"][0]["n"] == 0
+    assert report["weekly_rows"][0]["expectancy_net_calibrated"] is None
+    assert report["data_quality"]["excluded_direction_unavailable_as_forward"] == 10
