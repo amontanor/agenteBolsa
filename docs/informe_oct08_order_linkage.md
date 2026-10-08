@@ -29,6 +29,11 @@ en `ca876b97`).
 - `build_production_health_report` añade el carrier en `summary.order_linkage`
   y en el nivel superior `order_linkage`. Si la lectura falla, publica
   `{"status": "unavailable"}` y conserva el health fail-open.
+- Revisión de eficiencia N2: el lector ya no hace `fetchall` ni conserva filas.
+  Ejecuta una única consulta agregada SQL para los totales globales y recientes,
+  usa `Store.read_connection` (`mode=ro`, `query_only=ON`) y cierra su cursor
+  en `finally`, sin cerrar la conexión read-only compartida de otro lector.
+  No abre transacción writable.
 - Solo se reañaden lecturas y cableado observacional. No hay esquema, índice,
   configuración, backfill, reescritura histórica, cambios de autoridad de
   trading ni archivos protegidos.
@@ -38,24 +43,35 @@ en `ca876b97`).
 ## Commits e identidad
 
 - Implementación + bump + pin de versión: `ce950742d99abd8021cfea643de2ec893a5d50c6`.
-- Tree tras implementación: `4911327418ef3927025100900d6a484b95482872`.
-- El informe se entrega en un commit documental separado posterior.
+- Optimización agregada read-only: `8dc3b307`.
+- QA focal de límites: `b58c5b88`.
+- El informe original se actualiza ahora en un commit documental separado.
 - Sin push, merge, despliegue, reinicio ni escritura de producción.
 
 ## QA ejecutada
 
 - Focal directa: `tests/test_p135_order_linkage.py` — **4 passed**.
+- Revisión posterior a la optimización: `tests/test_p135_order_linkage.py` —
+  **6 passed**, incluyendo estados `FILLED`/`partially_filled`, cutoff
+  lexicográfico UTC, enlace ausente, tienda vacía, no mutación y DB ausente sin
+  creación.
 - Regresiones relacionadas (`p135`, `p59c`, `p133`, `operational_health`,
-  `order_plan_expiration`) — **70 passed**.
+  `order_plan_expiration`) sobre el candidato previo a la optimización —
+  **70 passed**.
 - Harness autorizado `validate_oct08_isolated.py` sobre las mismas focales y
-  regresiones, con `DATA_DIR` temporal, `_env_file=None`, paper y red externa
-  bloqueada — **70 passed**.
+  regresiones del candidato previo, con `DATA_DIR` temporal, `_env_file=None`,
+  paper y red externa bloqueada — **70 passed**.
 - `ruff check src tests` — `All checks passed`.
 - `scripts/check_no_nulls.py` — `OK (544 archivos)`.
 - `git diff --check` — limpio.
 - `validate-agent-config --json` aislado — `ok=true`, sin errores ni warnings.
 - `kernel-status --json` aislado — `status=unsealed`, esperado en DATA_DIR
   temporal sin manifest; no se tocó ningún protegido ni se ejecutó seal.
+
+La revisión de eficiencia no repitió los 70 tests de regresión: la evidencia de
+70/70 corresponde al candidato previo, mientras que la consulta nueva quedó
+cubierta por las seis focales, Ruff focal y diff-check. La suite amplia y los
+gates operativos siguen pendientes del ensayo cerrado.
 
 ## Límites y siguiente paso
 
@@ -65,4 +81,3 @@ La cobertura real de producción sigue sin medirse en este lote. El siguiente
 paso requiere revisión del coordinador y ensayo de integración cerrado con la
 identidad exacta de este candidato; no autoriza promoción ni despliegue por sí
 solo.
-
