@@ -5034,3 +5034,12 @@ Cuatro candidatos limpios antes de esta nota, separados sobre 1adc3cec/.321: pos
 Detenido antes de asignar validaciones, suites, smoke, integración o cambios funcionales. Focales anteriores no repetidos ni declarados validación operativa. Kernel/configuración completa, exclusividad de procesos y demás gates no aprobados. Sólo lectura productiva y documentación local, diff --check; sin órdenes, broker/LLM desde tests, protegidos, históricos, locks, producción, reinicios, merge, promoción o despliegue. Automatización validar-mejoras-bolsa-tras-cierre PAUSED tras este intento; estudio del 12-oct sin cambios. Siguiente: terminal de sesión y ausencia de lease/job/retry antes de reprogramar; no forzar cierre ni borrar leases.
 
 Evidencia: C:/Users/utopi/.codex/worktrees/ef99/agenteBolsa/audit_validation_2305_live.json y audit_validation_2305_image.txt; timestamps originales UTC.
+
+
+## 8-oct — cierre explícito del lector de eventos (candidato aislado N2)
+
+- Rama codex/oct08-event-reader-lifecycle, base exacta 1adc3cec/.321; QA HEAD 501052f9/tree48a3b3a1. Sin release, integración ni despliegue.
+- Store.iter_agent_events cierra cursor y conexión propia al agotar, fallar o cerrar generador; SQL/filtros/orden/payload intactos. No soluciona generadores suspendidos aún referenciados ni todos los lectores del proyecto.
+- Seis fallos reproducidos en base; final 11 passed (siete nuevos + cuatro regresiones), Ruff/NUL/diff verdes. Revisión independiente sin bloqueantes. Evidencia y límites: docs/informe_oct08_event_reader_lifecycle.md.
+- Encargo aislado nuevo autorizado por usuario; validación operativa permanece precondition_not_met por lease postmarket activo. Sin suites largas, broker/LLM desde tests ni mutaciones productivas.
+- Auditoría adicional: EXPLAIN temporal confirma SCAN agent_events + TEMP B-TREE en consultas H por ciclo; agrupar/indexar requiere lote aparte con legacy e identidad exacta. Optimización de copias de velas en candidato bolsa-outcome-memory-oct08; carrera scheduler y atomicidad/chunks pendientes separados.
