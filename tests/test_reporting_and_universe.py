@@ -73,7 +73,8 @@ def test_technical_study_enriches_relative_return_vs_benchmark(monkeypatch, tmp_
     assert candidate["relative_return_20d"] is not None
 
 
-def test_resolve_universe_can_overlay_recent_breakouts(tmp_path):
+def test_resolve_universe_can_overlay_recent_breakouts(tmp_path, monkeypatch):
+    monkeypatch.setattr("agente_bolsa.tools.universe.load_sp500_symbols", lambda: ["AAPL", "MSFT"])
     reports_dir = tmp_path / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
     (reports_dir / "latest_breakout_scan.json").write_text(
@@ -90,9 +91,11 @@ def test_resolve_universe_can_overlay_recent_breakouts(tmp_path):
 
     assert "AKAM" in symbols
     assert "DDOG" in symbols
+    assert {"AAPL", "MSFT"}.issubset(symbols)
 
 
-def test_resolve_universe_intraday_focus_prioritizes_recent_overlays(tmp_path):
+def test_resolve_universe_intraday_focus_prioritizes_recent_overlays(tmp_path, monkeypatch):
+    monkeypatch.setattr("agente_bolsa.tools.universe.load_sp500_symbols", lambda: ["AAPL", "MSFT"])
     reports_dir = tmp_path / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
     (reports_dir / "latest_breakout_scan.json").write_text(
