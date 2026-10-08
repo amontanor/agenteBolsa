@@ -118,4 +118,5 @@ __all__ = ["__version__"]
 # Oct08: combined corrective candidate, separate from isolated reservations.
 # Oct08 N2: preserve recovered postmarket/reconciliation identity across sessions (0.4.344).
 # Oct08: restore exact order-plan linkage coverage and fail-open health carrier.
-__version__ = "0.4.348"
+# Oct08 P-L80B-DATE: canonical signal-date equality in same-cycle controls (0.4.351).
+__version__ = "0.4.351"
