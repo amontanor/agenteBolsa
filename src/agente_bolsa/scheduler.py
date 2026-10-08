@@ -145,6 +145,7 @@ SCHEDULER_MAX_WORKERS = 2
 # rancio (coalesce intacto en cada job). MAX_WORKERS se conserva en 2 a
 # la espera de medir contencion (no tocar concurrencia y timing a la vez).
 SCHEDULER_INTRADAY_MISFIRE_GRACE_SECONDS = 120
+SCHEDULER_MARKET_CYCLE_MISFIRE_GRACE_SECONDS = 300
 SCHEDULER_BACKGROUND_MISFIRE_GRACE_SECONDS = 300
 LOGGER = logging.getLogger(__name__)
 OPERATIONAL_HEALTH_REFRESH_INTERVAL_MINUTES = 45
@@ -4590,6 +4591,7 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         max_instances=1,
         coalesce=True,
         replace_existing=True,
+        misfire_grace_time=SCHEDULER_INTRADAY_MISFIRE_GRACE_SECONDS,
     )
     scheduler.add_job(
         market_cycle_job,
@@ -4601,6 +4603,7 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
         max_instances=1,
         coalesce=True,
         replace_existing=True,
+        misfire_grace_time=SCHEDULER_MARKET_CYCLE_MISFIRE_GRACE_SECONDS,
     )
     if settings.trade_fill_watch_enabled:
         scheduler.add_job(
@@ -4613,6 +4616,7 @@ def build_scheduler(settings: Settings, store: Store, *, use_crew: bool, verbose
             max_instances=1,
             coalesce=True,
             replace_existing=True,
+            misfire_grace_time=SCHEDULER_INTRADAY_MISFIRE_GRACE_SECONDS,
         )
     scheduler.add_job(
         closed_market_technical_study_job,
