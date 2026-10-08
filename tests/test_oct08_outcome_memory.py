@@ -102,3 +102,60 @@ def test_calls_are_isolated(monkeypatch, tmp_path):
     second = _run(monkeypatch, tmp_path, signals, rows, changed)
     assert first[1] != second[1]
     assert {id(frame) for frame, _ in first[3]}.isdisjoint(id(frame) for frame, _ in second[3])
+
+
+@pytest.mark.parametrize("missing,empty,malformed", [(False, False, False),
+    (True, False, False), (False, True, False), (False, False, True)])
+def test_legacy_update_full_payload_parity(monkeypatch, tmp_path, missing, empty, malformed):
+    signals, _, data = _fixture(30)
+    for signal in signals:
+        signal["signal_date"] = "2026-10-05"
+        signal["features"] = {"entry_price": 100, "stop_loss": 85, "take_profit": 120}
+    if missing:
+        data = data.drop(columns="BBB", level=0)
+    if empty:
+        data[("BBB", "Close")] = float("nan")
+    if malformed:
+        signals[3]["features"] = [1]
+    for symbol in data.columns.get_level_values(0).unique():
+        data[(symbol, "High")] = data[(symbol, "Close")] + 2
+        data[(symbol, "Low")] = data[(symbol, "Close")] - 2
+    class FrozenClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return OBSERVED
+    class MemoryStore:
+        def signal_outcomes(self, **kwargs):
+            return deepcopy(signals)
+        def update_signal_outcomes_bulk(self, payload):
+            self.saved = deepcopy(payload)
+    monkeypatch.setattr(learning, "datetime", FrozenClock)
+    monkeypatch.setattr(learning, "download_daily_prices", lambda *args, **kwargs: data)
+    monkeypatch.setattr(learning, "trim_to_completed_sessions", lambda data, **kwargs:
+                        (data, 0, "2026-10-07", False))
+    monkeypatch.setattr(learning, "_persist_signal_outcome_captures", lambda *args, **kwargs: True)
+    original = learning._symbol_frame
+    calls, frames = [], []
+    def lookup(data, symbol):
+        calls.append(symbol)
+        frame = original(data, symbol)
+        frames.append((frame, frame.copy(deep=True)))
+        return frame
+    monkeypatch.setattr(learning, "_symbol_frame", lookup)
+    namespace = dict(vars(learning))
+    exec(Path(__file__).with_name("outcome_memory_legacy.txt").read_text(), namespace)
+    namespace["_persist_signal_outcome_captures"] = learning._persist_signal_outcome_captures
+    settings = Settings(_env_file=None, data_dir=tmp_path)
+    before = data.copy(deep=True)
+    legacy_store = MemoryStore()
+    expected = namespace["update_signal_outcomes"](settings, legacy_store, now=OBSERVED)
+    assert len(calls) == 30
+    calls.clear()
+    actual_store = MemoryStore()
+    actual = learning.update_signal_outcomes(settings, actual_store, now=OBSERVED)
+    assert actual == expected
+    assert actual_store.saved == legacy_store.saved
+    pd.testing.assert_frame_equal(data, before)
+    for frame, snapshot in frames:
+        pd.testing.assert_frame_equal(frame, snapshot)
+    assert len(calls) == (11 if missing else 2)
