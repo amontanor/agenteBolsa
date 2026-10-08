@@ -87,9 +87,11 @@ Pendiente de respuesta: el tiempo transcurrido no equivale a autorización.
 La pregunta de saldo LLM también sigue pendiente. No ejecutar esos gates
 dependientes hasta respuesta o hasta cumplir todas las precondiciones.
 
-Auditoría de siguiente optimización asignada a Luna: solo propuesta de iteración
+Auditoría de siguiente optimización completada por Luna: propuesta de iteración
 y acumuladores para decision_context_quality, sin editar el candidato ni reducir
-históricos/denominadores. No confundir esa propuesta con un fix integrado.
+históricos/denominadores. Requiere fijar snapshot/concurrencia y caracterizar
+payload completo antes de implementación; ver informe_oct08_digest_memory_audit.
+No confundir esa propuesta con un fix integrado.
 
 ## Evidencia adicional de QA y operación nocturna
 

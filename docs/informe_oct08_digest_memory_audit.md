@@ -244,3 +244,23 @@ informe en commit documental. El fallo de status anterior era del acceso del
 sandbox, no evidencia de corrupción del worktree. Los scripts de medición y
 comandos reproducibles se han solicitado al autor; hasta recibirlos, las cifras
 de tracemalloc se consideran evidencia comunicada y no reproducción propia.
+
+## Propuesta posterior: lectura incremental de decision_context_quality
+
+Auditoría independiente sobre fuente exacta7dce37e1 (HEAD documentalb15e5531):
+la función conserva cuatro listas históricas, records, rec_snapshots y snapshots.
+Propuesta futura no implementada ni integrada: iteradores fetchmany que devuelvan
+diccionarios idénticos a los lectores legacy y acumuladores para coberturas;
+first_hash_by_id más conflicted_ids para contar IDs con hashes distintos.
+No reducir límites50000/50000/200000/200000, cambiar filtros, mover recent antes
+del LIMIT, omitir campos o alterar orden/denominadores/históricos.
+
+Antes de implementar se debe fijar contrato de snapshot: hoy las cuatro consultas
+no comparten transacción. Una transacción común daría consistencia distinta bajo
+escrituras y podría retener WAL más tiempo. Paridad sobre base estable no prueba
+paridad temporal concurrente. Caracterización necesaria: payload completo contra
+algoritmo anterior, diccionarios/orden exactos por reader, límites mayores que
+batch_size, recursos/cierre ante error e interrupción, concurrencia determinista
+y memoria sintética con comandos reproducibles. No hay mediciones nuevas de RSS
+ni se afirma resuelto el OOM. La propuesta queda separada del candidato.352 ya
+probado; no modifica su fuente ni sustituye los gates pendientes.
