@@ -11,9 +11,10 @@ despliegue productivo.
 - Rama: `codex/oct08-coordination-identity`
 - Base exacta: `ab28bd86193ef48a18d1f058e2f79492721c1412`
 - Tree de base: `daa3f125e2da5b0504924dce5a6858764a9aa1f9`
-- HEAD final: `ca311574485517a9caa3321db98c2c24bb7d64c3`
-- Tree final: `4fc2daee6d3cd5091009e767b3e6683f46f86a16`
-- Versión: `0.4.344` (reserva provisional; el plan no contenía `.344`)
+- HEAD funcional final: `79dcfacd588ca2e4e56d4e99ed6de8d7378d7ef5`
+- Tree funcional final: `f91848a2667008210390931d7b2fefdb8190f2ef`
+- Versión: `0.4.345` (se atravesó `.344` en un commit intermedio; el plan no
+  contenía reserva previa)
 - Informe único del lote: este archivo.
 - El plan maestro y el relevo compartidos no se modificaron.
 
@@ -21,6 +22,8 @@ Commits separados:
 
 - `2962e6a6` — caracterización focal de identidad y recuperación.
 - `ca311574` — corrección funcional y bump de versión a `0.4.344`.
+- `79dcfacd` — sesión ausente como `unavailable`, conflicto PMR/recon y bump
+  final a `0.4.345`.
 
 ## Causa y contrato corregido
 
@@ -34,8 +37,9 @@ run.
 El cambio es acotado:
 
 - terminal y marker de recuperación conservan la sesión del propietario
-  original; el marker añade `replacement_session_date` para la sesión que toma
-  el lease;
+  original; si falta en el lease queda `unavailable`, nunca se copia la sesión
+  del adquirente. El marker añade `replacement_session_date` para la sesión que
+  toma el lease;
 - la vista de sesión anterior sólo se elimina mediante compare-and-swap cuando
   coinciden exactamente `run_id`, PID y token del propietario recuperado;
 - terminal sólo marca la vista de sesión si la vista actual conserva esa misma
@@ -61,11 +65,16 @@ Después del cambio:
 
 - `tests/test_oct08_coordination_identity.py` más las regresiones
   `test_p45b_postmarket_reliability.py`, `test_p45b1_integration_qa.py` y
-  `test_p45b2_integration_qa.py`: `30 passed in 17.98s`;
+  `test_p45b2_integration_qa.py`, además de `test_version_policy.py`:
+  `33 passed in 17.58s`;
 - Ruff focal sobre coordinador y pruebas: `All checks passed!`;
 - `scripts/check_no_nulls.py`: `OK (545 archivos)`;
 - `git diff --check`: verde;
 - worktree final: limpio.
+
+Los nuevos casos también cubren un dueño vivo que ya tiene un terminal antiguo
+sin robarlo, una vista de sesión ausente que debe seguir `unavailable`, y un
+terminal PMR que no libera un lease de reconciliación con otra identidad.
 
 Los fixtures usan `Settings(_env_file=None)`, `PYTHONPATH` del worktree,
 SQLite temporal y propietarios sintéticos; no usan red, broker, LLM, yfinance,
@@ -80,7 +89,7 @@ producción y no despliega.
 
 Se omitieron fullsuite, smoke, validación integral de configuración/kernel,
 integración conjunta, merge productivo, reinicio, build, push y cualquier
-interacción con broker/red/LLM. El siguiente paso es integrar este commit en el
-ensayo aislado y repetir los gates proporcionales de integración. Cualquier
-problema mayor de concurrencia entre procesos o de persistencia/esquema queda
-fuera del lote y requiere una revisión independiente.
+interacción con broker/red/LLM. El conflicto entre PMR y reconciliación se
+verifica para no liberar la identidad ajena; resolver ordenamiento global o
+concurrencia adicional entre ambos tipos de lease queda fuera del lote y
+requiere una revisión independiente.
