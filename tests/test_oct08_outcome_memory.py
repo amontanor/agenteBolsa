@@ -61,6 +61,10 @@ def _run(monkeypatch, tmp_path, signals, rows, data, *, legacy=False, fail_looku
     def persist(store, payload):
         if fail_persist and payload["signal_id"] == "signal-2":
             raise RuntimeError("persist_failure")
+        assert h_capture.validate_h_capture_event(
+            {"event_id": payload["event_id"], "event_type": payload["event_type"],
+             "cycle_id": payload["cycle_id"], "payload": payload},
+            expected_event_type=h_capture.OUTCOME_EVENT_TYPE)
         outputs.append(deepcopy(payload))
     monkeypatch.setattr(learning, "persist_h_capture_event", persist)
     function = learning._persist_signal_outcome_captures
@@ -87,6 +91,9 @@ def test_full_payload_parity_and_fail_open(monkeypatch, tmp_path, fail_lookup, f
     actual = _run(monkeypatch, tmp_path, signals, rows, data,
                   fail_lookup=fail_lookup, fail_persist=fail_persist)
     assert actual[:2] == expected[:2]
+    assert len(expected[2]) == 120
+    assert len(actual[2]) == (41 if fail_lookup else 2)
+    assert len(actual[3]) == (1 if fail_lookup else 2)
     assert actual[0] is not (fail_lookup or fail_persist)
     assert len(actual[1]) == 120 - (40 if fail_lookup else 0) - (1 if fail_persist else 0)
     assert all(payload["outcome_status"] == "matured" for payload in actual[1])
@@ -159,3 +166,14 @@ def test_legacy_update_full_payload_parity(monkeypatch, tmp_path, missing, empty
     for frame, snapshot in frames:
         pd.testing.assert_frame_equal(frame, snapshot)
     assert len(calls) == (11 if missing else 2)
+
+
+def test_invalid_and_ambiguous_lineage_stays_excluded(monkeypatch, tmp_path):
+    signals, rows, data = _fixture(6)
+    rows[1]["payload"]["candidate_id"] = "wrong-candidate"
+    signals.append({**signals[2], "symbol": "BBB", "source_run_id": "other-cycle"})
+    expected = _run(monkeypatch, tmp_path, signals, rows, data, legacy=True)
+    actual = _run(monkeypatch, tmp_path, signals, rows, data)
+    assert actual[:2] == expected[:2]
+    assert {payload["signal_id"] for payload in actual[1]} == {
+        "signal-0", "signal-3", "signal-4", "signal-5"}
