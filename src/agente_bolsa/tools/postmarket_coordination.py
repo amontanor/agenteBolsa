@@ -252,6 +252,56 @@ class PostmarketCoordinator:
         token = str(state.get("owner_process_token") or state.get("owner_token") or "").strip()
         return pid == lease.owner_pid and token == lease.owner_token and str(state.get("run_id") or "") == lease.run_id
 
+    @staticmethod
+    def _same_runtime_identity(
+        state: dict[str, Any] | None,
+        *,
+        run_id: str,
+        owner_pid: int,
+        owner_token: str,
+    ) -> bool:
+        if not isinstance(state, dict):
+            return False
+        try:
+            pid = int(state.get("owner_pid") or 0)
+        except (TypeError, ValueError):
+            return False
+        token = str(state.get("owner_process_token") or state.get("owner_token") or "").strip()
+        return pid == owner_pid and token == owner_token and str(state.get("run_id") or "") == run_id
+
+    @classmethod
+    def _release_recovered_session_view(cls, conn: Any, owner: dict[str, Any]) -> None:
+        """Remove only the old session view owned by the recovered run."""
+
+        session_date = str(owner.get("session_date") or "").strip()
+        run_id = str(owner.get("run_id") or "").strip()
+        owner_token = str(owner.get("owner_process_token") or owner.get("owner_token") or "").strip()
+        if not session_date or not run_id or not owner_token:
+            return
+        try:
+            owner_pid = int(owner.get("owner_pid") or 0)
+        except (TypeError, ValueError):
+            return
+        key = f"{SESSION_KEY_PREFIX}{session_date}"
+        row = conn.execute("SELECT value_json FROM runtime_state WHERE key = ?", (key,)).fetchone()
+        if not row:
+            return
+        raw = row["value_json"] if hasattr(row, "keys") else row[0]
+        try:
+            state = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return
+        if cls._same_runtime_identity(
+            state,
+            run_id=run_id,
+            owner_pid=owner_pid,
+            owner_token=owner_token,
+        ):
+            conn.execute(
+                "DELETE FROM runtime_state WHERE key = ? AND value_json = ?",
+                (key, raw),
+            )
+
     def _release_runtime_lease(
         self,
         lease: CoordinationLease,
@@ -324,6 +374,7 @@ class PostmarketCoordinator:
         recovered_run_id: str | None = None
         recovered_started_at: str | None = None
         recovered_owner: dict[str, Any] | None = None
+        recovered_session_date: str | None = None
         recovery_event_type: str | None = None
         recovered_terminal_status: str | None = None
         effective = False
@@ -356,6 +407,7 @@ class PostmarketCoordinator:
                     recovered_run_id = active_run_id or None
                     recovered_started_at = str(active.get("started_at") or "") or None
                     recovered_owner = dict(active)
+                    recovered_session_date = str(active.get("session_date") or "") or None
                     recovery_event_type = "terminal_lease_recovered"
                     recovered_terminal_status = terminal_status
                     effective = True
@@ -366,11 +418,14 @@ class PostmarketCoordinator:
                     recovered_run_id = str(active.get("run_id") or "") or None
                     recovered_started_at = str(active.get("started_at") or "") or None
                     recovered_owner = dict(active)
+                    recovered_session_date = str(active.get("session_date") or "") or None
                     recovery_event_type = "stale_lease_recovered"
                     effective = True
             else:
                 effective = True
             if effective:
+                if recovered_owner:
+                    self._release_recovered_session_view(conn, recovered_owner)
                 state = {
                     **_lease_payload(
                         status="active",
@@ -398,10 +453,11 @@ class PostmarketCoordinator:
             else:
                 status = "skipped"
         if recovered_run_id and recovered_owner:
+            recovered_identity_session = recovered_session_date or session_date
             if recovery_event_type != "terminal_lease_recovered":
                 recovered = self._event(
                     run_id=recovered_run_id,
-                    session_date=session_date,
+                    session_date=recovered_identity_session,
                     trigger=str(recovered_owner.get("trigger") or "scheduled"),
                     stage="terminal",
                     status="failed",
@@ -421,7 +477,8 @@ class PostmarketCoordinator:
                 payload={
                     "run_id": recovered_run_id,
                     "replacement_run_id": run_id,
-                    "session_date": session_date,
+                    "session_date": recovered_identity_session,
+                    "replacement_session_date": session_date,
                     "owner_pid": int(recovered_owner.get("owner_pid") or 0),
                     "owner_process_token": str(recovered_owner.get("owner_process_token") or recovered_owner.get("owner_token") or ""),
                     "reason": reason,
@@ -554,10 +611,20 @@ class PostmarketCoordinator:
                     reason=reason,
                 )
                 encoded = json.dumps(state, ensure_ascii=True, sort_keys=True)
-                conn.execute(
-                    "UPDATE runtime_state SET value_json = ?, updated_at = ? WHERE key = ?",
-                    (encoded, finished, f"{SESSION_KEY_PREFIX}{lease.session_date}"),
-                )
+                key = f"{SESSION_KEY_PREFIX}{lease.session_date}"
+                row = conn.execute("SELECT value_json FROM runtime_state WHERE key = ?", (key,)).fetchone()
+                if row:
+                    raw = row["value_json"] if hasattr(row, "keys") else row[0]
+                    try:
+                        current = json.loads(raw)
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        current = None
+                    if self._same_owner(current, lease):
+                        conn.execute(
+                            "UPDATE runtime_state SET value_json = ?, updated_at = ? "
+                            "WHERE key = ? AND value_json = ?",
+                            (encoded, finished, key, raw),
+                        )
         except Exception as exc:  # noqa: BLE001 - release failure must be visible.
             self._persist_marker(
                 "lease_release_failed",
@@ -583,6 +650,7 @@ class PostmarketCoordinator:
         reason: str | None = None
         recovered_run_id: str | None = None
         recovered_owner: dict[str, Any] | None = None
+        recovered_session_date: str | None = None
         recovery_event_type: str | None = None
         recovered_terminal_status: str | None = None
         effective = False
@@ -601,6 +669,7 @@ class PostmarketCoordinator:
                     conn.execute("DELETE FROM runtime_state WHERE key = ? AND value_json = ?", (ACTIVE_KEY, pmr_row[0]))
                     recovered_run_id = pmr_run_id or None
                     recovered_owner = dict(pmr)
+                    recovered_session_date = str(pmr.get("session_date") or "") or None
                     recovery_event_type = "terminal_lease_recovered"
                     recovered_terminal_status = pmr_terminal
                     effective = True
@@ -620,6 +689,7 @@ class PostmarketCoordinator:
                     conn.execute("DELETE FROM runtime_state WHERE key = ? AND value_json = ?", (RECONCILIATION_KEY, recon_row[0]))
                     recovered_run_id = recon_run_id or None
                     recovered_owner = dict(recon)
+                    recovered_session_date = str(recon.get("session_date") or "") or None
                     recovery_event_type = "terminal_lease_recovered"
                     recovered_terminal_status = recon_terminal
                     effective = True
@@ -627,11 +697,14 @@ class PostmarketCoordinator:
                     reason = "owner_token_mismatch_recovered" if recon_pid == pid and recon_token and recon_token != token else "dead_reconciliation_recovered"
                     recovered_run_id = str(recon.get("run_id") or "") or None
                     recovered_owner = recon
+                    recovered_session_date = str(recon.get("session_date") or "") or None
                     recovery_event_type = "stale_lease_recovered"
                     effective = True
             else:
                 effective = True
             if effective:
+                if recovered_owner:
+                    self._release_recovered_session_view(conn, recovered_owner)
                 state = {
                     **_lease_payload(
                         status="active",
@@ -651,10 +724,11 @@ class PostmarketCoordinator:
                     (RECONCILIATION_KEY, encoded, started),
                 )
         if recovered_run_id and recovered_owner:
+            recovered_identity_session = recovered_session_date or session_date
             if recovery_event_type != "terminal_lease_recovered":
                 recovered = self._event(
                     run_id=recovered_run_id,
-                    session_date=session_date,
+                    session_date=recovered_identity_session,
                     trigger=str(recovered_owner.get("trigger") or "scheduled"),
                     stage="terminal",
                     status="failed",
@@ -672,7 +746,8 @@ class PostmarketCoordinator:
                 payload={
                     "run_id": recovered_run_id,
                     "replacement_run_id": run_id,
-                    "session_date": session_date,
+                    "session_date": recovered_identity_session,
+                    "replacement_session_date": session_date,
                     "owner_pid": int(recovered_owner.get("owner_pid") or 0),
                     "owner_process_token": str(recovered_owner.get("owner_process_token") or recovered_owner.get("owner_token") or ""),
                     "reason": reason or recovery_event_type,
