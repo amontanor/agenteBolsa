@@ -2929,3 +2929,11 @@ reconciliación manual ni cambios de política.
 - Informe: `docs/informe_p_l141_port_jetson.md`.
 - Siguiente: operador + memoria sana + postmarket terminal →
   preflight/snapshot/corte/doble salud → oleada 2.
+
+## 8-oct — cierre explícito del lector de eventos (candidato aislado N2)
+
+- Rama codex/oct08-event-reader-lifecycle, base exacta 1adc3cec/.321; QA HEAD 501052f9/tree48a3b3a1. Sin release, integración ni despliegue.
+- Store.iter_agent_events cierra cursor y conexión propia al agotar, fallar o cerrar generador; SQL/filtros/orden/payload intactos. No soluciona generadores suspendidos aún referenciados ni todos los lectores del proyecto.
+- Seis fallos reproducidos en base; final 11 passed (siete nuevos + cuatro regresiones), Ruff/NUL/diff verdes. Revisión independiente sin bloqueantes. Evidencia y límites: docs/informe_oct08_event_reader_lifecycle.md.
+- Encargo aislado nuevo autorizado por usuario; validación operativa permanece precondition_not_met por lease postmarket activo. Sin suites largas, broker/LLM desde tests ni mutaciones productivas.
+- Auditoría adicional: EXPLAIN temporal confirma SCAN agent_events + TEMP B-TREE en consultas H por ciclo; agrupar/indexar requiere lote aparte con legacy e identidad exacta. Optimización de copias de velas en candidato bolsa-outcome-memory-oct08; carrera scheduler y atomicidad/chunks pendientes separados.
