@@ -631,8 +631,20 @@ def _strip_observational_minimal(obj: dict, *, inside_dcs: bool = False) -> dict
 def _capture_parity_run(monkeypatch, tmp_path, llm_selected):
     """Run _auto_paper_trade with frozen IDs and return minimal-stripped payloads."""
     from dataclasses import asdict, is_dataclass
+    from datetime import datetime, timezone
 
     import agente_bolsa.cycle_runner as runner
+    import agente_bolsa.tools.decision_context as decision_context
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            instant = cls(2026, 7, 27, 20, 0, tzinfo=timezone.utc)
+            return instant.astimezone(tz) if tz is not None else instant.replace(tzinfo=None)
+
+    # El contrato anidado conserva as_of: comparar el mismo instante sin
+    # eliminar campos de identidad o temporalidad del payload económico.
+    monkeypatch.setattr(decision_context, "datetime", FrozenDatetime)
 
     # Freeze new_id so all three runs produce identical deterministic IDs
     _id_seq = iter(f"ID-{i:04d}" for i in range(100))
@@ -640,7 +652,8 @@ def _capture_parity_run(monkeypatch, tmp_path, llm_selected):
 
     _patch_trading_flow(monkeypatch, llm_selected=llm_selected)
     store = _StoreSpy()
-    settings = Settings(DATA_DIR=tmp_path, AUTO_PAPER_TRADING=True, REQUIRE_HUMAN_APPROVAL=False)
+    settings = Settings(_env_file=None, DATA_DIR=tmp_path,
+                        AUTO_PAPER_TRADING=True, REQUIRE_HUMAN_APPROVAL=False)
 
     result = runner._auto_paper_trade(
         settings, store, _Reporter(), "cycle",
