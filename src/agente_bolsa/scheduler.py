@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import sqlite3
 import time
@@ -1509,6 +1510,44 @@ def _exit_policy_v2_runtime_trigger(
     return None
 
 
+def _stop_take_observation(portfolio: Any, buy_plans: dict[str, Any]) -> dict[str, Any]:
+    """Describe the existing local lookup; never certify broker protection."""
+    open_symbols = {order.symbol.upper() for order in portfolio.open_orders}
+    rows = []
+    for position in portfolio.positions:
+        symbol = position.symbol.upper()
+        source = buy_plans.get(symbol)
+        levels: dict[str, float | None] = {"stop_loss": None, "take_profit": None}
+        invalid = False
+        if source:
+            payload = ((source.get("plan") or {}).get("payload") or {})
+            for key in levels:
+                raw = payload.get(key)
+                if raw is None:
+                    continue
+                try:
+                    value = float(raw)
+                    if isinstance(raw, bool) or not math.isfinite(value):
+                        invalid = True
+                    elif value > 0:
+                        levels[key] = value
+                except (TypeError, ValueError):
+                    invalid = True
+        state = (
+            "skipped_open_order" if symbol in open_symbols
+            else "source_unavailable" if not source
+            else "levels_unavailable" if invalid
+            else "local_levels_available" if any(value is not None for value in levels.values())
+            else "local_levels_absent"
+        )
+        rows.append({"symbol": symbol, "status": state, **levels,
+                     "broker_protection_status": "unavailable"})
+    return {"schema_version": "local_stop_take_observation.v1", "status": "observed",
+            "scope": "local_watch_configuration_only",
+            "source_lookup_basis": "legacy_latest_registered_buy_by_symbol",
+            "positions_count": len(rows), "positions": rows}
+
+
 def _execute_stop_take_exits(
     settings: Settings,
     store: Store,
@@ -1518,14 +1557,25 @@ def _execute_stop_take_exits(
     *,
     calendar: MarketCalendar | None = None,
     evaluation_at: datetime | None = None,
+    observation: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
+    if observation is not None:
+        observation.update({"status": "not_evaluated", "reason": "automatic_exits_disabled", "positions": None})
     if not settings.auto_paper_trading or settings.require_human_approval:
         return []
     if settings.trading_mode != "paper" or not settings.alpaca_paper or settings.allow_live_trading:
+        if observation is not None:
+            observation["reason"] = "paper_safety_preconditions_not_met"
         return []
 
     open_order_symbols = {order.symbol.upper() for order in portfolio.open_orders}
     buy_plans = store.latest_executed_buy_plans_by_symbol()
+    if observation is not None:
+        try:
+            observation.clear()
+            observation.update(_stop_take_observation(portfolio, buy_plans))
+        except Exception as exc:  # noqa: BLE001 - diagnostic evidence cannot block exits.
+            observation.update({"status": "unavailable", "reason": type(exc).__name__, "positions": None})
     try:
         buy_lots = store.executed_open_buy_lots_by_symbol(
             position_quantities={
@@ -2119,6 +2169,9 @@ def portfolio_watch_job(
             "open_orders_count": len(portfolio.open_orders) if portfolio else 0,
         },
     )
+    exit_observation: dict[str, Any] = {"status": "unavailable", "reason": "portfolio_unavailable", "positions": None}
+    if portfolio is not None and not portfolio.positions:
+        exit_observation = {"status": "not_required", "reason": "no_positions", "positions": []}
     if portfolio and portfolio.positions:
         _run_open_position_news_guard(settings, store, reporter, run_id, portfolio)
         _execute_stop_take_exits(
@@ -2129,6 +2182,7 @@ def portfolio_watch_job(
             portfolio,
             calendar=calendar,
             evaluation_at=datetime.now(timezone.utc),
+            observation=exit_observation,
         )
 
     reporter.emit(
@@ -2136,7 +2190,7 @@ def portfolio_watch_job(
         "portfolio_watch_completed" if has_activity else "portfolio_watch_heartbeat_completed",
         run_id,
         "Monitor de cartera finalizado.",
-        status.as_dict(),
+        {**status.as_dict(), "stop_take_observation": exit_observation},
     )
     _set_job_status(
         store,
