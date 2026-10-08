@@ -117,20 +117,20 @@ canónica. No hay evidencia aquí de un defecto en esas cuatro fronteras.
 Tampoco se reclasifica el comportamiento intencional de timing LLM
 `failed if ANY segment failed`.
 
-## Propuesta mínima pendiente
+## Propuesta mínima identificada antes del fix
 
 En un lote separado y tras revisar la autoridad de fecha/sesión, añadir al
 predicado de candidatos una igualdad temporal canónica, manteniendo identidad,
 ciclo, decisión, estado y razón existentes:
 
 ```python
-and str(row.get("signal_date") or "") == str(item.get("signal_date") or "")
+and canonical_signal_date(row) == item_signal_date
 ```
 
 Si el contrato final usa una clave de sesión XNYS distinta de la fecha de
-señal, comparar esa clave canónica en ambos rows. Después repetir este foco y
-su regresión. No se implementó la propuesta en este lote porque la tarea exige
-dejar rojo el caso DATE si revela defecto de fuente.
+señal, comparar esa clave canónica en ambos rows. La implementación debe
+rechazar fechas ausentes o inválidas; nunca puede tratar `missing == missing` como
+igualdad.
 
 ## Cierre
 
@@ -139,3 +139,42 @@ Commit test-only creado sin push. El commit emitió además el warning Git
 durante `geometric repack`, pero terminó creando el commit indicado y dejó el
 worktree limpio. El informe se añade en commit documental separado. No se
 retiraron gates ni se sustituyó `end_state` por un check de paso.
+
+## Corrección aplicada — P-L80B-DATE
+
+La corrección quedó implementada en
+`src/agente_bolsa/tools/learning_scoreboard.py:178-190,227-237`, commit
+`fc0350b24021006cc917e832257e7fd22f850d81` / tree
+`f58df751ac777d6ecd37a472deaf6f43f3904f35`. `canonical_signal_date()` exige
+texto no vacío, `date.fromisoformat()` válido y representación canónica
+`YYYY-MM-DD`; el predicado añade igualdad de fecha junto a todos los filtros
+previos de ID, ciclo y elegibilidad. Treatment y control con fecha ausente o
+inválida no se emparejan.
+
+El fix también reserva `.351` en `src/agente_bolsa/__init__.py` y actualiza el
+pin coherente de `tests/test_p59c_llm_selected_authority.py`. No toca schema,
+histórico, aprendizaje, promoción, P/L ni política de trading.
+
+QA posterior, siempre con `PYTHONPATH` del worktree, `DATA_DIR` temporal,
+`Settings(_env_file=None)`, reloj de fixture fijo y red bloqueada:
+
+```text
+pytest tests/test_p80b_same_cycle_control_carrier.py::test_canonical_control_contract_is_one_to_one -q
+8 passed in 1.38s
+
+pytest tests/test_p80b_same_cycle_control_carrier.py tests/test_comparable_controls.py tests/test_comparable_controls_p31br.py tests/test_learning_scoreboard.py tests/test_p59c_llm_selected_authority.py::test_version_policy_requires_bump -q
+47 passed in 4.03s
+
+ruff check src/agente_bolsa/tools/learning_scoreboard.py src/agente_bolsa/__init__.py tests/test_p80b_same_cycle_control_carrier.py tests/test_p59c_llm_selected_authority.py
+All checks passed!
+```
+
+El positivo compara payload completo del control emparejado con el único row
+de control y conserva contadores (`1` treatment, `1` control). DATE,
+SOURCE, REASON, DECISION, IDENTITY, MISSING_DATE e INVALID_DATE dejan cero
+matches sin retirar rows del universo. El fix evita el emparejamiento
+cross-date; no demuestra ninguna mejora económica ni de P/L.
+
+Git se ejecutó con `maintenance.auto=false` y `gc.auto=0`; el ref ajeno
+`refs/codex/turn-diffs/.../base` no se reparó. Sin merge, push, suite completa,
+smoke, producción, broker, red o LLM operativo.
