@@ -10,8 +10,11 @@ import sqlite3
 import time
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 from pathlib import Path
+from threading import Lock
 from typing import Any
+from weakref import WeakKeyDictionary
 from zoneinfo import ZoneInfo
 
 try:
@@ -2478,6 +2481,37 @@ def market_cycle_job(
         raise
 
 
+# Bootstrap calls jobs directly, outside APScheduler's max_instances accounting.
+# Weak keys keep this process-local guard bounded by live Store instances.
+_STUDY_JOB_LOCKS: WeakKeyDictionary[Store, dict[str, Any]] = WeakKeyDictionary()
+_STUDY_JOB_LOCKS_GUARD = Lock()
+
+
+def _single_study_job(job: Any) -> Any:
+    @wraps(job)
+    def guarded(settings: Settings, store: Store, *args: Any, **kwargs: Any) -> Any:
+        with _STUDY_JOB_LOCKS_GUARD:
+            locks = _STUDY_JOB_LOCKS.setdefault(store, {})
+            lock = locks.setdefault(job.__name__, Lock())
+        if not lock.acquire(blocking=False):
+            try:
+                # File diagnostic only: never wait for SQLite or replace the
+                # accepted run's runtime state when rejecting a duplicate.
+                log_system_event(settings.logs_dir, "study_job_concurrent_skipped", {
+                    "job_name": job.__name__, "reason": "same_store_job_running",
+                })
+            except Exception:  # noqa: BLE001 - diagnostics cannot change admission.
+                pass
+            return None
+        try:
+            return job(settings, store, *args, **kwargs)
+        finally:
+            lock.release()
+
+    return guarded
+
+
+@_single_study_job
 def closed_market_technical_study_job(
     settings: Settings,
     store: Store,
@@ -2905,6 +2939,7 @@ def opportunity_snapshot_job(
     return snapshot
 
 
+@_single_study_job
 def daily_study_job(
     settings: Settings,
     store: Store,
