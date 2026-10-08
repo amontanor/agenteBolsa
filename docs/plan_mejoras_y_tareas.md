@@ -1,5 +1,51 @@
 # Plan maestro de mejoras y tareas — agenteBolsa
 
+## 8-oct-2026, continuación nocturna: candidato .348 y producción .321
+
+Dictamen `needs_fix`; no desplegado. Producción comprobada a las 21:18 Madrid:
+los tres contenedores usan imagen .321 sha256:8ff2bedce363751c33e8e0acd37eae4095358a8f4edf65c08f28fcfaf069d1ae.
+Scheduler/web healthy; auxiliary unhealthy. El último preflight, 22:15 Madrid,
+confirma XNYS cerrado, siguiente apertura 9-oct15:30, paper activo, live y
+auto-apply false; no hay terminal postmarket de 8-oct todavía. La vista skipped
+market_not_ready anterior al cierre no acredita haber completado el postmarket.
+Validación completa/despliegue `precondition_not_met`; sin reparaciones implícitas.
+
+Candidato integrado .348 HEAD funcional 1f88f1118751dc6a95662aba7bf92641452c9ecb,
+tree c7003b371aa470921c8e6144a40268d083cd3785, limpio antes de esta nota.
+Integra coordinación .344, linkage .345 (d235e862), fixtures uplift .346 y
+scheduler grace .347. Conflictos de versión resueltos campo a campo a .348.
+El rechazo anterior de revisión automática por cuota no ejecutó el merge;
+la revisión volvió a estar disponible y la integración local ya está completada.
+69 focales combinadas passed en 10.07s; 28 regresiones multiproceso passed en
+23.63s. Son baterías distintas; no sustituyen la suite completa. Ruff src/tests
+verde, NUL545 verde, diff verde y protegidos Git idénticos a base1adc3cec.
+Los comandos iniciales con nombres inexistentes no ejecutaron ninguna prueba.
+
+Diagnóstico previo del resto .343 terminó:22 failed,1232 passed,1 skipped,
+1 warning en317.75s. Reproducción exacta base de esos22:21 failed,1 passed;
+el único passed fue pin de versión. Correcciones de fixtures/copy comprometidas
+en2f4f4da2,8abb0255,4e2eeab7,ef4ea0bd requieren revisión independiente.
+El bloqueo anterior de suite multiproceso aún no tiene causa demostrada: los
+28 casos relacionados pasan juntos en el candidato, pero no se atribuye solución
+a captura off ni se oculta la interacción pendiente. Journal JSONL local probado
+con69 casos; conservarlo en la futura suite definitiva para capturar fallos.
+
+Auditoría de sesión, solo lectura:21:15 patrimonio69970.85USD frente apertura
+70058.49USD, delta-87.64USD/-0.1251%, provisional, no neutral a flujos. Compra
+AMD1acción fill638.88USD; no comparativa SPY diaria válida. LLM principal402
+Insufficient account funds; fallback~27min. Tres bloqueos BUY de la ventana
+reciente usan alerta data_pipeline_down de informe19:55 pese a snapshot20:47.
+Esto acredita consumo de alerta anterior, no cotizaciones suficientes para operar.
+Auxiliary:ci_digest falló08:34 returncode-9 y cgroupoom_kill1 con límite256MiB;
+causa exacta del pico no demostrada. No borrar estado ni reiniciar para hacer verde.
+
+Luna revisa aisladamente frescura de salud (N3:caracterización/propuesta sin
+cambiar gates), memoria digest (auditoría sin fuente) y fixtures(test-only).
+No promover ni aumentar riesgo. Prioridad: recoger dictámenes, corregir mínimos,
+resolver interacción de suite y precondiciones; después QA definitiva y preflight
+nuevo antes de cualquier despliegue autorizado. Configurar saldo del proveedor
+requiere actuación de la cuenta; ningún pago/credencial se cambia desde aquí.
+
 ## 8-oct-2026, 14:57: gates y lotes correctivos vigentes
 
 Release `needs_fix`, producción .321 sin desplegar. Candidata .343 incorpora
