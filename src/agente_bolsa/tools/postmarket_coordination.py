@@ -291,7 +291,7 @@ class PostmarketCoordinator:
             state = json.loads(raw)
         except (TypeError, ValueError, json.JSONDecodeError):
             return
-        if cls._same_runtime_identity(
+        if state.get("status") == "active" and cls._same_runtime_identity(
             state,
             run_id=run_id,
             owner_pid=owner_pid,

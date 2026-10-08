@@ -186,6 +186,24 @@ def test_recovery_does_not_remove_mismatched_old_session_view(tmp_path: Path) ->
     assert store.get_runtime_value(f"{SESSION_KEY_PREFIX}{old_session}") == conflicting_view
 
 
+def test_recovery_preserves_matching_terminal_session_view(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    old_session = "2026-10-07"
+    active_state = _dead_state(session_date=old_session, run_id="pmr-old")
+    terminal_view = {**active_state, "status": "failed", "finished_at": "2026-10-07T21:00:00+00:00"}
+    store.set_runtime_value(ACTIVE_KEY, active_state)
+    store.set_runtime_value(f"{SESSION_KEY_PREFIX}{old_session}", terminal_view)
+
+    lease = PostmarketCoordinator(settings, store).acquire(
+        session_date="2026-10-08", run_id="pmr-new", trigger="scheduled"
+    )
+
+    assert lease.effective is True
+    assert store.get_runtime_value(f"{SESSION_KEY_PREFIX}{old_session}") == terminal_view
+
+
 def test_late_terminal_does_not_overwrite_new_owner_session_view(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     store = Store(settings.database_path, settings.agent_logs_dir)
