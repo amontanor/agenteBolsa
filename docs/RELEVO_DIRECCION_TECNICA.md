@@ -1,5 +1,25 @@
 # Relevo de direccion tecnica — agenteBolsa
 
+## Evidencia adicional de QA y operación nocturna
+
+Commit test-only c7619f57 acota Pool.map_async.get a45s en P49BR1; mantiene
+las mismas aserciones de idempotencia/append-only y termina hijos por contexto
+si vence el timeout. Focal1passed1.45s y Ruff/diffverdes. Evita espera ilimitada,
+no demuestra ni oculta la causa del fallo multiproceso anterior.
+
+Preflight22:20Madrid mantiene postmarket8 sin terminal válido. Lectura Docker
+posterior: scheduler1.92GiB/2GiB96.02%,web698.8MiB/1GiB68.24%,aux42.68MiB/256MiB.
+Logs20:01–20:15UTC registran skips por max_instances1 enwatch/fillwatch/lab.
+La presión de memoria es observada; no se atribuye causa ni OOMscheduler sin
+prueba. No se detienen procesos, cambian límites ni ejecutan jobs manuales.
+
+Revisión independiente de fixtures: lecciones, overlays y copy/futurebar
+aprobados acotadamente. P80B:4/4 negativos carecen de controlset verificado y
+no aíslan filtros. Luna prepara QA separado con carrier canónico y positivos
+comparables; si aparece fallo se conserva rojo y se clasifica, sin relajarasserts.
+Timingllm_decisionfailed refleja ANYsegmentfailed en_refresh_stage de forma
+intencional: no cambiarlo a completed para ocultar el primer intento fallido.
+
 ## 8-oct-2026, continuación nocturna: candidato .348 y producción .321
 
 Dictamen `needs_fix`; no desplegado. Producción comprobada a las 21:18 Madrid:
