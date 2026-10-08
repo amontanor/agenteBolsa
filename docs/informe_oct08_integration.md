@@ -1,5 +1,75 @@
 # Ensayo conjunto de siete mejoras — 8-oct-2026
 
+## Estado vigente — 8-oct, integración nocturna .352
+
+Dictamen: `needs_final_validation`, no desplegado. Candidato funcional limpio
+HEAD `7dce37e1b4464a696daaff5de65468c889396296`, tree
+`0ec3540e44b2ef5f3fb1019c523ad15819095f3b`, versión `0.4.352`.
+Esta sección sustituye los estados operativos y tareas abiertas de las entradas
+históricas inferiores; no cambia su evidencia ni convierte pruebas antiguas en
+validación del árbol actual.
+
+Integrados ahora: controles de misma fecha `.351` (fbf01db9), reutilización de
+listas del digest `.349` (acbdbf91) y salud selectiva `.350` (35c01d0d).
+Merges separados --no-ff; conflictos de versión resueltos campo a campo a .352.
+Salud conserva el carrier order_linkage anterior. La revisión independiente
+aprobó el merge acotadamente sobre este HEAD/tree, sin repetir pruebas.
+
+QA combinada nueva por los cambios semánticos: **152 passed en 19.20 s**,
+proceso terminal exit0. Incluye salud/frescura, P59C, P80B, comparable controls,
+scoreboard, digest reuse/phase3/P4/overlay y linkage. No se suma a baterías
+anteriores solapadas ni equivale a fullsuite. Harness validate_oct08_isolated.py:
+Python del proyecto, PYTHONPATH exacto, DATA_DIR temporal, _env_file=None y red
+externa bloqueada. Evidencia ef99: goal_fix_0352_combined_focal.txt y
+ goal_fix_0352_combined_journal.jsonl. Ruff completo verde; NUL547 verde;
+diff limpio; los seis archivos protegidos Git idénticos a base1adc3cec.
+
+Los controles de fecha sí cambian el emparejamiento de evidencia de aprendizaje:
+rechazan fechas ausentes, inválidas o distintas, conservando rows originales.
+No escriben ni promocionan históricos. Digest elimina dos lecturas/materializaciones;
+no prueba una solución definitiva del OOM ni paridad bajo escrituras concurrentes.
+Salud es N3: cambia intencionalmente el gate de BUY para recuperar únicamente
+`data_pipeline_down:market_data` con captura aware posterior fresca de la sesión
+actual. Preserva otros críticos/overrides y rechaza fechas/mtime futuros. No se
+atribuye paridad BUY ni mejora económica a este cambio.
+
+Producción verificada 22:38–22:41 Madrid: los tres servicios .321, imagen
+sha256:8ff2bedce363751c33e8e0acd37eae4095358a8f4edf65c08f28fcfaf069d1ae.
+Scheduler/web healthy; auxiliary unhealthy. Último snapshot de cuenta21:57:
+equity70000.03USD, apertura70058.49USD, delta-58.46USD/-0.0834%, provisional,
+no neutral a flujos; efectivo62631.66USD,9posiciones,1orden abierta. Una compra
+AMD1acción fill638.88USD, señal a plan25.16min. SPY/EOD/costes/flujos de hoy:
+unavailable. Fuente ef99 audit_oct08_close_*.json/txt; informe provisional allí.
+
+Preflight22:39 confirma XNYS cerrado y próxima apertura9-oct15:30. PMR8 sigue
+sin terminal completed|failed; skipped21:29 market_not_ready es anterior al
+cierre. last_session5-oct. Runtime sin running no demuestra pool quieto:
+logs22:29:53 muestran max_instances para postmarket, reconciliación y estudios.
+Docker inspect posterior registra scheduler running, StartedAt19:50:14UTC,
+RestartCount6; no se atribuye ese reinicio a una causa no demostrada ni a estas
+acciones. Consulta acotada de eventos Docker19:35–20:00 no devolvió eventos;
+no demuestra ausencia histórica de OOM. Evidencia goal_fix_0352_live_scheduler_tail.txt.
+
+Presión de memoria medida anteriormente esta noche: scheduler casi2GiB y
+~1.9GiBswap; oom=0/oom_kill=0 del cgroup consultado no identifica causas de
+reinicios anteriores. Auxiliarci_digest returncode-9 y oom_kill1 agregado:
+causa exacta/pico no probados. LLM principal402 saldo insuficiente: estado de
+cuenta solicitado al operador, sin respuesta; no pagos ni credenciales cambiadas.
+
+Gates pendientes: fullsuite única del árbol definitivo, smoke aislado y gates
+config/kernel, paridad proporcional y preflight operativo completo antes del
+build/corte, doble salud tras despliegue autorizado. La interacción multiproceso
+de la suite anterior sigue sin causa demostrada; timeout45s evita espera infinita,
+no la resuelve. No repetir suites sobre el mismo árbol sin nueva causa.
+
+Validación completa/despliegue `precondition_not_met` por PMR8 no terminal y
+quietud operativa no acreditada. No hubo build/transfer, corte, restart, órdenes,
+configuración, cambios de locks/leases, reparaciones implícitas ni promoción.
+Prioridad siguiente: completar QA cuando proceda o con excepción operativa
+explícita; diagnosticar recursos/cierre y auxiliar sin forzar salud; cerrar saldo
+LLM. La autorización de despliegue persiste, pero no se eluden estos gates.
+
+
 ## Evidencia adicional de QA y operación nocturna
 
 Commit test-only c7619f57 acota Pool.map_async.get a45s en P49BR1; mantiene

@@ -90,3 +90,13 @@ Worktree: `C:\Users\utopi\.codex\worktrees\oct08-health-freshness\agenteBolsa`, 
 No se ejecutaron `pytest tests/ -x -q`, smoke `run-once --skip-crew`, `validate-agent-config`, `kernel-status`, `schedule-status`, postmarket, reconciliación, despliegue ni promoción. La razón es el encargo explícito y la precondición PMR8 no terminal, no un resultado verde omitido.
 
 Decisión: el contrato mínimo queda implementado y probado en aislamiento. El gate de integración/operación sigue pendiente porque PMR8 no estaba terminal y el encargo excluye fullsuite, smoke, deploy y producción. No se afirma paridad económica ni paridad de BUY: el cambio altera intencionadamente el gate de frescura. La evidencia de snapshot de las 20:47 tampoco se presenta como aceptación de cotizaciones; al carecer de una captura aware consumible por este contrato, solo conserva el hallazgo histórico de obsolescencia.
+
+## Integración revisada en candidato .352
+
+El informe anterior conserva la identidad y QA de su lote aislado .350.
+Integrado --no-ff en HEAD7dce37e1b4464a696daaff5de65468c889396296,
+tree0ec3540e44b2ef5f3fb1019c523ad15819095f3b, worktree bolsa-oct08-integration.
+Versión/pin .352; única diferencia adicional de operational_health respecto
+al lote es el carrier order_linkage previamente integrado. Revisión independiente
+y batería conjunta152passed19.20s terminal0; no fullsuite ni despliegue.
+Ver informe de integración para gates y estado operativo vigentes.

@@ -152,8 +152,9 @@ previos de ID, ciclo y elegibilidad. Treatment y control con fecha ausente o
 inválida no se emparejan.
 
 El fix también reserva `.351` en `src/agente_bolsa/__init__.py` y actualiza el
-pin coherente de `tests/test_p59c_llm_selected_authority.py`. No toca schema,
-histórico, aprendizaje, promoción, P/L ni política de trading.
+pin coherente de `tests/test_p59c_llm_selected_authority.py`. No toca schema ni escribe históricos, promociones, P/L o política de trading.
+Sí cambia el emparejamiento de evidencia utilizado por el aprendizaje: exige
+fecha canónica igual, sin alterar las filas originales.
 
 QA posterior, siempre con `PYTHONPATH` del worktree, `DATA_DIR` temporal,
 `Settings(_env_file=None)`, reloj de fixture fijo y red bloqueada:
