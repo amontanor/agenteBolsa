@@ -111,4 +111,5 @@ __all__ = ["__version__"]
 # P-L140B-R (re-add): _spy_alpha_summary + alpha unico, leaderboard a Config via session_state, baseline sin render (0.4.320).
 # P-L155: el lector de recibos EOD de SPY elige por captured_at y comparable sobre
 # unavailable, y el productor toma el reloj de captura despues de la descarga.
-__version__ = "0.4.321"
+# Oct07/08: seven-lot integration candidate; reserved after .340/.341 artifacts.
+__version__ = "0.4.342"
