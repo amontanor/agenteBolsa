@@ -486,6 +486,7 @@ def load_operational_block_context(
         age_seconds = reference_now.timestamp() - path.stat().st_mtime
     except OSError:
         return _invalid_health_block("lectura de mtime fallida")
+    health_mtime_future = age_seconds < 0
     if age_seconds > KILL_SWITCH_MAX_REPORT_AGE_SECONDS:
         return {
             "available": True,
@@ -524,11 +525,16 @@ def load_operational_block_context(
     data_pipeline = report_health.get("data_pipeline") if isinstance(report_health, dict) else {}
     if not isinstance(data_pipeline, dict):
         data_pipeline = {}
+    recovery_observation: dict[str, Any] | None = None
     if (
         health_as_of is not None
         and health_as_of <= reference_now
         and isinstance(data_pipeline, dict)
-        and any(item["kind"] == "data_pipeline_down" for item in blocking_alerts)
+        and not health_mtime_future
+        and any(
+            item["kind"] == "data_pipeline_down" and item["scope"] == "market_data"
+            for item in blocking_alerts
+        )
     ):
         recovered = _fresh_data_pipeline_artifact(
             data_dir,
@@ -538,13 +544,24 @@ def load_operational_block_context(
             settings=settings,
         )
         if recovered is not None:
-            blocking_alerts = [item for item in blocking_alerts if item["kind"] != "data_pipeline_down"]
+            blocking_alerts = [
+                item
+                for item in blocking_alerts
+                if not (item["kind"] == "data_pipeline_down" and item["scope"] == "market_data")
+            ]
+            recovery_observation = {
+                "path": recovered["path"],
+                "captured_at": recovered["captured_at"],
+                "observed_at": recovered["observed_at"],
+                "session_date": recovered["session_date"],
+                "evaluated_at": reference_now.isoformat(),
+            }
 
     reasons = [
         f"{item['kind']}:{item['scope']}: {item['detail']}".strip()
         for item in blocking_alerts
     ]
-    return {
+    result = {
         "available": bool(payload),
         "as_of": payload.get("as_of") if isinstance(payload, dict) else None,
         "kill_switch_active": bool(blocking_alerts),
@@ -553,6 +570,10 @@ def load_operational_block_context(
         "blocking_alerts": blocking_alerts,
         "reasons": reasons,
     }
+    if recovery_observation is not None:
+        result["data_pipeline_recovery"] = recovery_observation
+        result["report_as_of"] = payload.get("as_of")
+    return result
 
 
 def _job_runtime(store: Store) -> dict[str, Any]:

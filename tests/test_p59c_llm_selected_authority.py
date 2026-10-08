@@ -771,5 +771,5 @@ def test_version_policy_requires_bump():
     if dist:
         # Con PYTHONPATH al src del worktree, leemos __init__.py
         import agente_bolsa
-        # .348 is the combined corrective candidate; isolated slots are not releases.
-        assert agente_bolsa.__version__ == "0.4.348"
+        # .350 is the isolated Oct08 freshness candidate; .349 remains reserved for digest reuse.
+        assert agente_bolsa.__version__ == "0.4.350"

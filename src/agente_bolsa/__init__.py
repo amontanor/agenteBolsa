@@ -117,4 +117,5 @@ __all__ = ["__version__"]
 # Oct08: LLM uplift fixtures aligned with direction-corrected maturity contract.
 # Oct08: combined corrective candidate, separate from isolated reservations.
 # Oct08 N2: preserve recovered postmarket/reconciliation identity across sessions (0.4.344).
-__version__ = "0.4.348"
+# Oct08 N3: selectively revalidate stale data-pipeline blocks from aware current-session evidence (0.4.350).
+__version__ = "0.4.350"
