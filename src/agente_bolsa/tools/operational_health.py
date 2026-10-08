@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +86,20 @@ def _parse_datetime(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _parse_aware_datetime(value: Any) -> datetime | None:
+    """Parse only timestamps carrying an explicit timezone."""
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
 def _freshness_status(heartbeat_at: Any, *, max_age_seconds: int) -> dict[str, Any]:
     parsed = _parse_datetime(heartbeat_at)
     if parsed is None:
@@ -134,6 +148,8 @@ def _data_pipeline_heartbeat(settings: Settings, data_dir: Path, now: datetime |
     open_age_seconds = (now_utc - market_open).total_seconds() if market_open else None
 
     summary: dict[str, Any] = {
+        "calendar": settings.market_calendar,
+        "local_timezone": settings.local_timezone,
         "market_is_open": market.is_open,
         "session_date": market.session_date,
         "max_stale_seconds": DATA_PIPELINE_MAX_STALE_SECONDS,
@@ -241,6 +257,130 @@ def load_persistent_kill_switch(data_dir: Path) -> dict[str, Any]:
     return payload if bool(payload.get("active")) else {}
 
 
+def _invalid_health_block(reason: str) -> dict[str, Any]:
+    detail = f"Informe latest_operational_health.json no utilizable: {reason}."
+    alert = {"kind": "invalid_operational_health_report", "scope": "global", "detail": detail}
+    return {
+        "available": True,
+        "as_of": None,
+        "kill_switch_active": True,
+        "block_new_buys": True,
+        "block_buy_execution": True,
+        "blocking_alerts": [alert],
+        "reasons": [f"invalid_operational_health_report:global: {detail}"],
+    }
+
+
+def _artifact_session_date(payload: dict[str, Any], calendar: MarketCalendar) -> str | None:
+    raw_as_of = payload.get("as_of")
+    if isinstance(raw_as_of, str) and len(raw_as_of) == 10:
+        try:
+            return date.fromisoformat(raw_as_of).isoformat()
+        except ValueError:
+            return None
+    parsed = _parse_aware_datetime(raw_as_of)
+    if parsed is None:
+        return None
+    return parsed.astimezone(calendar.market_tz).date().isoformat()
+
+
+def _known_data_pipeline_artifact(path: Path, payload: Any, *, session_date: str, calendar: MarketCalendar) -> bool:
+    if not isinstance(payload, dict) or not payload:
+        return False
+    if _artifact_session_date(payload, calendar) != session_date:
+        return False
+    name = path.name
+    if name.startswith("market_snapshot_"):
+        return (
+            isinstance(payload.get("benchmark"), str)
+            and bool(payload.get("benchmark"))
+            and isinstance(payload.get("symbols"), dict)
+            and bool(payload.get("symbols"))
+        )
+    if name.startswith("market_state_"):
+        return (
+            isinstance(payload.get("run_id"), str)
+            and bool(payload.get("run_id"))
+            and isinstance(payload.get("data_quality"), dict)
+            and isinstance(payload.get("benchmark"), str)
+        )
+    if name.startswith("breakout_scan_"):
+        return (
+            isinstance(payload.get("run_id"), str)
+            and bool(payload.get("run_id"))
+            and isinstance(payload.get("market_data"), dict)
+            and isinstance(payload.get("alerts"), list)
+        )
+    if name.startswith("closed_market_technical_study_"):
+        return (
+            isinstance(payload.get("run_id"), str)
+            and bool(payload.get("run_id"))
+            and isinstance(payload.get("market_data"), dict)
+            and isinstance(payload.get("symbol_coverage"), dict)
+        )
+    return False
+
+
+def _fresh_data_pipeline_artifact(
+    data_dir: Path,
+    *,
+    data_pipeline: dict[str, Any],
+    health_as_of: datetime,
+    now: datetime,
+    settings: Settings | Any | None,
+) -> dict[str, Any] | None:
+    calendar_name = str(data_pipeline.get("calendar") or "").strip()
+    local_timezone = str(data_pipeline.get("local_timezone") or "").strip()
+    if not calendar_name and settings is not None:
+        calendar_name = str(getattr(settings, "market_calendar", "") or "").strip()
+    if not local_timezone and settings is not None:
+        local_timezone = str(getattr(settings, "local_timezone", "") or "").strip()
+    session_date = str(data_pipeline.get("session_date") or "").strip()
+    if not calendar_name or not local_timezone or not session_date:
+        return None
+    try:
+        calendar = MarketCalendar(calendar_name, local_timezone)
+        market = calendar.status(now)
+    except Exception:  # noqa: BLE001 - health consumer must remain fail-closed.
+        return None
+    if not market.is_open or not market.session_date or market.session_date != session_date:
+        return None
+
+    reports_dir = data_dir / "reports"
+    candidates: list[tuple[Path, datetime]] = []
+    for pattern in DATA_PIPELINE_REPORT_PATTERNS:
+        for path in reports_dir.glob(pattern):
+            if not path.is_file() or path.name.endswith(".manifest.json"):
+                continue
+            try:
+                observed_at = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+            except OSError:
+                continue
+            candidates.append((path, observed_at))
+    candidates.sort(key=lambda item: item[1], reverse=True)
+    for path, observed_at in candidates:
+        if observed_at > now or observed_at <= health_as_of:
+            continue
+        age_seconds = (now - observed_at).total_seconds()
+        if age_seconds < 0 or age_seconds > DATA_PIPELINE_MAX_STALE_SECONDS:
+            continue
+        payload = _load_json(path)
+        if not _known_data_pipeline_artifact(
+            path,
+            payload,
+            session_date=session_date,
+            calendar=calendar,
+        ):
+            continue
+        return {
+            "path": str(path),
+            "observed_at": observed_at.isoformat(),
+            "age_seconds": round(age_seconds, 3),
+            "session_date": session_date,
+        }
+    return None
+
+
 def _kernel_integrity_settings(data_dir: Path) -> Any:
     class _KernelIntegritySettings:
         def __init__(self, root: Path) -> None:
@@ -302,6 +442,7 @@ def load_operational_block_context(
     settings: Settings | Any | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
+    reference_now = now.astimezone(timezone.utc) if now is not None and now.tzinfo else datetime.now(timezone.utc)
     override = load_persistent_kill_switch(data_dir)
     if override:
         if _is_kernel_integrity_override(override):
@@ -348,7 +489,10 @@ def load_operational_block_context(
             "blocking_alerts": [],
             "reasons": [],
         }
-    age_seconds = (datetime.now(timezone.utc).timestamp() - path.stat().st_mtime)
+    try:
+        age_seconds = reference_now.timestamp() - path.stat().st_mtime
+    except OSError:
+        return _invalid_health_block("lectura de mtime fallida")
     if age_seconds > KILL_SWITCH_MAX_REPORT_AGE_SECONDS:
         return {
             "available": True,
@@ -359,10 +503,16 @@ def load_operational_block_context(
             "blocking_alerts": [],
             "reasons": [f"stale_operational_health_report:{int(age_seconds)}s"],
         }
-    payload = _load_json(path) or {}
+    payload = _load_json(path)
+    if not isinstance(payload, dict) or not payload:
+        return _invalid_health_block("JSON ausente, vacio o invalido")
     alerts = payload.get("alerts", []) if isinstance(payload, dict) else []
+    if not isinstance(alerts, list):
+        return _invalid_health_block("alerts no es una lista")
     blocking_alerts = []
     for item in alerts or []:
+        if not isinstance(item, dict):
+            return _invalid_health_block("alerta con forma invalida")
         if str(item.get("severity") or "").lower() != "critical":
             continue
         kind = str(item.get("kind") or "")
@@ -375,6 +525,27 @@ def load_operational_block_context(
                 "detail": str(item.get("detail") or "").strip(),
             }
         )
+
+    health_as_of = _parse_aware_datetime(payload.get("as_of"))
+    report_health = payload.get("report_health")
+    data_pipeline = report_health.get("data_pipeline") if isinstance(report_health, dict) else {}
+    if not isinstance(data_pipeline, dict):
+        data_pipeline = {}
+    if (
+        health_as_of is not None
+        and health_as_of <= reference_now
+        and isinstance(data_pipeline, dict)
+        and any(item["kind"] == "data_pipeline_down" for item in blocking_alerts)
+    ):
+        recovered = _fresh_data_pipeline_artifact(
+            data_dir,
+            data_pipeline=data_pipeline,
+            health_as_of=health_as_of,
+            now=reference_now,
+            settings=settings,
+        )
+        if recovered is not None:
+            blocking_alerts = [item for item in blocking_alerts if item["kind"] != "data_pipeline_down"]
 
     reasons = [
         f"{item['kind']}:{item['scope']}: {item['detail']}".strip()

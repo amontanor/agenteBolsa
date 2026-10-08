@@ -1,10 +1,4 @@
-"""Caracterizacion aislada de frescura del bloqueo operativo de compras.
-
-Estas pruebas documentan el comportamiento observado en la base 0.4.348:
-``load_operational_block_context`` consume el ultimo informe de salud completo
-durante seis horas aunque un snapshot posterior ya exista. No son una
-implementacion del refresco; fijan evidencia reproducible para un lote futuro.
-"""
+"""Caracterizacion y contrato aislado de frescura del bloqueo operativo."""
 
 from __future__ import annotations
 
@@ -15,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from agente_bolsa.config import Settings
 from agente_bolsa.tools import operational_health
 from agente_bolsa.tools.operational_health import (
     KILL_SWITCH_MAX_REPORT_AGE_SECONDS,
@@ -52,6 +47,38 @@ def _critical_alert(kind: str, detail: str) -> dict[str, str]:
         "kind": kind,
         "scope": "market_data" if kind == "data_pipeline_down" else "market_cycle",
         "detail": detail,
+    }
+
+
+def _health_payload(
+    health_at: datetime | None,
+    *,
+    alerts: list[dict[str, str]],
+    session_date: str = "2026-10-08",
+    calendar: str | None = "XNYS",
+    local_timezone: str | None = "Europe/Madrid",
+) -> dict:
+    pipeline = {"session_date": session_date}
+    if calendar is not None:
+        pipeline["calendar"] = calendar
+    if local_timezone is not None:
+        pipeline["local_timezone"] = local_timezone
+    payload = {
+        "report_health": {"data_pipeline": pipeline},
+        "alerts": alerts,
+    }
+    if health_at is not None:
+        payload["as_of"] = health_at.isoformat()
+    return payload
+
+
+def _valid_snapshot(session_date: str = "2026-10-08") -> dict:
+    return {
+        "as_of": session_date,
+        "benchmark": "SPY",
+        "provider": "local",
+        "symbols": {"SPY": {"close": 500.0}},
+        "warnings": [],
     }
 
 
@@ -176,3 +203,260 @@ def test_report_older_than_six_hours_fails_open_without_inventing_pipeline_state
     assert block["reasons"] == [
         f"stale_operational_health_report:{KILL_SWITCH_MAX_REPORT_AGE_SECONDS + 1}s"
     ]
+
+
+def test_newer_valid_same_session_snapshot_recovers_only_pipeline_block(tmp_path, monkeypatch):
+    _freeze_health_clock(monkeypatch)
+    health_at = FIXED_NOW - timedelta(minutes=20)
+    snapshot_at = FIXED_NOW - timedelta(minutes=10)
+    reports = tmp_path / "reports"
+    alert = _critical_alert("data_pipeline_down", "Sin snapshots frescos.")
+    _write_json_with_mtime(
+        reports / "latest_operational_health.json",
+        _health_payload(health_at, alerts=[alert]),
+        health_at,
+    )
+    _write_json_with_mtime(reports / "market_snapshot_recovered.json", _valid_snapshot(), snapshot_at)
+
+    block = load_operational_block_context(tmp_path, now=FIXED_NOW)
+
+    assert block["as_of"] == health_at.isoformat()
+    assert block["kill_switch_active"] is False
+    assert block["block_new_buys"] is False
+    assert block["block_buy_execution"] is False
+    assert block["blocking_alerts"] == []
+    assert block["reasons"] == []
+
+
+def test_newer_valid_snapshot_preserves_unrelated_critical_alert(tmp_path, monkeypatch):
+    _freeze_health_clock(monkeypatch)
+    health_at = FIXED_NOW - timedelta(minutes=20)
+    snapshot_at = FIXED_NOW - timedelta(minutes=10)
+    reports = tmp_path / "reports"
+    alerts = [
+        _critical_alert("data_pipeline_down", "Sin snapshots frescos."),
+        _critical_alert("job_failed", "market_cycle fallo; requiere diagnostico."),
+    ]
+    _write_json_with_mtime(
+        reports / "latest_operational_health.json",
+        _health_payload(health_at, alerts=alerts),
+        health_at,
+    )
+    _write_json_with_mtime(reports / "market_snapshot_recovered.json", _valid_snapshot(), snapshot_at)
+
+    block = load_operational_block_context(tmp_path, now=FIXED_NOW)
+
+    assert block["kill_switch_active"] is True
+    assert block["block_buy_execution"] is True
+    assert [item["kind"] for item in block["blocking_alerts"]] == ["job_failed"]
+
+
+def test_missing_health_as_of_keeps_pipeline_block_even_with_newer_snapshot(tmp_path, monkeypatch):
+    _freeze_health_clock(monkeypatch)
+    health_at = FIXED_NOW - timedelta(minutes=20)
+    snapshot_at = FIXED_NOW - timedelta(minutes=10)
+    reports = tmp_path / "reports"
+    _write_json_with_mtime(
+        reports / "latest_operational_health.json",
+        _health_payload(None, alerts=[_critical_alert("data_pipeline_down", "Sin snapshots frescos.")]),
+        health_at,
+    )
+    _write_json_with_mtime(reports / "market_snapshot_recovered.json", _valid_snapshot(), snapshot_at)
+
+    block = load_operational_block_context(tmp_path, now=FIXED_NOW)
+
+    assert block["kill_switch_active"] is True
+    assert block["blocking_alerts"][0]["kind"] == "data_pipeline_down"
+
+
+def test_naive_health_as_of_keeps_pipeline_block_even_with_newer_snapshot(tmp_path, monkeypatch):
+    _freeze_health_clock(monkeypatch)
+    health_at = FIXED_NOW - timedelta(minutes=20)
+    snapshot_at = FIXED_NOW - timedelta(minutes=10)
+    reports = tmp_path / "reports"
+    payload = _health_payload(
+        None,
+        alerts=[_critical_alert("data_pipeline_down", "Sin snapshots frescos.")],
+    )
+    payload["as_of"] = "2026-10-08T19:00:00"
+    _write_json_with_mtime(reports / "latest_operational_health.json", payload, health_at)
+    _write_json_with_mtime(reports / "market_snapshot_recovered.json", _valid_snapshot(), snapshot_at)
+
+    block = load_operational_block_context(tmp_path, now=FIXED_NOW)
+
+    assert block["kill_switch_active"] is True
+    assert block["blocking_alerts"][0]["kind"] == "data_pipeline_down"
+
+
+def test_future_health_as_of_keeps_pipeline_block(tmp_path, monkeypatch):
+    _freeze_health_clock(monkeypatch)
+    health_at = FIXED_NOW + timedelta(minutes=1)
+    snapshot_at = FIXED_NOW - timedelta(minutes=10)
+    reports = tmp_path / "reports"
+    _write_json_with_mtime(
+        reports / "latest_operational_health.json",
+        _health_payload(health_at, alerts=[_critical_alert("data_pipeline_down", "Sin snapshots frescos.")]),
+        FIXED_NOW - timedelta(minutes=20),
+    )
+    _write_json_with_mtime(reports / "market_snapshot_recovered.json", _valid_snapshot(), snapshot_at)
+
+    block = load_operational_block_context(tmp_path, now=FIXED_NOW)
+
+    assert block["kill_switch_active"] is True
+    assert block["blocking_alerts"][0]["kind"] == "data_pipeline_down"
+
+
+@pytest.mark.parametrize("artifact_payload", [{}, {"as_of": "2026-10-08"}])
+def test_empty_or_unknown_artifact_does_not_authorize_recovery(tmp_path, monkeypatch, artifact_payload):
+    _freeze_health_clock(monkeypatch)
+    health_at = FIXED_NOW - timedelta(minutes=20)
+    snapshot_at = FIXED_NOW - timedelta(minutes=10)
+    reports = tmp_path / "reports"
+    _write_json_with_mtime(
+        reports / "latest_operational_health.json",
+        _health_payload(health_at, alerts=[_critical_alert("data_pipeline_down", "Sin snapshots frescos.")]),
+        health_at,
+    )
+    _write_json_with_mtime(reports / "market_snapshot_recovered.json", artifact_payload, snapshot_at)
+
+    block = load_operational_block_context(tmp_path, now=FIXED_NOW)
+
+    assert block["kill_switch_active"] is True
+    assert block["blocking_alerts"][0]["kind"] == "data_pipeline_down"
+
+
+def test_future_mtime_does_not_authorize_recovery(tmp_path, monkeypatch):
+    _freeze_health_clock(monkeypatch)
+    health_at = FIXED_NOW - timedelta(minutes=20)
+    reports = tmp_path / "reports"
+    _write_json_with_mtime(
+        reports / "latest_operational_health.json",
+        _health_payload(health_at, alerts=[_critical_alert("data_pipeline_down", "Sin snapshots frescos.")]),
+        health_at,
+    )
+    _write_json_with_mtime(
+        reports / "market_snapshot_recovered.json",
+        _valid_snapshot(),
+        FIXED_NOW + timedelta(minutes=1),
+    )
+
+    block = load_operational_block_context(tmp_path, now=FIXED_NOW)
+
+    assert block["kill_switch_active"] is True
+    assert block["blocking_alerts"][0]["kind"] == "data_pipeline_down"
+
+
+def test_invalid_json_does_not_authorize_recovery(tmp_path, monkeypatch):
+    _freeze_health_clock(monkeypatch)
+    health_at = FIXED_NOW - timedelta(minutes=20)
+    snapshot_at = FIXED_NOW - timedelta(minutes=10)
+    reports = tmp_path / "reports"
+    _write_json_with_mtime(
+        reports / "latest_operational_health.json",
+        _health_payload(health_at, alerts=[_critical_alert("data_pipeline_down", "Sin snapshots frescos.")]),
+        health_at,
+    )
+    artifact = reports / "market_snapshot_recovered.json"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text("{invalid", encoding="utf-8")
+    os.utime(artifact, (snapshot_at.timestamp(), snapshot_at.timestamp()))
+
+    block = load_operational_block_context(tmp_path, now=FIXED_NOW)
+
+    assert block["kill_switch_active"] is True
+    assert block["blocking_alerts"][0]["kind"] == "data_pipeline_down"
+
+
+def test_older_artifact_does_not_authorize_recovery(tmp_path, monkeypatch):
+    _freeze_health_clock(monkeypatch)
+    health_at = FIXED_NOW - timedelta(minutes=20)
+    reports = tmp_path / "reports"
+    _write_json_with_mtime(
+        reports / "latest_operational_health.json",
+        _health_payload(health_at, alerts=[_critical_alert("data_pipeline_down", "Sin snapshots frescos.")]),
+        health_at,
+    )
+    _write_json_with_mtime(
+        reports / "market_snapshot_recovered.json",
+        _valid_snapshot(),
+        health_at - timedelta(minutes=1),
+    )
+
+    block = load_operational_block_context(tmp_path, now=FIXED_NOW)
+
+    assert block["kill_switch_active"] is True
+    assert block["blocking_alerts"][0]["kind"] == "data_pipeline_down"
+
+
+def test_mismatched_session_does_not_authorize_recovery(tmp_path, monkeypatch):
+    _freeze_health_clock(monkeypatch)
+    health_at = FIXED_NOW - timedelta(minutes=20)
+    snapshot_at = FIXED_NOW - timedelta(minutes=10)
+    reports = tmp_path / "reports"
+    _write_json_with_mtime(
+        reports / "latest_operational_health.json",
+        _health_payload(
+            health_at,
+            alerts=[_critical_alert("data_pipeline_down", "Sin snapshots frescos.")],
+            session_date="2026-10-07",
+        ),
+        health_at,
+    )
+    _write_json_with_mtime(reports / "market_snapshot_recovered.json", _valid_snapshot(), snapshot_at)
+
+    block = load_operational_block_context(tmp_path, now=FIXED_NOW)
+
+    assert block["kill_switch_active"] is True
+    assert block["blocking_alerts"][0]["kind"] == "data_pipeline_down"
+
+
+def test_missing_calendar_metadata_stays_blocked_without_settings(tmp_path, monkeypatch):
+    _freeze_health_clock(monkeypatch)
+    health_at = FIXED_NOW - timedelta(minutes=20)
+    snapshot_at = FIXED_NOW - timedelta(minutes=10)
+    reports = tmp_path / "reports"
+    _write_json_with_mtime(
+        reports / "latest_operational_health.json",
+        _health_payload(
+            health_at,
+            alerts=[_critical_alert("data_pipeline_down", "Sin snapshots frescos.")],
+            calendar=None,
+            local_timezone=None,
+        ),
+        health_at,
+    )
+    _write_json_with_mtime(reports / "market_snapshot_recovered.json", _valid_snapshot(), snapshot_at)
+
+    block = load_operational_block_context(tmp_path, now=FIXED_NOW)
+
+    assert block["kill_switch_active"] is True
+    assert block["blocking_alerts"][0]["kind"] == "data_pipeline_down"
+
+
+def test_explicit_settings_metadata_allows_legacy_pipeline_recovery(tmp_path, monkeypatch):
+    _freeze_health_clock(monkeypatch)
+    health_at = FIXED_NOW - timedelta(minutes=20)
+    snapshot_at = FIXED_NOW - timedelta(minutes=10)
+    reports = tmp_path / "reports"
+    _write_json_with_mtime(
+        reports / "latest_operational_health.json",
+        _health_payload(
+            health_at,
+            alerts=[_critical_alert("data_pipeline_down", "Sin snapshots frescos.")],
+            calendar=None,
+            local_timezone=None,
+        ),
+        health_at,
+    )
+    _write_json_with_mtime(reports / "market_snapshot_recovered.json", _valid_snapshot(), snapshot_at)
+    settings = Settings(
+        _env_file=None,
+        DATA_DIR=tmp_path,
+        MARKET_CALENDAR="XNYS",
+        LOCAL_TIMEZONE="Europe/Madrid",
+    )
+
+    block = load_operational_block_context(tmp_path, settings=settings, now=FIXED_NOW)
+
+    assert block["kill_switch_active"] is False
+    assert block["blocking_alerts"] == []
