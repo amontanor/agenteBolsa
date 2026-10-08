@@ -15,19 +15,19 @@ from agente_bolsa.storage import Store
 
 
 def _setup(tmp_path):
-    settings = Settings(DATA_DIR=tmp_path)
+    settings = Settings(_env_file=None, DATA_DIR=tmp_path, LESSON_REVALIDATION_WINDOW=10)
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()
     return settings, store
 
 
-def _seed(store, setup, ret, winner, idx):
+def _seed(store, setup, ret, winner, idx, *, signal_date="2026-06-10"):
     store.save_signal_outcome(
         signal_id=f"{setup}_{idx}",
         source_run_id="run",
         source="test",
         symbol="AAA",
-        signal_date="2026-06-10",
+        signal_date=signal_date,
         decision="buy",
         features={"setup": setup},
         gate={},
@@ -78,21 +78,31 @@ def test_revalidate_weakens_then_retires(tmp_path):
     _seed_breakout_strong(store)
     distill_lessons(store, settings, llm=_llm)
 
-    # Borra outcomes y siembra un breakout debil (30% win).
+    # Conserva el historial y añade una ventana posterior con 30% de aciertos.
     store2 = Store(settings.database_path, settings.agent_logs_dir)
     for i in range(3):
         _seed(store2, "breakout_weak_marker", 0.0, False, 900 + i)
-    # Sobrescribe el historico relevante: nuevas señales breakout debiles.
     for i in range(3):
-        _seed(store2, "breakout", 0.03, True, 200 + i)
+        _seed(store2, "breakout", 0.03, True, 200 + i, signal_date="2026-06-11")
     for i in range(7):
-        _seed(store2, "breakout", -0.02, False, 300 + i)
+        _seed(store2, "breakout", -0.02, False, 300 + i, signal_date="2026-06-11")
+
+    # La destilación sólo crea hipótesis: revalidar nunca las promociona.
+    assert revalidate_lessons(store, settings)["transitions"] == []
+    lesson = store.distilled_lessons()[0]
+    assert lesson["status"] == "HYPOTHESIS"
+    # Fixture de una lección previamente validada; no ejercita promoción.
+    store.upsert_distilled_lesson({**lesson, "status": "ACTIVE"})
 
     first = revalidate_lessons(store, settings)
-    assert any(t["to"] in {"WEAKENED", "RETIRED"} for t in first["transitions"])
-    revalidate_lessons(store, settings)
-    statuses = {row["status"] for row in store.distilled_lessons()}
-    assert "WEAKENED" in statuses or "RETIRED" in statuses
+    assert first["transitions"] == [{"lesson_id": lesson["lesson_id"], "from": "ACTIVE", "to": "WEAKENED"}]
+    weakened = store.distilled_lessons()[0]
+    assert weakened["confidence"] == 0.3
+    assert weakened["supporting_cases"] == 3
+    assert weakened["contradicting_cases"] == 7
+    second = revalidate_lessons(store, settings)
+    assert second["transitions"] == [{"lesson_id": lesson["lesson_id"], "from": "WEAKENED", "to": "RETIRED"}]
+    assert store.distilled_lessons()[0]["status"] == "RETIRED"
 
 
 def test_distilled_lessons_start_as_hypothesis(tmp_path):
