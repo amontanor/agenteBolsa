@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import agente_bolsa.storage as storage_module
 from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.operational_health import build_production_health_report
@@ -89,7 +90,7 @@ def test_empty_store_reports_no_coverage(tmp_path: Path) -> None:
     assert summary["coverage"] is None
 
 
-def test_aggregate_preserves_cutoff_statuses_and_rows(tmp_path: Path) -> None:
+def test_aggregate_preserves_cutoff_statuses_and_rows(tmp_path: Path, monkeypatch) -> None:
     settings = _settings(tmp_path)
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()
@@ -100,11 +101,22 @@ def test_aggregate_preserves_cutoff_statuses_and_rows(tmp_path: Path) -> None:
     store.save_broker_order(**_order_kwargs("order-ghost", "plan-missing", status="filled"))
     store.save_broker_order(**_order_kwargs("order-cancelled", "plan-missing", status="cancelled"))
 
-    old_created_at = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+    fixed_now = datetime(2026, 10, 8, 12, 0, tzinfo=timezone.utc)
+    cutoff = fixed_now - timedelta(days=2)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now if tz is timezone.utc else fixed_now.replace(tzinfo=None)
+
+    monkeypatch.setattr(storage_module, "datetime", FrozenDateTime)
     with store.connect() as conn:
         conn.execute(
-            "UPDATE broker_orders SET created_at = ? WHERE broker_order_id = ?",
-            (old_created_at, "order-partial"),
+            "UPDATE broker_orders SET created_at = CASE broker_order_id "
+            "WHEN 'order-filled' THEN ? "
+            "WHEN 'order-partial' THEN ? "
+            "ELSE ? END",
+            (cutoff.isoformat(), (cutoff - timedelta(microseconds=1)).isoformat(), fixed_now.isoformat()),
         )
     before = store.count_broker_orders()
 
