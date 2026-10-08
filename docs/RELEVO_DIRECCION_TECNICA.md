@@ -2,6 +2,13 @@
 
 ## 8-oct-2026: estado vigente del ensayo conjunto
 
+Actualización 13:42 Madrid: nuevo scheduler PID 7, reinicio 11:38, misma imagen.
+PID 6 ausente; terminales failed exactos de ambos runs antiguos contrastados.
+Vistas antiguas active no equivalen a trabajo vivo. Recuperación PMR emitió
+terminal con sesión 8-oct para el run del 7-oct: defecto de identidad verificado.
+No corregir historial append-only ni limpiar claves a ciegas; preparar lote
+acotado y recuperación operativa explícita antes del nuevo preflight/deploy.
+
 Actualización 09:09 Madrid: el usuario autoriza desplegar; nuevo preflight
 devuelve `precondition_not_met`, con lease postmarket active/outcome_update y
 reconciliación registrada active. No se interrumpen ni limpian implícitamente.

@@ -1,5 +1,46 @@
 # Ensayo conjunto de siete mejoras — 8-oct-2026
 
+## Reanudación y diagnóstico de estados huérfanos — 13:40–13:42 Madrid
+
+Dictamen de despliegue `precondition_not_met`, con causa ahora más precisa.
+Contenedor misma imagen, RestartCount 5, nuevo arranque 11:38:24 Madrid;
+scheduler PID 7/token 4898747 vivo. Causa del reinicio no determinada. XNYS
+cerrado, apertura 15:30; paper true, live/auto-apply false. Candidato limpio
+919ba2f8, sin nuevos cambios funcionales. Memoria puntual 1.507 GiB/2 GiB;
+no prueba causal ni benchmark.
+
+Ya no existe post_market_coordination:active. La vista de sesión 7-oct sigue
+active para pmr_150611d46dd9, y reconciliación brkrec_056138f49ca5 sigue active.
+Consulta exacta por cycle_id, mediante Store.read_connection: ambos runs tienen
+terminal failed/owner_dead_recovered durable. El terminal del primero se creó
+11:40:24 Madrid; el del segundo a las 02:48:56. /proc/6/stat ya no existe.
+No son evidencia de trabajos todavía ejecutándose; no se limpian por inferencia.
+
+Defecto verificado de identidad: el terminal del run pmr_150611d46dd9, que la
+vista y su lease identifican como sesión 7-oct, declara session_date 8-oct.
+PostmarketCoordinator.acquire utiliza session_date del adquirente al construir
+el evento recuperado; no toma la sesión del propietario antiguo. Su ruta también
+puede recuperar como postmarket_run un antiguo run de reconciliación, y dejar
+la clave de reconciliación antigua. No se afirma que causase el reinicio ni el
+database is locked. Los eventos append-only existentes no deben sobrescribirse.
+
+Próximo lote de código: caracterizar recuperación entre sesiones y entre tipos
+de lease; conservar identidad original, actualizar sólo vistas que coincidan
+exactamente con PID/token/run, registrar resolución durable sin reescribir
+históricos y demostrar idempotencia, conflictos y no robo de propietario vivo.
+Recuperación operativa propuesta, separada del deploy: comprobar otra vez la
+ausencia del propietario y terminales, respaldar estado por la vía canónica,
+resolver únicamente esas vistas con compare-and-swap y evidencia append-only.
+No avanzar last_session ni ejecutar aprendizaje/reconciliación/órdenes. Esta
+recuperación exige autorización explícita de mutación operativa: la orden de
+despliegue no se usa para eludir la prohibición de reparaciones implícitas.
+Después: nuevo preflight y gates pendientes; no prometer deploy antes de 15:30.
+
+Evidencia local: audit_oct08_resume_preflight.json y
+audit_oct08_resume_terminals.json en el checkout ef99 de este chat. Sólo lecturas
+remotas; sin órdenes, broker, LLM, parada/reinicio, modificación de SQLite ni
+despliegue. No se repiten suites sobre el mismo árbol.
+
 ## Intento de despliegue autorizado — 09:09 Europe/Madrid
 
 El usuario solicita desplegar los nuevos cambios. Resultado del nuevo preflight:

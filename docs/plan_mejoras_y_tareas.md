@@ -2,6 +2,12 @@
 
 ## 8-oct-2026: cierre del ensayo combinado de siete mejoras
 
+Actualización 13:42 Madrid: los dos runs antiguos tienen terminal failed y
+propietario PID 6 ausente; persisten vistas active huérfanas. Nuevo defecto de
+recuperación: terminal de run de sesión 7-oct etiquetado 8-oct. Separar lote de
+identidad/recuperación y reparación operativa explícita; no sobrescribir eventos
+ni avanzar last_session. Deploy sigue precondition_not_met. Detalle en informe.
+
 Actualización 09:09 Madrid: despliegue autorizado por el usuario, intento
 `precondition_not_met`. Preflight nuevo confirma lease postmarket activo en
 outcome_update y reconciliación registrada active; scheduler vivo. Sin corte,
