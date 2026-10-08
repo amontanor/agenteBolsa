@@ -2,6 +2,11 @@
 
 ## 8-oct-2026: cierre del ensayo combinado de siete mejoras
 
+Actualización 09:09 Madrid: despliegue autorizado por el usuario, intento
+`precondition_not_met`. Preflight nuevo confirma lease postmarket activo en
+outcome_update y reconciliación registrada active; scheduler vivo. Sin corte,
+reinicio ni despliegue. Evidencia y siguiente condición en informe del ensayo.
+
 Dictamen `partially_verified_integration_candidate`; informe vigente
 `docs/informe_oct08_integration.md`, rama `codex/oct08-integration-rehearsal`.
 HEAD funcional probado `5f2f530d2eab5b72c171a3fc0bd1afc1f9ddf5c4`:

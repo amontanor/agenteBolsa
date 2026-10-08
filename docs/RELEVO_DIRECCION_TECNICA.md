@@ -2,6 +2,11 @@
 
 ## 8-oct-2026: estado vigente del ensayo conjunto
 
+Actualización 09:09 Madrid: el usuario autoriza desplegar; nuevo preflight
+devuelve `precondition_not_met`, con lease postmarket active/outcome_update y
+reconciliación registrada active. No se interrumpen ni limpian implícitamente.
+Producción intacta; queda pendiente resolver estado operativo antes del corte.
+
 Siete lotes reunidos en `codex/oct08-integration-rehearsal`; informe único
 `docs/informe_oct08_integration.md`. Dictamen `partially_verified_integration_candidate`:
 87 casos distintos pasan, Ruff/NUL/diff verdes y protegidos sin cambios.

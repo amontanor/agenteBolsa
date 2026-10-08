@@ -1,5 +1,35 @@
 # Ensayo conjunto de siete mejoras — 8-oct-2026
 
+## Intento de despliegue autorizado — 09:09 Europe/Madrid
+
+El usuario solicita desplegar los nuevos cambios. Resultado del nuevo preflight:
+`precondition_not_met`; no se inicia corte ni despliegue. Candidato limpio
+`5b92c480051e6c62f54b48c510951ec7eb6dad4f`, tree
+`155fdd4758ac79c27d6c266acb612654c01e0181`; respecto al árbol probado sólo
+contiene el cierre documental anterior.
+
+Sonda real de sólo lectura a las 09:09 del 8-oct: XNYS cerrado, apertura 15:30;
+paper true, live false, auto-apply false. Scheduler PID 6/token 2686539 vivo y
+coherente. Misma imagen `sha256:8ff2bedce363751c33e8e0acd37eae4095358a8f4edf65c08f28fcfaf069d1ae`,
+arranque 03:29:42 UTC, RestartCount 4. Lease postmarket de 7-oct
+`pmr_150611d46dd9` active/outcome_update, actualizado 05:32 Madrid; lease de
+reconciliación `brkrec_056138f49ca5` también figura active desde 02:38 Madrid.
+No se presupone que éste sea un proceso todavía ejecutando ni se limpia como
+huérfano: su estado no resuelto basta para bloquear el corte. last_session
+permanece 5-oct. El último evento de postmarket observado a las 09:05 es un
+scheduled missed, no el terminal del run activo.
+
+schedule-status informa runtime_state unavailable por wal_mode_or_sidecar_present;
+los leases anteriores se contrastan mediante Store.read_connection, SELECT de
+sólo lectura y cierre explícito. Evidencia cruda local:
+`C:/Users/utopi/.codex/worktrees/ef99/agenteBolsa/audit_oct08_deploy_preflight.json`.
+La lectura de metadatos Docker es igualmente no mutante. No se ejecutan broker,
+LLM, suites, smoke, parada, restart, build, órdenes ni cambios productivos en
+este intento. Kernel/configuración y salud integral no se certifican ahora:
+la precondición operativa ya falla. Autorización de despliegue recibida;
+resolver estos leases y completar los gates sigue pendiente. AGENTS exige
+no reparar ni detener implícitamente servicios ante esta situación.
+
 Dictamen: `partially_verified_integration_candidate`. Las siete mejoras conviven sin conflictos funcionales y pasan 87 casos focales distintos. No es una release ni un despliegue. La validación operativa conserva `precondition_not_met`: el último preflight real, a las 08:33 Europe/Madrid, encontraba un lease postmarket activo en outcome_update. No se reparan ni detienen servicios para eliminar ese bloqueo.
 
 ## Identidad y alcance
