@@ -114,4 +114,6 @@ __all__ = ["__version__"]
 # Oct07/08: seven-lot integration candidate; reserved after .340/.341 artifacts.
 # Oct08: restore scoreboard v3 costs and coverage while preserving exact controls.
 # Oct08: restore explicit 300/120/120-second intraday scheduler grace.
-__version__ = "0.4.347"
+# Oct08: LLM uplift fixtures aligned with direction-corrected maturity contract.
+# Oct08: combined corrective candidate, separate from isolated reservations.
+__version__ = "0.4.348"

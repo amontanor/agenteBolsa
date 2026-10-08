@@ -13,7 +13,15 @@ def _store(tmp_path: Path) -> Store:
     return store
 
 
-def _seed(store: Store, tag: str, *, llm: bool | None, returns: list[float], embedded: bool) -> None:
+def _seed(
+    store: Store,
+    tag: str,
+    *,
+    llm: bool | None,
+    returns: list[float],
+    embedded: bool,
+    direction: str | None = "long",
+) -> None:
     for index, value in enumerate(returns):
         signal_id = f"sig-{tag}-{index}"
         symbol = f"S{tag}{index}"
@@ -24,13 +32,18 @@ def _seed(store: Store, tag: str, *, llm: bool | None, returns: list[float], emb
             symbol=symbol,
             signal_date="2026-09-01",
             decision="approved_buy",
-            features={},
+            # `signal_learning._signal_features` carries direction into both
+            # signal_outcomes and the materialized learning observation.
+            features={"direction": direction} if direction is not None else {},
             gate={},
             outcome={"return_5d": value, "matured_horizons": {"5d": True}},
         )
-        features: dict = {}
+        features: dict = {"direction": direction} if direction is not None else {}
         if embedded and llm is not None:
-            features = {"decision_context_snapshot": {"llm_selected": llm, "content_hash": "h"}}
+            features["decision_context_snapshot"] = {
+                "llm_selected": llm,
+                "content_hash": "h",
+            }
         elif llm is not None:
             store.attach_decision_context_snapshot(
                 signal_id, {"llm_selected": llm, "content_hash": f"h-{tag}-{index}"}
@@ -110,7 +123,7 @@ def test_source_text_is_never_used_as_proxy(tmp_path: Path) -> None:
             symbol=f"P{index}",
             signal_date="2026-09-01",
             decision="approved_buy",
-            features={"recommendation_source": "llm"},
+            features={"direction": "long", "recommendation_source": "llm"},
             gate={},
             outcome={"return_5d": 0.02, "matured_horizons": {"5d": True}},
         )
@@ -125,7 +138,7 @@ def test_source_text_is_never_used_as_proxy(tmp_path: Path) -> None:
                 "best_score": 15.0,
                 "decision": "executed_buy",
                 "executed_buy": True,
-                "features": {"recommendation_source": "llm"},
+                "features": {"direction": "long", "recommendation_source": "llm"},
                 "gate": {},
                 "outcome": {"return_5d": 0.02, "matured_horizons": {"5d": True}},
                 "execution": {},
@@ -136,4 +149,18 @@ def test_source_text_is_never_used_as_proxy(tmp_path: Path) -> None:
 
     assert report["llm"]["n"] == 0
     assert report["unattached"] == 35
+    assert report["verdict"] == "insufficient_sample"
+
+
+def test_missing_direction_stays_unverified(tmp_path: Path) -> None:
+    """Maturity without direction cannot enter uplift denominators."""
+    store = _store(tmp_path)
+    _seed(store, "missing-direction", llm=True, returns=[0.02] * 35, embedded=False, direction=None)
+
+    report = _report(store, tmp_path)
+
+    assert report["mature_executed"] == 0
+    assert report["unattached"] == 0
+    assert report["llm"]["n"] == 0
+    assert report["snapshot_coverage"] is None
     assert report["verdict"] == "insufficient_sample"

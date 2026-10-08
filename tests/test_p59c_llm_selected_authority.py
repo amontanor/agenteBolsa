@@ -771,5 +771,5 @@ def test_version_policy_requires_bump():
     if dist:
         # Con PYTHONPATH al src del worktree, leemos __init__.py
         import agente_bolsa
-        # P-L155 is the current candidate (lector EOD de SPY por reloj, reloj de captura post-descarga).
-        assert agente_bolsa.__version__ == "0.4.321"
+        # .348 is the combined corrective candidate; isolated slots are not releases.
+        assert agente_bolsa.__version__ == "0.4.348"
