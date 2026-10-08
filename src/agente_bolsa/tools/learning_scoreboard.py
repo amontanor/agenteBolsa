@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import statistics
 from collections import defaultdict
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -34,6 +36,27 @@ LEARNING_SCOREBOARD_CRITERION = (
 
 def _round(value: float | None, digits: int = 4) -> float | None:
     return None if value is None else round(float(value), digits)
+
+
+def _calibrated_cost(executed: list[dict[str, Any]]) -> dict[str, Any]:
+    """P-L131: mediana observada de fills, separada de bandas asumidas."""
+    samples = []
+    for row in executed:
+        snapshot = (row.get("execution") or {}).get("execution_snapshot") or {}
+        bps = (snapshot.get("metrics") or {}).get("signal_to_fill_bps")
+        if isinstance(bps, bool) or not isinstance(bps, (int, float)):
+            continue
+        if math.isfinite(bps) and abs(bps) <= 200:
+            samples.append(float(bps))
+    calibrated = len(samples) >= 10
+    cost_bps = round(float(statistics.median(samples)), 2) if calibrated else 10.0
+    return {
+        "cost_basis": "calibrated" if calibrated else "assumption_10bps",
+        "cost_bps": cost_bps,
+        "cost_rate": cost_bps / 10000.0,
+        "calibration_samples": len(samples),
+        "calibrated": calibrated,
+    }
 
 
 def _week_index(first_day: date, current_day: date) -> int:
@@ -214,9 +237,14 @@ def _weekly_rows(
     since_date: str,
     end_date: str | None,
     horizon: int = 5,
+    calibration: dict[str, Any] | None = None,
+    matches: dict[str, list[str]] | None = None,
 ) -> list[dict[str, Any]]:
     if not rows:
         return []
+    calibration = calibration or _calibrated_cost([])
+    matched_by_id = matches or {}
+    calibrated_rate = float(calibration["cost_rate"]) if calibration.get("calibrated") else None
     first_day = date.fromisoformat(since_date)
     benchmark = _build_spy_forward_returns(settings, start=since_date, end=end_date)
     grouped: dict[int, list[dict[str, Any]]] = {}
@@ -234,6 +262,7 @@ def _weekly_rows(
         gross_values = []
         costs_10 = []
         costs_20 = []
+        costs_calibrated = []
         alpha_values = []
         hit_flags = []
         gross_hit_flags = []
@@ -247,6 +276,8 @@ def _weekly_rows(
             net_20 = value - LEARNING_NET_20BPS_COST
             costs_10.append(net_10)
             costs_20.append(net_20)
+            if calibrated_rate is not None:
+                costs_calibrated.append(value - calibrated_rate)
             hit_flags.append(bool(metric["hit_rate_net_10bps"]))
             gross_hit_flags.append(bool(metric["gross_gt_1pct"]))
             spy_return = benchmark.get((str(item.get("signal_date") or ""), horizon))
@@ -263,6 +294,9 @@ def _weekly_rows(
         alpha_net = _round(_mean(alpha_values))
         portfolio_drawdown = _round(_max_drawdown(daily_returns), 4)
         control_expectancy = _round(_mean(control_values))
+        mature_ids = [str(item.get("observation_id") or "") for item in items
+                      if _mature_return(item, horizon) is not None]
+        matched = sum(bool(matched_by_id.get(observation_id)) for observation_id in mature_ids)
         weekly.append(
             {
                 "week": week,
@@ -273,6 +307,12 @@ def _weekly_rows(
                 "net_return_10bps": expectancy_10,
                 "expectancy_net_10bps": expectancy_10,
                 "expectancy_net_20bps": expectancy_20,
+                "expectancy_net_calibrated": _round(_mean(costs_calibrated)),
+                "cost_basis": calibration["cost_basis"],
+                "calibration_samples": calibration["calibration_samples"],
+                "control_cost_basis": "assumption_10bps",
+                "matched_executed": matched,
+                "unmatched_executed": len(mature_ids) - matched,
                 "hit_rate": _round(sum(1 for flag in hit_flags if flag) / len(hit_flags), 4) if hit_flags else None,
                 "hit_rate_net_10bps": _round(sum(1 for flag in hit_flags if flag) / len(hit_flags), 4) if hit_flags else None,
                 "gross_gt_1pct": {
@@ -477,12 +517,15 @@ def build_learning_scoreboard(
         since_date=since_date,
         end_date=resolved_end_date,
     )
+    calibration = _calibrated_cost(executed)
     weekly_rows = _weekly_rows(
         settings,
         executed,
         control,
         since_date=since_date,
         end_date=resolved_end_date,
+        calibration=calibration,
+        matches=matches,
     )
     data_quality = _data_quality(executed, control, matches, all_control)
     evaluation = _evaluation(
@@ -491,7 +534,8 @@ def build_learning_scoreboard(
         control_coverage_status=data_quality["control_coverage"]["comparability_status"],
     )
     report = {
-        "schema_version": 2,
+        "schema_version": 3,
+        "cost_calibration": calibration,
         "run_id": run_id,
         "metric_scope": "full_policy",
         "as_of": datetime.now(timezone.utc).isoformat(),

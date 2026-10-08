@@ -112,4 +112,5 @@ __all__ = ["__version__"]
 # P-L155: el lector de recibos EOD de SPY elige por captured_at y comparable sobre
 # unavailable, y el productor toma el reloj de captura despues de la descarga.
 # Oct07/08: seven-lot integration candidate; reserved after .340/.341 artifacts.
-__version__ = "0.4.342"
+# Oct08: restore scoreboard v3 costs and coverage while preserving exact controls.
+__version__ = "0.4.343"
