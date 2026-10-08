@@ -175,6 +175,20 @@ def _cohort_rows(
                 return value
         return None
 
+    def canonical_signal_date(row: dict[str, Any]) -> str | None:
+        raw = row.get("signal_date")
+        if not isinstance(raw, str):
+            return None
+        value = raw.strip()
+        if not value:
+            return None
+        try:
+            parsed = date.fromisoformat(value)
+        except ValueError:
+            return None
+        canonical = parsed.isoformat()
+        return canonical if value == canonical else None
+
     def verified_control_ids(row: dict[str, Any]) -> set[str]:
         features = row.get("features") if isinstance(row.get("features"), dict) else {}
         control_set = features.get("comparable_control_set")
@@ -213,12 +227,15 @@ def _cohort_rows(
     for item in executed:
         control_ids = verified_control_ids(item)
         item_cycle_id = explicit_cycle_id(item)
+        item_signal_date = canonical_signal_date(item)
         candidates = [
             row
             for row in all_control
             if exact_signal_id(row) in control_ids
             and item_cycle_id is not None
             and explicit_cycle_id(row) == item_cycle_id
+            and item_signal_date is not None
+            and canonical_signal_date(row) == item_signal_date
             and eligible_capacity_control(row)
         ]
         selected = sorted(candidates, key=control_sort_key)[:3]

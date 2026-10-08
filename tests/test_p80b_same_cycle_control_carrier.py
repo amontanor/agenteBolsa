@@ -595,7 +595,18 @@ def test_exact_carrier_is_idempotent_and_conflicts_are_append_only(tmp_path):
     assert json.loads(conflicts[0]["payload_json"])["status"] == "conflict"
 
 
-@pytest.mark.parametrize("case", ["POSITIVE", "DATE", "SOURCE", "REASON", "DECISION", "IDENTITY"])
+def _local_learning_observation(row: dict, *, signal_date: str | None) -> dict:
+    observation = dict(row)
+    observation["signal_date"] = signal_date
+    observation["source_family"] = "learning_experiment"
+    observation["observation_id"] = f"{signal_date}:{row['symbol']}:learning_experiment"
+    return observation
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["POSITIVE", "DATE", "SOURCE", "REASON", "DECISION", "IDENTITY", "MISSING_DATE", "INVALID_DATE"],
+)
 def test_canonical_control_contract_is_one_to_one(tmp_path, case, monkeypatch):
     """Use one valid producer set, changing exactly one consumer field per negative."""
 
@@ -646,27 +657,48 @@ def test_canonical_control_contract_is_one_to_one(tmp_path, case, monkeypatch):
     )
     treatment_row = store.signal_outcome_by_id(treatment_id)
     control_row = store.signal_outcome_by_id(actual_control_id)
-    _materialize_observations(
-        store,
-        [
+    if case in {"MISSING_DATE", "INVALID_DATE"}:
+        treatment_observation = _local_learning_observation(
             _raw_observation(
                 treatment_row,
                 executed=True,
                 comparable_control_set=control_set,
             ),
+            signal_date="2026-08-03",
+        )
+        control_observation = _local_learning_observation(
             _raw_observation(control_row, executed=False),
-        ],
-    )
+            signal_date=None if case == "MISSING_DATE" else "not-a-date",
+        )
+        observation_store = SimpleNamespace(
+            learning_observations=lambda **_kwargs: [treatment_observation, control_observation]
+        )
+    else:
+        _materialize_observations(
+            store,
+            [
+                _raw_observation(
+                    treatment_row,
+                    executed=True,
+                    comparable_control_set=control_set,
+                ),
+                _raw_observation(control_row, executed=False),
+            ],
+        )
+        observation_store = store
 
     executed, matched_controls, matches, _all_controls = _cohort_rows(
-        store,
+        observation_store,
         since_date="2026-08-03",
         end_date="2026-08-05",
     )
     assert len(executed) == 1
+    assert len(_all_controls) == 1
+    assert _all_controls[0]["symbol"] == "CONTROL"
     treatment_observation_id = executed[0]["observation_id"]
     if case == "POSITIVE":
         assert [row["symbol"] for row in matched_controls] == ["CONTROL"]
+        assert matched_controls[0] == _all_controls[0]
         assert matches[treatment_observation_id] == [
             "2026-08-03:CONTROL:learning_experiment"
         ]
