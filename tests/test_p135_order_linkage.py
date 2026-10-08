@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import pytest
 
 from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
@@ -83,6 +87,56 @@ def test_empty_store_reports_no_coverage(tmp_path: Path) -> None:
 
     assert summary["total"] == 0
     assert summary["coverage"] is None
+
+
+def test_aggregate_preserves_cutoff_statuses_and_rows(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    store.save_order_plan(**_plan_kwargs("plan-filled"))
+    store.save_order_plan(**_plan_kwargs("plan-partial"))
+    store.save_broker_order(**_order_kwargs("order-filled", "plan-filled", status="FILLED"))
+    store.save_broker_order(**_order_kwargs("order-partial", "plan-partial", status="partially_filled"))
+    store.save_broker_order(**_order_kwargs("order-ghost", "plan-missing", status="filled"))
+    store.save_broker_order(**_order_kwargs("order-cancelled", "plan-missing", status="cancelled"))
+
+    old_created_at = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE broker_orders SET created_at = ? WHERE broker_order_id = ?",
+            (old_created_at, "order-partial"),
+        )
+    before = store.count_broker_orders()
+
+    summary = store.order_plan_linkage_summary(recent_days=2)
+
+    assert summary == {
+        "total": 4,
+        "filled": 3,
+        "filled_with_plan": 2,
+        "filled_without_plan": 1,
+        "coverage": round(2 / 3, 4),
+        "recent": {
+            "total": 3,
+            "filled": 2,
+            "filled_with_plan": 1,
+            "filled_without_plan": 1,
+            "coverage": 0.5,
+        },
+        "recent_days": 2,
+        "unverified_label": "legacy_unverified",
+    }
+    assert store.count_broker_orders() == before
+
+
+def test_missing_database_is_not_created_by_read(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+
+    assert not settings.database_path.exists()
+    with pytest.raises(sqlite3.OperationalError):
+        store.order_plan_linkage_summary()
+    assert not settings.database_path.exists()
 
 
 def test_production_health_includes_linkage_fail_open(tmp_path: Path, monkeypatch) -> None:
