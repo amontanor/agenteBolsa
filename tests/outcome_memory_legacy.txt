@@ -1,0 +1,152 @@
+# Frozen characterization reference from 1adc3cec; executed with production globals.
+def _persist_signal_outcome_captures(
+    settings: Settings,
+    store: Store,
+    signals: list[dict[str, Any]],
+    data: pd.DataFrame,
+    *,
+    observed_at: datetime,
+) -> bool:
+    observation_failed = False
+    try:
+        signals_by_id: dict[str, dict[str, Any]] = {}
+        ambiguous_signal_ids: set[str] = set()
+        for signal in signals:
+            signal_id = str(signal.get("signal_id") or "").strip()
+            if not signal_id:
+                continue
+            identity = (
+                str(signal.get("symbol") or "").upper().strip(),
+                str(signal.get("source_run_id") or "").strip(),
+            )
+            previous = signals_by_id.get(signal_id)
+            if previous is not None:
+                previous_identity = (
+                    str(previous.get("symbol") or "").upper().strip(),
+                    str(previous.get("source_run_id") or "").strip(),
+                )
+                if previous_identity != identity:
+                    ambiguous_signal_ids.add(signal_id)
+                    continue
+            signals_by_id[signal_id] = signal
+
+        calendar = MarketCalendar(settings.market_calendar, settings.local_timezone)
+        frame_by_signal: dict[str, pd.DataFrame] = {}
+        for row in _iter_signal_prediction_events(store, signals):
+            if not validate_h_capture_event(row, expected_event_type=PREDICTION_EVENT_TYPE):
+                LOGGER.warning("Se descarta evento H inválido antes de observar outcome: %s", row.get("event_id"))
+                continue
+            prediction_event = row.get("payload")
+            if not isinstance(prediction_event, dict):
+                continue
+            signal_id = str(prediction_event.get("signal_id") or "").strip()
+            signal = signals_by_id.get(signal_id)
+            if not signal or signal_id in ambiguous_signal_ids:
+                continue
+            if not _prediction_matches_signal(prediction_event, row, signal):
+                LOGGER.warning(
+                    "Se descarta evento H sin lineage exacto para signal_id=%s",
+                    signal_id,
+                )
+                continue
+            try:
+                if signal_id not in frame_by_signal:
+                    frame_by_signal[signal_id] = _symbol_frame(data, str(signal.get("symbol") or ""))
+                payload = build_outcome_capture(
+                    prediction_event,
+                    price_frame=frame_by_signal[signal_id],
+                    observed_at=observed_at,
+                    market_calendar=calendar,
+                    outcome_source_ref={
+                        "kind": "signal_outcomes",
+                        "signal_id": signal_id,
+                        "source_run_id": signal.get("source_run_id"),
+                    },
+                )
+                persist_h_capture_event(store, payload)
+            except Exception:  # noqa: BLE001 - outcome observation cannot block trading.
+                observation_failed = True
+                LOGGER.exception("No se pudo persistir outcome prospectivo para %s", signal_id)
+    except Exception:  # noqa: BLE001 - observation cannot block legacy outcomes.
+        observation_failed = True
+        LOGGER.exception("No se pudo recorrer capturas prospectivas de señales")
+    return not observation_failed
+
+
+def update_signal_outcomes(
+    settings: Settings,
+    store: Store,
+    *,
+    limit: int = 1000,
+    since_date: str = "2026-04-01",
+    now: datetime | None = None,
+    observed_at: datetime | None = None,
+) -> dict[str, Any]:
+    signals = store.signal_outcomes(
+        limit=limit,
+        since_date=since_date,
+        include_lab_book=True,
+        include_learning_experiment=True,
+    )
+    symbols = sorted({signal["symbol"] for signal in signals})
+    if not signals or not symbols:
+        return {"updated": 0, "signals": 0, "symbols": 0, "warnings": [],
+                "bars_trimmed_universe": 0, "last_completed_session": None,
+                "session_seal_degraded": None}
+    start = min(signal["signal_date"] for signal in signals)
+    end = (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
+    warnings = []
+    try:
+        data = download_daily_prices(symbols, start=start, end=end)
+    except Exception as exc:  # noqa: BLE001
+        return {"updated": 0, "signals": len(signals), "symbols": len(symbols), "warnings": [str(exc)],
+                "bars_trimmed_universe": 0, "last_completed_session": None,
+                "session_seal_degraded": None}
+    data, bars_trimmed, last_completed, seal_degraded = trim_to_completed_sessions(data, now=now)
+
+    updated = 0
+    outcome_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
+    outcomes_to_save: dict[str, dict[str, Any]] = {}
+    for signal in signals:
+        try:
+            frame = _symbol_frame(data, signal["symbol"]).dropna(how="all")
+            if frame.empty:
+                continue
+            features = signal.get("features", {}) or {}
+            cache_key = (
+                signal["symbol"],
+                signal["signal_date"],
+                _num(features.get("entry_price") or features.get("close")),
+                _num(features.get("stop_loss")),
+                _num(features.get("take_profit")),
+            )
+            outcome = outcome_cache.get(cache_key)
+            if outcome is None:
+                outcome = _outcome_for_signal(signal, frame)
+                outcome_cache[cache_key] = outcome
+            outcomes_to_save[signal["signal_id"]] = outcome
+            updated += 1
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"{signal['symbol']}: {exc}")
+    if hasattr(store, "update_signal_outcomes_bulk"):
+        store.update_signal_outcomes_bulk(outcomes_to_save)
+    else:
+        for signal_id, outcome in outcomes_to_save.items():
+            store.update_signal_outcome(signal_id, outcome)
+    try:
+        observation_ok = _persist_signal_outcome_captures(
+            settings,
+            store,
+            signals,
+            data,
+            observed_at=observed_at or datetime.now(timezone.utc),
+        )
+        if not observation_ok:
+            warnings.append("prospective_capture_observation_failed")
+    except Exception:  # noqa: BLE001 - prospective telemetry remains fail-open.
+        warnings.append("prospective_capture_observation_failed")
+        LOGGER.exception("Falló observación prospectiva; se conserva outcome legacy")
+    return {"updated": updated, "signals": len(signals), "symbols": len(symbols), "warnings": warnings[:20],
+            "bars_trimmed_universe": bars_trimmed, "last_completed_session": last_completed,
+            "session_seal_degraded": seal_degraded}
+
