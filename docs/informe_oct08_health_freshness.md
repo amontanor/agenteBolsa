@@ -3,7 +3,7 @@
 ## Dictamen
 
 El defecto queda reproducido en la base `0.4.348` (`HEAD 52cc0fa5921ff690cfec4d08d5eda5c9c1bbccb1`, `tree 28a76ff51aa66139c02700ce0f86789842b51b4c`):
-`load_operational_block_context` conservaba un `data_pipeline_down` emitido por un informe de salud anterior aunque existía evidencia posterior. En esta rama se implementa el mínimo aislado N3 en `operational_health.py`, con pruebas negativas y de recuperación selectiva. No se modifica versión, configuración, producción ni política activa.
+`load_operational_block_context` conservaba un `data_pipeline_down` emitido por un informe de salud anterior aunque existía evidencia posterior. En esta rama se implementa el mínimo aislado N3 en `operational_health.py`, con pruebas negativas y de recuperación selectiva. La versión de la rama queda en `0.4.350`; no se modifica configuración, producción ni política activa.
 
 La ventana operativa queda `precondition_not_met` para cualquier suite completa, smoke, despliegue o comprobación productiva: el `schedule-status` SSH aportado para el 8-oct a las 22:15 Europe/Madrid indicó XNYS cerrado, pero `PMR8` aún no tenía terminal `completed|failed`. Por tanto no se ejecutaron gates operativos.
 
@@ -14,6 +14,8 @@ Productor: `build_operational_health_report` calcula `_data_pipeline_heartbeat` 
 Antes del fix, la función aceptaba `now` pero decidía la edad con el reloj real y el `st_mtime` del JSON; no comparaba `payload.as_of` con evidencia posterior. Así, un informe reciente como archivo (menos de seis horas) podía conservar un diagnóstico de pipeline obsoleto. La ausencia o antigüedad superior a seis horas conserva la semántica existente de `stale_operational_health_report` con bloqueo de compras desactivado.
 
 El consumidor corregido usa un `now` aware explícito; un `now` naive produce bloqueo de incertidumbre. Para refrescar `data_pipeline_down`, exige JSON de salud no vacío y un `as_of` aware válido, no futuro; si la forma no es utilizable conserva el bloqueo. Toma calendario y zona del heartbeat o de `Settings` explícitos; sin ninguno, permanece bloqueado. Requiere sesión abierta actual, `session_date` coincidente y un artefacto `market_state_*.json` de forma canónica, con `as_of` aware posterior al health report, no futuro y de edad máxima de 30 minutos. Filtra mtime futuro, anterior al informe o fuera de la ventana y recorre candidatos en una sola pasada de memoria acotada. Una fecha `YYYY-MM-DD` de un `market_snapshot` no demuestra hora de captura y no autoriza recuperación.
+
+Cuando la recuperación es válida, el resultado expone `data_pipeline_recovery` con `path`, `captured_at`, `observed_at`, `session_date` y `evaluated_at`, además de `report_as_of` separado. El JSON de salud no se muta. Si queda cualquier crítico —incluido otro `data_pipeline_down` con scope distinto de `market_data`— `kill_switch_active` sigue activo y bloquea la operación; la evidencia fresca solo resuelve el diagnóstico exacto `data_pipeline_down:market_data`.
 
 Contrato de seguridad para el siguiente lote:
 
@@ -37,7 +39,7 @@ Secuencia productor-evento-consumidor verificada en `audit_oct08_evening_results
 | Snapshot posterior, evento `market_snapshot_completed` | 17:58:14.226969 | 19:58:14.226969 | `mkt_790e09534e15`, `Snapshot guardado con 25 simbolos`. Ocurrió 3m07.813593s después del `as_of` de salud. |
 | Snapshot posterior adicional, evento `market_snapshot_completed` | 18:47:06.306643 | 20:47:06.306643 | `mkt_92a9836a3a39`, `Snapshot guardado con 24 simbolos`. |
 | `paper_auto_trade_blocked` | 19:15:00.993051 | 21:15:00.993051 | Volvió a consumir exactamente `as_of=17:55:06.413376`; `block_new_buys=true`, `block_buy_execution=true`, razón única `data_pipeline_down`. |
-| `portfolio_watch_started` del artefacto de cuenta | 19:15:49.692459 | 21:15:49.692459 | Cuenta tenía 9 posiciones y 1 orden abierta; el payload repite el mismo health `as_of=17:55:06.413376`. |
+| `portfolio_watch_started` del artefacto de cuenta | 19:15:49.692459 | 21:15:49.692459 | Cuenta tenía 9 posiciones y 1 orden abierta; es un evento separado del health. |
 
 El snapshot de 18:47:06 UTC precede al bloqueo de 19:15:00 UTC por 27m54.686408s, pero no hubo refresh de `latest_operational_health` entre ambos. Esto prueba obsolescencia del diagnóstico consumido; no prueba por sí solo que todos los datos, cotizaciones o gates fueran sanos. El payload `portfolio_watch` no contiene health; el health aparece como hermano en el JSON de cuenta.
 
@@ -54,7 +56,8 @@ Casos cubiertos:
 - `data_pipeline_down` obsoleto junto con `job_failed`: la recuperación selectiva conserva el crítico ajeno;
 - informe sano junto con `operational_kill_switch.json` manual activo: el override persistente sigue bloqueando y el archivo permanece;
 - informe con más de seis horas: se obtiene `stale_operational_health_report:<edad>s`, sin inventar un bloqueo fresco;
-- timestamp ausente, naive o futuro, sesión distinta, JSON vacío/inválido, artefacto desconocido, mtime futuro, copia con contenido antiguo, captura antigua y ausencia de calendario sin `Settings`: no recuperan;
+- timestamp ausente, naive o futuro, sesión distinta, JSON vacío/inválido, artefacto desconocido, mtime futuro del artefacto o del health report, copia con contenido antiguo, captura antigua y ausencia de calendario sin `Settings`: no recuperan;
+- otro `data_pipeline_down` con scope `global` sobrevive junto al `market_data` recuperado y mantiene el bloqueo;
 - `Settings(_env_file=None)` explícitos permiten el caso legacy con metadatos de calendario ausentes, sin llamar a `get_settings()`.
 
 Todas las pruebas usan `tmp_path`, reloj congelado, JSON local y `os.utime`; no usan broker, red, yfinance, LLM, servicios ni SQLite productiva.
@@ -68,7 +71,10 @@ pytest tests\test_oct08_health_freshness_characterization.py -q
 pytest tests\test_oct08_health_freshness_characterization.py tests\test_operational_health.py -q
 30 passed in 6.57s
 
-ruff check src\agente_bolsa\tools\operational_health.py tests\test_oct08_health_freshness_characterization.py
+pytest tests\test_oct08_health_freshness_characterization.py tests\test_operational_health.py tests\test_p59c_llm_selected_authority.py -q
+77 passed in 6.97s
+
+ruff check src\agente_bolsa\tools\operational_health.py src\agente_bolsa\__init__.py tests\test_oct08_health_freshness_characterization.py tests\test_p59c_llm_selected_authority.py
 All checks passed!
 
 scripts\check_no_nulls.py
@@ -79,7 +85,7 @@ check_no_nulls: OK (546 archivos)
 
 ## Estado, límites y siguiente decisión
 
-Worktree: `C:\Users\utopi\.codex\worktrees\oct08-health-freshness\agenteBolsa`, rama `codex/oct08-health-freshness`, base exacta indicada arriba. La secuencia de commits aislados es `6380d0d4` (caracterización), `f1e8b635` (revalidación selectiva) y `c5fd589c` (evidencia aware, reloj y memoria acotada). El último commit funcional modifica solo `src/agente_bolsa/tools/operational_health.py` y el test focal; este documento queda para un commit separado. No se modifica ninguna fuente protegida, configuración, versión, plan maestro, relevo, dato productivo, lock, lease, servicio, broker, red, LLM o remoto.
+Worktree: `C:\Users\utopi\.codex\worktrees\oct08-health-freshness\agenteBolsa`, rama `codex/oct08-health-freshness`, base exacta indicada arriba. La secuencia de commits aislados es `6380d0d4` (caracterización), `f1e8b635` (revalidación selectiva), `c5fd589c` (evidencia aware, reloj y memoria acotada), `98a37a82` (scope, mtime futuro, observación y pin `.350`) y el commit documental final. La versión queda fijada en `0.4.350`; `.349` permanece reservada para la reutilización de digest. No se modifica ninguna fuente protegida, configuración, plan maestro, relevo, dato productivo, lock, lease, servicio, broker, red, LLM o remoto.
 
 No se ejecutaron `pytest tests/ -x -q`, smoke `run-once --skip-crew`, `validate-agent-config`, `kernel-status`, `schedule-status`, postmarket, reconciliación, despliegue ni promoción. La razón es el encargo explícito y la precondición PMR8 no terminal, no un resultado verde omitido.
 
