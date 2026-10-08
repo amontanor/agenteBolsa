@@ -2,6 +2,12 @@
 
 ## 8-oct-2026: cierre del ensayo combinado de siete mejoras
 
+Actualización 13:57 Madrid: recuperación operativa explícitamente autorizada y
+completada con respaldo, CAS y evento atómicos. Vistas huérfanas resueltas;
+kernel/config productivos verdes; last_session sin avanzar. Release `needs_fix`:
+diagnóstico focal confirma el fallo económico de base rec_payloads True/False.
+No desplegado. Evidencia, límites y gates pendientes en informe del ensayo.
+
 Actualización 13:42 Madrid: los dos runs antiguos tienen terminal failed y
 propietario PID 6 ausente; persisten vistas active huérfanas. Nuevo defecto de
 recuperación: terminal de run de sesión 7-oct etiquetado 8-oct. Separar lote de

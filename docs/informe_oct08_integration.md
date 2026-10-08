@@ -1,5 +1,55 @@
 # Ensayo conjunto de siete mejoras — 8-oct-2026
 
+## Recuperación operativa autorizada y completada — 8-oct, 13:57 Madrid
+
+Autorización humana explícita en este chat: «Autorizo», para el alcance de
+recuperación controlada presentado. Resultado `resolved`. Se comprobó otra vez
+XNYS cerrado, flags paper/live/auto-apply, ausencia del PID 6, ausencia de lease
+global y terminales failed exactos antes de escribir. Se respaldaron las dos
+filas y sus terminales en archivo exclusivo con fsync y hash SHA256
+`25515f1fe48c0b054c1d8264d9b00c09cac7930269bda7a1549681528bfd9d20`:
+`/data/reports/oct08_runtime_before_25515f1fe48c0b054c1d8264d9b00c09cac7930269bda7a1549681528bfd9d20.json`.
+
+Una sola transacción BEGIN IMMEDIATE corta, timeout 2 segundos, revalida los
+bytes exactos de ambas filas y la ausencia del propietario. Compare-and-swap
+marca failed/terminal la vista de sesión 7-oct conservando su identidad original,
+y elimina únicamente el lease de reconciliación antiguo. En la misma transacción
+inserta el evento append-only
+`operational_state_recovered:oct08:25515f1fe48c0b054c1d8264d9b00c09cac7930269bda7a1549681528bfd9d20`.
+No sobrescribe eventos, ni corrige retroactivamente el terminal mal etiquetado.
+last_session sigue 5-oct. No ejecuta aprendizaje, broker, órdenes ni reinicios.
+
+Script operativo revisable `recover_oct08_runtime.py` en el checkout ef99;
+modo plan previo sin escritura, recibo `recovery_oct08_receipt.json` y lectura
+posterior `recovery_oct08_postflight.json` en ese mismo checkout. Cuatro pruebas
+locales con SQLite temporal: resolución e idempotencia, propietario reaparecido,
+rollback de ambas vistas si falla la evidencia y preservación de cambio
+concurrente. `Ran 4 tests in 0.052s, OK`; Python del proyecto, sin red/proveedores
+productivos desde tests. El script no se incorpora a la imagen candidata.
+
+Postflight: sesión 7-oct failed/terminal; claves global active y reconciliation
+ausentes. No statuses started/running/active encontrados en los registros de jobs
+consultados. Kernel-status productivo ok true, violations vacías, cuatro hashes
+sellados coinciden; validate-agent-config ok true, errores y warnings vacíos.
+Esto resuelve el bloqueo operativo de vistas, no demuestra postmarket completo
+ni despliegue del candidato.
+
+Siguiente gate investigado: una ejecución focal de diagnóstico de
+`test_economic_parity_true_false_none_identical_payloads` en el ensayo devuelve
+`1 failed in 2.56s`, `rec_payloads difiere True vs False`. Es el fallo de base
+ya documentado, ahora contrastado al retomar release; no se trata como aprobado.
+El fixture StoreSpy carece de record_agent_event/record_append_only_event y se
+observan errores de telemetría; la diferencia exacta de payload aún no queda
+explicada. No se altera código ni se debilita la aserción para desplegar.
+Dictamen actual de release `needs_fix`; suite completa, smoke, identidad
+.321/.340, reserva/bump y paridad completa siguen pendientes. Producción sigue
+ejecutando la misma imagen .321: no build, corte, despliegue ni reinicio desde
+esta intervención. Compose activo apunta a releases/0.4.297/deploy; las carpetas
+.340 y .341-web existen pero los tres contenedores core declaran imagen .321.
+Las etiquetas de la imagen incluyen valores heredados .320 y source-revision
+1adc3cec/source-tree 00e5bdeadf1a7d6cd9340e76fbd9b136c3583412; requieren contraste
+de bytes antes de atribuir identidad exacta o reutilizar un número de release.
+
 ## Reanudación y diagnóstico de estados huérfanos — 13:40–13:42 Madrid
 
 Dictamen de despliegue `precondition_not_met`, con causa ahora más precisa.

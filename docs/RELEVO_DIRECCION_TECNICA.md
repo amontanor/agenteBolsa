@@ -2,6 +2,12 @@
 
 ## 8-oct-2026: estado vigente del ensayo conjunto
 
+Actualización 13:57 Madrid: recuperación autorizada completada, dos vistas
+resueltas con respaldo y evento atómicos; kernel/config productivos ok. No
+repetir limpieza ni avanzar last_session. Nuevo gate actual `needs_fix`: la
+prueba económica conocida falla rec_payloads True/False; explicar diferencia
+antes de release, sin retirar aserciones. No hubo corte, build ni despliegue.
+
 Actualización 13:42 Madrid: nuevo scheduler PID 7, reinicio 11:38, misma imagen.
 PID 6 ausente; terminales failed exactos de ambos runs antiguos contrastados.
 Vistas antiguas active no equivalen a trabajo vivo. Recuperación PMR emitió
