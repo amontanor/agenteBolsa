@@ -1,5 +1,16 @@
 # Plan maestro de mejoras y tareas — agenteBolsa
 
+## 8 octubre 2026: exclusión local de estudios duplicados
+
+Candidato N2 `ready_for_integration_rehearsal`, rama
+`codex/oct08-study-dedup`, base `1adc3cec2b68a6a02eb8b3dd38e78846f1120cc2`.
+Informe único `docs/informe_oct08_study_dedup.md`. Guard no bloqueante por
+Store/job entre bootstrap y APScheduler; diagnóstico de archivo fail-open,
+sin SQLite/runtime del duplicado. 37 focales passed; Ruff/NUL/diff verdes.
+Sin fullsuite, smoke, producción, red/broker/LLM, restart/deploy/push.
+Versión/reserva diferidas; NO release. Siguiente: ensayo aislado por dirección;
+validación operativa requiere lease postmarket terminal y gates autorizados.
+
 ## P-L155: lector de recibos EOD de SPY y reloj del productor (candidato 0.4.321)
 
 Informe unico: `docs/informe_p_l155_lector_spy_eod.md`. Lote N2 acotado a
