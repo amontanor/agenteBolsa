@@ -1,8 +1,27 @@
 # Relevo de direccion tecnica — agenteBolsa
 
-## 8-oct-2026: estado vigente del ensayo conjunto
+## 8-oct-2026, 14:57: relevo vigente
 
-Estado vigente: recuperación operativa completada; candidato .342, HEAD 0e8712b0.
+Release needs_fix, producción .321 sin build/corte/restart/deploy. Candidata
+.343 scoreboard v3, HEAD funcional ab28bd86/tree daa3f125, más fixture test-only
+2f4f4da2 de lecciones; learning_mode corregido e0c90864, smoke limpio/config ok.
+Suite .343 interrumpida tras 1501 resultados/13 fallos por bucle de workers en
+p49br1; NO repetirla sin cerrar causas ni presentarla como verde. Nueve fallos
+persisten en diagnóstico focal; cuatro multiproceso pasan solos. Captura on/off
+p49br1 pasa; interacción de suite aún sin explicar. Diagnóstico de 1255 restantes
+corre en session70586; no duplicarlo ni detenerlo por mera observación lenta.
+
+Luna trabaja aislada: coordinación .344, linkage .345, uplift .346. Dirección
+preparó scheduler grace .347, HEAD 5bf84282, 1+27 pruebas verdes, no integrado.
+Consultar informes propios; resolver versiones campo a campo, sin ours/theirs.
+Preflight 14:41 XNYS cerrado, paper/livefalse/autoapplyfalse, sin jobs/leases
+activos observados, próxima apertura 15:30. No heredar este gate al corte.
+Ver informe integrado/plan para causas y evidencias. Autorización deploy recibida;
+faltan revisión/integración, fullsuite definitiva, gates y doble salud productiva.
+
+## Antecedente 8-oct-2026: estado del ensayo conjunto
+
+Estado de entonces: recuperación operativa completada; candidato .342, HEAD 0e8712b0.
 Paridad resuelta con reloj congelado del fixture (sin retirar as_of). Suite -x
 se detuvo: 638 passed, 1 failed en learning_mode, reproducido en base 1adc3cec.
 No repetir suite sin causa ni cambiar política para aprobar el test. Ruff

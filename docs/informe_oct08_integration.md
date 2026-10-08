@@ -1,8 +1,60 @@
 # Ensayo conjunto de siete mejoras — 8-oct-2026
 
-## Cierre de gates tras recuperación — candidata 0.4.342
+## Estado vigente — 8 octubre, 14:57 Madrid
 
-Estado vigente: recuperación operativa completada; release `needs_fix`, NO
+Dictamen `needs_fix`, NO desplegado. Producción sigue .321; preflight read-only
+14:41 Madrid: XNYS cerrado, próxima apertura 15:30, paper/live false/auto-apply
+false, sin estados activos en jobs/leases consultados. No se hereda al corte.
+La candidata .343 incorporó scoreboard v3; HEAD funcional validado focalmente
+`ab28bd86193ef48a18d1f058e2f79492721c1412`, tree
+`daa3f125e2da5b0504924dce5a6858764a9aa1f9`. Detalle del lote en
+`docs/informe_oct08_scoreboard_contract.md`: 16 passed; base exacta 11 failed,
+1 passed. Conserva dirección y contratos explícitos de control, sin inferirlos.
+Ruff completo/NUL 544/diff verdes; protegidos idénticos a base 1adc3cec.
+
+Learning_mode: el fixture chocaba con el veto tóxico vigente a score 18. Commit
+test-only e0c90864 separa score 17 permitido de 18 vetado, `_env_file=None`;
+12 pruebas del módulo pasan en 0.94 s. No cambia política. Smoke anterior:
+la limpieza WinError 32 era del harness; logging.shutdown y gc.collect antes
+del cleanup permiten salida 0, flujo completed, used_crew=false, fuentes
+locales una vez y validate-agent-config ok. Evidencia goal_fix_smoke.txt en ef99.
+
+La suite completa .343 iniciada 14:25 se interrumpió tras 1501 resultados
+observados, 13 fallos, al bloquearse la prueba multiproceso p49br1. No hay
+resultado completo ni gate verde. Se verificó un bucle de recreación de workers
+sin avance de SQLite; se detuvo sólo el PID local 17212, inicio exacto 14:25:18,
+y descendientes coincidentes. Producción no se detuvo. La prueba aislada pasa
+con captura desactivada (1.44 s) y activada (1.43 s): la causa de interacción
+en suite sigue pendiente, no se atribuye a la captura como hecho.
+
+Los 13 IDs se recuperaron de los marcadores conservados y colección exacta
+(2756 casos). Diagnóstico focal: 9 failed, 4 passed en 22.91 s. Cuatro fallos
+multiproceso no reaparecen aislados; nueve restantes: lecciones (1), uplift
+LLM (3), linkage de órdenes (4), misfire (1). No se ocultan ni se suman baterías
+solapadas. Evidencia ef99: goal_fix_0343_fullsuite.txt,
+goal_fix_0343_hung_workers.json, goal_fix_failed_nodes.txt,
+goal_fix_failure_diagnostics.txt. Diagnóstico de los 1255 nodos no alcanzados
+en ejecución, con fuentes temporales y salida visible; no equivale a fullsuite.
+
+Lecciones: reproducido sobre base exacta 1adc3cec. El fixture destilaba
+HYPOTHESIS y esperaba degradación reservada a ACTIVE/WEAKENED. Commit test-only
+2f4f4da2 comprueba primero que revalidar no promociona hipótesis, crea fixture
+explícito ACTIVE y exige transiciones ACTIVE→WEAKENED→RETIRED con ventana
+posterior 3/10; 7 passed en 1.69 s, Ruff focal/diff verdes. Fuente intacta.
+
+Lotes aislados en revisión: .344 identidad de recuperación postmarket,
+.345 enlace exacto de órdenes, .346 uplift LLM. .347 restaura misfire
+documentado 300/120/120; 1 focal y 27 regresiones pasan. Informe propio
+`docs/informe_oct08_scheduler_grace.md` en su worktree: todavía no integrado.
+Ese cambio sí permite ciclos con retrasos de 120–300 s, no se afirma paridad
+temporal. Ningún lote cambia protegidos/configuración ni reescribe históricos.
+Pendientes: cerrar causas/QA de todos, integrar con revisión, fullsuite del
+árbol definitivo y gates afectados, nuevo preflight y doble salud del despliegue.
+Autorización de despliegue recibida; sin build, corte, restart, deploy ni push.
+
+## Antecedente: cierre de gates tras recuperación — candidata 0.4.342
+
+Estado de entonces: recuperación operativa completada; release `needs_fix`, NO
 desplegada. HEAD funcional `0e8712b02aea10ecd8300a41f449fdd61f21b456`, tree
 `20ef2ed37d24685bf78513fc16c8377166870274`, checkout limpio antes de esta nota.
 Reserva 0.4.342 tras observar artefactos .340/.341-web; no cambia la imagen activa.

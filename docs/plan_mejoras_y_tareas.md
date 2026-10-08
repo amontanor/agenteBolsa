@@ -1,8 +1,26 @@
 # Plan maestro de mejoras y tareas — agenteBolsa
 
-## 8-oct-2026: cierre del ensayo combinado de siete mejoras
+## 8-oct-2026, 14:57: gates y lotes correctivos vigentes
 
-Estado vigente: recuperación completada, candidata 0.4.342 / 0e8712b0.
+Release `needs_fix`, producción .321 sin desplegar. Candidata .343 incorpora
+scoreboard v3; learning_mode y lecciones corregidos sólo en fixtures, sin
+relajar veto ni promoción. Smoke aislado/cleanup corregido, config ok.
+Suite .343 interrumpida por workers que se recreaban: 1501 resultados, 13 fallos;
+no gate completo. Diagnóstico focal: nueve fallos de contrato/fixtures y cuatro
+multiproceso que no reaparecen aislados. Resto de 1255 nodos en diagnóstico.
+Informe vigente `docs/informe_oct08_integration.md`; autorización deploy vigente.
+
+Reservas separadas: .344 coordinación/identidad postmarket; .345 order linkage;
+.346 uplift LLM; .347 scheduler grace 300/120/120 (1+27 focales/regresiones
+verdes, integración pendiente). No confundir ramas/versiones reservadas con
+releases activas. Primero resolver/revisar e integrar mínimos, explicar interacción
+multiproceso, fullsuite del árbol definitivo y gates; después preflight nuevo y
+deploy con doble salud. XNYS próximo abre 15:30; ningún corte si no queda margen.
+No reparaciones productivas implícitas ni cambios de protegidos/config/históricos.
+
+## Antecedente 8-oct-2026: cierre del ensayo combinado de siete mejoras
+
+Estado de entonces: recuperación completada, candidata 0.4.342 / 0e8712b0.
 Paridad económica corregida congelando reloj del fixture, sin retirar campos.
 Suite -x: 638 passed, 1 failed; fallo learning_mode reproducido sobre base exacta.
 Release needs_fix, sin desplegar. Ruff completo/NUL/diff verdes. Smoke llegó a
