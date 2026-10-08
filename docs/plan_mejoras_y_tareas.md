@@ -2,6 +2,13 @@
 
 ## 8-oct-2026: cierre del ensayo combinado de siete mejoras
 
+Estado vigente: recuperación completada, candidata 0.4.342 / 0e8712b0.
+Paridad económica corregida congelando reloj del fixture, sin retirar campos.
+Suite -x: 638 passed, 1 failed; fallo learning_mode reproducido sobre base exacta.
+Release needs_fix, sin desplegar. Ruff completo/NUL/diff verdes. Smoke llegó a
+completed pero su limpieza temporal Windows falló; gate pendiente. No relajar
+política para cumplir el assert. Detalles y evidencia en informe único.
+
 Actualización 13:57 Madrid: recuperación operativa explícitamente autorizada y
 completada con respaldo, CAS y evento atómicos. Vistas huérfanas resueltas;
 kernel/config productivos verdes; last_session sin avanzar. Release `needs_fix`:

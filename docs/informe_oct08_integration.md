@@ -1,5 +1,59 @@
 # Ensayo conjunto de siete mejoras — 8-oct-2026
 
+## Cierre de gates tras recuperación — candidata 0.4.342
+
+Estado vigente: recuperación operativa completada; release `needs_fix`, NO
+desplegada. HEAD funcional `0e8712b02aea10ecd8300a41f449fdd61f21b456`, tree
+`20ef2ed37d24685bf78513fc16c8377166870274`, checkout limpio antes de esta nota.
+Reserva 0.4.342 tras observar artefactos .340/.341-web; no cambia la imagen activa.
+
+Se explica y corrige el fallo económico anterior sin debilitar las aserciones:
+el único campo diferente en la comparación recursiva True/False era
+payload.decision_context_snapshot.agent_contract.as_of, por reloj no congelado.
+Commit test-only 9ea28f48 congela datetime en el productor decision_context del
+fixture y fija _env_file=None en su Settings. Se preservan todos los campos
+comparados, incluido as_of, IDs, hashes externos y economía. Prueba económica y
+regresión del normalizador: `2 passed in 0.68s`; Ruff focal verde. No se cambia
+trading ni configuración para lograr paridad. Commit 0e8712b0 reserva versión.
+
+Linaje de imagen: manifiesto read-only de los 205 módulos Python activos contra
+base 1adc3cec, SHA256 normalizando CRLF a LF: 204 coinciden; sólo difiere
+__init__.py, sin módulos extra. No equivale a identidad del árbol completo ni
+certifica data/config. Los tres core declaran imagen .321; carpetas .340/.341-web
+no prueban despliegue. Evidencia active_oct08_source_manifest.json en ef99.
+
+Suite completa -x intentada sobre .342, con Python del proyecto, PYTHONPATH
+exacto, DATA_DIR temporal, Settings sin .env implícito y bloqueo de red externa:
+`1 failed, 638 passed, 1 warning in 107.73s`. Primer fallo:
+tests/test_learning_mode.py::test_learning_mode_relaxes_partial_market_state_only_when_enabled,
+assert len(allowed)==1, observado 0. Reproducido focalmente sobre archive de base
+exacta 1adc3cec en otro temporal: `1 failed in 1.38s`, mismo assert 0==1.
+Clasificación: fallo preexistente, no aprobado ni ocultado. No se modifica
+política activa para hacer pasar una expectativa de relajación. Queda por
+determinar si el fixture está obsoleto o el contrato tiene un defecto.
+
+La primera invocación del bootstrap no colectó por importar scripts desde ef99;
+se corrigió sys.path para equivaler a python -m pytest desde el candidato.
+Sólo después se ejecutó la suite anterior. No se repite la suite tras su fallo.
+Ruff completo: All checks passed; NUL: OK (544 archivos); diff --check verde.
+Los 638 casos no se suman a baterías focales solapadas.
+
+Smoke aislado del handler run-once --skip-crew --quiet, fuentes locales para
+snapshot y market_state, red bloqueada, SQLite temporal y Settings(_env_file=None):
+el ciclo devolvió used_crew=false y llegó a completed; fuentes llamadas una vez.
+La salida declaró smoke passed, pero el proceso acabó con WinError 32 al limpiar
+el log abierto por configure_logging en Windows. Se clasifica separado como
+fallo de limpieza del harness; no se declara gate smoke global verde. No hubo
+red, LLM, broker ni datos productivos desde pruebas.
+
+Evidencia local en ef99: validation_oct08_fullsuite.txt,
+validation_oct08_base_learning_mode.txt, validation_oct08_ruff.txt y
+validation_oct08_smoke.txt; harness validate_oct08_isolated.py. No build, parada,
+reinicio ni despliegue. No push. La autorización de deploy sigue recibida;
+primero resolver el fallo base con su contrato y completar gates pendientes.
+Antes del corte habrá que repetir el preflight real, no heredar indefinidamente
+la ventana cerrada ni el estado de jobs de esta recuperación.
+
 ## Recuperación operativa autorizada y completada — 8-oct, 13:57 Madrid
 
 Autorización humana explícita en este chat: «Autorizo», para el alcance de

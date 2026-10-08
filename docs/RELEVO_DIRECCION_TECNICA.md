@@ -2,6 +2,14 @@
 
 ## 8-oct-2026: estado vigente del ensayo conjunto
 
+Estado vigente: recuperación operativa completada; candidato .342, HEAD 0e8712b0.
+Paridad resuelta con reloj congelado del fixture (sin retirar as_of). Suite -x
+se detuvo: 638 passed, 1 failed en learning_mode, reproducido en base 1adc3cec.
+No repetir suite sin causa ni cambiar política para aprobar el test. Ruff
+completo/NUL/diff verdes. Smoke flujo completed, limpieza Windows WinError 32.
+Release needs_fix; no build, corte, restart ni deploy. Resolver contrato/fixture
+de learning_mode y limpieza del harness antes del siguiente preflight de corte.
+
 Actualización 13:57 Madrid: recuperación autorizada completada, dos vistas
 resueltas con respaldo y evento atómicos; kernel/config productivos ok. No
 repetir limpieza ni avanzar last_session. Nuevo gate actual `needs_fix`: la
