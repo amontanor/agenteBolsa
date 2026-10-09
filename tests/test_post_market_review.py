@@ -48,10 +48,14 @@ def test_learning_candidates_keep_valid_negative_pl_signal():
 
 
 @pytest.mark.parametrize(
-    "unavailable",
-    [None, True, False, float("nan"), float("inf"), float("-inf")],
+    ("field", "unavailable"),
+    [
+        (field, value)
+        for field in ("realized_pl", "open_unrealized_pl")
+        for value in (None, True, False, float("nan"), float("inf"), float("-inf"))
+    ],
 )
-def test_learning_candidates_skip_unavailable_pl_values(unavailable):
+def test_learning_candidates_skip_unavailable_pl_values(field, unavailable):
     portfolio = PortfolioSnapshot(
         account_id="paper",
         status="ACTIVE",
@@ -63,9 +67,11 @@ def test_learning_candidates_skip_unavailable_pl_values(unavailable):
         open_orders=[],
     )
 
+    day_summary = {"realized_pl": 0.0, "open_unrealized_pl": 0.0}
+    day_summary[field] = unavailable
     suggestions = _learning_candidates(
         evaluations=[],
-        day_summary={"realized_pl": 0.0, "open_unrealized_pl": unavailable},
+        day_summary=day_summary,
         portfolio=portfolio,
     )
 
