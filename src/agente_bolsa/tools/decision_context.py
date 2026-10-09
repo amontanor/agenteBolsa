@@ -451,7 +451,7 @@ def build_decision_context_quality(
     contamination = 0
     fallback_count = 0
     fallback_reason_count = 0
-    decision_source_known = 0
+    decision_source_non_unknown = 0
     source_counts: dict[str, int] = {}
     first_hash_by_id: dict[str, str] = {}
     conflicted_ids: set[str] = set()
@@ -459,7 +459,7 @@ def build_decision_context_quality(
     def consume(kind: str, item: Mapping[str, Any]) -> None:
         nonlocal agent_run_linked
         nonlocal broken, captured, contamination, fallback_count, fallback_reason_count
-        nonlocal decision_source_known, observations_with_snapshot, outcomes_with_snapshot, plans_with_snapshot
+        nonlocal decision_source_non_unknown, observations_with_snapshot, outcomes_with_snapshot, plans_with_snapshot
         nonlocal same_cycle, snapshot_count, total, unavailable, verified
         if not recent(item):
             return
@@ -470,7 +470,7 @@ def build_decision_context_quality(
                 captured += 1
                 source = str(snapshot.get("decision_source") or "unknown")
                 source_counts[source] = source_counts.get(source, 0) + 1
-                decision_source_known += source != "unknown"
+                decision_source_non_unknown += snapshot.get("decision_source") != "unknown"
                 signal_link_status = snapshot.get("signal_link_status")
                 verified += signal_link_status == "verified"
                 broken += signal_link_status == "broken"
@@ -533,7 +533,7 @@ def build_decision_context_quality(
         if snapshot_count
         else None,
         "market_state_same_cycle_coverage": same_cycle / snapshot_count if snapshot_count else None,
-        "decision_source_coverage": decision_source_known / total
+        "decision_source_coverage": decision_source_non_unknown / total
         if total
         else None,
         "fallback_reason_coverage": fallback_reason_count / fallback_count

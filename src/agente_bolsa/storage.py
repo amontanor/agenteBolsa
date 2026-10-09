@@ -1044,10 +1044,14 @@ class Store:
 
         database_uri = self.database_path.resolve().as_uri() + "?mode=ro"
         conn = sqlite3.connect(database_uri, uri=True, timeout=30.0)
-        conn.execute("PRAGMA busy_timeout=30000")
-        conn.execute("PRAGMA query_only=ON")
-        conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            conn.execute("PRAGMA busy_timeout=30000")
+            conn.execute("PRAGMA query_only=ON")
+            conn.row_factory = sqlite3.Row
+            return conn
+        except Exception:
+            conn.close()
+            raise
 
     @staticmethod
     def _decision_context_recommendation_from_row(row: sqlite3.Row) -> dict[str, Any]:
