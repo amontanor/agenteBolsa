@@ -4,11 +4,11 @@
 
 Dictamen `needs_final_validation`, no desplegado. HEAD funcional probado
 7db0790b2f87214f291f603db470a3c97faa50b7, tree
-e657e7eb9ffba7a252aa2f70db066349787965e9, versión0.4.356. Esta sección
+e657e7eb9ffba7a252aa2f70db066349787965e9, versión 0.4.356. Esta sección
 sustituye el estado actual de las notas inferiores, que conservan su historia.
 
-Integración aislada --no-ff: PMR null-safe38deb622 mediante20533c4b y streaming
-bd2dad81 mediante7db0790b. Conflictos solo de plan/relevo/version: se conservaron
+Integración aislada --no-ff: PMR null-safe 38deb622 mediante 20533c4b y streaming
+bd2dad81 mediante 7db0790b. Conflictos solo de plan/relevo/versión: se conservaron
 ambos documentos/comentarios y se reservó .356. Fuente protegida intacta.
 
 Revisión independiente corrigió una discrepancia de paridad en coverage para
@@ -17,42 +17,56 @@ El defecto None/int de _learning_candidates está reproducido localmente;
 atribución al fallo productivo8-oct permanece inferida, sin traceback remoto.
 No ocultar el fallo ni decir que la sesión se recuperó por tener un parche.
 
-QA nueva del árbol combinado: **73 passed en4.69s**, exit0, Python del proyecto,
+QA nueva del árbol combinado: **73 passed en 4.69 s**, exit0, Python del proyecto,
 PYTHONPATH exacto, DATA_DIR temporal, _env_file=None, red externa bloqueada.
 ef99/release_oct09_0356_focal2.txt y focal_journal2.jsonl. Primer intento tuvo
 error de ruta de test y no ejecutó pruebas; no se contabiliza como validación.
-Ruffsrc/testsverde, NUL548verde, diffverde, seisprotegidos iguales a1adc3cec.
-No sumar73 a las152 anteriores solapadas ni declarar fullsuite/smoke aprobados.
+Ruff src/tests verde, NUL548 verde, diff verde; seis archivos protegidos iguales a 1adc3cec.
+No sumar 73 a las 152 anteriores solapadas ni declarar fullsuite/smoke aprobados.
 
-Fuentes activas inspeccionadas20:43:205Python,204exactas a1adc3cec; init solo
+Fuentes activas inspeccionadas el 9-oct: 205 Python, 204 exactas a 1adc3cec; init solo
 comentario traducido deP-L155/newline, versión.321idéntica. Diferencia .340 no
 se porta ni se usa como base productiva. Evidencia ef99/audit_oct09_source_*
 y audit_oct09_live_init.txt. Hashes exactos de imagen en estudio9-oct.
 
-Paquete LOCAL de13fuentes modificadas: ef99/release_oct09_0356_sources.zip,
-sha2567491ca944a1313d5dd53247a0e3907cdf62a96347867d768ed8b61734b02dc76.
-Manifest incluyeHEAD/tree/hashporarchivo; no es build ni pruebaARM ni despliegue.
+Paquete LOCAL de 13 fuentes modificadas: ef99/release_oct09_0356_sources.zip,
+sha256 7491ca944a1313d5dd53247a0e3907cdf62a96347867d768ed8b61734b02dc76.
+Manifest incluye HEAD/tree/hash por archivo; no es build ni pruebaARM ni despliegue.
 Scripts preparación enef99: prepare_oct09_source_bundle.py,
 validate_oct08_isolated.py, smoke_oct08_isolated.py. Tras cualquier cambio
 semántico, invalidar paquete/evidencia afectados y fijar versión única nueva.
 
-Gates: fullsuite delárbolfinal única, smokeaislado, config/kernel/paridadN3,
-XNYS cerrado yPMR9terminal, no jobs/retries/leases/pytest activos, salud yflags,
-recursos/margen; aldesplegar verificar imagen/fuente ydoble salud>=75s.
-No efectuarbuild/transfer/corteantes22:45 ni forzar jobs/locks para superar gates.
+Gates: fullsuite única del árbol final, smoke aislado, config/kernel/paridad N3,
+XNYS cerrado y PMR9 terminal, no jobs/retries/leases/pytest activos, salud yflags,
+recursos/margen; al desplegar verificar imagen/fuente y doble salud >=75 s.
+No efectuar build/transfer/corte antes de las 22:45 ni forzar jobs/locks para superar gates.
 
-Broker enum sigue pendiente de revisión humana explícita de parche ysellado.
+Broker enum sigue pendiente de revisión humana explícita de parche y sellado.
 No aplicar ni sellar mientras falte respuesta. Antes de aceptar el candidato
 N3 (incluye recuperación selectiva de BUY de.352), contrastar exposición real
-conla ruta de riesgo: una exposición long incorrectamente cero es un bloqueo
+con la ruta de riesgo: una exposición long incorrectamente cero es un bloqueo
 de seguridad, no debe ignorarse por ser preexistente ni compensarse elevando
 límites. No desplegar un gate nuevo con esa inconsistencia sin resolver.
 
 APO: protección/origen por auditar, no órdenes autorizadas desde este estudio.
 FTNT: auditar salida/reentrada por IDs yprecio/condición nuevos, no introducir
-cooldown ni umbral activo sin evidencia. LLM402 requiere saldo/operador, no
-pagos/config/credenciales modificados. Automatización22:45ACTIVE; revisión12oct
-intacta. Alfinal delintento22:45pausar automatización yreportar resultado real.
+cooldown ni umbral activo sin evidencia. LLM 402 requiere saldo/operador, no
+pagos/config/credenciales modificados. Automatización 22:45 ACTIVE; revisión 12-oct
+intacta. Al final del intento 22:45 pausar automatización y reportar resultado real.
+
+### Gate de ejecución añadido tras auditoría FTNT
+
+La salida exacta FTNT, plan risk_exit_922928607a7f, broker order
+f0b1691d-b7af-4be2-aba0-d54439c7e965, registra qty=2.5 en el plan y fill=5.
+El trigger estructurado es partial_take_profit_v2. La discrepancia permanece
+sin explicación causal: revisar carrier de submit y respuesta, no concluir
+sobreejecución únicamente por un payload histórico. Si la cantidad aprobada y
+la enviada/ejecutada difieren realmente, es un bloqueo N3 antes del despliegue.
+Auditoría exacta y seguimiento: ef99/docs/informe_oct09_exit_followup.md.
+No se modifican ejecución protegida ni órdenes para resolverlo implícitamente.
+La antigüedad de 9 días corresponde al origen BUY de niveles EXIT; no es la
+edad de la señal de reentrada. El contraste entre captures y signal_outcomes
+requiere verificar el contrato de autoridad antes de afirmar corrupción.
 
 ## Preparación autorizada — 9-oct, despliegue objetivo 22:45 Madrid
 
