@@ -66,6 +66,29 @@ Esta sección sustituye los estados operativos y tareas abiertas de las entradas
 históricas inferiores; no cambia su evidencia ni convierte pruebas antiguas en
 validación del árbol actual.
 
+## Relevo Oct09 N2 — cierre del TypeError postmercado
+
+El defecto local compatible con el fallo de la sesión 8-oct queda confirmado
+contra la base: el resumen diario puede transportar `open_unrealized_pl=None`
+sin posiciones y
+`_learning_candidates` lo comparaba directamente con cero. El snapshot de ef99
+registra el mismo `TypeError`, pero ese literal no confirma frame ni inputs
+productivos; el corte del 9-oct tenía nueve posiciones. Los logs Docker remotos
+de la ventana autorizada están ausentes o rotados, por lo que la causa
+productiva queda inferida/compatible, no confirmada. El cambio mínimo en la línea
+`.354` conserva
+unavailable como `None`, descarta booleanos y no finitos, y mantiene el criterio
+para P/L negativo válido. No toca trading, órdenes, históricos ni archivos
+protegidos.
+
+Caracterización `b1d5169d`, fix `b4ddf194`; documentación en
+`docs/informe_oct09_postmarket_null.md`. Verificación: `23 passed` en las dos
+baterías focales, casos nuevos de strings/containers, Ruff/diff/NUL verdes y
+reproducción base resuelta. XNYS estaba
+abierto: no fullsuite, smoke, build, producción, broker, red, LLM, locks ni
+configuración. El checkout final debe quedar limpio tras el commit documental;
+registrar HEAD/tree/status en la entrega.
+
 Integrados ahora: controles de misma fecha `.351` (fbf01db9), reutilización de
 listas del digest `.349` (acbdbf91) y salud selectiva `.350` (35c01d0d).
 Merges separados --no-ff; conflictos de versión resueltos campo a campo a .352.

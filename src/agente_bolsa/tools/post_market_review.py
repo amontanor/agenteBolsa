@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import time
 from collections import defaultdict
 from datetime import datetime
@@ -30,6 +31,18 @@ def _round(value: float | int | None, precision: int = 4) -> float | None:
     if value is None:
         return None
     return round(float(value), precision)
+
+
+def _metric_number(value: Any) -> float | None:
+    """Return finite numeric P/L data, preserving missing values as unavailable."""
+
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _short(text: Any, max_chars: int = 280) -> str:
@@ -352,9 +365,9 @@ def _learning_candidates(
                 }
             )
 
-    realized = day_summary.get("realized_pl", 0.0)
-    unrealized = day_summary.get("open_unrealized_pl", 0.0)
-    if realized < 0 or unrealized < 0:
+    realized = _metric_number(day_summary.get("realized_pl"))
+    unrealized = _metric_number(day_summary.get("open_unrealized_pl"))
+    if (realized is not None and realized < 0) or (unrealized is not None and unrealized < 0):
         suggestions.append(
             {
                 "id": "add_entry_quality_filters",

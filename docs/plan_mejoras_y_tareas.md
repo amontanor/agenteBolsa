@@ -66,6 +66,26 @@ Esta sección sustituye los estados operativos y tareas abiertas de las entradas
 históricas inferiores; no cambia su evidencia ni convierte pruebas antiguas en
 validación del árbol actual.
 
+## Oct09 N2 — null P/L en candidatos postmercado
+
+En el checkout aislado de N2 se reprodujo como defecto local contra la base exacta
+`7d4f4bc1f54d45fca9f6cc62867f4ddf9b6d80a1` el `TypeError` de la sesión del
+8-oct: `open_unrealized_pl=None` llegaba a `_learning_candidates` y se comparaba
+con `0`. El snapshot `ef99/audit_oct09_results.json` confirma el mismo literal
+en `post_market_review_failed`; la consulta de logs remotos acotada no devolvió
+líneas y no permite afirmar traceback adicional. El literal es compatible con
+este defecto, pero no confirma el frame ni los inputs productivos; el corte del
+9-oct tenía nueve posiciones. La causa remota queda inferida, no confirmada.
+
+El fix N2 añade una frontera numérica finita que conserva `None` como
+unavailable y no convierte booleanos, `NaN`, infinitos o entradas no numéricas
+en P/L. Los negativos válidos mantienen la recomendación existente. Focal:
+`23 passed` en postmarket + P-L57A, más la matriz nueva de strings y containers;
+Ruff, NUL y diff limpios. Versión reservada
+`.354` (la `.353` pertenece a otro worker). Ver
+`docs/informe_oct09_postmarket_null.md`. Con XNYS abierto no se ejecutaron
+fullsuite, smoke, build ni gates operativos.
+
 Integrados ahora: controles de misma fecha `.351` (fbf01db9), reutilización de
 listas del digest `.349` (acbdbf91) y salud selectiva `.350` (35c01d0d).
 Merges separados --no-ff; conflictos de versión resueltos campo a campo a .352.
