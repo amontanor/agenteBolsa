@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timezone
 
 import pytest
 
+import agente_bolsa.storage as storage_module
 from agente_bolsa.config import Settings
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.decision_context import (
@@ -233,6 +235,67 @@ def test_streaming_quality_matches_full_legacy_oracle_on_heterogeneous_fixture(t
     assert build_decision_context_quality(store, now=NOW, days=1) == _oracle_quality(store, now=NOW, days=1)
 
 
+def test_decision_source_coverage_preserves_raw_legacy_values(tmp_path):
+    store = _fixture_store(tmp_path)
+    missing = object()
+    variants = {
+        "r_source_missing": missing,
+        "r_source_none": None,
+        "r_source_empty": "",
+        "r_source_zero": 0,
+        "r_source_false": False,
+        "r_source_unknown": "unknown",
+        "r_source_list": [],
+        "r_source_mapping": {"unexpected": True},
+    }
+    for recommendation_id, decision_source in variants.items():
+        snapshot = _snapshot(f"{recommendation_id}-snapshot", "hash-source")
+        if decision_source is not missing:
+            snapshot["decision_source"] = decision_source
+        else:
+            del snapshot["decision_source"]
+        payload = {"decision_context_snapshot": snapshot}
+        store.save_trade_recommendation(
+            recommendation_id=recommendation_id,
+            cycle_id="cycle-fixed",
+            symbol="AAPL",
+            action="buy",
+            confidence=0.7,
+            payload=payload,
+        )
+    with store.connect() as conn:
+        for recommendation_id in variants:
+            conn.execute(
+                "UPDATE trade_recommendations SET created_at = ? WHERE recommendation_id = ?",
+                ("2026-07-12T11:40:00+00:00", recommendation_id),
+            )
+
+    actual = build_decision_context_quality(store, now=NOW, days=1)
+    expected = _oracle_quality(store, now=NOW, days=1)
+    assert actual == expected
+    assert actual["decision_source_coverage"] == 12 / 14
+
+    expected_records = [
+        ("recommendation", item) for item in store.trade_recommendations(limit=50000)
+    ]
+    expected_records += [
+        ("plan", item) for item in store.order_plans(limit=50000)
+    ]
+    expected_records += [
+        ("observation", item) for item in store.learning_observations(limit=200000)
+    ]
+    expected_records += [
+        ("outcome", item)
+        for item in store.signal_outcomes(
+            limit=200000,
+            include_lab_book=True,
+            include_learning_experiment=True,
+        )
+    ]
+    with store.decision_context_quality_record_stream(batch_size=2) as records:
+        assert list(records) == expected_records
+
+
 def test_stream_records_preserve_payload_order_and_global_limits(tmp_path, monkeypatch):
     store = _fixture_store(tmp_path)
     traces: list[str] = []
@@ -348,6 +411,29 @@ def test_stream_closes_current_cursor_and_connection_when_consumer_aborts(tmp_pa
             raise RuntimeError("stop stream")
     assert closed_connections == [True]
     assert closed_cursors == [True]
+
+
+def test_stream_connection_setup_closes_after_pragma_error(tmp_path, monkeypatch):
+    store = _store(tmp_path)
+    closed: list[bool] = []
+    executed: list[str] = []
+
+    class BrokenConnection:
+        def execute(self, statement, *_args):
+            executed.append(statement)
+            if len(executed) == 2:
+                raise sqlite3.OperationalError("query_only setup failed")
+            return self
+
+        def close(self):
+            closed.append(True)
+
+    connection = BrokenConnection()
+    monkeypatch.setattr(storage_module.sqlite3, "connect", lambda *args, **kwargs: connection)
+    with pytest.raises(sqlite3.OperationalError, match="query_only setup failed"):
+        store._decision_context_read_connection()
+    assert executed == ["PRAGMA busy_timeout=30000", "PRAGMA query_only=ON"]
+    assert closed == [True]
 
 
 def test_legacy_store_without_stream_api_keeps_list_fallback(tmp_path):
