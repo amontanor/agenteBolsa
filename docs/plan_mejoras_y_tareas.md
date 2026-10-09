@@ -1,5 +1,34 @@
 # Plan maestro de mejoras y tareas — agenteBolsa
 
+## Estado vigente — 9-oct, candidato N2 `.353` de streaming de contexto
+
+Dictamen: `partially_verified_context_streaming_candidate`; no integrado ni
+desplegado. Base exacta `7d4f4bc1f54d45fca9f6cc62867f4ddf9b6d80a1`/tree
+`011cdf6b9608e1e8e71aba80b29b4f36169a1b3a`, rama
+`codex/oct08-context-streaming`, versión `0.4.353`.
+
+`Store.decision_context_quality_record_stream` usa conexiones SQLite RO
+independientes, cursores y `fetchmany`; `build_decision_context_quality`
+consume cuatro fuentes sin materializar listas/records/snapshots históricos.
+Límites, orden, filtros legacy, IDs, payloads y denominadores se conservan
+exactamente: `50000` recomendaciones, `50000` planes, `200000`
+observaciones y `200000` outcomes. El context manager cierra cursor y conexión
+al agotar, fallar o abandonar explícitamente; no comparte transacción snapshot
+entre tablas. Stores sin la API nueva conservan fallback legacy.
+
+Commits separados: `9c66ccc9` funcional y `98af4766` tests. Validación aislada:
+`5 passed` de streaming, `45 passed` en focales streaming/snapshot/digest
+reuse, Ruff `src tests`, NUL y `git diff --check` verdes. No se ejecutaron
+fullsuite, smoke, build, broker, red, LLM, producción, merge, push ni
+despliegue; XNYS abierto fue verificado por `schedule-status` a las 20:36
+Madrid. La lectura por lotes acota filas retenidas por consulta; no demuestra
+RSS productivo ni causa única del OOM.
+
+Informe único: `docs/informe_oct08_digest_memory_audit.md`. Siguiente paso:
+revisión y ensayo de integración aislado con XNYS cerrado, sin ampliar a
+`comparable_controls`, `performance_daily`, `llm_usage`, stdout del supervisor,
+esquema, configuración o fronteras protegidas.
+
 ## Estado vigente — 8-oct, integración nocturna .352
 
 Dictamen: `needs_final_validation`, no desplegado. Candidato funcional limpio

@@ -1,4 +1,62 @@
-# Auditoría de memoria `ci_digest` — 8-oct-2026
+# Auditoría e implementación de memoria `ci_digest` — 8/9-oct-2026
+
+## Continuación 9-oct-2026 — stream aislado de `decision_context_quality`
+
+### Dictamen
+
+`partially_verified_context_streaming_candidate`. La implementación acotada
+lee recomendaciones, planes, observaciones y outcomes con cursores de solo
+lectura y `fetchmany`, y reduce los acumuladores de calidad a contadores y
+estado mínimo de conflictos. Conserva payloads, IDs, orden, filtros legacy,
+denominadores y límites `50000/50000/200000/200000`. La evidencia demuestra
+paridad exacta sobre fixture heterogéneo y cierre de cursor/conexión; no mide
+RSS productivo ni prueba que el OOM observado tuviese una causa única.
+
+### Identidad, alcance y estado
+
+- Fecha de trabajo: 9-oct-2026, XNYS abierto según `schedule-status` real
+  comunicado a las 20:36 Madrid. Sólo se ejecutó trabajo aislado en este
+  worktree; no se accedió a broker, red, LLM, servicios ni SQLite productiva.
+- Base exacta: `7d4f4bc1f54d45fca9f6cc62867f4ddf9b6d80a1`, tree
+  `011cdf6b9608e1e8e71aba80b29b4f36169a1b3a`, versión `.352`.
+- Rama: `codex/oct08-context-streaming`.
+- Commits funcionales separados: `9c66ccc9` (`feat`) y `98af4766` (`test`).
+- Versión candidata: `0.4.353`; reserva coherente con este lote.
+- Producción, build, smoke, fullsuite, merge a integración, push y despliegue
+  quedan omitidos por alcance/mercado abierto. No se afirma `deployed`.
+
+### Contrato preservado
+
+`Store.decision_context_quality_record_stream` abre una conexión RO por
+consulta, activa `query_only`, prepara un cursor y consume lotes acotados. Cada
+consulta termina antes de abrir la siguiente, sin transacción snapshot común;
+se conserva la semántica per-query anterior. El context manager cierra cursor y
+conexión al agotar, ante error o cuando el consumidor abandona explícitamente.
+La ruta legacy sigue disponible para stores sin esta API.
+
+La caracterización compara la secuencia completa de cuatro tipos y cada payload
+decodificado contra lectores legacy, incluyendo filas sin snapshot, fechas
+inválidas/stale/futuras, conflicto de hash, contaminación, fallback y control
+de límites. Con `batch_size=1`, el harness registra `fetchmany` y no permite
+`fetchall`; ningún lote supera el tamaño solicitado. Es una garantía de lectura
+por lotes en esta ruta, no una medición de RSS ni evidencia causal del OOM.
+
+### Validación ejecutada
+
+- `tests/test_decision_context_streaming.py`: `5 passed`.
+- Batería focal `tests/test_decision_context_streaming.py
+  tests/test_decision_context_snapshot.py tests/test_ci_digest_reuse.py`:
+  `45 passed` en `3.31s`.
+- Ruff `src tests`: verde.
+- `scripts/check_no_nulls.py`: `OK (548 archivos)`.
+- `git diff --check`: verde.
+- Gates omitidos: fullsuite, smoke, `validate-agent-config`,
+  `kernel-status`, build, producción y cualquier broker/red/LLM.
+
+Pendiente: revisión independiente, ensayo de integración en ventana y gates
+proporcionales con XNYS cerrado y quietud operativa acreditada. No ampliar este
+lote a `comparable_controls`, `performance_daily`, `llm_usage`, stdout del
+supervisor, esquema, configuración o protegidos.
 
 ## Dictamen
 
