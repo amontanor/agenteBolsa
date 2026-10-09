@@ -1,3 +1,5 @@
+import pytest
+
 from agente_bolsa.main import _post_market_review_text
 from agente_bolsa.models import PortfolioSnapshot
 from agente_bolsa.tools.post_market_review import _learning_candidates, _mandatory_market_review
@@ -22,6 +24,52 @@ def test_learning_candidates_use_day_pl_not_global_history():
     )
 
     assert all("P/L realizado -" not in item["reason"] for item in suggestions)
+
+
+def test_learning_candidates_keep_valid_negative_pl_signal():
+    portfolio = PortfolioSnapshot(
+        account_id="paper",
+        status="ACTIVE",
+        currency="USD",
+        cash=10_000,
+        portfolio_value=20_000,
+        buying_power=20_000,
+        positions=[],
+        open_orders=[],
+    )
+
+    suggestions = _learning_candidates(
+        evaluations=[],
+        day_summary={"realized_pl": 0.0, "open_unrealized_pl": -1.0},
+        portfolio=portfolio,
+    )
+
+    assert any(item["id"] == "add_entry_quality_filters" for item in suggestions)
+
+
+@pytest.mark.parametrize(
+    "unavailable",
+    [None, True, False, float("nan"), float("inf"), float("-inf")],
+)
+def test_learning_candidates_skip_unavailable_pl_values(unavailable):
+    portfolio = PortfolioSnapshot(
+        account_id="paper",
+        status="ACTIVE",
+        currency="USD",
+        cash=10_000,
+        portfolio_value=20_000,
+        buying_power=20_000,
+        positions=[],
+        open_orders=[],
+    )
+
+    suggestions = _learning_candidates(
+        evaluations=[],
+        day_summary={"realized_pl": 0.0, "open_unrealized_pl": unavailable},
+        portfolio=portfolio,
+    )
+
+    assert all(item["id"] != "add_entry_quality_filters" for item in suggestions)
 
 
 def test_post_market_review_text_explains_actions_and_learning():
