@@ -12,7 +12,8 @@ independientes RO con cursores `fetchmany`, acumuladores de calidad y fallback
 legacy. Límites exactos `50000/50000/200000/200000`, orden, filtros, IDs,
 payloads y denominadores preservados. Sin transacción snapshot común. El
 context manager cierra cursor/conexión en agotamiento, error y abandono
-explícito. Commits: `9c66ccc9` funcional, `98af4766` tests.
+explícito. Commits: `9c66ccc9` funcional, `d339d78d` corrección de paridad,
+`98af4766` y `4ee590fb` tests.
 
 QA aislada: `5 passed` streaming; `45 passed` streaming + snapshot + digest
 reuse; Ruff `src tests`, NUL y `git diff --check` verdes. XNYS abierto fue
@@ -20,6 +21,12 @@ verificado por `schedule-status` a las 20:36 Madrid. No fullsuite, smoke,
 build, broker, red, LLM, producción, merge, push o despliegue. La evidencia
 prueba lectura por lotes y paridad contra baseline/oráculo legacy; no prueba
 RSS productivo ni causa única del OOM.
+
+Revisión independiente detectó y corrigió regresión en `decision_source_coverage`:
+se conserva exactamente `snapshot.get("decision_source") != "unknown"` para
+coverage, mientras `sources` mantiene su normalización legacy. Se añadieron
+variantes missing/`None`/`''`/falsy/malformed, comparación de payload completo y
+caso de cierre de conexión tras fallo de `PRAGMA`.
 
 Siguiente: revisión independiente y ensayo de integración en ventana cerrada,
 manteniendo fuera de este lote `comparable_controls`, `performance_daily`,

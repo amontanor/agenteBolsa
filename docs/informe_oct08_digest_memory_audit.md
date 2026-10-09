@@ -20,7 +20,8 @@ RSS productivo ni prueba que el OOM observado tuviese una causa única.
 - Base exacta: `7d4f4bc1f54d45fca9f6cc62867f4ddf9b6d80a1`, tree
   `011cdf6b9608e1e8e71aba80b29b4f36169a1b3a`, versión `.352`.
 - Rama: `codex/oct08-context-streaming`.
-- Commits funcionales separados: `9c66ccc9` (`feat`) y `98af4766` (`test`).
+- Commits funcionales separados: `9c66ccc9` (`feat`), `d339d78d` (`fix`),
+  `98af4766` y `4ee590fb` (`test`).
 - Versión candidata: `0.4.353`; reserva coherente con este lote.
 - Producción, build, smoke, fullsuite, merge a integración, push y despliegue
   quedan omitidos por alcance/mercado abierto. No se afirma `deployed`.
@@ -47,6 +48,14 @@ por lotes en esta ruta, no una medición de RSS ni evidencia causal del OOM.
 - Batería focal `tests/test_decision_context_streaming.py
   tests/test_decision_context_snapshot.py tests/test_ci_digest_reuse.py`:
   `45 passed` en `3.31s`.
+- Revisión de paridad detectó una regresión en `decision_source_coverage`:
+  el baseline cuenta con la expresión raw
+  `snapshot.get("decision_source") != "unknown"`, mientras el primer stream
+  normalizaba valores falsy a `"unknown"`. `d339d78d` conserva la expresión
+  exacta; `4ee590fb` caracteriza `missing`, `None`, `''`, `0`, `False`, `[]`,
+  mapping y `unknown`, y compara payload completo contra legacy (`7 passed`).
+- El mismo focal verifica que un error de `PRAGMA` tras conectar cierre la
+  conexión antes de relanzar la excepción.
 - Primer intento del test nuevo terminó `4 failed` por un fixture que repetía
   la clave única de observaciones y produjo exactamente
   `UNIQUE constraint failed: learning_observations.signal_date, learning_observations.symbol, learning_observations.source_family`;

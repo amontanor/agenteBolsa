@@ -16,13 +16,20 @@ observaciones y `200000` outcomes. El context manager cierra cursor y conexión
 al agotar, fallar o abandonar explícitamente; no comparte transacción snapshot
 entre tablas. Stores sin la API nueva conservan fallback legacy.
 
-Commits separados: `9c66ccc9` funcional y `98af4766` tests. Validación aislada:
+Commits separados: `9c66ccc9` funcional, `d339d78d` corrección de paridad,
+`98af4766` y `4ee590fb` tests. Validación aislada:
 `5 passed` de streaming, `45 passed` en focales streaming/snapshot/digest
 reuse, Ruff `src tests`, NUL y `git diff --check` verdes. No se ejecutaron
 fullsuite, smoke, build, broker, red, LLM, producción, merge, push ni
 despliegue; XNYS abierto fue verificado por `schedule-status` a las 20:36
 Madrid. La lectura por lotes acota filas retenidas por consulta; no demuestra
 RSS productivo ni causa única del OOM.
+
+Revisión posterior corrigió `decision_source_coverage` para conservar la
+expresión raw legacy `snapshot.get("decision_source") != "unknown"`, separada
+de la normalización usada por `sources`. Focales añadidos cubren valores
+missing/falsy/malformed y payload completo, además de cierre tras error de
+`PRAGMA`.
 
 Informe único: `docs/informe_oct08_digest_memory_audit.md`. Siguiente paso:
 revisión y ensayo de integración aislado con XNYS cerrado, sin ampliar a
