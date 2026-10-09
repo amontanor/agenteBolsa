@@ -437,37 +437,84 @@ def build_decision_context_quality(
         except ValueError:
             return False
 
-    recommendations = [item for item in store.trade_recommendations(limit=50000) if recent(item)]
-    plans = [item for item in store.order_plans(limit=50000) if recent(item)]
-    observations = [item for item in store.learning_observations(limit=200000) if recent(item)]
-    outcomes = [item for item in store.signal_outcomes(limit=200000, include_lab_book=True, include_learning_experiment=True) if recent(item)]
-    records = [
-        ("recommendation", item, _snapshot_from_record(item)) for item in recommendations
-    ] + [("plan", item, _snapshot_from_record(item)) for item in plans]
-    records += [("observation", item, _snapshot_from_record(item)) for item in observations]
-    records += [("outcome", item, _snapshot_from_record(item)) for item in outcomes]
-    rec_snapshots = [snapshot for _, _, snapshot in records[: len(recommendations)] if snapshot]
-    snapshots = [snapshot for _, _, snapshot in records if snapshot]
-    verified = sum(snapshot.get("signal_link_status") == "verified" for snapshot in rec_snapshots)
-    broken = sum(snapshot.get("signal_link_status") == "broken" for snapshot in rec_snapshots)
-    unavailable = sum(snapshot.get("signal_link_status") == "unavailable" for snapshot in rec_snapshots)
-    same_cycle = sum(
-        (snapshot.get("market_state_ref") or {}).get("status") == "unavailable"
-        or (snapshot.get("market_state_ref") or {}).get("cycle_id") == snapshot.get("cycle_id")
-        for snapshot in snapshots
-    )
+    total = 0
+    captured = 0
+    verified = 0
+    broken = 0
+    unavailable = 0
+    plans_with_snapshot = 0
+    observations_with_snapshot = 0
+    outcomes_with_snapshot = 0
+    snapshot_count = 0
+    agent_run_linked = 0
+    same_cycle = 0
+    contamination = 0
+    fallback_count = 0
+    fallback_reason_count = 0
+    decision_source_known = 0
     source_counts: dict[str, int] = {}
-    for snapshot in rec_snapshots:
-        source = str(snapshot.get("decision_source") or "unknown")
-        source_counts[source] = source_counts.get(source, 0) + 1
-    fallback_snapshots = [snapshot for snapshot in rec_snapshots if snapshot.get("decision_source") == "fallback"]
-    hashes_by_id: dict[str, set[str]] = {}
-    for snapshot in snapshots:
-        hashes_by_id.setdefault(str(snapshot.get("snapshot_id")), set()).add(str(snapshot.get("content_hash")))
-    conflict_count = sum(len(hashes) > 1 for hashes in hashes_by_id.values())
-    contamination = sum(_contains_prohibited(snapshot) is not None for snapshot in snapshots)
-    total = len(recommendations)
-    captured = len(rec_snapshots)
+    first_hash_by_id: dict[str, str] = {}
+    conflicted_ids: set[str] = set()
+
+    def consume(kind: str, item: Mapping[str, Any]) -> None:
+        nonlocal agent_run_linked
+        nonlocal broken, captured, contamination, fallback_count, fallback_reason_count
+        nonlocal decision_source_known, observations_with_snapshot, outcomes_with_snapshot, plans_with_snapshot
+        nonlocal same_cycle, snapshot_count, total, unavailable, verified
+        if not recent(item):
+            return
+        snapshot = _snapshot_from_record(item)
+        if kind == "recommendation":
+            total += 1
+            if snapshot:
+                captured += 1
+                source = str(snapshot.get("decision_source") or "unknown")
+                source_counts[source] = source_counts.get(source, 0) + 1
+                decision_source_known += source != "unknown"
+                signal_link_status = snapshot.get("signal_link_status")
+                verified += signal_link_status == "verified"
+                broken += signal_link_status == "broken"
+                unavailable += signal_link_status == "unavailable"
+                if snapshot.get("decision_source") == "fallback":
+                    fallback_count += 1
+                    fallback_reason_count += bool(snapshot.get("fallback_reason"))
+        elif kind == "plan":
+            plans_with_snapshot += bool(snapshot)
+        elif kind == "observation":
+            observations_with_snapshot += bool(snapshot)
+        elif kind == "outcome":
+            outcomes_with_snapshot += bool(snapshot)
+        else:
+            raise ValueError(f"decision_context_quality_record_kind_invalid:{kind}")
+        if not snapshot:
+            return
+        snapshot_count += 1
+        agent_run_linked += bool(snapshot.get("agent_run_id"))
+        market_state_ref = snapshot.get("market_state_ref") or {}
+        same_cycle += market_state_ref.get("status") == "unavailable" or market_state_ref.get("cycle_id") == snapshot.get("cycle_id")
+        snapshot_id = str(snapshot.get("snapshot_id"))
+        content_hash = str(snapshot.get("content_hash"))
+        previous_hash = first_hash_by_id.setdefault(snapshot_id, content_hash)
+        if previous_hash != content_hash:
+            conflicted_ids.add(snapshot_id)
+        contamination += _contains_prohibited(snapshot) is not None
+
+    stream_factory = getattr(store, "decision_context_quality_record_stream", None)
+    if callable(stream_factory):
+        with stream_factory(batch_size=512) as records:
+            for kind, item in records:
+                consume(kind, item)
+    else:
+        for item in store.trade_recommendations(limit=50000):
+            consume("recommendation", item)
+        for item in store.order_plans(limit=50000):
+            consume("plan", item)
+        for item in store.learning_observations(limit=200000):
+            consume("observation", item)
+        for item in store.signal_outcomes(limit=200000, include_lab_book=True, include_learning_experiment=True):
+            consume("outcome", item)
+
+    conflict_count = len(conflicted_ids)
     return {
         "schema_version": SCHEMA_VERSION,
         "window_days": max(1, int(days)),
@@ -479,18 +526,18 @@ def build_decision_context_quality(
         "broken_signal_links": broken,
         "unavailable_signal_links": unavailable,
         "signal_snapshot_coverage_verified_links": verified / total if total else None,
-        "plans_with_snapshot": sum(bool(_snapshot_from_record(item)) for item in plans),
-        "observations_with_snapshot": sum(bool(_snapshot_from_record(item)) for item in observations),
-        "outcomes_with_snapshot": sum(bool(_snapshot_from_record(item)) for item in outcomes),
-        "agent_run_link_coverage": sum(bool(snapshot.get("agent_run_id")) for snapshot in snapshots) / len(snapshots)
-        if snapshots
+        "plans_with_snapshot": plans_with_snapshot,
+        "observations_with_snapshot": observations_with_snapshot,
+        "outcomes_with_snapshot": outcomes_with_snapshot,
+        "agent_run_link_coverage": agent_run_linked / snapshot_count
+        if snapshot_count
         else None,
-        "market_state_same_cycle_coverage": same_cycle / len(snapshots) if snapshots else None,
-        "decision_source_coverage": sum(snapshot.get("decision_source") != "unknown" for snapshot in rec_snapshots) / total
+        "market_state_same_cycle_coverage": same_cycle / snapshot_count if snapshot_count else None,
+        "decision_source_coverage": decision_source_known / total
         if total
         else None,
-        "fallback_reason_coverage": sum(bool(snapshot.get("fallback_reason")) for snapshot in fallback_snapshots) / len(fallback_snapshots)
-        if fallback_snapshots
+        "fallback_reason_coverage": fallback_reason_count / fallback_count
+        if fallback_count
         else None,
         "post_decision_contamination_count": contamination,
         "snapshot_conflict_count": conflict_count,

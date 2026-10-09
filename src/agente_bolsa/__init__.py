@@ -122,4 +122,5 @@ __all__ = ["__version__"]
 # Oct08: reuse digest approval inputs without duplicate historical materialization.
 # Oct08 N3: selectively revalidate stale data-pipeline blocks from aware current-session evidence (0.4.350).
 # Oct08: combined corrective candidate after isolated .349/.350/.351 reservations.
-__version__ = "0.4.352"
+# Oct09 N2: stream decision-context quality readers with bounded fetchmany (0.4.353).
+__version__ = "0.4.353"
