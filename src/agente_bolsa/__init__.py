@@ -125,4 +125,5 @@ __all__ = ["__version__"]
 # Oct09 N2: postmarket P/L candidate tolerates unavailable/null metrics (0.4.354).
 # Oct09 N2: stream decision-context quality readers with bounded fetchmany (0.4.353).
 # Oct09: isolated combined corrective candidate; protected broker review remains separate.
-__version__ = "0.4.356"
+# Oct09 N3: preserve broker enum values and dispatch partial take-profit quantity (0.4.357).
+__version__ = "0.4.357"
