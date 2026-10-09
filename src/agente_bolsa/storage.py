@@ -9,7 +9,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Iterable, Iterator
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from itertools import islice
@@ -1038,6 +1038,183 @@ class Store:
             return
         conn.close()
         del self._reader_state.connection
+
+    def _decision_context_read_connection(self) -> sqlite3.Connection:
+        """Open one short-lived read-only connection for a decision-context stream."""
+
+        database_uri = self.database_path.resolve().as_uri() + "?mode=ro"
+        conn = sqlite3.connect(database_uri, uri=True, timeout=30.0)
+        try:
+            conn.execute("PRAGMA busy_timeout=30000")
+            conn.execute("PRAGMA query_only=ON")
+            conn.row_factory = sqlite3.Row
+            return conn
+        except Exception:
+            conn.close()
+            raise
+
+    @staticmethod
+    def _decision_context_recommendation_from_row(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "recommendation_id": row["recommendation_id"],
+            "cycle_id": row["cycle_id"],
+            "symbol": row["symbol"],
+            "action": row["action"],
+            "confidence": row["confidence"],
+            "payload": json.loads(row["payload_json"] or "{}"),
+            "created_at": row["created_at"],
+        }
+
+    @staticmethod
+    def _decision_context_observation_from_row(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            **{key: row[key] for key in row.keys() if not key.endswith("_json")},
+            "source_run_ids": json.loads(row["source_run_ids_json"] or "[]"),
+            "rank_path": json.loads(row["rank_path_json"] or "[]"),
+            "features": json.loads(row["features_json"] or "{}"),
+            "gate": json.loads(row["gate_json"] or "{}"),
+            "outcome": json.loads(row["outcome_json"] or "{}"),
+            "execution": json.loads(row["execution_json"] or "{}"),
+            "llm_considered": bool(row["llm_considered"]),
+            "approved_buy": bool(row["approved_buy"]),
+            "blocked_entry_quality": bool(row["blocked_entry_quality"]),
+            "blocked_backtest": bool(row["blocked_backtest"]),
+            "executed_buy": bool(row["executed_buy"]),
+        }
+
+    @staticmethod
+    def _decision_context_outcome_from_row(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "signal_id": row["signal_id"],
+            "source_run_id": row["source_run_id"],
+            "source": row["source"],
+            "symbol": row["symbol"],
+            "signal_date": row["signal_date"],
+            "decision": row["decision"],
+            "features": json.loads(row["features_json"] or "{}"),
+            "gate": json.loads(row["gate_json"] or "{}"),
+            "outcome": json.loads(row["outcome_json"] or "{}"),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    @staticmethod
+    def _decision_context_cursor_records(
+        conn: sqlite3.Connection,
+        *,
+        kind: str,
+        query: str,
+        params: list[Any],
+        decoder: Any,
+        batch_size: int,
+    ) -> Iterator[tuple[str, dict[str, Any]]]:
+        cursor: sqlite3.Cursor | None = None
+        try:
+            cursor = conn.execute(query, params)
+            while True:
+                rows = cursor.fetchmany(batch_size)
+                if not rows:
+                    break
+                for row in rows:
+                    yield kind, decoder(row)
+        finally:
+            if cursor is not None:
+                cursor.close()
+
+    @contextmanager
+    def decision_context_quality_record_stream(
+        self,
+        *,
+        batch_size: int = 512,
+    ) -> Iterator[Iterator[tuple[str, dict[str, Any]]]]:
+        """Yield the four decision-quality readers without materializing them.
+
+        Each SELECT gets a dedicated read-only connection.  The connections are
+        intentionally independent, matching the legacy cross-table snapshot
+        semantics while avoiding the thread-local ``read_connection``.
+        """
+
+        batch_size = max(1, int(batch_size))
+
+        def records() -> Iterator[tuple[str, dict[str, Any]]]:
+            recommendation_query = """
+                SELECT recommendation_id, cycle_id, symbol, action, confidence,
+                       payload_json, created_at
+                FROM trade_recommendations
+                WHERE 1 = 1
+                ORDER BY created_at DESC LIMIT ?
+            """
+            plan_query = """
+                SELECT plan_id, cycle_id, symbol, side, notional, approved, dry_run,
+                       payload_json, created_at, status, status_reason, status_updated_at
+                FROM order_plans
+                WHERE 1 = 1
+                ORDER BY created_at DESC LIMIT ?
+            """
+            observation_query = """
+                SELECT observation_id, signal_date, symbol, source_family, source_run_ids_json,
+                       first_seen_at, last_seen_at, best_signal_id, best_score, decision,
+                       explanation, llm_considered, approved_buy, blocked_entry_quality,
+                       blocked_backtest, executed_buy, duplicate_count, rank_path_json,
+                       features_json, gate_json, outcome_json, execution_json, created_at, updated_at
+                FROM learning_observations
+                WHERE 1 = 1
+                ORDER BY signal_date DESC, symbol ASC LIMIT ?
+            """
+            outcome_query = """
+                SELECT signal_id, source_run_id, source, symbol, signal_date,
+                       decision, features_json, gate_json, outcome_json,
+                       created_at, updated_at
+                FROM signal_outcomes
+                WHERE 1 = 1
+            """
+            outcome_params: list[Any] = []
+            excluded = excluded_signal_sources(
+                include_lab_book=True,
+                include_learning_experiment=True,
+            )
+            if excluded:
+                placeholders = ",".join("?" for _ in excluded)
+                outcome_query += f" AND coalesce(source, '') NOT IN ({placeholders})"
+                outcome_params.extend(excluded)
+            outcome_query += " ORDER BY signal_date DESC, created_at DESC LIMIT ?"
+            outcome_params.append(200000)
+
+            specs = (
+                (
+                    "recommendation",
+                    recommendation_query,
+                    [50000],
+                    self._decision_context_recommendation_from_row,
+                ),
+                ("plan", plan_query, [50000], self._order_plan_from_row),
+                (
+                    "observation",
+                    observation_query,
+                    [200000],
+                    self._decision_context_observation_from_row,
+                ),
+                ("outcome", outcome_query, outcome_params, self._decision_context_outcome_from_row),
+            )
+            for kind, query, params, decoder in specs:
+                conn = self._decision_context_read_connection()
+                try:
+                    yield from self._decision_context_cursor_records(
+                        conn,
+                        kind=kind,
+                        query=query,
+                        params=params,
+                        decoder=decoder,
+                        batch_size=batch_size,
+                    )
+                finally:
+                    conn.close()
+
+        stream = records()
+        try:
+            yield stream
+        finally:
+            stream.close()
 
     def ensure_schema(self) -> None:
         with self.connect() as conn:

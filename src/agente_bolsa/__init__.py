@@ -123,4 +123,6 @@ __all__ = ["__version__"]
 # Oct08 N3: selectively revalidate stale data-pipeline blocks from aware current-session evidence (0.4.350).
 # Oct08: combined corrective candidate after isolated .349/.350/.351 reservations.
 # Oct09 N2: postmarket P/L candidate tolerates unavailable/null metrics (0.4.354).
-__version__ = "0.4.354"
+# Oct09 N2: stream decision-context quality readers with bounded fetchmany (0.4.353).
+# Oct09: isolated combined corrective candidate; protected broker review remains separate.
+__version__ = "0.4.356"
