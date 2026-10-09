@@ -1,5 +1,62 @@
 # Relevo de direccion tecnica — agenteBolsa
 
+## Preparación autorizada — 9-oct, despliegue objetivo 22:45 Madrid
+
+El operador autoriza continuar las mejoras del estudio y desplegar el 9 de
+octubre a las 22:45 Europe/Madrid. Automatización
+`validar-mejoras-bolsa-tras-cierre` reactivada y actualizada para ese intento;
+antes de la hora no hace cambios productivos. Revisión del 12-oct intacta.
+
+Base de preparación limpia: HEAD 7d4f4bc1f54d45fca9f6cc62867f4ddf9b6d80a1,
+tree 011cdf6b9608e1e8e71aba80b29b4f36169a1b3a, versión .352. El árbol funcional
+ya probado sigue siendo 7dce37e1/0ec3540e; no repetir focales existentes
+salvo cambios semánticos posteriores. Fullsuite y smoke siguen pendientes.
+
+Sonda real 20:36 Madrid: XNYS abierto, cierre 22:00, lock scheduler PID7 vivo
+y token coincidente. schedule-status runtime unavailable por WAL no certifica
+quietud; al corte usar Store.read_connection y cerrar explícitamente lectores
+para comprobar estados/leases, además de procesos y logs. Sin reparaciones
+implícitas de locks ni trabajos manuales para forzar el cierre.
+
+Estudio nuevo ef99/docs/informe_oct09_resultados_oportunidades.md: broker GET
+20:09 Madrid, equity70195.73USD, efectivo89.22%, exposición10.78%. Imagen
+activa .321, sin despliegue de .352. PMR8 terminal failed 22:25:38UTC por
+TypeError None/int, distinto de una recuperación completada; PMR9 aún no
+terminal válido. Fallos402 por saldo proveedor siguen presentes; no pagos ni
+credenciales/configuración autorizados. 8 reinicios scheduler; auxiliar unhealthy;
+no atribuir causa sin evidencia ni declarar salud recuperada por documentación.
+
+Lotes aislados asignados conforme AGENTS a Luna gpt-5.6-luna/xhigh:
+- .353: oct08-digest-memory-audit, rama codex/oct08-context-streaming,
+  continuar cambios del lote anterior; stream RO y acumuladores con paridad,
+  mismos límites y snapshots per-query. Sin integración hasta QA/revisión.
+- .354: oct09-postmarket-null, base exacta anterior, diagnosticar traceback y
+  caracterizar None/int; no asumir que el antecedente P-L57A sea la misma causa.
+  Solo bug fix mínimo, métricas ausentes unavailable, sin histórico/trading.
+
+Parche protegido propuesto en ef99/proposed_oct09_broker_enum.patch:
+normalizar Enum.value en tools/broker.py conservando strings/None. Defecto
+caracterizado con SDK real y proveedor falso: exposición0 frente a0.1 esperada.
+PENDIENTE revisión humana explícita del parche y autorización de sellado
+canónico intencional. La pregunta se ha presentado con las dos reglas exactas;
+no asumir respuesta por tiempo transcurrido. Mientras falte, no aplicar ni
+integrar ni sellar este lote. Si se autoriza, caracterizar también OrderSide,
+OrderStatus, OrderType y paridad de cantidades/precios/órdenes; N3 completo.
+
+Secuencia restante: recoger lotes y revisar diffs exactos, merge --no-ff aislado
+sin cambios ajenos, fijar versión única final; QA del árbol funcional definitivo
+y gates completos en ventana permitida. Deploy no antes22:45 por procedimiento
+docs/despliegue_jetson_autonomo.md. Comparar fuente/hash con imagen viva y base
+exacta1adc3cec; no portar a ciegas diferencias .340. Mantener .env/config,
+datos e históricos; rollback conserva imagen .321. Doble salud >=75s y
+observación recursos/OOM según runbook, sin atribuir OOM por correlación.
+
+Si falta cualquier precondición: precondition_not_met y detener el intento sin
+forzar jobs, borrar locks ni arrancar/desactivar gates para hacerlos pasar.
+No órdenes ni cambios de riesgo/política de reentrada desde este estudio.
+Reentrada FTNT, edades señal/precio y oportunidades descartadas necesitan
+replay con costes y evidencia futura antes de promoción.
+
 ## Estado vigente — 8-oct, integración nocturna .352
 
 Dictamen: `needs_final_validation`, no desplegado. Candidato funcional limpio
