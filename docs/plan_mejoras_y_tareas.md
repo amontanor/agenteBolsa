@@ -1,5 +1,59 @@
 # Plan maestro de mejoras y tareas — agenteBolsa
 
+## Estado vigente — 9-oct, candidato combinado .356 para las 22:45
+
+Dictamen `needs_final_validation`, no desplegado. HEAD funcional probado
+7db0790b2f87214f291f603db470a3c97faa50b7, tree
+e657e7eb9ffba7a252aa2f70db066349787965e9, versión0.4.356. Esta sección
+sustituye el estado actual de las notas inferiores, que conservan su historia.
+
+Integración aislada --no-ff: PMR null-safe38deb622 mediante20533c4b y streaming
+bd2dad81 mediante7db0790b. Conflictos solo de plan/relevo/version: se conservaron
+ambos documentos/comentarios y se reservó .356. Fuente protegida intacta.
+
+Revisión independiente corrigió una discrepancia de paridad en coverage para
+decision_source ausente/falsy y el cierre al fallar PRAGMA antes de integrar.
+El defecto None/int de _learning_candidates está reproducido localmente;
+atribución al fallo productivo8-oct permanece inferida, sin traceback remoto.
+No ocultar el fallo ni decir que la sesión se recuperó por tener un parche.
+
+QA nueva del árbol combinado: **73 passed en4.69s**, exit0, Python del proyecto,
+PYTHONPATH exacto, DATA_DIR temporal, _env_file=None, red externa bloqueada.
+ef99/release_oct09_0356_focal2.txt y focal_journal2.jsonl. Primer intento tuvo
+error de ruta de test y no ejecutó pruebas; no se contabiliza como validación.
+Ruffsrc/testsverde, NUL548verde, diffverde, seisprotegidos iguales a1adc3cec.
+No sumar73 a las152 anteriores solapadas ni declarar fullsuite/smoke aprobados.
+
+Fuentes activas inspeccionadas20:43:205Python,204exactas a1adc3cec; init solo
+comentario traducido deP-L155/newline, versión.321idéntica. Diferencia .340 no
+se porta ni se usa como base productiva. Evidencia ef99/audit_oct09_source_*
+y audit_oct09_live_init.txt. Hashes exactos de imagen en estudio9-oct.
+
+Paquete LOCAL de13fuentes modificadas: ef99/release_oct09_0356_sources.zip,
+sha2567491ca944a1313d5dd53247a0e3907cdf62a96347867d768ed8b61734b02dc76.
+Manifest incluyeHEAD/tree/hashporarchivo; no es build ni pruebaARM ni despliegue.
+Scripts preparación enef99: prepare_oct09_source_bundle.py,
+validate_oct08_isolated.py, smoke_oct08_isolated.py. Tras cualquier cambio
+semántico, invalidar paquete/evidencia afectados y fijar versión única nueva.
+
+Gates: fullsuite delárbolfinal única, smokeaislado, config/kernel/paridadN3,
+XNYS cerrado yPMR9terminal, no jobs/retries/leases/pytest activos, salud yflags,
+recursos/margen; aldesplegar verificar imagen/fuente ydoble salud>=75s.
+No efectuarbuild/transfer/corteantes22:45 ni forzar jobs/locks para superar gates.
+
+Broker enum sigue pendiente de revisión humana explícita de parche ysellado.
+No aplicar ni sellar mientras falte respuesta. Antes de aceptar el candidato
+N3 (incluye recuperación selectiva de BUY de.352), contrastar exposición real
+conla ruta de riesgo: una exposición long incorrectamente cero es un bloqueo
+de seguridad, no debe ignorarse por ser preexistente ni compensarse elevando
+límites. No desplegar un gate nuevo con esa inconsistencia sin resolver.
+
+APO: protección/origen por auditar, no órdenes autorizadas desde este estudio.
+FTNT: auditar salida/reentrada por IDs yprecio/condición nuevos, no introducir
+cooldown ni umbral activo sin evidencia. LLM402 requiere saldo/operador, no
+pagos/config/credenciales modificados. Automatización22:45ACTIVE; revisión12oct
+intacta. Alfinal delintento22:45pausar automatización yreportar resultado real.
+
 ## Preparación autorizada — 9-oct, despliegue objetivo 22:45 Madrid
 
 El operador autoriza continuar las mejoras del estudio y desplegar el 9 de
