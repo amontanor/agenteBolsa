@@ -68,6 +68,31 @@ La antigüedad de 9 días corresponde al origen BUY de niveles EXIT; no es la
 edad de la señal de reentrada. El contraste entre captures y signal_outcomes
 requiere verificar el contrato de autoridad antes de afirmar corrupción.
 
+### Propuesta N3 preparada, pendiente de revisión humana específica
+
+La frontera de salida parcial se reproduce localmente: _is_full_position_exit
+ignora qty y trata action=exit como cierre completo. Propuesta mínima: para
+checks.trigger exacto partial_take_profit_v2, devolver False para usar la
+petición market existente con qty del plan. No usar el trigger nested como
+segunda autoridad; cierres stop/time/trailing y controles previos permanecen.
+
+Parche ef99/proposed_oct09_partial_exit.patch SIN aplicar; junto al parche
+Enum de broker se presentó revisión humana específica y sellado tras QA.
+Mientras falte respuesta no editar protegidos ni sellar ni aceptar la release
+con esas inconsistencias N3. La nueva solicitud reúne ambos parches.
+
+Caracterización independiente v6 con Python del proyecto y SDK Alpaca real,
+Settings _env_file=None, DATA_DIR temporal y red bloqueada: qty2.5 enviado
+como2.5, controles completos preservados y kernel bloqueado sin llamadas.
+Evidencia ef99/audit_oct09_exit_followup_boundary_v6_project_sdk.json.
+La prueba v5 anterior usaba emulación en otro intérprete: no heredar su
+afirmación de SDK ausente al Python del proyecto. GET paper separado de tests
+confirma FTNT fractionable=true, no certifica aceptación histórica.
+
+Al aprobarse, implementar ambos parches mínimos con versión única final,
+caracterizaciones/regresiones N3 y fullsuite/smoke del árbol definitivo;
+invalida el paquete .356 si cambia source. No promoción ni nuevas órdenes.
+
 ## Preparación autorizada — 9-oct, despliegue objetivo 22:45 Madrid
 
 El operador autoriza continuar las mejoras del estudio y desplegar el 9 de
