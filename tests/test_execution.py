@@ -4,6 +4,7 @@ import types
 import pytest
 
 from agente_bolsa.config import Settings
+from agente_bolsa.tools import execution
 from agente_bolsa.tools.broker import BrokerClientFactory
 from agente_bolsa.tools.execution import (
     _alpaca_price,
@@ -44,6 +45,37 @@ def test_detects_full_position_exit_plan():
             "payload": {
                 "recommendation": {"action": "reduce"},
                 "risk_decision": {"checks": {"held_qty": 13.600098938}},
+            },
+        }
+    )
+    assert not _is_full_position_exit(
+        {
+            "symbol": "AMZN",
+            "side": "sell",
+            "payload": {
+                "recommendation": {"action": "exit"},
+                "risk_decision": {
+                    "checks": {
+                        "action": "exit",
+                        "trigger": "partial_take_profit_v2",
+                    }
+                },
+            },
+        }
+    )
+    assert _is_full_position_exit(
+        {
+            "symbol": "AMZN",
+            "side": "sell",
+            "payload": {
+                "recommendation": {"action": "exit"},
+                "risk_decision": {
+                    "checks": {
+                        "action": "exit",
+                        "trigger": "stop_loss",
+                    },
+                    "exit_policy_v2": {"trigger": "partial_take_profit_v2"},
+                },
             },
         }
     )
@@ -217,6 +249,173 @@ def test_full_exit_uses_alpaca_close_position(monkeypatch):
     assert captured["closed"] == "AMZN"
     assert result["id"] == "order-1"
     assert result["side"] == "sell"
+
+
+def test_partial_exit_submits_real_sdk_qty_and_legacy_exits_close(monkeypatch, tmp_path):
+    from alpaca.trading.enums import OrderSide, TimeInForce
+    from alpaca.trading.requests import MarketOrderRequest
+
+    calls = []
+
+    class FakeClient:
+        def close_position(self, symbol):
+            calls.append(("close_position", symbol))
+            return {
+                "id": "full",
+                "symbol": symbol,
+                "side": "sell",
+                "type": "market",
+                "status": "accepted",
+                "qty": 5.0,
+            }
+
+        def submit_order(self, order_data):
+            calls.append(("submit_order", order_data))
+            return {
+                "id": "partial",
+                "client_order_id": order_data.client_order_id,
+                "symbol": order_data.symbol,
+                "side": "sell",
+                "type": "market",
+                "status": "accepted",
+                "qty": order_data.qty,
+            }
+
+    monkeypatch.setattr(execution, "_kernel_portfolio_snapshot", lambda _settings: None)
+    monkeypatch.setattr(
+        BrokerClientFactory,
+        "alpaca_trading_client",
+        lambda self: FakeClient(),
+    )
+    settings = Settings(
+        _env_file=None,
+        DATA_DIR=tmp_path,
+        TRADING_MODE="paper",
+        ALPACA_PAPER=True,
+        ALLOW_LIVE_TRADING=False,
+        USE_BRACKET_ORDERS=True,
+    )
+
+    partial_plan = {
+        "symbol": "FTNT",
+        "side": "sell",
+        "payload": {
+            "qty": 2.5,
+            "recommendation": {"action": "exit"},
+            "risk_decision": {
+                "checks": {
+                    "action": "exit",
+                    "trigger": "partial_take_profit_v2",
+                }
+            },
+        },
+    }
+    result = submit_paper_order_plan(
+        settings,
+        partial_plan,
+        client_order_id="agente-ftnt-partial",
+    )
+
+    assert isinstance(calls[0][1], MarketOrderRequest)
+    partial_request = calls[0][1]
+    assert calls[0][0] == "submit_order"
+    assert partial_request.qty == 2.5
+    assert partial_request.side == OrderSide.SELL
+    assert partial_request.time_in_force == TimeInForce.DAY
+    assert partial_request.client_order_id == "agente-ftnt-partial"
+    assert result["id"] == "partial"
+
+    for trigger in ("stop_loss", "time_stop_v2", "trailing_stop_v2"):
+        full_plan = {
+            "symbol": "FTNT",
+            "side": "sell",
+            "payload": {
+                "qty": 5.0,
+                "recommendation": {"action": "exit"},
+                "risk_decision": {
+                    "checks": {"action": "exit", "trigger": trigger},
+                    "exit_policy_v2": {"trigger": trigger},
+                },
+            },
+        }
+        submit_paper_order_plan(
+            settings,
+            full_plan,
+            client_order_id=f"agente-ftnt-{trigger}",
+        )
+
+    mixed_plan = {
+        "symbol": "FTNT",
+        "side": "sell",
+        "payload": {
+            "qty": 5.0,
+            "recommendation": {"action": "exit"},
+            "risk_decision": {
+                "checks": {"action": "exit", "trigger": "stop_loss"},
+                "exit_policy_v2": {"trigger": "partial_take_profit_v2"},
+            },
+        },
+    }
+    submit_paper_order_plan(
+        settings,
+        mixed_plan,
+        client_order_id="agente-ftnt-mixed",
+    )
+
+    assert [kind for kind, _ in calls] == [
+        "submit_order",
+        "close_position",
+        "close_position",
+        "close_position",
+        "close_position",
+    ]
+    assert all(
+        item[1] == "FTNT"
+        for item in calls[1:]
+    )
+
+
+def test_partial_exit_kernel_block_prevents_all_dispatch(monkeypatch, tmp_path):
+    calls = []
+
+    class FakeClient:
+        def close_position(self, symbol):
+            calls.append(("close_position", symbol))
+
+        def submit_order(self, order_data):
+            calls.append(("submit_order", order_data))
+
+    monkeypatch.setattr(execution, "_kernel_portfolio_snapshot", lambda _settings: None)
+    monkeypatch.setattr(
+        execution,
+        "kernel_check_order",
+        lambda *_args: (False, "test_kernel_block"),
+    )
+    monkeypatch.setattr(
+        BrokerClientFactory,
+        "alpaca_trading_client",
+        lambda self: FakeClient(),
+    )
+
+    plan = {
+        "symbol": "FTNT",
+        "side": "sell",
+        "payload": {
+            "qty": 2.5,
+            "recommendation": {"action": "exit"},
+            "risk_decision": {
+                "checks": {"action": "exit", "trigger": "partial_take_profit_v2"}
+            },
+        },
+    }
+    with pytest.raises(RuntimeError, match="test_kernel_block"):
+        submit_paper_order_plan(
+            Settings(_env_file=None, DATA_DIR=tmp_path, TRADING_MODE="paper", ALPACA_PAPER=True),
+            plan,
+            client_order_id="agente-ftnt-blocked",
+        )
+
+    assert calls == []
 
 
 def test_buy_execution_is_blocked_by_operational_kill_switch(tmp_path):

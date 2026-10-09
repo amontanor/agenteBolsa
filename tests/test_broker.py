@@ -2,9 +2,18 @@ import sys
 import types
 
 import pytest
+from alpaca.trading.enums import OrderSide, OrderStatus, OrderType
 
 from agente_bolsa.config import Settings
-from agente_bolsa.tools.broker import BrokerClientFactory
+from agente_bolsa.tools.broker import BrokerClientFactory, _str_attr
+
+
+def test_str_attr_normalizes_sdk_enum_and_defaults():
+    assert _str_attr(types.SimpleNamespace(side=OrderSide.SELL), "side") == "sell"
+    assert _str_attr(types.SimpleNamespace(type=OrderType.MARKET), "type") == "market"
+    assert _str_attr(types.SimpleNamespace(status=OrderStatus.NEW), "status") == "new"
+    assert _str_attr(types.SimpleNamespace(status=None), "status", "fallback") == "fallback"
+    assert _str_attr(types.SimpleNamespace(raw="plain"), "raw") == "plain"
 
 
 def test_alpaca_client_uses_paper_endpoint(monkeypatch):
