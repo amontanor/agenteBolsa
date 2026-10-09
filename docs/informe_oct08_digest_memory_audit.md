@@ -47,6 +47,11 @@ por lotes en esta ruta, no una medición de RSS ni evidencia causal del OOM.
 - Batería focal `tests/test_decision_context_streaming.py
   tests/test_decision_context_snapshot.py tests/test_ci_digest_reuse.py`:
   `45 passed` en `3.31s`.
+- Primer intento del test nuevo terminó `4 failed` por un fixture que repetía
+  la clave única de observaciones y produjo exactamente
+  `UNIQUE constraint failed: learning_observations.signal_date, learning_observations.symbol, learning_observations.source_family`;
+  el fixture se corrigió para usar `source_family` único por observación y no
+  se relajó ninguna aserción de producto.
 - Ruff `src tests`: verde.
 - `scripts/check_no_nulls.py`: `OK (548 archivos)`.
 - `git diff --check`: verde.
