@@ -4,10 +4,10 @@ Fecha de revisión: 2026-10-09. El trabajo se hizo en el worktree aislado
 `C:\Users\utopi\.codex\worktrees\oct09-postmarket-null\agenteBolsa`, partiendo de
 `7d4f4bc1f54d45fca9f6cc62867f4ddf9b6d80a1` (versión `0.4.352`).
 
-## Dictamen y causa
+## Dictamen y alcance de evidencia
 
-La causa queda confirmada con confianza alta por evidencia del snapshot y una
-reproducción determinista contra la base. `trade_history._daily_groups` deja
+El defecto local queda confirmado con confianza alta por una reproducción
+determinista contra la base. `trade_history._daily_groups` deja
 `open_unrealized_pl=None` cuando no hay posiciones abiertas. En
 `tools/post_market_review.py:_learning_candidates`, la base asignaba ese valor
 con `.get(..., 0.0)` y después ejecutaba `unrealized < 0`. El valor explícito
@@ -24,7 +24,11 @@ registra para `post_market_coordination:session:2026-10-08` el run
 `post_market_review_failed` contiene el mismo error literal. La consulta SSH
 autorizada y acotada a Docker entre `22:24:00Z` y `22:27:00Z` no devolvió líneas,
 por lo que no se afirma un traceback remoto adicional: los logs están ausentes
-o rotados.
+o rotados. El mensaje compartido es compatible con el defecto local, pero por sí
+solo no demuestra el frame ni los inputs productivos exactos. Además, el corte
+del 9-oct mostraba nueve posiciones, así que no permite inferir que la cartera
+productiva del fallo tuviera el mismo estado. La causa productiva queda por tanto
+inferida/compatible, no confirmada.
 
 La reproducción base, sin broker ni red, fue:
 
@@ -57,15 +61,17 @@ Después del arreglo, el mismo comando de reproducción devuelve `[]`. Con
 ```text
 python -m pytest tests/test_post_market_review.py tests/test_p57a_null_safety.py -q
 23 passed
+python -m pytest tests/test_post_market_review.py::test_learning_candidates_skip_non_numeric_container_pl_values -q
+3 passed
 python -m ruff check src/agente_bolsa/tools/post_market_review.py tests/test_post_market_review.py
 All checks passed!
 git diff --check                         OK
 auditoría de NUL en archivos tocados   NUL_OK
 ```
 
-La matriz cubre P/L válido negativo, `None`, booleanos, `NaN`, `+inf` y `-inf`
-en `realized_pl` y `open_unrealized_pl`, además de conservar las regresiones
-P-L57A existentes.
+La matriz cubre P/L válido negativo, `None`, booleanos, `NaN`, `+inf`, `-inf`,
+strings no numéricos y containers en `realized_pl` y `open_unrealized_pl`, además
+de conservar las regresiones P-L57A existentes.
 
 ## Gates y entrega
 

@@ -11,18 +11,23 @@ validación del árbol actual.
 
 ## Relevo Oct09 N2 — cierre del TypeError postmercado
 
-La causa del fallo de la sesión 8-oct queda confirmada contra la base: el
-resumen diario puede transportar `open_unrealized_pl=None` sin posiciones y
+El defecto local compatible con el fallo de la sesión 8-oct queda confirmado
+contra la base: el resumen diario puede transportar `open_unrealized_pl=None`
+sin posiciones y
 `_learning_candidates` lo comparaba directamente con cero. El snapshot de ef99
-registra el mismo `TypeError`; los logs Docker remotos de la ventana autorizada
-están ausentes o rotados. El cambio mínimo en la línea `.354` conserva
+registra el mismo `TypeError`, pero ese literal no confirma frame ni inputs
+productivos; el corte del 9-oct tenía nueve posiciones. Los logs Docker remotos
+de la ventana autorizada están ausentes o rotados, por lo que la causa
+productiva queda inferida/compatible, no confirmada. El cambio mínimo en la línea
+`.354` conserva
 unavailable como `None`, descarta booleanos y no finitos, y mantiene el criterio
 para P/L negativo válido. No toca trading, órdenes, históricos ni archivos
 protegidos.
 
 Caracterización `b1d5169d`, fix `b4ddf194`; documentación en
 `docs/informe_oct09_postmarket_null.md`. Verificación: `23 passed` en las dos
-baterías focales, Ruff/diff/NUL verdes y reproducción base resuelta. XNYS estaba
+baterías focales, casos nuevos de strings/containers, Ruff/diff/NUL verdes y
+reproducción base resuelta. XNYS estaba
 abierto: no fullsuite, smoke, build, producción, broker, red, LLM, locks ni
 configuración. El checkout final debe quedar limpio tras el commit documental;
 registrar HEAD/tree/status en la entrega.

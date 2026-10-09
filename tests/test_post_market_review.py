@@ -78,6 +78,28 @@ def test_learning_candidates_skip_unavailable_pl_values(field, unavailable):
     assert all(item["id"] != "add_entry_quality_filters" for item in suggestions)
 
 
+@pytest.mark.parametrize("unavailable", ["bad", [], {}])
+def test_learning_candidates_skip_non_numeric_container_pl_values(unavailable):
+    portfolio = PortfolioSnapshot(
+        account_id="paper",
+        status="ACTIVE",
+        currency="USD",
+        cash=10_000,
+        portfolio_value=20_000,
+        buying_power=20_000,
+        positions=[],
+        open_orders=[],
+    )
+
+    suggestions = _learning_candidates(
+        evaluations=[],
+        day_summary={"realized_pl": 0.0, "open_unrealized_pl": unavailable},
+        portfolio=portfolio,
+    )
+
+    assert all(item["id"] != "add_entry_quality_filters" for item in suggestions)
+
+
 def test_post_market_review_text_explains_actions_and_learning():
     text = _post_market_review_text(
         {
