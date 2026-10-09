@@ -5,10 +5,10 @@ import types
 import pytest
 from alpaca.trading.enums import OrderSide, OrderStatus, OrderType, PositionSide
 
+import agente_bolsa.tools.trade_decision as trade_decision
 from agente_bolsa.config import Settings
 from agente_bolsa.models import PortfolioSnapshot
 from agente_bolsa.tools.broker import BrokerClientFactory, _str_attr
-import agente_bolsa.tools.trade_decision as trade_decision
 from agente_bolsa.tools.trade_decision import _portfolio_risk_context
 
 
