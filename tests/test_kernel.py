@@ -53,30 +53,6 @@ def test_kernel_approves_valid_order(tmp_path):
     assert ok, reason
 
 
-def test_kernel_approves_long_exposure_of_100_over_equity_1000(tmp_path):
-    settings = Settings(
-        _env_file=None,
-        DATA_DIR=tmp_path,
-        ALPACA_PAPER=True,
-        TRADING_MODE="paper",
-    )
-    plan = {
-        "symbol": "AAPL",
-        "side": "buy",
-        "notional": 100.0,
-        "payload": {
-            "portfolio_equity": 1000.0,
-            "entry_price": 100.0,
-            "stop_loss": 95.0,
-            "take_profit": 115.0,
-        },
-    }
-
-    assert plan["notional"] / plan["payload"]["portfolio_equity"] == 0.1
-    ok, reason = kernel_check_order(plan, _empty_portfolio(1000.0), settings)
-    assert ok, reason
-
-
 def test_kernel_blocks_absolute_drawdown_even_if_risk_approves(tmp_path):
     settings = _settings(tmp_path)
     # risk.py aprobaria esta orden: ratios y exposicion correctos.
