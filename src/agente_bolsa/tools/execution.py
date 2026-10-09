@@ -67,6 +67,8 @@ def _is_full_position_exit(plan: dict[str, Any]) -> bool:
     recommendation = payload.get("recommendation", {}) or {}
     risk_decision = payload.get("risk_decision", {}) or {}
     checks = risk_decision.get("checks", {}) or {}
+    if checks.get("trigger") == "partial_take_profit_v2":
+        return False
     action = str(recommendation.get("action") or checks.get("action") or "").lower()
     return action in {"sell", "exit"}
 

@@ -7,6 +7,7 @@ mode unless the global safety settings allow it.
 from __future__ import annotations
 
 import json
+from enum import Enum
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -46,7 +47,7 @@ def _str_attr(obj: Any, attr: str, default: str = "") -> str:
     value = getattr(obj, attr, default)
     if value is None:
         return default
-    return str(value)
+    return str(value.value if isinstance(value, Enum) else value)
 
 
 class BrokerClientFactory:
