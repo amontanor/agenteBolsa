@@ -1,0 +1,17 @@
+started=2026-10-10T12:14:25.3093713+02:00
+worktree=C:\Users\utopi\.codex\worktrees\bolsa-controls-memory-oct10\agenteBolsa
+python=C:\Antonio\Bref\agenteBolsa\.venv\Scripts\python.exe
+PYTHONPATH=C:\Users\utopi\.codex\worktrees\bolsa-controls-memory-oct10\agenteBolsa\src
+DATA_DIR=C:\Users\utopi\AppData\Local\Temp\oct10-comparable-final-v7-data
+_env_file=None
+providers=local;WEB_SEARCH_PROVIDER=off;IMPROVEMENT_LLM_ENABLED=false
+network_guard=C:\Users\utopi\AppData\Local\Temp\oct10_comparable_memory_bootstrap_v6.py
+tests=tests/test_oct10_comparable_memory.py -k 'recommendation_decoder_error_priority or frozen_base_characterization or stream_selection_and_reader_or_finalize_errors' -q
+pid=43920
+started_process=2026-10-10T12:14:25.3093713+02:00
+exit=0
+finished=2026-10-10T12:14:26.3178206+02:00
+--- stdout ---
+...                                                                      [100%]
+3 passed, 11 deselected in 0.39s
+--- stderr ---
