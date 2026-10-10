@@ -1,5 +1,59 @@
 # Ensayo conjunto de siete mejoras — 8-oct-2026
 
+## Revisión root del digest y auditoría del scheduler — 10-oct, 11:45 Europe/Madrid
+
+Dictamen .358 `ready_for_integration_rehearsal`, con merge pendiente. Entrega
+limpia verificada: HEAD 56a8b988bda1714b0ab78d5233744d6849275d46,
+tree 921d9321fce9afb25a2aaf80f4127b71b1923f5a. Sustituye el rechazo de la
+entrega anterior f52c055e; no borra su evidencia. QA del worker: 38 passed
+(9.51 s), Ruff correcto y medición v3 del proceso propio con firma WinAPI
+corregida. RSS Windows no prueba límites memcg Linux ni resolución del OOM.
+
+Root ejecutó el despacho AST exacto de cb3d8805a9890fab0357b0ba3a3f7afaa8577586
+contra el handler nuevo, con Python del proyecto, PYTHONPATH exacto .358/src,
+DATA_DIR temporal, Settings(_env_file=None), reloj fijo y red/DNS bloqueados.
+Ocho casos (vacío/fixture, texto/JSON, con/sin archivo) dieron igualdad exacta
+sin normalización. También verificó identidad de la clase exportada
+ContinuousImprovementOrchestrator. Dos ensayos previos fallaron únicamente
+al limpiar SQLite temporal (WinError32); v3 cierra readers y ejecuta gc.collect
+antes de limpiar, termina exit=0 y conserva resultado. No cambió Store ni
+código productivo para corregir el lanzador.
+Evidencia reproducible: docs/artifacts/oct10_digest_root_cb3_exact_parity.json
+y docs/artifacts/oct10_digest_root_cb3_exact_parity.py. SHA256 del blob bruto
+main.py cb3: 2bc7bbfa1a5eddee347094351cfb474ea6eb4e077a5cdd4435493bb296641fbe.
+La huella d40daccc del worker corresponde a texto con normalización universal
+de saltos de línea (subprocess text=True), no a bytes Git brutos. Son ámbitos
+distintos; la comparación root usa el blob bruto y su AST ejecutable.
+
+Auditoría scheduler readonly entregada en ef99/docs/informe_oct10_scheduler_memory.md:
+OOM históricos confirmados, reconciliaciones largas y llamadas grandes de
+aprendizaje repetidas entre reconciliación, PMR y medición. No demuestra qué
+función es dueña de cada pico; un OOM coincide con crew/reintentos LLM y no
+se atribuye a digest. Desactivar update_learning en reconciliación alteraría
+cadencia/disponibilidad de outcomes; no se acepta como optimización de paridad
+sin estudiar consumidores y PMR fallido. Auditoría de contratos adicional en curso.
+El script fuente entregado muestra sqlite3.connect directo; root exige evidencia
+de la envoltura Store.read_connection realmente ejecutada antes de certificar
+la conformidad de esa consulta. No repetir la consulta para sustituir evidencia.
+
+Schedule-status real 09:43:20 UTC confirma XNYS cerrado, próxima apertura
+12-oct 15:30 Madrid. Sonda Store.read_connection query_only=1 de 09:43:52 UTC
+consulta claves scheduler_job_status, lease/retry (LIMIT 100): estados terminales
+en el ámbito consultado; sin entradas lease/retry. La primera consulta empleó
+un nombre de contenedor inexistente; la segunda un prefijo job_status erróneo
+(no devolvió filas); ambas se corrigieron exclusivamente en sondas readonly.
+Evidencia ef99/audit_oct10_runtime_1145.json (nombre nominal, timestamp interno
+autoritativo). Paper=true, live=false, auto_apply=false. No certifica salud de
+producción: auxiliary sigue unhealthy y .321 activa. Sin despliegue/reinicio,
+órdenes, modificación de configuración, locks o históricos.
+
+CIM detecta múltiples pytest locales vivos del lote .359. El worker revisa
+handles/procesos antes de nuevos lanzamientos. Merge y QA siguiente esperan
+terminales verificables; no interpretar timeout como fin ni matar Python genérico.
+Fullsuite se reserva para el árbol funcional integrado definitivo. Automatización
+de despliegue sigue pausada; revisión readonly del 12-oct intacta.
+
+
 ## Revisión de entregas de memoria — 10-oct, 11:29 Europe/Madrid
 
 Dictamen `needs_fix`, sin integración ni despliegue. .358 fue entregado limpio

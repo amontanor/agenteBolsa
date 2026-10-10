@@ -1,0 +1,73 @@
+{
+  "base": "cb3d8805a9890fab0357b0ba3a3f7afaa8577586",
+  "base_main_sha256": "2bc7bbfa1a5eddee347094351cfb474ea6eb4e077a5cdd4435493bb296641fbe",
+  "mode": "execute_exact_baseline_AST_not_product_code",
+  "cases": [
+    {
+      "populated": false,
+      "out": false,
+      "json": false,
+      "exact_output_equal": true,
+      "exact_file_equal": true,
+      "normalization": "none"
+    },
+    {
+      "populated": false,
+      "out": false,
+      "json": true,
+      "exact_output_equal": true,
+      "exact_file_equal": true,
+      "normalization": "none"
+    },
+    {
+      "populated": false,
+      "out": true,
+      "json": false,
+      "exact_output_equal": true,
+      "exact_file_equal": true,
+      "normalization": "none"
+    },
+    {
+      "populated": false,
+      "out": true,
+      "json": true,
+      "exact_output_equal": true,
+      "exact_file_equal": true,
+      "normalization": "none"
+    },
+    {
+      "populated": true,
+      "out": false,
+      "json": false,
+      "exact_output_equal": true,
+      "exact_file_equal": true,
+      "normalization": "none"
+    },
+    {
+      "populated": true,
+      "out": false,
+      "json": true,
+      "exact_output_equal": true,
+      "exact_file_equal": true,
+      "normalization": "none"
+    },
+    {
+      "populated": true,
+      "out": true,
+      "json": false,
+      "exact_output_equal": true,
+      "exact_file_equal": true,
+      "normalization": "none"
+    },
+    {
+      "populated": true,
+      "out": true,
+      "json": true,
+      "exact_output_equal": true,
+      "exact_file_equal": true,
+      "normalization": "none"
+    }
+  ],
+  "public_orchestrator_identity_equal": true,
+  "all_equal": true
+}
