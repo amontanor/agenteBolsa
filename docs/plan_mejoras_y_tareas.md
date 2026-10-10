@@ -1,5 +1,53 @@
 # Plan maestro de mejoras y tareas — agenteBolsa
 
+## Integración digest y defectos de paridad — 10-oct, 11:53 Europe/Madrid
+
+.358 integrado únicamente en rehearsal mediante merge --no-ff
+1a3333a49db77898cecf1670813b4e23d445ac00,
+tree 3d64164ce508958be64b86445dfbdc84ef79c076, limpio/version .358.
+Se incorporó HEAD 3d6e4f8c197dfd3227fb6eefb67ade5d586d25fd (código/tests
+idénticos a la entrega revisada 56a8b988; posteriores solo docs). Protegidos
+idénticos a 01000f74. No es despliegue ni DoD completo; fullsuite final pendiente.
+Antes de merge, CIM ya no devolvió pytest/smoke/bootstrap local activo.
+
+.359 permanece needs_fix. Root ejecutó AST exacto de la base 43325d7b con
+fakes en memoria, red/DNS bloqueados y Python/PYTHONPATH del proyecto: nueve
+de diez casos conservaron resultados/errores/lecturas; verified_controls_scalar
+(controls=1, status=verified) difirió: base TypeError "'int' object is not iterable",
+candidato TypeError "object of type 'int' has no len()". Es diagnóstico de la
+fuente en curso, no QA final de un árbol limpio: HEAD 83ec4b60 y SHA fuente
+registrados en artefacto. Corrección y caracterización persistente asignadas al
+worker. Las pruebas nuevo-vs-nuevo no certifican equivalencia con la base.
+Evidencia: docs/artifacts/oct10_comparable_root_errors.json y su script.
+
+La discrepancia de procesos se contrastó de nuevo: Get-Process no encontró los
+16 PID de pytest previamente vistos por CIM; CIM posterior tampoco los mostró.
+No se mataron procesos. Se exige al worker registrar handles/terminales/salidas
+originales y corregir cualquier atribución al coordinador, que no lanzó esos
+ensayos. No se afirma un cuelgue productivo ni QA pasada por inventario parcial.
+
+Auditoría scheduler: el worker reconoce que el SELECT histórico de cinco
+cycle_id (LIMIT 300) usó sqlite3.connect directo, no la envoltura Store.
+No cumple el procedimiento de auditoría readonly exigido; corregir un helper
+local después no valida retroactivamente la ejecución. Consulta histórica se
+conserva como tal; no se repite. Procedencia: ef99/audit_oct10_remote_query_provenance.txt.
+La conclusión de OOM memcg se sostiene por la evidencia independiente del kernel;
+la causa por función sigue hipótesis. update_learning=False se retira como
+optimización de paridad: puede dejar outcomes/capturas obsoletos si PMR falla.
+
+Próximo lote N2 reservado .360: lectura proyectada/por lotes exclusiva de
+artifacts para origin_utility del digest. Fuente actual solicita 50000 artifacts
+con content_text completo, mientras ese consumidor solo usa proposal_id y
+payload.status/tests_ok. La aprobación humana sigue usando su lector íntegro.
+Mantener límite/orden/JSON/errores y métricas exactas; caracterizar contra base,
+probar lifecycle/read-only y medir memoria local con diffs sintéticos grandes.
+Sin cambios a aprobación, aprendizaje, trading, esquema, config ni protegidos.
+Base prevista 1a3333a4; nuevo worktree bolsa-origin-memory-oct10 en preparación.
+.361 reservado para la versión de integración final si se combinan .359/.360.
+No afirmar OOM resuelto por esta reducción de ancho; salud/ARM/paridad/QA final
+siguen gates antes de desplegar. Producción .321 y revisión 12-oct intactas.
+
+
 ## Revisión root del digest y auditoría del scheduler — 10-oct, 11:45 Europe/Madrid
 
 Dictamen .358 `ready_for_integration_rehearsal`, con merge pendiente. Entrega

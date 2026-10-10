@@ -1,0 +1,697 @@
+{
+  "base": "43325d7b8c6525fa3665537f5109d570f2f2f5a9",
+  "head": "83ec4b60ef7bb9c079d9780dbe77a648d3f601ea",
+  "source_sha256": "d7e03cd6f716d1e51db015c212542eebdd576e493336aef84653c1231e61b050",
+  "base_blob_sha256": "9d9167471562efa2896ad3a2e2a19214ebbf13d2408255fe3bc496ad6465fa94",
+  "cases": [
+    {
+      "name": "valid",
+      "equal": true,
+      "base": {
+        "result": {
+          "schema_version": "p-l31b.comparable-control.v2",
+          "status": "evaluable",
+          "window": {
+            "from": null,
+            "to": null,
+            "status_filter": null
+          },
+          "treatments_total_new": 1,
+          "treatments_with_control_set": 1,
+          "verified_control_sets": 1,
+          "partially_comparable_sets": 0,
+          "unavailable_sets": 0,
+          "primary_controls": 1,
+          "blocked_candidates": 0,
+          "eligible_controls_omitted": 0,
+          "treatment_control_pairs": 1,
+          "average_controls_per_treatment": 1.0,
+          "same_cycle_coverage": 0.0,
+          "signal_price_coverage": 0.0,
+          "market_state_ref_coverage": 0.0,
+          "gate_ledger_coverage": 0.0,
+          "non_execution_reason_coverage": 0.0,
+          "outcome_maturity_by_arm": {
+            "treatment": 1,
+            "controls": 0,
+            "total": 0
+          },
+          "outcome_maturity_coverage": 0.5,
+          "conflicts": null,
+          "conflicts_status": "unavailable",
+          "unavailable_by_reason": {},
+          "legacy_without_control_set": 0,
+          "legacy_v1_prospective_selection": 0,
+          "invalid_schema_count": 0,
+          "selection_source_coverage": 0.0
+        },
+        "reads": [
+          [
+            "recommendations",
+            {
+              "limit": 50000
+            }
+          ],
+          [
+            "outcomes",
+            {
+              "limit": 200000,
+              "include_lab_book": true,
+              "include_learning_experiment": true
+            }
+          ]
+        ]
+      },
+      "candidate": {
+        "result": {
+          "schema_version": "p-l31b.comparable-control.v2",
+          "status": "evaluable",
+          "window": {
+            "from": null,
+            "to": null,
+            "status_filter": null
+          },
+          "treatments_total_new": 1,
+          "treatments_with_control_set": 1,
+          "verified_control_sets": 1,
+          "partially_comparable_sets": 0,
+          "unavailable_sets": 0,
+          "primary_controls": 1,
+          "blocked_candidates": 0,
+          "eligible_controls_omitted": 0,
+          "treatment_control_pairs": 1,
+          "average_controls_per_treatment": 1.0,
+          "same_cycle_coverage": 0.0,
+          "signal_price_coverage": 0.0,
+          "market_state_ref_coverage": 0.0,
+          "gate_ledger_coverage": 0.0,
+          "non_execution_reason_coverage": 0.0,
+          "outcome_maturity_by_arm": {
+            "treatment": 1,
+            "controls": 0,
+            "total": 0
+          },
+          "outcome_maturity_coverage": 0.5,
+          "conflicts": null,
+          "conflicts_status": "unavailable",
+          "unavailable_by_reason": {},
+          "legacy_without_control_set": 0,
+          "legacy_v1_prospective_selection": 0,
+          "invalid_schema_count": 0,
+          "selection_source_coverage": 0.0
+        },
+        "reads": [
+          [
+            "recommendations",
+            {
+              "limit": 50000
+            }
+          ],
+          [
+            "outcomes",
+            {
+              "limit": 200000,
+              "include_lab_book": true,
+              "include_learning_experiment": true
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "name": "invalid_overwritten",
+      "equal": true,
+      "base": {
+        "result": {
+          "schema_version": "p-l31b.comparable-control.v2",
+          "status": "evaluable",
+          "window": {
+            "from": null,
+            "to": null,
+            "status_filter": null
+          },
+          "treatments_total_new": 1,
+          "treatments_with_control_set": 1,
+          "verified_control_sets": 1,
+          "partially_comparable_sets": 0,
+          "unavailable_sets": 0,
+          "primary_controls": 1,
+          "blocked_candidates": 0,
+          "eligible_controls_omitted": 0,
+          "treatment_control_pairs": 1,
+          "average_controls_per_treatment": 1.0,
+          "same_cycle_coverage": 0.0,
+          "signal_price_coverage": 0.0,
+          "market_state_ref_coverage": 0.0,
+          "gate_ledger_coverage": 0.0,
+          "non_execution_reason_coverage": 0.0,
+          "outcome_maturity_by_arm": {
+            "treatment": 1,
+            "controls": 0,
+            "total": 0
+          },
+          "outcome_maturity_coverage": 0.5,
+          "conflicts": null,
+          "conflicts_status": "unavailable",
+          "unavailable_by_reason": {},
+          "legacy_without_control_set": 0,
+          "legacy_v1_prospective_selection": 0,
+          "invalid_schema_count": 0,
+          "selection_source_coverage": 0.0
+        },
+        "reads": [
+          [
+            "recommendations",
+            {
+              "limit": 50000
+            }
+          ],
+          [
+            "outcomes",
+            {
+              "limit": 200000,
+              "include_lab_book": true,
+              "include_learning_experiment": true
+            }
+          ]
+        ]
+      },
+      "candidate": {
+        "result": {
+          "schema_version": "p-l31b.comparable-control.v2",
+          "status": "evaluable",
+          "window": {
+            "from": null,
+            "to": null,
+            "status_filter": null
+          },
+          "treatments_total_new": 1,
+          "treatments_with_control_set": 1,
+          "verified_control_sets": 1,
+          "partially_comparable_sets": 0,
+          "unavailable_sets": 0,
+          "primary_controls": 1,
+          "blocked_candidates": 0,
+          "eligible_controls_omitted": 0,
+          "treatment_control_pairs": 1,
+          "average_controls_per_treatment": 1.0,
+          "same_cycle_coverage": 0.0,
+          "signal_price_coverage": 0.0,
+          "market_state_ref_coverage": 0.0,
+          "gate_ledger_coverage": 0.0,
+          "non_execution_reason_coverage": 0.0,
+          "outcome_maturity_by_arm": {
+            "treatment": 1,
+            "controls": 0,
+            "total": 0
+          },
+          "outcome_maturity_coverage": 0.5,
+          "conflicts": null,
+          "conflicts_status": "unavailable",
+          "unavailable_by_reason": {},
+          "legacy_without_control_set": 0,
+          "legacy_v1_prospective_selection": 0,
+          "invalid_schema_count": 0,
+          "selection_source_coverage": 0.0
+        },
+        "reads": [
+          [
+            "recommendations",
+            {
+              "limit": 50000
+            }
+          ],
+          [
+            "outcomes",
+            {
+              "limit": 200000,
+              "include_lab_book": true,
+              "include_learning_experiment": true
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "name": "invalid_horizons_overwritten",
+      "equal": true,
+      "base": {
+        "result": {
+          "schema_version": "p-l31b.comparable-control.v2",
+          "status": "collecting",
+          "window": {
+            "from": null,
+            "to": null,
+            "status_filter": null
+          },
+          "treatments_total_new": 1,
+          "treatments_with_control_set": 1,
+          "verified_control_sets": 1,
+          "partially_comparable_sets": 0,
+          "unavailable_sets": 0,
+          "primary_controls": 1,
+          "blocked_candidates": 0,
+          "eligible_controls_omitted": 0,
+          "treatment_control_pairs": 1,
+          "average_controls_per_treatment": 1.0,
+          "same_cycle_coverage": 0.0,
+          "signal_price_coverage": 0.0,
+          "market_state_ref_coverage": 0.0,
+          "gate_ledger_coverage": 0.0,
+          "non_execution_reason_coverage": 0.0,
+          "outcome_maturity_by_arm": {
+            "treatment": 0,
+            "controls": 0,
+            "total": 0
+          },
+          "outcome_maturity_coverage": 0.0,
+          "conflicts": null,
+          "conflicts_status": "unavailable",
+          "unavailable_by_reason": {},
+          "legacy_without_control_set": 0,
+          "legacy_v1_prospective_selection": 0,
+          "invalid_schema_count": 0,
+          "selection_source_coverage": 0.0
+        },
+        "reads": [
+          [
+            "recommendations",
+            {
+              "limit": 50000
+            }
+          ],
+          [
+            "outcomes",
+            {
+              "limit": 200000,
+              "include_lab_book": true,
+              "include_learning_experiment": true
+            }
+          ]
+        ]
+      },
+      "candidate": {
+        "result": {
+          "schema_version": "p-l31b.comparable-control.v2",
+          "status": "collecting",
+          "window": {
+            "from": null,
+            "to": null,
+            "status_filter": null
+          },
+          "treatments_total_new": 1,
+          "treatments_with_control_set": 1,
+          "verified_control_sets": 1,
+          "partially_comparable_sets": 0,
+          "unavailable_sets": 0,
+          "primary_controls": 1,
+          "blocked_candidates": 0,
+          "eligible_controls_omitted": 0,
+          "treatment_control_pairs": 1,
+          "average_controls_per_treatment": 1.0,
+          "same_cycle_coverage": 0.0,
+          "signal_price_coverage": 0.0,
+          "market_state_ref_coverage": 0.0,
+          "gate_ledger_coverage": 0.0,
+          "non_execution_reason_coverage": 0.0,
+          "outcome_maturity_by_arm": {
+            "treatment": 0,
+            "controls": 0,
+            "total": 0
+          },
+          "outcome_maturity_coverage": 0.0,
+          "conflicts": null,
+          "conflicts_status": "unavailable",
+          "unavailable_by_reason": {},
+          "legacy_without_control_set": 0,
+          "legacy_v1_prospective_selection": 0,
+          "invalid_schema_count": 0,
+          "selection_source_coverage": 0.0
+        },
+        "reads": [
+          [
+            "recommendations",
+            {
+              "limit": 50000
+            }
+          ],
+          [
+            "outcomes",
+            {
+              "limit": 200000,
+              "include_lab_book": true,
+              "include_learning_experiment": true
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "name": "invalid_final",
+      "equal": true,
+      "base": {
+        "error_type": "AttributeError",
+        "error": "'list' object has no attribute 'get'",
+        "reads": [
+          [
+            "recommendations",
+            {
+              "limit": 50000
+            }
+          ],
+          [
+            "outcomes",
+            {
+              "limit": 200000,
+              "include_lab_book": true,
+              "include_learning_experiment": true
+            }
+          ]
+        ]
+      },
+      "candidate": {
+        "error_type": "AttributeError",
+        "error": "'list' object has no attribute 'get'",
+        "reads": [
+          [
+            "recommendations",
+            {
+              "limit": 50000
+            }
+          ],
+          [
+            "outcomes",
+            {
+              "limit": 200000,
+              "include_lab_book": true,
+              "include_learning_experiment": true
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "name": "irrelevant_invalid",
+      "equal": true,
+      "base": {
+        "result": {
+          "schema_version": "p-l31b.comparable-control.v2",
+          "status": "collecting",
+          "window": {
+            "from": null,
+            "to": null,
+            "status_filter": null
+          },
+          "treatments_total_new": 1,
+          "treatments_with_control_set": 1,
+          "verified_control_sets": 1,
+          "partially_comparable_sets": 0,
+          "unavailable_sets": 0,
+          "primary_controls": 1,
+          "blocked_candidates": 0,
+          "eligible_controls_omitted": 0,
+          "treatment_control_pairs": 1,
+          "average_controls_per_treatment": 1.0,
+          "same_cycle_coverage": 0.0,
+          "signal_price_coverage": 0.0,
+          "market_state_ref_coverage": 0.0,
+          "gate_ledger_coverage": 0.0,
+          "non_execution_reason_coverage": 0.0,
+          "outcome_maturity_by_arm": {
+            "treatment": 0,
+            "controls": 0,
+            "total": 0
+          },
+          "outcome_maturity_coverage": 0.0,
+          "conflicts": null,
+          "conflicts_status": "unavailable",
+          "unavailable_by_reason": {},
+          "legacy_without_control_set": 0,
+          "legacy_v1_prospective_selection": 0,
+          "invalid_schema_count": 0,
+          "selection_source_coverage": 0.0
+        },
+        "reads": [
+          [
+            "recommendations",
+            {
+              "limit": 50000
+            }
+          ],
+          [
+            "outcomes",
+            {
+              "limit": 200000,
+              "include_lab_book": true,
+              "include_learning_experiment": true
+            }
+          ]
+        ]
+      },
+      "candidate": {
+        "result": {
+          "schema_version": "p-l31b.comparable-control.v2",
+          "status": "collecting",
+          "window": {
+            "from": null,
+            "to": null,
+            "status_filter": null
+          },
+          "treatments_total_new": 1,
+          "treatments_with_control_set": 1,
+          "verified_control_sets": 1,
+          "partially_comparable_sets": 0,
+          "unavailable_sets": 0,
+          "primary_controls": 1,
+          "blocked_candidates": 0,
+          "eligible_controls_omitted": 0,
+          "treatment_control_pairs": 1,
+          "average_controls_per_treatment": 1.0,
+          "same_cycle_coverage": 0.0,
+          "signal_price_coverage": 0.0,
+          "market_state_ref_coverage": 0.0,
+          "gate_ledger_coverage": 0.0,
+          "non_execution_reason_coverage": 0.0,
+          "outcome_maturity_by_arm": {
+            "treatment": 0,
+            "controls": 0,
+            "total": 0
+          },
+          "outcome_maturity_coverage": 0.0,
+          "conflicts": null,
+          "conflicts_status": "unavailable",
+          "unavailable_by_reason": {},
+          "legacy_without_control_set": 0,
+          "legacy_v1_prospective_selection": 0,
+          "invalid_schema_count": 0,
+          "selection_source_coverage": 0.0
+        },
+        "reads": [
+          [
+            "recommendations",
+            {
+              "limit": 50000
+            }
+          ],
+          [
+            "outcomes",
+            {
+              "limit": 200000,
+              "include_lab_book": true,
+              "include_learning_experiment": true
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "name": "verified_controls_scalar",
+      "equal": false,
+      "base": {
+        "error_type": "TypeError",
+        "error": "'int' object is not iterable",
+        "reads": [
+          [
+            "recommendations",
+            {
+              "limit": 50000
+            }
+          ]
+        ]
+      },
+      "candidate": {
+        "error_type": "TypeError",
+        "error": "object of type 'int' has no len()",
+        "reads": [
+          [
+            "recommendations",
+            {
+              "limit": 50000
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "name": "identity_then_later_outcome",
+      "equal": true,
+      "base": {
+        "error_type": "AttributeError",
+        "error": "'int' object has no attribute 'get'",
+        "reads": [
+          [
+            "recommendations",
+            {
+              "limit": 50000
+            }
+          ],
+          [
+            "outcomes",
+            {
+              "limit": 200000,
+              "include_lab_book": true,
+              "include_learning_experiment": true
+            }
+          ]
+        ]
+      },
+      "candidate": {
+        "error_type": "AttributeError",
+        "error": "'int' object has no attribute 'get'",
+        "reads": [
+          [
+            "recommendations",
+            {
+              "limit": 50000
+            }
+          ],
+          [
+            "outcomes",
+            {
+              "limit": 200000,
+              "include_lab_book": true,
+              "include_learning_experiment": true
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "name": "metric_then_later_maturity",
+      "equal": true,
+      "base": {
+        "error_type": "AttributeError",
+        "error": "'list' object has no attribute 'get'",
+        "reads": [
+          [
+            "recommendations",
+            {
+              "limit": 50000
+            }
+          ],
+          [
+            "outcomes",
+            {
+              "limit": 200000,
+              "include_lab_book": true,
+              "include_learning_experiment": true
+            }
+          ]
+        ]
+      },
+      "candidate": {
+        "error_type": "AttributeError",
+        "error": "'list' object has no attribute 'get'",
+        "reads": [
+          [
+            "recommendations",
+            {
+              "limit": 50000
+            }
+          ],
+          [
+            "outcomes",
+            {
+              "limit": 200000,
+              "include_lab_book": true,
+              "include_learning_experiment": true
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "name": "fields_across_records",
+      "equal": true,
+      "base": {
+        "error_type": "TypeError",
+        "error": "object of type 'int' has no len()",
+        "reads": [
+          [
+            "recommendations",
+            {
+              "limit": 50000
+            }
+          ],
+          [
+            "outcomes",
+            {
+              "limit": 200000,
+              "include_lab_book": true,
+              "include_learning_experiment": true
+            }
+          ]
+        ]
+      },
+      "candidate": {
+        "error_type": "TypeError",
+        "error": "object of type 'int' has no len()",
+        "reads": [
+          [
+            "recommendations",
+            {
+              "limit": 50000
+            }
+          ],
+          [
+            "outcomes",
+            {
+              "limit": 200000,
+              "include_lab_book": true,
+              "include_learning_experiment": true
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "name": "invalid_recommendation_after_metric",
+      "equal": true,
+      "base": {
+        "error_type": "AttributeError",
+        "error": "'list' object has no attribute 'get'",
+        "reads": [
+          [
+            "recommendations",
+            {
+              "limit": 50000
+            }
+          ]
+        ]
+      },
+      "candidate": {
+        "error_type": "AttributeError",
+        "error": "'list' object has no attribute 'get'",
+        "reads": [
+          [
+            "recommendations",
+            {
+              "limit": 50000
+            }
+          ]
+        ]
+      }
+    }
+  ],
+  "all_equal": false
+}
