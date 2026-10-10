@@ -734,83 +734,359 @@ def build_comparable_control_quality(
 ) -> dict[str, Any]:
     """Read-only digest for newly captured control sets."""
 
-    records = []
     legacy = 0
     legacy_v1 = 0
     invalid_schema = 0
-    for record in store.trade_recommendations(limit=50000):
-        created = _iso_date(record.get("created_at"))
-        if start and created and created < start:
-            continue
-        if end and created and created > end:
-            continue
-        payload = record.get("payload") or {}
-        control_set = payload.get("comparable_control_set")
-        if not control_set:
-            legacy += 1
-            continue
-        if control_set.get("schema_version") == LEGACY_SCHEMA_VERSION:
-            legacy_v1 += 1
-            continue
-        if control_set.get("schema_version") != SCHEMA_VERSION:
-            invalid_schema += 1
-            continue
-        if status and str(control_set.get("status") or "") != status:
-            continue
-        records.append(control_set)
-    counts = Counter(str(item.get("status") or "unavailable") for item in records)
-    verified = [item for item in records if item.get("status") == "verified"]
-    controls = [control for item in verified for control in item.get("controls") or []]
-    outcomes_by_id = {}
-    for item in store.signal_outcomes(limit=200000, include_lab_book=True, include_learning_experiment=True):
-        outcomes_by_id[str(item.get("signal_id") or "")] = item.get("outcome") or {}
+
+    # Keep one compact entry per accepted control set.  The old reader retained
+    # up to 50k full recommendation payloads and 200k full outcome payloads.
+    # Exception descriptors contain only type/message so a deferred error does
+    # not keep a large source row alive through a traceback.
+    compact_records: list[dict[str, Any]] = []
+    counts: Counter[str] = Counter()
+    denominator = 0
+    primary_controls = 0
+    control_denominator = 0
+    blocked_candidates = 0
+    eligible_controls_omitted = 0
+    same_cycle_count = 0
+    signal_price_count = 0
+    market_state_ref_count = 0
+    gate_ledger_count = 0
+    non_execution_reason_count = 0
+    unavailable_by_reason: Counter[str] = Counter()
+    selection_source_count = 0
     maturity = {"treatment": 0, "controls": 0, "total": 0}
-    for item in records:
-        treatment_signal = str((item.get("treatment") or {}).get("signal_id") or "")
-        outcome = outcomes_by_id.get(treatment_signal) or {}
-        if (outcome.get("matured_horizons") or {}).get("10d"):
+    tracked_signal_ids: set[str] = set()
+    maturity_probe_by_signal_id: dict[str, tuple[str, Any]] = {}
+
+    def error_spec(error: Exception) -> tuple[type[Exception], str]:
+        return type(error), str(error)
+
+    def raise_error(spec: tuple[type[Exception], str]) -> None:
+        error_type, message = spec
+        raise error_type(message)
+
+    def safe_call(callback: Any) -> tuple[str, Any]:
+        try:
+            return "value", callback()
+        except Exception as exc:
+            return "error", error_spec(exc)
+
+    def mapping_get(item: Any, key: str) -> tuple[str, Any]:
+        try:
+            return "value", item.get(key)
+        except Exception as exc:
+            return "error", error_spec(exc)
+
+    def signal_probe(
+        identity: Any,
+        *,
+        treatment: bool = False,
+        from_mapping_get: bool = False,
+    ) -> tuple[str, Any]:
+        if from_mapping_get:
+            if identity[0] == "error":
+                return "error", identity[1]
+            identity = identity[1]
+        try:
+            normalized = identity or {} if treatment else identity
+        except Exception as exc:
+            return "error", error_spec(exc)
+        if not isinstance(normalized, Mapping):
+            return "invalid", type(normalized).__name__
+        try:
+            return "signal", str(normalized.get("signal_id") or "")
+        except Exception as exc:
+            return "error", error_spec(exc)
+
+    def control_collection_probe(raw: tuple[str, Any]) -> dict[str, Any]:
+        if raw[0] == "error":
+            return {"kind": "error", "error": raw[1], "items": (), "count": ("error", raw[1])}
+        try:
+            controls = raw[1] or []
+        except Exception as exc:
+            spec = error_spec(exc)
+            return {"kind": "error", "error": spec, "items": (), "count": ("error", spec)}
+        try:
+            if not controls:
+                return {"kind": "items", "items": (), "count": ("value", 0)}
+        except Exception as exc:
+            spec = error_spec(exc)
+            return {"kind": "error", "error": spec, "items": (), "count": ("error", spec)}
+        try:
+            iterator = iter(controls)
+        except Exception as exc:
+            spec = error_spec(exc)
+            return {"kind": "error", "error": spec, "items": (), "count": ("error", spec)}
+        items = []
+        for control in iterator:
+            items.append(
+                (
+                    signal_probe(control),
+                    safe_call(lambda control=control: bool(control.get("gate_ledger"))),
+                    safe_call(
+                        lambda control=control: control.get("non_execution_reason") in PRIMARY_REASONS
+                    ),
+                )
+            )
+        count = safe_call(lambda: len(controls))
+        return {"kind": "items", "items": tuple(items), "count": count}
+
+    def consume_control_set(item: Any) -> None:
+        status = mapping_get(item, "status")
+        treatment = mapping_get(item, "treatment")
+        controls = control_collection_probe(mapping_get(item, "controls"))
+        compact_records.append(
+            {
+                "status": status,
+                "is_verified": status[0] == "value" and status[1] == "verified",
+                "treatment": signal_probe(treatment, treatment=True, from_mapping_get=True),
+                "controls": controls,
+                "blocked_candidates": safe_call(
+                    lambda: len(item.get("blocked_candidates") or [])
+                ),
+                "eligible_controls_omitted": safe_call(
+                    lambda: int(item.get("eligible_controls_omitted") or 0)
+                ),
+                "same_cycle": safe_call(lambda: bool(item.get("cycle_id"))),
+                "signal_price": safe_call(
+                    lambda: bool((item.get("treatment") or {}).get("signal_price"))
+                ),
+                "market_state_ref": safe_call(lambda: bool(item.get("market_state_ref_hash"))),
+                "unavailable_reason": safe_call(
+                    lambda: str(item.get("unavailable_reason") or "")
+                    if item.get("unavailable_reason")
+                    else ""
+                ),
+                "selection_source": safe_call(
+                    lambda: item.get("selection_source") == "actual_final_plans"
+                ),
+            }
+        )
+
+    selection_error: tuple[type[Exception], str] | None = None
+
+    def remember_selection_error(exc: Exception) -> None:
+        nonlocal selection_error
+        if selection_error is None:
+            selection_error = error_spec(exc)
+
+    def consume_recommendation(record: Mapping[str, Any]) -> None:
+        nonlocal legacy, legacy_v1, invalid_schema
+        if selection_error is not None:
+            return
+        try:
+            created = _iso_date(record.get("created_at"))
+            if start and created and created < start:
+                return
+            if end and created and created > end:
+                return
+            payload = record.get("payload") or {}
+            control_set = payload.get("comparable_control_set")
+            if not control_set:
+                legacy += 1
+                return
+            if control_set.get("schema_version") == LEGACY_SCHEMA_VERSION:
+                legacy_v1 += 1
+                return
+            if control_set.get("schema_version") != SCHEMA_VERSION:
+                invalid_schema += 1
+                return
+            if status and str(control_set.get("status") or "") != status:
+                return
+            consume_control_set(control_set)
+        except Exception as exc:
+            # The legacy reader materializes and decodes every row before the
+            # handler selects any row. Keep draining the streaming reader so a
+            # later decoder/SQL failure retains the same precedence, then
+            # re-raise this compact selection error at the phase boundary.
+            remember_selection_error(exc)
+
+    def finalize_recommendations() -> None:
+        nonlocal denominator, primary_controls
+        for entry in compact_records:
+            status = entry["status"]
+            if status[0] == "error":
+                raise_error(status[1])
+            counts[str(status[1] or "unavailable")] += 1
+            denominator += 1
+        for entry in compact_records:
+            controls = entry["controls"]
+            if controls["kind"] == "error":
+                if entry["is_verified"]:
+                    raise_error(controls["error"])
+                entry["control_shape_error"] = controls["error"]
+                entry["control_items"] = ()
+            else:
+                entry["control_shape_error"] = None
+                entry["control_items"] = controls["items"]
+                if entry["is_verified"]:
+                    primary_controls += len(entry["control_items"])
+            treatment = entry["treatment"]
+            if treatment[0] == "signal":
+                tracked_signal_ids.add(treatment[1])
+            for control in entry["control_items"]:
+                identity = control[0]
+                if identity[0] == "signal":
+                    tracked_signal_ids.add(identity[1])
+
+    def finish_recommendations() -> None:
+        if selection_error is not None:
+            raise_error(selection_error)
+        finalize_recommendations()
+
+    def consume_outcome(record: Mapping[str, Any]) -> None:
+        signal_id = str(record.get("signal_id") or "")
+        if signal_id not in tracked_signal_ids:
+            return
+        try:
+            outcome = record.get("outcome") or {}
+        except Exception as exc:
+            maturity_probe_by_signal_id[signal_id] = ("error", error_spec(exc))
+            return
+        # Keep a compact probe only. Assignment on every row preserves legacy
+        # last-wins behavior; shape errors are raised only for the final row.
+        if not isinstance(outcome, Mapping):
+            maturity_probe_by_signal_id[signal_id] = ("invalid_outcome", type(outcome).__name__)
+            return
+        try:
+            matured_horizons = outcome.get("matured_horizons")
+            if not matured_horizons:
+                maturity_probe_by_signal_id[signal_id] = ("value", False)
+            elif not isinstance(matured_horizons, Mapping):
+                maturity_probe_by_signal_id[signal_id] = ("invalid_horizons", type(matured_horizons).__name__)
+            else:
+                maturity_probe_by_signal_id[signal_id] = ("value", bool(matured_horizons.get("10d")))
+        except Exception as exc:
+            maturity_probe_by_signal_id[signal_id] = ("error", error_spec(exc))
+
+    stream_factory = getattr(store, "comparable_control_quality_record_stream", None)
+    if callable(stream_factory):
+        with stream_factory(batch_size=512) as stream:
+            recommendations_finalized = False
+            for kind, record in stream:
+                if kind == "recommendation":
+                    consume_recommendation(record)
+                elif kind == "recommendations_complete":
+                    if not recommendations_finalized:
+                        finish_recommendations()
+                        recommendations_finalized = True
+                elif kind == "outcome":
+                    if not recommendations_finalized:
+                        finish_recommendations()
+                        recommendations_finalized = True
+                    consume_outcome(record)
+                else:
+                    raise ValueError(f"comparable_control_quality_record_kind_invalid:{kind}")
+            if not recommendations_finalized:
+                finish_recommendations()
+    else:
+        # Fakes and older Store implementations keep their list-based contract.
+        for record in store.trade_recommendations(limit=50000):
+            consume_recommendation(record)
+        finish_recommendations()
+        for record in store.signal_outcomes(
+            limit=200000,
+            include_lab_book=True,
+            include_learning_experiment=True,
+        ):
+            consume_outcome(record)
+
+    # Re-evaluate maturity after all duplicate outcome rows have been seen.
+    # This pass retains only compact probes and follows the base item order.
+    def maturity_for_probe(probe: tuple[str, Any]) -> bool:
+        if probe[0] == "invalid":
+            raise AttributeError(f"'{probe[1]}' object has no attribute 'get'")
+        if probe[0] == "error":
+            raise_error(probe[1])
+        signal_id = probe[1]
+        outcome_probe = maturity_probe_by_signal_id.get(signal_id)
+        if not outcome_probe:
+            return False
+        if outcome_probe[0] == "invalid_outcome":
+            raise AttributeError(f"'{outcome_probe[1]}' object has no attribute 'get'")
+        if outcome_probe[0] == "invalid_horizons":
+            raise AttributeError(f"'{outcome_probe[1]}' object has no attribute 'get'")
+        if outcome_probe[0] == "error":
+            raise_error(outcome_probe[1])
+        return bool(outcome_probe[1])
+
+    for entry in compact_records:
+        if maturity_for_probe(entry["treatment"]):
             maturity["treatment"] += 1
-        for control in item.get("controls") or []:
-            outcome = outcomes_by_id.get(str(control.get("signal_id") or "")) or {}
-            if (outcome.get("matured_horizons") or {}).get("10d"):
+        if entry["control_shape_error"] is not None:
+            raise_error(entry["control_shape_error"])
+        for control in entry["control_items"]:
+            if maturity_for_probe(control[0]):
                 maturity["controls"] += 1
-    denominator = len(records)
-    control_denominator = sum(len(item.get("controls") or []) for item in records)
+
+    for entry in compact_records:
+        count = entry["controls"]["count"]
+        if count[0] == "error":
+            raise_error(count[1])
+        control_denominator += count[1]
+
+    def sum_metric(name: str) -> int:
+        total = 0
+        for entry in compact_records:
+            probe = entry[name]
+            if probe[0] == "error":
+                raise_error(probe[1])
+            total += probe[1]
+        return total
+
+    blocked_candidates = sum_metric("blocked_candidates")
+    eligible_controls_omitted = sum_metric("eligible_controls_omitted")
+    same_cycle_count = sum_metric("same_cycle")
+    signal_price_count = sum_metric("signal_price")
+    market_state_ref_count = sum_metric("market_state_ref")
+    for entry in compact_records:
+        for control in entry["control_items"]:
+            probe = control[1]
+            if probe[0] == "error":
+                raise_error(probe[1])
+            gate_ledger_count += probe[1]
+    for entry in compact_records:
+        for control in entry["control_items"]:
+            probe = control[2]
+            if probe[0] == "error":
+                raise_error(probe[1])
+            non_execution_reason_count += probe[1]
+    for entry in compact_records:
+        probe = entry["unavailable_reason"]
+        if probe[0] == "error":
+            raise_error(probe[1])
+        if probe[1]:
+            unavailable_by_reason[probe[1]] += 1
+    selection_source_count = sum_metric("selection_source")
     mature_total = maturity["treatment"] + maturity["controls"]
     return {
         "schema_version": SCHEMA_VERSION,
-        "status": "collecting" if not records or not mature_total else "evaluable",
+        "status": "collecting" if not denominator or not mature_total else "evaluable",
         "window": {"from": start, "to": end, "status_filter": status},
         "treatments_total_new": denominator,
         "treatments_with_control_set": denominator,
         "verified_control_sets": counts.get("verified", 0),
         "partially_comparable_sets": counts.get("partially_comparable", 0),
         "unavailable_sets": counts.get("unavailable", 0),
-        "primary_controls": len(controls),
-        "blocked_candidates": sum(len(item.get("blocked_candidates") or []) for item in records),
-        "eligible_controls_omitted": sum(int(item.get("eligible_controls_omitted") or 0) for item in records),
-        "treatment_control_pairs": len(controls),
-        "average_controls_per_treatment": len(controls) / denominator if denominator else None,
-        "same_cycle_coverage": sum(bool(item.get("cycle_id")) for item in records) / denominator if denominator else None,
-        "signal_price_coverage": sum(bool((item.get("treatment") or {}).get("signal_price")) for item in records) / denominator if denominator else None,
-        "market_state_ref_coverage": sum(bool(item.get("market_state_ref_hash")) for item in records) / denominator if denominator else None,
-        "gate_ledger_coverage": sum(
-            bool(control.get("gate_ledger"))
-            for item in records
-            for control in item.get("controls") or []
-        ) / control_denominator if control_denominator else None,
-        "non_execution_reason_coverage": sum(
-            control.get("non_execution_reason") in PRIMARY_REASONS
-            for item in records
-            for control in item.get("controls") or []
-        ) / control_denominator if control_denominator else None,
+        "primary_controls": primary_controls,
+        "blocked_candidates": blocked_candidates,
+        "eligible_controls_omitted": eligible_controls_omitted,
+        "treatment_control_pairs": primary_controls,
+        "average_controls_per_treatment": primary_controls / denominator if denominator else None,
+        "same_cycle_coverage": same_cycle_count / denominator if denominator else None,
+        "signal_price_coverage": signal_price_count / denominator if denominator else None,
+        "market_state_ref_coverage": market_state_ref_count / denominator if denominator else None,
+        "gate_ledger_coverage": gate_ledger_count / control_denominator if control_denominator else None,
+        "non_execution_reason_coverage": non_execution_reason_count / control_denominator if control_denominator else None,
         "outcome_maturity_by_arm": maturity,
         "outcome_maturity_coverage": mature_total / (denominator + control_denominator) if denominator + control_denominator else None,
         "conflicts": None,
         "conflicts_status": "unavailable",
-        "unavailable_by_reason": dict(Counter(str(item.get("unavailable_reason") or "") for item in records if item.get("unavailable_reason"))),
+        "unavailable_by_reason": dict(unavailable_by_reason),
         "legacy_without_control_set": legacy,
         "legacy_v1_prospective_selection": legacy_v1,
         "invalid_schema_count": invalid_schema,
-        "selection_source_coverage": sum(item.get("selection_source") == "actual_final_plans" for item in records) / denominator if denominator else None,
+        "selection_source_coverage": selection_source_count / denominator if denominator else None,
     }

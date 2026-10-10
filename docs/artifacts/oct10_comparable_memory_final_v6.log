@@ -1,0 +1,19 @@
+started=2026-10-10T12:02:35.4914055+02:00
+worktree=C:\Users\utopi\.codex\worktrees\bolsa-controls-memory-oct10\agenteBolsa
+python=C:\Antonio\Bref\agenteBolsa\.venv\Scripts\python.exe
+PYTHONPATH=C:\Users\utopi\.codex\worktrees\bolsa-controls-memory-oct10\agenteBolsa\src
+DATA_DIR=C:\Users\utopi\AppData\Local\Temp\oct10-comparable-final-v6-data
+_env_file=None
+OCT10_MEMORY_ARTIFACT=1
+network_guard=C:\Users\utopi\AppData\Local\Temp\oct10_comparable_memory_bootstrap_v6.py
+tests=tests/test_oct10_comparable_memory.py tests/test_comparable_controls.py tests/test_comparable_controls_p31br.py tests/test_decision_context_streaming.py tests/test_version_policy.py
+
+pid=34072
+started_process=2026-10-10T12:02:35.5154801+02:00
+exit=0
+finished=2026-10-10T12:02:40.8029862+02:00
+--- stdout ---
+............................................                             [100%]
+44 passed in 4.69s
+
+--- stderr ---

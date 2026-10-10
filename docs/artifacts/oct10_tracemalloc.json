@@ -1,0 +1,33 @@
+{
+  "recommendation_count": 3000,
+  "outcome_count": 6000,
+  "payload_padding_bytes": 2048,
+  "baseline_peak_bytes": 6391874,
+  "streaming_peak_bytes": 4287497,
+  "streaming_to_baseline_peak_ratio": 0.6707730784430357,
+  "baseline_result_equals_streaming_result": true,
+  "legacy_reads": [
+    [
+      "recommendations",
+      50000
+    ],
+    [
+      "outcomes",
+      200000,
+      true,
+      true
+    ]
+  ],
+  "streaming_reads": [
+    [
+      "recommendations",
+      50000
+    ],
+    [
+      "outcomes",
+      200000,
+      true,
+      true
+    ]
+  ]
+}
