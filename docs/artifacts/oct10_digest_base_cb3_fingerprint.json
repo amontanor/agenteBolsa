@@ -1,0 +1,13 @@
+{
+  "base_commit": "cb3d8805a9890fab0357b0ba3a3f7afaa8577586",
+  "base_main_sha256": "d40daccc9b8dc29d5b529a1dbe829178d01194e4476d01dac1d13990d1091e1c",
+  "base_digest_related_ast_sha256": "d88fe90446b830aee0328b95af9623bcdcd7a9f573b01b147af1c39591280949",
+  "base_digest_related_nodes": [
+    "command_pre_earnings_learning_digest",
+    "command_learning_digest",
+    "command_autonomy_digest",
+    "command_continuous_improvement_lab"
+  ],
+  "current_shared_execute_ast_sha256": "f654c422e24583238a712590a7985cdeee6fc2ab81ee6c5dafea48c1619e0387",
+  "comparison_mode": "pre-refactor provenance hash only; no duplicated business implementation executed"
+}
