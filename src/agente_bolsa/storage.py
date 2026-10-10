@@ -7455,6 +7455,47 @@ class Store:
             for row in rows
         ]
 
+    def iter_continuous_improvement_proposal_artifact_summaries(
+        self,
+        *,
+        limit: int = 50000,
+        batch_size: int = 512,
+    ) -> Iterator[dict[str, Any]]:
+        """Stream the fields needed by origin utility metrics.
+
+        The full artifact reader above remains the authority for human approval and
+        other consumers that need ``content_text``. This projection keeps the
+        existing ordering and limit while avoiding materializing that text for the
+        origin-only counter.
+        """
+        conn = self._decision_context_read_connection()
+        cursor: sqlite3.Cursor | None = None
+        try:
+            cursor = conn.execute(
+                """
+                SELECT proposal_id, payload_json
+                FROM continuous_improvement_proposal_artifacts
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            try:
+                fetch_size = max(1, int(batch_size))
+                while True:
+                    rows = cursor.fetchmany(fetch_size)
+                    if not rows:
+                        break
+                    for row in rows:
+                        yield {
+                            "proposal_id": row["proposal_id"],
+                            "payload": json.loads(row["payload_json"] or "{}"),
+                        }
+            finally:
+                cursor.close()
+        finally:
+            conn.close()
+
     def upsert_continuous_improvement_runtime_state(
         self,
         *,

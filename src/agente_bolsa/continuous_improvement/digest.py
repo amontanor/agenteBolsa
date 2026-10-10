@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
@@ -59,6 +60,14 @@ TERMINAL_PROPOSAL_STATUSES = {
 ROLLBACK_STATUSES = {"ROLLED_BACK", "ROLLBACK_REQUESTED", "ROLLBACK_FAILED"}
 EXECUTABLE = "EJECUTABLE"
 PROSE = "PROSA"
+
+
+def _origin_utility_artifacts(store: Store) -> Iterable[dict[str, Any]]:
+    """Select the narrow artifact projection, with a legacy-store fallback."""
+    reader = getattr(store, "iter_continuous_improvement_proposal_artifact_summaries", None)
+    if callable(reader):
+        return reader(limit=50000)
+    return store.continuous_improvement_proposal_artifacts(limit=50000)
 
 
 def _load_json_file(path: Path) -> dict[str, Any] | None:
@@ -244,7 +253,7 @@ def build_lab_digest(
             proposals,
             applied_changes,
             experiments=experiments,
-            artifacts=store.continuous_improvement_proposal_artifacts(limit=50000),
+            artifacts=_origin_utility_artifacts(store),
         ),
         "agent_run_productivity": agent_run_productivity,
         "agent_group_conclusions": agent_group_conclusions,
@@ -329,7 +338,7 @@ def build_origin_utility_metrics(
     applied_changes: list[dict[str, Any]],
     *,
     experiments: list[dict[str, Any]] | None = None,
-    artifacts: list[dict[str, Any]] | None = None,
+    artifacts: Iterable[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Read-only origin funnel; legacy rows remain unattributed rather than guessed."""
     origins: dict[str, dict[str, Any]] = {}
@@ -382,14 +391,20 @@ def build_origin_utility_metrics(
         if resolved:
             origins[resolved[0]]["experiments_created"] += 1
 
-    for artifact in artifacts or []:
-        resolved = proposal_origins.get(str(artifact.get("proposal_id") or ""))
-        if not resolved:
-            continue
-        item = origins[resolved[0]]
-        payload = artifact.get("payload") or {}
-        item["codegen_attempted"] += 1
-        item["codegen_succeeded"] += payload.get("status") == "READY_FOR_HUMAN_REVIEW" and payload.get("tests_ok") is True
+    artifact_iter = iter(artifacts or ())
+    try:
+        for artifact in artifact_iter:
+            resolved = proposal_origins.get(str(artifact.get("proposal_id") or ""))
+            if not resolved:
+                continue
+            item = origins[resolved[0]]
+            payload = artifact.get("payload") or {}
+            item["codegen_attempted"] += 1
+            item["codegen_succeeded"] += payload.get("status") == "READY_FOR_HUMAN_REVIEW" and payload.get("tests_ok") is True
+    finally:
+        close = getattr(artifact_iter, "close", None)
+        if callable(close):
+            close()
     for change in applied_changes:
         resolved = proposal_origins.get(str(change.get("proposal_id") or ""))
         if not resolved:
