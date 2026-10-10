@@ -1,5 +1,33 @@
 # Plan maestro de mejoras y tareas — agenteBolsa
 
+## Revisión final .359 todavía abierta — 10-oct, 11:56 Europe/Madrid
+
+Entrega 0f181d8498a3ae89c4c1b884a0a784eda3d6dc2a/tree
+3d8d5b78735c89d49bb4a99d1d3f414f1369e794 verificada limpia. Focales finales:
+42 passed en3.65s, PID2556/exit0 según log v3 leído por root. Sustituye cualquier
+atribución previa de28/8passed: aquellos ocho ensayos fueron inconclusive.
+El worker acredita parada explícita de sus16PID tras comprobar pertenencia;
+la comprobación root posterior sin procesos ocurrió después. La frase anterior
+"No se mataron procesos" describía acciones root, no el conjunto del equipo.
+No se detuvieron servicios ni procesos productivos.
+
+Paridad no aceptada aún: comparación independiente root v2 contra ASTbase
+exacta43325d cubre13casos,10iguales. Tres divergencias: controles parciales
+escalares provocan fallo antes de leer outcomes (base los lee); controles
+escalares verificados/parciales seguidos de recomendación inválida cambian
+error prioritario (base list.get, candidato int not iterable). Se pide diferir
+por etapa/orden los errores sin retener payloads/tracebacks grandes, añadir
+regresión contra base y medición local de memoria requerida por el lote.
+Evidencia docs/artifacts/oct10_comparable_root_errors_v2.{json,py}.
+No merge .359 ni declaración OOM resuelto.
+
+.360 ya asignado en bolsa-origin-memory-oct10, base limpia1a3333a4:
+proyección/stream exclusivo de artifacts para origin_utility; lector íntegro
+para aprobación humana intacto. Schedule-status real09:54:44UTC confirma
+XNYS cerrado y próxima apertura12-oct15:30Madrid. Fullsuite única pendiente
+para árbol integrado definitivo; producción .321 sin cambios.
+
+
 ## Integración digest y defectos de paridad — 10-oct, 11:53 Europe/Madrid
 
 .358 integrado únicamente en rehearsal mediante merge --no-ff
