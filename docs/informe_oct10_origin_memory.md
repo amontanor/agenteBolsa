@@ -18,13 +18,16 @@ economia, broker, riesgo ni los worktrees protegidos.
 de 512 filas y cierra cursor y conexion en exito, error SQL/JSON y cierre
 temprano del generador.
 
-Antes de devolver el iterador hace un preflight por lotes que ejecuta y decodifica
-todos los `payload_json`, descartando cada objeto inmediatamente. Solo despues
-devuelve la segunda pasada por lotes. Asi un JSON invalido posterior conserva
-prioridad sobre un fallo del consumidor del primer payload, y un fallo de
-propuesta se produce despues de que la lectura de artifacts haya validado todos
-sus datos, como en el lector completo. Ningun `content_text` ni lista completa
-de payloads se conserva en memoria; la segunda pasada repite la consulta minima.
+La consulta se ejecuta una sola vez en una conexion, cursor y snapshot. El
+iterador lee por `fetchmany` de 512 filas y decodifica cada `payload_json` al
+avanzar; `drain()` consume el resto del mismo cursor cuando debe diferirse un
+error del consumidor. Asi un JSON/SQL invalido posterior conserva prioridad
+sobre un fallo del consumidor del primer payload, y un fallo de propuesta se
+produce despues de drenar la lectura de artifacts, como en el lector completo.
+Ningun `content_text` ni lista completa de payloads se conserva en memoria; no
+se repite la consulta ni se abre un segundo snapshot. `close()` cierra cursor y
+conexion y vacia tambien las filas del ultimo lote; hay regresiones para cierre
+normal, temprano y por error.
 
 El lector completo `continuous_improvement_proposal_artifacts` no cambia.
 `build_lab_digest` selecciona la proyeccion en
@@ -51,8 +54,8 @@ resume stdout en este lote.
   de cursor/conexion; tambien cierre temprano del generador.
 - precedencia de decode: un primer payload JSON-lista y un segundo JSON invalido
   producen `JSONDecodeError` antes de cualquier `.get` del consumidor; tambien
-  se verifica que el preflight ocurre antes de un error en proposals y que un
-  error del consumidor cierra la segunda pasada.
+  se verifica que el mismo cursor se drena antes de un error en proposals y que
+  un error del consumidor se difiere hasta cerrar/drainar ese cursor.
 - equivalencia de los campos proyectados con el lector completo en la misma
   base SQLite temporal y preservacion de `content_text` para aprobacion.
 - consumo de generador, verdad literal de `tests_ok`, y fallback de fakes sin
@@ -63,7 +66,7 @@ Comando final de regresion (salida y exit code persistidos en
 
 ```text
 C:\Antonio\Bref\agenteBolsa\.venv\Scripts\python.exe -m pytest -q tests/test_origin_artifact_projection.py tests/test_ci_digest_reuse.py tests/test_improvement_origin_lineage.py
-37 passed in 2.51s
+39 passed in 2.43s
 exitcode=0
 ```
 
@@ -78,9 +81,11 @@ Usa `git show` de bytes sin normalizar y escribe sus hashes en
 - AST de `build_origin_utility_metrics` base:
   `e382450264f98531ca8c4f7d213aad572d8fb47ca72bccf8af0fed252b76bd18`;
 - AST actual de `build_origin_utility_metrics`:
-  `d9c3c207069cd3142d739c61ca7ab4d63d3cd5f971562d2f6b5f7eb59eba74ad`;
+  `f5909acdf7689b607d82e411efe68778c83cde87dcaa4b34b2a8d6b435243572`;
 - AST de la nueva proyeccion:
-  `27030a19bef5b42f199033ece7a65a4d9ce0fbb8fc035dc93e8446406bea3680`.
+  `841b8d70905b8c9b76d5abf0c3ed4bacfc1a536d13930bcb5b5ff239b78a172b`;
+- blob bruto actual de `storage.py`:
+  `9be1c91a4112fbe34be6227856f8a2e86f4d8983`.
 
 ## Medicion local
 
@@ -94,8 +99,8 @@ no hubo broker, LLM ni consulta de produccion.
 
 | modo | PID | filas | content retenido | pico tracemalloc |
 | --- | ---: | ---: | ---: | ---: |
-| lector completo | 15832 | 16 | 4,194,304 B | 4,221,673 B |
-| proyeccion | 27616 | 16 | 0 B | 17,720 B |
+| lector completo | 25560 | 16 | 4,194,304 B | 4,221,673 B |
+| proyeccion | 49704 | 16 | 0 B | 17,376 B |
 
 La medicion acredita que esta ruta no materializa `content_text` en el
 proceso medido. Es una fixture pequena y `tracemalloc`, no RSS de Windows ni
