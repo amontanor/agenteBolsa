@@ -756,14 +756,22 @@ def build_comparable_control_quality(
     selection_source_count = 0
     maturity = {"treatment": 0, "controls": 0, "total": 0}
     tracked_signal_ids: set[str] = set()
-    maturity_by_signal_id: dict[str, bool] = {}
+    maturity_probe_by_signal_id: dict[str, tuple[str, bool | str]] = {}
     treatment_signal_ids: Counter[str] = Counter()
     control_signal_ids: Counter[str] = Counter()
+    arm_signal_order: list[tuple[str, str]] = []
+    deferred_error: Exception | None = None
 
     def track_signal(identity: Any, *, arm: str) -> None:
         signal_id = str((identity or {}).get("signal_id") or "")
         tracked_signal_ids.add(signal_id)
         (treatment_signal_ids if arm == "treatment" else control_signal_ids)[signal_id] += 1
+        arm_signal_order.append((arm, signal_id))
+
+    def remember_error(error: Exception) -> None:
+        nonlocal deferred_error
+        if deferred_error is None:
+            deferred_error = error
 
     def consume_control_set(item: Any) -> None:
         nonlocal denominator
@@ -772,28 +780,35 @@ def build_comparable_control_quality(
         nonlocal market_state_ref_count, gate_ledger_count, non_execution_reason_count
         nonlocal selection_source_count
 
-        counts[str(item.get("status") or "unavailable")] += 1
-        denominator += 1
-        is_verified = item.get("status") == "verified"
-        controls_for_item = item.get("controls") or []
-        if is_verified:
-            primary_controls += len(controls_for_item)
-        blocked_candidates += len(item.get("blocked_candidates") or [])
-        eligible_controls_omitted += int(item.get("eligible_controls_omitted") or 0)
-        same_cycle_count += bool(item.get("cycle_id"))
-        signal_price_count += bool((item.get("treatment") or {}).get("signal_price"))
-        market_state_ref_count += bool(item.get("market_state_ref_hash"))
-        control_denominator += len(controls_for_item)
-        gate_ledger_count += sum(bool(control.get("gate_ledger")) for control in controls_for_item)
-        non_execution_reason_count += sum(
-            control.get("non_execution_reason") in PRIMARY_REASONS for control in controls_for_item
-        )
-        if item.get("unavailable_reason"):
-            unavailable_by_reason[str(item.get("unavailable_reason") or "")] += 1
-        selection_source_count += item.get("selection_source") == "actual_final_plans"
-        track_signal(item.get("treatment") or {}, arm="treatment")
-        for control in controls_for_item:
-            track_signal(control, arm="controls")
+        try:
+            track_signal(item.get("treatment") or {}, arm="treatment")
+            for control in item.get("controls") or []:
+                track_signal(control, arm="controls")
+        except Exception as exc:  # Preserve base error until after outcomes are read.
+            remember_error(exc)
+
+        try:
+            counts[str(item.get("status") or "unavailable")] += 1
+            denominator += 1
+            is_verified = item.get("status") == "verified"
+            controls_for_item = item.get("controls") or []
+            if is_verified:
+                primary_controls += len(controls_for_item)
+            blocked_candidates += len(item.get("blocked_candidates") or [])
+            eligible_controls_omitted += int(item.get("eligible_controls_omitted") or 0)
+            same_cycle_count += bool(item.get("cycle_id"))
+            signal_price_count += bool((item.get("treatment") or {}).get("signal_price"))
+            market_state_ref_count += bool(item.get("market_state_ref_hash"))
+            control_denominator += len(controls_for_item)
+            gate_ledger_count += sum(bool(control.get("gate_ledger")) for control in controls_for_item)
+            non_execution_reason_count += sum(
+                control.get("non_execution_reason") in PRIMARY_REASONS for control in controls_for_item
+            )
+            if item.get("unavailable_reason"):
+                unavailable_by_reason[str(item.get("unavailable_reason") or "")] += 1
+            selection_source_count += item.get("selection_source") == "actual_final_plans"
+        except Exception as exc:  # Output metrics historically raised after outcome reads.
+            remember_error(exc)
 
     def consume_recommendation(record: Mapping[str, Any]) -> None:
         nonlocal legacy, legacy_v1, invalid_schema
@@ -822,9 +837,18 @@ def build_comparable_control_quality(
         if signal_id not in tracked_signal_ids:
             return
         outcome = record.get("outcome") or {}
-        # Assignment on every row intentionally preserves legacy last-wins
-        # behavior for duplicate IDs in the DESC-ordered outcome stream.
-        maturity_by_signal_id[signal_id] = bool((outcome.get("matured_horizons") or {}).get("10d"))
+        # Keep a compact probe only. Assignment on every row preserves legacy
+        # last-wins behavior; shape errors are raised only for the final row.
+        if not isinstance(outcome, Mapping):
+            maturity_probe_by_signal_id[signal_id] = ("invalid_outcome", type(outcome).__name__)
+            return
+        matured_horizons = outcome.get("matured_horizons")
+        if not matured_horizons:
+            maturity_probe_by_signal_id[signal_id] = ("value", False)
+        elif not isinstance(matured_horizons, Mapping):
+            maturity_probe_by_signal_id[signal_id] = ("invalid_horizons", type(matured_horizons).__name__)
+        else:
+            maturity_probe_by_signal_id[signal_id] = ("value", bool(matured_horizons.get("10d")))
 
     stream_factory = getattr(store, "comparable_control_quality_record_stream", None)
     if callable(stream_factory):
@@ -849,12 +873,16 @@ def build_comparable_control_quality(
 
     # Re-evaluate maturity after all duplicate outcome rows have been seen.
     # This second pass uses IDs only; no outcome payload is retained.
-    maturity["treatment"] = sum(
-        count for signal_id, count in treatment_signal_ids.items() if maturity_by_signal_id.get(signal_id)
-    )
-    maturity["controls"] = sum(
-        count for signal_id, count in control_signal_ids.items() if maturity_by_signal_id.get(signal_id)
-    )
+    for arm, signal_id in arm_signal_order:
+        probe = maturity_probe_by_signal_id.get(signal_id)
+        if probe:
+            probe_kind, probe_value = probe
+            if probe_kind != "value":
+                raise AttributeError(f"'{probe_value}' object has no attribute 'get'")
+            if probe_value:
+                maturity[arm] += 1
+    if deferred_error is not None:
+        raise deferred_error
     mature_total = maturity["treatment"] + maturity["controls"]
     return {
         "schema_version": SCHEMA_VERSION,
