@@ -70,7 +70,9 @@ class _FakeCursor:
 
 class _FakeConnection:
     def __init__(self, rows: list[dict[str, object]], *, execute_error: Exception | None = None) -> None:
-        self.cursor = _FakeCursor(rows)
+        self.rows = rows
+        self.cursor: _FakeCursor | None = None
+        self.cursors: list[_FakeCursor] = []
         self.execute_error = execute_error
         self.closed = False
         self.calls: list[tuple[str, tuple[object, ...]]] = []
@@ -79,6 +81,8 @@ class _FakeConnection:
         self.calls.append((query, params))
         if self.execute_error is not None:
             raise self.execute_error
+        self.cursor = _FakeCursor(self.rows.copy())
+        self.cursors.append(self.cursor)
         return self.cursor
 
     def close(self) -> None:
@@ -119,8 +123,9 @@ def test_projection_keeps_order_limit_and_json_falsy_contract() -> None:
     assert "ORDER BY updated_at DESC" in query
     assert "LIMIT ?" in query
     assert params == (7,)
+    assert connection.cursor is not None
     assert connection.cursor.fetch_sizes == [2, 2, 2, 2, 2]
-    assert connection.cursor.closed is True
+    assert all(cursor.closed for cursor in connection.cursors)
     assert connection.closed is True
 
 
@@ -129,7 +134,7 @@ def test_projection_closes_cursor_and_connection_on_early_close() -> None:
     stream = _projection_store(connection).iter_continuous_improvement_proposal_artifact_summaries(batch_size=1)
     assert next(stream) == {"proposal_id": "p", "payload": {}}
     stream.close()
-    assert connection.cursor.closed is True
+    assert all(cursor.closed for cursor in connection.cursors)
     assert connection.closed is True
 
 
@@ -142,6 +147,7 @@ def test_projection_preserves_sql_and_decode_errors_and_closes() -> None:
     failed_decode = _FakeConnection([{"proposal_id": "p", "payload_json": "{bad-json"}])
     with pytest.raises(json.JSONDecodeError):
         list(_projection_store(failed_decode).iter_continuous_improvement_proposal_artifact_summaries())
+    assert failed_decode.cursor is not None
     assert failed_decode.cursor.closed is True
     assert failed_decode.closed is True
 
@@ -151,6 +157,40 @@ def test_projection_preserves_sql_and_decode_errors_and_closes() -> None:
     )
     with pytest.raises(sqlite3.OperationalError, match="synthetic PRAGMA failure"):
         list(setup_failure.iter_continuous_improvement_proposal_artifact_summaries())
+
+
+def test_preflight_decode_error_precedes_malformed_consumer_payload() -> None:
+    connection = _FakeConnection(
+        [
+            {"proposal_id": "p-first", "payload_json": "[1]"},
+            {"proposal_id": "p-later", "payload_json": "{bad-json"},
+        ]
+    )
+    with pytest.raises(json.JSONDecodeError):
+        _projection_store(connection).iter_continuous_improvement_proposal_artifact_summaries(batch_size=1)
+    assert all(cursor.closed for cursor in connection.cursors)
+    assert connection.closed is True
+
+
+def test_consumer_error_closes_stream_after_successful_preflight() -> None:
+    connection = _FakeConnection([{"proposal_id": "proposal-1", "payload_json": "[1]"}])
+    artifacts = _projection_store(connection).iter_continuous_improvement_proposal_artifact_summaries(batch_size=1)
+    with pytest.raises(AttributeError, match="get"):
+        build_origin_utility_metrics([_proposal()], [], artifacts=artifacts)
+    assert len(connection.cursors) == 2
+    assert all(cursor.closed for cursor in connection.cursors)
+    assert connection.closed is True
+
+
+def test_artifact_preflight_runs_before_proposal_consumer_error() -> None:
+    connection = _FakeConnection([{"proposal_id": "proposal-1", "payload_json": "{}"}])
+    store = _projection_store(connection)
+    artifacts = _origin_utility_artifacts(store)
+    with pytest.raises(AttributeError, match="get"):
+        build_origin_utility_metrics([{"proposal_id": "bad", "payload": "not-a-mapping"}], [], artifacts=artifacts)
+    assert len(connection.calls) == 1
+    assert all(cursor.closed for cursor in connection.cursors)
+    assert connection.closed is True
 
 
 def test_projection_matches_legacy_fields_and_legacy_reader_retains_content(tmp_path) -> None:
