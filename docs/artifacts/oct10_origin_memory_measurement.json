@@ -1,0 +1,56 @@
+{
+  "artifact_count": 16,
+  "content_bytes": 262144,
+  "database": "temporary SQLite fixture, best-effort removed after child runs",
+  "fingerprint": {
+    "base_commit": "1a3333a49db77898cecf1670813b4e23d445ac00",
+    "base_legacy_reader_ast_sha256": "090946ae7abca6f1e2a73299602bd6f5591ab77282efcfc99e40d51f2a1086d0",
+    "base_storage_blob_sha256": "da8e3ebc081a210995415dfb664fd342203aff95563e562d80fb0d3224759d67",
+    "comparison": "projection fields compared with unchanged full-reader fields on the same temporary rows",
+    "current_legacy_reader_ast_sha256": "090946ae7abca6f1e2a73299602bd6f5591ab77282efcfc99e40d51f2a1086d0",
+    "current_projection_ast_sha256": "20492b9c2ca74c0b58c9fe02abf63a350017fa80564ce541bc32e797d923af3e",
+    "current_storage_blob_sha256": "f0e041adb98930fcc004a85bc67486fbdcd97afb00106d74a49355fcad63d0f9",
+    "hash_scope": "raw git-show/file bytes for blob hashes; AST dump without source locations for function hashes"
+  },
+  "fixture_content_bytes": 4194304,
+  "limits": [
+    "tracemalloc is Python allocation tracing, not Windows RSS or cgroup memory",
+    "small synthetic fixture only; this does not prove or disprove the production OOM",
+    "projection still decodes each payload JSON and retains its small output list in this measurement"
+  ],
+  "modes": [
+    {
+      "measurement": {
+        "current_tracemalloc_bytes": 4216125,
+        "mode": "legacy",
+        "peak_tracemalloc_bytes": 4221673,
+        "pid": 51596,
+        "python_executable": "C:\\Antonio\\Bref\\agenteBolsa\\.venv\\Scripts\\python.exe",
+        "retained_content_bytes": 4194304,
+        "rows": 16,
+        "sys_prefix": "C:\\Antonio\\Bref\\agenteBolsa\\.venv"
+      },
+      "mode": "legacy",
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "{\"current_tracemalloc_bytes\": 4216125, \"mode\": \"legacy\", \"peak_tracemalloc_bytes\": 4221673, \"pid\": 51596, \"python_executable\": \"C:\\\\Antonio\\\\Bref\\\\agenteBolsa\\\\.venv\\\\Scripts\\\\python.exe\", \"retained_content_bytes\": 4194304, \"rows\": 16, \"sys_prefix\": \"C:\\\\Antonio\\\\Bref\\\\agenteBolsa\\\\.venv\"}\n"
+    },
+    {
+      "measurement": {
+        "current_tracemalloc_bytes": 13637,
+        "mode": "projection",
+        "peak_tracemalloc_bytes": 17272,
+        "pid": 2836,
+        "python_executable": "C:\\Antonio\\Bref\\agenteBolsa\\.venv\\Scripts\\python.exe",
+        "retained_content_bytes": 0,
+        "rows": 16,
+        "sys_prefix": "C:\\Antonio\\Bref\\agenteBolsa\\.venv"
+      },
+      "mode": "projection",
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "{\"current_tracemalloc_bytes\": 13637, \"mode\": \"projection\", \"peak_tracemalloc_bytes\": 17272, \"pid\": 2836, \"python_executable\": \"C:\\\\Antonio\\\\Bref\\\\agenteBolsa\\\\.venv\\\\Scripts\\\\python.exe\", \"retained_content_bytes\": 0, \"rows\": 16, \"sys_prefix\": \"C:\\\\Antonio\\\\Bref\\\\agenteBolsa\\\\.venv\"}\n"
+    }
+  ],
+  "status": "passed"
+}
