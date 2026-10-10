@@ -844,7 +844,7 @@ def build_comparable_control_quality(
                 "treatment": signal_probe(treatment, treatment=True, from_mapping_get=True),
                 "controls": controls,
                 "blocked_candidates": safe_call(
-                    lambda: len((item.get("blocked_candidates") or []))
+                    lambda: len(item.get("blocked_candidates") or [])
                 ),
                 "eligible_controls_omitted": safe_call(
                     lambda: int(item.get("eligible_controls_omitted") or 0)
