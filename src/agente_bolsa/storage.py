@@ -1049,6 +1049,8 @@ class _ContinuousImprovementProposalArtifactSummaryStream:
             if self._cursor is not None:
                 self._cursor.close()
         finally:
+            self._rows.clear()
+            self._row_index = 0
             self._conn.close()
 
 
