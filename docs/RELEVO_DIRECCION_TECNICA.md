@@ -1,5 +1,84 @@
 # Relevo de direccion tecnica — agenteBolsa
 
+## Diagnóstico y QA aislada — 10-oct, 11:13 Europe/Madrid
+
+Dictamen `needs_fix`; despliegue pendiente. Esta continuación del objetivo
+«Soluciónalo» es diagnóstico y preparación aislada, posterior al intento
+operativo fallido de las 10:38. No se ha reanudado la automatización pausada.
+Producción sigue .321; el candidato .357 conserva fuente/tests exactos de
+68bfe74bfa8e5dd079a89531c322a1166b31177c. Referencia limpia antes de este
+registro documental: cb3d8805a9890fab0357b0ba3a3f7afaa8577586,
+tree 09ce69a049594006f990ade6004ef1e90be5c591.
+
+El kernel del host confirma un OOM memcg el 10-oct a las 08:31:31 Madrid en
+el cgroup docker-c17930611803ca55b06d953303c14072b245e0f4a0c90bec95094c7bd7998a3e
+(auxiliary): límite/uso 262144 kB, Python PID411741 eliminado, anon-RSS
+257008 kB y file-RSS 10368 kB. El digest falló con returncode=-9 a
+06:31:32.291 UTC. Coinciden contenedor y tiempo; la etapa concreta que disparó
+el pico sigue unavailable. Evidencia conservada en ef99/audit_oct10_oom_kernel.txt.
+El supervisor está vivo con heartbeat fresco: healthcheck_all falla por el
+estado diario failed, no por supervisor muerto. No se ha borrado ni cambiado
+ese estado ni ejecutado retry/restart para forzar salud.
+Scheduler presenta presión de memoria, pero su cgroup actual tiene oom=0 y
+oom_kill=0: no atribuir sus 13 reinicios a este OOM. Causa de reinicios todavía
+unavailable; Docker no conserva eventos útiles del intervalo consultado.
+
+Schedule-status real 09:09:12 UTC: XNYS cerrado, próxima apertura 12-oct
+15:30 Madrid; runtime unavailable por WAL. SELECT acotados mediante
+Store.read_connection, cierre explícito, a 09:11:48 UTC confirman los 18
+job_status consultados terminales completed/skipped y sin entradas lease/retry
+en el ámbito consultado. Paper=true, mode=paper, live=false, auto_apply=false.
+La consulta inicial usó un atributo inexistente en la sonda y falló antes de
+abrir conexión; se corrigió solo la sonda. Evidencia ef99/audit_oct10_runtime_1115.json.
+La sesión 9-oct sigue failed terminal, con evidencia previa a 03:29:55 UTC;
+los skipped del sábado no la sustituyen. No había pytest/smoke local activo
+antes del smoke. Estas comprobaciones permiten QA aislada; no acreditan salud
+operativa suficiente para despliegue.
+
+QA .357: primer fullsuite 1 failed, 1313 passed, 105 warnings en 229.58 s;
+segundo intento 1 failed, 1313 passed, 105 warnings en 190.54 s. Ambos fallan
+antes del target de los hijos Windows: shim temporal del lanzador externo,
+NameError: __args is not defined; queue.Empty es consecuencia. El test
+multiproceso no cambia frente a 1adc3cec. No son suites aprobadas, ni se
+atribuye automáticamente este fallo a bloqueos históricos diferentes.
+Evidencias ef99/release_oct10_0357_full.txt y
+release_oct10_0357_full_spawn_safe.txt, con journals separados.
+El primer ajuste del lanzador pasó un focal (1 passed, 5.72 s), pero resultó
+insuficiente en fullsuite. La nueva entrada absoluta verificable, con guards
+heredados y comprobación de __main__.__file__ por setup, pasó los siete tests
+del archivo de concurrencia en 15.38 s; sin cambiar tests ni usar skips/xfail.
+Artefacto ef99/validate_oct10_isolated_entry.py, SHA256
+DF5218BC30184933D6D6EC4F6AF7CC2B5F029302539A72F0ADFB47FD3046157F.
+Evidencia ef99/release_oct10_entry_focal.txt y journal. La suite completa
+final permanece pendiente; no repetir el mismo lanzador fallido sin nueva causa.
+Smoke local .357 run-once --skip-crew y validate-agent-config: passed,
+proveedores locales, DATA_DIR temporal, _env_file=None, red bloqueada,
+cleanup passed. Evidencia ef99/release_oct10_0357_smoke.txt. Kernel productivo
+no se ha sellado ni cambiado; no confundir este smoke con prueba ARM.
+
+Auditoría de memoria .357: streaming de decision_context reduce su pico
+tracemalloc de 118.72 MB legacy a 1.45 MB con fixture temporal de 50k filas
+por fuente y paridad observada. Persisten listas grandes en digest, comparable
+controls y otros helpers. La importación eager de main carga 1518 módulos.
+RSS Windows no equivale a memcg Linux: ninguna medición sintética prueba que
+el digest completo cabe en los 256 MiB productivos.
+Lote aislado .358 reservado a Luna en bolsa-digest-oct10/agenteBolsa, desde
+cb3d8805: despacho compartido del digest para evitar la importación eager del
+main en supervisor, sin duplicar negocio, tocar protegidos ni añadir servicio.
+Implementación, paridad, medidas por etapa y revisión root pendientes. No está
+integrado ni desplegado. Criterio de aceptación: preservar salida/errores/safety,
+cierre Store y órdenes/economía; declarar picos residuales, sin recortar datos
+ni elevar límites para aparentar solución.
+
+Siguiente secuencia: revisar el lote aislado de memoria y sus evidencias;
+resolver el lanzador de QA con evidencia completa; validar una vez el árbol
+funcional final, Ruff/NUL/diff, configuración/kernel y smoke; preparar prueba
+ARM y recuperación revisable. Revalidar todos los gates antes de producción.
+Salud auxiliary, diagnóstico de reinicios y riesgo de OOM residual siguen
+pendientes. Sin órdenes, cambios de riesgo, configuración, históricos, locks,
+push, reinicio, sellado ni despliegue en esta continuación. La revisión
+read-only del 12-oct queda intacta.
+
 ## Resultado del intento retomado — 10-oct, 10:38 Europe/Madrid
 
 Dictamen `precondition_not_met`. No se desplegó .357 ni se ejecutó sellado,
