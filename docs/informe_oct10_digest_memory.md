@@ -90,7 +90,10 @@ La referencia al comportamiento pre-refactor de `cb3` se conserva como huella
 AST y SHA-256 en el artefacto de fingerprint. No se duplicó ni ejecutó una
 segunda implementación de negocio; por tanto, la paridad ejecutada es entre
 los dos entrypoints candidatos actuales, con la procedencia pre-refactor
-verificable por hash.
+verificable por hash. El `base_main_sha256` local (`d40dac...`) se calculó
+sobre el texto decodificado por `git show` con `text=True`, por lo que no es una
+huella del blob Git bruto; la comparación de blob exacta queda documentada en
+la evidencia de integración del padre.
 
 ## Cierre, safety y fallos
 
