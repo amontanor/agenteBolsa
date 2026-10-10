@@ -282,7 +282,7 @@ def run_service_once(data_root: Path, service: str, run_date: date | None = None
         result = _run_json_command(
             data_root,
             service,
-            main + ["continuous-improvement-lab", "digest", "--days", "1", "--out", str(report_path), "--json"],
+            [python, "-m", "agente_bolsa.digest_cli", "--days", "1", "--out", str(report_path), "--json"],
         )
         return {"ok": True, "service": service, "result": result, "artifact": str(report_path)}
 
