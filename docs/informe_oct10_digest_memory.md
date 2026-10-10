@@ -128,3 +128,102 @@ El OOM exacto reportado por kernel queda acreditado para el contenedor
 auxiliary y el instante indicado por el padre. Este lote demuestra reducción
 de importación y paridad de contrato en hijos locales, pero no atribuye el OOM
 a una única fase ni declara resolución total.
+
+## Diagnóstico residual de memoria: `digest.py` y supervisor
+
+La ruta ligera elimina el grafo eager de `main.py`, pero el propio digest
+todavía conserva varias colecciones completas. Las cuatro lecturas principales
+en `build_lab_digest` (`digest.py:86-89`) son listas de Python obtenidas con
+`fetchall`: propuestas, experimentos, cambios aplicados y decisiones, todas con
+límite 50.000 en esta llamada. Sus órdenes SQL son autoridad del resultado:
+propuestas se ordenan por `updated_at DESC`, experimentos y applied por
+`updated_at DESC`, y decisiones por `created_at DESC`. El límite actual también
+forma parte de la semántica observable: cambiarlo altera los contadores cuando
+la tabla supera 50.000 filas.
+
+Esas listas sobreviven a la lectura inicial porque se reutilizan en varias
+secciones. `build_kpi_funnel` (`digest.py:630-710`) necesita sus identificadores
+y fechas para las cuatro semanas, WIP, conversiones y edades de decisión;
+`build_proposal_quality_report` conserva la muestra de 200 propuestas más
+recientes por `created_at`; `build_evidence_factory_metrics` recorre propuestas
+y applied; y `build_origin_utility_metrics` recorre propuestas, experimentos,
+applied y artifacts. Las funciones no devuelven las listas completas, pero sí
+retienen durante el cálculo los payloads anidados que leen. Una futura
+proyección debe conservar, como mínimo, los identificadores/ciclos/estados,
+targets, `created_at`/`updated_at`, `payload` y `guard` de propuestas; tipo,
+estado, proposal/cycle ids, métricas y fechas de experimentos; y estado,
+proposal/cycle ids, decisión, validaciones y fechas de applied. No se debe
+recortar por ventana temporal sin demostrar que cada consumidor mantiene sus
+cuatro semanas y su límite histórico.
+
+La lectura de artifacts en `digest.py:247` es especialmente ancha: el Store
+trae hasta 50.000 filas con `content_text` completo y `payload_json`. El
+consumidor de origin utility solo usa `proposal_id` y `payload.status/tests_ok`
+(`digest.py:380-389`); la aprobación humana obtiene por separado hasta 200
+`code_diff_preview` y sí usa `content_text` (`digest.py:854-905`). Por ello, el
+primer cambio mínimo y aislable recomendado es un lector read-only proyectado
+para origin utility que conserve el mismo `ORDER BY updated_at DESC` y límite,
+pero solo decodifique `proposal_id` y `payload_json`, dejando intacta la
+consulta de aprobación. Mantiene los contadores y estados del payload, no toca
+aprendizaje ni riesgo, y evita retener diffs históricos que esa sección nunca
+consulta. Reduce el ancho de la colección, pero por sí solo no demuestra
+resolver el OOM: seguiría existiendo el límite de 50.000 objetos.
+
+Hay optimizaciones existentes que sí cubren parte del pico. El lector de
+decision context (`storage.py:1124-1223`) usa cuatro cursores independientes,
+`fetchmany(512)` y conserva solo contadores/hash de snapshot en
+`decision_context.py:423-540`; sus límites de autoridad son 50.000 para
+recommendations/plans y 200.000 para observations/outcomes, excluyendo las
+fuentes lab book y learning experiment. El lector de productividad de agentes
+usa `iter_agent_events(limit=None)` en orden ascendente
+(`agent_run.py:342-356`), por lo que no hace `fetchall`, pero retiene un estado
+por `agent_run_id` y los agregados de roles; ese crecimiento histórico queda
+abierto. Estos caminos no deben recibir otra lista intermedia durante una
+optimización.
+
+Persisten otros lectores completos que explican el riesgo residual:
+
+- `performance_daily(limit=0)` en `digest.py:209` desactiva el `LIMIT`; el
+  Store devuelve todas las filas en orden `session_date ASC`. `benchmark_summary`
+  necesita el último contrato, recuento de legacy/conflictos y estado de
+  freshness, mientras `_drawdown` necesita la secuencia de equity. El objeto
+  realmente necesario es un acumulador ordenado con esos contadores, último
+  contrato y estado de drawdown; sustituirlo por una ventana reciente cambiaría
+  resultados.
+- `build_comparable_control_quality` materializa hasta 50.000
+  `trade_recommendations`, conserva los control sets aceptados y crea un mapa
+  de hasta 200.000 `signal_outcomes` (`comparable_controls.py:741-780`). Para
+  paridad hay que retener solo los control sets que sobreviven al filtro y los
+  outcomes referenciados por treatment/control, respetando el orden de entrada
+  y los contadores de madurez; eliminar outcomes legacy antes de demostrar el
+  filtro cambiaría cobertura.
+- `canonical_operation_telemetry_digest` materializa hasta 50.000 eventos,
+  filtra snapshots/conflictos y ordena el último snapshot por `created_at`
+  (`canonical_operation_telemetry.py:642-660`). `learning_penalty_shadow_digest`
+  hace una lectura equivalente de hasta 50.000 eventos, deduplica un evento
+  canónico por ciclo y conserva la lista ordenada (`storage.py:2671-2730`). La
+  autoridad es el `event_id`, schema/hash y ciclo; un streaming futuro debe
+  retener solo el último canónico por ciclo y los contadores de inválidos,
+  duplicados y conflictos.
+- `latest_overlay_shadow_signal` y `latest_core_sleeve_signal` leen el JSONL
+  completo con `read_text().splitlines()` (`digest.py:918-980`) aunque solo
+  usan el último JSON válido. Iterar el archivo línea a línea conserva exactamente
+  la regla “último registro válido” y elimina una copia completa del log.
+
+El supervisor añade una copia independiente del pico en
+`docker_supervisor.py:209-230`: `subprocess.run(..., stdout=PIPE)` conserva
+todo el stdout del hijo en `CompletedProcess.stdout`, lo escribe entero al log
+y después `json.loads` construye el payload. En el fallback de JSON inválido,
+`find`/`rfind` crea además una subcadena antes de decodificarla. El contrato
+exige que el payload JSON completo llegue al llamador, que `ok=false` y
+returncodes fallen, y que el log conserve stdout/stderr; por tanto, no se puede
+truncar ni resumir el envelope como arreglo de memoria. El cambio mínimo de
+ese borde sería redirigir el stdout a un archivo temporal y parsearlo desde
+allí, manteniendo copia íntegra al log y el mismo parser/error envelope; debe
+medirse por separado porque `_run_json_command` sirve a más servicios.
+
+La evidencia actual solo prueba la reducción del arranque y la paridad del
+payload en vacío/fixture. No mide todavía el pico con 50.000 filas, diffs
+grandes, outcomes de 200.000, JSONL extensos ni stdout proporcional a esos
+datos. Esos son los hotspots restantes y requieren una caracterización focal
+antes de integrar cualquier proyección o streaming.
