@@ -738,15 +738,17 @@ def build_comparable_control_quality(
     legacy_v1 = 0
     invalid_schema = 0
 
-    # Keep only aggregate state and identities needed to join the later outcome
-    # stream.  The old reader retained up to 50k full recommendation payloads
-    # and 200k full outcome payloads at once.
+    # Keep one compact entry per accepted control set.  The old reader retained
+    # up to 50k full recommendation payloads and 200k full outcome payloads.
+    # Exception descriptors contain only type/message so a deferred error does
+    # not keep a large source row alive through a traceback.
+    compact_records: list[dict[str, Any]] = []
     counts: Counter[str] = Counter()
     denominator = 0
     primary_controls = 0
+    control_denominator = 0
     blocked_candidates = 0
     eligible_controls_omitted = 0
-    control_denominator = 0
     same_cycle_count = 0
     signal_price_count = 0
     market_state_ref_count = 0
@@ -756,75 +758,112 @@ def build_comparable_control_quality(
     selection_source_count = 0
     maturity = {"treatment": 0, "controls": 0, "total": 0}
     tracked_signal_ids: set[str] = set()
-    maturity_probe_by_signal_id: dict[str, tuple[str, bool | str]] = {}
-    treatment_signal_ids: Counter[str] = Counter()
-    control_signal_ids: Counter[str] = Counter()
-    arm_signal_order: list[tuple[str, tuple[str, str]]] = []
-    metric_errors: dict[str, Exception] = {}
+    maturity_probe_by_signal_id: dict[str, tuple[str, Any]] = {}
 
-    def signal_probe(identity: Any, *, arm: str, treatment: bool = False) -> tuple[str, str]:
-        normalized = identity or {} if treatment else identity
+    def error_spec(error: Exception) -> tuple[type[Exception], str]:
+        return type(error), str(error)
+
+    def raise_error(spec: tuple[type[Exception], str]) -> None:
+        error_type, message = spec
+        raise error_type(message)
+
+    def safe_call(callback: Any) -> tuple[str, Any]:
+        try:
+            return "value", callback()
+        except Exception as exc:
+            return "error", error_spec(exc)
+
+    def mapping_get(item: Any, key: str) -> tuple[str, Any]:
+        try:
+            return "value", item.get(key)
+        except Exception as exc:
+            return "error", error_spec(exc)
+
+    def signal_probe(
+        identity: Any,
+        *,
+        treatment: bool = False,
+        from_mapping_get: bool = False,
+    ) -> tuple[str, Any]:
+        if from_mapping_get:
+            if identity[0] == "error":
+                return "error", identity[1]
+            identity = identity[1]
+        try:
+            normalized = identity or {} if treatment else identity
+        except Exception as exc:
+            return "error", error_spec(exc)
         if not isinstance(normalized, Mapping):
             return "invalid", type(normalized).__name__
-        signal_id = str(normalized.get("signal_id") or "")
-        tracked_signal_ids.add(signal_id)
-        (treatment_signal_ids if arm == "treatment" else control_signal_ids)[signal_id] += 1
-        return "signal", signal_id
+        try:
+            return "signal", str(normalized.get("signal_id") or "")
+        except Exception as exc:
+            return "error", error_spec(exc)
 
-    def remember_metric_error(name: str, error: Exception) -> None:
-        metric_errors.setdefault(name, error)
+    def control_collection_probe(raw: tuple[str, Any]) -> dict[str, Any]:
+        if raw[0] == "error":
+            return {"kind": "error", "error": raw[1], "items": (), "count": ("error", raw[1])}
+        try:
+            controls = raw[1] or []
+        except Exception as exc:
+            spec = error_spec(exc)
+            return {"kind": "error", "error": spec, "items": (), "count": ("error", spec)}
+        try:
+            if not controls:
+                return {"kind": "items", "items": (), "count": ("value", 0)}
+        except Exception as exc:
+            spec = error_spec(exc)
+            return {"kind": "error", "error": spec, "items": (), "count": ("error", spec)}
+        try:
+            iterator = iter(controls)
+        except Exception as exc:
+            spec = error_spec(exc)
+            return {"kind": "error", "error": spec, "items": (), "count": ("error", spec)}
+        items = []
+        for control in iterator:
+            items.append(
+                (
+                    signal_probe(control),
+                    safe_call(lambda control=control: bool(control.get("gate_ledger"))),
+                    safe_call(
+                        lambda control=control: control.get("non_execution_reason") in PRIMARY_REASONS
+                    ),
+                )
+            )
+        count = safe_call(lambda: len(controls))
+        return {"kind": "items", "items": tuple(items), "count": count}
 
     def consume_control_set(item: Any) -> None:
-        nonlocal denominator
-        nonlocal primary_controls, blocked_candidates, eligible_controls_omitted
-        nonlocal control_denominator, same_cycle_count, signal_price_count
-        nonlocal market_state_ref_count, gate_ledger_count, non_execution_reason_count
-        nonlocal selection_source_count
-
-        counts[str(item.get("status") or "unavailable")] += 1
-        denominator += 1
-        is_verified = item.get("status") == "verified"
-        controls_for_item = item.get("controls") or []
-        # The base builds its verified-control list before reading outcomes.
-        # Validate iteration now, while deferring per-control field reads.
-        for _control in controls_for_item:
-            pass
-        if is_verified:
-            primary_controls += len(controls_for_item)
-        arm_signal_order.append(
-            ("treatment", signal_probe(item.get("treatment"), arm="treatment", treatment=True))
+        status = mapping_get(item, "status")
+        treatment = mapping_get(item, "treatment")
+        controls = control_collection_probe(mapping_get(item, "controls"))
+        compact_records.append(
+            {
+                "status": status,
+                "is_verified": status[0] == "value" and status[1] == "verified",
+                "treatment": signal_probe(treatment, treatment=True, from_mapping_get=True),
+                "controls": controls,
+                "blocked_candidates": safe_call(
+                    lambda: len((item.get("blocked_candidates") or []))
+                ),
+                "eligible_controls_omitted": safe_call(
+                    lambda: int(item.get("eligible_controls_omitted") or 0)
+                ),
+                "same_cycle": safe_call(lambda: bool(item.get("cycle_id"))),
+                "signal_price": safe_call(
+                    lambda: bool((item.get("treatment") or {}).get("signal_price"))
+                ),
+                "market_state_ref": safe_call(lambda: bool(item.get("market_state_ref_hash"))),
+                "unavailable_reason": safe_call(
+                    lambda: str(item.get("unavailable_reason") or "")
+                    if item.get("unavailable_reason")
+                    else ""
+                ),
+                "selection_source": safe_call(
+                    lambda: item.get("selection_source") == "actual_final_plans"
+                ),
+            }
         )
-        for control in controls_for_item:
-            arm_signal_order.append(("controls", signal_probe(control, arm="controls")))
-        control_denominator += len(controls_for_item)
-
-        try:
-            blocked_candidates += len(item.get("blocked_candidates") or [])
-        except Exception as exc:
-            remember_metric_error("blocked_candidates", exc)
-        try:
-            eligible_controls_omitted += int(item.get("eligible_controls_omitted") or 0)
-        except Exception as exc:
-            remember_metric_error("eligible_controls_omitted", exc)
-        same_cycle_count += bool(item.get("cycle_id"))
-        try:
-            signal_price_count += bool((item.get("treatment") or {}).get("signal_price"))
-        except Exception as exc:
-            remember_metric_error("signal_price", exc)
-        market_state_ref_count += bool(item.get("market_state_ref_hash"))
-        try:
-            gate_ledger_count += sum(bool(control.get("gate_ledger")) for control in controls_for_item)
-        except Exception as exc:
-            remember_metric_error("gate_ledger", exc)
-        try:
-            non_execution_reason_count += sum(
-                control.get("non_execution_reason") in PRIMARY_REASONS for control in controls_for_item
-            )
-        except Exception as exc:
-            remember_metric_error("non_execution_reason", exc)
-        if item.get("unavailable_reason"):
-            unavailable_by_reason[str(item.get("unavailable_reason") or "")] += 1
-        selection_source_count += item.get("selection_source") == "actual_final_plans"
 
     def consume_recommendation(record: Mapping[str, Any]) -> None:
         nonlocal legacy, legacy_v1, invalid_schema
@@ -848,38 +887,80 @@ def build_comparable_control_quality(
             return
         consume_control_set(control_set)
 
+    def finalize_recommendations() -> None:
+        nonlocal denominator, primary_controls
+        for entry in compact_records:
+            status = entry["status"]
+            if status[0] == "error":
+                raise_error(status[1])
+            counts[str(status[1] or "unavailable")] += 1
+            denominator += 1
+        for entry in compact_records:
+            controls = entry["controls"]
+            if controls["kind"] == "error":
+                if entry["is_verified"]:
+                    raise_error(controls["error"])
+                entry["control_shape_error"] = controls["error"]
+                entry["control_items"] = ()
+            else:
+                entry["control_shape_error"] = None
+                entry["control_items"] = controls["items"]
+                if entry["is_verified"]:
+                    primary_controls += len(entry["control_items"])
+            treatment = entry["treatment"]
+            if treatment[0] == "signal":
+                tracked_signal_ids.add(treatment[1])
+            for control in entry["control_items"]:
+                identity = control[0]
+                if identity[0] == "signal":
+                    tracked_signal_ids.add(identity[1])
+
     def consume_outcome(record: Mapping[str, Any]) -> None:
         signal_id = str(record.get("signal_id") or "")
         if signal_id not in tracked_signal_ids:
             return
-        outcome = record.get("outcome") or {}
+        try:
+            outcome = record.get("outcome") or {}
+        except Exception as exc:
+            maturity_probe_by_signal_id[signal_id] = ("error", error_spec(exc))
+            return
         # Keep a compact probe only. Assignment on every row preserves legacy
         # last-wins behavior; shape errors are raised only for the final row.
         if not isinstance(outcome, Mapping):
             maturity_probe_by_signal_id[signal_id] = ("invalid_outcome", type(outcome).__name__)
             return
-        matured_horizons = outcome.get("matured_horizons")
-        if not matured_horizons:
-            maturity_probe_by_signal_id[signal_id] = ("value", False)
-        elif not isinstance(matured_horizons, Mapping):
-            maturity_probe_by_signal_id[signal_id] = ("invalid_horizons", type(matured_horizons).__name__)
-        else:
-            maturity_probe_by_signal_id[signal_id] = ("value", bool(matured_horizons.get("10d")))
+        try:
+            matured_horizons = outcome.get("matured_horizons")
+            if not matured_horizons:
+                maturity_probe_by_signal_id[signal_id] = ("value", False)
+            elif not isinstance(matured_horizons, Mapping):
+                maturity_probe_by_signal_id[signal_id] = ("invalid_horizons", type(matured_horizons).__name__)
+            else:
+                maturity_probe_by_signal_id[signal_id] = ("value", bool(matured_horizons.get("10d")))
+        except Exception as exc:
+            maturity_probe_by_signal_id[signal_id] = ("error", error_spec(exc))
 
     stream_factory = getattr(store, "comparable_control_quality_record_stream", None)
     if callable(stream_factory):
         with stream_factory(batch_size=512) as stream:
+            recommendations_finalized = False
             for kind, record in stream:
                 if kind == "recommendation":
                     consume_recommendation(record)
                 elif kind == "outcome":
+                    if not recommendations_finalized:
+                        finalize_recommendations()
+                        recommendations_finalized = True
                     consume_outcome(record)
                 else:
                     raise ValueError(f"comparable_control_quality_record_kind_invalid:{kind}")
+            if not recommendations_finalized:
+                finalize_recommendations()
     else:
         # Fakes and older Store implementations keep their list-based contract.
         for record in store.trade_recommendations(limit=50000):
             consume_recommendation(record)
+        finalize_recommendations()
         for record in store.signal_outcomes(
             limit=200000,
             include_lab_book=True,
@@ -888,29 +969,72 @@ def build_comparable_control_quality(
             consume_outcome(record)
 
     # Re-evaluate maturity after all duplicate outcome rows have been seen.
-    # This second pass uses IDs only; no outcome payload is retained.
-    for arm, probe in arm_signal_order:
-        probe_kind, probe_value = probe
-        if probe_kind != "signal":
-            raise AttributeError(f"'{probe_value}' object has no attribute 'get'")
-        signal_id = probe_value
-        probe = maturity_probe_by_signal_id.get(signal_id)
-        if probe:
-            probe_kind, probe_value = probe
-            if probe_kind != "value":
-                raise AttributeError(f"'{probe_value}' object has no attribute 'get'")
-            if probe_value:
-                maturity[arm] += 1
-    for metric_name in (
-        "blocked_candidates",
-        "eligible_controls_omitted",
-        "signal_price",
-        "gate_ledger",
-        "non_execution_reason",
-    ):
-        error = metric_errors.get(metric_name)
-        if error is not None:
-            raise error
+    # This pass retains only compact probes and follows the base item order.
+    def maturity_for_probe(probe: tuple[str, Any]) -> bool:
+        if probe[0] == "invalid":
+            raise AttributeError(f"'{probe[1]}' object has no attribute 'get'")
+        if probe[0] == "error":
+            raise_error(probe[1])
+        signal_id = probe[1]
+        outcome_probe = maturity_probe_by_signal_id.get(signal_id)
+        if not outcome_probe:
+            return False
+        if outcome_probe[0] == "invalid_outcome":
+            raise AttributeError(f"'{outcome_probe[1]}' object has no attribute 'get'")
+        if outcome_probe[0] == "invalid_horizons":
+            raise AttributeError(f"'{outcome_probe[1]}' object has no attribute 'get'")
+        if outcome_probe[0] == "error":
+            raise_error(outcome_probe[1])
+        return bool(outcome_probe[1])
+
+    for entry in compact_records:
+        if maturity_for_probe(entry["treatment"]):
+            maturity["treatment"] += 1
+        if entry["control_shape_error"] is not None:
+            raise_error(entry["control_shape_error"])
+        for control in entry["control_items"]:
+            if maturity_for_probe(control[0]):
+                maturity["controls"] += 1
+
+    for entry in compact_records:
+        count = entry["controls"]["count"]
+        if count[0] == "error":
+            raise_error(count[1])
+        control_denominator += count[1]
+
+    def sum_metric(name: str) -> int:
+        total = 0
+        for entry in compact_records:
+            probe = entry[name]
+            if probe[0] == "error":
+                raise_error(probe[1])
+            total += probe[1]
+        return total
+
+    blocked_candidates = sum_metric("blocked_candidates")
+    eligible_controls_omitted = sum_metric("eligible_controls_omitted")
+    same_cycle_count = sum_metric("same_cycle")
+    signal_price_count = sum_metric("signal_price")
+    market_state_ref_count = sum_metric("market_state_ref")
+    for entry in compact_records:
+        for control in entry["control_items"]:
+            probe = control[1]
+            if probe[0] == "error":
+                raise_error(probe[1])
+            gate_ledger_count += probe[1]
+    for entry in compact_records:
+        for control in entry["control_items"]:
+            probe = control[2]
+            if probe[0] == "error":
+                raise_error(probe[1])
+            non_execution_reason_count += probe[1]
+    for entry in compact_records:
+        probe = entry["unavailable_reason"]
+        if probe[0] == "error":
+            raise_error(probe[1])
+        if probe[1]:
+            unavailable_by_reason[probe[1]] += 1
+    selection_source_count = sum_metric("selection_source")
     mature_total = maturity["treatment"] + maturity["controls"]
     return {
         "schema_version": SCHEMA_VERSION,
