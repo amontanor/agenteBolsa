@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from datetime import date
+from pathlib import Path
+
+import pytest
 
 from agente_bolsa import digest_cli, docker_supervisor
 
@@ -72,22 +76,160 @@ def test_execute_digest_command_closes_store_when_digest_fails():
     assert store.closed == 1
 
 
-def test_continuous_improvement_package_keeps_orchestrator_public_but_lazy():
+def test_execute_digest_command_closes_store_when_handler_import_fails(monkeypatch):
+    store = _TrackedStore()
+    args = argparse.Namespace(days=1, out=None, json=False)
+    monkeypatch.setitem(sys.modules, "agente_bolsa.continuous_improvement.digest", None)
+
+    with pytest.raises(ModuleNotFoundError):
+        digest_cli.execute_digest_command(
+            args,
+            settings=object(),
+            store=store,
+            safety_summary=lambda _settings: {},
+        )
+
+    assert store.closed == 1
+
+
+def test_execute_digest_command_closes_store_when_output_io_fails(tmp_path):
+    store = _TrackedStore()
+    blocked_parent = tmp_path / "already-a-file"
+    blocked_parent.write_text("occupied", encoding="utf-8")
+    args = argparse.Namespace(days=1, out=str(blocked_parent / "digest.md"), json=False)
+
+    with pytest.raises(FileExistsError):
+        digest_cli.execute_digest_command(
+            args,
+            settings=object(),
+            store=store,
+            build_digest=lambda *_args, **_kwargs: {"ok": True},
+            format_digest=lambda payload: json.dumps(payload),
+            safety_summary=lambda _settings: {},
+        )
+
+    assert store.closed == 1
+
+
+def test_execute_digest_command_preserves_safety_input_and_text_without_output(capsys):
+    store = _TrackedStore()
+    args = argparse.Namespace(days=2, out=None, json=False)
+    safety = {"ok": False, "violations": ["synthetic_safety_failure"]}
+    seen: dict[str, object] = {}
+
+    def build_digest(_store, *, days, safety):
+        seen.update(days=days, safety=safety)
+        return {"days": days, "safety_seen": safety}
+
+    digest_cli.execute_digest_command(
+        args,
+        settings=object(),
+        store=store,
+        build_digest=build_digest,
+        format_digest=lambda payload: f"TEXT:{payload['days']}",
+        safety_summary=lambda _settings: safety,
+    )
+
+    assert seen == {"days": 2, "safety": safety}
+    assert capsys.readouterr().out == "TEXT:2\n"
+    assert store.closed == 1
+
+
+def test_execute_digest_command_supports_json_without_output(capsys):
+    store = _TrackedStore()
+    args = argparse.Namespace(days=1, out=None, json=True)
+
+    digest_cli.execute_digest_command(
+        args,
+        settings=object(),
+        store=store,
+        build_digest=lambda *_args, **_kwargs: {"marker": "no-output"},
+        format_digest=lambda payload: str(payload),
+        safety_summary=lambda _settings: {"ok": True},
+    )
+
+    assert json.loads(capsys.readouterr().out) == {"ok": True, "digest": {"marker": "no-output"}}
+    assert store.closed == 1
+
+
+def test_execute_digest_command_closes_store_when_safety_fails():
+    store = _TrackedStore()
+    args = argparse.Namespace(days=1, out=None, json=False)
+
+    with pytest.raises(RuntimeError, match="synthetic_safety_failure"):
+        digest_cli.execute_digest_command(
+            args,
+            settings=object(),
+            store=store,
+            build_digest=lambda *_args, **_kwargs: {},
+            format_digest=lambda payload: str(payload),
+            safety_summary=lambda _settings: (_ for _ in ()).throw(RuntimeError("synthetic_safety_failure")),
+        )
+
+    assert store.closed == 1
+
+
+def test_run_digest_command_closes_store_when_ensure_schema_fails(monkeypatch):
+    import agente_bolsa.config as config
+    import agente_bolsa.logging_utils as logging_utils
+    import agente_bolsa.storage as storage
+
+    class Settings:
+        logs_dir = "logs"
+        log_level = "INFO"
+        database_path = "database.sqlite"
+        agent_logs_dir = "agent-logs"
+
+    class FailingStore:
+        instances: list[FailingStore] = []
+
+        def __init__(self, *_args):
+            self.closed = 0
+            self.instances.append(self)
+
+        def ensure_schema(self):
+            raise RuntimeError("synthetic_schema_failure")
+
+        def close_read_connection(self):
+            self.closed += 1
+
+    monkeypatch.setattr(config, "get_settings", lambda: Settings())
+    monkeypatch.setattr(logging_utils, "configure_logging", lambda *_args: None)
+    monkeypatch.setattr(storage, "Store", FailingStore)
+
+    with pytest.raises(RuntimeError, match="synthetic_schema_failure"):
+        digest_cli.run_digest_command(argparse.Namespace(days=1, out=None, json=False))
+
+    assert len(FailingStore.instances) == 1
+    assert FailingStore.instances[0].closed == 1
+
+
+def test_continuous_improvement_package_keeps_orchestrator_public_but_lazy(tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    child = repo_root / "scripts" / "digest_route_isolated_child_oct10.py"
+    data_root = tmp_path / "data"
+    (tmp_path / ".env").write_text("DATA_DIR=hostile-env-path\n", encoding="utf-8")
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(repo_root / "src"),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "DATA_DIR": str(data_root),
+        "DIGEST_ROUTE_MODULE": "agente_bolsa.continuous_improvement",
+        "DIGEST_ROUTE_IMPORT_ONLY": "1",
+    }
     probe = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import sys; import agente_bolsa.continuous_improvement as ci; "
-                "print('runtime' in sys.modules, 'agente_bolsa.continuous_improvement.runtime' in sys.modules); "
-                "print(ci.ContinuousImprovementOrchestrator.__name__)"
-            ),
-        ],
+        [sys.executable, str(child)],
+        cwd=tmp_path,
+        env=env,
         check=True,
         capture_output=True,
         text=True,
     )
-    assert probe.stdout.splitlines() == ["False False", "ContinuousImprovementOrchestrator"]
+    report = json.loads(probe.stdout)
+    assert report["main_loaded"] is False
+    assert report["scheduler_loaded"] is False
+    assert report["runtime_loaded"] is False
+    assert report["guards"] == {"data_dir": str(data_root), "dns_blocked": True, "env_file": None}
 
 
 def test_docker_supervisor_uses_lightweight_digest_entrypoint(monkeypatch, tmp_path):
