@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import ast
+import copy
+import gc
 import hashlib
 import importlib
+import json
+import os
 import subprocess
+import tracemalloc
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -89,6 +94,111 @@ class _StreamingStore(_LegacyStore):
             stream.close()
 
 
+class _ObservedLegacyStore:
+    def __init__(self, recommendations, outcomes):
+        self._recommendations = copy.deepcopy(recommendations)
+        self._outcomes = copy.deepcopy(outcomes)
+        self.reads = []
+
+    def trade_recommendations(self, *, limit: int):
+        self.reads.append(("recommendations", limit))
+        return copy.deepcopy(self._recommendations)
+
+    def signal_outcomes(self, *, limit: int, include_lab_book: bool, include_learning_experiment: bool):
+        self.reads.append(("outcomes", limit, include_lab_book, include_learning_experiment))
+        return copy.deepcopy(self._outcomes)
+
+
+class _ObservedStreamingStore(_ObservedLegacyStore):
+    @contextmanager
+    def comparable_control_quality_record_stream(self, *, batch_size: int):
+        assert batch_size == 512
+
+        def records():
+            self.reads.append(("recommendations", 50000))
+            for record in self._recommendations:
+                yield "recommendation", copy.deepcopy(record)
+            self.reads.append(("outcomes", 200000, True, True))
+            for record in self._outcomes:
+                yield "outcome", copy.deepcopy(record)
+
+        stream = records()
+        try:
+            yield stream
+        finally:
+            stream.close()
+
+
+def _invoke_quality(handler, store):
+    try:
+        result = {"result": handler(store)}
+    except Exception as exc:
+        result = {"error_type": type(exc).__name__, "error": str(exc)}
+    result["reads"] = store.reads
+    return result
+
+
+def _characterization_cases():
+    def rec(control_set):
+        return {"created_at": "2026-10-09", "payload": {"comparable_control_set": control_set}}
+
+    def out(signal_id, outcome):
+        return {"signal_id": signal_id, "outcome": outcome}
+
+    def control_set(**changes):
+        item = _control_set()
+        item.update(changes)
+        return item
+
+    return [
+        ("valid", [rec(control_set())], [out("treatment", {"matured_horizons": {"10d": True}})]),
+        (
+            "invalid_overwritten",
+            [rec(control_set())],
+            [out("treatment", [1]), out("treatment", {"matured_horizons": {"10d": True}})],
+        ),
+        (
+            "invalid_horizons_overwritten",
+            [rec(control_set())],
+            [out("treatment", {"matured_horizons": [1]}), out("treatment", {})],
+        ),
+        ("invalid_final", [rec(control_set())], [out("treatment", {}), out("treatment", [1])]),
+        ("irrelevant_invalid", [rec(control_set())], [out("unused", [1])]),
+        ("verified_controls_scalar", [rec(control_set(controls=1))], []),
+        (
+            "identity_then_later_outcome",
+            [rec(control_set(controls=[1])), rec(control_set(treatment={"signal_id": "later"}, controls=[]))],
+            [out("later", "bad")],
+        ),
+        (
+            "metric_then_later_maturity",
+            [rec(control_set(eligible_controls_omitted="bad")), rec(control_set(treatment={"signal_id": "later"}, controls=[]))],
+            [out("later", [1])],
+        ),
+        (
+            "fields_across_records",
+            [rec(control_set(eligible_controls_omitted="bad")), rec(control_set(blocked_candidates=1))],
+            [],
+        ),
+        ("partial_controls_scalar", [rec(control_set(status="partially_comparable", controls=1))], []),
+        (
+            "invalid_verified_controls_before_later_recommendation",
+            [rec(control_set(controls=1)), {"payload": [1]}],
+            [],
+        ),
+        (
+            "invalid_partial_controls_before_later_recommendation",
+            [rec(control_set(status="partially_comparable", controls=1)), {"payload": [1]}],
+            [],
+        ),
+        (
+            "invalid_recommendation_after_metric",
+            [rec(control_set(eligible_controls_omitted="bad")), {"payload": [1]}],
+            [],
+        ),
+    ]
+
+
 def _frozen_base_quality():
     module = importlib.import_module("agente_bolsa.tools.comparable_controls")
     root = Path(__file__).resolve().parents[1]
@@ -124,6 +234,18 @@ def test_streaming_quality_matches_legacy_lists_and_preserves_last_wins():
 def test_streaming_quality_matches_exact_frozen_base_ast_fixture():
     frozen = _frozen_base_quality()
     assert build_comparable_control_quality(_StreamingStore()) == frozen(_LegacyStore())
+
+
+def test_frozen_base_characterization_preserves_error_stages_and_reader_order():
+    frozen = _frozen_base_quality()
+    comparisons = []
+    for _name, recommendations, outcomes in _characterization_cases():
+        base_store = _ObservedLegacyStore(recommendations, outcomes)
+        candidate_store = _ObservedStreamingStore(recommendations, outcomes)
+        base = _invoke_quality(frozen, base_store)
+        candidate = _invoke_quality(build_comparable_control_quality, candidate_store)
+        comparisons.append((base, candidate))
+    assert all(base == candidate for base, candidate in comparisons)
 
 
 def test_frozen_base_and_stream_preserve_invalid_final_duplicate_error():
@@ -262,6 +384,105 @@ def test_streaming_quality_closes_store_stream_when_decoder_fails():
     else:
         raise AssertionError("invalid stream kind must fail")
     assert closed == [True]
+
+
+def test_streaming_quality_reduces_tracemalloc_peak_for_large_local_payloads():
+    recommendation_count = 3000
+    outcome_count = 6000
+    padding = "x" * 2048
+
+    def recommendation_rows():
+        for index in range(recommendation_count):
+            item = _control_set(status="partially_comparable", controls=())
+            item["treatment"] = {"signal_id": f"treatment-{index}"}
+            item["padding"] = padding
+            yield {
+                "recommendation_id": f"recommendation-{index}",
+                "created_at": "2026-10-09",
+                "payload": {"comparable_control_set": item},
+            }
+
+    def outcome_rows():
+        for index in range(outcome_count):
+            yield {
+                "signal_id": f"treatment-{index % recommendation_count}",
+                "outcome": {
+                    "matured_horizons": {"10d": index % 2 == 0},
+                    "padding": padding,
+                },
+            }
+
+    class SyntheticLegacyStore:
+        def __init__(self):
+            self.reads = []
+
+        def trade_recommendations(self, *, limit: int):
+            assert limit == 50000
+            self.reads.append(("recommendations", limit))
+            return list(recommendation_rows())
+
+        def signal_outcomes(self, *, limit: int, include_lab_book: bool, include_learning_experiment: bool):
+            assert (limit, include_lab_book, include_learning_experiment) == (200000, True, True)
+            self.reads.append(("outcomes", limit, include_lab_book, include_learning_experiment))
+            return list(outcome_rows())
+
+    class SyntheticStreamingStore(SyntheticLegacyStore):
+        @contextmanager
+        def comparable_control_quality_record_stream(self, *, batch_size: int):
+            assert batch_size == 512
+
+            def records():
+                self.reads.append(("recommendations", 50000))
+                for record in recommendation_rows():
+                    yield "recommendation", record
+                self.reads.append(("outcomes", 200000, True, True))
+                for record in outcome_rows():
+                    yield "outcome", record
+
+            stream = records()
+            try:
+                yield stream
+            finally:
+                stream.close()
+
+    frozen = _frozen_base_quality()
+
+    def measured(handler, store):
+        gc.collect()
+        tracemalloc.start()
+        try:
+            result = handler(store)
+            _current, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        return result, peak
+
+    baseline_result, baseline_peak = measured(frozen, SyntheticLegacyStore())
+    candidate_store = SyntheticStreamingStore()
+    candidate_result, candidate_peak = measured(build_comparable_control_quality, candidate_store)
+
+    assert candidate_result == baseline_result
+    assert candidate_peak < baseline_peak * 0.75
+    if os.environ.get("OCT10_MEMORY_ARTIFACT") == "1":
+        artifact = Path(__file__).resolve().parents[1] / "docs" / "artifacts" / "oct10_tracemalloc.json"
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text(
+            json.dumps(
+                {
+                    "recommendation_count": recommendation_count,
+                    "outcome_count": outcome_count,
+                    "payload_padding_bytes": len(padding),
+                    "baseline_peak_bytes": baseline_peak,
+                    "streaming_peak_bytes": candidate_peak,
+                    "streaming_to_baseline_peak_ratio": candidate_peak / baseline_peak,
+                    "baseline_result_equals_streaming_result": True,
+                    "legacy_reads": [("recommendations", 50000), ("outcomes", 200000, True, True)],
+                    "streaming_reads": candidate_store.reads,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
 
 def test_store_quality_stream_uses_readonly_fetchmany_and_closes(tmp_path, monkeypatch):
