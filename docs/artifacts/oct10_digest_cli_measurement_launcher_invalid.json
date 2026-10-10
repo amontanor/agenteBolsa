@@ -1,0 +1,13 @@
+{
+  "status": "invalid_measurement_preserved_for_audit",
+  "reason": "Parent-side ctypes sampling after child exit read launcher/reused-process values; it did not measure child Python RSS.",
+  "module_counts": {
+    "agente_bolsa.digest_cli": 80,
+    "agente_bolsa.main": 1895
+  },
+  "invalid_rss_values_bytes": {
+    "digest_cli_peak": 4644864,
+    "main_peak": 4640768
+  },
+  "replacement": "docs/artifacts/oct10_digest_cli_measurement_self_rss_v2.json"
+}
