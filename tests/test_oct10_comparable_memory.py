@@ -85,6 +85,7 @@ class _StreamingStore(_LegacyStore):
 
         def records():
             yield from (("recommendation", item) for item in _recommendations())
+            yield "recommendations_complete", None
             yield from (("outcome", item) for item in _outcomes())
 
         stream = records()
@@ -118,6 +119,7 @@ class _ObservedStreamingStore(_ObservedLegacyStore):
             self.reads.append(("recommendations", 50000))
             for record in self._recommendations:
                 yield "recommendation", copy.deepcopy(record)
+            yield "recommendations_complete", None
             self.reads.append(("outcomes", 200000, True, True))
             for record in self._outcomes:
                 yield "outcome", copy.deepcopy(record)
@@ -239,13 +241,14 @@ def test_streaming_quality_matches_exact_frozen_base_ast_fixture():
 def test_frozen_base_characterization_preserves_error_stages_and_reader_order():
     frozen = _frozen_base_quality()
     comparisons = []
-    for _name, recommendations, outcomes in _characterization_cases():
+    for name, recommendations, outcomes in _characterization_cases():
         base_store = _ObservedLegacyStore(recommendations, outcomes)
         candidate_store = _ObservedStreamingStore(recommendations, outcomes)
         base = _invoke_quality(frozen, base_store)
         candidate = _invoke_quality(build_comparable_control_quality, candidate_store)
-        comparisons.append((base, candidate))
-    assert all(base == candidate for base, candidate in comparisons)
+        comparisons.append((name, base, candidate))
+    mismatches = [(name, base, candidate) for name, base, candidate in comparisons if base != candidate]
+    assert not mismatches, mismatches
 
 
 def test_frozen_base_and_stream_preserve_invalid_final_duplicate_error():
@@ -435,6 +438,7 @@ def test_streaming_quality_reduces_tracemalloc_peak_for_large_local_payloads():
                 self.reads.append(("recommendations", 50000))
                 for record in recommendation_rows():
                     yield "recommendation", record
+                yield "recommendations_complete", None
                 self.reads.append(("outcomes", 200000, True, True))
                 for record in outcome_rows():
                     yield "outcome", record
@@ -550,7 +554,10 @@ def test_store_quality_stream_uses_readonly_fetchmany_and_closes(tmp_path, monke
     with store.comparable_control_quality_record_stream(batch_size=512) as records:
         streamed = list(records)
 
-    assert [kind for kind, _item in streamed] == ["recommendation", "outcome"]
+    assert [kind for kind, _item in streamed if kind != "recommendations_complete"] == [
+        "recommendation",
+        "outcome",
+    ]
     assert fetch_sizes
     assert max(fetch_sizes) <= 512
     assert closed_cursors == [True, True]
