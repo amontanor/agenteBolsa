@@ -947,6 +947,10 @@ def build_comparable_control_quality(
             for kind, record in stream:
                 if kind == "recommendation":
                     consume_recommendation(record)
+                elif kind == "recommendations_complete":
+                    if not recommendations_finalized:
+                        finalize_recommendations()
+                        recommendations_finalized = True
                 elif kind == "outcome":
                     if not recommendations_finalized:
                         finalize_recommendations()

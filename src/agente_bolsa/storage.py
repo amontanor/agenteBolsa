@@ -1209,6 +1209,12 @@ class Store:
                     )
                 finally:
                     conn.close()
+                if kind == "recommendation":
+                    # Let the quality digest finish the recommendation phase
+                    # before the outcome connection is opened.  This keeps
+                    # validation/error precedence aligned with the legacy
+                    # list reader without retaining recommendation payloads.
+                    yield "recommendations_complete", None
 
         stream = records()
         try:
