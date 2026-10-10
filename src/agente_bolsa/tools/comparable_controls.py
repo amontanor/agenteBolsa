@@ -865,27 +865,43 @@ def build_comparable_control_quality(
             }
         )
 
+    selection_error: tuple[type[Exception], str] | None = None
+
+    def remember_selection_error(exc: Exception) -> None:
+        nonlocal selection_error
+        if selection_error is None:
+            selection_error = error_spec(exc)
+
     def consume_recommendation(record: Mapping[str, Any]) -> None:
         nonlocal legacy, legacy_v1, invalid_schema
-        created = _iso_date(record.get("created_at"))
-        if start and created and created < start:
+        if selection_error is not None:
             return
-        if end and created and created > end:
-            return
-        payload = record.get("payload") or {}
-        control_set = payload.get("comparable_control_set")
-        if not control_set:
-            legacy += 1
-            return
-        if control_set.get("schema_version") == LEGACY_SCHEMA_VERSION:
-            legacy_v1 += 1
-            return
-        if control_set.get("schema_version") != SCHEMA_VERSION:
-            invalid_schema += 1
-            return
-        if status and str(control_set.get("status") or "") != status:
-            return
-        consume_control_set(control_set)
+        try:
+            created = _iso_date(record.get("created_at"))
+            if start and created and created < start:
+                return
+            if end and created and created > end:
+                return
+            payload = record.get("payload") or {}
+            control_set = payload.get("comparable_control_set")
+            if not control_set:
+                legacy += 1
+                return
+            if control_set.get("schema_version") == LEGACY_SCHEMA_VERSION:
+                legacy_v1 += 1
+                return
+            if control_set.get("schema_version") != SCHEMA_VERSION:
+                invalid_schema += 1
+                return
+            if status and str(control_set.get("status") or "") != status:
+                return
+            consume_control_set(control_set)
+        except Exception as exc:
+            # The legacy reader materializes and decodes every row before the
+            # handler selects any row. Keep draining the streaming reader so a
+            # later decoder/SQL failure retains the same precedence, then
+            # re-raise this compact selection error at the phase boundary.
+            remember_selection_error(exc)
 
     def finalize_recommendations() -> None:
         nonlocal denominator, primary_controls
@@ -914,6 +930,11 @@ def build_comparable_control_quality(
                 identity = control[0]
                 if identity[0] == "signal":
                     tracked_signal_ids.add(identity[1])
+
+    def finish_recommendations() -> None:
+        if selection_error is not None:
+            raise_error(selection_error)
+        finalize_recommendations()
 
     def consume_outcome(record: Mapping[str, Any]) -> None:
         signal_id = str(record.get("signal_id") or "")
@@ -949,22 +970,22 @@ def build_comparable_control_quality(
                     consume_recommendation(record)
                 elif kind == "recommendations_complete":
                     if not recommendations_finalized:
-                        finalize_recommendations()
+                        finish_recommendations()
                         recommendations_finalized = True
                 elif kind == "outcome":
                     if not recommendations_finalized:
-                        finalize_recommendations()
+                        finish_recommendations()
                         recommendations_finalized = True
                     consume_outcome(record)
                 else:
                     raise ValueError(f"comparable_control_quality_record_kind_invalid:{kind}")
             if not recommendations_finalized:
-                finalize_recommendations()
+                finish_recommendations()
     else:
         # Fakes and older Store implementations keep their list-based contract.
         for record in store.trade_recommendations(limit=50000):
             consume_recommendation(record)
-        finalize_recommendations()
+        finish_recommendations()
         for record in store.signal_outcomes(
             limit=200000,
             include_lab_book=True,
