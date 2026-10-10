@@ -5,11 +5,13 @@
   "fingerprint": {
     "base_commit": "1a3333a49db77898cecf1670813b4e23d445ac00",
     "base_legacy_reader_ast_sha256": "090946ae7abca6f1e2a73299602bd6f5591ab77282efcfc99e40d51f2a1086d0",
+    "base_origin_metrics_ast_sha256": "e382450264f98531ca8c4f7d213aad572d8fb47ca72bccf8af0fed252b76bd18",
     "base_storage_blob_sha256": "da8e3ebc081a210995415dfb664fd342203aff95563e562d80fb0d3224759d67",
     "comparison": "projection fields compared with unchanged full-reader fields on the same temporary rows",
     "current_legacy_reader_ast_sha256": "090946ae7abca6f1e2a73299602bd6f5591ab77282efcfc99e40d51f2a1086d0",
-    "current_projection_ast_sha256": "20492b9c2ca74c0b58c9fe02abf63a350017fa80564ce541bc32e797d923af3e",
-    "current_storage_blob_sha256": "f0e041adb98930fcc004a85bc67486fbdcd97afb00106d74a49355fcad63d0f9",
+    "current_origin_metrics_ast_sha256": "d9c3c207069cd3142d739c61ca7ab4d63d3cd5f971562d2f6b5f7eb59eba74ad",
+    "current_projection_ast_sha256": "27030a19bef5b42f199033ece7a65a4d9ce0fbb8fc035dc93e8446406bea3680",
+    "current_storage_blob_sha256": "6057d747046e7175d997e740eaf572da1894ec7231d070f862d070be79f3ec64",
     "hash_scope": "raw git-show/file bytes for blob hashes; AST dump without source locations for function hashes"
   },
   "fixture_content_bytes": 4194304,
@@ -23,8 +25,14 @@
       "measurement": {
         "current_tracemalloc_bytes": 4216125,
         "mode": "legacy",
+        "offline_guards": [
+          "socket.socket",
+          "socket.create_connection",
+          "socket.getaddrinfo",
+          "socket.gethostbyname"
+        ],
         "peak_tracemalloc_bytes": 4221673,
-        "pid": 51596,
+        "pid": 15832,
         "python_executable": "C:\\Antonio\\Bref\\agenteBolsa\\.venv\\Scripts\\python.exe",
         "retained_content_bytes": 4194304,
         "rows": 16,
@@ -33,14 +41,20 @@
       "mode": "legacy",
       "returncode": 0,
       "stderr": "",
-      "stdout": "{\"current_tracemalloc_bytes\": 4216125, \"mode\": \"legacy\", \"peak_tracemalloc_bytes\": 4221673, \"pid\": 51596, \"python_executable\": \"C:\\\\Antonio\\\\Bref\\\\agenteBolsa\\\\.venv\\\\Scripts\\\\python.exe\", \"retained_content_bytes\": 4194304, \"rows\": 16, \"sys_prefix\": \"C:\\\\Antonio\\\\Bref\\\\agenteBolsa\\\\.venv\"}\n"
+      "stdout": "{\"current_tracemalloc_bytes\": 4216125, \"mode\": \"legacy\", \"offline_guards\": [\"socket.socket\", \"socket.create_connection\", \"socket.getaddrinfo\", \"socket.gethostbyname\"], \"peak_tracemalloc_bytes\": 4221673, \"pid\": 15832, \"python_executable\": \"C:\\\\Antonio\\\\Bref\\\\agenteBolsa\\\\.venv\\\\Scripts\\\\python.exe\", \"retained_content_bytes\": 4194304, \"rows\": 16, \"sys_prefix\": \"C:\\\\Antonio\\\\Bref\\\\agenteBolsa\\\\.venv\"}\n"
     },
     {
       "measurement": {
-        "current_tracemalloc_bytes": 13637,
+        "current_tracemalloc_bytes": 13773,
         "mode": "projection",
-        "peak_tracemalloc_bytes": 17272,
-        "pid": 2836,
+        "offline_guards": [
+          "socket.socket",
+          "socket.create_connection",
+          "socket.getaddrinfo",
+          "socket.gethostbyname"
+        ],
+        "peak_tracemalloc_bytes": 17720,
+        "pid": 27616,
         "python_executable": "C:\\Antonio\\Bref\\agenteBolsa\\.venv\\Scripts\\python.exe",
         "retained_content_bytes": 0,
         "rows": 16,
@@ -49,8 +63,15 @@
       "mode": "projection",
       "returncode": 0,
       "stderr": "",
-      "stdout": "{\"current_tracemalloc_bytes\": 13637, \"mode\": \"projection\", \"peak_tracemalloc_bytes\": 17272, \"pid\": 2836, \"python_executable\": \"C:\\\\Antonio\\\\Bref\\\\agenteBolsa\\\\.venv\\\\Scripts\\\\python.exe\", \"retained_content_bytes\": 0, \"rows\": 16, \"sys_prefix\": \"C:\\\\Antonio\\\\Bref\\\\agenteBolsa\\\\.venv\"}\n"
+      "stdout": "{\"current_tracemalloc_bytes\": 13773, \"mode\": \"projection\", \"offline_guards\": [\"socket.socket\", \"socket.create_connection\", \"socket.getaddrinfo\", \"socket.gethostbyname\"], \"peak_tracemalloc_bytes\": 17720, \"pid\": 27616, \"python_executable\": \"C:\\\\Antonio\\\\Bref\\\\agenteBolsa\\\\.venv\\\\Scripts\\\\python.exe\", \"retained_content_bytes\": 0, \"rows\": 16, \"sys_prefix\": \"C:\\\\Antonio\\\\Bref\\\\agenteBolsa\\\\.venv\"}\n"
     }
   ],
+  "offline_guards": [
+    "socket.socket",
+    "socket.create_connection",
+    "socket.getaddrinfo",
+    "socket.gethostbyname"
+  ],
+  "settings": "Settings was not constructed; no _env_file was consulted",
   "status": "passed"
 }

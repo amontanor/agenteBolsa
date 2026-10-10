@@ -18,6 +18,14 @@ economia, broker, riesgo ni los worktrees protegidos.
 de 512 filas y cierra cursor y conexion en exito, error SQL/JSON y cierre
 temprano del generador.
 
+Antes de devolver el iterador hace un preflight por lotes que ejecuta y decodifica
+todos los `payload_json`, descartando cada objeto inmediatamente. Solo despues
+devuelve la segunda pasada por lotes. Asi un JSON invalido posterior conserva
+prioridad sobre un fallo del consumidor del primer payload, y un fallo de
+propuesta se produce despues de que la lectura de artifacts haya validado todos
+sus datos, como en el lector completo. Ningun `content_text` ni lista completa
+de payloads se conserva en memoria; la segunda pasada repite la consulta minima.
+
 El lector completo `continuous_improvement_proposal_artifacts` no cambia.
 `build_lab_digest` selecciona la proyeccion en
 `src/agente_bolsa/continuous_improvement/digest.py:65` y conserva fallback al
@@ -41,16 +49,22 @@ resume stdout en este lote.
   ausente, duplicado y no coincidente.
 - fallos sinteticos de SQL, PRAGMA/setup y decode JSON, con cierre verificable
   de cursor/conexion; tambien cierre temprano del generador.
+- precedencia de decode: un primer payload JSON-lista y un segundo JSON invalido
+  producen `JSONDecodeError` antes de cualquier `.get` del consumidor; tambien
+  se verifica que el preflight ocurre antes de un error en proposals y que un
+  error del consumidor cierra la segunda pasada.
 - equivalencia de los campos proyectados con el lector completo en la misma
   base SQLite temporal y preservacion de `content_text` para aprobacion.
 - consumo de generador, verdad literal de `tests_ok`, y fallback de fakes sin
   la API nueva.
 
-Comando focal ejecutado con el Python efectivo y `PYTHONPATH=src` del checkout:
+Comando final de regresion (salida y exit code persistidos en
+`docs/artifacts/oct10_origin_focal_pytest.log`):
 
 ```text
-C:\Antonio\Bref\agenteBolsa\.venv\Scripts\python.exe -m pytest -q tests/test_origin_artifact_projection.py tests/test_ci_digest_reuse.py
-10 passed in 1.63s
+C:\Antonio\Bref\agenteBolsa\.venv\Scripts\python.exe -m pytest -q tests/test_origin_artifact_projection.py tests/test_ci_digest_reuse.py tests/test_improvement_origin_lineage.py
+37 passed in 2.51s
+exitcode=0
 ```
 
 El script `scripts/measure_origin_memory_oct10.py` conserva la comparacion
@@ -61,20 +75,27 @@ Usa `git show` de bytes sin normalizar y escribe sus hashes en
 - blob bruto del lector base: `da8e3ebc081a210995415dfb664fd342203aff95563e562d80fb0d3224759d67`;
 - AST del lector completo base y actual: ambos
   `090946ae7abca6f1e2a73299602bd6f5591ab77282efcfc99e40d51f2a1086d0`;
+- AST de `build_origin_utility_metrics` base:
+  `e382450264f98531ca8c4f7d213aad572d8fb47ca72bccf8af0fed252b76bd18`;
+- AST actual de `build_origin_utility_metrics`:
+  `d9c3c207069cd3142d739c61ca7ab4d63d3cd5f971562d2f6b5f7eb59eba74ad`;
 - AST de la nueva proyeccion:
-  `20492b9c2ca74c0b58c9fe02abf63a350017fa80564ce541bc32e797d923af3e`.
+  `27030a19bef5b42f199033ece7a65a4d9ce0fbb8fc035dc93e8446406bea3680`.
 
 ## Medicion local
 
 Se crearon 16 artifacts temporales con `content_text` sintetico de 262144
 bytes cada uno (4,194,304 bytes totales). Cada modo corrio en un proceso
 hijo efectivo con `sys.executable` y `sys.prefix` del entorno del proyecto,
-sin Settings, red, DNS, broker ni LLM.
+instalando antes de importar `agente_bolsa.storage` guards para
+`socket.socket`, `socket.create_connection`, `socket.getaddrinfo` y
+`socket.gethostbyname`. No se construyo `Settings` ni se consulto `_env_file`;
+no hubo broker, LLM ni consulta de produccion.
 
 | modo | PID | filas | content retenido | pico tracemalloc |
 | --- | ---: | ---: | ---: | ---: |
-| lector completo | 51596 | 16 | 4,194,304 B | 4,221,673 B |
-| proyeccion | 2836 | 16 | 0 B | 17,272 B |
+| lector completo | 15832 | 16 | 4,194,304 B | 4,221,673 B |
+| proyeccion | 27616 | 16 | 0 B | 17,720 B |
 
 La medicion acredita que esta ruta no materializa `content_text` en el
 proceso medido. Es una fixture pequena y `tracemalloc`, no RSS de Windows ni

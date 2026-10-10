@@ -21,8 +21,6 @@ import tracemalloc
 from pathlib import Path
 from typing import Any
 
-from agente_bolsa.storage import Store
-
 BASE_COMMIT = "1a3333a49db77898cecf1670813b4e23d445ac00"
 CONTENT_BYTES = 256 * 1024
 ARTIFACT_COUNT = 16
@@ -33,6 +31,8 @@ def _repo_root() -> Path:
 
 
 def _create_fixture(database_path: Path, *, count: int = ARTIFACT_COUNT) -> int:
+    from agente_bolsa.storage import Store
+
     store = Store(database_path, database_path.parent / "agent_logs")
     store.ensure_schema()
     content = "X" * CONTENT_BYTES
@@ -60,6 +60,8 @@ def _create_fixture(database_path: Path, *, count: int = ARTIFACT_COUNT) -> int:
 
 
 def _child_measure(mode: str, database_path: Path) -> dict[str, Any]:
+    from agente_bolsa.storage import Store
+
     gc.collect()
     tracemalloc.start()
     if mode == "legacy":
@@ -86,6 +88,28 @@ def _child_measure(mode: str, database_path: Path) -> dict[str, Any]:
     return payload
 
 
+def _install_offline_guards() -> list[str]:
+    """Block socket/DNS calls before importing project modules in each child."""
+    import socket
+
+    def blocked(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("network disabled for isolated origin-memory measurement")
+
+    original_socket = socket.socket
+
+    class GuardedSocket(original_socket):
+        connect = blocked
+        connect_ex = blocked
+        sendto = blocked
+        sendmsg = blocked
+
+    socket.socket = GuardedSocket  # type: ignore[assignment]
+    socket.create_connection = blocked  # type: ignore[assignment]
+    socket.getaddrinfo = blocked  # type: ignore[assignment]
+    socket.gethostbyname = blocked  # type: ignore[assignment]
+    return ["socket.socket", "socket.create_connection", "socket.getaddrinfo", "socket.gethostbyname"]
+
+
 def _raw_git_blob(repo: Path, revision: str, relative_path: str) -> bytes:
     return subprocess.check_output(["git", "show", f"{revision}:{relative_path}"], cwd=repo)
 
@@ -102,8 +126,11 @@ def _ast_hash(source: bytes, *, function_name: str) -> str:
 def _run_parent(output_path: Path) -> int:
     repo = _repo_root()
     storage_path = Path("src/agente_bolsa/storage.py")
+    digest_path = Path("src/agente_bolsa/continuous_improvement/digest.py")
     current_source = (repo / storage_path).read_bytes()
     base_source = _raw_git_blob(repo, BASE_COMMIT, str(storage_path).replace("\\", "/"))
+    current_digest_source = (repo / digest_path).read_bytes()
+    base_digest_source = _raw_git_blob(repo, BASE_COMMIT, str(digest_path).replace("\\", "/"))
     fingerprint = {
         "base_commit": BASE_COMMIT,
         "base_storage_blob_sha256": hashlib.sha256(base_source).hexdigest(),
@@ -116,6 +143,12 @@ def _run_parent(output_path: Path) -> int:
         ),
         "current_projection_ast_sha256": _ast_hash(
             current_source, function_name="iter_continuous_improvement_proposal_artifact_summaries"
+        ),
+        "base_origin_metrics_ast_sha256": _ast_hash(
+            base_digest_source, function_name="build_origin_utility_metrics"
+        ),
+        "current_origin_metrics_ast_sha256": _ast_hash(
+            current_digest_source, function_name="build_origin_utility_metrics"
         ),
         "comparison": "projection fields compared with unchanged full-reader fields on the same temporary rows",
         "hash_scope": "raw git-show/file bytes for blob hashes; AST dump without source locations for function hashes",
@@ -155,6 +188,13 @@ def _run_parent(output_path: Path) -> int:
         "artifact_count": ARTIFACT_COUNT,
         "content_bytes": CONTENT_BYTES,
         "fixture_content_bytes": content_bytes,
+        "offline_guards": [
+            "socket.socket",
+            "socket.create_connection",
+            "socket.getaddrinfo",
+            "socket.gethostbyname",
+        ],
+        "settings": "Settings was not constructed; no _env_file was consulted",
         "modes": modes,
         "fingerprint": fingerprint,
         "limits": [
@@ -179,10 +219,13 @@ def main() -> int:
         default=Path("docs/artifacts/oct10_origin_memory_measurement.json"),
     )
     args = parser.parse_args()
+    offline_guards = _install_offline_guards()
     if args.child:
         if args.db is None:
             parser.error("--db is required with --child")
-        print(json.dumps(_child_measure(args.child, args.db), sort_keys=True))
+        result = _child_measure(args.child, args.db)
+        result["offline_guards"] = offline_guards
+        print(json.dumps(result, sort_keys=True))
         return 0
     return _run_parent(args.output if args.output.is_absolute() else _repo_root() / args.output)
 
