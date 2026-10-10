@@ -251,6 +251,115 @@ def test_frozen_base_characterization_preserves_error_stages_and_reader_order():
     assert not mismatches, mismatches
 
 
+def test_frozen_base_and_stream_preserve_recommendation_decoder_error_priority():
+    class RawDecodeLegacyStore:
+        def __init__(self, rows):
+            self._rows = rows
+            self.reads = []
+            self.closed = False
+
+        def trade_recommendations(self, *, limit: int):
+            self.reads.append(("recommendations", limit))
+            return [json.loads(row) for row in self._rows]
+
+        def signal_outcomes(self, *, limit: int, include_lab_book: bool, include_learning_experiment: bool):
+            self.reads.append(("outcomes", limit, include_lab_book, include_learning_experiment))
+            return []
+
+    class RawDecodeStreamingStore(RawDecodeLegacyStore):
+        @contextmanager
+        def comparable_control_quality_record_stream(self, *, batch_size: int):
+            assert batch_size == 512
+
+            def records():
+                self.reads.append(("recommendations", 50000))
+                for row in self._rows:
+                    yield "recommendation", json.loads(row)
+                yield "recommendations_complete", None
+                self.reads.append(("outcomes", 200000, True, True))
+                yield from ()
+
+            stream = records()
+            try:
+                yield stream
+            finally:
+                self.closed = True
+                stream.close()
+
+    frozen = _frozen_base_quality()
+    for rows in (
+        ('{"payload":[1]}', "{"),
+        ('{"payload":[1]}', '{"payload":{}}'),
+    ):
+        base_store = RawDecodeLegacyStore(rows)
+        candidate_store = RawDecodeStreamingStore(rows)
+        base = _invoke_quality(frozen, base_store)
+        candidate = _invoke_quality(build_comparable_control_quality, candidate_store)
+        assert candidate == base, (rows, base, candidate)
+        assert candidate_store.closed is True
+        assert candidate_store.reads == base_store.reads == [("recommendations", 50000)]
+
+
+def test_stream_selection_and_reader_or_finalize_errors_close_before_outcomes():
+    class ErrorStageLegacyStore:
+        def __init__(self, stage):
+            self.stage = stage
+            self.reads = []
+            self.closed = False
+
+        def trade_recommendations(self, *, limit: int):
+            self.reads.append(("recommendations", limit))
+            if self.stage == "reader":
+                raise RuntimeError("recommendations_reader_failed")
+            if self.stage == "selection":
+                return [{"payload": [1]}, {"payload": {}}]
+            item = _control_set(controls=())
+            item["controls"] = 1
+            return [{"payload": {"comparable_control_set": item}}]
+
+        def signal_outcomes(self, *, limit: int, include_lab_book: bool, include_learning_experiment: bool):
+            self.reads.append(("outcomes", limit, include_lab_book, include_learning_experiment))
+            return []
+
+    class ErrorStageStreamingStore(ErrorStageLegacyStore):
+        @contextmanager
+        def comparable_control_quality_record_stream(self, *, batch_size: int):
+            assert batch_size == 512
+
+            def records():
+                self.reads.append(("recommendations", 50000))
+                if self.stage == "reader":
+                    yield "recommendation", {"payload": [1]}
+                    raise RuntimeError("recommendations_reader_failed")
+                if self.stage == "selection":
+                    yield "recommendation", {"payload": [1]}
+                    yield "recommendation", {"payload": {}}
+                else:
+                    item = _control_set(controls=())
+                    item["controls"] = 1
+                    yield "recommendation", {"payload": {"comparable_control_set": item}}
+                yield "recommendations_complete", None
+                self.reads.append(("outcomes", 200000, True, True))
+                yield from ()
+
+            stream = records()
+            try:
+                yield stream
+            finally:
+                self.closed = True
+                stream.close()
+
+    frozen = _frozen_base_quality()
+    for stage in ("reader", "selection", "finalize"):
+        base_store = ErrorStageLegacyStore(stage)
+        candidate_store = ErrorStageStreamingStore(stage)
+        base = _invoke_quality(frozen, base_store)
+        candidate = _invoke_quality(build_comparable_control_quality, candidate_store)
+        assert candidate == base, (stage, base, candidate)
+        assert candidate_store.closed is True
+        assert candidate_store.reads == base_store.reads == [("recommendations", 50000)]
+
+
 def test_frozen_base_and_stream_preserve_invalid_final_duplicate_error():
     class InvalidFinalStore(_LegacyStore):
         def signal_outcomes(self, **_kwargs):
