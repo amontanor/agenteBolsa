@@ -19,9 +19,19 @@ el pico sigue unavailable. Evidencia conservada en ef99/audit_oct10_oom_kernel.t
 El supervisor está vivo con heartbeat fresco: healthcheck_all falla por el
 estado diario failed, no por supervisor muerto. No se ha borrado ni cambiado
 ese estado ni ejecutado retry/restart para forzar salud.
-Scheduler presenta presión de memoria, pero su cgroup actual tiene oom=0 y
-oom_kill=0: no atribuir sus 13 reinicios a este OOM. Causa de reinicios todavía
-unavailable; Docker no conserva eventos útiles del intervalo consultado.
+Seguimiento histórico del scheduler: su cgroup actual tiene oom=0 y
+oom_kill=0, pero el journal del kernel identifica OOM anteriores en el mismo
+ID 7e56adccf3aca898043ab00392eba1281a3ad58c37fca3067b8833305620770b:
+9-oct 00:24:04, 21:31:31, 22:25:25, 23:47:27 Madrid; 10-oct 03:38:56 y
+05:28:22 Madrid. Último proceso eliminado: anon-RSS 2062436 kB, file-RSS
+35456 kB; arranque actual a 05:28:23.655 Madrid. Esto vincula fuertemente el
+último reinicio a OOM del scheduler, separado del auxiliar. No certifica la
+causa de los 13 reinicios ni la función que acumuló memoria. Docker no
+conserva eventos útiles; OOMKilled=false actual no descarta historia OOM.
+Evidencia ef99/audit_oct10_recent_kernel_ooms.txt y docker inspect del mismo
+ID. Auditoría readonly separada asignada a Luna para correlacionar fases/logs
+y proponer corrección mínima sin tocar servicios ni usar datos productivos
+en tests. Su dictamen todavía pendiente.
 
 Schedule-status real 09:09:12 UTC: XNYS cerrado, próxima apertura 12-oct
 15:30 Madrid; runtime unavailable por WAL. SELECT acotados mediante
