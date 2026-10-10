@@ -62,6 +62,36 @@ EXECUTABLE = "EJECUTABLE"
 PROSE = "PROSA"
 
 
+class _CapturedDigestError:
+    """Keep only consumer exception type/message while a reader is drained."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error_type = type(error)
+        self.message = str(error)
+
+    def raise_error(self) -> None:
+        try:
+            error = self.error_type(self.message)
+        except Exception:
+            error = RuntimeError(self.message)
+        raise error.with_traceback(None)
+
+
+def _drain_artifact_iterator(artifact_iter: Iterable[dict[str, Any]]) -> None:
+    """Drain reader rows so a later SQL/JSON error outranks a consumer error."""
+    try:
+        drain = getattr(artifact_iter, "drain", None)
+        if callable(drain):
+            drain()
+        else:
+            for _ in artifact_iter:
+                pass
+    finally:
+        close = getattr(artifact_iter, "close", None)
+        if callable(close):
+            close()
+
+
 def _origin_utility_artifacts(store: Store) -> Iterable[dict[str, Any]]:
     """Select the narrow artifact projection, with a legacy-store fallback."""
     reader = getattr(store, "iter_continuous_improvement_proposal_artifact_summaries", None)
@@ -356,51 +386,70 @@ def build_origin_utility_metrics(
             "by_evidence_class": {"trading": 0, "reliability": 0, "observability": 0, "docs": 0},
         }
 
-    for proposal in proposals:
-        payload = proposal.get("payload") or {}
-        contract = validate_experiment_contract(proposal).get("contract") or {}
-        origin = contract.get("origin") or payload.get("origin")
-        check = validate_origin(origin, change_class=str(contract.get("change_class") or ""))
-        if not origin:
-            legacy += 1
-            continue
-        if not check["valid"]:
-            invalid += 1
-            continue
-        role = check["origin"]["origin_role"]
-        item = origins.setdefault(role, empty())
-        item["runs"].add(check["origin"]["origin_run_id"])
-        item["findings"] += 1
-        classification = classify_experiment(proposal, proposal)
-        item["operational_checks"] += classification == "operational_checks"
-        item["evidence_experiments_proposed"] += classification != "operational_checks"
-        item["by_evidence_class"][check["origin"]["evidence_class"]] += 1
-        valid_contract = validate_experiment_contract(proposal)["valid"]
-        if valid_contract:
-            item["admitted"] += 1
-        else:
-            item["invalid_or_inevaluable"] += 1
-        if str(proposal.get("status") or "").upper() == "REJECTED":
-            item["rejected_before_llm"] += 1
-        if str(proposal.get("status") or "").upper() == "READY_TO_APPLY":
-            item["ready_to_apply"] += 1
-        proposal_origins[str(proposal.get("proposal_id") or "")] = (role, check["origin"])
-
-    for experiment in experiments or []:
-        resolved = proposal_origins.get(str(experiment.get("proposal_id") or ""))
-        if resolved:
-            origins[resolved[0]]["experiments_created"] += 1
-
     artifact_iter = iter(artifacts or ())
-    try:
-        for artifact in artifact_iter:
-            resolved = proposal_origins.get(str(artifact.get("proposal_id") or ""))
-            if not resolved:
+
+    def prepare_origin_map() -> None:
+        nonlocal legacy, invalid
+        for proposal in proposals:
+            payload = proposal.get("payload") or {}
+            contract = validate_experiment_contract(proposal).get("contract") or {}
+            origin = contract.get("origin") or payload.get("origin")
+            check = validate_origin(origin, change_class=str(contract.get("change_class") or ""))
+            if not origin:
+                legacy += 1
                 continue
-            item = origins[resolved[0]]
-            payload = artifact.get("payload") or {}
-            item["codegen_attempted"] += 1
-            item["codegen_succeeded"] += payload.get("status") == "READY_FOR_HUMAN_REVIEW" and payload.get("tests_ok") is True
+            if not check["valid"]:
+                invalid += 1
+                continue
+            role = check["origin"]["origin_role"]
+            item = origins.setdefault(role, empty())
+            item["runs"].add(check["origin"]["origin_run_id"])
+            item["findings"] += 1
+            classification = classify_experiment(proposal, proposal)
+            item["operational_checks"] += classification == "operational_checks"
+            item["evidence_experiments_proposed"] += classification != "operational_checks"
+            item["by_evidence_class"][check["origin"]["evidence_class"]] += 1
+            valid_contract = validate_experiment_contract(proposal)["valid"]
+            if valid_contract:
+                item["admitted"] += 1
+            else:
+                item["invalid_or_inevaluable"] += 1
+            if str(proposal.get("status") or "").upper() == "REJECTED":
+                item["rejected_before_llm"] += 1
+            if str(proposal.get("status") or "").upper() == "READY_TO_APPLY":
+                item["ready_to_apply"] += 1
+            proposal_origins[str(proposal.get("proposal_id") or "")] = (role, check["origin"])
+
+        for experiment in experiments or []:
+            resolved = proposal_origins.get(str(experiment.get("proposal_id") or ""))
+            if resolved:
+                origins[resolved[0]]["experiments_created"] += 1
+
+    try:
+        prepare_origin_map()
+    except Exception as exc:
+        captured = _CapturedDigestError(exc)
+        _drain_artifact_iterator(artifact_iter)
+        captured.raise_error()
+
+    try:
+        while True:
+            try:
+                artifact = next(artifact_iter)
+            except StopIteration:
+                break
+            try:
+                resolved = proposal_origins.get(str(artifact.get("proposal_id") or ""))
+                if not resolved:
+                    continue
+                item = origins[resolved[0]]
+                payload = artifact.get("payload") or {}
+                item["codegen_attempted"] += 1
+                item["codegen_succeeded"] += payload.get("status") == "READY_FOR_HUMAN_REVIEW" and payload.get("tests_ok") is True
+            except Exception as exc:
+                captured = _CapturedDigestError(exc)
+                _drain_artifact_iterator(artifact_iter)
+                captured.raise_error()
     finally:
         close = getattr(artifact_iter, "close", None)
         if callable(close):
