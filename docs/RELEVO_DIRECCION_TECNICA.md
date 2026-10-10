@@ -1,5 +1,42 @@
 # Relevo de direccion tecnica — agenteBolsa
 
+## Revisión de entregas de memoria — 10-oct, 11:29 Europe/Madrid
+
+Dictamen `needs_fix`, sin integración ni despliegue. .358 fue entregado limpio
+por Luna en bolsa-digest-oct10: HEAD f52c055e963289cd813e9a56f79ca4001be2be37,
+tree 938bdc7c39bd407209edaae5bdbce6532e526645. El código comparte despacho y
+cierra Store en las rutas previstas. Root detectó límites de la QA entregada:
+solo cuatro focales nuevos, sin pruebas de todos los fallos descritos; hijo del
+test de import sin guards; paridad entre dos entrypoints candidatos, sin base
+pre-refactor; normalización que elimina campos de ventanas de negocio.
+Medición v2 mide el proceso propio, pero la firma WinAPI pasa un puntero donde
+GetProcessMemoryInfo requiere DWORD cb; tampoco prueba pico entre fases.
+No se acepta como certificación de memoria ni paridad final. El resumen del
+primer resultado inválido no conserva su JSON completo original. Se pide
+conservar evidencia y declarar cualquier pérdida, sin reconstruirla como original.
+Luna corrige esos puntos mediante commits nuevos y evidencia v3; .358 no está
+aprobado para integración todavía. El smoke .357 anterior y los 32 focales del
+worker no equivalen a DoD completo.
+
+El lanzador root con entrada fija recogió las 2830 pruebas de .357 sin error
+(3.19 s); es colección, no ejecución completa. Sus siete tests de concurrencia
+siguen verdes y la suite completa final se reserva para el árbol integrado.
+
+Nuevo lote N2 .359 reservado en bolsa-controls-memory-oct10/agenteBolsa,
+base exacta 43325d7b8c6525fa3665537f5109d570f2f2f5a9. Lectura de código confirma
+que build_comparable_control_quality materializa hasta 50000 recomendaciones,
+listas de controles y hasta 200000 outcomes completos para calcular contadores
+y madurez. Corrección aislada asignada: streaming readonly mediante Store,
+reutilización de helpers, contadores/IDs y madurez en lugar de payloads retenidos.
+Aceptar solo con paridad campo a campo contra la base, mismos límites/orden,
+exclusiones, filtros, last-wins de IDs duplicados, denominadores y errores;
+legacy y lectores actuales intactos, cierre de recursos probado y reducción de
+memoria medida con fixtures locales. No cambio de candidatos, selección,
+órdenes, economía, aprendizaje ni promoción. Implementación/QA/revisión root
+pendientes; no atribuir OOM productivo a esta función sin evidencia adicional.
+La auditoría readonly separada del scheduler continúa buscando fases exactas.
+No se ha cambiado configuración, límites, locks ni servicios para pasar gates.
+
 ## Diagnóstico y QA aislada — 10-oct, 11:13 Europe/Madrid
 
 Dictamen `needs_fix`; despliegue pendiente. Esta continuación del objetivo
