@@ -127,4 +127,5 @@ __all__ = ["__version__"]
 # Oct09: isolated combined corrective candidate; protected broker review remains separate.
 # Oct09 N3: preserve broker enum values and dispatch partial take-profit quantity (0.4.357).
 # Oct10 N2: share read-only digest dispatch and avoid main's eager graph in supervisor (0.4.358).
-__version__ = "0.4.358"
+# Oct10 N2: stream origin utility artifact summaries without content_text (0.4.360).
+__version__ = "0.4.360"
