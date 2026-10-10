@@ -1,5 +1,121 @@
 # Ensayo conjunto de siete mejoras — 8-oct-2026
 
+## Resultado del intento retomado — 10-oct, 10:38 Europe/Madrid
+
+Dictamen `precondition_not_met`. No se desplegó .357 ni se ejecutó sellado,
+build, suite completa, smoke, reinicio, orden o reparación productiva. La
+automatización de despliegue se pausa al concluir este intento; la revisión
+del 12-oct se conserva. Las aprobaciones de los dos parches y del sellado
+posterior a QA siguen vigentes, sin ampliar el alcance.
+
+Preflight real por SSH: XNYS cerrado, próxima apertura 12-oct 15:30 Madrid.
+Los tres servicios siguen en agente-bolsa:0.4.321-arm64, imagen
+sha256:8ff2bedce363751c33e8e0acd37eae4095358a8f4edf65c08f28fcfaf069d1ae.
+Scheduler healthy, RestartCount=13, OOMKilled=false; web healthy,
+RestartCount=0; auxiliary unhealthy, RestartCount=0, OOMKilled=true.
+El contador OOM prueba un estado observado, no identifica su causa ni la hora
+del episodio. La salud no pasa y bloquea el intento antes de QA/despliegue.
+
+Kernel actual ok, violations=[], paper=true, live=false, auto-apply=false.
+Carrier declarado conserva SHA256
+4e60333c92b037c58a20c2cc94e6b252ffffdac9b912ab2740e3103454d5827f.
+Schedule-status devuelve runtime unavailable por WAL: no acredita quietud.
+SELECT acotados mediante Store.read_connection, cierre explícito, confirman
+postmarket de la sesión 9-oct terminal failed a
+2026-10-10T03:29:55.697543+00:00, stage_postmarket_report_failed. Evento asociado
+pmr_ef2dfa7a798f, TypeError de comparación NoneType/int. Esto es compatible
+con el defecto local ya corregido en el candidato; no se obtuvo traceback
+remoto que demuestre la función exacta. Sesión civil 10-oct aparece skipped
+market_not_ready (sábado) y no sustituye al terminal de la sesión 9-oct.
+Market_cycle y portfolio_watch consultados estaban skipped; ausencia global
+de todos los jobs, leases, retries y procesos sigue sin certificar. No se
+continúa investigando ni reparando el runtime después del gate de salud fallido.
+
+El intento de preparación del 9-oct fue interrumpido por el revisor automático
+al alcanzar el límite de uso: la escritura final, commit documental y paquete
+no se ejecutaron. Era un fallo de revisión, no un dictamen de inseguridad.
+En esta reanudación las lecturas autorizadas y la documentación vuelven a
+estar disponibles. Los tres cambios documentales pendientes eran propios del
+lote; no había cambios de fuente, tests ni archivos ajenos. Se preservaron.
+
+Candidato funcional 0.4.357: HEAD 68bfe74bfa8e5dd079a89531c322a1166b31177c,
+tree 35a7d0c7b64c7eba1cbaae88985923ba829a0ab3. Los commits posteriores a esta
+identidad son solo documentación; comprobar diff src/tests antes de heredar
+las 27 focales en 2.20 s y Ruff/NUL/diff verdes. Fullsuite, smoke, ARM, preflight
+válido, sellado y doble salud siguen pendientes. No existe paquete .357
+completado; el .356 no representa los parches protegidos nuevos.
+
+Siguiente gate: diagnóstico separado del estado unhealthy/OOM y del aumento
+de reinicios, con evidencia de procesos, logs y recursos y causa contrastada.
+Después, en un intento operativo nuevo, volver a verificar todos los gates
+antes de la QA completa y del despliegue ya autorizado. No aumentar riesgo ni
+forzar servicios/locks para superar estas condiciones.
+
+## Estado vigente — 9-oct, .357 con los dos parches aprobados
+
+Dictamen `needs_final_validation`, no desplegado. El operador aprobó ambos
+parches concretos y el sellado canónico intencional tras QA mediante «Tienes mi
+ok». Esta aprobación sustituye los bloqueos de revisión humana de las notas
+inferiores; no amplía el alcance a otros protegidos, política u órdenes manuales.
+
+HEAD funcional 68bfe74bfa8e5dd079a89531c322a1166b31177c, tree 35a7d0c7b64c7eba1cbaae88985923ba829a0ab3, versión 0.4.357.
+La revisión independiente compara byte a byte broker.py y execution.py con
+el resultado exacto de los parches aprobados sobre f758d72d. Son los únicos
+protegidos distintos de 1adc3cec; kernel.py, risk.py, config.py y .env intactos.
+broker.py SHA256 7656e0beb1edafbe2b648e5472d0047a80826a39d6be56f0465cd2d9366a0248.
+execution.py SHA256 e3b46b5b60f91aed7bca089761486312724168766415f749ccee78a44d8d3594.
+
+El adaptador devuelve Enum.value y conserva strings/defaults. La salida SELL
+con checks.trigger=partial_take_profit_v2 utiliza la petición existente con
+la cantidad del plan; el trigger nested no se añade como autoridad. Los demás
+cierres completos conservan close_position y los controles previos del kernel.
+No se reescriben históricos ni se afirma un fill real a partir de un cliente falso.
+
+QA focal de este árbol: Root: 27 passed en 2.20 s sobre 53975985, SDK real y red bloqueada.
+Evidencia ef99/release_oct09_0357_protected_focal.txt y
+ef99/release_oct09_0357_protected_focal_journal.jsonl. El commit 68bfe74b solo
+ordena imports (Ruff), sin cambio de fuente ni lógica; se hereda esa evidencia.
+La regresión significativa sustituye la prueba aritmética descartada. Un test
+previo de política de versión pasó; fullsuite todavía pendiente.
+Ruff src/tests, NUL (548 archivos) y git diff --check verdes.
+Paquete local .357 pendiente; rutas reservadas para un intento posterior: ef99/release_oct09_0357_sources.zip, con su identidad y SHA256 en
+ef99/release_oct09_0357_bundle.json. Es fuente revisada, no imagen, QA ARM ni
+prueba de despliegue.
+La evidencia .356 no sustituye las comprobaciones afectadas de .357. Fullsuite
+única, smoke aislado, configuración/kernel, preflight y prueba ARM siguen
+pendientes. Python del proyecto, PYTHONPATH exacto, DATA_DIR temporal,
+_env_file=None y proveedores locales son obligatorios; sin broker/red/LLM ni
+datos productivos desde tests. No repetir suites idénticas sin causa nueva.
+
+Schedule-status real a las 21:17 Madrid: XNYS abierto, cierre previsto 22:00.
+Producción sigue .321, kernel ok, paper=true, live=false y auto-apply=false.
+Carrier real /run/secrets/application.env: SHA256
+4e60333c92b037c58a20c2cc94e6b252ffffdac9b912ab2740e3103454d5827f,
+igual al declarado; se comprobó sin imprimir contenido. Evidencias en ef99:
+audit_oct09_seal_carrier.json y audit_oct09_carrier_root_hash.json.
+
+El contenedor vivo usa UID1000, cap_drop ALL y no-new-privileges: ejecutar
+get_settings como UID0 falló por acceso a /data. No se selló ni se cambiaron
+permisos. Para el sellado autorizado usar el procedimiento canónico de
+contenedor efímero limitado documentado en informe_codex_p_l89_raspberry_docker
+(sección de despliegue .244), con fuente final y carrier real; no copiar un
+manifest temporal, editarlo a mano ni relajar la configuración de los servicios.
+Comprobar que env y kernel.py siguen iguales antes y después, y que solo se
+incorporan los hashes aprobados de broker.py/execution.py.
+
+Intento a las 22:45 Madrid: exigir XNYS cerrado, postmarket de HOY completed o
+failed, ningún job/retry/lease/pytest/despliegue activo, salud, flags y margen.
+WAL/runtime unavailable no demuestra quietud. Si falla un gate operativo:
+precondition_not_met y pausa del intento, sin reparación o parada implícita.
+Después de QA y gates, despliegue incremental sobre imagen .321 con rollback,
+verificación de fuentes, doble salud >=75s y observación OOM600s. Nada de build,
+transferencia, sellado o corte antes de las 22:45. Automatización ACTIVE conserva
+la aprobación; pausar al concluir ese intento. Revisión del 12-oct intacta.
+
+APO protección/origen no certificado y LLM402 siguen pendientes; esta release
+no prueba resolución ni autoriza órdenes, pagos, cambios de proveedor o riesgo.
+Los resultados futuros deberán confirmar comportamiento y economía reales.
+
 ## Estado vigente — 9-oct, candidato combinado .356 para las 22:45
 
 Dictamen `needs_final_validation`, no desplegado. HEAD funcional probado
