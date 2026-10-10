@@ -759,19 +759,20 @@ def build_comparable_control_quality(
     maturity_probe_by_signal_id: dict[str, tuple[str, bool | str]] = {}
     treatment_signal_ids: Counter[str] = Counter()
     control_signal_ids: Counter[str] = Counter()
-    arm_signal_order: list[tuple[str, str]] = []
-    deferred_error: Exception | None = None
+    arm_signal_order: list[tuple[str, tuple[str, str]]] = []
+    metric_errors: dict[str, Exception] = {}
 
-    def track_signal(identity: Any, *, arm: str) -> None:
-        signal_id = str((identity or {}).get("signal_id") or "")
+    def signal_probe(identity: Any, *, arm: str, treatment: bool = False) -> tuple[str, str]:
+        normalized = identity or {} if treatment else identity
+        if not isinstance(normalized, Mapping):
+            return "invalid", type(normalized).__name__
+        signal_id = str(normalized.get("signal_id") or "")
         tracked_signal_ids.add(signal_id)
         (treatment_signal_ids if arm == "treatment" else control_signal_ids)[signal_id] += 1
-        arm_signal_order.append((arm, signal_id))
+        return "signal", signal_id
 
-    def remember_error(error: Exception) -> None:
-        nonlocal deferred_error
-        if deferred_error is None:
-            deferred_error = error
+    def remember_metric_error(name: str, error: Exception) -> None:
+        metric_errors.setdefault(name, error)
 
     def consume_control_set(item: Any) -> None:
         nonlocal denominator
@@ -780,35 +781,50 @@ def build_comparable_control_quality(
         nonlocal market_state_ref_count, gate_ledger_count, non_execution_reason_count
         nonlocal selection_source_count
 
-        try:
-            track_signal(item.get("treatment") or {}, arm="treatment")
-            for control in item.get("controls") or []:
-                track_signal(control, arm="controls")
-        except Exception as exc:  # Preserve base error until after outcomes are read.
-            remember_error(exc)
+        counts[str(item.get("status") or "unavailable")] += 1
+        denominator += 1
+        is_verified = item.get("status") == "verified"
+        controls_for_item = item.get("controls") or []
+        # The base builds its verified-control list before reading outcomes.
+        # Validate iteration now, while deferring per-control field reads.
+        for _control in controls_for_item:
+            pass
+        if is_verified:
+            primary_controls += len(controls_for_item)
+        arm_signal_order.append(
+            ("treatment", signal_probe(item.get("treatment"), arm="treatment", treatment=True))
+        )
+        for control in controls_for_item:
+            arm_signal_order.append(("controls", signal_probe(control, arm="controls")))
+        control_denominator += len(controls_for_item)
 
         try:
-            counts[str(item.get("status") or "unavailable")] += 1
-            denominator += 1
-            is_verified = item.get("status") == "verified"
-            controls_for_item = item.get("controls") or []
-            if is_verified:
-                primary_controls += len(controls_for_item)
             blocked_candidates += len(item.get("blocked_candidates") or [])
+        except Exception as exc:
+            remember_metric_error("blocked_candidates", exc)
+        try:
             eligible_controls_omitted += int(item.get("eligible_controls_omitted") or 0)
-            same_cycle_count += bool(item.get("cycle_id"))
+        except Exception as exc:
+            remember_metric_error("eligible_controls_omitted", exc)
+        same_cycle_count += bool(item.get("cycle_id"))
+        try:
             signal_price_count += bool((item.get("treatment") or {}).get("signal_price"))
-            market_state_ref_count += bool(item.get("market_state_ref_hash"))
-            control_denominator += len(controls_for_item)
+        except Exception as exc:
+            remember_metric_error("signal_price", exc)
+        market_state_ref_count += bool(item.get("market_state_ref_hash"))
+        try:
             gate_ledger_count += sum(bool(control.get("gate_ledger")) for control in controls_for_item)
+        except Exception as exc:
+            remember_metric_error("gate_ledger", exc)
+        try:
             non_execution_reason_count += sum(
                 control.get("non_execution_reason") in PRIMARY_REASONS for control in controls_for_item
             )
-            if item.get("unavailable_reason"):
-                unavailable_by_reason[str(item.get("unavailable_reason") or "")] += 1
-            selection_source_count += item.get("selection_source") == "actual_final_plans"
-        except Exception as exc:  # Output metrics historically raised after outcome reads.
-            remember_error(exc)
+        except Exception as exc:
+            remember_metric_error("non_execution_reason", exc)
+        if item.get("unavailable_reason"):
+            unavailable_by_reason[str(item.get("unavailable_reason") or "")] += 1
+        selection_source_count += item.get("selection_source") == "actual_final_plans"
 
     def consume_recommendation(record: Mapping[str, Any]) -> None:
         nonlocal legacy, legacy_v1, invalid_schema
@@ -873,7 +889,11 @@ def build_comparable_control_quality(
 
     # Re-evaluate maturity after all duplicate outcome rows have been seen.
     # This second pass uses IDs only; no outcome payload is retained.
-    for arm, signal_id in arm_signal_order:
+    for arm, probe in arm_signal_order:
+        probe_kind, probe_value = probe
+        if probe_kind != "signal":
+            raise AttributeError(f"'{probe_value}' object has no attribute 'get'")
+        signal_id = probe_value
         probe = maturity_probe_by_signal_id.get(signal_id)
         if probe:
             probe_kind, probe_value = probe
@@ -881,8 +901,16 @@ def build_comparable_control_quality(
                 raise AttributeError(f"'{probe_value}' object has no attribute 'get'")
             if probe_value:
                 maturity[arm] += 1
-    if deferred_error is not None:
-        raise deferred_error
+    for metric_name in (
+        "blocked_candidates",
+        "eligible_controls_omitted",
+        "signal_price",
+        "gate_ledger",
+        "non_execution_reason",
+    ):
+        error = metric_errors.get(metric_name)
+        if error is not None:
+            raise error
     mature_total = maturity["treatment"] + maturity["controls"]
     return {
         "schema_version": SCHEMA_VERSION,
