@@ -265,7 +265,12 @@ def test_streaming_quality_closes_store_stream_when_decoder_fails():
 
 
 def test_store_quality_stream_uses_readonly_fetchmany_and_closes(tmp_path, monkeypatch):
-    settings = Settings(DATA_DIR=tmp_path, DATABASE_PATH=tmp_path / "state.sqlite3", AGENT_LOGS_DIR=tmp_path / "logs")
+    settings = Settings(
+        _env_file=None,
+        DATA_DIR=tmp_path,
+        DATABASE_PATH=tmp_path / "state.sqlite3",
+        AGENT_LOGS_DIR=tmp_path / "logs",
+    )
     store = Store(settings.database_path, settings.agent_logs_dir)
     store.ensure_schema()
     store.save_trade_recommendation(
