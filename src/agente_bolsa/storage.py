@@ -1216,6 +1216,82 @@ class Store:
         finally:
             stream.close()
 
+    @contextmanager
+    def comparable_control_quality_record_stream(
+        self,
+        *,
+        batch_size: int = 512,
+    ) -> Iterator[Iterator[tuple[str, dict[str, Any]]]]:
+        """Stream only records consumed by the comparable-control quality digest.
+
+        The digest has different consumers and limits from the decision-context
+        quality reader.  Keep this route separate so its bounded, read-only
+        behavior cannot change the existing reader contract.
+        """
+
+        batch_size = max(1, int(batch_size))
+
+        def records() -> Iterator[tuple[str, dict[str, Any]]]:
+            recommendation_query = """
+                SELECT recommendation_id, cycle_id, symbol, action, confidence,
+                       payload_json, created_at
+                FROM trade_recommendations
+                WHERE 1 = 1
+                ORDER BY created_at DESC LIMIT ?
+            """
+            outcome_query = """
+                SELECT signal_id, source_run_id, source, symbol, signal_date,
+                       decision, features_json, gate_json, outcome_json,
+                       created_at, updated_at
+                FROM signal_outcomes
+                WHERE 1 = 1
+            """
+            outcome_params: list[Any] = []
+            excluded = excluded_signal_sources(
+                include_lab_book=True,
+                include_learning_experiment=True,
+            )
+            if excluded:
+                placeholders = ",".join("?" for _ in excluded)
+                outcome_query += f" AND coalesce(source, '') NOT IN ({placeholders})"
+                outcome_params.extend(excluded)
+            outcome_query += " ORDER BY signal_date DESC, created_at DESC LIMIT ?"
+            outcome_params.append(200000)
+
+            specs = (
+                (
+                    "recommendation",
+                    recommendation_query,
+                    [50000],
+                    self._decision_context_recommendation_from_row,
+                ),
+                (
+                    "outcome",
+                    outcome_query,
+                    outcome_params,
+                    self._decision_context_outcome_from_row,
+                ),
+            )
+            for kind, query, params, decoder in specs:
+                conn = self._decision_context_read_connection()
+                try:
+                    yield from self._decision_context_cursor_records(
+                        conn,
+                        kind=kind,
+                        query=query,
+                        params=params,
+                        decoder=decoder,
+                        batch_size=batch_size,
+                    )
+                finally:
+                    conn.close()
+
+        stream = records()
+        try:
+            yield stream
+        finally:
+            stream.close()
+
     def ensure_schema(self) -> None:
         with self.connect() as conn:
             conn.executescript(SCHEMA)

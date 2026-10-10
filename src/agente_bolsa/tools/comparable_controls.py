@@ -734,83 +734,154 @@ def build_comparable_control_quality(
 ) -> dict[str, Any]:
     """Read-only digest for newly captured control sets."""
 
-    records = []
     legacy = 0
     legacy_v1 = 0
     invalid_schema = 0
-    for record in store.trade_recommendations(limit=50000):
+
+    # Keep only aggregate state and identities needed to join the later outcome
+    # stream.  The old reader retained up to 50k full recommendation payloads
+    # and 200k full outcome payloads at once.
+    counts: Counter[str] = Counter()
+    denominator = 0
+    primary_controls = 0
+    blocked_candidates = 0
+    eligible_controls_omitted = 0
+    control_denominator = 0
+    same_cycle_count = 0
+    signal_price_count = 0
+    market_state_ref_count = 0
+    gate_ledger_count = 0
+    non_execution_reason_count = 0
+    unavailable_by_reason: Counter[str] = Counter()
+    selection_source_count = 0
+    maturity = {"treatment": 0, "controls": 0, "total": 0}
+    tracked_signal_ids: set[str] = set()
+    maturity_by_signal_id: dict[str, bool] = {}
+    treatment_signal_ids: Counter[str] = Counter()
+    control_signal_ids: Counter[str] = Counter()
+
+    def track_signal(identity: Any, *, arm: str) -> None:
+        signal_id = str((identity or {}).get("signal_id") or "")
+        tracked_signal_ids.add(signal_id)
+        (treatment_signal_ids if arm == "treatment" else control_signal_ids)[signal_id] += 1
+
+    def consume_control_set(item: Any) -> None:
+        nonlocal denominator
+        nonlocal primary_controls, blocked_candidates, eligible_controls_omitted
+        nonlocal control_denominator, same_cycle_count, signal_price_count
+        nonlocal market_state_ref_count, gate_ledger_count, non_execution_reason_count
+        nonlocal selection_source_count
+
+        counts[str(item.get("status") or "unavailable")] += 1
+        denominator += 1
+        is_verified = item.get("status") == "verified"
+        controls_for_item = item.get("controls") or []
+        if is_verified:
+            primary_controls += len(controls_for_item)
+        blocked_candidates += len(item.get("blocked_candidates") or [])
+        eligible_controls_omitted += int(item.get("eligible_controls_omitted") or 0)
+        same_cycle_count += bool(item.get("cycle_id"))
+        signal_price_count += bool((item.get("treatment") or {}).get("signal_price"))
+        market_state_ref_count += bool(item.get("market_state_ref_hash"))
+        control_denominator += len(controls_for_item)
+        gate_ledger_count += sum(bool(control.get("gate_ledger")) for control in controls_for_item)
+        non_execution_reason_count += sum(
+            control.get("non_execution_reason") in PRIMARY_REASONS for control in controls_for_item
+        )
+        if item.get("unavailable_reason"):
+            unavailable_by_reason[str(item.get("unavailable_reason") or "")] += 1
+        selection_source_count += item.get("selection_source") == "actual_final_plans"
+        track_signal(item.get("treatment") or {}, arm="treatment")
+        for control in controls_for_item:
+            track_signal(control, arm="controls")
+
+    def consume_recommendation(record: Mapping[str, Any]) -> None:
+        nonlocal legacy, legacy_v1, invalid_schema
         created = _iso_date(record.get("created_at"))
         if start and created and created < start:
-            continue
+            return
         if end and created and created > end:
-            continue
+            return
         payload = record.get("payload") or {}
         control_set = payload.get("comparable_control_set")
         if not control_set:
             legacy += 1
-            continue
+            return
         if control_set.get("schema_version") == LEGACY_SCHEMA_VERSION:
             legacy_v1 += 1
-            continue
+            return
         if control_set.get("schema_version") != SCHEMA_VERSION:
             invalid_schema += 1
-            continue
+            return
         if status and str(control_set.get("status") or "") != status:
-            continue
-        records.append(control_set)
-    counts = Counter(str(item.get("status") or "unavailable") for item in records)
-    verified = [item for item in records if item.get("status") == "verified"]
-    controls = [control for item in verified for control in item.get("controls") or []]
-    outcomes_by_id = {}
-    for item in store.signal_outcomes(limit=200000, include_lab_book=True, include_learning_experiment=True):
-        outcomes_by_id[str(item.get("signal_id") or "")] = item.get("outcome") or {}
-    maturity = {"treatment": 0, "controls": 0, "total": 0}
-    for item in records:
-        treatment_signal = str((item.get("treatment") or {}).get("signal_id") or "")
-        outcome = outcomes_by_id.get(treatment_signal) or {}
-        if (outcome.get("matured_horizons") or {}).get("10d"):
-            maturity["treatment"] += 1
-        for control in item.get("controls") or []:
-            outcome = outcomes_by_id.get(str(control.get("signal_id") or "")) or {}
-            if (outcome.get("matured_horizons") or {}).get("10d"):
-                maturity["controls"] += 1
-    denominator = len(records)
-    control_denominator = sum(len(item.get("controls") or []) for item in records)
+            return
+        consume_control_set(control_set)
+
+    def consume_outcome(record: Mapping[str, Any]) -> None:
+        signal_id = str(record.get("signal_id") or "")
+        if signal_id not in tracked_signal_ids:
+            return
+        outcome = record.get("outcome") or {}
+        # Assignment on every row intentionally preserves legacy last-wins
+        # behavior for duplicate IDs in the DESC-ordered outcome stream.
+        maturity_by_signal_id[signal_id] = bool((outcome.get("matured_horizons") or {}).get("10d"))
+
+    stream_factory = getattr(store, "comparable_control_quality_record_stream", None)
+    if callable(stream_factory):
+        with stream_factory(batch_size=512) as stream:
+            for kind, record in stream:
+                if kind == "recommendation":
+                    consume_recommendation(record)
+                elif kind == "outcome":
+                    consume_outcome(record)
+                else:
+                    raise ValueError(f"comparable_control_quality_record_kind_invalid:{kind}")
+    else:
+        # Fakes and older Store implementations keep their list-based contract.
+        for record in store.trade_recommendations(limit=50000):
+            consume_recommendation(record)
+        for record in store.signal_outcomes(
+            limit=200000,
+            include_lab_book=True,
+            include_learning_experiment=True,
+        ):
+            consume_outcome(record)
+
+    # Re-evaluate maturity after all duplicate outcome rows have been seen.
+    # This second pass uses IDs only; no outcome payload is retained.
+    maturity["treatment"] = sum(
+        count for signal_id, count in treatment_signal_ids.items() if maturity_by_signal_id.get(signal_id)
+    )
+    maturity["controls"] = sum(
+        count for signal_id, count in control_signal_ids.items() if maturity_by_signal_id.get(signal_id)
+    )
     mature_total = maturity["treatment"] + maturity["controls"]
     return {
         "schema_version": SCHEMA_VERSION,
-        "status": "collecting" if not records or not mature_total else "evaluable",
+        "status": "collecting" if not denominator or not mature_total else "evaluable",
         "window": {"from": start, "to": end, "status_filter": status},
         "treatments_total_new": denominator,
         "treatments_with_control_set": denominator,
         "verified_control_sets": counts.get("verified", 0),
         "partially_comparable_sets": counts.get("partially_comparable", 0),
         "unavailable_sets": counts.get("unavailable", 0),
-        "primary_controls": len(controls),
-        "blocked_candidates": sum(len(item.get("blocked_candidates") or []) for item in records),
-        "eligible_controls_omitted": sum(int(item.get("eligible_controls_omitted") or 0) for item in records),
-        "treatment_control_pairs": len(controls),
-        "average_controls_per_treatment": len(controls) / denominator if denominator else None,
-        "same_cycle_coverage": sum(bool(item.get("cycle_id")) for item in records) / denominator if denominator else None,
-        "signal_price_coverage": sum(bool((item.get("treatment") or {}).get("signal_price")) for item in records) / denominator if denominator else None,
-        "market_state_ref_coverage": sum(bool(item.get("market_state_ref_hash")) for item in records) / denominator if denominator else None,
-        "gate_ledger_coverage": sum(
-            bool(control.get("gate_ledger"))
-            for item in records
-            for control in item.get("controls") or []
-        ) / control_denominator if control_denominator else None,
-        "non_execution_reason_coverage": sum(
-            control.get("non_execution_reason") in PRIMARY_REASONS
-            for item in records
-            for control in item.get("controls") or []
-        ) / control_denominator if control_denominator else None,
+        "primary_controls": primary_controls,
+        "blocked_candidates": blocked_candidates,
+        "eligible_controls_omitted": eligible_controls_omitted,
+        "treatment_control_pairs": primary_controls,
+        "average_controls_per_treatment": primary_controls / denominator if denominator else None,
+        "same_cycle_coverage": same_cycle_count / denominator if denominator else None,
+        "signal_price_coverage": signal_price_count / denominator if denominator else None,
+        "market_state_ref_coverage": market_state_ref_count / denominator if denominator else None,
+        "gate_ledger_coverage": gate_ledger_count / control_denominator if control_denominator else None,
+        "non_execution_reason_coverage": non_execution_reason_count / control_denominator if control_denominator else None,
         "outcome_maturity_by_arm": maturity,
         "outcome_maturity_coverage": mature_total / (denominator + control_denominator) if denominator + control_denominator else None,
         "conflicts": None,
         "conflicts_status": "unavailable",
-        "unavailable_by_reason": dict(Counter(str(item.get("unavailable_reason") or "") for item in records if item.get("unavailable_reason"))),
+        "unavailable_by_reason": dict(unavailable_by_reason),
         "legacy_without_control_set": legacy,
         "legacy_v1_prospective_selection": legacy_v1,
         "invalid_schema_count": invalid_schema,
-        "selection_source_coverage": sum(item.get("selection_source") == "actual_final_plans" for item in records) / denominator if denominator else None,
+        "selection_source_coverage": selection_source_count / denominator if denominator else None,
     }
