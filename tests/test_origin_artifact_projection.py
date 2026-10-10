@@ -117,6 +117,9 @@ def test_projection_keeps_order_limit_and_json_falsy_contract() -> None:
         {"proposal_id": "p-json-false", "payload": False},
         {"proposal_id": "p-json-null", "payload": None},
     ]
+    stream = _projection_store(_FakeConnection([])).iter_continuous_improvement_proposal_artifact_summaries()
+    list(stream)
+    assert stream._rows == []
     assert connection.calls
     query, params = connection.calls[0]
     assert "SELECT proposal_id, payload_json" in query
@@ -134,6 +137,7 @@ def test_projection_closes_cursor_and_connection_on_early_close() -> None:
     stream = _projection_store(connection).iter_continuous_improvement_proposal_artifact_summaries(batch_size=1)
     assert next(stream) == {"proposal_id": "p", "payload": {}}
     stream.close()
+    assert stream._rows == []
     assert all(cursor.closed for cursor in connection.cursors)
     assert connection.closed is True
 
@@ -166,8 +170,10 @@ def test_preflight_decode_error_precedes_malformed_consumer_payload() -> None:
             {"proposal_id": "p-later", "payload_json": "{bad-json"},
         ]
     )
+    artifacts = _projection_store(connection).iter_continuous_improvement_proposal_artifact_summaries(batch_size=1)
     with pytest.raises(json.JSONDecodeError):
-        _projection_store(connection).iter_continuous_improvement_proposal_artifact_summaries(batch_size=1)
+        list(artifacts)
+    assert artifacts._rows == []
     assert all(cursor.closed for cursor in connection.cursors)
     assert connection.closed is True
 
@@ -177,7 +183,8 @@ def test_consumer_error_closes_stream_after_successful_preflight() -> None:
     artifacts = _projection_store(connection).iter_continuous_improvement_proposal_artifact_summaries(batch_size=1)
     with pytest.raises(AttributeError, match="get"):
         build_origin_utility_metrics([_proposal()], [], artifacts=artifacts)
-    assert len(connection.cursors) == 2
+    assert len(connection.cursors) == 1
+    assert artifacts._rows == []
     assert all(cursor.closed for cursor in connection.cursors)
     assert connection.closed is True
 
@@ -190,6 +197,34 @@ def test_artifact_preflight_runs_before_proposal_consumer_error() -> None:
         build_origin_utility_metrics([{"proposal_id": "bad", "payload": "not-a-mapping"}], [], artifacts=artifacts)
     assert len(connection.calls) == 1
     assert all(cursor.closed for cursor in connection.cursors)
+    assert connection.closed is True
+
+
+def test_later_json_error_supersedes_first_consumer_error_and_keeps_one_cursor() -> None:
+    connection = _FakeConnection(
+        [
+            {"proposal_id": "proposal-1", "payload_json": "[1]"},
+            {"proposal_id": "unmatched", "payload_json": "{bad-json"},
+        ]
+    )
+    artifacts = _origin_utility_artifacts(_projection_store(connection))
+    with pytest.raises(json.JSONDecodeError):
+        build_origin_utility_metrics([_proposal()], [], artifacts=artifacts)
+    assert len(connection.calls) == 1
+    assert len(connection.cursors) == 1
+    assert artifacts._rows == []
+    assert connection.cursors[0].closed is True
+    assert connection.closed is True
+
+
+def test_later_artifact_error_supersedes_proposal_error_on_same_cursor() -> None:
+    connection = _FakeConnection([{"proposal_id": "p", "payload_json": "{bad-json"}])
+    artifacts = _origin_utility_artifacts(_projection_store(connection))
+    with pytest.raises(json.JSONDecodeError):
+        build_origin_utility_metrics([{"proposal_id": "bad", "payload": "not-a-mapping"}], [], artifacts=artifacts)
+    assert len(connection.calls) == 1
+    assert artifacts._rows == []
+    assert connection.cursors[0].closed is True
     assert connection.closed is True
 
 
