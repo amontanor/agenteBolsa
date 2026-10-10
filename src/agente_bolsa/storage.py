@@ -7466,24 +7466,40 @@ class Store:
         The full artifact reader above remains the authority for human approval and
         other consumers that need ``content_text``. This projection keeps the
         existing ordering and limit while avoiding materializing that text for the
-        origin-only counter.
+        origin-only counter. A bounded preflight decodes all payloads before the
+        stream is returned, preserving the legacy reader's read-error precedence
+        without retaining the decoded summaries.
         """
+        query = """
+            SELECT proposal_id, payload_json
+            FROM continuous_improvement_proposal_artifacts
+            ORDER BY updated_at DESC
+            LIMIT ?
+        """
+        fetch_size = max(1, int(batch_size))
+
         conn = self._decision_context_read_connection()
         cursor: sqlite3.Cursor | None = None
         try:
-            cursor = conn.execute(
-                """
-                SELECT proposal_id, payload_json
-                FROM continuous_improvement_proposal_artifacts
-                ORDER BY updated_at DESC
-                LIMIT ?
-                """,
-                (limit,),
-            )
+            cursor = conn.execute(query, (limit,))
+            while True:
+                rows = cursor.fetchmany(fetch_size)
+                if not rows:
+                    break
+                for row in rows:
+                    json.loads(row["payload_json"] or "{}")
+        finally:
+            if cursor is not None:
+                cursor.close()
+            conn.close()
+
+        def stream() -> Iterator[dict[str, Any]]:
+            stream_conn = self._decision_context_read_connection()
+            stream_cursor: sqlite3.Cursor | None = None
             try:
-                fetch_size = max(1, int(batch_size))
+                stream_cursor = stream_conn.execute(query, (limit,))
                 while True:
-                    rows = cursor.fetchmany(fetch_size)
+                    rows = stream_cursor.fetchmany(fetch_size)
                     if not rows:
                         break
                     for row in rows:
@@ -7492,9 +7508,11 @@ class Store:
                             "payload": json.loads(row["payload_json"] or "{}"),
                         }
             finally:
-                cursor.close()
-        finally:
-            conn.close()
+                if stream_cursor is not None:
+                    stream_cursor.close()
+                stream_conn.close()
+
+        return stream()
 
     def upsert_continuous_improvement_runtime_state(
         self,
