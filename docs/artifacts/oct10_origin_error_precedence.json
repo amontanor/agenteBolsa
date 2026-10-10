@@ -1,0 +1,48 @@
+{
+  "base_commit": "1a3333a49db77898cecf1670813b4e23d445ac00",
+  "purpose": "Persistent characterization of legacy read/decode precedence versus the one-query batched origin projection",
+  "cases": [
+    {
+      "fixture": "first payload_json is [1], second payload_json is malformed {bad-json",
+      "legacy_observed": "JSONDecodeError while materializing the full artifact reader",
+      "projection_observed": "JSONDecodeError while draining the same query/cursor",
+      "consumer_error_suppressed": "AttributeError from payload.get is not reached"
+    },
+    {
+      "fixture": "valid artifact projection plus malformed proposal payload before artifact consumer loop",
+      "projection_observed": "the same query/cursor is drained and closed before build_origin_utility_metrics raises the proposal AttributeError",
+      "stream_query_count": 1,
+      "stream_cursor_count": 1,
+      "consumer_stream_opened": false
+    },
+    {
+      "fixture": "valid preflight plus matching payload_json [1] consumed by origin metrics",
+      "projection_observed": "consumer AttributeError is deferred until the same cursor drains successfully",
+      "closed_cursors": 1,
+      "connection_closed": true
+    },
+    {
+      "fixture": "matching payload_json [1] followed by malformed artifact JSON, with a consumer AttributeError on the first row",
+      "projection_observed": "JSONDecodeError from the later artifact supersedes the saved consumer AttributeError while one cursor is drained",
+      "stream_query_count": 1,
+      "closed_cursors": 1,
+      "connection_closed": true
+    },
+    {
+      "fixture": "malformed proposal payload plus malformed artifact JSON",
+      "projection_observed": "JSONDecodeError from the artifact reader supersedes the proposal consumer error after draining the same cursor",
+      "stream_query_count": 1,
+      "closed_cursors": 1,
+      "connection_closed": true
+    }
+  ],
+  "focal_command": "C:\\Antonio\\Bref\\agenteBolsa\\.venv\\Scripts\\python.exe -m pytest -q tests/test_origin_artifact_projection.py tests/test_ci_digest_reuse.py tests/test_improvement_origin_lineage.py",
+  "focal_output": "39 passed in 2.43s",
+  "focal_exitcode": 0,
+  "focal_log": "docs/artifacts/oct10_origin_focal_pytest.log",
+  "scope": [
+    "No rows are omitted or silently repaired",
+    "No content_text or full payload list is retained",
+    "Approval path remains on the full reader"
+  ]
+}

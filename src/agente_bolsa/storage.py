@@ -987,6 +987,73 @@ def _bullish_confirmed_count(features: dict[str, Any]) -> int:
     return 0
 
 
+class _ContinuousImprovementProposalArtifactSummaryStream:
+    """One-query, bounded artifact projection with explicit drain/close hooks."""
+
+    def __init__(self, store: Store, *, query: str, limit: int, batch_size: int) -> None:
+        self._query = query
+        self._limit = limit
+        self._batch_size = batch_size
+        self._conn = store._decision_context_read_connection()
+        self._cursor: sqlite3.Cursor | None = None
+        self._rows: list[sqlite3.Row] = []
+        self._row_index = 0
+        self._closed = False
+        try:
+            self._cursor = self._conn.execute(self._query, (self._limit,))
+        except Exception:
+            self.close()
+            raise
+
+    def __iter__(self) -> _ContinuousImprovementProposalArtifactSummaryStream:
+        return self
+
+    def __next__(self) -> dict[str, Any]:
+        if self._closed:
+            raise StopIteration
+        try:
+            while self._row_index >= len(self._rows):
+                if self._cursor is None:
+                    self.close()
+                    raise StopIteration
+                self._rows = self._cursor.fetchmany(self._batch_size)
+                self._row_index = 0
+                if not self._rows:
+                    self.close()
+                    raise StopIteration
+            row = self._rows[self._row_index]
+            self._row_index += 1
+            return {
+                "proposal_id": row["proposal_id"],
+                "payload": json.loads(row["payload_json"] or "{}"),
+            }
+        except StopIteration:
+            raise
+        except Exception:
+            self.close()
+            raise
+
+    def drain(self) -> None:
+        """Consume and decode every remaining row without invoking a consumer."""
+        try:
+            while True:
+                next(self)
+        except StopIteration:
+            return
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            if self._cursor is not None:
+                self._cursor.close()
+        finally:
+            self._rows.clear()
+            self._row_index = 0
+            self._conn.close()
+
+
 class Store:
     def __init__(self, database_path: Path, agent_logs_dir: Path) -> None:
         self.database_path = database_path
@@ -7536,6 +7603,35 @@ class Store:
             }
             for row in rows
         ]
+
+    def iter_continuous_improvement_proposal_artifact_summaries(
+        self,
+        *,
+        limit: int = 50000,
+        batch_size: int = 512,
+    ) -> Iterator[dict[str, Any]]:
+        """Stream the fields needed by origin utility metrics.
+
+        The full artifact reader above remains the authority for human approval and
+        other consumers that need ``content_text``. This projection keeps the
+        existing ordering and limit while avoiding materializing that text for the
+        origin-only counter. The cursor is opened once and can be drained by the
+        consumer when a downstream error must be deferred until later SQL/JSON
+        rows have had a chance to fail.
+        """
+        query = """
+            SELECT proposal_id, payload_json
+            FROM continuous_improvement_proposal_artifacts
+            ORDER BY updated_at DESC
+            LIMIT ?
+        """
+        fetch_size = max(1, int(batch_size))
+        return _ContinuousImprovementProposalArtifactSummaryStream(
+            self,
+            query=query,
+            limit=limit,
+            batch_size=fetch_size,
+        )
 
     def upsert_continuous_improvement_runtime_state(
         self,
