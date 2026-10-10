@@ -16,7 +16,6 @@ from .agent_config import load_agent_config, load_task_config, validate_agent_ta
 from .agent_registry import AGENTS
 from .config import Settings, get_settings
 from .continuous_improvement.api import run_api_server
-from .continuous_improvement.digest import build_lab_digest, format_lab_digest_text
 from .continuous_improvement.experiments import AutoApplyCodeAgent
 from .continuous_improvement.orchestrator import ContinuousImprovementOrchestrator
 from .continuous_improvement.promotion_readiness import evaluate_promotion_readiness
@@ -64,7 +63,7 @@ from .tools.breakout_scanner import build_breakout_scan, merge_breakout_universe
 from .tools.broker import BrokerClientFactory
 from .tools.command_catalog import available_command_catalog, command_cheatsheet
 from .tools.comparable_controls import build_comparable_control_quality
-from .tools.config_audit import build_config_audit, digest_safety_summary, format_config_audit_text
+from .tools.config_audit import build_config_audit, format_config_audit_text
 from .tools.counterfactual_analysis import (
     DEFAULT_RETROSPECTIVE_SESSIONS,
     build_decision_compare_report,
@@ -3276,22 +3275,9 @@ def command_continuous_improvement_lab(args: argparse.Namespace) -> None:
         )
         return
     if args.lab_command == "digest":
-        if args.out:
-            target = Path(args.out)
-            digest = build_lab_digest(store, days=args.days, safety=digest_safety_summary(get_settings()))
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(format_lab_digest_text(digest), encoding="utf-8")
-            result = {"ok": True, "path": str(target), "digest": digest}
-            if args.json:
-                _print_json(result)
-            else:
-                print(f"Digest escrito: {result['path']}")
-            return
-        digest = build_lab_digest(store, days=args.days, safety=digest_safety_summary(get_settings()))
-        if args.json:
-            _print_json({"ok": True, "digest": digest})
-        else:
-            print(format_lab_digest_text(digest))
+        from .digest_cli import execute_digest_command
+
+        execute_digest_command(args, settings=settings, store=store, emit_json=_print_json)
         return
     if args.lab_command == "rollback":
         change = AutoApplyCodeAgent().rollback(

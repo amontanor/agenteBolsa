@@ -1,0 +1,15 @@
+{
+  "status": "retrospective_summary_only_original_unavailable",
+  "reason": "The original 94506-byte parent-side result with parity=false is no longer available in this worktree. This short file is a retrospective summary, not an exact copy; its values measured the launcher/reused process after child exit and are invalid for child RSS.",
+  "original_result_bytes": 94506,
+  "original_result_available": false,
+  "module_counts": {
+    "agente_bolsa.digest_cli": 80,
+    "agente_bolsa.main": 1895
+  },
+  "invalid_rss_values_bytes": {
+    "digest_cli_peak": 4644864,
+    "main_peak": 4640768
+  },
+  "replacement": "docs/artifacts/oct10_digest_cli_measurement_self_rss_v3.json"
+}

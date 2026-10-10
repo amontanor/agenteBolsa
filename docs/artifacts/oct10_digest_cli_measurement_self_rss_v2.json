@@ -1,0 +1,228 @@
+{
+  "python": "C:\\Antonio\\Bref\\agenteBolsa\\.venv\\Scripts\\python.exe",
+  "platform": "nt",
+  "data_root_is_temporary": true,
+  "network_broker_llm": "not invoked by this script",
+  "import_results": {
+    "digest_cli": {
+      "returncode": 0,
+      "stdout_bytes": 133,
+      "stderr_tail": "",
+      "rss_phases": [
+        {
+          "module": "agente_bolsa.digest_cli",
+          "module_count": 305,
+          "phase": "before_import",
+          "rss_bytes": 38641664
+        },
+        {
+          "module": "agente_bolsa.digest_cli",
+          "module_count": 306,
+          "phase": "imported",
+          "rss_bytes": 39034880
+        }
+      ],
+      "probe": {
+        "module": "agente_bolsa.digest_cli",
+        "module_count": 306,
+        "main_loaded": false,
+        "scheduler_loaded": false,
+        "runtime_loaded": false
+      }
+    },
+    "main": {
+      "returncode": 0,
+      "stdout_bytes": 125,
+      "stderr_tail": "",
+      "rss_phases": [
+        {
+          "module": "agente_bolsa.main",
+          "module_count": 305,
+          "phase": "before_import",
+          "rss_bytes": 38776832
+        },
+        {
+          "module": "agente_bolsa.main",
+          "module_count": 1895,
+          "phase": "imported",
+          "rss_bytes": 140484608
+        }
+      ],
+      "probe": {
+        "module": "agente_bolsa.main",
+        "module_count": 1895,
+        "main_loaded": true,
+        "scheduler_loaded": true,
+        "runtime_loaded": true
+      }
+    }
+  },
+  "routes": {
+    "new": {
+      "returncode": 0,
+      "stdout_bytes": 38030,
+      "stderr_tail": "",
+      "rss_phases": [
+        {
+          "module": "agente_bolsa.digest_cli",
+          "module_count": 305,
+          "phase": "before_import",
+          "rss_bytes": 38752256
+        },
+        {
+          "module": "agente_bolsa.digest_cli",
+          "module_count": 306,
+          "phase": "imported",
+          "rss_bytes": 39194624
+        },
+        {
+          "module": "agente_bolsa.digest_cli",
+          "module_count": 1748,
+          "phase": "completed",
+          "rss_bytes": 137240576
+        }
+      ],
+      "report_bytes": 5903,
+      "report_exists": true,
+      "payload_summary": {
+        "ok": true,
+        "days": 1,
+        "safety_ok": true,
+        "safety_violations": [],
+        "top_level_keys": [
+          "digest",
+          "ok",
+          "path"
+        ],
+        "digest_keys": [
+          "adaptive_config_governance",
+          "agent_group_conclusions",
+          "agent_run_productivity",
+          "applied_changes",
+          "approval_requests",
+          "canonical_operation_telemetry",
+          "capital_deployment_funnel_shadow",
+          "codegen_nightly",
+          "comparable_control_quality",
+          "core_sleeve",
+          "days",
+          "decision_context_quality",
+          "director_brief",
+          "evidence_factory",
+          "experiments",
+          "gate_effectiveness_quality",
+          "generated_at",
+          "kpi_funnel",
+          "learning_experiment_yesterday",
+          "learning_penalty_shadow",
+          "llm_decision_quality",
+          "low_sample_usage",
+          "origin_utility",
+          "overlay_shadow",
+          "performance_benchmark",
+          "post_market_attribution",
+          "proposal_quality",
+          "proposals",
+          "requires_attention",
+          "research_agenda",
+          "research_mode",
+          "safety",
+          "window_start"
+        ]
+      }
+    },
+    "legacy": {
+      "returncode": 0,
+      "stdout_bytes": 38033,
+      "stderr_tail": "",
+      "rss_phases": [
+        {
+          "module": "agente_bolsa.main",
+          "module_count": 305,
+          "phase": "before_import",
+          "rss_bytes": 38555648
+        },
+        {
+          "module": "agente_bolsa.main",
+          "module_count": 1895,
+          "phase": "imported",
+          "rss_bytes": 140738560
+        },
+        {
+          "module": "agente_bolsa.main",
+          "module_count": 2064,
+          "phase": "completed",
+          "rss_bytes": 151126016
+        }
+      ],
+      "report_bytes": 5903,
+      "report_exists": true,
+      "payload_summary": {
+        "ok": true,
+        "days": 1,
+        "safety_ok": true,
+        "safety_violations": [],
+        "top_level_keys": [
+          "digest",
+          "ok",
+          "path"
+        ],
+        "digest_keys": [
+          "adaptive_config_governance",
+          "agent_group_conclusions",
+          "agent_run_productivity",
+          "applied_changes",
+          "approval_requests",
+          "canonical_operation_telemetry",
+          "capital_deployment_funnel_shadow",
+          "codegen_nightly",
+          "comparable_control_quality",
+          "core_sleeve",
+          "days",
+          "decision_context_quality",
+          "director_brief",
+          "evidence_factory",
+          "experiments",
+          "gate_effectiveness_quality",
+          "generated_at",
+          "kpi_funnel",
+          "learning_experiment_yesterday",
+          "learning_penalty_shadow",
+          "llm_decision_quality",
+          "low_sample_usage",
+          "origin_utility",
+          "overlay_shadow",
+          "performance_benchmark",
+          "post_market_attribution",
+          "proposal_quality",
+          "proposals",
+          "requires_attention",
+          "research_agenda",
+          "research_mode",
+          "safety",
+          "window_start"
+        ]
+      }
+    }
+  },
+  "parity": {
+    "returncodes_equal_zero": true,
+    "stable_payload_equal_after_runtime_normalization": true,
+    "top_level_keys_equal": true,
+    "digest_keys_equal": true,
+    "normalization_keys": [
+      "generated_at",
+      "as_of",
+      "from",
+      "to",
+      "window_start",
+      "reference_at",
+      "path"
+    ]
+  },
+  "limits": {
+    "reference_memcg_bytes": 268435456,
+    "windows_rss_is_not_linux_memcg": true,
+    "import_probe_is_not_full_digest": true
+  }
+}
