@@ -131,4 +131,5 @@ __all__ = ["__version__"]
 # Oct10 N2: stream origin utility artifact summaries without content_text (0.4.360).
 # Oct10: integrated isolated streaming memory candidates for rehearsal (0.4.361).
 # Oct11: deterministic QA fixture dates and integrated release validation (0.4.362).
-__version__ = "0.4.362"
+# Oct11: bounded approval artifact reader; preserves digest contract.
+__version__ = "0.4.363"

@@ -943,34 +943,39 @@ def ready_for_human_approval_requests(
         for item in applied_changes
         if item.get("proposal_id") and str(item.get("status") or "").upper() in {"APPLIED", "ROLLED_BACK"}
     }
-    rows: list[Any]
-    with store.connect() as conn:
-        rows = conn.execute(query, (limit,)).fetchall()
     requests: list[dict[str, Any]] = []
-    for row in rows:
-        payload = json.loads(row["payload_json"] or "{}")
-        if payload.get("status") != "READY_FOR_HUMAN_REVIEW" or payload.get("tests_ok") is not True:
-            continue
-        if workspace is not None and not validate_diff_provenance(workspace, payload)["valid"]:
-            continue
-        proposal = proposals_by_id.get(str(row["proposal_id"])) or {}
-        proposal_status = str(proposal.get("status") or "").upper()
-        if (
-            str(row["proposal_id"]) in applied_or_rolled_back
-            or proposal_status in TERMINAL_PROPOSAL_STATUSES
-            or proposal_status in ROLLBACK_STATUSES
-        ):
-            continue
-        target_paths = payload.get("target_paths") or _diff_target_paths(str(row["content_text"] or ""))
-        requests.append(
-            {
-                "proposal_id": row["proposal_id"],
-                "title": _proposal_title(proposal),
-                "targets": list(target_paths),
-                "artifact_id": row["artifact_id"],
-                "updated_at": row["updated_at"],
-            }
-        )
+    conn = store.read_connection()
+    cursor = None
+    try:
+        cursor = conn.execute(query, (limit,))
+        for row in cursor:
+            payload = json.loads(row["payload_json"] or "{}")
+            if payload.get("status") != "READY_FOR_HUMAN_REVIEW" or payload.get("tests_ok") is not True:
+                continue
+            if workspace is not None and not validate_diff_provenance(workspace, payload)["valid"]:
+                continue
+            proposal = proposals_by_id.get(str(row["proposal_id"])) or {}
+            proposal_status = str(proposal.get("status") or "").upper()
+            if (
+                str(row["proposal_id"]) in applied_or_rolled_back
+                or proposal_status in TERMINAL_PROPOSAL_STATUSES
+                or proposal_status in ROLLBACK_STATUSES
+            ):
+                continue
+            target_paths = payload.get("target_paths") or _diff_target_paths(str(row["content_text"] or ""))
+            requests.append(
+                {
+                    "proposal_id": row["proposal_id"],
+                    "title": _proposal_title(proposal),
+                    "targets": list(target_paths),
+                    "artifact_id": row["artifact_id"],
+                    "updated_at": row["updated_at"],
+                }
+            )
+    finally:
+        if cursor is not None:
+            cursor.close()
+        store.close_read_connection()
     return requests
 
 

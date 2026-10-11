@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from contextlib import contextmanager
 from datetime import datetime, timezone
 
 import agente_bolsa.continuous_improvement.digest as digest_module
@@ -18,8 +17,11 @@ class _SpyConnection:
     def execute(self, query, params):
         return self
 
-    def fetchall(self):
-        return list(self._rows)
+    def __iter__(self):
+        return iter(self._rows)
+
+    def close(self):
+        pass
 
 
 class _SpyStore:
@@ -37,10 +39,12 @@ class _SpyStore:
         self.calls.append(("applied_changes", limit))
         return self.applied_changes_data
 
-    @contextmanager
-    def connect(self):
+    def read_connection(self):
         self.calls.append(("artifacts", 200))
-        yield _SpyConnection(self.rows)
+        return _SpyConnection(self.rows)
+
+    def close_read_connection(self):
+        pass
 
 
 def _approval_fixture():
@@ -147,10 +151,12 @@ def test_build_lab_digest_passes_its_loaded_lists_to_approval_helper(monkeypatch
             self.calls.append(("performance_daily", limit))
             return []
 
-        @contextmanager
-        def connect(self):
+        def read_connection(self):
             self.calls.append(("artifacts", 200))
-            yield _SpyConnection(rows)
+            return _SpyConnection(rows)
+
+        def close_read_connection(self):
+            pass
 
     captured = []
     monkeypatch.setattr(digest_module, "_enrich_safety_context", lambda *args, **kwargs: {})
@@ -204,3 +210,63 @@ def test_build_lab_digest_passes_its_loaded_lists_to_approval_helper(monkeypatch
     assert legacy_store.calls.count(("applied_changes", 50000)) == 2
     assert reuse_store.calls.count(("proposals", 50000)) == 1
     assert reuse_store.calls.count(("applied_changes", 50000)) == 1
+
+
+
+
+def test_approval_stream_closes_cursor_and_reader_on_malformed_payload():
+    import pytest
+
+    events = []
+
+    class Cursor:
+        def __iter__(self):
+            yield {"payload_json": "{broken"}
+
+        def close(self):
+            events.append("cursor_closed")
+
+    class Connection:
+        def execute(self, query, params):
+            assert params == (200,)
+            return Cursor()
+
+    class Reader:
+        def read_connection(self):
+            return Connection()
+
+        def close_read_connection(self):
+            events.append("reader_closed")
+
+    with pytest.raises(json.JSONDecodeError):
+        ready_for_human_approval_requests(Reader(), proposals=[], applied_changes=[])
+    assert events == ["cursor_closed", "reader_closed"]
+
+
+def test_approval_stream_does_not_prefetch_rejected_content():
+    events = []
+
+    class Cursor:
+        def __iter__(self):
+            for i in range(200):
+                events.append(i)
+                yield {"payload_json": "{}", "content_text": "X" * 10000}
+
+        def fetchall(self):
+            raise AssertionError("unbounded_fetch_forbidden")
+
+        def close(self):
+            events.append("cursor_closed")
+
+    class Reader:
+        def read_connection(self):
+            return self
+
+        def execute(self, query, params):
+            return Cursor()
+
+        def close_read_connection(self):
+            events.append("reader_closed")
+
+    assert ready_for_human_approval_requests(Reader(), proposals=[], applied_changes=[]) == []
+    assert events == list(range(200)) + ["cursor_closed", "reader_closed"]
