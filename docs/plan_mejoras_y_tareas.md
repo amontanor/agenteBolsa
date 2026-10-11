@@ -1,3 +1,47 @@
+## QA local final .364 cerrada — 11-oct-2026
+
+Fullsuite del árbol definitivo:2869 passed,1 skipped,0 failed,791.51s,exit0.
+Skip preexistente de historia local unavailable. Focales89, Ruff,NUL556/0,
+diff, configuración y smoke aislados pasan; Python proyecto,PYTHONPATH exacto,
+DATA_DIR temporal,_env_file=None,PYTHON_DOTENV_DISABLED=1 y red externa bloqueada.
+No repetir esta suite sin nueva causa. Snapshot fuentes/tests en EF99
+release_oct11_0364_tested_tree_snapshot.json y journal
+EF99/oct11_0364_final_full_v6.jsonl. Fuentes/tests congelados desde su inicio.
+Paridad exacta de solicitudes y ARM preliminar combinado constan abajo.
+Producción todavía .321; ARM final, recuperación y corte pendientes.
+
+## .363 no apta para despliegue real; .364 en QA — 11-oct-2026
+
+La recuperación canónica real con .363 falló returncode=-9. Failed original
+SHA256 d828eec315c4303cd64579b5b39bf86edf7f6acfa2169b02b36f54e064eece6a
+se conservó sin modificar last_status. Backups/receipts en
+/data/reports/deployment_recovery. cgroup oom_kill aumentó4->5: OOM real.
+El perfil operativo posterior exit137 localiza acumulaciones en listas del
+laboratorio y reconstrucción de agentes; el proceso cae al comenzar
+build_research_mode_usage. No desplegar .363 por pasar fixture insuficiente.
+La raíz readonly rechazó docker cp antes de la recuperación; staging permitido
+/data/tmp/oct11-0363-recovery contiene fuentes alternativas, NO hotpatch de
+/app/src ni cambio de imagen activa. Producción sigue .321; no sellado/corte.
+
+Reserva.364: iterator read-only de ciclos conserva SELECT,ORDER,LIMIT y decodificación
+legacy, con cierre explícito incluso error/close temprano; research conserva
+sólo cycle_id tras validar cada fila. Resumen de agentes libera run_states por
+orden original a medida que reconstruye runs. Sin recortar históricos ni límites.
+89 focales pasan; Ruff pasa. Paridad exacta productividad contra HEAD.363
+46598ad621c30730f0bc783a134b9599da918e61 con8000 eventos/4000runs sintéticos.
+Fullsuite del nuevo árbol en curso:EF99/oct11_0364_final_full_v6.jsonl;
+fuentes/tests congelados y snapshot EF99/release_oct11_0364_tested_tree_snapshot.json.
+Imagen agente-bolsa:0.4.364-qa-arm64 sólo QA; ZIP/manifest preparatorios no
+acreditan aprobación de corte. Ensayo ampliado añade propuestas,experimentos,
+decisiones y5000 ciclos con informes grandes; datos exclusivamente sintéticos.
+
+La auditoría agregada de tamaños terminó timeout60s y queda unavailable;
+no usar resultados inexistentes ni repetirla sobre producción sin nueva causa.
+El profile operativo sí quedó capturado en EF99/audit_oct11_digest_live_profile_stderr.txt.
+Pendientes: QA final/ARM, recuperación satisfactoria real con failed preservado,
+preflight inmediato completo, sellado aprobado y deploy +doble salud/OOM600s.
+Revisión12-oct y límites intactos.
+
 ## QA local final .363 cerrada — 11-oct-2026
 
 Fullsuite del árbol definitivo:2867 passed,1 skipped,0 failed,727.67s,exit0.
