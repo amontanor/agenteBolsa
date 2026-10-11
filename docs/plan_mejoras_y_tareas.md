@@ -1,4 +1,19 @@
 
+## Identidad de fuentes probadas .362
+
+Commit funcional y de QA:b7d055ff1b226cf0f57466d647641a7f7abe1a7f.
+Tree:dab188c5e7a1558245623e173cc0d3344e064783. Checkout limpio verificado
+tras commit; fuentes/tests idénticos al snapshot de la fullsuite verde.
+Los commits documentales posteriores no autorizan repetir suites idénticas.
+La preparación.361 queda superseded. No imagen.362 construida ni desplegada.
+
+Al cerrar commit, mantenimiento geométrico de Git encontró una referencia
+ajena refs/codex/turn-diffs/captures/.../base con bad object. El commit,
+HEAD/tree y estado limpio se verifican por separado. Incidencia de metadata
+Codex; no reparar/eliminar refs ni ocultarla. No es fallo de tests ni prueba
+de despliegue. Readiness, paquete y manifest final se registran en EF99.
+
+
 ## Resultado final local .362 — 11-oct-2026
 
 Fullsuite definitiva:2865 passed,1 skipped,0 failed,739.68s,exit0.
