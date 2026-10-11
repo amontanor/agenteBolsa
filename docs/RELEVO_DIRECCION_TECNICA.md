@@ -1,4 +1,163 @@
+
+## Resultado final local .362 — 11-oct-2026
+
+Fullsuite definitiva:2865 passed,1 skipped,0 failed,739.68s,exit0.
+Skip preexistente: historia SQLite local no disponible; no introducir datos
+productivos en tests. Ruff, NUL539/0, diff, configuración y smoke aislados
+pasan. PYTHON_DOTENV_DISABLED=1,_env_file=None,DATA_DIR temporal, Python
+C:/Antonio/Bref/agenteBolsa/.venv/Scripts/python.exe y PYTHONPATH src exacto;
+red externa bloqueada y proveedores locales. No se repite esta suite sin causa
+nueva. Journal y receipt en EF99/oct11_0362_final_full_v6.jsonl y
+release_oct11_0362_local_qa.json. Fuentes/tests conservan los hashes del
+snapshot probado; sólo docs se actualizan después de QA.
+
+Correcciones nuevas: fecha contractual fija20-jun en fixture setup-edge y
+expectativa de versión. Reserva.362 obligatoria por política de cambios en
+tests; no cambio de estrategia, proveedor, configuración ni límites. Frente
+a1adc3cec, archivos protegidos diferentes sólo broker Enum.value y execution
+partial_take_profit_v2 aprobado. No sellado canónico aún: QA ARM pendiente.
+
+Capital5–9oct:180 recomendaciones/109 BUY.8 BUY enlazados por IDs exactos a
+plan,orden y fill, con paridad de cantidades8/8; todos con multiplicador0.5 y
+cap1000USD, después redondeo entero.53 BUY sólo rechazo position_adds_disabled;
+8 rechazos de duplicados pertenecen a BUY con plan y no son oportunidades
+adicionales.48 BUY sin frontera final atribuida; los carriers de backtest por
+símbolo no conceden autoridad para unirlos.61 enlaces de rechazo contrastados
+por cycle_id/candidate_id/signal_capture_id. Orígenes BUY58 fallback LLM
+fallido,22 hold override,22 capacity fill,7 LLM. No convertirlos en beneficio
+retrospectivo ni capacidad elegible sin gates completos.
+
+Dictamen operativo:precondition_not_met,NO DEPLOY. Producción observada.321,
+auxiliary unhealthy,ci_digest failed11-oct06:31:26UTC returncode-9,
+cgroup256MiB con oom_kill4 acumulados y heartbeat fresco. El postmarket de
+última sesión9-oct es terminal failed; skipped dominical no es el bloqueo
+decisivo. No cambios productivos, reinicios, órdenes, límites ni estados.
+Pendientes:QA ARM digest completo representativo y margen real, recuperación
+canónica con evidencia conservada, sellado aprobado, preflight inmediato
+completo, imagen/hashes activos,doble salud>=75s,OOM600s,5 sesiones posteriores.
+La revisión12-oct10:00Madrid se mantiene sin cambios.
+
+
+## Reserva final .362 — QA en curso
+
+La política test_version_must_change_when_product_files_change incluye tests/:
+por eso las dos correcciones QA exigen versión nueva. Se reserva0.4.362;
+solo __init__.py cambia en src desde HEADfuncional.e1a0013b. Se mantienen
+intactos los demás204/205 archivos funcionales y los parches aprobados.
+No integrar nuevos cambios mientras corre la fullsuite final.
+Tramo posterior no alcanzado en v6:107 passed12.89s tras la reserva; no se
+suma a la fullsuite fallida. Nueva suite completa final tiene journal
+EF99/oct11_0362_final_full_v6.jsonl y permanece pendiente.
+Skip preexistente: test_score_study_regression_current_sqlite exige historia
+SQLite local ausente en entorno aislado; no conectar ni copiar datos productivos
+para eliminarlo. Registrar ese límite al dictaminar QA.
+Ruff y diff finales pasan. Smoke .362, NUL y sellado/ARM quedan por verificar.
+El ZIP .361 anterior queda superseded y no debe utilizarse para el corte.
+
+
+## Precisión del gate postmarket en domingo
+
+El plan actual exige postmarket terminal de la sesión bursátil pertinente;
+no exige fabricar una sesión bursátil dominical. La coordinación9-oct consta
+terminal failed/stage_postmarket_report_failed, finished10-oct03:29:55UTC.
+El skipped/market_not_ready del11-oct no prueba por sí solo incumplimiento
+para la última sesión XNYS. Se corrige la atribución anterior: el bloqueo
+confirmado de este intento es auxiliary unhealthy/digest failed con OOM,
+además de QA ARM y comprobaciones finales aún pendientes. No certificar
+quietud solo con snapshots ni con WAL unavailable. Sin corte productivo.
+
+
+## Capital: cobertura completa de carriers BUY y fallo auxiliar actual
+
+Segunda extracción dirigida: 340 eventos desde5-oct, límite3000 no saturado.
+Los210 rechazos transportados se reducen a61 observaciones por identidad exacta
+cycle_id/candidate_id/signal_capture_id/stage/reason; todos tienen un único
+recommendation_id por captura exacta. 53 position_adds_disabled y8
+symbol_already_has_buy_plan_in_cycle. Esos8 también obtuvieron planes BUY:
+son duplicados adicionales bloqueados, no8 oportunidades perdidas.
+Cobertura final de109 BUY:8 con plan/orden/fill,53 solo con rechazo verificado,
+48 sin frontera final atribuida. No calcular beneficios ejecutables ni
+convertir repetición de carriers en oportunidades únicas. Universo y candidatos
+entregados requieren el carrier symbol_coverage realmente desplegado.
+
+Lectura auxiliar actual11-oct: ci_digest failed06:31:26UTC returncode=-9;
+heartbeat supervisor fresco10:56:27UTC PID7. memory.max268435456,
+memory.current18087936 al observar; memory.events max39172/oom63/oom_kill4.
+Los contadores agregados no identifican por sí solos la fase que consume.
+No declarar solucionado OOM por memoria actual baja ni por mejora sintética.
+El código canónico conserva un fallo diario y no lo reintenta ese día;
+no hay ruta de retry explícita en el supervisor. No borrar/reescribir estado,
+forzar digest productivo ni reiniciar para certificar salud. precondition_not_met
+por salud auxiliar; medir ARM y definir recuperación verificable siguen
+pendientes antes de aceptar corte. Evidencia audit_oct11_auxiliary_readonly.json.
+
+
+## Implementación del plan — evidencia nueva 11-oct
+
+La dependencia de orden queda localizada tras test_p147_crew_session_headers:
+CrewAI llama load_dotenv() al importarse; la búsqueda desde la dependencia
+encuentra C:/Antonio/Bref/agenteBolsa/.env. _env_file=None no bloquea esa carga.
+No se han inspeccionado ni publicado credenciales. El lanzador v6 establece
+PYTHON_DOTENV_DISABLED=1 antes de importar dependencias. Reproducción conjunta
+P-L147 + P-L78B: 13 passed en 3,34 s con red bloqueada. La suite completa v6
+está en ejecución; todavía no se declara verde. La causa está en aislamiento
+QA, no autoriza cambiar proveedor ni configuración productiva.
+
+SELECT con Store.read_connection y query_only=1 confirma producción .321,
+paper true, live/auto-apply false; max_position_exposure=0.05,
+max_risk_per_trade=0.01, risk_budget_max_new_risk_per_day_pct=0.015,
+trade_selection_top_n=24. Ventana desde 5-oct: 180 recomendaciones, 109 BUY,
+8 planes BUY y 8 órdenes BUY filled. Los ocho enlaces se verifican por
+recommendation_id y plan_id, sin unir por símbolo/fecha. No concluir que los
+otros 101 BUY fueran elegibles: atribución de rechazos pendiente.
+
+Los 8 planes tienen size_multiplier=0.5 y learning_mode_notional_cap=1000.
+Ejemplo PANW plan_6459f2c1a7fb / rec_f262132f1131: equity 69883.12,
+max_position_notional 3494.16, adjusted_target_notional 1747.08, cap1000,
+whole_share_bracket qty2 x404.27 =808.54. El riesgo snapshot registra exposure0;
+no lo usar como exposición real ni liberar límites. Los cambios aprobados
+Enum.value deben corregir ese contrato antes de N3.
+
+Gate de corte: precondition_not_met. Coordinación 11-oct terminal skipped,
+reason market_not_ready, finalizada 10:43:51UTC; el plan exige completed/failed.
+Auxiliar unhealthy también pendiente. No se ha desplegado, reiniciado,
+forzado jobs ni borrado estados. QA ARM/digest completo, sellado final,
+identidad limpia, doble salud y observación600s siguen pendientes.
+Evidencia local ef99: audit_oct11_capital_exact_readonly.json,
+audit_oct11_capital_exact_analysis.json, oct11_defaults_fixed_v6.jsonl,
+validate_oct11_isolated_entry_v6.py. La revisión 12-oct permanece intacta.
+
 # Relevo de direccion tecnica — agenteBolsa
+
+## Estado actualizado .361 y capital — 11-oct-2026
+
+Candidato integrado HEAD e1a0013bb324b5d25dcadeed1dcd224c5c9fd380,
+tree comprometido 2adc44379f0925a842448bddd13cd4760bc938b8, versión .361.
+.359/.360 integrados en rehearsal: sustituyen el estado abierto de las notas
+históricas inferiores. Pendiente commit del test de versión .352 -> .361;
+status previo a esta nota: solo ese test modificado. No desplegado.
+Fullsuite v5: 2.110 passed y 1 failed (defaults P-L78B opencode-go/zen),
+742,80s. Focal del fallo pasa en base y candidato con objetos config/test
+idénticos: dependencia de orden/entorno sospechada, causa no demostrada;
+no clasificarlo como defecto de base reproducido ni cambiar proveedor.
+Smoke .361 local y validate-agent-config passed; diff --check correcto.
+Journal: ef99/docs/artifacts/oct11_0361_full_v5_journal.jsonl. No repetir
+suite sin resolver una causa nueva. Kernel productivo, ARM y gates pendientes.
+
+Producción comprobada hoy: imagen .321; scheduler/web healthy, auxiliary
+unhealthy. Schedule-status 12:28:52 Madrid XNYS cerrado, próxima apertura
+12-oct15:30; lock PID7/token coincidente. Runtime unavailable por WAL no
+prueba ausencia de jobs. Sin despliegue, reinicio, órdenes ni cambios de riesgo.
+
+Capital: captura 9-oct con 89,22% cash; 37 BUY de últimas80 recomendaciones
+(límite saturado),35 con razón fallback;8 fills BUY entre638,88 y972,25USD.
+No dividir8/37: ventanas y granularidad difieren. Diagnóstico/reproducción:
+C:/Users/utopi/.codex/worktrees/ef99/agenteBolsa/docs/informe_oct11_capital_y_validacion.md.
+Siguiente: resolver QA por orden; enlazar candidatos/recomendaciones/planes/
+órdenes por IDs, atribuir notional rechazado y sizing; eliminar defectos
+operativos conservando gates. Ajustar capital requiere evidencia de riesgo,
+costes y OOS; no forzar compras por cash. Revisión12-oct intacta.
+
 
 ## Revisión final .359 todavía abierta — 10-oct, 11:56 Europe/Madrid
 

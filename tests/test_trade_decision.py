@@ -592,6 +592,8 @@ def test_deterministic_trade_fallback_applies_setup_edge_bias_and_writes_shadow_
     bad["selection_score"] = 0.05
     good["selection_rank"] = 1
     bad["selection_rank"] = 2
+    # Bind the fixture window to its June training rows, not the wall clock.
+    good["last_date"] = bad["last_date"] = "2026-06-20"
     context = {"run_id": "scan-setup-edge", "selected_candidates": [bad, good]}
 
     recommendations = deterministic_trade_fallback_recommendations(settings, portfolio, context, limit=1)
