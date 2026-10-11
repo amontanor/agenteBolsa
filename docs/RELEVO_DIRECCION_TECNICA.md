@@ -1,3 +1,69 @@
+## .364 desplegada y verificada — 11-oct-2026
+
+Dictamen: deployed. Corte completado 18:42:39 Madrid; sellado canónico intencional
+18:42:33, kernel ok. Imagen activa en scheduler/web/auxiliary: sha256:8515f6bd289759827e6c04670fd02006bbf58dfb4879d817ce8d97f7991a7208.
+Fuentes de release HEAD efce78861c3040ee996d85e82b9841d143ece3f9, tree 7583fe8fdf5a53f5ac5cc2eb6847ccaa0d426173; 206 hashes
+verificados en los tres servicios. Los commits documentales posteriores no
+cambian la imagen ni las fuentes probadas. Rollback .321 inmutable conservado.
+
+QA final:2869 passed,1 skipped preexistente,0 failed;89 focales,Ruff,NUL,diff,
+configuración y smoke aislados pasan. Paridad exacta de productividad; iterator
+de ciclos conserva fila,orden,límite,errores y cierre. ARM digest completo ampliado
+con 5000 ciclos/reportes grandes,18MiB de padre y256MiB de cgroup:exit0,0OOM,
+peak RSS hijo226914304. No elevar límites ni extrapolar garantía infinita.
+
+Recuperación real .364 completed 18:36:43 Madrid con informe no vacío SHA256
+ebc1f15848bf4f63c8b1098629c87858288ab167270bda2e6713e03bdfe84cea.
+Failed original d828eec315c4303cd64579b5b39bf86edf7f6acfa2169b02b36f54e064eece6a
+y recibos preservados en /data/reports/deployment_recovery; ningún nuevo
+oom_kill en este intento. La ejecución real tardó unos10min por I/O sobre
+históricos: memoria corregida, latencia de digest pendiente de medir/optimizar.
+No se vaciaron estados ni históricos para aparentar salud.
+
+Preflight: XNYS cerrado; postmarket última sesión9-oct terminal failed
+stage_postmarket_report_failed (deuda previa, no ocultada); sin jobs/leases
+activos en consulta RO contrastada con procesos. Paper true,live/auto-apply false,
+kernel/config válidos y margen de recursos. Configuración Compose igual excepto
+imagen. Dos incidentes del controlador quedaron auditados: comparación inicial
+del alias YAML x-app-common/image abortó sin corte; primer sellado efímero root
+sin capacidades no pudo leer /data/state y produjo rollback automático .321.
+Se verificó DAC_OVERRIDE sólo para el contenedor temporal autorizado de sellado;
+no se cambió la configuración/capacidades de los servicios operativos.
+
+Aceptación: controles 2026-10-11T16:43:08.678731+00:00 y 2026-10-11T16:44:27.628487+00:00 (>75s),
+HTTP / y /_stcore/health200; tres healthy,RestartCount0,OOMKilledfalse.
+Scheduler único PID7/token33364117, coincide con
+lock y proceso; actividad fresca tras arranque,operational_health_refresh completed.
+Auxiliar heartbeat nuevo 2026-10-11T16:52:40.664650+00:00,ci_digest completed.
+Observación 601.01s/14muestras: sin
+reinicios ni OOM; vecinos intactos. Evidencia EF99/deploy_oct11_0364_acceptance_*.json,
+deploy_oct11_0364_resource_observation.jsonl y release_oct11_0364_deployed_receipt.json.
+Web alcanzó presión de caché cerca del cgroup1GiB (memory.events max1130,oom0);
+lectura memory.stat muestra unos661MB file/348MB anon y proceso padreRSS134396kB.
+No confundir max con OOM ni RSS padre con todo el servicio; seguir midiendo caché.
+Hashes application.env y runtime.env intactos; manifiesto cambia sólo por sellado
+aprobado y conserva copia exacta para rollback.
+
+Salud funcional existente: operational_health fresco16:43:08UTC warning,0critical,
+5warnings (3setup_edge_deterioration,post_market_attribution_degraded,
+post_market_pipeline_slow). No desactivar estas alertas válidas para invertir más.
+latest_production_health fecha10-sep es obsoleto y market_data_quality unavailable;
+no certifican datos actuales ni preparación BUY. Son gates/deudas para la sesión,
+distintos de liveness e integridad del despliegue; no generar jobs manuales para
+maquillar informes. Digest completado no repara automáticamente postmarket9-oct.
+
+Siguientes pasos: conservar revisión12-oct10:00Madrid sin cambios. Sesiones5–9oct
+corrieron .321; no atribuirles .364. Medir5 sesiones completas12–16oct si .364 se
+mantiene activa: exposición temporal/cash,embudo109BUY/IDs exactos,primera frontera,
+sizing,costes,rotación,errores y SPY comparable. Capital:53BUY bloqueados por
+position_adds_disabled;8planes/fills con0.5/cap1000 y redondeo;48BUY frontera
+unavailable. Eso identifica causas/cobertura, no beneficio ejecutable perdido.
+Prioridades: completar carriers de frontera/sizing sin consultas extra ni autoridad,
+medir fallback/latencia LLM y digest, verificar exposición long y partial EXIT en
+eventos reales. Sin mínimos de inversión ni aumento de riesgo; asignación futura
+en lote separado con costes,validación cronológica y paper. Protección broker APO
+requiere evidencia broker; niveles locales no la certifican.
+
 ## QA local final .364 cerrada — 11-oct-2026
 
 Fullsuite del árbol definitivo:2869 passed,1 skipped,0 failed,791.51s,exit0.
