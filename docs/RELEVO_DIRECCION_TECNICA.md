@@ -1,3 +1,34 @@
+## Corrección de memoria .363 en validación — 11-oct-2026
+
+El usuario autorizó «Corrígelo y despliega». Producción sigue .321; no corte,
+reinicio, sellado ni cambio de estado realizado en este tramo. La imagen
+.362 sí está construida en staging: los apartados anteriores que dicen
+«no construida» describen el momento anterior y no el estado presente.
+
+Nueva reserva .363: ready_for_human_approval_requests consume el cursor
+SQLite de sólo lectura fila a fila en lugar de retener todos los content_text.
+Conserva SELECT, límite, orden, criterios, errores JSON y salida; cierre explícito
+de cursor y reader también al fallar. No cambio de riesgo, límites o broker.
+64 focales pasan; Ruff y diff pasan. Paridad contra HEAD .362 exacto
+226b28350c52f78f5c55d30ca3c5ddd97cc95d30:205 registros,limit200,
+60 resultados idénticos. Dos tests nuevos verifican streaming y cierre ante error.
+
+ARM diagnóstico .362:50k recomendaciones,200k outcomes,16 diffs de4MiB,
+digest completo incluida serialización/report; con512MiB pico RSS284794880.
+La mayor acumulación adicional ocurre antes de research_agenda, en la lectura
+de solicitudes de aprobación. .363 preliminar se probó mediante montaje ro
+únicamente del digest corregido sobre imagen .362: NO es imagen final .363.
+Bajo256MiB, solo pico227864576 y combinado con18MiB residentes229724160;
+ambos exit0,oom0,oom_kill0. cgroup memory.peak alcanza límite por caché de
+fixture; no confundirlo con RSS ni certificar margen productivo universal.
+
+Fullsuite final .363 en curso, journal EF99/oct11_0363_final_full_v6.jsonl;
+no editar src/tests durante su ejecución. Pendientes: resultado fullsuite,
+NUL/config/smoke, identidad y paquete final, construir imagen .363,
+ARM final exacta, recuperación canónica del digest con failed conservado,
+preflight inmediato, sellado intencional aprobado y despliegue con doble
+salud>=75s y OOM600s. Mantener revisión12-oct sin cambios.
+
 
 ## Identidad de fuentes probadas .362
 
