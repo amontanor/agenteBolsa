@@ -840,11 +840,18 @@ def build_proposal_quality_report(
 def build_research_mode_usage(store: Store, *, now: datetime | None = None) -> dict[str, Any]:
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     cutoff = now - timedelta(days=1)
-    cycles = [
-        item
-        for item in store.continuous_improvement_cycles(limit=5000)
-        if str(item.get("mode") or "") == "research" and _is_recent(item.get("started_at"), cutoff)
-    ]
+    iterator = getattr(store, "iter_continuous_improvement_cycles", None)
+    cycle_rows = iterator(limit=5000) if callable(iterator) else store.continuous_improvement_cycles(limit=5000)
+    try:
+        cycles = [
+            {"cycle_id": item.get("cycle_id")}
+            for item in cycle_rows
+            if str(item.get("mode") or "") == "research" and _is_recent(item.get("started_at"), cutoff)
+        ]
+    finally:
+        close_rows = getattr(cycle_rows, "close", None)
+        if callable(close_rows):
+            close_rows()
     cycle_ids = {str(item.get("cycle_id") or "") for item in cycles}
     if not cycle_ids:
         return {

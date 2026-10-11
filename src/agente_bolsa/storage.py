@@ -6787,6 +6787,31 @@ class Store:
             ).fetchall()
         return [self._continuous_improvement_cycle_from_row(row) for row in rows]
 
+    def iter_continuous_improvement_cycles(self, limit: int = 50) -> Iterator[dict[str, Any]]:
+        """Yield the legacy cycle rows with bounded retention and explicit close."""
+        conn = self._decision_context_read_connection()
+        cursor = None
+        try:
+            cursor = conn.execute(
+                """
+                SELECT cycle_id, trace_id, job_id, status, mode, dry_run, dedupe_key,
+                       started_at, finished_at, context_json, evaluation_json,
+                       llm_call_id, llm_status, error_json, report_json, created_at, updated_at
+                FROM continuous_improvement_cycles
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            for row in cursor:
+                yield self._continuous_improvement_cycle_from_row(row)
+        finally:
+            try:
+                if cursor is not None:
+                    cursor.close()
+            finally:
+                conn.close()
+
     def continuous_improvement_cycle(self, cycle_id: str) -> dict[str, Any] | None:
         with self.connect() as conn:
             row = conn.execute(

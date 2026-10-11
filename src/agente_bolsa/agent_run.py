@@ -382,7 +382,8 @@ def build_agent_run_productivity(
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     runs: list[dict[str, Any]] = []
     orphan_runs = invalid_runs = 0
-    for run_id, state in run_states.items():
+    for run_id in list(run_states):
+        state = run_states.pop(run_id)
         starts = int(state["starts"])
         terminals = int(state["terminals"])
         source = (
