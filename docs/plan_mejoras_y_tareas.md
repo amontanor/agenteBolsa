@@ -1,3 +1,15 @@
+## QA local final .363 cerrada — 11-oct-2026
+
+Fullsuite del árbol definitivo:2867 passed,1 skipped,0 failed,727.67s,exit0.
+Skip preexistente de historia local unavailable. Focales64, Ruff,NUL555/0,
+diff, configuración y smoke aislados pasan; Python proyecto,PYTHONPATH exacto,
+DATA_DIR temporal,_env_file=None,PYTHON_DOTENV_DISABLED=1 y red externa bloqueada.
+No repetir esta suite sin nueva causa. Snapshot fuentes/tests en EF99
+release_oct11_0363_tested_tree_snapshot.json y journal
+EF99/oct11_0363_final_full_v6.jsonl. Fuentes/tests congelados desde su inicio.
+Paridad exacta de solicitudes y ARM preliminar combinado constan abajo.
+Producción todavía .321; ARM final, recuperación y corte pendientes.
+
 ## Corrección de memoria .363 en validación — 11-oct-2026
 
 El usuario autorizó «Corrígelo y despliega». Producción sigue .321; no corte,
