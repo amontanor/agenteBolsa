@@ -1,3 +1,15 @@
+## Capital 25% — candidato .368 local, sin activar — 12-oct-2026
+
+Código de tamaños y observación integrado sobre .364 exacta;315 focales verdes,
+Ruff/diff/configuración aislada/NUL511 pasan. Objetos protegidos intactos.
+Fullsuite única, smoke y QA ARM pendientes de cierre y preflight; no desplegado.
+Observación no acredita cinco sesiones ni autorización de inversión. BUY inválidas
+se bloquean sin bloquear SELL; cash reservado broker/local/ciclo y riesgo
+desconocido failclosed. Ampliaciones bloqueadas hasta protección canónica de
+cantidad añadida; score y tamaño5% sin autoridad activa. Lotes separados.
+Informe vigente:docs/informe_oct12_capital_25.md. Evidencia:
+EF99/release_oct12_0368_focal_snapshot.json. Mantener revisión del12 sin cambios.
+
 ## .364 desplegada y verificada — 11-oct-2026
 
 Dictamen: deployed. Corte completado 18:42:39 Madrid; sellado canónico intencional

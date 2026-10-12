@@ -23,6 +23,11 @@ from agente_bolsa.models import (
     new_id,
 )
 from agente_bolsa.storage import Store
+from agente_bolsa.tools.capital_allocation_policy import (
+    active_stage_limits,
+    cap_allocation_notional,
+    load_capital_allocation_policy,
+)
 from agente_bolsa.tools.capital_ladder import cap_notional_for_ladder, load_capital_ladder
 from agente_bolsa.tools.challenger_policy import score_challenger_candidate
 from agente_bolsa.tools.daily_learning import load_daily_learning_context
@@ -114,8 +119,23 @@ def _portfolio_risk_context(
         else 0.0
     )
     pending_open_risk_amount = sum(_buy_plan_risk_amount(item) for item in pending_buy_plans)
+    def valid_stop(plan: dict[str, Any] | None) -> bool:
+        payload = (plan or {}).get("payload", {}) or {}
+        stop = _float(payload.get("stop_loss"))
+        return stop is not None and math.isfinite(stop) and stop > 0
+
+    risk_complete = all(
+        valid_stop((latest_buy_plans.get(position.symbol.upper()) or {}).get("plan"))
+        for position in portfolio.positions
+        if str(position.side or "long").lower() == "long" and float(position.qty or 0.0) > 0
+    ) and all(valid_stop(item) and _float((item.get("payload") or {}).get("entry_price")) is not None
+              for item in pending_buy_plans)
     return {
+        "open_risk_complete": risk_complete,
         "current_portfolio_exposure": current_portfolio_exposure,
+        "pending_buy_notional": sum(float(item.get("notional") or 0.0) for item in pending_buy_plans),
+        "pending_plan_reservations_complete": len(pending_buy_plans) < max(50, settings.max_orders_per_cycle * 10)
+            and all(isinstance(item.get("notional"), (int, float)) and math.isfinite(item["notional"]) and item["notional"] >= 0 for item in pending_buy_plans),
         "pending_portfolio_exposure": pending_portfolio_exposure,
         "existing_open_risk_amount": existing_open_risk_amount,
         "pending_open_risk_amount": pending_open_risk_amount,
@@ -352,7 +372,13 @@ def _effective_trade_recommendation_limit(settings: Settings, technical_context:
     return max(base_limit, _effective_long_only_capacity(settings, len(selected)))
 
 
-def _effective_buy_plan_limit(settings: Settings, recommendations: list[TradeRecommendation]) -> int:
+def _effective_buy_plan_limit(settings: Settings, recommendations: list[TradeRecommendation], *, include_allocation: bool = True) -> int:
+    allocation_policy = load_capital_allocation_policy(settings.data_dir, settings) if include_allocation else {}
+    if allocation_policy.get("status") == "blocked":
+        return 0
+    limits = active_stage_limits(allocation_policy)
+    if limits:
+        return min(int(settings.max_orders_per_cycle), limits["daily_buys"])
     base_limit = max(1, int(settings.max_orders_per_cycle))
     learning_mode = active_learning_mode(settings)
     if learning_mode:
@@ -368,6 +394,12 @@ def _effective_buy_plan_limit(settings: Settings, recommendations: list[TradeRec
 
 
 def _effective_daily_buy_limit(settings: Settings, plans: list[Any]) -> int:
+    allocation_policy = load_capital_allocation_policy(settings.data_dir, settings)
+    if allocation_policy.get("status") == "blocked":
+        return 0
+    limits = active_stage_limits(allocation_policy)
+    if limits:
+        return _apply_risk_off_factor(settings, min(int(settings.max_daily_buy_orders), limits["daily_buys"]))
     base_limit = max(0, int(settings.max_daily_buy_orders))
     learning_mode = active_learning_mode(settings)
     if learning_mode:
@@ -3670,9 +3702,9 @@ def filter_entry_quality(
                     aggressiveness_profile=settings.trade_aggressiveness_profile,
                     micro_experiment=bool(recommendation.micro_experiment or micro_experiment),
                     size_multiplier=(
-                        min(float(recommendation.size_multiplier or 1.0), float(settings.micro_experiment_size_multiplier))
+                        min(float(recommendation.size_multiplier if recommendation.size_multiplier is not None else 1.0), float(settings.micro_experiment_size_multiplier))
                         if micro_experiment
-                        else float(recommendation.size_multiplier or 1.0)
+                        else float(recommendation.size_multiplier if recommendation.size_multiplier is not None else 1.0)
                     ),
                     soft_override_reasons=[
                         *soft_override_reasons,
@@ -3732,7 +3764,7 @@ def _recommendation_from_dict(item: dict[str, Any]) -> TradeRecommendation | Non
         invalidation=str(item.get("invalidation", "")) or None,
         aggressiveness_profile=str(item.get("aggressiveness_profile") or "") or None,
         micro_experiment=bool(item.get("micro_experiment")),
-        size_multiplier=float(item.get("size_multiplier") or 1.0),
+        size_multiplier=float(item.get("size_multiplier") if item.get("size_multiplier") is not None else 1.0),
         backtest_soft_override=bool(item.get("backtest_soft_override")),
         soft_override_reasons=[str(value) for value in list(item.get("soft_override_reasons") or [])],
         llm_selected=True,
@@ -4790,6 +4822,7 @@ def build_buy_order_plans(
     rejected: list[dict[str, Any]] | None = None,
     market_state: dict[str, Any] | None = None,
     ignore_operational_kill_switch: bool = False,
+    allocation_observations: list[dict[str, Any]] | None = None,
 ) -> list[OrderPlan]:
     """Build risk-checked buy plans. Sell/reduce/exit are kept as recommendations for now."""
 
@@ -4826,6 +4859,11 @@ def build_buy_order_plans(
         if learning_mode
         else 0.0
     )
+    allocation_policy = load_capital_allocation_policy(settings.data_dir, settings)
+    allocation_limits = active_stage_limits(allocation_policy)
+    if allocation_limits:
+        learning_notional_cap = 0.0  # replaced by the approved proportional cap below
+        learning_exposure_cap = allocation_limits["exposure"]
     risk_manager = RiskManager(settings)
     open_order_symbols = {order.symbol.upper() for order in portfolio.open_orders}
     existing_position_symbols = {
@@ -4846,7 +4884,43 @@ def build_buy_order_plans(
         settings=settings,
     )
     portfolio_risk_context = _portfolio_risk_context(settings, portfolio)
+    if allocation_observations is not None:
+        allocation_observations.append({"kind": "portfolio_reservations", **portfolio_risk_context})
     capital_ladder = load_capital_ladder(settings.data_dir)
+    if allocation_limits:
+        # The evidence gate retains the canonical ladder requirements. No file is
+        # silently written or promoted; this is the approved policy's stage.
+        capital_ladder = {"active_stage": allocation_policy["stage"],
+                          "human_approved": True, "status": "active",
+                          "source": "capital_allocation_policy"}
+    pending_buy_cash = 0.0
+    if allocation_limits:
+        for pending_order in portfolio.open_orders:
+            if str(pending_order.side).lower() != "buy":
+                continue
+            if pending_order.notional is None:
+                pending_buy_cash = float("nan")  # quantity alone has no price authority
+                break
+            amount = float(pending_order.notional)
+            if not math.isfinite(amount) or amount < 0:
+                pending_buy_cash = float("nan")
+                break
+            pending_buy_cash += amount
+    if allocation_limits:
+        if (not portfolio_risk_context.get("pending_plan_reservations_complete")
+                or not portfolio_risk_context.get("open_risk_complete")):
+            pending_buy_cash = float("nan")
+        else:
+            local_pending_cash = portfolio_risk_context["pending_buy_notional"]
+            broker_pending_cash = pending_buy_cash
+            pending_buy_cash += local_pending_cash
+            # The local reader excludes plans present in broker_orders. If a
+            # submission race has no exact link yet, reserve both conservatively.
+            portfolio_risk_context["pending_portfolio_exposure"] = pending_buy_cash / portfolio.portfolio_value if portfolio.portfolio_value > 0 else float("nan")
+            # No stop authority for an unlinked broker pending order: reserve
+            # its full notional as risk, rather than assuming a zero stop risk.
+            portfolio_risk_context["pending_open_risk_amount"] += broker_pending_cash
+    planned_buy_cash = 0.0
     planned_buy_exposure = 0.0
     planned_buy_risk_amount = 0.0
     market_state_block_reason = _effective_market_state_block_reason(settings, market_state)
@@ -4944,6 +5018,15 @@ def build_buy_order_plans(
                     recommendation,
                 )
             continue
+        if allocation_limits and recommendation.symbol in existing_position_symbols:
+            if rejected is not None:
+                _record_rejection({"symbol": recommendation.symbol, "action": "buy",
+                    "stage": "controlled_position_add",
+                    "reason": "controlled_add_protection_unavailable" if allocation_policy.get("enable_adds") is True else "position_adds_disabled",
+                    "checks": {"enable_adds": allocation_policy.get("enable_adds") is True,
+                               "canonical_added_quantity_protection": "unavailable",
+                               "preserve_existing_protection": True}}, recommendation)
+            continue
         if recommendation.symbol in open_order_symbols:
             if rejected is not None:
                 _record_rejection(
@@ -4998,8 +5081,8 @@ def build_buy_order_plans(
                 0.0,
                 min(
                     float(settings.micro_experiment_size_multiplier),
-                    float(recommendation.size_multiplier or 1.0),
-                    float(sizing_adjustment.get("size_multiplier") or 1.0),
+                    float(recommendation.size_multiplier if recommendation.size_multiplier is not None else 1.0),
+                    float(sizing_adjustment.get("size_multiplier") if sizing_adjustment.get("size_multiplier") is not None else 1.0),
                 ),
             )
             sizing_adjustment = {
@@ -5016,6 +5099,22 @@ def build_buy_order_plans(
             recommendation,
             sizing_adjustment=sizing_adjustment,
         )
+        if allocation_observations is not None:
+            allocation_observations.append({"kind": "sizing", "identity": dict(recommendation.decision_lineage or {}),
+                "requested_before_learning_cap": notional, "sizing": dict(sizing_checks)})
+        if allocation_limits:
+            notional, allocation_checks = cap_allocation_notional(
+                allocation_policy, desired_notional=notional,
+                equity=portfolio.portfolio_value, cash=portfolio.cash,
+                buying_power=portfolio.buying_power,
+                current_exposure=portfolio_risk_context["current_portfolio_exposure"],
+                pending_exposure=portfolio_risk_context["pending_portfolio_exposure"],
+                planned_exposure=planned_buy_exposure, pending_buy_notional=pending_buy_cash,
+                planned_buy_notional=planned_buy_cash,
+            )
+            sizing_checks["capital_allocation"] = allocation_checks
+            if allocation_checks.get("status") == "unavailable":
+                sizing_checks["reason"] = "allocation_inputs_unavailable"
         if learning_notional_cap > 0:
             capped_notional = min(notional, learning_notional_cap)
             sizing_checks["learning_mode_notional_cap"] = learning_notional_cap
@@ -5185,6 +5284,7 @@ def build_buy_order_plans(
             )
         )
         planned_buy_symbols.add(recommendation.symbol)
+        planned_buy_cash += execution_notional
         if float(portfolio.portfolio_value or 0.0) > 0:
             planned_buy_exposure += execution_notional / float(portfolio.portfolio_value)
         proposed_risk_amount = decision.checks.get("proposed_trade_risk_amount")
@@ -5341,6 +5441,7 @@ def build_order_plans(
     exit_rejections: list[dict[str, Any]] | None = None,
     market_state: dict[str, Any] | None = None,
     ignore_operational_kill_switch: bool = False,
+    allocation_observations: list[dict[str, Any]] | None = None,
 ) -> list[OrderPlan]:
     """Build buy and long-position sell/reduce/exit plans."""
 
@@ -5372,12 +5473,17 @@ def build_order_plans(
         rejected=rejected,
         market_state=market_state,
         ignore_operational_kill_switch=ignore_operational_kill_switch,
+        allocation_observations=allocation_observations,
     )
-    total_plan_limit = _effective_buy_plan_limit(settings, recommendations)
+    total_plan_limit = _effective_buy_plan_limit(settings, recommendations, include_allocation=False)
+    allocation_controls_buys = load_capital_allocation_policy(settings.data_dir, settings).get("status") in {"blocked", "guarded_active"}
     open_order_symbols = {order.symbol.upper() for order in portfolio.open_orders}
 
     for index, recommendation in enumerate(recommendations):
-        if len(plans) >= total_plan_limit:
+        # A BUY policy must never suppress a risk-reducing exit. With the new
+        # policy off, preserve the legacy shared-quota contract exactly.
+        used_slots = sum(plan.side == "sell" for plan in plans) if allocation_controls_buys else len(plans)
+        if used_slots >= total_plan_limit:
             for remaining in recommendations[index:]:
                 if remaining.action in {"sell", "reduce", "exit"}:
                     record_exit_rejection(remaining, "cycle_plan_limit_reached", {

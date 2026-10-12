@@ -65,7 +65,7 @@ def test_position_and_order_rejections(case, state, reason):
 
 def test_capacity_marks_remaining_exits_not_evaluated(case, monkeypatch):
     settings, portfolio, rec = case
-    monkeypatch.setattr(td, "_effective_buy_plan_limit", lambda *a: 0)
+    monkeypatch.setattr(td, "_effective_buy_plan_limit", lambda *a, **kw: 0)
     rejected = []
     assert td.build_order_plans(settings, portfolio, [rec], exit_rejections=rejected) == []
     assert rejected[0]["reason"] == "cycle_plan_limit_reached"
@@ -109,3 +109,10 @@ def test_absent_identity_is_not_reconstructed(case):
     exits = []
     td.build_order_plans(settings, portfolio, [rec], exit_rejections=exits)
     assert not {"signal_id", "candidate_id", "cycle_id", "recommendation_id"} & exits[0].keys()
+
+
+def test_invalid_buy_policy_does_not_block_eligible_exit(case, monkeypatch):
+    settings, portfolio, rec = case
+    monkeypatch.setattr(td, "load_capital_allocation_policy", lambda *a, **kw: {"status": "blocked", "active": False})
+    plans = td.build_order_plans(settings, portfolio, [rec])
+    assert len(plans) == 1 and plans[0].side == "sell"

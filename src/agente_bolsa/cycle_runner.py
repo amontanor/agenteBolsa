@@ -37,6 +37,11 @@ from .tools.canonical_selection_ledger import (
     build_canonical_selection_ledger,
     persist_canonical_selection_ledger,
 )
+from .tools.capital_allocation_policy import load_capital_allocation_policy
+from .tools.capital_allocation_shadow import (
+    build_capital_allocation_shadow,
+    persist_capital_allocation_shadow,
+)
 from .tools.capital_deployment_funnel_shadow import (
     account_projection_from_portfolio_snapshot,
     build_capital_deployment_funnel_shadow,
@@ -359,12 +364,16 @@ def _apply_daily_buy_limit(
 ) -> list[Any]:
     daily_buy_limit = _effective_daily_buy_limit(settings, plans)
     if daily_buy_limit <= 0:
-        return plans
-
-    used_buys = store.count_broker_orders(
-        side="buy",
-        since_iso=_session_start_utc_iso(settings),
-    )
+        # Preserve legacy zero-budget behavior except a fail-closed allocation
+        # policy: already materialized BUY plans must not bypass its block.
+        if load_capital_allocation_policy(settings.data_dir, settings).get("status") != "blocked":
+            return plans
+        used_buys = 0
+    else:
+        used_buys = store.count_broker_orders(
+            side="buy",
+            since_iso=_session_start_utc_iso(settings),
+        )
     remaining_buys = max(0, daily_buy_limit - used_buys)
     kept = []
     blocked = []
@@ -1550,6 +1559,9 @@ def _persist_capital_deployment_funnel_shadow(
     rejected_order_plans: list[dict[str, Any]] | None = None,
     submitted: list[dict[str, Any]] | None = None,
     account: dict[str, Any] | None = None,
+    portfolio_snapshot: Any = None,
+    allocation_settings: Settings | None = None,
+    allocation_observations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Persist P-L54B after the active route; every failure is fail-open."""
 
@@ -1585,6 +1597,30 @@ def _persist_capital_deployment_funnel_shadow(
             account=account,
         )
         persisted = persist_capital_deployment_funnel_shadow(store, payload)
+        allocation_result = None
+        # Separate event: never changes legacy funnel hashes, rows or authority.
+        if allocation_settings is not None:
+            try:
+                policy = load_capital_allocation_policy(allocation_settings.data_dir, allocation_settings)
+                allocation_shadow = build_capital_allocation_shadow(
+                    cycle_id=run_id, policy=policy, portfolio=portfolio_snapshot,
+                    recommendations=recommendations, plans=plans, funnel=payload,
+                    allocation_observations=allocation_observations,
+                )
+                for row in allocation_shadow["details"]:
+                    row["daily_risk_budget"] = {
+                        "configured_pct": allocation_settings.risk_budget_max_new_risk_per_day_pct,
+                        "enforcement": "enabled" if allocation_settings.risk_budget_enabled else "disabled",
+                    }
+                from .tools.capital_allocation_shadow import shadow_content_hash
+                allocation_shadow["content_hash"] = shadow_content_hash(allocation_shadow)
+                allocation_persisted = persist_capital_allocation_shadow(store, allocation_shadow)
+                allocation_result = {"status": allocation_persisted.get("status"),
+                                     "event_id": allocation_shadow["event_id"],
+                                     "content_hash": allocation_shadow["content_hash"]}
+            except Exception as shadow_exc:  # noqa: BLE001 - no shadow failure changes the active result.
+                allocation_result = {"status": "unavailable", "error_type": type(shadow_exc).__name__}
+                logging.getLogger(__name__).warning("capital_allocation_shadow unavailable: %s", type(shadow_exc).__name__)
         reporter.emit(
             "risk_manager",
             "capital_deployment_funnel_shadow",
@@ -1611,6 +1647,7 @@ def _persist_capital_deployment_funnel_shadow(
             "detail_total": payload.get("detail_total"),
             "detail_persisted": payload.get("detail_persisted"),
             "detail_omitted": payload.get("detail_omitted"),
+            **({"allocation_shadow": allocation_result} if allocation_settings is not None else {}),
         }
     except Exception as exc:  # noqa: BLE001 - shadow telemetry cannot alter trading.
         tracker.fail(reason=exc, error_code="capital_deployment_funnel_failed")
@@ -2111,6 +2148,7 @@ def _auto_paper_trade(
         return signal_id or None
 
     with optional_measure(timing, "deterministic_gates", "order_plan_build"):
+        allocation_observations: list[dict[str, Any]] = []
         plans = build_order_plans(
             settings,
             portfolio,
@@ -2120,6 +2158,7 @@ def _auto_paper_trade(
             exit_rejections=exit_rejections,
             market_state=market_state,
             ignore_operational_kill_switch=learning_shadow_only,
+            allocation_observations=allocation_observations,
         )
     if exit_rejections:
         try:
@@ -2538,6 +2577,9 @@ def _auto_paper_trade(
                 rejected_order_plans=rejected_order_plans,
                 submitted=[],
                 account=capital_account,
+                portfolio_snapshot=portfolio,
+                allocation_settings=settings,
+                allocation_observations=allocation_observations,
             ),
         }
 
@@ -2701,6 +2743,9 @@ def _auto_paper_trade(
             rejected_order_plans=rejected_order_plans,
             submitted=ordered_records,
             account=capital_account,
+            portfolio_snapshot=portfolio,
+            allocation_settings=settings,
+            allocation_observations=allocation_observations,
         ),
     }
 
@@ -3290,6 +3335,7 @@ def run_observable_cycle(
             plans=(auto_result or {}).get("plans") if isinstance(auto_result, dict) else None,
             rejected_order_plans=(auto_result or {}).get("rejected_order_plans") if isinstance(auto_result, dict) else None,
             submitted=(auto_result or {}).get("submitted") if isinstance(auto_result, dict) else None,
+            allocation_settings=settings,
         )
     with timing.measure("persistence", "trade_summary"):
         _record_trade_summary(settings, store, reporter, run_id, auto_result)

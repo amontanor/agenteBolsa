@@ -133,4 +133,5 @@ __all__ = ["__version__"]
 # Oct11: deterministic QA fixture dates and integrated release validation (0.4.362).
 # Oct11: bounded approval artifact reader; preserves digest contract.
 # Oct11: stream research cycles and release reconstructed run states.
-__version__ = "0.4.364"
+# Oct12: human-gated proportional paper capital; score and adds remain separate.
+__version__ = "0.4.368"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from decimal import ROUND_DOWN, Decimal
 
 from agente_bolsa.config import Settings
@@ -58,7 +59,13 @@ def recommended_notional(
     available_buying_power = max(0.0, portfolio.buying_power)
 
     adjustment = sizing_adjustment or {}
-    multiplier = float(adjustment.get("size_multiplier") or 1.0)
+    raw_multiplier = adjustment.get("size_multiplier")
+    try:
+        multiplier = 1.0 if raw_multiplier is None else float(raw_multiplier)
+    except (TypeError, ValueError, OverflowError):
+        multiplier = 0.0
+    if not math.isfinite(multiplier):
+        multiplier = 0.0
     if multiplier < 0:
         multiplier = 0.0
     multiplier = min(1.15, multiplier)
