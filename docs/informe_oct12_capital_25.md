@@ -1,3 +1,14 @@
+## Resultado del nuevo intento — 12-oct18:42Madrid
+
+precondition_not_met. Revalidación fresca:continuous_improvement running,
+ci_sched_f44c93c441ad desde18:40:37;XNYS abierto. No corte, no reinicio,
+no interrupción de jobs. Tres servicios .364 healthy,RestartCount0,OOMfalse;
+kernelok/papertrue/livefalse/auto-applyfalse,memoria disponible3153MiB.
+La QA ya está completa y la imagen .368 construida: no repetir suites ni
+smokes idénticos. Sólo quedan gates/corte/aceptación operativa. Automatización
+22:45 continúa autorizada y debe consumir los recibos actuales. Evidencia
+EF99/release_oct12_0368_retry_result.json. Ninguna política nueva activada.
+
 ## QA ARM .368 cerrada — 12-oct-2026
 
 Smoke ARM exit0,0OOM,211 hashes exactos; política inactiva, cash reservado y
