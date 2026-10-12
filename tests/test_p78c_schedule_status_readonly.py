@@ -3,12 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from agente_bolsa.config import Settings
 from agente_bolsa.main import build_parser, command_schedule_status
+from agente_bolsa.market_calendar import MarketCalendar
 from agente_bolsa.scheduler import _job_state_key, scheduler_status
 from agente_bolsa.storage import Store
 
@@ -222,11 +224,20 @@ def test_schedule_status_accepts_json_flag_without_changing_default_contract() -
     assert args.func.__name__ == "command_schedule_status"
 
 
-def test_schedule_status_preserves_calendar_and_job_contract(tmp_path: Path) -> None:
+@pytest.mark.parametrize("reference,expected_open", [
+    ("2026-10-12T12:00:00+00:00", False),
+    ("2026-10-12T16:00:00+00:00", True),
+])
+def test_schedule_status_preserves_calendar_and_job_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reference: str, expected_open: bool
+) -> None:
+    original_status = MarketCalendar.status
+    frozen_clock = datetime.fromisoformat(reference)
+    monkeypatch.setattr(MarketCalendar, "status", lambda self: original_status(self, now=frozen_clock))
     status = scheduler_status(_settings(tmp_path))
 
     assert status["market"]["calendar"] == "XNYS"
-    assert status["market"]["is_open"] is False
+    assert status["market"]["is_open"] is expected_open
     assert {job["id"] for job in status["jobs"]} >= {
         "portfolio_watch_1m",
         "market_cycle_15m",

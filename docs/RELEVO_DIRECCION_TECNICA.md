@@ -1,3 +1,27 @@
+## Intento inmediato autorizado — 12-oct-2026
+
+Dictamen:precondition_not_met; no corte ni mutación de producción. Preflight
+17:45Madrid:producción .364/kernelok/papertrue/livefalse/auto-applyfalse;
+XNYS abierto y continuous_improvement running,run ci_sched_cc8808830225 desde
+17:41Madrid. No se interrumpió el job ni se fabricó quietud.
+
+La autorización de intentar ahora se aplicó a QA Windows aislada, sin competir
+con Jetson. Smoke/configuración pasan. Fullsuite única inicial:2228 passed,
+1 failed; se detuvo, no es aceptación verde. El test de schedule-status esperaba
+cerrado sin fijar hora. Se reprodujo exactamente en base .364 limpia; scheduler
+y test eran idénticos a base antes de la reparación. Se corrigió sólo el test,
+fijando dos horas XNYS abiertas/cerradas:11 focales del archivo pasan. Ningún
+fuente de producción cambió desde el snapshot. La nueva fullsuite del árbol
+de tests corregido tiene causa documentada y queda para el intento22:45; no
+repetir la suite fallida idéntica. Journal y snapshotv2:
+EF99/release_oct12_0368_full_attempt_result.json.
+
+Fuentes .368 congeladas:211 archivos,zipSHA256
+d29d69e3d4cbabaded991b4d2c02ae2e5a265a8ed66c5edf6298bb361e4d171c.
+El ZIP no es imagen ni aprobación; ARM sigue pendiente. Automatización22:45
+permanece activa y deberá leer este relevo, comprobar gates y el árbol más
+reciente antes de QA/corte. No activar tamaños/adds/score sin evidencia previa.
+
 ## Capital 25% — candidato .368 local, sin activar — 12-oct-2026
 
 Código de tamaños y observación integrado sobre .364 exacta;315 focales verdes,
