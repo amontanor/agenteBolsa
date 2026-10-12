@@ -95,3 +95,14 @@ No se certifica N3 ni se ha construido una imagen .368 de producción.
 5. Comparación cronológica principal cinco sesiones, secundarias tres/diez,
    costes/spread/slippage/rotación/gaps, control y SPY con flujos equivalentes.
    No existe aún un resultado económico atribuible a .368.
+
+
+## Identidad del checkpoint y continuidad
+
+HEAD funcional579dc2ad173454aa632cf26420e30742251a1c2d,
+tree612df176c1adc580293ed4e48172681826c9bec4, worktree limpio al commit.
+Reanudación de QA/corte de observación a las22:45Madrid del12-oct mediante
+automatización validar-mejoras-bolsa-tras-cierre actualizada (ACTIVE), pausándose
+al terminar el intento. No activa política, tamaños, adds ni score. Cualquier
+precondición ausente detiene el intento sin fabricar quietud. No cambia la
+revisión del12. Recibo EF99/release_oct12_0368_checkpoint.json.
