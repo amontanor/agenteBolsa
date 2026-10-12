@@ -1,3 +1,49 @@
+## QA ARM .368 cerrada — 12-oct-2026
+
+Smoke ARM exit0,0OOM,211 hashes exactos; política inactiva, cash reservado y
+protección desconocida bloqueada. Imagen candidata:
+sha256:71c5a4d9ca7fe4dd09db9bb5d7bcb491640343977b751649da9431c3f00e7a1e,
+tag agente-bolsa:0.4.368-arm64-qa, basada exactamente en imagen .364.
+Rednone,entrypointpython controlado,readonly,medioCPU/512MiB,DATA_DIR temporal,
+sin volúmenes productivos. Contenedor QA propio eliminado tras éxito; contexto
+auditado preservado /tmp/bolsa-0368-qa-45cy675q/qa_receipt.json.
+
+Primer build alcanzó300s y no produjo tag; diagnóstico no encontró procesos
+propios activos ni contenedor QA. Dockerfile válido/contexto6,49MB. Reintento
+acotado con pullfalse/log persistido reutilizó capas y terminó exit0. No se
+atribuye causa no probada al primer timeout; no afectó fuentes ni producción.
+Logs y recibos EF99/qa_oct12_arm_build_retry_diagnostic.json,
+EF99/release_oct12_0368_arm_qa.json. No repetir suite ni smoke ARM idénticos.
+
+QA completa:2964 passed,1 skipped preexistente,0 failed;Ruff/NUL/diff,
+configuración/smoke Windows y smoke ARM pasan. Cortar exige revalidar gates y
+garantizar imagen/config/hashes/rollback, doble salud75s y recursos/OOM600s.
+No activar tamaño/adds/score durante este corte: faltan sesiones y recibos.
+Producción aún .364; esta imagen candidata no constituye despliegue.
+
+## QA local .368 cerrada — 12-oct-2026
+
+Suite del árbol corregido:2964 passed,1 skipped preexistente,0 failed,exit0,
+798,46s sumados en reports. Skip test_pre_earnings_current_sqlite por histórico
+local unavailable; no se altera ni oculta. Causa de repetición:únicamente el
+test de calendario corregido, después de reproducir el fallo en base .364.
+Hashes de fuentes y tests intactos antes/después. No repetir esta suite salvo
+nueva causa/árbol. Ruff/diff/NUL511/configuración y smoke Windows aislados pasan.
+QAARM, imagen y aceptación operativa pendientes; no desplegado ni activo.
+Evidencia:EF99/release_oct12_0368_local_qa.json y
+EF99/oct12_0368_final_full_v6_clockfix.jsonl.
+
+Los cinco archivos protegidos coinciden byte a byte con release .364: no hace
+falta sellado ni nueva aprobación de cambios protegidos para este candidato.
+Tres diferencias adicionales agent_run/digest/storage frente al ZIP .364 son
+solo CRLF/LF; comparación normalizada idéntica, sin cambios de código. No se
+portó otra rama ni se añadieron optimizaciones ajenas.
+
+Nuevo intento18:08Madrid:marketopen,CIrunning ci_sched_71685d3f67bc desde18:04.
+No se interrumpieron jobs. Revalidación final en curso; no inferir quietud a partir
+de la terminación del pytest local. El corte y QAARM siguen condicionados a los
+gates del plan. La automatización22:45 debe consumir esta QA, no repetirla.
+
 ## Intento inmediato autorizado — 12-oct-2026
 
 Dictamen:precondition_not_met; no corte ni mutación de producción. Preflight
