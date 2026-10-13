@@ -488,7 +488,7 @@ def _persist_signal_outcome_captures(
         frame_by_symbol: dict[str, pd.DataFrame] = {}
         for row in _iter_signal_prediction_events(store, signals):
             if not validate_h_capture_event(row, expected_event_type=PREDICTION_EVENT_TYPE):
-                LOGGER.warning("Se descarta evento H inválido antes de observar outcome: %s", row.get("event_id"))
+                LOGGER.warning("Se descarta evento H invÃ¡lido antes de observar outcome: %s", row.get("event_id"))
                 continue
             prediction_event = row.get("payload")
             if not isinstance(prediction_event, dict):
@@ -524,7 +524,7 @@ def _persist_signal_outcome_captures(
                 LOGGER.exception("No se pudo persistir outcome prospectivo para %s", signal_id)
     except Exception:  # noqa: BLE001 - observation cannot block legacy outcomes.
         observation_failed = True
-        LOGGER.exception("No se pudo recorrer capturas prospectivas de señales")
+        LOGGER.exception("No se pudo recorrer capturas prospectivas de seÃ±ales")
     return not observation_failed
 
 
@@ -1622,7 +1622,7 @@ def update_signal_outcomes(
             warnings.append("prospective_capture_observation_failed")
     except Exception:  # noqa: BLE001 - prospective telemetry remains fail-open.
         warnings.append("prospective_capture_observation_failed")
-        LOGGER.exception("Falló observación prospectiva; se conserva outcome legacy")
+        LOGGER.exception("FallÃ³ observaciÃ³n prospectiva; se conserva outcome legacy")
     return {"updated": updated, "signals": len(signals), "symbols": len(symbols), "warnings": warnings[:20],
             "bars_trimmed_universe": bars_trimmed, "last_completed_session": last_completed,
             "session_seal_degraded": seal_degraded}
@@ -1639,6 +1639,8 @@ def _bucket(value: Any, buckets: list[tuple[str, float, float]]) -> str:
 
 
 def _indicator_tags(signal: dict[str, Any]) -> list[str]:
+    if isinstance(signal, _LearningMetricSignal):
+        return signal.indicator_tags
     features = signal.get("features", {}) or {}
     chart = features.get("chart_patterns", {}) or {}
     tags = [
@@ -1653,6 +1655,8 @@ def _indicator_tags(signal: dict[str, Any]) -> list[str]:
 
 
 def _combo_key(signal: dict[str, Any]) -> str:
+    if isinstance(signal, _LearningMetricSignal):
+        return signal.combination
     features = signal.get("features", {}) or {}
     chart = features.get("chart_patterns", {}) or {}
     score = _bucket(features.get("score"), [("lt12", -999, 12), ("12_14", 12, 15), ("gte15", 15, 999)])
@@ -1668,6 +1672,8 @@ def _combo_key(signal: dict[str, Any]) -> str:
 
 
 def _setup_key(signal: dict[str, Any]) -> str:
+    if isinstance(signal, _LearningMetricSignal):
+        return signal.setup
     features = signal.get("features", {}) or {}
     if bool(features.get("event_momentum_long")):
         return "event_momentum"
@@ -1698,11 +1704,85 @@ def _resolved_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+class _LearningMetricSignal(dict[str, Any]):
+    """Private projection: identity is verified before discarding large carriers."""
+
+    agent_identity: tuple[dict[str, Any] | None, str, str]
+    same_cycle_control: bool
+    legacy_unverified: bool
+    lineage: dict[str, str | None]
+    indicator_tags: list[str]
+    combination: str
+    setup: str
+
+
+def _compact_learning_metric_signal(signal: dict[str, Any]) -> _LearningMetricSignal:
+    # Evaluate original carriers first, including conflicts in unused contract fields.
+    contract, status, role = _agent_contract_from_signal(signal)
+    lineage = _lineage_for_row(signal)
+    control = _control_is_same_cycle_verified(signal, contract)
+    legacy = _is_legacy_unverified(signal)
+    features = signal.get("features", {}) or {}
+    # Preserve legacy malformed-feature errors before projecting valid feature maps.
+    indicator_tags = _indicator_tags(signal)
+    combination = _combo_key(signal)
+    setup = _setup_key(signal)
+    feature_keys = ("direction", "position_direction", "exit_position_direction", "selected_for_llm")
+    projected_features = {key: features[key] for key in feature_keys if key in features}
+    outcome = signal.get("outcome") or {}
+    outcome_keys = ("verdict", "source", "mfe_10d", "mae_10d", *(f"return_{h}d" for h in HORIZONS))
+    projected_outcome = {key: outcome[key] for key in outcome_keys if key in outcome}
+    maturity = outcome.get("matured_horizons")
+    if "matured_horizons" in outcome:
+        projected_outcome["matured_horizons"] = (
+            {f"{h}d": maturity[f"{h}d"] for h in HORIZONS if f"{h}d" in maturity}
+            if isinstance(maturity, dict) else maturity
+        )
+    gate = signal.get("gate") if isinstance(signal.get("gate"), dict) else {}
+    projected_gate: dict[str, Any] = {}
+    if any(bool(value) for value in gate.values()):
+        projected_gate["observed"] = True
+    execution = _execution_payload(signal)
+    if execution is not None:
+        projected_gate["execution"] = {
+            key: execution[key] for key in ("signal_id", "status") if key in execution
+        }
+        # Stage feedback distinguishes an empty execution dict from an observed one.
+        if execution and not projected_gate["execution"]:
+            projected_gate["execution"]["observed"] = True
+    compact = _LearningMetricSignal(
+        {key: signal[key] for key in ("signal_id", "source_run_id", "decision", "direction") if key in signal},
+        features=projected_features, gate=projected_gate, outcome=projected_outcome,
+    )
+    if contract is not None:
+        keys = (
+            "schema_version", "agent_name", "canonical_agent_id", "agent_run_id", "cycle_id",
+            "execution_kind", "decision_source", "provider", "model", "parent_run_id", "retry_of",
+            "fallback_reason", "llm_provider", "llm_effective_model",
+        )
+        projected_contract = {key: contract[key] for key in keys if key in contract}
+        for field, fields in (("fallback", ("used", "reason")), ("effective_identity", ("provider", "model"))):
+            value = contract.get(field)
+            if isinstance(value, dict):
+                projected_contract[field] = {key: value[key] for key in fields if key in value}
+        contract = projected_contract
+    compact.agent_identity = contract, status, role
+    compact.lineage = lineage
+    compact.same_cycle_control = control
+    compact.legacy_unverified = legacy
+    compact.indicator_tags = indicator_tags
+    compact.combination = combination
+    compact.setup = setup
+    return compact
+
+
 def _agent_contract_from_signal(
     signal: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, str, str]:
     """Read exact producer/decision carriers; never infer from symbol/source."""
 
+    if isinstance(signal, _LearningMetricSignal):
+        return signal.agent_identity
     features = signal.get("features") if isinstance(signal.get("features"), dict) else {}
     producer_candidates = [
         item
@@ -1878,6 +1958,8 @@ def _control_is_same_cycle_verified(
     signal: dict[str, Any],
     contract: dict[str, Any] | None,
 ) -> bool:
+    if isinstance(signal, _LearningMetricSignal):
+        return signal.same_cycle_control
     if not _control_is_verified_exact(signal):
         return False
     features = signal.get("features") if isinstance(signal.get("features"), dict) else {}
@@ -1890,6 +1972,8 @@ def _control_is_same_cycle_verified(
 
 
 def _is_legacy_unverified(signal: dict[str, Any]) -> bool:
+    if isinstance(signal, _LearningMetricSignal):
+        return signal.legacy_unverified
     features = signal.get("features") if isinstance(signal.get("features"), dict) else {}
     gate = signal.get("gate") if isinstance(signal.get("gate"), dict) else {}
     execution = gate.get("execution") if isinstance(gate.get("execution"), dict) else {}
@@ -1942,6 +2026,9 @@ def _counter_values(values: list[str | None]) -> dict[str, int]:
 
 def _lineage_for_row(row: dict[str, Any]) -> dict[str, str | None]:
     """Extract only explicit, exact carriers for a feedback hypothesis."""
+
+    if isinstance(row, _LearningMetricSignal):
+        return row.lineage
 
     features = row.get("features") if isinstance(row.get("features"), dict) else {}
     gate = row.get("gate") if isinstance(row.get("gate"), dict) else {}
@@ -3517,7 +3604,14 @@ def _signal_stat(items: list[dict[str, Any]], *, key: str | None = None) -> dict
 
 
 def build_learning_status(store: Store, *, since_date: str = "2026-04-01", limit: int = 1000) -> dict[str, Any]:
-    signals = store.signal_outcomes(limit=limit, since_date=since_date)
+    reader = getattr(store, "iter_signal_outcomes", None)
+    incoming = reader(limit=limit, since_date=since_date) if callable(reader) else store.signal_outcomes(limit=limit, since_date=since_date)
+    try:
+        signals = [_compact_learning_metric_signal(signal) for signal in incoming]
+    finally:
+        close = getattr(incoming, "close", None)
+        if callable(close):
+            close()
     by_tag: dict[str, list[dict[str, Any]]] = defaultdict(list)
     by_combo: dict[str, list[dict[str, Any]]] = defaultdict(list)
     by_setup: dict[str, list[dict[str, Any]]] = defaultdict(list)

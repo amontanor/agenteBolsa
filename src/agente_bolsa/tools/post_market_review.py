@@ -539,13 +539,23 @@ def _session_candidate_attribution(
     are retained as raw evidence but never promoted to a verified candidate.
     """
 
-    all_recommendations = store.trade_recommendations(limit=100000)
-    recommendations = [
-        item
-        for item in all_recommendations
-        if str(item.get("created_at") or "")[:10] == session_date
-        or session_date in str(((item.get("payload") or {}).get("decision_lineage") or {}).get("signal_id") or "")
-    ]
+    reader = getattr(store, "iter_trade_recommendations", None)
+    incoming = reader(limit=100000) if callable(reader) else store.trade_recommendations(limit=100000)
+    recommendations = []
+    try:
+        for item in incoming:
+            payload = item.get("payload") or {}
+            lineage = payload.get("decision_lineage") or {}
+            if str(item.get("created_at") or "")[:10] == session_date or session_date in str(lineage.get("signal_id") or ""):
+                recommendations.append({
+                    key: item.get(key) for key in ("recommendation_id", "cycle_id", "symbol", "action")
+                } | {"payload": {"decision_lineage": {
+                    key: lineage[key] for key in ("candidate_id", "signal_id") if key in lineage
+                }}})
+    finally:
+        close = getattr(incoming, "close", None)
+        if callable(close):
+            close()
     rec_by_key: dict[str, dict[str, Any]] = {}
     legacy_rec_count = 0
     for item in recommendations:

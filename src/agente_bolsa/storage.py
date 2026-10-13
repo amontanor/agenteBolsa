@@ -846,7 +846,7 @@ def _prepare_learning_observation_parameters(
     item: dict[str, Any],
     now: str,
 ) -> tuple[tuple[Any, ...], int]:
-    """Normaliza una observación antes de abrir la transacción de escritura."""
+    """Normaliza una observaciÃ³n antes de abrir la transacciÃ³n de escritura."""
 
     parameters = (
         item["observation_id"],
@@ -882,7 +882,7 @@ def _prepare_learning_observation_parameters(
 
 
 def _execute_learning_observation_upsert(cursor: sqlite3.Cursor, parameters: tuple[Any, ...]) -> None:
-    """Ejecuta solo el SQL sobre una conexión ya abierta."""
+    """Ejecuta solo el SQL sobre una conexiÃ³n ya abierta."""
     cursor.execute(
         """
         INSERT INTO learning_observations (
@@ -934,7 +934,7 @@ def _merge_json_dicts(existing: dict[str, Any], incoming: dict[str, Any]) -> dic
 
 
 def _json_safe(value: Any) -> Any:
-    """Normaliza NaN/Infinity solo para payloads nuevos que exigen JSON válido."""
+    """Normaliza NaN/Infinity solo para payloads nuevos que exigen JSON vÃ¡lido."""
 
     if isinstance(value, float) and not math.isfinite(value):
         return None
@@ -1424,10 +1424,10 @@ class Store:
         Es la ruta para contratos nuevos que requieren historial durable. La
         escritura es corta, idempotente para el mismo payload y publica un
         evento de conflicto si el mismo ``event_id`` llega con otro contenido.
-        ``lock_timeout_seconds`` permite a la telemetría shadow fallar abierto
-        sin esperar el timeout de producción cuando SQLite está bloqueado.
+        ``lock_timeout_seconds`` permite a la telemetrÃ­a shadow fallar abierto
+        sin esperar el timeout de producciÃ³n cuando SQLite estÃ¡ bloqueado.
         ``idempotent_on_content_hash`` se reserva para contratos cuyo hash
-        excluye campos de observación volátiles.
+        excluye campos de observaciÃ³n volÃ¡tiles.
         """
         encoded = _dumps(payload)
         candidate_hash = str(payload.get("content_hash") or "")
@@ -3557,6 +3557,37 @@ class Store:
             for row in rows
         ]
 
+    def iter_trade_recommendations(self, *, cycle_id: str | None = None, limit: int = 50000, batch_size: int = 64) -> Iterator[dict[str, Any]]:
+        query = """
+            SELECT recommendation_id, cycle_id, symbol, action, confidence,
+                   payload_json, created_at
+            FROM trade_recommendations
+            WHERE 1 = 1
+        """
+        params: list[Any] = []
+        if cycle_id:
+            query += " AND cycle_id = ?"
+            params.append(cycle_id)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(max(1, int(limit)))
+        with closing(self._decision_context_read_connection()) as conn:
+            with closing(conn.execute(query, params)) as cursor:
+                while True:
+                    rows = cursor.fetchmany(max(1, int(batch_size)))
+                    if not rows:
+                        break
+                    for row in rows:
+                        yield {
+                            "recommendation_id": row["recommendation_id"],
+                            "cycle_id": row["cycle_id"],
+                            "symbol": row["symbol"],
+                            "action": row["action"],
+                            "confidence": row["confidence"],
+                            "payload": json.loads(row["payload_json"] or "{}"),
+                            "created_at": row["created_at"],
+                        }
+
+
     def signal_outcome_by_id(self, signal_id: str) -> dict[str, Any] | None:
         with self.connect() as conn:
             row = conn.execute(
@@ -4984,8 +5015,8 @@ class Store:
             result["received"] += len(chunk)
             result["rows_received"] = result["received"]
             try:
-                # La construcciÃ³n y normalizaciÃ³n completa del chunk ocurre
-                # antes de abrir conexiÃ³n o iniciar BEGIN IMMEDIATE.
+                # La construcciÃƒÂ³n y normalizaciÃƒÂ³n completa del chunk ocurre
+                # antes de abrir conexiÃƒÂ³n o iniciar BEGIN IMMEDIATE.
                 prepared_chunk = [
                     _prepare_learning_observation_parameters(item, _utc_iso())
                     for item in chunk
@@ -5338,6 +5369,63 @@ class Store:
             }
             for row in rows
         ]
+
+    def iter_signal_outcomes(
+        self,
+        *,
+        limit: int = 500,
+        since_date: str | None = None,
+        include_lab_book: bool = False,
+        include_learning_experiment: bool = False,
+        sources: list[str] | None = None,
+        batch_size: int = 64,
+    ) -> Iterator[dict[str, Any]]:
+        query = """
+            SELECT signal_id, source_run_id, source, symbol, signal_date,
+                   decision, features_json, gate_json, outcome_json,
+                   created_at, updated_at
+            FROM signal_outcomes
+            WHERE 1 = 1
+        """
+        params: list[Any] = []
+        excluded = excluded_signal_sources(
+            include_lab_book=include_lab_book,
+            include_learning_experiment=include_learning_experiment,
+        )
+        if excluded:
+            placeholders = ",".join("?" for _ in excluded)
+            query += f" AND coalesce(source, '') NOT IN ({placeholders})"
+            params.extend(excluded)
+        if since_date:
+            query += " AND signal_date >= ?"
+            params.append(since_date)
+        if sources:
+            placeholders = ",".join("?" for _ in sources)
+            query += f" AND coalesce(source, '') IN ({placeholders})"
+            params.extend(str(source or "") for source in sources)
+        query += " ORDER BY signal_date DESC, created_at DESC LIMIT ?"
+        params.append(limit)
+        with closing(self._decision_context_read_connection()) as conn:
+            with closing(conn.execute(query, params)) as cursor:
+                while True:
+                    rows = cursor.fetchmany(max(1, int(batch_size)))
+                    if not rows:
+                        break
+                    for row in rows:
+                        yield {
+                            "signal_id": row["signal_id"],
+                            "source_run_id": row["source_run_id"],
+                            "source": row["source"],
+                            "symbol": row["symbol"],
+                            "signal_date": row["signal_date"],
+                            "decision": row["decision"],
+                            "features": json.loads(row["features_json"] or "{}"),
+                            "gate": json.loads(row["gate_json"] or "{}"),
+                            "outcome": json.loads(row["outcome_json"] or "{}"),
+                            "created_at": row["created_at"],
+                            "updated_at": row["updated_at"],
+                        }
+
 
     def upsert_promotion_window(self, item: dict[str, Any]) -> None:
         now = _utc_iso()
@@ -5933,14 +6021,14 @@ class Store:
     def upsert_performance_daily(self, item: dict[str, Any]) -> None:
         # Las filas nuevas del contrato P-L40B usan una ruta conflict-safe. La
         # ruta legacy se conserva intacta para no reescribir ni reinterpretar
-        # las observaciones históricas.
+        # las observaciones histÃ³ricas.
         if isinstance(item.get("performance_benchmark"), dict) or isinstance(
             (item.get("payload") or {}).get("performance_benchmark"), dict
         ):
             self.upsert_performance_benchmark(item)
             return
-        # Un caller legacy no puede borrar el bloque canónico de una fila ya
-        # instrumentada. Se permite añadir/actualizar claves legacy, pero se
+        # Un caller legacy no puede borrar el bloque canÃ³nico de una fila ya
+        # instrumentada. Se permite aÃ±adir/actualizar claves legacy, pero se
         # conserva literalmente ``performance_benchmark`` y sus escalares.
         session_date = str(item.get("session_date") or "")
         if session_date:
@@ -6005,11 +6093,11 @@ class Store:
             )
 
     def upsert_performance_benchmark(self, item: dict[str, Any]) -> dict[str, Any]:
-        """Persiste una observación P-L40B sin sobrescritura silenciosa.
+        """Persiste una observaciÃ³n P-L40B sin sobrescritura silenciosa.
 
-        No añade columnas ni tablas: el contrato vive dentro de ``payload_json``.
-        Una fila legacy existente para la misma sesión se conserva y se informa
-        como conflicto; la revisión explícita queda fuera de este lote.
+        No aÃ±ade columnas ni tablas: el contrato vive dentro de ``payload_json``.
+        Una fila legacy existente para la misma sesiÃ³n se conserva y se informa
+        como conflicto; la revisiÃ³n explÃ­cita queda fuera de este lote.
         """
 
         benchmark = item.get("performance_benchmark") or (item.get("payload") or {}).get("performance_benchmark")

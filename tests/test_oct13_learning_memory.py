@@ -139,9 +139,45 @@ def test_streaming_report_peak_does_not_retain_large_payloads():
     assert peak < 12_000_000, peak
 
 
-def test_iterators_match_legacy_selection_and_close_cursor(tmp_path):
+def test_iterators_match_legacy_selection_and_close_cursor(tmp_path, monkeypatch):
     store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
     store.ensure_schema()
+    original_reader = store._decision_context_read_connection
+    opened = []
+
+    class Cursor:
+        def __init__(self, cursor):
+            self.cursor = cursor
+            self.closed = False
+
+        def fetchmany(self, batch_size):
+            return self.cursor.fetchmany(batch_size)
+
+        def close(self):
+            self.closed = True
+            self.cursor.close()
+
+    class Connection:
+        def __init__(self):
+            self.connection = original_reader()
+            assert self.connection.execute("PRAGMA query_only").fetchone()[0] == 1
+            self.closed = False
+            self.cursor = None
+
+        def execute(self, query, params):
+            self.cursor = Cursor(self.connection.execute(query, params))
+            return self.cursor
+
+        def close(self):
+            self.closed = True
+            self.connection.close()
+
+    def tracked_reader():
+        connection = Connection()
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(store, "_decision_context_read_connection", tracked_reader)
     with store.connect() as conn:
         for i, source in enumerate(["scan", "lab_book", "learning_experiment", "scan"]):
             conn.execute("INSERT INTO signal_outcomes(signal_id, source_run_id, source, symbol, signal_date, decision, features_json, gate_json, outcome_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (str(i), "run", source, "AAA", "2026-10-12", "candidate", '{"score":1}', '{}', '{}', f"2026-10-12T00:00:0{i}", "2026-10-12"))
@@ -159,7 +195,49 @@ def test_iterators_match_legacy_selection_and_close_cursor(tmp_path):
     next(reader)
     reader.close()
     store.close_read_connection()
-    # A closed/failed cursor must not retain a read lock blocking an exclusive writer.
+    assert len(opened) == 9
+    assert all(connection.closed and connection.cursor.closed for connection in opened)
+    # The exhausted, failed and explicitly closed generators release owned resources.
     with store.connect() as conn:
         conn.execute("BEGIN EXCLUSIVE")
         conn.rollback()
+
+
+def test_producer_conflict_in_unused_evidence_remains_conflict():
+    row = next(row for row in metric_rows() if "producer_agent_contract" in row["features"])
+    row["gate"]["execution"]["producer_agent_contract"]["unused_evidence"] = "different"
+    compact = learning._compact_learning_metric_signal(row)
+    assert learning._agent_contract_from_signal(compact)[1:] == ("conflict", "producer")
+    assert learning.build_agent_learning_scoreboard([compact]) == learning.build_agent_learning_scoreboard([row])
+
+
+def test_report_closes_reader_when_projection_fails():
+    closed = []
+
+    def reader(**_):
+        try:
+            yield {"features": {"chart_patterns": ["malformed"]}, "outcome": {}, "decision": "candidate"}
+        finally:
+            closed.append(True)
+
+    with pytest.raises(AttributeError):
+        learning.build_learning_status(SimpleNamespace(iter_signal_outcomes=reader))
+    assert closed == [True]
+
+
+def test_recommendation_stream_does_not_retain_unused_payloads(monkeypatch):
+    monkeypatch.setattr(review, "_session_event_payloads", lambda *_: [])
+
+    def reader(**kwargs):
+        assert kwargs == {"limit": 100000}
+        for i in range(600):
+            yield {"recommendation_id": f"r-{i}", "cycle_id": "c", "symbol": "AAA", "action": "buy", "created_at": "2026-10-12", "payload": {"decision_lineage": {"signal_id": f"s-{i}"}, "large": "x" * 100000}}
+
+    tracemalloc.start()
+    try:
+        report = review._session_candidate_attribution(SimpleNamespace(iter_trade_recommendations=reader), "2026-10-12", [])
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert report["recommendations_raw"] == report["recommendations_unique"] == 600
+    assert peak < 4_000_000, peak
