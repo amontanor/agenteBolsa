@@ -1,0 +1,2891 @@
+{
+  "learning": {
+    "metric_scope": "signal",
+    "portfolio_metrics": {
+      "status": "unavailable",
+      "reason": "portfolio_replay_required",
+      "sample_unit": "portfolio",
+      "required_inputs": [
+        "fills",
+        "marks",
+        "cash_flows",
+        "costs"
+      ]
+    },
+    "since_date": "2026-04-01",
+    "signals": 42,
+    "resolved": 37,
+    "pending": 5,
+    "maturity": {
+      "resolved_ratio": 0.881,
+      "horizon_coverage": {
+        "1d": 36,
+        "3d": 36,
+        "5d": 36,
+        "10d": 36
+      },
+      "enough_for_rules": false,
+      "note": "usar 1d/3d para aprendizaje temprano y 5d/10d para validacion mas fuerte; no promover reglas sin evidencia suficiente"
+    },
+    "decisions": {
+      "candidate": 7,
+      "approved_buy": 7,
+      "blocked_entry_quality": 7,
+      "blocked_backtest": 7,
+      "executed_buy": 7,
+      "": 7
+    },
+    "verdicts": {
+      "pending": 11,
+      "winner_5d": 11,
+      "loser_5d": 10,
+      "null": 10
+    },
+    "agent_learning": {
+      "schema_version": "p-l104.agent-learning.v1",
+      "metric_scope": "attributed_agent",
+      "signal_metrics": {
+        "sample_unit": "signal",
+        "source": "attributed_agent_outcomes"
+      },
+      "portfolio_metrics": {
+        "status": "unavailable",
+        "reason": "portfolio_replay_required",
+        "sample_unit": "portfolio",
+        "required_inputs": [
+          "fills",
+          "marks",
+          "cash_flows",
+          "costs"
+        ]
+      },
+      "status": "partial",
+      "quality_status": "not_evaluable",
+      "quality_reason": "same_cycle_control_and_promotion_not_established",
+      "independent_validation": null,
+      "measurement_status": "not_evaluable",
+      "maturity": {
+        "horizon": "10d",
+        "status": "partial",
+        "matured": 8,
+        "evaluated": 4,
+        "immature": 8,
+        "maturity_unavailable": 8,
+        "return_unavailable": 2,
+        "direction_unavailable": 1
+      },
+      "same_cycle_control": {
+        "horizon": "10d",
+        "status": "partial",
+        "matured": 8,
+        "verified": 6,
+        "coverage": 0.75
+      },
+      "collection": {
+        "returned_rows": 42,
+        "total_rows": null,
+        "limit": null,
+        "limit_reached": false,
+        "completeness": "unknown",
+        "window": null,
+        "as_of": null
+      },
+      "denominators": {
+        "signals_total": 42,
+        "attributed": 24,
+        "producer_attributed": 6,
+        "decision_attributed": 18,
+        "unavailable_attribution": 6,
+        "conflicting_attribution": 6,
+        "attribution_coverage": 0.5714,
+        "fallback": 6,
+        "llm": 6,
+        "deterministic": 12,
+        "execution_kinds": {
+          "deterministic": 12,
+          "fallback": 6,
+          "llm": 6
+        },
+        "providers": {
+          "provider": 18
+        },
+        "models": {
+          "model": 18
+        },
+        "fallback_reasons": {
+          "funds": 6
+        },
+        "parent_run_ids": {
+          "parent": 9
+        },
+        "retry_of": {
+          "retry": 14
+        },
+        "selected": 11,
+        "not_selected": 11,
+        "selection_unavailable": 20,
+        "gate": 42,
+        "execution_verified": 36,
+        "legacy_unverified": 6,
+        "matured": 14,
+        "attributed_matured": 8,
+        "matured_with_control": 8,
+        "attributed_matured_with_control": 6
+      },
+      "agents": [
+        {
+          "agent_name": "agent-0",
+          "agent_role": "decision",
+          "metric_scope": "attributed_agent",
+          "agent_run_ids": [
+            "run-3",
+            "run-4",
+            "run-6"
+          ],
+          "cycles": [
+            "cycle-1",
+            "cycle-2",
+            "cycle-3",
+            "cycle-4"
+          ],
+          "signal_ids": [
+            "signal-18",
+            "signal-24",
+            "signal-27",
+            "signal-3",
+            "signal-39",
+            "signal-6"
+          ],
+          "signals": 6,
+          "decisions": {
+            "blocked_backtest": 3,
+            "candidate": 3
+          },
+          "decision_sources": {
+            "llm": 6
+          },
+          "execution_kinds": {
+            "llm": 6
+          },
+          "providers": {
+            "provider": 6
+          },
+          "models": {
+            "model": 6
+          },
+          "parent_run_ids": {
+            "parent": 3
+          },
+          "retry_of": {
+            "retry": 5
+          },
+          "fallback_reasons": {},
+          "matured": 0,
+          "matured_with_control": 0,
+          "attributed_matured": 0,
+          "attributed_matured_with_control": 0,
+          "selected": 1,
+          "not_selected": 0,
+          "selection_unavailable": 5,
+          "gate": 6,
+          "execution_verified": 4,
+          "execution_statuses": {
+            "submitted": 6
+          },
+          "comparable_control_sets": {
+            "verified": 4,
+            "total": 6,
+            "coverage": 0.6667
+          },
+          "lineage": {
+            "signal_ids": [
+              "signal-18",
+              "signal-24",
+              "signal-27",
+              "signal-3",
+              "signal-39",
+              "signal-6"
+            ],
+            "source_run_ids": [
+              "scan-0",
+              "scan-2",
+              "scan-3"
+            ],
+            "agent_run_ids": [
+              "run-3",
+              "run-4",
+              "run-6"
+            ],
+            "cycle_ids": [
+              "cycle-1",
+              "cycle-2",
+              "cycle-3",
+              "cycle-4"
+            ],
+            "recommendation_ids": [
+              "rec-18",
+              "rec-24",
+              "rec-27",
+              "rec-3",
+              "rec-39",
+              "rec-6"
+            ],
+            "plan_ids": [
+              "plan-18",
+              "plan-24",
+              "plan-27",
+              "plan-3",
+              "plan-39",
+              "plan-6"
+            ],
+            "broker_order_ids": [
+              "order-18",
+              "order-24",
+              "order-27",
+              "order-3",
+              "order-39",
+              "order-6"
+            ],
+            "as_of": null,
+            "window": null
+          },
+          "stage_feedback": {
+            "selection": {
+              "selected": 1,
+              "not_selected": 0,
+              "unavailable": 5
+            },
+            "decision": {
+              "by_decision": {
+                "blocked_backtest": 3,
+                "candidate": 3
+              }
+            },
+            "gate": {
+              "blocked_backtest": 3,
+              "execution_verified": 4,
+              "observed": 6
+            },
+            "execution": {
+              "by_status": {
+                "submitted": 6
+              },
+              "verified_signal_ids": [
+                "signal-18",
+                "signal-27",
+                "signal-39",
+                "signal-6"
+              ],
+              "unverified_signal_ids": []
+            },
+            "hypotheses": [
+              {
+                "hypothesis_id": "p-l104.selection.selection_identity_unavailable",
+                "legacy_hypothesis_id": "p-l102.selection.selection_identity_unavailable",
+                "stage": "selection",
+                "reason_code": "selection_identity_unavailable",
+                "count": 5,
+                "signal_ids": [
+                  "signal-18",
+                  "signal-27",
+                  "signal-3",
+                  "signal-39",
+                  "signal-6"
+                ],
+                "lineage": {
+                  "signal_ids": [
+                    "signal-18",
+                    "signal-27",
+                    "signal-3",
+                    "signal-39",
+                    "signal-6"
+                  ],
+                  "source_run_ids": [
+                    "scan-2",
+                    "scan-3"
+                  ],
+                  "agent_run_ids": [
+                    "run-3",
+                    "run-4",
+                    "run-6"
+                  ],
+                  "cycle_ids": [
+                    "cycle-1",
+                    "cycle-2",
+                    "cycle-3",
+                    "cycle-4"
+                  ],
+                  "recommendation_ids": [
+                    "rec-18",
+                    "rec-27",
+                    "rec-3",
+                    "rec-39",
+                    "rec-6"
+                  ],
+                  "plan_ids": [
+                    "plan-18",
+                    "plan-27",
+                    "plan-3",
+                    "plan-39",
+                    "plan-6"
+                  ],
+                  "broker_order_ids": [
+                    "order-18",
+                    "order-27",
+                    "order-3",
+                    "order-39",
+                    "order-6"
+                  ],
+                  "as_of": null,
+                  "window": null
+                },
+                "status": "observational",
+                "requires": "matured_outcome_and_same_cycle_control"
+              },
+              {
+                "hypothesis_id": "p-l104.gate.blocked_backtest",
+                "legacy_hypothesis_id": "p-l102.gate.blocked_backtest",
+                "stage": "gate",
+                "reason_code": "blocked_backtest",
+                "count": 3,
+                "signal_ids": [
+                  "signal-27",
+                  "signal-3",
+                  "signal-39"
+                ],
+                "lineage": {
+                  "signal_ids": [
+                    "signal-27",
+                    "signal-3",
+                    "signal-39"
+                  ],
+                  "source_run_ids": [
+                    "scan-3"
+                  ],
+                  "agent_run_ids": [
+                    "run-3",
+                    "run-4",
+                    "run-6"
+                  ],
+                  "cycle_ids": [
+                    "cycle-2",
+                    "cycle-3",
+                    "cycle-4"
+                  ],
+                  "recommendation_ids": [
+                    "rec-27",
+                    "rec-3",
+                    "rec-39"
+                  ],
+                  "plan_ids": [
+                    "plan-27",
+                    "plan-3",
+                    "plan-39"
+                  ],
+                  "broker_order_ids": [
+                    "order-27",
+                    "order-3",
+                    "order-39"
+                  ],
+                  "as_of": null,
+                  "window": null
+                },
+                "status": "observational",
+                "requires": "matured_outcome_and_same_cycle_control"
+              }
+            ]
+          },
+          "horizons": {
+            "1d": {
+              "matured": 0,
+              "immature": 6,
+              "maturity_unavailable": 0,
+              "return_unavailable": 0,
+              "direction_unavailable": 0,
+              "excluded_trade_memory": 0,
+              "eligible_direction_corrected": 0,
+              "evaluated": 0,
+              "hits": 0,
+              "hit_rate": null,
+              "hit_rate_net_10bps": null,
+              "signed_gross_return": null,
+              "net_return_10bps": null,
+              "gross_gt_1pct": {
+                "hits": 0,
+                "rate": null
+              },
+              "avg_return": null,
+              "directions": {}
+            },
+            "3d": {
+              "matured": 6,
+              "immature": 0,
+              "maturity_unavailable": 0,
+              "return_unavailable": 0,
+              "direction_unavailable": 4,
+              "excluded_trade_memory": 0,
+              "eligible_direction_corrected": 2,
+              "evaluated": 2,
+              "hits": 1,
+              "hit_rate": 0.5,
+              "hit_rate_net_10bps": 0.5,
+              "signed_gross_return": -0.01,
+              "net_return_10bps": -0.011,
+              "gross_gt_1pct": {
+                "hits": 1,
+                "rate": 0.5
+              },
+              "avg_return": -0.01,
+              "directions": {
+                "exit_short": 1,
+                "long": 1
+              }
+            },
+            "5d": {
+              "matured": 0,
+              "immature": 0,
+              "maturity_unavailable": 6,
+              "return_unavailable": 0,
+              "direction_unavailable": 0,
+              "excluded_trade_memory": 0,
+              "eligible_direction_corrected": 0,
+              "evaluated": 0,
+              "hits": 0,
+              "hit_rate": null,
+              "hit_rate_net_10bps": null,
+              "signed_gross_return": null,
+              "net_return_10bps": null,
+              "gross_gt_1pct": {
+                "hits": 0,
+                "rate": null
+              },
+              "avg_return": null,
+              "directions": {}
+            },
+            "10d": {
+              "matured": 0,
+              "immature": 6,
+              "maturity_unavailable": 0,
+              "return_unavailable": 0,
+              "direction_unavailable": 0,
+              "excluded_trade_memory": 0,
+              "eligible_direction_corrected": 0,
+              "evaluated": 0,
+              "hits": 0,
+              "hit_rate": null,
+              "hit_rate_net_10bps": null,
+              "signed_gross_return": null,
+              "net_return_10bps": null,
+              "gross_gt_1pct": {
+                "hits": 0,
+                "rate": null
+              },
+              "avg_return": null,
+              "directions": {}
+            }
+          }
+        },
+        {
+          "agent_name": "agent-1",
+          "agent_role": "decision",
+          "metric_scope": "attributed_agent",
+          "agent_run_ids": [
+            "run-3",
+            "run-4",
+            "run-6"
+          ],
+          "cycles": [
+            "cycle-0",
+            "cycle-1",
+            "cycle-3",
+            "cycle-4"
+          ],
+          "signal_ids": [
+            "signal-10",
+            "signal-13",
+            "signal-25",
+            "signal-31",
+            "signal-34",
+            "signal-4"
+          ],
+          "signals": 6,
+          "decisions": {
+            "approved_buy": 3,
+            "executed_buy": 3
+          },
+          "decision_sources": {
+            "fallback": 6
+          },
+          "execution_kinds": {
+            "fallback": 6
+          },
+          "providers": {
+            "provider": 6
+          },
+          "models": {
+            "model": 6
+          },
+          "parent_run_ids": {
+            "parent": 3
+          },
+          "retry_of": {
+            "retry": 5
+          },
+          "fallback_reasons": {
+            "funds": 6
+          },
+          "matured": 0,
+          "matured_with_control": 0,
+          "attributed_matured": 0,
+          "attributed_matured_with_control": 0,
+          "selected": 1,
+          "not_selected": 2,
+          "selection_unavailable": 3,
+          "gate": 6,
+          "execution_verified": 4,
+          "execution_statuses": {
+            "submitted": 6
+          },
+          "comparable_control_sets": {
+            "verified": 4,
+            "total": 6,
+            "coverage": 0.6667
+          },
+          "lineage": {
+            "signal_ids": [
+              "signal-10",
+              "signal-13",
+              "signal-25",
+              "signal-31",
+              "signal-34",
+              "signal-4"
+            ],
+            "source_run_ids": [
+              "scan-0",
+              "scan-1",
+              "scan-2",
+              "scan-3"
+            ],
+            "agent_run_ids": [
+              "run-3",
+              "run-4",
+              "run-6"
+            ],
+            "cycle_ids": [
+              "cycle-0",
+              "cycle-1",
+              "cycle-3",
+              "cycle-4"
+            ],
+            "recommendation_ids": [
+              "rec-10",
+              "rec-13",
+              "rec-25",
+              "rec-31",
+              "rec-34",
+              "rec-4"
+            ],
+            "plan_ids": [
+              "plan-10",
+              "plan-13",
+              "plan-25",
+              "plan-31",
+              "plan-34",
+              "plan-4"
+            ],
+            "broker_order_ids": [
+              "order-10",
+              "order-13",
+              "order-25",
+              "order-31",
+              "order-34",
+              "order-4"
+            ],
+            "as_of": null,
+            "window": null
+          },
+          "stage_feedback": {
+            "selection": {
+              "selected": 1,
+              "not_selected": 2,
+              "unavailable": 3
+            },
+            "decision": {
+              "by_decision": {
+                "approved_buy": 3,
+                "executed_buy": 3
+              }
+            },
+            "gate": {
+              "execution_verified": 4,
+              "observed": 6
+            },
+            "execution": {
+              "by_status": {
+                "submitted": 6
+              },
+              "verified_signal_ids": [
+                "signal-13",
+                "signal-25",
+                "signal-34",
+                "signal-4"
+              ],
+              "unverified_signal_ids": []
+            },
+            "hypotheses": [
+              {
+                "hypothesis_id": "p-l104.selection.selection_identity_unavailable",
+                "legacy_hypothesis_id": "p-l102.selection.selection_identity_unavailable",
+                "stage": "selection",
+                "reason_code": "selection_identity_unavailable",
+                "count": 3,
+                "signal_ids": [
+                  "signal-10",
+                  "signal-31",
+                  "signal-34"
+                ],
+                "lineage": {
+                  "signal_ids": [
+                    "signal-10",
+                    "signal-31",
+                    "signal-34"
+                  ],
+                  "source_run_ids": [
+                    "scan-2",
+                    "scan-3"
+                  ],
+                  "agent_run_ids": [
+                    "run-3",
+                    "run-6"
+                  ],
+                  "cycle_ids": [
+                    "cycle-0",
+                    "cycle-1",
+                    "cycle-4"
+                  ],
+                  "recommendation_ids": [
+                    "rec-10",
+                    "rec-31",
+                    "rec-34"
+                  ],
+                  "plan_ids": [
+                    "plan-10",
+                    "plan-31",
+                    "plan-34"
+                  ],
+                  "broker_order_ids": [
+                    "order-10",
+                    "order-31",
+                    "order-34"
+                  ],
+                  "as_of": null,
+                  "window": null
+                },
+                "status": "observational",
+                "requires": "matured_outcome_and_same_cycle_control"
+              }
+            ]
+          },
+          "horizons": {
+            "1d": {
+              "matured": 0,
+              "immature": 0,
+              "maturity_unavailable": 6,
+              "return_unavailable": 0,
+              "direction_unavailable": 0,
+              "excluded_trade_memory": 0,
+              "eligible_direction_corrected": 0,
+              "evaluated": 0,
+              "hits": 0,
+              "hit_rate": null,
+              "hit_rate_net_10bps": null,
+              "signed_gross_return": null,
+              "net_return_10bps": null,
+              "gross_gt_1pct": {
+                "hits": 0,
+                "rate": null
+              },
+              "avg_return": null,
+              "directions": {}
+            },
+            "3d": {
+              "matured": 0,
+              "immature": 6,
+              "maturity_unavailable": 0,
+              "return_unavailable": 0,
+              "direction_unavailable": 0,
+              "excluded_trade_memory": 0,
+              "eligible_direction_corrected": 0,
+              "evaluated": 0,
+              "hits": 0,
+              "hit_rate": null,
+              "hit_rate_net_10bps": null,
+              "signed_gross_return": null,
+              "net_return_10bps": null,
+              "gross_gt_1pct": {
+                "hits": 0,
+                "rate": null
+              },
+              "avg_return": null,
+              "directions": {}
+            },
+            "5d": {
+              "matured": 6,
+              "immature": 0,
+              "maturity_unavailable": 0,
+              "return_unavailable": 2,
+              "direction_unavailable": 1,
+              "excluded_trade_memory": 0,
+              "eligible_direction_corrected": 3,
+              "evaluated": 3,
+              "hits": 1,
+              "hit_rate": 0.3333,
+              "hit_rate_net_10bps": 0.3333,
+              "signed_gross_return": 0.01,
+              "net_return_10bps": 0.009,
+              "gross_gt_1pct": {
+                "hits": 1,
+                "rate": 0.3333
+              },
+              "avg_return": 0.01,
+              "directions": {
+                "exit_short": 1,
+                "long": 1,
+                "short": 1
+              }
+            },
+            "10d": {
+              "matured": 0,
+              "immature": 0,
+              "maturity_unavailable": 6,
+              "return_unavailable": 0,
+              "direction_unavailable": 0,
+              "excluded_trade_memory": 0,
+              "eligible_direction_corrected": 0,
+              "evaluated": 0,
+              "hits": 0,
+              "hit_rate": null,
+              "hit_rate_net_10bps": null,
+              "signed_gross_return": null,
+              "net_return_10bps": null,
+              "gross_gt_1pct": {
+                "hits": 0,
+                "rate": null
+              },
+              "avg_return": null,
+              "directions": {}
+            }
+          }
+        },
+        {
+          "agent_name": "agent-2",
+          "agent_role": "decision",
+          "metric_scope": "attributed_agent",
+          "agent_run_ids": [
+            "run-3",
+            "run-4",
+            "run-6"
+          ],
+          "cycles": [
+            "cycle-0",
+            "cycle-1",
+            "cycle-2",
+            "cycle-3"
+          ],
+          "signal_ids": [
+            "signal-11",
+            "signal-17",
+            "signal-20",
+            "signal-32",
+            "signal-38",
+            "signal-41"
+          ],
+          "signals": 6,
+          "decisions": {
+            "blocked_entry_quality": 3,
+            "unknown": 3
+          },
+          "decision_sources": {
+            "deterministic": 6
+          },
+          "execution_kinds": {
+            "deterministic": 6
+          },
+          "providers": {
+            "provider": 6
+          },
+          "models": {
+            "model": 6
+          },
+          "parent_run_ids": {
+            "parent": 3
+          },
+          "retry_of": {
+            "retry": 4
+          },
+          "fallback_reasons": {},
+          "matured": 6,
+          "matured_with_control": 4,
+          "attributed_matured": 6,
+          "attributed_matured_with_control": 4,
+          "selected": 2,
+          "not_selected": 2,
+          "selection_unavailable": 2,
+          "gate": 6,
+          "execution_verified": 4,
+          "execution_statuses": {
+            "submitted": 6
+          },
+          "comparable_control_sets": {
+            "verified": 4,
+            "total": 6,
+            "coverage": 0.6667
+          },
+          "lineage": {
+            "signal_ids": [
+              "signal-11",
+              "signal-17",
+              "signal-20",
+              "signal-32",
+              "signal-38",
+              "signal-41"
+            ],
+            "source_run_ids": [
+              "scan-0",
+              "scan-1",
+              "scan-2",
+              "scan-3"
+            ],
+            "agent_run_ids": [
+              "run-3",
+              "run-4",
+              "run-6"
+            ],
+            "cycle_ids": [
+              "cycle-0",
+              "cycle-1",
+              "cycle-2",
+              "cycle-3"
+            ],
+            "recommendation_ids": [
+              "rec-11",
+              "rec-17",
+              "rec-20",
+              "rec-32",
+              "rec-38",
+              "rec-41"
+            ],
+            "plan_ids": [
+              "plan-11",
+              "plan-17",
+              "plan-20",
+              "plan-32",
+              "plan-38",
+              "plan-41"
+            ],
+            "broker_order_ids": [
+              "order-11",
+              "order-17",
+              "order-20",
+              "order-32",
+              "order-38",
+              "order-41"
+            ],
+            "as_of": null,
+            "window": null
+          },
+          "stage_feedback": {
+            "selection": {
+              "selected": 2,
+              "not_selected": 2,
+              "unavailable": 2
+            },
+            "decision": {
+              "by_decision": {
+                "blocked_entry_quality": 3,
+                "unavailable": 3
+              }
+            },
+            "gate": {
+              "blocked_entry_quality": 3,
+              "execution_verified": 4,
+              "observed": 6
+            },
+            "execution": {
+              "by_status": {
+                "submitted": 6
+              },
+              "verified_signal_ids": [
+                "signal-11",
+                "signal-20",
+                "signal-32",
+                "signal-41"
+              ],
+              "unverified_signal_ids": []
+            },
+            "hypotheses": [
+              {
+                "hypothesis_id": "p-l104.selection.selection_identity_unavailable",
+                "legacy_hypothesis_id": "p-l102.selection.selection_identity_unavailable",
+                "stage": "selection",
+                "reason_code": "selection_identity_unavailable",
+                "count": 2,
+                "signal_ids": [
+                  "signal-11",
+                  "signal-38"
+                ],
+                "lineage": {
+                  "signal_ids": [
+                    "signal-11",
+                    "signal-38"
+                  ],
+                  "source_run_ids": [
+                    "scan-2",
+                    "scan-3"
+                  ],
+                  "agent_run_ids": [
+                    "run-3",
+                    "run-4"
+                  ],
+                  "cycle_ids": [
+                    "cycle-1",
+                    "cycle-3"
+                  ],
+                  "recommendation_ids": [
+                    "rec-11",
+                    "rec-38"
+                  ],
+                  "plan_ids": [
+                    "plan-11",
+                    "plan-38"
+                  ],
+                  "broker_order_ids": [
+                    "order-11",
+                    "order-38"
+                  ],
+                  "as_of": null,
+                  "window": null
+                },
+                "status": "observational",
+                "requires": "matured_outcome_and_same_cycle_control"
+              },
+              {
+                "hypothesis_id": "p-l104.gate.blocked_entry_quality",
+                "legacy_hypothesis_id": "p-l102.gate.blocked_entry_quality",
+                "stage": "gate",
+                "reason_code": "blocked_entry_quality",
+                "count": 3,
+                "signal_ids": [
+                  "signal-20",
+                  "signal-32",
+                  "signal-38"
+                ],
+                "lineage": {
+                  "signal_ids": [
+                    "signal-20",
+                    "signal-32",
+                    "signal-38"
+                  ],
+                  "source_run_ids": [
+                    "scan-0",
+                    "scan-2"
+                  ],
+                  "agent_run_ids": [
+                    "run-3",
+                    "run-4",
+                    "run-6"
+                  ],
+                  "cycle_ids": [
+                    "cycle-0",
+                    "cycle-2",
+                    "cycle-3"
+                  ],
+                  "recommendation_ids": [
+                    "rec-20",
+                    "rec-32",
+                    "rec-38"
+                  ],
+                  "plan_ids": [
+                    "plan-20",
+                    "plan-32",
+                    "plan-38"
+                  ],
+                  "broker_order_ids": [
+                    "order-20",
+                    "order-32",
+                    "order-38"
+                  ],
+                  "as_of": null,
+                  "window": null
+                },
+                "status": "observational",
+                "requires": "matured_outcome_and_same_cycle_control"
+              }
+            ]
+          },
+          "horizons": {
+            "1d": {
+              "matured": 6,
+              "immature": 0,
+              "maturity_unavailable": 0,
+              "return_unavailable": 1,
+              "direction_unavailable": 1,
+              "excluded_trade_memory": 1,
+              "eligible_direction_corrected": 3,
+              "evaluated": 3,
+              "hits": 1,
+              "hit_rate": 0.3333,
+              "hit_rate_net_10bps": 0.3333,
+              "signed_gross_return": -0.0133,
+              "net_return_10bps": -0.0143,
+              "gross_gt_1pct": {
+                "hits": 0,
+                "rate": 0.0
+              },
+              "avg_return": -0.0133,
+              "directions": {
+                "long": 1,
+                "short": 2
+              }
+            },
+            "3d": {
+              "matured": 0,
+              "immature": 0,
+              "maturity_unavailable": 6,
+              "return_unavailable": 0,
+              "direction_unavailable": 0,
+              "excluded_trade_memory": 0,
+              "eligible_direction_corrected": 0,
+              "evaluated": 0,
+              "hits": 0,
+              "hit_rate": null,
+              "hit_rate_net_10bps": null,
+              "signed_gross_return": null,
+              "net_return_10bps": null,
+              "gross_gt_1pct": {
+                "hits": 0,
+                "rate": null
+              },
+              "avg_return": null,
+              "directions": {}
+            },
+            "5d": {
+              "matured": 0,
+              "immature": 6,
+              "maturity_unavailable": 0,
+              "return_unavailable": 0,
+              "direction_unavailable": 0,
+              "excluded_trade_memory": 0,
+              "eligible_direction_corrected": 0,
+              "evaluated": 0,
+              "hits": 0,
+              "hit_rate": null,
+              "hit_rate_net_10bps": null,
+              "signed_gross_return": null,
+              "net_return_10bps": null,
+              "gross_gt_1pct": {
+                "hits": 0,
+                "rate": null
+              },
+              "avg_return": null,
+              "directions": {}
+            },
+            "10d": {
+              "matured": 6,
+              "immature": 0,
+              "maturity_unavailable": 0,
+              "return_unavailable": 1,
+              "direction_unavailable": 1,
+              "excluded_trade_memory": 1,
+              "eligible_direction_corrected": 3,
+              "evaluated": 3,
+              "hits": 1,
+              "hit_rate": 0.3333,
+              "hit_rate_net_10bps": 0.3333,
+              "signed_gross_return": -0.0133,
+              "net_return_10bps": -0.0143,
+              "gross_gt_1pct": {
+                "hits": 0,
+                "rate": 0.0
+              },
+              "avg_return": -0.0133,
+              "directions": {
+                "long": 1,
+                "short": 2
+              }
+            }
+          }
+        },
+        {
+          "agent_name": "technical_analyst",
+          "agent_role": "producer",
+          "metric_scope": "attributed_agent",
+          "agent_run_ids": [
+            "producer-0",
+            "producer-1",
+            "producer-2"
+          ],
+          "cycles": [
+            "cycle-0",
+            "cycle-1",
+            "cycle-2",
+            "cycle-3",
+            "cycle-4"
+          ],
+          "signal_ids": [
+            "signal-12",
+            "signal-19",
+            "signal-26",
+            "signal-33",
+            "signal-40",
+            "signal-5"
+          ],
+          "signals": 6,
+          "decisions": {
+            "approved_buy": 1,
+            "blocked_backtest": 1,
+            "blocked_entry_quality": 1,
+            "candidate": 1,
+            "executed_buy": 1,
+            "unknown": 1
+          },
+          "decision_sources": {
+            "unknown": 6
+          },
+          "execution_kinds": {
+            "deterministic": 6
+          },
+          "providers": {},
+          "models": {},
+          "parent_run_ids": {},
+          "retry_of": {},
+          "fallback_reasons": {},
+          "matured": 2,
+          "matured_with_control": 2,
+          "attributed_matured": 2,
+          "attributed_matured_with_control": 2,
+          "selected": 2,
+          "not_selected": 2,
+          "selection_unavailable": 2,
+          "gate": 6,
+          "execution_verified": 6,
+          "execution_statuses": {
+            "submitted": 6
+          },
+          "comparable_control_sets": {
+            "verified": 6,
+            "total": 6,
+            "coverage": 1.0
+          },
+          "lineage": {
+            "signal_ids": [
+              "signal-12",
+              "signal-19",
+              "signal-26",
+              "signal-33",
+              "signal-40",
+              "signal-5"
+            ],
+            "source_run_ids": [
+              "scan-0",
+              "scan-1",
+              "scan-2",
+              "scan-3"
+            ],
+            "agent_run_ids": [
+              "producer-0",
+              "producer-1",
+              "producer-2"
+            ],
+            "cycle_ids": [
+              "cycle-0",
+              "cycle-1",
+              "cycle-2",
+              "cycle-3",
+              "cycle-4"
+            ],
+            "recommendation_ids": [
+              "rec-12",
+              "rec-19",
+              "rec-26",
+              "rec-33",
+              "rec-40",
+              "rec-5"
+            ],
+            "plan_ids": [
+              "plan-12",
+              "plan-19",
+              "plan-26",
+              "plan-33",
+              "plan-40",
+              "plan-5"
+            ],
+            "broker_order_ids": [
+              "order-12",
+              "order-19",
+              "order-26",
+              "order-33",
+              "order-40",
+              "order-5"
+            ],
+            "as_of": null,
+            "window": null
+          },
+          "stage_feedback": {
+            "selection": {
+              "selected": 2,
+              "not_selected": 2,
+              "unavailable": 2
+            },
+            "decision": {
+              "by_decision": {
+                "approved_buy": 1,
+                "blocked_backtest": 1,
+                "blocked_entry_quality": 1,
+                "candidate": 1,
+                "executed_buy": 1,
+                "unavailable": 1
+              }
+            },
+            "gate": {
+              "blocked_backtest": 1,
+              "blocked_entry_quality": 1,
+              "execution_verified": 6,
+              "observed": 6
+            },
+            "execution": {
+              "by_status": {
+                "submitted": 6
+              },
+              "verified_signal_ids": [
+                "signal-12",
+                "signal-19",
+                "signal-26",
+                "signal-33",
+                "signal-40",
+                "signal-5"
+              ],
+              "unverified_signal_ids": []
+            },
+            "hypotheses": [
+              {
+                "hypothesis_id": "p-l104.selection.selection_identity_unavailable",
+                "legacy_hypothesis_id": "p-l102.selection.selection_identity_unavailable",
+                "stage": "selection",
+                "reason_code": "selection_identity_unavailable",
+                "count": 2,
+                "signal_ids": [
+                  "signal-19",
+                  "signal-26"
+                ],
+                "lineage": {
+                  "signal_ids": [
+                    "signal-19",
+                    "signal-26"
+                  ],
+                  "source_run_ids": [
+                    "scan-2",
+                    "scan-3"
+                  ],
+                  "agent_run_ids": [
+                    "producer-1",
+                    "producer-2"
+                  ],
+                  "cycle_ids": [
+                    "cycle-1",
+                    "cycle-4"
+                  ],
+                  "recommendation_ids": [
+                    "rec-19",
+                    "rec-26"
+                  ],
+                  "plan_ids": [
+                    "plan-19",
+                    "plan-26"
+                  ],
+                  "broker_order_ids": [
+                    "order-19",
+                    "order-26"
+                  ],
+                  "as_of": null,
+                  "window": null
+                },
+                "status": "observational",
+                "requires": "matured_outcome_and_same_cycle_control"
+              },
+              {
+                "hypothesis_id": "p-l104.gate.blocked_entry_quality",
+                "legacy_hypothesis_id": "p-l102.gate.blocked_entry_quality",
+                "stage": "gate",
+                "reason_code": "blocked_entry_quality",
+                "count": 1,
+                "signal_ids": [
+                  "signal-26"
+                ],
+                "lineage": {
+                  "signal_ids": [
+                    "signal-26"
+                  ],
+                  "source_run_ids": [
+                    "scan-2"
+                  ],
+                  "agent_run_ids": [
+                    "producer-2"
+                  ],
+                  "cycle_ids": [
+                    "cycle-1"
+                  ],
+                  "recommendation_ids": [
+                    "rec-26"
+                  ],
+                  "plan_ids": [
+                    "plan-26"
+                  ],
+                  "broker_order_ids": [
+                    "order-26"
+                  ],
+                  "as_of": null,
+                  "window": null
+                },
+                "status": "observational",
+                "requires": "matured_outcome_and_same_cycle_control"
+              },
+              {
+                "hypothesis_id": "p-l104.gate.blocked_backtest",
+                "legacy_hypothesis_id": "p-l102.gate.blocked_backtest",
+                "stage": "gate",
+                "reason_code": "blocked_backtest",
+                "count": 1,
+                "signal_ids": [
+                  "signal-33"
+                ],
+                "lineage": {
+                  "signal_ids": [
+                    "signal-33"
+                  ],
+                  "source_run_ids": [
+                    "scan-1"
+                  ],
+                  "agent_run_ids": [
+                    "producer-0"
+                  ],
+                  "cycle_ids": [
+                    "cycle-3"
+                  ],
+                  "recommendation_ids": [
+                    "rec-33"
+                  ],
+                  "plan_ids": [
+                    "plan-33"
+                  ],
+                  "broker_order_ids": [
+                    "order-33"
+                  ],
+                  "as_of": null,
+                  "window": null
+                },
+                "status": "observational",
+                "requires": "matured_outcome_and_same_cycle_control"
+              }
+            ]
+          },
+          "horizons": {
+            "1d": {
+              "matured": 2,
+              "immature": 2,
+              "maturity_unavailable": 2,
+              "return_unavailable": 1,
+              "direction_unavailable": 0,
+              "excluded_trade_memory": 0,
+              "eligible_direction_corrected": 1,
+              "evaluated": 1,
+              "hits": 1,
+              "hit_rate": 1.0,
+              "hit_rate_net_10bps": 1.0,
+              "signed_gross_return": 0.04,
+              "net_return_10bps": 0.039,
+              "gross_gt_1pct": {
+                "hits": 1,
+                "rate": 1.0
+              },
+              "avg_return": 0.04,
+              "directions": {
+                "exit_short": 1
+              }
+            },
+            "3d": {
+              "matured": 2,
+              "immature": 2,
+              "maturity_unavailable": 2,
+              "return_unavailable": 0,
+              "direction_unavailable": 0,
+              "excluded_trade_memory": 1,
+              "eligible_direction_corrected": 1,
+              "evaluated": 1,
+              "hits": 0,
+              "hit_rate": 0.0,
+              "hit_rate_net_10bps": 0.0,
+              "signed_gross_return": -0.01,
+              "net_return_10bps": -0.011,
+              "gross_gt_1pct": {
+                "hits": 0,
+                "rate": 0.0
+              },
+              "avg_return": -0.01,
+              "directions": {
+                "long": 1
+              }
+            },
+            "5d": {
+              "matured": 2,
+              "immature": 2,
+              "maturity_unavailable": 2,
+              "return_unavailable": 1,
+              "direction_unavailable": 1,
+              "excluded_trade_memory": 0,
+              "eligible_direction_corrected": 0,
+              "evaluated": 0,
+              "hits": 0,
+              "hit_rate": null,
+              "hit_rate_net_10bps": null,
+              "signed_gross_return": null,
+              "net_return_10bps": null,
+              "gross_gt_1pct": {
+                "hits": 0,
+                "rate": null
+              },
+              "avg_return": null,
+              "directions": {}
+            },
+            "10d": {
+              "matured": 2,
+              "immature": 2,
+              "maturity_unavailable": 2,
+              "return_unavailable": 1,
+              "direction_unavailable": 0,
+              "excluded_trade_memory": 0,
+              "eligible_direction_corrected": 1,
+              "evaluated": 1,
+              "hits": 1,
+              "hit_rate": 1.0,
+              "hit_rate_net_10bps": 1.0,
+              "signed_gross_return": 0.04,
+              "net_return_10bps": 0.039,
+              "gross_gt_1pct": {
+                "hits": 1,
+                "rate": 1.0
+              },
+              "avg_return": 0.04,
+              "directions": {
+                "exit_short": 1
+              }
+            }
+          }
+        }
+      ],
+      "stage_feedback": {
+        "selection": {
+          "selected": 11,
+          "not_selected": 11,
+          "unavailable": 20
+        },
+        "decision": {
+          "by_decision": {
+            "approved_buy": 7,
+            "blocked_backtest": 7,
+            "blocked_entry_quality": 7,
+            "candidate": 7,
+            "executed_buy": 7,
+            "unavailable": 7
+          }
+        },
+        "gate": {
+          "blocked_backtest": 7,
+          "blocked_entry_quality": 7,
+          "execution_verified": 36,
+          "legacy_unverified": 6,
+          "observed": 42
+        },
+        "execution": {
+          "by_status": {
+            "submitted": 42
+          },
+          "verified_signal_ids": [
+            "signal-0",
+            "signal-1",
+            "signal-11",
+            "signal-12",
+            "signal-13",
+            "signal-14",
+            "signal-15",
+            "signal-16",
+            "signal-18",
+            "signal-19",
+            "signal-2",
+            "signal-20",
+            "signal-21",
+            "signal-22",
+            "signal-23",
+            "signal-25",
+            "signal-26",
+            "signal-27",
+            "signal-28",
+            "signal-29"
+          ],
+          "unverified_signal_ids": []
+        },
+        "hypotheses": [
+          {
+            "hypothesis_id": "p-l104.selection.selection_identity_unavailable",
+            "legacy_hypothesis_id": "p-l102.selection.selection_identity_unavailable",
+            "stage": "selection",
+            "reason_code": "selection_identity_unavailable",
+            "count": 20,
+            "signal_ids": [
+              "signal-10",
+              "signal-11",
+              "signal-14",
+              "signal-15",
+              "signal-18",
+              "signal-19",
+              "signal-2",
+              "signal-22",
+              "signal-23",
+              "signal-26",
+              "signal-27",
+              "signal-3",
+              "signal-30",
+              "signal-31",
+              "signal-34",
+              "signal-35",
+              "signal-38",
+              "signal-39",
+              "signal-6",
+              "signal-7"
+            ],
+            "lineage": {
+              "signal_ids": [
+                "signal-10",
+                "signal-11",
+                "signal-14",
+                "signal-15",
+                "signal-18",
+                "signal-19",
+                "signal-2",
+                "signal-22",
+                "signal-23",
+                "signal-26",
+                "signal-27",
+                "signal-3",
+                "signal-30",
+                "signal-31",
+                "signal-34",
+                "signal-35",
+                "signal-38",
+                "signal-39",
+                "signal-6",
+                "signal-7"
+              ],
+              "source_run_ids": [
+                "scan-2",
+                "scan-3"
+              ],
+              "agent_run_ids": [
+                "producer-1",
+                "producer-2",
+                "run-2",
+                "run-3",
+                "run-4",
+                "run-6"
+              ],
+              "cycle_ids": [
+                "cycle-0",
+                "cycle-1",
+                "cycle-2",
+                "cycle-3",
+                "cycle-4"
+              ],
+              "recommendation_ids": [
+                "rec-10",
+                "rec-11",
+                "rec-14",
+                "rec-15",
+                "rec-18",
+                "rec-19",
+                "rec-2",
+                "rec-22",
+                "rec-23",
+                "rec-26",
+                "rec-27",
+                "rec-3",
+                "rec-30",
+                "rec-31",
+                "rec-34",
+                "rec-35",
+                "rec-38",
+                "rec-39",
+                "rec-6",
+                "rec-7"
+              ],
+              "plan_ids": [
+                "plan-10",
+                "plan-11",
+                "plan-14",
+                "plan-15",
+                "plan-18",
+                "plan-19",
+                "plan-2",
+                "plan-22",
+                "plan-23",
+                "plan-26",
+                "plan-27",
+                "plan-3",
+                "plan-30",
+                "plan-31",
+                "plan-34",
+                "plan-35",
+                "plan-38",
+                "plan-39",
+                "plan-6",
+                "plan-7"
+              ],
+              "broker_order_ids": [
+                "order-10",
+                "order-11",
+                "order-14",
+                "order-15",
+                "order-18",
+                "order-19",
+                "order-2",
+                "order-22",
+                "order-23",
+                "order-26",
+                "order-27",
+                "order-3",
+                "order-30",
+                "order-31",
+                "order-34",
+                "order-35",
+                "order-38",
+                "order-39",
+                "order-6",
+                "order-7"
+              ],
+              "as_of": null,
+              "window": null
+            },
+            "status": "observational",
+            "requires": "matured_outcome_and_same_cycle_control"
+          },
+          {
+            "hypothesis_id": "p-l104.decision.decision_identity_unavailable",
+            "legacy_hypothesis_id": "p-l102.decision.decision_identity_unavailable",
+            "stage": "decision",
+            "reason_code": "decision_identity_unavailable",
+            "count": 8,
+            "signal_ids": [
+              "signal-1",
+              "signal-14",
+              "signal-15",
+              "signal-21",
+              "signal-22",
+              "signal-28",
+              "signal-7",
+              "signal-8"
+            ],
+            "lineage": {
+              "signal_ids": [
+                "signal-1",
+                "signal-14",
+                "signal-15",
+                "signal-21",
+                "signal-22",
+                "signal-28",
+                "signal-7",
+                "signal-8"
+              ],
+              "source_run_ids": [
+                "scan-0",
+                "scan-1",
+                "scan-2",
+                "scan-3"
+              ],
+              "agent_run_ids": null,
+              "cycle_ids": null,
+              "recommendation_ids": [
+                "rec-1",
+                "rec-14",
+                "rec-15",
+                "rec-21",
+                "rec-22",
+                "rec-28",
+                "rec-7",
+                "rec-8"
+              ],
+              "plan_ids": [
+                "plan-1",
+                "plan-14",
+                "plan-15",
+                "plan-21",
+                "plan-22",
+                "plan-28",
+                "plan-7",
+                "plan-8"
+              ],
+              "broker_order_ids": [
+                "order-1",
+                "order-14",
+                "order-15",
+                "order-21",
+                "order-22",
+                "order-28",
+                "order-7",
+                "order-8"
+              ],
+              "as_of": null,
+              "window": null
+            },
+            "status": "observational",
+            "requires": "matured_outcome_and_same_cycle_control"
+          },
+          {
+            "hypothesis_id": "p-l104.gate.blocked_entry_quality",
+            "legacy_hypothesis_id": "p-l102.gate.blocked_entry_quality",
+            "stage": "gate",
+            "reason_code": "blocked_entry_quality",
+            "count": 7,
+            "signal_ids": [
+              "signal-14",
+              "signal-2",
+              "signal-20",
+              "signal-26",
+              "signal-32",
+              "signal-38",
+              "signal-8"
+            ],
+            "lineage": {
+              "signal_ids": [
+                "signal-14",
+                "signal-2",
+                "signal-20",
+                "signal-26",
+                "signal-32",
+                "signal-38",
+                "signal-8"
+              ],
+              "source_run_ids": [
+                "scan-0",
+                "scan-2"
+              ],
+              "agent_run_ids": [
+                "producer-2",
+                "run-2",
+                "run-3",
+                "run-4",
+                "run-6"
+              ],
+              "cycle_ids": [
+                "cycle-0",
+                "cycle-1",
+                "cycle-2",
+                "cycle-3"
+              ],
+              "recommendation_ids": [
+                "rec-14",
+                "rec-2",
+                "rec-20",
+                "rec-26",
+                "rec-32",
+                "rec-38",
+                "rec-8"
+              ],
+              "plan_ids": [
+                "plan-14",
+                "plan-2",
+                "plan-20",
+                "plan-26",
+                "plan-32",
+                "plan-38",
+                "plan-8"
+              ],
+              "broker_order_ids": [
+                "order-14",
+                "order-2",
+                "order-20",
+                "order-26",
+                "order-32",
+                "order-38",
+                "order-8"
+              ],
+              "as_of": null,
+              "window": null
+            },
+            "status": "observational",
+            "requires": "matured_outcome_and_same_cycle_control"
+          },
+          {
+            "hypothesis_id": "p-l104.gate.blocked_backtest",
+            "legacy_hypothesis_id": "p-l102.gate.blocked_backtest",
+            "stage": "gate",
+            "reason_code": "blocked_backtest",
+            "count": 7,
+            "signal_ids": [
+              "signal-15",
+              "signal-21",
+              "signal-27",
+              "signal-3",
+              "signal-33",
+              "signal-39",
+              "signal-9"
+            ],
+            "lineage": {
+              "signal_ids": [
+                "signal-15",
+                "signal-21",
+                "signal-27",
+                "signal-3",
+                "signal-33",
+                "signal-39",
+                "signal-9"
+              ],
+              "source_run_ids": [
+                "scan-1",
+                "scan-3"
+              ],
+              "agent_run_ids": [
+                "producer-0",
+                "run-2",
+                "run-3",
+                "run-4",
+                "run-6"
+              ],
+              "cycle_ids": [
+                "cycle-2",
+                "cycle-3",
+                "cycle-4"
+              ],
+              "recommendation_ids": [
+                "rec-15",
+                "rec-21",
+                "rec-27",
+                "rec-3",
+                "rec-33",
+                "rec-39",
+                "rec-9"
+              ],
+              "plan_ids": [
+                "plan-15",
+                "plan-21",
+                "plan-27",
+                "plan-3",
+                "plan-33",
+                "plan-39",
+                "plan-9"
+              ],
+              "broker_order_ids": [
+                "order-15",
+                "order-21",
+                "order-27",
+                "order-3",
+                "order-33",
+                "order-39",
+                "order-9"
+              ],
+              "as_of": null,
+              "window": null
+            },
+            "status": "observational",
+            "requires": "matured_outcome_and_same_cycle_control"
+          },
+          {
+            "hypothesis_id": "p-l104.identity.legacy_unverified",
+            "legacy_hypothesis_id": "p-l102.identity.legacy_unverified",
+            "stage": "identity",
+            "reason_code": "legacy_unverified",
+            "count": 6,
+            "signal_ids": [
+              "signal-16",
+              "signal-2",
+              "signal-23",
+              "signal-30",
+              "signal-37",
+              "signal-9"
+            ],
+            "lineage": {
+              "signal_ids": [
+                "signal-16",
+                "signal-2",
+                "signal-23",
+                "signal-30",
+                "signal-37",
+                "signal-9"
+              ],
+              "source_run_ids": [
+                "scan-0",
+                "scan-1",
+                "scan-2",
+                "scan-3"
+              ],
+              "agent_run_ids": [
+                "run-2"
+              ],
+              "cycle_ids": [
+                "cycle-0",
+                "cycle-1",
+                "cycle-2",
+                "cycle-3",
+                "cycle-4"
+              ],
+              "recommendation_ids": [
+                "rec-16",
+                "rec-2",
+                "rec-23",
+                "rec-30",
+                "rec-37",
+                "rec-9"
+              ],
+              "plan_ids": [
+                "plan-16",
+                "plan-2",
+                "plan-23",
+                "plan-30",
+                "plan-37",
+                "plan-9"
+              ],
+              "broker_order_ids": [
+                "order-16",
+                "order-2",
+                "order-23",
+                "order-30",
+                "order-37",
+                "order-9"
+              ],
+              "as_of": null,
+              "window": null
+            },
+            "status": "observational",
+            "requires": "matured_outcome_and_same_cycle_control"
+          }
+        ]
+      },
+      "actionability": {
+        "status": "blocked",
+        "descriptive_metrics_available": true,
+        "usable_for_agent_learning": false,
+        "usable_for_promotion": false,
+        "blockers": [
+          "quality_status_not_evaluable"
+        ]
+      },
+      "method": {
+        "identity": "producer_agent_contract preferred; decision agent_contract only when producer identity is unavailable; never infer from symbol/source",
+        "hit_definition": "hit_rate_net_10bps uses signed forward return minus 10 bps > 0; gross_gt_1pct is retained as a separate historical metric; short reverses raw return; exit requires explicit position_direction",
+        "metric_aliases": {
+          "hit_rate": "hit_rate_net_10bps",
+          "avg_return": "signed_gross_return"
+        },
+        "eligible_denominator": "explicit mature outcome + return available + valid direction + source is not trade_memory",
+        "missing_identity": "excluded_from_agent_denominators",
+        "missing_direction": "excluded_from_direction_corrected_hit_denominators",
+        "same_cycle_control": "10d mature signal and verified control with matching signal_id and cycle_id",
+        "fallback": "separate from llm/deterministic; provider, model and reason retained when available",
+        "promotion": "disabled_until_mature_outcomes_and_same_cycle_controls"
+      }
+    },
+    "best_indicators": [
+      {
+        "signals": 30,
+        "resolved": 27,
+        "pending": 3,
+        "win_rate": 0.2963,
+        "avg_return_1d": -0.0092,
+        "avg_return_3d": -0.0092,
+        "avg_return_5d": -0.0092,
+        "avg_return_10d": -0.0092,
+        "avg_mfe_10d": 0.1922,
+        "avg_mae_10d": -0.1922,
+        "tag": "score:lt12"
+      },
+      {
+        "signals": 28,
+        "resolved": 25,
+        "pending": 3,
+        "win_rate": 0.28,
+        "avg_return_1d": -0.0077,
+        "avg_return_3d": -0.0077,
+        "avg_return_5d": -0.0077,
+        "avg_return_10d": -0.0077,
+        "avg_mfe_10d": 0.202,
+        "avg_mae_10d": -0.202,
+        "tag": "macd:non_positive"
+      },
+      {
+        "signals": 21,
+        "resolved": 19,
+        "pending": 2,
+        "win_rate": 0.5789,
+        "avg_return_1d": -0.0076,
+        "avg_return_3d": -0.0076,
+        "avg_return_5d": -0.0076,
+        "avg_return_10d": -0.0076,
+        "avg_mfe_10d": 0.2058,
+        "avg_mae_10d": -0.2058,
+        "tag": "chart_confirmed:yes"
+      },
+      {
+        "signals": 21,
+        "resolved": 18,
+        "pending": 3,
+        "win_rate": 0.0,
+        "avg_return_1d": 0.0025,
+        "avg_return_3d": 0.0025,
+        "avg_return_5d": 0.0025,
+        "avg_return_10d": 0.0025,
+        "avg_mfe_10d": 0.2,
+        "avg_mae_10d": -0.2,
+        "tag": "chart_confirmed:no"
+      },
+      {
+        "signals": 20,
+        "resolved": 18,
+        "pending": 2,
+        "win_rate": 0.0,
+        "avg_return_1d": -0.0031,
+        "avg_return_3d": -0.0031,
+        "avg_return_5d": -0.0031,
+        "avg_return_10d": -0.0031,
+        "avg_mfe_10d": 0.2,
+        "avg_mae_10d": -0.2,
+        "tag": "volume_z:gt1"
+      },
+      {
+        "signals": 16,
+        "resolved": 16,
+        "pending": 0,
+        "win_rate": 0.25,
+        "avg_return_1d": -0.0044,
+        "avg_return_3d": -0.0044,
+        "avg_return_5d": -0.0044,
+        "avg_return_10d": -0.0044,
+        "avg_mfe_10d": 0.21,
+        "avg_mae_10d": -0.21,
+        "tag": "sma20_dist:gt12pct"
+      },
+      {
+        "signals": 15,
+        "resolved": 14,
+        "pending": 1,
+        "win_rate": 0.2143,
+        "avg_return_1d": 0.0025,
+        "avg_return_3d": 0.0025,
+        "avg_return_5d": 0.0025,
+        "avg_return_10d": 0.0025,
+        "avg_mfe_10d": 0.0857,
+        "avg_mae_10d": -0.0857,
+        "tag": "rsi:60_75"
+      },
+      {
+        "signals": 18,
+        "resolved": 13,
+        "pending": 5,
+        "win_rate": 0.3846,
+        "avg_return_1d": -0.0,
+        "avg_return_3d": -0.0,
+        "avg_return_5d": -0.0,
+        "avg_return_10d": -0.0,
+        "avg_mfe_10d": 0.1992,
+        "avg_mae_10d": -0.1992,
+        "tag": "sma20_dist:0_6pct"
+      },
+      {
+        "signals": 15,
+        "resolved": 13,
+        "pending": 2,
+        "win_rate": 0.3077,
+        "avg_return_1d": -0.01,
+        "avg_return_3d": -0.01,
+        "avg_return_5d": -0.01,
+        "avg_return_10d": -0.01,
+        "avg_mfe_10d": 0.3346,
+        "avg_mae_10d": -0.3346,
+        "tag": "rsi:gt85"
+      },
+      {
+        "signals": 14,
+        "resolved": 12,
+        "pending": 2,
+        "win_rate": 0.3333,
+        "avg_return_1d": 0.0073,
+        "avg_return_3d": 0.0073,
+        "avg_return_5d": 0.0073,
+        "avg_return_10d": 0.0073,
+        "avg_mfe_10d": 0.205,
+        "avg_mae_10d": -0.205,
+        "tag": "macd:positive"
+      }
+    ],
+    "worst_indicators": [
+      {
+        "signals": 20,
+        "resolved": 18,
+        "pending": 2,
+        "win_rate": 0.0,
+        "avg_return_1d": -0.0031,
+        "avg_return_3d": -0.0031,
+        "avg_return_5d": -0.0031,
+        "avg_return_10d": -0.0031,
+        "avg_mfe_10d": 0.2,
+        "avg_mae_10d": -0.2,
+        "tag": "volume_z:gt1"
+      },
+      {
+        "signals": 21,
+        "resolved": 18,
+        "pending": 3,
+        "win_rate": 0.0,
+        "avg_return_1d": 0.0025,
+        "avg_return_3d": 0.0025,
+        "avg_return_5d": 0.0025,
+        "avg_return_10d": 0.0025,
+        "avg_mfe_10d": 0.2,
+        "avg_mae_10d": -0.2,
+        "tag": "chart_confirmed:no"
+      },
+      {
+        "signals": 11,
+        "resolved": 8,
+        "pending": 3,
+        "win_rate": 0.0,
+        "avg_return_1d": 0.0025,
+        "avg_return_3d": 0.0025,
+        "avg_return_5d": 0.0025,
+        "avg_return_10d": 0.0025,
+        "avg_mfe_10d": 0.2,
+        "avg_mae_10d": -0.2,
+        "tag": "volume_z:lt0"
+      },
+      {
+        "signals": 6,
+        "resolved": 6,
+        "pending": 0,
+        "win_rate": 0.1667,
+        "avg_return_1d": 0.002,
+        "avg_return_3d": 0.002,
+        "avg_return_5d": 0.002,
+        "avg_return_10d": 0.002,
+        "avg_mfe_10d": 0.22,
+        "avg_mae_10d": -0.22,
+        "tag": "score:12_14"
+      },
+      {
+        "signals": 15,
+        "resolved": 14,
+        "pending": 1,
+        "win_rate": 0.2143,
+        "avg_return_1d": 0.0025,
+        "avg_return_3d": 0.0025,
+        "avg_return_5d": 0.0025,
+        "avg_return_10d": 0.0025,
+        "avg_mfe_10d": 0.0857,
+        "avg_mae_10d": -0.0857,
+        "tag": "rsi:60_75"
+      },
+      {
+        "signals": 16,
+        "resolved": 16,
+        "pending": 0,
+        "win_rate": 0.25,
+        "avg_return_1d": -0.0044,
+        "avg_return_3d": -0.0044,
+        "avg_return_5d": -0.0044,
+        "avg_return_10d": -0.0044,
+        "avg_mfe_10d": 0.21,
+        "avg_mae_10d": -0.21,
+        "tag": "sma20_dist:gt12pct"
+      },
+      {
+        "signals": 8,
+        "resolved": 8,
+        "pending": 0,
+        "win_rate": 0.25,
+        "avg_return_1d": -0.0025,
+        "avg_return_3d": -0.0025,
+        "avg_return_5d": -0.0025,
+        "avg_return_10d": -0.0025,
+        "avg_mfe_10d": 0.195,
+        "avg_mae_10d": -0.195,
+        "tag": "sma20_dist:6_12pct"
+      },
+      {
+        "signals": 28,
+        "resolved": 25,
+        "pending": 3,
+        "win_rate": 0.28,
+        "avg_return_1d": -0.0077,
+        "avg_return_3d": -0.0077,
+        "avg_return_5d": -0.0077,
+        "avg_return_10d": -0.0077,
+        "avg_mfe_10d": 0.202,
+        "avg_mae_10d": -0.202,
+        "tag": "macd:non_positive"
+      },
+      {
+        "signals": 30,
+        "resolved": 27,
+        "pending": 3,
+        "win_rate": 0.2963,
+        "avg_return_1d": -0.0092,
+        "avg_return_3d": -0.0092,
+        "avg_return_5d": -0.0092,
+        "avg_return_10d": -0.0092,
+        "avg_mfe_10d": 0.1922,
+        "avg_mae_10d": -0.1922,
+        "tag": "score:lt12"
+      },
+      {
+        "signals": 15,
+        "resolved": 13,
+        "pending": 2,
+        "win_rate": 0.3077,
+        "avg_return_1d": -0.01,
+        "avg_return_3d": -0.01,
+        "avg_return_5d": -0.01,
+        "avg_return_10d": -0.01,
+        "avg_mfe_10d": 0.3346,
+        "avg_mae_10d": -0.3346,
+        "tag": "rsi:gt85"
+      }
+    ],
+    "best_combinations": [
+      {
+        "signals": 2,
+        "resolved": 2,
+        "pending": 0,
+        "win_rate": 1.0,
+        "avg_return_1d": -0.01,
+        "avg_return_3d": -0.01,
+        "avg_return_5d": -0.01,
+        "avg_return_10d": -0.01,
+        "avg_mfe_10d": 0.23,
+        "avg_mae_10d": -0.23,
+        "key": "score_lt12|rsi_75_85|sma20_0_6pct|macd_nonpos|vol_0_1|pattern_yes"
+      },
+      {
+        "signals": 2,
+        "resolved": 2,
+        "pending": 0,
+        "win_rate": 0.0,
+        "avg_return_1d": 0.02,
+        "avg_return_3d": 0.02,
+        "avg_return_5d": 0.02,
+        "avg_return_10d": 0.02,
+        "avg_mfe_10d": 0.08,
+        "avg_mae_10d": -0.08,
+        "key": "score_lt12|rsi_60_75|sma20_0_6pct|macd_nonpos|vol_gt1|pattern_no"
+      },
+      {
+        "signals": 1,
+        "resolved": 1,
+        "pending": 0,
+        "win_rate": 1.0,
+        "avg_return_1d": 0.04,
+        "avg_return_3d": 0.04,
+        "avg_return_5d": 0.04,
+        "avg_return_10d": 0.04,
+        "avg_mfe_10d": 0.17,
+        "avg_mae_10d": -0.17,
+        "key": "score_gte15|rsi_75_85|sma20_6_12pct|macd_pos|vol_0_1|pattern_yes"
+      },
+      {
+        "signals": 1,
+        "resolved": 1,
+        "pending": 0,
+        "win_rate": 1.0,
+        "avg_return_1d": 0.02,
+        "avg_return_3d": 0.02,
+        "avg_return_5d": 0.02,
+        "avg_return_10d": 0.02,
+        "avg_mfe_10d": 0.33,
+        "avg_mae_10d": -0.33,
+        "key": "score_gte15|rsi_gt85|sma20_gt12pct|macd_nonpos|vol_0_1|pattern_yes"
+      },
+      {
+        "signals": 1,
+        "resolved": 1,
+        "pending": 0,
+        "win_rate": 1.0,
+        "avg_return_1d": 0.01,
+        "avg_return_3d": 0.01,
+        "avg_return_5d": 0.01,
+        "avg_return_10d": 0.01,
+        "avg_mfe_10d": 0.41,
+        "avg_mae_10d": -0.41,
+        "key": "score_lt12|rsi_gt85|sma20_0_6pct|macd_pos|vol_0_1|pattern_yes"
+      },
+      {
+        "signals": 1,
+        "resolved": 1,
+        "pending": 0,
+        "win_rate": 1.0,
+        "avg_return_1d": 0.0,
+        "avg_return_3d": 0.0,
+        "avg_return_5d": 0.0,
+        "avg_return_10d": 0.0,
+        "avg_mfe_10d": 0.13,
+        "avg_mae_10d": -0.13,
+        "key": "score_12_14|rsi_60_75|sma20_gt12pct|macd_nonpos|vol_0_1|pattern_yes"
+      },
+      {
+        "signals": 1,
+        "resolved": 1,
+        "pending": 0,
+        "win_rate": 1.0,
+        "avg_return_1d": -0.02,
+        "avg_return_3d": -0.02,
+        "avg_return_5d": -0.02,
+        "avg_return_10d": -0.02,
+        "avg_mfe_10d": 0.29,
+        "avg_mae_10d": -0.29,
+        "key": "score_lt12|rsi_gt85|sma20_gt12pct|macd_pos|vol_0_1|pattern_yes"
+      },
+      {
+        "signals": 1,
+        "resolved": 1,
+        "pending": 0,
+        "win_rate": 1.0,
+        "avg_return_1d": -0.03,
+        "avg_return_3d": -0.03,
+        "avg_return_5d": -0.03,
+        "avg_return_10d": -0.03,
+        "avg_mfe_10d": 0.01,
+        "avg_mae_10d": -0.01,
+        "key": "score_lt12|rsi_lt60|sma20_0_6pct|macd_nonpos|vol_0_1|pattern_yes"
+      },
+      {
+        "signals": 1,
+        "resolved": 1,
+        "pending": 0,
+        "win_rate": 1.0,
+        "avg_return_1d": -0.03,
+        "avg_return_3d": -0.03,
+        "avg_return_5d": -0.03,
+        "avg_return_10d": -0.03,
+        "avg_mfe_10d": 0.37,
+        "avg_mae_10d": -0.37,
+        "key": "score_lt12|rsi_gt85|sma20_6_12pct|macd_nonpos|vol_0_1|pattern_yes"
+      },
+      {
+        "signals": 1,
+        "resolved": 1,
+        "pending": 0,
+        "win_rate": 1.0,
+        "avg_return_1d": -0.04,
+        "avg_return_3d": -0.04,
+        "avg_return_5d": -0.04,
+        "avg_return_10d": -0.04,
+        "avg_mfe_10d": 0.09,
+        "avg_mae_10d": -0.09,
+        "key": "score_lt12|rsi_60_75|sma20_gt12pct|macd_nonpos|vol_0_1|pattern_yes"
+      }
+    ],
+    "setup_stats": [
+      {
+        "signals": 17,
+        "resolved": 17,
+        "pending": 0,
+        "win_rate": 0.5294,
+        "avg_return_1d": -0.0076,
+        "avg_return_3d": -0.0076,
+        "avg_return_5d": -0.0076,
+        "avg_return_10d": -0.0076,
+        "avg_mfe_10d": 0.2124,
+        "avg_mae_10d": -0.2124,
+        "setup": "confirmed_pattern"
+      },
+      {
+        "signals": 8,
+        "resolved": 8,
+        "pending": 0,
+        "win_rate": 0.0,
+        "avg_return_1d": 0.0025,
+        "avg_return_3d": 0.0025,
+        "avg_return_5d": 0.0025,
+        "avg_return_10d": 0.0025,
+        "avg_mfe_10d": 0.2,
+        "avg_mae_10d": -0.2,
+        "setup": "trend_volume"
+      },
+      {
+        "signals": 8,
+        "resolved": 8,
+        "pending": 0,
+        "win_rate": 0.0,
+        "avg_return_1d": 0.0025,
+        "avg_return_3d": 0.0025,
+        "avg_return_5d": 0.0025,
+        "avg_return_10d": 0.0025,
+        "avg_mfe_10d": 0.2,
+        "avg_mae_10d": -0.2,
+        "setup": "baseline_trend"
+      },
+      {
+        "signals": 2,
+        "resolved": 2,
+        "pending": 0,
+        "win_rate": 1.0,
+        "avg_return_1d": null,
+        "avg_return_3d": null,
+        "avg_return_5d": null,
+        "avg_return_10d": null,
+        "avg_mfe_10d": 0.15,
+        "avg_mae_10d": -0.15,
+        "setup": "range_expansion_breakout"
+      },
+      {
+        "signals": 2,
+        "resolved": 2,
+        "pending": 0,
+        "win_rate": 0.0,
+        "avg_return_1d": null,
+        "avg_return_3d": null,
+        "avg_return_5d": null,
+        "avg_return_10d": null,
+        "avg_mfe_10d": 0.2,
+        "avg_mae_10d": -0.2,
+        "setup": "orderly_breakout"
+      },
+      {
+        "signals": 3,
+        "resolved": 0,
+        "pending": 3,
+        "win_rate": null,
+        "avg_return_1d": null,
+        "avg_return_3d": null,
+        "avg_return_5d": null,
+        "avg_return_10d": null,
+        "avg_mfe_10d": null,
+        "avg_mae_10d": null,
+        "setup": "event_momentum"
+      },
+      {
+        "signals": 2,
+        "resolved": 0,
+        "pending": 2,
+        "win_rate": null,
+        "avg_return_1d": null,
+        "avg_return_3d": null,
+        "avg_return_5d": null,
+        "avg_return_10d": null,
+        "avg_mfe_10d": null,
+        "avg_mae_10d": null,
+        "setup": "momentum_shakeout"
+      }
+    ],
+    "worst_combinations": [
+      {
+        "signals": 1,
+        "resolved": 1,
+        "pending": 0,
+        "win_rate": 0.0,
+        "avg_return_1d": -0.04,
+        "avg_return_3d": -0.04,
+        "avg_return_5d": -0.04,
+        "avg_return_10d": -0.04,
+        "avg_mfe_10d": 0.18,
+        "avg_mae_10d": -0.18,
+        "key": "score_lt12|rsi_75_85|sma20_gt12pct|macd_nonpos|vol_gt1|pattern_no"
+      },
+      {
+        "signals": 1,
+        "resolved": 1,
+        "pending": 0,
+        "win_rate": 0.0,
+        "avg_return_1d": -0.04,
+        "avg_return_3d": -0.04,
+        "avg_return_5d": -0.04,
+        "avg_return_10d": -0.04,
+        "avg_mfe_10d": 0.27,
+        "avg_mae_10d": -0.27,
+        "key": "score_lt12|rsi_gt85|sma20_6_12pct|macd_nonpos|vol_gt1|pattern_yes"
+      },
+      {
+        "signals": 2,
+        "resolved": 1,
+        "pending": 1,
+        "win_rate": 0.0,
+        "avg_return_1d": -0.04,
+        "avg_return_3d": -0.04,
+        "avg_return_5d": -0.04,
+        "avg_return_10d": -0.04,
+        "avg_mfe_10d": 0.36,
+        "avg_mae_10d": -0.36,
+        "key": "score_lt12|rsi_gt85|sma20_0_6pct|macd_nonpos|vol_lt0|pattern_no"
+      },
+      {
+        "signals": 1,
+        "resolved": 1,
+        "pending": 0,
+        "win_rate": 0.0,
+        "avg_return_1d": -0.03,
+        "avg_return_3d": -0.03,
+        "avg_return_5d": -0.03,
+        "avg_return_10d": -0.03,
+        "avg_mfe_10d": 0.19,
+        "avg_mae_10d": -0.19,
+        "key": "score_lt12|rsi_75_85|sma20_gt12pct|macd_nonpos|vol_gt1|pattern_yes"
+      },
+      {
+        "signals": 1,
+        "resolved": 1,
+        "pending": 0,
+        "win_rate": 0.0,
+        "avg_return_1d": -0.03,
+        "avg_return_3d": -0.03,
+        "avg_return_5d": -0.03,
+        "avg_return_10d": -0.03,
+        "avg_mfe_10d": 0.28,
+        "avg_mae_10d": -0.28,
+        "key": "score_lt12|rsi_gt85|sma20_gt12pct|macd_nonpos|vol_lt0|pattern_no"
+      },
+      {
+        "signals": 1,
+        "resolved": 1,
+        "pending": 0,
+        "win_rate": 0.0,
+        "avg_return_1d": -0.02,
+        "avg_return_3d": -0.02,
+        "avg_return_5d": -0.02,
+        "avg_return_10d": -0.02,
+        "avg_mfe_10d": 0.02,
+        "avg_mae_10d": -0.02,
+        "key": "score_lt12|rsi_60_75|sma20_6_12pct|macd_pos|vol_gt1|pattern_no"
+      },
+      {
+        "signals": 1,
+        "resolved": 1,
+        "pending": 0,
+        "win_rate": 0.0,
+        "avg_return_1d": -0.02,
+        "avg_return_3d": -0.02,
+        "avg_return_5d": -0.02,
+        "avg_return_10d": -0.02,
+        "avg_mfe_10d": 0.11,
+        "avg_mae_10d": -0.11,
+        "key": "score_lt12|rsi_60_75|sma20_0_6pct|macd_pos|vol_gt1|pattern_yes"
+      },
+      {
+        "signals": 1,
+        "resolved": 1,
+        "pending": 0,
+        "win_rate": 0.0,
+        "avg_return_1d": -0.02,
+        "avg_return_3d": -0.02,
+        "avg_return_5d": -0.02,
+        "avg_return_10d": -0.02,
+        "avg_mfe_10d": 0.38,
+        "avg_mae_10d": -0.38,
+        "key": "score_lt12|rsi_gt85|sma20_gt12pct|macd_pos|vol_gt1|pattern_no"
+      },
+      {
+        "signals": 1,
+        "resolved": 1,
+        "pending": 0,
+        "win_rate": 0.0,
+        "avg_return_1d": -0.01,
+        "avg_return_3d": -0.01,
+        "avg_return_5d": -0.01,
+        "avg_return_10d": -0.01,
+        "avg_mfe_10d": 0.03,
+        "avg_mae_10d": -0.03,
+        "key": "score_lt12|rsi_60_75|sma20_gt12pct|macd_nonpos|vol_gt1|pattern_yes"
+      },
+      {
+        "signals": 1,
+        "resolved": 1,
+        "pending": 0,
+        "win_rate": 0.0,
+        "avg_return_1d": -0.01,
+        "avg_return_3d": -0.01,
+        "avg_return_5d": -0.01,
+        "avg_return_10d": -0.01,
+        "avg_mfe_10d": 0.12,
+        "avg_mae_10d": -0.12,
+        "key": "score_12_14|rsi_60_75|sma20_6_12pct|macd_nonpos|vol_lt0|pattern_no"
+      }
+    ],
+    "worst_setups": [
+      {
+        "signals": 8,
+        "resolved": 8,
+        "pending": 0,
+        "win_rate": 0.0,
+        "avg_return_1d": 0.0025,
+        "avg_return_3d": 0.0025,
+        "avg_return_5d": 0.0025,
+        "avg_return_10d": 0.0025,
+        "avg_mfe_10d": 0.2,
+        "avg_mae_10d": -0.2,
+        "setup": "trend_volume"
+      },
+      {
+        "signals": 8,
+        "resolved": 8,
+        "pending": 0,
+        "win_rate": 0.0,
+        "avg_return_1d": 0.0025,
+        "avg_return_3d": 0.0025,
+        "avg_return_5d": 0.0025,
+        "avg_return_10d": 0.0025,
+        "avg_mfe_10d": 0.2,
+        "avg_mae_10d": -0.2,
+        "setup": "baseline_trend"
+      },
+      {
+        "signals": 2,
+        "resolved": 2,
+        "pending": 0,
+        "win_rate": 0.0,
+        "avg_return_1d": null,
+        "avg_return_3d": null,
+        "avg_return_5d": null,
+        "avg_return_10d": null,
+        "avg_mfe_10d": 0.2,
+        "avg_mae_10d": -0.2,
+        "setup": "orderly_breakout"
+      },
+      {
+        "signals": 17,
+        "resolved": 17,
+        "pending": 0,
+        "win_rate": 0.5294,
+        "avg_return_1d": -0.0076,
+        "avg_return_3d": -0.0076,
+        "avg_return_5d": -0.0076,
+        "avg_return_10d": -0.0076,
+        "avg_mfe_10d": 0.2124,
+        "avg_mae_10d": -0.2124,
+        "setup": "confirmed_pattern"
+      },
+      {
+        "signals": 2,
+        "resolved": 2,
+        "pending": 0,
+        "win_rate": 1.0,
+        "avg_return_1d": null,
+        "avg_return_3d": null,
+        "avg_return_5d": null,
+        "avg_return_10d": null,
+        "avg_mfe_10d": 0.15,
+        "avg_mae_10d": -0.15,
+        "setup": "range_expansion_breakout"
+      }
+    ]
+  },
+  "empty": {
+    "metric_scope": "signal",
+    "portfolio_metrics": {
+      "status": "unavailable",
+      "reason": "portfolio_replay_required",
+      "sample_unit": "portfolio",
+      "required_inputs": [
+        "fills",
+        "marks",
+        "cash_flows",
+        "costs"
+      ]
+    },
+    "since_date": "2026-04-01",
+    "signals": 0,
+    "resolved": 0,
+    "pending": 0,
+    "maturity": {
+      "resolved_ratio": 0.0,
+      "horizon_coverage": {
+        "1d": 0,
+        "3d": 0,
+        "5d": 0,
+        "10d": 0
+      },
+      "enough_for_rules": false,
+      "note": "usar 1d/3d para aprendizaje temprano y 5d/10d para validacion mas fuerte; no promover reglas sin evidencia suficiente"
+    },
+    "decisions": {},
+    "verdicts": {},
+    "agent_learning": {
+      "schema_version": "p-l104.agent-learning.v1",
+      "metric_scope": "attributed_agent",
+      "signal_metrics": {
+        "sample_unit": "signal",
+        "source": "attributed_agent_outcomes"
+      },
+      "portfolio_metrics": {
+        "status": "unavailable",
+        "reason": "portfolio_replay_required",
+        "sample_unit": "portfolio",
+        "required_inputs": [
+          "fills",
+          "marks",
+          "cash_flows",
+          "costs"
+        ]
+      },
+      "status": "unavailable",
+      "quality_status": "not_evaluable",
+      "quality_reason": "same_cycle_control_and_promotion_not_established",
+      "independent_validation": null,
+      "measurement_status": "unavailable",
+      "maturity": {
+        "horizon": "10d",
+        "status": "unavailable",
+        "matured": 0,
+        "evaluated": 0,
+        "immature": 0,
+        "maturity_unavailable": 0,
+        "return_unavailable": 0,
+        "direction_unavailable": 0
+      },
+      "same_cycle_control": {
+        "horizon": "10d",
+        "status": "unavailable",
+        "matured": 0,
+        "verified": 0,
+        "coverage": null
+      },
+      "collection": {
+        "returned_rows": 0,
+        "total_rows": null,
+        "limit": null,
+        "limit_reached": false,
+        "completeness": "unknown",
+        "window": null,
+        "as_of": null
+      },
+      "denominators": {
+        "signals_total": 0,
+        "attributed": 0,
+        "producer_attributed": 0,
+        "decision_attributed": 0,
+        "unavailable_attribution": 0,
+        "conflicting_attribution": 0,
+        "attribution_coverage": null,
+        "fallback": 0,
+        "llm": 0,
+        "deterministic": 0,
+        "execution_kinds": {},
+        "providers": {},
+        "models": {},
+        "fallback_reasons": {},
+        "parent_run_ids": {},
+        "retry_of": {},
+        "selected": 0,
+        "not_selected": 0,
+        "selection_unavailable": 0,
+        "gate": 0,
+        "execution_verified": 0,
+        "legacy_unverified": 0,
+        "matured": 0,
+        "attributed_matured": 0,
+        "matured_with_control": 0,
+        "attributed_matured_with_control": 0
+      },
+      "agents": [],
+      "stage_feedback": {
+        "selection": {
+          "selected": 0,
+          "not_selected": 0,
+          "unavailable": 0
+        },
+        "decision": {
+          "by_decision": {}
+        },
+        "gate": {},
+        "execution": {
+          "by_status": {},
+          "verified_signal_ids": [],
+          "unverified_signal_ids": []
+        },
+        "hypotheses": []
+      },
+      "actionability": {
+        "status": "blocked",
+        "descriptive_metrics_available": false,
+        "usable_for_agent_learning": false,
+        "usable_for_promotion": false,
+        "blockers": [
+          "no_direction_corrected_mature_returns",
+          "no_same_cycle_control_verified_at_10d",
+          "quality_status_not_evaluable"
+        ]
+      },
+      "method": {
+        "identity": "producer_agent_contract preferred; decision agent_contract only when producer identity is unavailable; never infer from symbol/source",
+        "hit_definition": "hit_rate_net_10bps uses signed forward return minus 10 bps > 0; gross_gt_1pct is retained as a separate historical metric; short reverses raw return; exit requires explicit position_direction",
+        "metric_aliases": {
+          "hit_rate": "hit_rate_net_10bps",
+          "avg_return": "signed_gross_return"
+        },
+        "eligible_denominator": "explicit mature outcome + return available + valid direction + source is not trade_memory",
+        "missing_identity": "excluded_from_agent_denominators",
+        "missing_direction": "excluded_from_direction_corrected_hit_denominators",
+        "same_cycle_control": "10d mature signal and verified control with matching signal_id and cycle_id",
+        "fallback": "separate from llm/deterministic; provider, model and reason retained when available",
+        "promotion": "disabled_until_mature_outcomes_and_same_cycle_controls"
+      }
+    },
+    "best_indicators": [],
+    "worst_indicators": [],
+    "best_combinations": [],
+    "setup_stats": [],
+    "worst_combinations": [],
+    "worst_setups": []
+  },
+  "ledger": {
+    "source": "trade_recommendations+paper_auto_trade_completed",
+    "learning_experiment_included": true,
+    "recommendations_raw": 4,
+    "recommendations_unique": 3,
+    "cycles_unique": 3,
+    "candidate_signals_unique": 2,
+    "rejected_plans_raw": 3,
+    "rejected_plans_unique": 2,
+    "executed_treatments": 1,
+    "non_executed_candidates": 1,
+    "blocked_candidates": 2,
+    "unavailable_identity_count": 3,
+    "legacy_unverified_count": 2,
+    "raw_recommendations": [
+      {
+        "recommendation_id": "r1",
+        "cycle_id": "c1",
+        "symbol": "AAA"
+      },
+      {
+        "recommendation_id": "r1",
+        "cycle_id": "c2",
+        "symbol": "AAA"
+      },
+      {
+        "recommendation_id": "r2",
+        "cycle_id": "c2",
+        "symbol": "BBB"
+      },
+      {
+        "recommendation_id": "",
+        "cycle_id": "c3",
+        "symbol": "CCC"
+      }
+    ],
+    "rejected_plans": [
+      {
+        "plan_id": "p1",
+        "symbol": "AAA",
+        "_event_cycle_id": "c1"
+      },
+      {
+        "symbol": "BBB",
+        "reason": "gate",
+        "_event_cycle_id": "c1"
+      }
+    ]
+  }
+}
