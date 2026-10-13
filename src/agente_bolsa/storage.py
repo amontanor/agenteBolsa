@@ -846,7 +846,7 @@ def _prepare_learning_observation_parameters(
     item: dict[str, Any],
     now: str,
 ) -> tuple[tuple[Any, ...], int]:
-    """Normaliza una observaciÃ³n antes de abrir la transacciÃ³n de escritura."""
+    """Normaliza una observación antes de abrir la transacción de escritura."""
 
     parameters = (
         item["observation_id"],
@@ -882,7 +882,7 @@ def _prepare_learning_observation_parameters(
 
 
 def _execute_learning_observation_upsert(cursor: sqlite3.Cursor, parameters: tuple[Any, ...]) -> None:
-    """Ejecuta solo el SQL sobre una conexiÃ³n ya abierta."""
+    """Ejecuta solo el SQL sobre una conexión ya abierta."""
     cursor.execute(
         """
         INSERT INTO learning_observations (
@@ -934,7 +934,7 @@ def _merge_json_dicts(existing: dict[str, Any], incoming: dict[str, Any]) -> dic
 
 
 def _json_safe(value: Any) -> Any:
-    """Normaliza NaN/Infinity solo para payloads nuevos que exigen JSON vÃ¡lido."""
+    """Normaliza NaN/Infinity solo para payloads nuevos que exigen JSON válido."""
 
     if isinstance(value, float) and not math.isfinite(value):
         return None
@@ -1424,10 +1424,10 @@ class Store:
         Es la ruta para contratos nuevos que requieren historial durable. La
         escritura es corta, idempotente para el mismo payload y publica un
         evento de conflicto si el mismo ``event_id`` llega con otro contenido.
-        ``lock_timeout_seconds`` permite a la telemetrÃ­a shadow fallar abierto
-        sin esperar el timeout de producciÃ³n cuando SQLite estÃ¡ bloqueado.
+        ``lock_timeout_seconds`` permite a la telemetría shadow fallar abierto
+        sin esperar el timeout de producción cuando SQLite está bloqueado.
         ``idempotent_on_content_hash`` se reserva para contratos cuyo hash
-        excluye campos de observaciÃ³n volÃ¡tiles.
+        excluye campos de observación volátiles.
         """
         encoded = _dumps(payload)
         candidate_hash = str(payload.get("content_hash") or "")
@@ -3587,7 +3587,6 @@ class Store:
                             "created_at": row["created_at"],
                         }
 
-
     def signal_outcome_by_id(self, signal_id: str) -> dict[str, Any] | None:
         with self.connect() as conn:
             row = conn.execute(
@@ -5015,8 +5014,8 @@ class Store:
             result["received"] += len(chunk)
             result["rows_received"] = result["received"]
             try:
-                # La construcciÃƒÂ³n y normalizaciÃƒÂ³n completa del chunk ocurre
-                # antes de abrir conexiÃƒÂ³n o iniciar BEGIN IMMEDIATE.
+                # La construcciÃ³n y normalizaciÃ³n completa del chunk ocurre
+                # antes de abrir conexiÃ³n o iniciar BEGIN IMMEDIATE.
                 prepared_chunk = [
                     _prepare_learning_observation_parameters(item, _utc_iso())
                     for item in chunk
@@ -5425,7 +5424,6 @@ class Store:
                             "created_at": row["created_at"],
                             "updated_at": row["updated_at"],
                         }
-
 
     def upsert_promotion_window(self, item: dict[str, Any]) -> None:
         now = _utc_iso()
@@ -6021,14 +6019,14 @@ class Store:
     def upsert_performance_daily(self, item: dict[str, Any]) -> None:
         # Las filas nuevas del contrato P-L40B usan una ruta conflict-safe. La
         # ruta legacy se conserva intacta para no reescribir ni reinterpretar
-        # las observaciones histÃ³ricas.
+        # las observaciones históricas.
         if isinstance(item.get("performance_benchmark"), dict) or isinstance(
             (item.get("payload") or {}).get("performance_benchmark"), dict
         ):
             self.upsert_performance_benchmark(item)
             return
-        # Un caller legacy no puede borrar el bloque canÃ³nico de una fila ya
-        # instrumentada. Se permite aÃ±adir/actualizar claves legacy, pero se
+        # Un caller legacy no puede borrar el bloque canónico de una fila ya
+        # instrumentada. Se permite añadir/actualizar claves legacy, pero se
         # conserva literalmente ``performance_benchmark`` y sus escalares.
         session_date = str(item.get("session_date") or "")
         if session_date:
@@ -6093,11 +6091,11 @@ class Store:
             )
 
     def upsert_performance_benchmark(self, item: dict[str, Any]) -> dict[str, Any]:
-        """Persiste una observaciÃ³n P-L40B sin sobrescritura silenciosa.
+        """Persiste una observación P-L40B sin sobrescritura silenciosa.
 
-        No aÃ±ade columnas ni tablas: el contrato vive dentro de ``payload_json``.
-        Una fila legacy existente para la misma sesiÃ³n se conserva y se informa
-        como conflicto; la revisiÃ³n explÃ­cita queda fuera de este lote.
+        No añade columnas ni tablas: el contrato vive dentro de ``payload_json``.
+        Una fila legacy existente para la misma sesión se conserva y se informa
+        como conflicto; la revisión explícita queda fuera de este lote.
         """
 
         benchmark = item.get("performance_benchmark") or (item.get("payload") or {}).get("performance_benchmark")

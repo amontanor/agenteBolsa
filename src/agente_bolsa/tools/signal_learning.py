@@ -488,7 +488,7 @@ def _persist_signal_outcome_captures(
         frame_by_symbol: dict[str, pd.DataFrame] = {}
         for row in _iter_signal_prediction_events(store, signals):
             if not validate_h_capture_event(row, expected_event_type=PREDICTION_EVENT_TYPE):
-                LOGGER.warning("Se descarta evento H invÃ¡lido antes de observar outcome: %s", row.get("event_id"))
+                LOGGER.warning("Se descarta evento H inválido antes de observar outcome: %s", row.get("event_id"))
                 continue
             prediction_event = row.get("payload")
             if not isinstance(prediction_event, dict):
@@ -524,7 +524,7 @@ def _persist_signal_outcome_captures(
                 LOGGER.exception("No se pudo persistir outcome prospectivo para %s", signal_id)
     except Exception:  # noqa: BLE001 - observation cannot block legacy outcomes.
         observation_failed = True
-        LOGGER.exception("No se pudo recorrer capturas prospectivas de seÃ±ales")
+        LOGGER.exception("No se pudo recorrer capturas prospectivas de señales")
     return not observation_failed
 
 
@@ -1622,7 +1622,7 @@ def update_signal_outcomes(
             warnings.append("prospective_capture_observation_failed")
     except Exception:  # noqa: BLE001 - prospective telemetry remains fail-open.
         warnings.append("prospective_capture_observation_failed")
-        LOGGER.exception("FallÃ³ observaciÃ³n prospectiva; se conserva outcome legacy")
+        LOGGER.exception("Falló observación prospectiva; se conserva outcome legacy")
     return {"updated": updated, "signals": len(signals), "symbols": len(symbols), "warnings": warnings[:20],
             "bars_trimmed_universe": bars_trimmed, "last_completed_session": last_completed,
             "session_seal_degraded": seal_degraded}
