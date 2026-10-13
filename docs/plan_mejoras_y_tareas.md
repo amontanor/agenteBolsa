@@ -1,3 +1,88 @@
+## Despliegue verificado .369 — 13 de octubre de 2026
+
+Dictamen: **deployed**. La imagen .369 sustituyó a .364 a las 09:46 Madrid,
+con XNYS cerrado. Scheduler, web y auxiliar ejecutan la misma imagen inmutable:
+sha256:cbc77775407aa56f12be8be31a9000f888720c8d27d141112d33c259d284dde7. Los 211 hashes de fuentes coinciden en los tres servicios.
+
+Se despliega la observación preparada en .368 y las reparaciones de memoria y
+del adaptador CI. La política nueva permanece inactiva. Configuración efectiva:
+learning habilitado, 15% de exposición, 1.000 USD por compra, tres compras
+diarias, ampliaciones desactivadas y `builtin_pullback` en sombra. No hubo
+promociones, cambios de límites, proveedor o estrategia ni órdenes manuales.
+
+Fuente funcional: HEAD 02f6d8ddf54084b9d94b91132a3a0e83495fade7, tree 05f54b96ea754ea1339951ac3c8577757e208745, rama `codex/bolsa-repair-oct13`.
+El árbol estaba limpio antes del corte; los commits posteriores sólo documentan
+resultados. Los cinco archivos protegidos coinciden con .364. Los hashes de
+application.env, runtime.env y kernel_manifest.json se conservaron. No se ejecutó
+kernel-seal ni se copió un manifiesto. Compose recreó exclusivamente scheduler,
+web y auxiliary mediante `up -d --no-deps`. Las imágenes .364 y .321 se conservan.
+
+QA del árbol definitivo: **2.992 passed, 1 skipped preexistente, 0 failed**,
+765,52 segundos de tiempo total. El skip corresponde a un histórico local
+unavailable; no se modificó. Ruff, NUL (571 archivos), diff, configuración y
+smoke Windows pasan. Python del proyecto, PYTHONPATH exacto, DATA_DIR temporal,
+`_env_file=None`, proveedores locales y bloqueo de acceso externo en tests.
+Journal: EF99/oct13_0369_final_full.jsonl.
+
+El smoke ARM pasó con 211 hashes y cero OOM. La medición sintética de 200.000
+señales, con 24 KB descartables por fila, registró 556,5 MiB de RSS para las
+métricas y 877,1 MiB para outcomes con entradas distintas y serialización real,
+sin OOM bajo 1.536 MiB. La base utilizada era temporal y vacía; precios y
+capturas estaban simulados. No equivale a medir el download, las capturas
+históricas, el digest ni el postmarket completos. La paridad de resultados,
+capturas, IDs, hashes, consultas, errores y cierre de recursos se comprobó localmente.
+
+Los iteradores conservan selección, SQL, orden, filtros y límites. La proyección
+retiene sólo los carriers consumidos; no reduce los límites de 200.000/100.000
+ni los denominadores. CI402 evita reintentos HTTP 402 en ImprovementLLMClient y
+conserva su fallback. No corrige los reintentos internos de CrewAI ni el saldo
+del proveedor; no hubo pagos ni cambios de configuración.
+
+El kernel acreditó OOM anteriores en el cgroup de 2 GiB y 11 reinicios de .364.
+El último run del día 12 estaba en outcome_update antes del OOM; esto no prueba
+la asignación exacta que lo causó. Su terminal canónico es
+`pmr:pmr_150ac5ed97a6:terminal:failed`, del 13 de octubre a las 04:14:00 UTC,
+con `owner_dead_recovered`. La lectura anterior era incompleta: revisaba la vista
+runtime y eventos post_market_review_failed, omitiendo postmarket_run. No se
+fabricó ningún terminal. El snapshot EOD del día 12 permanece collecting/unavailable;
+se descartó un catchup que habría asociado la cartera del día 13 al día 12.
+
+Preflight fresco a las 09:45:59 Madrid: terminal failed acreditado, 84 estados
+runtime, ningún job/reintento/lease activo, kernel ok, paper true, live false y
+auto-apply false. Salud operativa: cero alertas críticas y cuatro warnings.
+El primer preflight agotó una lectura porque su deadline incluía el cálculo del
+calendario; abortó sin cambiar servicios. Se corrigió sólo el helper mediante
+consulta exacta, cobertura posterior acotada y presupuesto por lectura.
+
+La primera construcción ARM agotó 120 segundos; se comprobó que no quedaban
+procesos propios activos. El reintento con log persistido reutilizó la capa COPY
+y terminó correctamente. El primer harness falló por usar str en vez de Path;
+se corrigió sólo el harness y se conservó la evidencia. No se repitió la suite
+ni se cambió la imagen. El ZIP definitivo v2 contiene sólo Python; los YAML se
+heredan de la base y coinciden por hash con QA local. SHA del ZIP: 9abc8223bfceb313e108c4e4c47c1d83bdd31cc028d85cc4bb04bbf3b38301ec.
+
+Aceptación: HTTP 200, scheduler lógico único con PID 7 y token 47424932, actividad
+fresca y creciente de portfolio_watch/CI y auxiliar idle con cadencia de 300 s.
+Dos controles separados 130.9 s y observación de recursos durante
+600.8 s (14 muestras): cero reinicios y cero OOM.
+Kernel, flags, política inactiva y ausencia de alertas críticas comprobados.
+Web alcanzó el límite del cgroup con reclamación memory.max: una lectura mostró
+690 MB de caché de archivos, 410 MB inactivos y 145 MB de RSS del proceso principal.
+No se presenta como OOM; queda una auditoría de caché/lecturas UI, sin subir límites.
+Persisten warnings de deterioro de los setups confirmed_pattern, orderly_breakout
+y trend_volume, y de atribución postmarket degradada.
+
+Evidencia: EF99/release_oct13_0369_deployment.json,
+EF99/deploy_oct13_0369_cut_receipt.json, EF99/release_oct13_0369_local_qa.json,
+EF99/release_oct13_0369_arm_qa.json y EF99/release_oct13_0369_arm_memory_qa.json.
+
+Pendiente: observar un postmarket productivo completo y medir el digest; evaluar
+cinco sesiones shadow completas, cobertura de IDs ≥95%, reconciliación de
+cantidades/protección y recibos humanos antes de activar tamaño, ampliaciones o
+score. Se conservan los criterios de promoción a 20%/25%. La revisión del día 12
+no se modificó y la automatización de despliegue sigue pausada. No se hizo push.
+
+
 ## Intento automatizado 13-oct08:07Madrid — bloqueado
 
 Dictamen:precondition_not_met. XNYS cerrado,próxima apertura13-oct15:30Madrid,
