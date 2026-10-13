@@ -134,4 +134,5 @@ __all__ = ["__version__"]
 # Oct11: bounded approval artifact reader; preserves digest contract.
 # Oct11: stream research cycles and release reconstructed run states.
 # Oct12: human-gated proportional paper capital; score and adds remain separate.
-__version__ = "0.4.368"
+# Oct13: compact historical learning carriers and fail-fast CI HTTP402; policy inactive.
+__version__ = "0.4.369"
