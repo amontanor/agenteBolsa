@@ -457,7 +457,7 @@ class ImprovementLLMClient:
             status = int(status) if status is not None else None
         except (TypeError, ValueError):
             status = None
-        if status == 402:
+        if status == 402 or _safe_error_status(str(exc)) == 402:
             return f"HTTP 402: {exc}"
         if endpoint.name == "local_fallback" and endpoint.base_url.rstrip("/").startswith("http://127.0.0.1:8080"):
             return (

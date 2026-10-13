@@ -88,3 +88,10 @@ def test_402_terminal_classification_without_recovery(tmp_path, monkeypatch, fal
     assert len(calls) == (2 if fallback_enabled else 1)
     assert events[-1][1]['error_status'] == 402
     assert events[-1][1]['error_class'] == 'account_funds_exhausted'
+
+
+def test_local_fallback_preserves_402_text(tmp_path):
+    client = ImprovementLLMClient(Settings(_env_file=None, DATA_DIR=tmp_path))
+    endpoint = SimpleNamespace(name='local_fallback', base_url='http://127.0.0.1:8080/v1')
+    error = client._format_endpoint_error(endpoint, OSError('HTTP 402: Insufficient account funds'))
+    assert error.startswith('HTTP 402:')
