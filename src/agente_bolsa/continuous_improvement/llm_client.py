@@ -30,14 +30,18 @@ def _is_quota_exhausted_error(error_text: str) -> bool:
 
 def _safe_error_status(error_text: str) -> int | None:
     text = str(error_text or "").lower()
-    for code in (401, 403, 404, 408, 409, 429, 500, 502, 503, 504):
-        if f"http {code}" in text or f"status_code={code}" in text or f"code={code}" in text:
+    for code in (401, 402, 403, 404, 408, 409, 429, 500, 502, 503, 504):
+        if any(marker in text for marker in (
+            f"http {code}", f"status_code={code}", f"code={code}", f"error code: {code}",
+        )):
             return code
     return None
 
 
 def _safe_error_class(error_text: str) -> str:
     text = str(error_text or "").lower()
+    if _safe_error_status(text) == 402:
+        return "account_funds_exhausted"
     if _safe_error_status(text) == 429 or _is_quota_exhausted_error(text):
         return "quota_exhausted"
     if "timeout" in text:
@@ -425,7 +429,7 @@ class ImprovementLLMClient:
             except Exception as exc:  # noqa: BLE001
                 last_error = self._format_endpoint_error(endpoint, exc)
                 LOGGER.warning("Improvement LLM call failed on %s attempt %s: %s", endpoint.name, attempt + 1, exc)
-                if _is_quota_exhausted_error(last_error):
+                if _safe_error_status(last_error) == 402 or _is_quota_exhausted_error(last_error):
                     break
                 if attempt < retries:
                     time.sleep(min(2**attempt, 8))
@@ -446,6 +450,15 @@ class ImprovementLLMClient:
         )
 
     def _format_endpoint_error(self, endpoint: _ImprovementEndpoint, exc: Exception) -> str:
+        status = getattr(exc, "status_code", None)
+        if status is None:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+        try:
+            status = int(status) if status is not None else None
+        except (TypeError, ValueError):
+            status = None
+        if status == 402:
+            return f"HTTP 402: {exc}"
         if endpoint.name == "local_fallback" and endpoint.base_url.rstrip("/").startswith("http://127.0.0.1:8080"):
             return (
                 "fallback local no disponible en 127.0.0.1:8080 "
