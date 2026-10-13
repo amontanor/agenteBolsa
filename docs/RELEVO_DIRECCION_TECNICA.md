@@ -1,3 +1,25 @@
+## Intento automatizado 13-oct08:07Madrid — bloqueado
+
+Dictamen:precondition_not_met. XNYS cerrado,próxima apertura13-oct15:30Madrid,
+pero continuous_improvement running ci_sched_57b02603af40 iniciado08:07:56.
+No se acredita terminal postmarket12-oct: sin coordinación12-oct en runtime
+recogido, terminales recientes acotados siguen siendo fallos9-oct. Es evidencia
+unavailable para este gate, no afirmación de ausencia absoluta en toda la BD.
+Store.read_connection,SELECT acotados,cierre explícito y procesos contrastados.
+Producción .364,kernelok,papertrue/livefalse/auto-applyfalse.
+
+Git candidato limpio HEAD7b597a56498b56847a41b7650a39e1f14b5e6e61,
+tree692eefdcf3e820f6e9d5916d5dd5145970f62f1e. QA e imagen .368 anteriores
+no se repiten ni se confunden con despliegue. Sin corte,reinicio,órdenes,
+reparaciones,locks borrados ni resellado. Automatización se pausa al concluir
+este intento; la revisión12-oct permanece intacta. Recibo y lectura preservados:
+EF99/release_oct13_0368_attempt_0807.json,
+EF99/deploy_oct13_0368_preflight_0807_readonly.json.
+
+AGENTS solicita caveman; no se encontró SKILL.md en catálogo ni raíces de skills
+y plugins inspeccionadas. No se afirma haberlo invocado. Esta carencia de estilo
+no sustituye ni altera los gates operativos que bloquean el intento.
+
 ## Resultado del nuevo intento — 12-oct18:42Madrid
 
 precondition_not_met. Revalidación fresca:continuous_improvement running,
