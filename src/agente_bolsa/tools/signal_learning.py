@@ -1546,6 +1546,29 @@ def _verdict(outcome: dict[str, Any]) -> str:
     return "flat"
 
 
+def _compact_outcome_update_signal(signal: dict[str, Any]) -> dict[str, Any]:
+    """Retain exactly the fields consumed by outcomes and prospective capture."""
+
+    identity_fields = ("signal_id", "signal_capture_id", "signal_source_run_id", "candidate_id")
+    fields = ("symbol", "signal_date", "source_run_id", *identity_fields)
+    compact = {key: signal[key] for key in fields if key in signal}
+    features = signal.get("features", {}) or {}
+    if isinstance(features, Mapping):
+        feature_fields = ("entry_price", "close", "stop_loss", "take_profit", *identity_fields)
+        projected = {key: features[key] for key in feature_fields if key in features}
+        producer = features.get("producer_agent_contract")
+        if isinstance(producer, Mapping):
+            projected["producer_agent_contract"] = {
+                key: producer[key] for key in ("cycle_id", "agent_run_id") if key in producer
+            }
+        compact["features"] = projected
+    else:
+        # Unsupported legacy shapes still fail per signal/observation, not during
+        # selection: preserve their existing warnings and fail-open captures.
+        compact["features"] = features
+    return compact
+
+
 def update_signal_outcomes(
     settings: Settings,
     store: Store,
@@ -1555,12 +1578,20 @@ def update_signal_outcomes(
     now: datetime | None = None,
     observed_at: datetime | None = None,
 ) -> dict[str, Any]:
-    signals = store.signal_outcomes(
-        limit=limit,
-        since_date=since_date,
-        include_lab_book=True,
-        include_learning_experiment=True,
-    )
+    reader = getattr(store, "iter_signal_outcomes", None)
+    kwargs = {
+        "limit": limit,
+        "since_date": since_date,
+        "include_lab_book": True,
+        "include_learning_experiment": True,
+    }
+    incoming = reader(**kwargs) if callable(reader) else store.signal_outcomes(**kwargs)
+    try:
+        signals = [_compact_outcome_update_signal(signal) for signal in incoming]
+    finally:
+        close = getattr(incoming, "close", None)
+        if callable(close):
+            close()
     symbols = sorted({signal["symbol"] for signal in signals})
     if not signals or not symbols:
         return {"updated": 0, "signals": 0, "symbols": 0, "warnings": [],

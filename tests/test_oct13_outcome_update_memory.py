@@ -1,9 +1,9 @@
 """Outcome update parity against frozen c1ffb964 implementation; no providers."""
+import tracemalloc
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-import tracemalloc
 
 import pandas as pd
 import pytest
@@ -43,7 +43,7 @@ def fixture():
     return signals, events, data
 
 
-@pytest.mark.parametrize("variant", ["normal", "ambiguous", "mismatch", "missing_symbol", "empty_symbol", "malformed", "download_failure", "capture_failure", "bulk_failure"])
+@pytest.mark.parametrize("variant", ["normal", "ambiguous", "mismatch", "missing_symbol", "empty_symbol", "malformed", "download_failure", "capture_failure", "bulk_failure", "feature_identity", "empty", "single_writes"])
 def test_update_and_captures_exact_parity(monkeypatch, variant):
     signals, events, data = fixture()
     if variant == "ambiguous":
@@ -53,6 +53,12 @@ def test_update_and_captures_exact_parity(monkeypatch, variant):
         signals[0]["features"]["producer_agent_contract"]["agent_run_id"] = "different"
         signals[1]["features"].pop("producer_agent_contract")
         signals[2]["signal_capture_id"] = "different"
+    if variant == "feature_identity":
+        for signal in signals:
+            for field in ("signal_capture_id", "signal_source_run_id", "candidate_id"):
+                signal["features"][field] = signal.pop(field)
+    if variant == "empty":
+        signals.clear()
     if variant == "missing_symbol":
         data = data.drop(columns="BBB", level=0)
     if variant == "empty_symbol":
@@ -87,6 +93,16 @@ def test_update_and_captures_exact_parity(monkeypatch, variant):
             self.event_reads = []
             self.closed = False
             self.saved = None
+
+        def __getattribute__(self, name):
+            if name == "update_signal_outcomes_bulk" and variant == "single_writes":
+                raise AttributeError(name)
+            return super().__getattribute__(name)
+
+        def update_signal_outcome(self, signal_id, outcome):
+            if self.saved is None:
+                self.saved = {}
+            self.saved[signal_id] = deepcopy(outcome)
 
         def signal_outcomes(self, **kwargs):
             self.reads.append(kwargs)
@@ -124,6 +140,8 @@ def test_update_and_captures_exact_parity(monkeypatch, variant):
         if function is learning.update_signal_outcomes and hasattr(learning, "_compact_outcome_update_signal"):
             assert store.closed
     assert outputs[0] == outputs[1]
+    if variant in {"normal", "feature_identity", "single_writes"}:
+        assert len(outputs[1][2]) == 18
 
 
 def test_update_peak_drops_historical_payloads(monkeypatch):
