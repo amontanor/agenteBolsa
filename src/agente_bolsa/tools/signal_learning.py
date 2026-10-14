@@ -1641,6 +1641,9 @@ def update_signal_outcomes(
     else:
         for signal_id, outcome in outcomes_to_save.items():
             store.update_signal_outcome(signal_id, outcome)
+    # Drop only local build buffers before the prospective capture walk. The
+    # Store owns its serialized/copy payload; never mutate caller-owned values.
+    del outcome_cache, outcomes_to_save, frame_by_symbol
     try:
         observation_ok = _persist_signal_outcome_captures(
             settings,
