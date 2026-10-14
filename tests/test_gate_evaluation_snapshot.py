@@ -190,8 +190,10 @@ def test_terminal_rejection_cannot_become_admitted_from_final_plan():
         final_plans=[type("Plan", (), {"recommendation": candidate})()],
         captured_at="2026-07-12T10:01:00+00:00",
     )["cand-1"]
-    assert snapshot["decision"] == "blocked"
+    assert snapshot["decision"] == "unavailable"
     assert snapshot["terminal_gate"] == "duplicate_symbol"
+    assert snapshot["authority_conflict"] is True
+    assert snapshot["gate_path"][10]["status"] == "blocked"
 
 
 def test_duplicate_rows_same_identity_are_conflict_and_cannot_admit():
@@ -215,6 +217,26 @@ def test_duplicate_rows_same_identity_are_conflict_and_cannot_admit():
     assert snapshot["identity_conflict"] is True
     assert duplicate["status"] == "unavailable"
     assert duplicate["identity_link_status"] == "conflict"
+
+
+def test_duplicate_rejected_plans_are_conflict_and_do_not_use_first_match():
+    candidate = _candidate()
+    snapshot = collect_gate_path(
+        cycle_id="cycle-1",
+        candidates=[candidate],
+        stage_rows={},
+        rejected_order_plans=[
+            {"stage": "cycle_order_limit", "candidate_id": "cand-1", "signal_id": "sig-1", "cycle_id": "cycle-1", "action": "buy", "reason": "daily_capacity"},
+            {"stage": "cycle_order_limit", "candidate_id": "cand-1", "signal_id": "sig-1", "cycle_id": "cycle-1", "action": "buy", "reason": "daily_capacity_other"},
+        ],
+        final_plans=[type("Plan", (), {"recommendation": candidate})()],
+        captured_at="2026-07-12T10:01:00+00:00",
+    )["cand-1"]
+    capacity = snapshot["gate_path"][14]
+    assert snapshot["decision"] == "unavailable"
+    assert snapshot["identity_conflict"] is True
+    assert capacity["status"] == "unavailable"
+    assert capacity["identity_link_status"] == "conflict"
 
 
 def test_symbol_only_link_is_weak_and_not_verified():
@@ -271,3 +293,24 @@ def test_quality_without_data_is_collecting_with_null_denominators():
     assert report["status"] == "collecting"
     assert report["snapshots"] == 0
     assert report["gates"]["evaluated"] == 0
+
+
+def test_quality_excludes_authority_conflicts_from_learning_denominators():
+    candidate = _candidate()
+    snapshot = collect_gate_path(
+        cycle_id="cycle-1",
+        candidates=[candidate],
+        stage_rows={
+            "duplicate_symbol": [{
+                "candidate_id": "cand-1", "signal_id": "sig-1", "cycle_id": "cycle-1",
+                "action": "buy", "approved": False, "reason": "duplicate_symbol",
+            }],
+        },
+        final_plans=[type("Plan", (), {"recommendation": candidate})()],
+        captured_at="2026-07-12T10:01:00+00:00",
+    )["cand-1"]
+    report = build_gate_effectiveness_quality([snapshot])
+    assert report["snapshots"] == 0
+    assert report["conflicts"] == 1
+    assert report["gates"]["candidates_reaching_gate"] == 0
+    assert report["warnings"] == ["identity_conflicts_excluded"]

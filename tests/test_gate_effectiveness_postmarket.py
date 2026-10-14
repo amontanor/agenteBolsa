@@ -19,7 +19,7 @@ def _snapshot():
     candidate = TradeRecommendation(symbol="AAA", action="buy", confidence=.8, reason="test", entry_price=100,
         decision_lineage={"signal_id": "sig-1", "candidate_id": "cand-1", "cycle_id": "cycle-1"},
         decision_context_snapshot={"snapshot_id": "ctx", "captured_at": "2026-07-10T10:00:00+00:00", "market_state_ref": {"content_hash": "h"}})
-    rows = {"deterministic_review": [{"candidate_id": "cand-1", "approved": True}]}
+    rows = {"deterministic_review": [{"candidate_id": "cand-1", "signal_id": "sig-1", "cycle_id": "cycle-1", "action": "buy", "approved": True}]}
     return collect_gate_path(cycle_id="cycle-1", candidates=[candidate], stage_rows=rows, captured_at="2026-07-10T10:01:00+00:00")["cand-1"]
 
 
@@ -41,3 +41,17 @@ def test_postmarket_gate_report_is_stable_and_persists_runtime(tmp_path):
     assert first["content_hash"] == second["content_hash"]
     assert (tmp_path / "reports" / "latest_gate_effectiveness_quality.json").exists()
     assert store.get_runtime_value("gate_effectiveness_quality_runtime")["status"] == "collecting"
+
+
+def test_postmarket_gate_report_excludes_conflicted_snapshots_from_quality(tmp_path):
+    store = _store(tmp_path)
+    store.save_signal_outcome(signal_id="sig-1", source_run_id="run", source="test", symbol="AAA", signal_date="2026-07-10", decision="candidate", features={}, gate={}, outcome={})
+    snapshot = _snapshot()
+    snapshot["authority_conflict"] = True
+    store.attach_gate_evaluation_snapshot("sig-1", snapshot)
+    report = build_gate_effectiveness_postmarket_report(store, session_date="2026-07-10")
+    assert report["coverage"]["snapshots"] == 1
+    assert report["coverage"]["snapshots_eligible"] == 0
+    assert report["coverage"]["conflicts"] == 1
+    assert report["window"]["conflicts_excluded"] == 1
+    assert report["gates"]["candidates_reaching_gate"] == 0
