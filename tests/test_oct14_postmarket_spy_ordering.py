@@ -53,6 +53,11 @@ def test_postmarket_prepares_authority_before_persisting_daily_row(monkeypatch, 
                            "attribution_persist_calls", "performance_calls"], 0)
     _job_harness(monkeypatch, store, counts=counts)
     order = []
+    completed = {}
+    def emit(_agent, event_type, _run, _message, payload):
+        if event_type == "post_market_review_completed":
+            completed.update(payload)
+    monkeypatch.setattr(scheduler, "_reporter", lambda *_: SimpleNamespace(emit=emit))
     monkeypatch.setattr(scheduler, "_ensure_postmarket_spy_eod", lambda *_: (
         order.append("authority") or {"persisted": True, "comparison_status": "comparable"}))
     previous = scheduler._persist_daily_performance
@@ -64,5 +69,6 @@ def test_postmarket_prepares_authority_before_persisting_daily_row(monkeypatch, 
                                              verbose=False, force=True)
     assert report is not None
     assert order == ["authority", "performance"]
-    assert report["spy_eod_receipt"]["comparison_status"] == "comparable"
+    assert "spy_eod_receipt" not in report
+    assert completed["spy_eod_receipt"]["comparison_status"] == "comparable"
     assert counts["reconcile_calls"] == counts["outcome_updates"] == 1

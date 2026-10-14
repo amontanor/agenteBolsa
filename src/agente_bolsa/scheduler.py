@@ -3622,8 +3622,6 @@ def post_market_review_job(
         current_stage = "spy_eod_authority"
         coordinator.stage(lease, current_stage, "started")
         spy_eod = _ensure_postmarket_spy_eod(settings, session_date)
-        if isinstance(report, dict):
-            report["spy_eod_receipt"] = spy_eod
         coordinator.stage(lease, current_stage, "completed")
         current_stage = "canonical_eod_account_snapshot"
         coordinator.stage(lease, current_stage, "started")
@@ -3764,6 +3762,7 @@ def post_market_review_job(
                     "summary": report["summary"],
                     "broker_reconciliation": reconciliation,
                     "measurement_pipeline": measurement_pipeline,
+                    "spy_eod_receipt": spy_eod,
                     "proposed_improvements": improvements[:5],
                     "next_session_guidance": report.get("next_session_guidance", [])[:8],
                 },

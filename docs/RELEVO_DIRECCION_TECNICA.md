@@ -19,6 +19,10 @@ Recibo SPY comparable apareció después, capturado04:05:13 UTC, con cierres
 778.0999755859375/778.010009765625. No se reescriben las filas ni se usa precio
 posterior como si hubiese estado disponible al decidir.
 
+La observación del recibo se adjunta al evento durable existente
+post_market_review_completed, no al report ya serializado; el recibo separado
+con content_hash conserva su autoridad.
+
 Candidato .373 prepara el recibo SPY antes de guardar la próxima performance_daily.
 Reutiliza recibo comparable validado; en ausencia usa refresh_and_capture_spy_eod
 existente para la sesión exacta. Una lectura/descarga adicional SPY puede ocurrir
