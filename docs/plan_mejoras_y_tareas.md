@@ -1,3 +1,35 @@
+## Cierre parcial de candidatos — 14-oct
+
+Tres lotes aislados preparados, sin integración ni despliegue:
+
+- EOD .373: HEAD funcional07489e2c, diez focales offline7.50s más contrato
+  de versión; Ruff completo, NUL572 y diff verdes. El recibo se prepara antes
+  de performance_daily y el evento completed conserva sesión/hash/path/reloj.
+- Crew402 .371: funcionalc8665a81, documental a43f863f/treec69d3bb6; siete
+  focales independientes offline1.18s. La revisión independiente informa13
+  focales; baterías solapadas, no se suman como suite. Sin mejora viva certificada.
+- Buffers .374: HEAD4d3aad50/tree2da4158e, rama codex/oct14-outcome-buffer-release;
+  diecisiete focales/paridad/versionoffline1.76s con Pythonproyecto, Ruff completo,
+  NUL572/diff verdes. Sólo del referencias locales tras persistir; no muta
+  diccionarios prestados. La QA inicial del worker con Python global no se
+  hereda; se documentó y repitió por esa causa concreta. No OOMtotal resuelto.
+
+Gates .370: sigue en revisión; no aceptar blocked como rechazo efectivo si
+existe plan final admitido de idéntica decisión. Exigir unavailable/conflict y
+exclusión de esa observación de aprendizaje; IDs incompatibles no se degradan
+a joins débiles. La propuesta de staging .372 es investigación, no código
+activado ni nuevo schema. Fullsuite/smokes/QA ARM/integración pendientes.
+
+Parche GTC propuesto válido (gitapplycheck exit0 y caracterización fakeAlpaca:
+bracketgtc,limit/fractional/sellDAY), SHA256dbc8609c64ea5671405e53fdca4431222008bf07cc79772636cb3e46648be296.
+execution.py protegido permanece intacto; solicitud de revisión humana pendiente.
+El cambio futuro no restaura órdenes de posiciones ya abiertas.
+
+El mantenimiento Git automático falló en commits por ref ajena turn-diffs rota;
+commits/árboles comprobados utilizables y limpios. No se borró/reparó la ref.
+No se suman focales como suite final, no se reservó release combinado ni imagen.
+Límites actuales/política inactiva/producción intactos en este trabajo.
+
 ## 14-oct — correcciones operativas en preparación (sin despliegue)
 
 Dictamen: candidato aislado .373 de medición EOD con QA focal; no release integrado
