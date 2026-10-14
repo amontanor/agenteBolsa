@@ -254,7 +254,7 @@ def collect_gate_path(
             bad = _contains_post(row)
             if bad:
                 raise ValueError(f"post_decision_field:{bad}")
-    final_key_counts: dict[tuple[str, str, str], int] = {}
+    final_key_counts: dict[tuple[str, str, str, str, str], int] = {}
     for plan in final_plans or []:
         rec = getattr(plan, "recommendation", None)
         key = gate_identity_key(rec, cycle_id)
@@ -274,6 +274,7 @@ def collect_gate_path(
         path = []
         terminal = None
         identity_conflict = False
+        authority_conflict = False
         for order, (gate_name, category) in enumerate(GATE_ORDER, 1):
             if terminal:
                 path.append(_gate_row(gate_name, category, None, "unavailable", order) | {"status": "not_evaluated"})
@@ -283,18 +284,26 @@ def collect_gate_path(
             identity_conflict = identity_conflict or link == "conflict"
             # Real order-plan rejection reasons are the authority for later gates.
             if gate_name in {"daily_capacity", "low_sample_quota", "strategy_pause"} and rejected_order_plans:
-                matching = [r for r in rejected_order_plans if _row_identity(r, candidate) != "unavailable"]
-                if matching:
-                    row, link = matching[0], _row_identity(matching[0], candidate)
+                rejection_rows = [
+                    rejection for rejection in rejected_order_plans
+                    if rejection_gate.get(str(rejection.get("stage") or "")) == gate_name
+                ]
+                rejection, rejection_link = _find_row(candidate, rejection_rows, candidates=candidates)
+                if link == "conflict" or rejection_link == "conflict":
+                    identity_conflict = True
+                    row, link = None, "conflict"
+                elif rejection is not None:
+                    row, link = rejection, rejection_link
                     row = dict(row)
                     row["approved"] = False
             entry = _gate_row(gate_name, category, row, link, order)
             path.append(entry)
             if entry["status"] == "blocked":
                 terminal = gate_name
+        authority_conflict = bool(terminal and identity_key in final_keys)
         decision = (
-            "blocked" if terminal
-            else "unavailable" if identity_conflict
+            "unavailable" if authority_conflict or identity_conflict
+            else "blocked" if terminal
             else "admitted" if identity_key in final_keys
             else "unavailable"
         )
@@ -322,6 +331,7 @@ def collect_gate_path(
             "terminal_gate": terminal,
             "decision": decision,
             "identity_conflict": identity_conflict,
+            "authority_conflict": authority_conflict,
             "captured_at": captured_at,
             "content_hash": "",
         }
@@ -378,7 +388,14 @@ def derive_gate_outcomes(snapshots: list[Mapping[str, Any]], outcomes_by_signal:
 
 
 def build_gate_effectiveness_quality(snapshots: list[Mapping[str, Any]], *, start: str | None = None, end: str | None = None, gate: str | None = None, category: str | None = None, outcomes_by_signal: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any]:
-    selected = [s for s in snapshots if (not start or str(s.get("captured_at", ""))[:10] >= start) and (not end or str(s.get("captured_at", ""))[:10] <= end)]
+    window = [s for s in snapshots if (not start or str(s.get("captured_at", ""))[:10] >= start) and (not end or str(s.get("captured_at", ""))[:10] <= end)]
+    conflicted = [
+        snapshot for snapshot in window
+        if snapshot.get("identity_conflict")
+        or snapshot.get("authority_conflict")
+        or any(row.get("identity_link_status") == "conflict" for row in snapshot.get("gate_path", []) or [])
+    ]
+    selected = [snapshot for snapshot in window if snapshot not in conflicted]
     rows = [r for s in selected for r in s.get("gate_path", []) if not gate or r.get("gate_name") == gate if not category or r.get("category") == category]
     counts = {"candidates_reaching_gate": len(rows), "evaluated": sum(r.get("status") in {"passed", "blocked"} for r in rows),
               "passed": sum(r.get("status") == "passed" for r in rows), "blocked": sum(r.get("status") == "blocked" for r in rows),
@@ -397,4 +414,5 @@ def build_gate_effectiveness_quality(snapshots: list[Mapping[str, Any]], *, star
     verified = sum(s.get("identity_status") == "verified" for s in selected)
     context = sum(bool(s.get("decision_context_snapshot_id")) for s in selected)
     categories = {name: sum(row.get("category") == name for row in rows) for name in ("eligibility", "safety", "capacity", "operational", "portfolio")}
-    return {"schema_version": SCHEMA_VERSION, "status": status, "snapshots": len(selected), "identity_weak": sum(s.get("identity_status") == "weak" for s in selected), "identity_unavailable": sum(s.get("identity_status") == "unavailable" for s in selected), "identity_coverage": round(verified / len(selected), 6) if selected else None, "context_coverage": round(context / len(selected), 6) if selected else None, "conflicts": 0, "maturity": maturity, "gates": counts, "categories": categories, "warnings": [], "unavailable_by_reason": {}}
+    warnings = ["identity_conflicts_excluded"] if conflicted else []
+    return {"schema_version": SCHEMA_VERSION, "status": status, "snapshots": len(selected), "identity_weak": sum(s.get("identity_status") == "weak" for s in selected), "identity_unavailable": sum(s.get("identity_status") == "unavailable" for s in selected), "identity_coverage": round(verified / len(selected), 6) if selected else None, "context_coverage": round(context / len(selected), 6) if selected else None, "conflicts": len(conflicted), "maturity": maturity, "gates": counts, "categories": categories, "warnings": warnings, "unavailable_by_reason": {}}
