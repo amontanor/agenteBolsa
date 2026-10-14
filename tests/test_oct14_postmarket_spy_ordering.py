@@ -10,13 +10,17 @@ from agente_bolsa.tools import spy_eod_authority
 def test_existing_comparable_receipt_avoids_duplicate_refresh(monkeypatch, tmp_path):
     settings = SimpleNamespace(data_dir=tmp_path)
     monkeypatch.setattr(spy_eod_authority, "load_spy_eod_receipt", lambda *_: {
-        "comparison_status": "comparable", "session_date": "2026-10-13"})
+        "comparison_status": "comparable", "session_date": "2026-10-13",
+        "content_hash": "local_receipt_hash", "receipt_path": "local_receipt.json"})
     def forbidden(*args, **kwargs):
         raise AssertionError("Existing authority must avoid another download")
     monkeypatch.setattr(spy_eod_authority, "refresh_and_capture_spy_eod", forbidden)
     result = scheduler._ensure_postmarket_spy_eod(settings, "2026-10-13")
     assert result["comparison_status"] == "comparable"
     assert result["source"] == "existing_receipt"
+    assert result["session_date"] == "2026-10-13"
+    assert result["receipt_content_hash"] == "local_receipt_hash"
+    assert result["receipt_path"] == "local_receipt.json"
 
 
 @pytest.mark.parametrize("existing", [None, {"comparison_status": "unavailable"}])

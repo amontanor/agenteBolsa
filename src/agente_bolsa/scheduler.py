@@ -3428,6 +3428,10 @@ def _ensure_postmarket_spy_eod(settings: Settings, session_date: str) -> dict[st
             return {
                 "persisted": True, "comparison_status": "comparable",
                 "source": "existing_receipt", "reason_codes": [],
+                "session_date": session_date,
+                "receipt_content_hash": receipt.get("content_hash"),
+                "receipt_path": receipt.get("receipt_path"),
+                "captured_at": receipt.get("captured_at"),
             }
         captured = refresh_and_capture_spy_eod(settings, session_date)
         receipt = captured.get("receipt") or {}
@@ -3435,6 +3439,10 @@ def _ensure_postmarket_spy_eod(settings: Settings, session_date: str) -> dict[st
             "persisted": bool(captured.get("persisted")),
             "comparison_status": receipt.get("comparison_status") or "unavailable",
             "source": "postmarket_refresh", "reason": captured.get("reason"),
+            "session_date": session_date,
+            "receipt_content_hash": receipt.get("content_hash"),
+            "receipt_path": captured.get("path") or receipt.get("receipt_path"),
+            "captured_at": receipt.get("captured_at"),
             "reason_codes": receipt.get("reason_codes", []),
         }
     except Exception as exc:  # noqa: BLE001 - benchmark never authorizes trading.
