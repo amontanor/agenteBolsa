@@ -49,3 +49,12 @@ Ruff no estaba instalado en el intérprete disponible (`No module named ruff`), 
 El ahorro queda acotado a las referencias locales de esta ventana entre persistencia y captura. No permite atribuir por sí solo los OOM del scheduler ni sustituye el estudio `.372` sobre materialización/staging de aprendizaje. La integración o promoción requiere revisión del commit, decisión sobre el bump de versión y validación proporcional posterior; este worktree no activa ni envía ninguna orden.
 
 La creación del commit emitió además un error heredado de Git durante `geometric-repack` por la ref rota `refs/codex/turn-diffs/captures/1786628847747/4ee266fa-eceb-479d-a4a7-b513226192d9/base`, pero el commit se creó con éxito y la validación del árbol candidato quedó limpia.
+## Cierre con intérprete y versión canónicos
+
+Dirección corrigió la validación inicial: el worker usó Python global, por lo que
+no se hereda como QA canónica. Con C:/Antonio/Bref/agenteBolsa/.venv/Scripts/python.exe,
+PYTHONPATH exacto, DATA_DIR temporal y socket.connect/create_connection bloqueados:
+17passed en1.76s (16 focales/paridad + contrato de versión). Ruff src/tests verde
+tras ordenar imports; NUL572 y diff verdes. Se reserva realmente __version__0.4.374
+y se alinea la aserción de versión. Sin cambios protegidos/producción; fullsuite,
+configuración/kernel, smoke/ARM e integración siguen pendientes.

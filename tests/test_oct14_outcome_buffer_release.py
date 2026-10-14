@@ -12,7 +12,6 @@ import pytest
 
 from agente_bolsa.tools import signal_learning as learning
 
-
 OBSERVED = datetime(2026, 10, 14, 12, tzinfo=timezone.utc)
 
 
