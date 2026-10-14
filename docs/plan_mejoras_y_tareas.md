@@ -1,3 +1,19 @@
+## Cierre de la revisión de gates — 14-oct
+
+El lote .370 quedó corregido tras revisión: HEAD0a8e2e43/tree374b4a7b, rama
+codex/oct14-gate-identity limpia. Identidad completa, rechazo ambiguo sin
+matching[0] y autoridad contradictoria unavailable/conflict; las observaciones
+con conflicto se excluyen de aprendizaje y se cuentan. La separación se hace
+en una pasada, sin comparaciones profundas cuadráticas. Treinta y dos focales
+offline4.35s más versión0.83s, Ruffcompleto/NUL571/diff verdes. Se corrigió la
+comprobación del worker que había recorrido0archivos y su aserción de versión.
+
+Cuatro candidatos revisados para ensayo aislado, no integrados ni desplegados:
+.370gates, .371Crew402, .373EOD, .374buffers. No se suma QA de árboles distintos
+como suite. Fullsuite única del árbol combinado definitivo, configuración/kernel,
+smokes/ARM y preflight operativo pendientes. GTC protegido sigue sólo propuesto
+y con revisión humana pendiente; no hay reparación automática de APO/HPE.
+
 ## Cierre parcial de candidatos — 14-oct
 
 Tres lotes aislados preparados, sin integración ni despliegue:
