@@ -389,13 +389,15 @@ def derive_gate_outcomes(snapshots: list[Mapping[str, Any]], outcomes_by_signal:
 
 def build_gate_effectiveness_quality(snapshots: list[Mapping[str, Any]], *, start: str | None = None, end: str | None = None, gate: str | None = None, category: str | None = None, outcomes_by_signal: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any]:
     window = [s for s in snapshots if (not start or str(s.get("captured_at", ""))[:10] >= start) and (not end or str(s.get("captured_at", ""))[:10] <= end)]
-    conflicted = [
-        snapshot for snapshot in window
-        if snapshot.get("identity_conflict")
-        or snapshot.get("authority_conflict")
-        or any(row.get("identity_link_status") == "conflict" for row in snapshot.get("gate_path", []) or [])
-    ]
-    selected = [snapshot for snapshot in window if snapshot not in conflicted]
+    conflicted = []
+    selected = []
+    for snapshot in window:
+        has_conflict = (
+            snapshot.get("identity_conflict")
+            or snapshot.get("authority_conflict")
+            or any(row.get("identity_link_status") == "conflict" for row in snapshot.get("gate_path", []) or [])
+        )
+        (conflicted if has_conflict else selected).append(snapshot)
     rows = [r for s in selected for r in s.get("gate_path", []) if not gate or r.get("gate_name") == gate if not category or r.get("category") == category]
     counts = {"candidates_reaching_gate": len(rows), "evaluated": sum(r.get("status") in {"passed", "blocked"} for r in rows),
               "passed": sum(r.get("status") == "passed" for r in rows), "blocked": sum(r.get("status") == "blocked" for r in rows),

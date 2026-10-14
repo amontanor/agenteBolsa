@@ -65,3 +65,14 @@ integración. Los commits muestran el aviso conocido de `geometric-repack` por
 la referencia ajena
 `refs/codex/turn-diffs/captures/1786628847747/4ee266fa-eceb-479d-a4a7-b513226192d9/base`;
 no se modificó esa referencia.
+
+## Cierre de revisión de dirección
+
+La exclusión de conflictos se realiza en una pasada, conservando orden y
+referencias originales, sin buscar cada snapshot en una lista de diccionarios
+profundos (coste cuadrático). Con Pythonproyecto, PYTHONPATH exacto, DATA_DIR
+temporal y socket.connect/create_connection bloqueados:32passed en4.35s.
+Ruff src/tests completo verde; NUL sin argumentos571archivos (la comprobación
+previa0archivos no acreditaba cobertura). Versión0.4.370 alineada. Cambios
+preparados para ensayo de integración; fullsuite/smoke/ARM y paridad combinada
+siguen pendientes, sin despliegue ni autoridad de ejecución nueva.
