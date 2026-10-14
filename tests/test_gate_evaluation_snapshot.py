@@ -10,10 +10,10 @@ from agente_bolsa.tools.gate_evaluation import (
 )
 
 
-def _candidate(*, signal="sig-1", candidate="cand-1"):
+def _candidate(*, signal="sig-1", candidate="cand-1", action="buy"):
     return TradeRecommendation(
         symbol="AAA",
-        action="buy",
+        action=action,
         confidence=0.8,
         reason="test",
         entry_price=100.0,
@@ -51,6 +51,56 @@ def test_admitted_requires_final_plan_and_keeps_missing_gates_unavailable():
     assert snap["decision"] == "admitted"
     assert snap["gate_path"][3]["status"] == "unavailable"
     assert snap["identity_status"] == "verified"
+
+
+def test_shared_signal_id_keeps_buy_and_exit_gate_paths_separate():
+    buy = _candidate(signal="daily:AAA", candidate="buy-candidate", action="buy")
+    exit = _candidate(signal="daily:AAA", candidate="exit-candidate", action="exit")
+    rows = {
+        "duplicate_symbol": [{
+            "candidate_id": "buy-candidate",
+            "signal_id": "daily:AAA",
+            "action": "buy",
+            "approved": False,
+            "reason": "buy-only",
+        }],
+    }
+    plan = type("Plan", (), {"recommendation": exit})()
+    result = collect_gate_path(
+        cycle_id="cycle-1",
+        candidates=[buy, exit],
+        stage_rows=rows,
+        final_plans=[plan],
+        captured_at="2026-07-12T10:01:00+00:00",
+    )
+
+    buy_snapshot = result["buy-candidate"]
+    exit_snapshot = result["exit-candidate"]
+    buy_duplicate = buy_snapshot["gate_path"][10]
+    exit_duplicate = exit_snapshot["gate_path"][10]
+    assert buy_duplicate["status"] == "blocked"
+    assert buy_snapshot["decision"] == "blocked"
+    assert exit_duplicate["status"] == "unavailable"
+    assert exit_snapshot["decision"] == "admitted"
+
+
+def test_signal_only_gate_row_with_other_action_is_unavailable():
+    candidate = _candidate(signal="daily:AAA", candidate="exit-candidate", action="exit")
+    snapshot = collect_gate_path(
+        cycle_id="cycle-1",
+        candidates=[candidate],
+        stage_rows={
+            "duplicate_symbol": [{
+                "signal_id": "daily:AAA",
+                "action": "buy",
+                "approved": False,
+            }],
+        },
+        captured_at="2026-07-12T10:01:00+00:00",
+    )["exit-candidate"]
+    duplicate = snapshot["gate_path"][10]
+    assert duplicate["status"] == "unavailable"
+    assert duplicate["identity_link_status"] == "unavailable"
 
 
 def test_symbol_only_link_is_weak_and_not_verified():
