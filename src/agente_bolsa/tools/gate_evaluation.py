@@ -76,11 +76,45 @@ def _lineage(value: Any) -> dict[str, Any]:
     return dict(_as_dict(value).get("decision_lineage") or {})
 
 
-def _identity(value: Any, cycle_id: str) -> tuple[str | None, str | None, str]:
+def _action(value: Any) -> str | None:
+    item = _as_dict(value)
     lineage = _lineage(value)
-    signal_id = str(lineage.get("signal_id") or "").strip() or None
-    candidate_id = str(lineage.get("candidate_id") or "").strip() or None
-    lineage_cycle = str(lineage.get("cycle_id") or cycle_id or "").strip()
+    raw = str(item.get("action") or item.get("side") or lineage.get("action") or "").strip().lower()
+    if raw == "sell":
+        return "exit"
+    return raw or None
+
+
+def _identity_fields(value: Any, cycle_id: str | None = None) -> tuple[str | None, str | None, str | None, str | None, str | None]:
+    item = _as_dict(value)
+    lineage = _lineage(value)
+    cycle = str(item.get("cycle_id") or lineage.get("cycle_id") or cycle_id or "").strip() or None
+    action = _action(value)
+    candidate_id = str(item.get("candidate_id") or lineage.get("candidate_id") or "").strip() or None
+    capture_id = str(item.get("signal_capture_id") or lineage.get("signal_capture_id") or "").strip() or None
+    signal_id = str(item.get("signal_id") or lineage.get("signal_id") or "").strip() or None
+    return cycle, action, candidate_id, capture_id, signal_id
+
+
+def gate_identity_key(value: Any, cycle_id: str | None = None) -> tuple[str, str, str] | None:
+    """Return exact decision identity for gate snapshot association.
+
+    Candidate and capture IDs are preferred over the shared daily signal ID.
+    The action remains part of the key so BUY and EXIT cannot inherit each
+    other's observational path.
+    """
+    cycle, action, candidate_id, capture_id, signal_id = _identity_fields(value, cycle_id)
+    if cycle_id and cycle and cycle != str(cycle_id).strip():
+        return None
+    canonical_id = candidate_id or capture_id or signal_id
+    if not cycle or not action or not canonical_id:
+        return None
+    return cycle, action, canonical_id
+
+
+def _identity(value: Any, cycle_id: str) -> tuple[str | None, str | None, str]:
+    lineage_cycle, _, candidate_id, _, signal_id = _identity_fields(value, cycle_id)
+    lineage_cycle = lineage_cycle or ""
     if lineage_cycle and str(cycle_id).strip() and lineage_cycle != str(cycle_id).strip():
         return candidate_id, signal_id, "unavailable"
     status = "verified" if candidate_id else ("weak" if signal_id else "unavailable")
@@ -88,16 +122,20 @@ def _identity(value: Any, cycle_id: str) -> tuple[str | None, str | None, str]:
 
 
 def _row_identity(row: Mapping[str, Any], candidate: Any) -> str:
-    candidate_id = str(_lineage(candidate).get("candidate_id") or "").strip()
-    signal_id = str(_lineage(candidate).get("signal_id") or "").strip()
-    if candidate_id and str(row.get("candidate_id") or "").strip() == candidate_id:
-        return "strong"
-    if signal_id and str(row.get("signal_id") or "").strip() == signal_id:
-        return "strong"
-    if (str(row.get("symbol") or "").upper(), str(row.get("action") or "").lower()) == (
-        str(_as_dict(candidate).get("symbol") or "").upper(), str(_as_dict(candidate).get("action") or "").lower()
-    ):
-        return "weak"
+    candidate_cycle, candidate_action, candidate_id, capture_id, signal_id = _identity_fields(candidate)
+    row_cycle, row_action, row_candidate_id, row_capture_id, row_signal_id = _identity_fields(row)
+    if row_cycle and candidate_cycle and row_cycle != candidate_cycle:
+        return "unavailable"
+    if row_action and candidate_action and row_action != candidate_action:
+        return "unavailable"
+    if row_candidate_id:
+        return "strong" if candidate_id and row_candidate_id == candidate_id else "unavailable"
+    if row_capture_id:
+        return "strong" if capture_id and row_capture_id == capture_id else "unavailable"
+    if row_signal_id and signal_id and row_signal_id == signal_id:
+        # A signal-only row cannot identify BUY versus EXIT. Keep it usable only
+        # when the row carries the same explicit action; otherwise it is unsafe.
+        return "weak" if row_action and candidate_action else "unavailable"
     return "unavailable"
 
 
@@ -117,15 +155,31 @@ def _gate_row(gate_name: str, category: str, row: Mapping[str, Any] | None, iden
             "evaluated_at": row.get("evaluated_at"), "identity_link_status": identity}
 
 
-def _find_row(candidate: Any, rows: list[Mapping[str, Any]] | None) -> tuple[Mapping[str, Any] | None, str]:
-    fallback = None
+def _find_row(
+    candidate: Any,
+    rows: list[Mapping[str, Any]] | None,
+    *,
+    candidates: list[Any] | None = None,
+) -> tuple[Mapping[str, Any] | None, str]:
+    strong_matches = []
+    weak_matches = []
     for row in rows or []:
         link = _row_identity(row, candidate)
         if link == "strong":
-            return row, link
-        if link == "weak" and fallback is None:
-            fallback = row
-    return (fallback, "weak") if fallback else (None, "unavailable")
+            strong_matches.append(row)
+        elif link == "weak":
+            if candidates is not None:
+                peer_matches = [peer for peer in candidates if _row_identity(row, peer) == "weak"]
+                if len(peer_matches) != 1:
+                    continue
+            weak_matches.append(row)
+    if len(strong_matches) == 1:
+        return strong_matches[0], "strong"
+    if len(strong_matches) > 1:
+        return None, "unavailable"
+    if len(weak_matches) == 1:
+        return weak_matches[0], "weak"
+    return None, "unavailable"
 
 
 def collect_gate_path(
@@ -165,17 +219,23 @@ def collect_gate_path(
             bad = _contains_post(row)
             if bad:
                 raise ValueError(f"post_decision_field:{bad}")
-    final_keys = set()
+    final_key_counts: dict[tuple[str, str, str], int] = {}
     for plan in final_plans or []:
         rec = getattr(plan, "recommendation", None)
-        final_keys.add(str(_lineage(rec).get("signal_id") or "").strip())
+        key = gate_identity_key(rec, cycle_id)
+        if key is not None:
+            final_key_counts[key] = final_key_counts.get(key, 0) + 1
+    final_keys = {key for key, count in final_key_counts.items() if count == 1}
     for candidate in candidates:
         item = _as_dict(candidate)
         candidate_id, signal_id, identity_status = _identity(candidate, cycle_id)
-        if not candidate_id and not signal_id:
-            key = f"unavailable:{str(item.get('symbol') or '').upper()}:{str(item.get('action') or '').lower()}:{len(result)}"
+        identity_key = gate_identity_key(candidate, cycle_id)
+        if identity_key is None:
+            # Keep the public result key stable even when identity validation
+            # fails; the failure must affect linkage/decision, not collection.
+            key = candidate_id or signal_id or f"unavailable:{len(result)}"
         else:
-            key = candidate_id or signal_id
+            key = identity_key[2]
         path = []
         terminal = None
         for order, (gate_name, category) in enumerate(GATE_ORDER, 1):
@@ -183,7 +243,7 @@ def collect_gate_path(
                 path.append(_gate_row(gate_name, category, None, "unavailable", order) | {"status": "not_evaluated"})
                 continue
             rows = observed_rows.get(gate_name)
-            row, link = _find_row(candidate, rows)
+            row, link = _find_row(candidate, rows, candidates=candidates)
             # Real order-plan rejection reasons are the authority for later gates.
             if gate_name in {"daily_capacity", "low_sample_quota", "strategy_pause"} and rejected_order_plans:
                 matching = [r for r in rejected_order_plans if _row_identity(r, candidate) != "unavailable"]
@@ -195,7 +255,7 @@ def collect_gate_path(
             path.append(entry)
             if entry["status"] == "blocked":
                 terminal = gate_name
-        decision = "admitted" if signal_id in final_keys else ("blocked" if terminal else "unavailable")
+        decision = "admitted" if identity_key in final_keys else ("blocked" if terminal else "unavailable")
         if decision == "admitted" and not terminal:
             for entry in path:
                 if entry["status"] == "unavailable":
@@ -205,6 +265,7 @@ def collect_gate_path(
             "snapshot_id": f"gate_{_hash({'cycle_id': cycle_id, 'candidate_id': candidate_id, 'signal_id': signal_id, 'symbol': item.get('symbol'), 'action': item.get('action')})}",
             "candidate_id": candidate_id,
             "signal_id": signal_id,
+            "action": _action(candidate),
             "signal_capture_id": _lineage(candidate).get("signal_capture_id"),
             "cycle_id": cycle_id,
             "identity_status": identity_status,

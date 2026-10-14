@@ -63,7 +63,7 @@ from .tools.decision_context import build_decision_context_snapshot, copy_snapsh
 from .tools.decision_lineage import build_decision_lineage
 from .tools.deterministic_reviewer import recommendation_input_fingerprint, review_recommendations
 from .tools.execution import submit_paper_order_plan
-from .tools.gate_evaluation import collect_gate_path
+from .tools.gate_evaluation import collect_gate_path, gate_identity_key
 from .tools.h_capture import build_prediction_capture, persist_h_capture_event
 from .tools.learning_mode import (
     LEARNING_EXPERIMENT_SOURCE,
@@ -2235,11 +2235,24 @@ def _auto_paper_trade(
         rejected_order_plans=rejected_order_plans,
         captured_at=datetime.now(timezone.utc).isoformat(),
     )
-    gate_by_signal = {str(item.get("signal_id")): item for item in gate_snapshots.values() if item.get("signal_id")}
+    gate_by_identity: dict[tuple[str, str, str], dict[str, Any]] = {}
+    ambiguous_gate_identities: set[tuple[str, str, str]] = set()
+    for snapshot in gate_snapshots.values():
+        identity_key = gate_identity_key(snapshot, run_id)
+        if identity_key is None:
+            continue
+        if identity_key in gate_by_identity:
+            ambiguous_gate_identities.add(identity_key)
+            continue
+        gate_by_identity[identity_key] = snapshot
 
     def _attach_gate_snapshot(item: Any) -> Any:
-        lineage = dict(getattr(item, "decision_lineage", {}) or {})
-        snapshot = gate_by_signal.get(str(lineage.get("signal_id") or ""), {})
+        identity_key = gate_identity_key(item, run_id)
+        snapshot = (
+            {}
+            if identity_key is None or identity_key in ambiguous_gate_identities
+            else gate_by_identity.get(identity_key, {})
+        )
         return replace(item, gate_evaluation_snapshot=copy.deepcopy(snapshot))
 
     reviewed_recommendations = [_attach_gate_snapshot(item) for item in reviewed_recommendations]
