@@ -2235,8 +2235,8 @@ def _auto_paper_trade(
         rejected_order_plans=rejected_order_plans,
         captured_at=datetime.now(timezone.utc).isoformat(),
     )
-    gate_by_identity: dict[tuple[str, str, str], dict[str, Any]] = {}
-    ambiguous_gate_identities: set[tuple[str, str, str]] = set()
+    gate_by_identity: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+    ambiguous_gate_identities: set[tuple[str, str, str, str, str]] = set()
     for snapshot in gate_snapshots.values():
         identity_key = gate_identity_key(snapshot, run_id)
         if identity_key is None:
