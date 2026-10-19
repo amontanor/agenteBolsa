@@ -1667,6 +1667,34 @@ def _persist_capital_deployment_funnel_shadow(
         }
 
 
+def _persist_gate_capture_observation(
+    store: Store, reporter: Any, run_id: str, snapshots: dict[str, dict[str, Any]],
+) -> None:
+    """Retain all decision paths in the existing event, without changing learning.
+
+    The legacy outcome attachment accepts one snapshot per signal. Its conflict
+    counter must not discard a second BUY/EXIT decision sharing that signal.
+    This event is observational; it does not grant multi-decision learning
+    authority or rewrite the original immutable outcome attachment.
+    """
+    rows = list(snapshots.values())
+    attachment_counts = attach_gate_evaluation_snapshots(store, snapshots=rows)
+    if rows:
+        reporter.emit(
+            "self_improvement_engineer", "gate_evaluation_snapshots_captured", run_id,
+            f"Gate paths prospectivos capturados: {len(rows)}.",
+            {
+                "snapshots": len(rows),
+                "verified": sum(row.get("identity_status") == "verified" for row in rows),
+                "decision_paths_schema_version": "gate-decision-paths.v1",
+                "decision_paths": copy.deepcopy(rows),
+                "attachment_counts": attachment_counts,
+                "learning_authority": "legacy_single_snapshot_only",
+                "multi_decision_learning_status": "unavailable",
+            },
+        )
+
+
 def _auto_paper_trade(
     settings: Settings,
     store: Store,
@@ -2257,15 +2285,7 @@ def _auto_paper_trade(
 
     reviewed_recommendations = [_attach_gate_snapshot(item) for item in reviewed_recommendations]
     gated_recommendations = [_attach_gate_snapshot(item) for item in gated_recommendations]
-    attach_gate_evaluation_snapshots(store, snapshots=list(gate_snapshots.values()))
-    if gate_snapshots:
-        reporter.emit(
-            "self_improvement_engineer",
-            "gate_evaluation_snapshots_captured",
-            run_id,
-            f"Gate paths prospectivos capturados: {len(gate_snapshots)}.",
-            {"snapshots": len(gate_snapshots), "verified": sum(x.get("identity_status") == "verified" for x in gate_snapshots.values())},
-        )
+    _persist_gate_capture_observation(store, reporter, run_id, gate_snapshots)
 
     # P-L31BR: seal control sets only from the final in-memory plans and the
     # rejection rows emitted by the real flow. No ranking, capacity or gate is
