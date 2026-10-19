@@ -3410,6 +3410,48 @@ def _run_post_market_measurement_pipeline(
     )
 
 
+def _ensure_postmarket_spy_eod(settings: Settings, session_date: str) -> dict[str, Any]:
+    """Prepare prospective EOD authority before the immutable daily row.
+
+    Reuse a validated comparable receipt; otherwise use the existing SPY-only
+    provider path. Never backfill account equity or rewrite a historical row.
+    This runs outside the intraday decision path and fails open as unavailable.
+    """
+    try:
+        from .tools.spy_eod_authority import (
+            load_spy_eod_receipt,
+            refresh_and_capture_spy_eod,
+        )
+
+        receipt = load_spy_eod_receipt(settings, session_date)
+        if isinstance(receipt, dict) and receipt.get("comparison_status") == "comparable":
+            return {
+                "persisted": True, "comparison_status": "comparable",
+                "source": "existing_receipt", "reason_codes": [],
+                "session_date": session_date,
+                "receipt_content_hash": receipt.get("content_hash"),
+                "receipt_path": receipt.get("receipt_path"),
+                "captured_at": receipt.get("captured_at"),
+            }
+        captured = refresh_and_capture_spy_eod(settings, session_date)
+        receipt = captured.get("receipt") or {}
+        return {
+            "persisted": bool(captured.get("persisted")),
+            "comparison_status": receipt.get("comparison_status") or "unavailable",
+            "source": "postmarket_refresh", "reason": captured.get("reason"),
+            "session_date": session_date,
+            "receipt_content_hash": receipt.get("content_hash"),
+            "receipt_path": captured.get("path") or receipt.get("receipt_path"),
+            "captured_at": receipt.get("captured_at"),
+            "reason_codes": receipt.get("reason_codes", []),
+        }
+    except Exception as exc:  # noqa: BLE001 - benchmark never authorizes trading.
+        return {
+            "persisted": False, "comparison_status": "unavailable",
+            "reason": f"spy_eod_capture_failed_open:{type(exc).__name__}",
+        }
+
+
 def post_market_review_job(
     settings: Settings,
     store: Store,
@@ -3585,6 +3627,10 @@ def post_market_review_job(
             report["canonical_trade_attribution"] = canonical_trade_attribution
             report["canonical_trade_attribution_persistence"] = attribution_persistence
         coordinator.stage(lease, current_stage, "completed")
+        current_stage = "spy_eod_authority"
+        coordinator.stage(lease, current_stage, "started")
+        spy_eod = _ensure_postmarket_spy_eod(settings, session_date)
+        coordinator.stage(lease, current_stage, "completed")
         current_stage = "canonical_eod_account_snapshot"
         coordinator.stage(lease, current_stage, "started")
         eod_persistence: dict[str, Any] | None = None
@@ -3724,6 +3770,7 @@ def post_market_review_job(
                     "summary": report["summary"],
                     "broker_reconciliation": reconciliation,
                     "measurement_pipeline": measurement_pipeline,
+                    "spy_eod_receipt": spy_eod,
                     "proposed_improvements": improvements[:5],
                     "next_session_guidance": report.get("next_session_guidance", [])[:8],
                 },

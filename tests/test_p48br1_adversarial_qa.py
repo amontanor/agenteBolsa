@@ -254,6 +254,8 @@ def _job_harness(monkeypatch: pytest.MonkeyPatch, store: Store, *, counts: dict[
         return {"path": "report.json", "summary": {"trades_evaluated": 0}, "proposed_improvements": [], "next_session_guidance": []}
 
     monkeypatch.setattr(scheduler, "build_post_market_review", _fake_review)
+    monkeypatch.setattr(scheduler, "_ensure_postmarket_spy_eod", lambda *_: {
+        "persisted": False, "comparison_status": "unavailable", "source": "local_test"})
     monkeypatch.setattr(scheduler, "_run_post_market_measurement_pipeline", lambda *_args, **_kwargs: {"path": "measure.json"})
     monkeypatch.setattr(scheduler, "_run_change_watchdog", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(scheduler, "_run_macro_thesis", lambda *_args, **_kwargs: None)
@@ -365,6 +367,8 @@ def test_qa1_qa2_single_snapshot_and_postmarket_order(monkeypatch: pytest.Monkey
         ("canonical_operation_telemetry", "completed"),
         ("canonical_trade_attribution", "started"),
         ("canonical_trade_attribution", "completed"),
+        ("spy_eod_authority", "started"),
+        ("spy_eod_authority", "completed"),
         ("canonical_eod_account_snapshot", "started"),
         ("canonical_eod_account_snapshot", "completed"),
         ("performance", "started"),
