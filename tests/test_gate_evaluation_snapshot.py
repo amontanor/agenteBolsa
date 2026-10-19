@@ -10,14 +10,17 @@ from agente_bolsa.tools.gate_evaluation import (
 )
 
 
-def _candidate(*, signal="sig-1", candidate="cand-1"):
+def _candidate(*, signal="sig-1", candidate="cand-1", capture=None, action="buy"):
+    lineage = {"signal_id": signal, "candidate_id": candidate, "cycle_id": "cycle-1"}
+    if capture:
+        lineage["signal_capture_id"] = capture
     return TradeRecommendation(
         symbol="AAA",
-        action="buy",
+        action=action,
         confidence=0.8,
         reason="test",
         entry_price=100.0,
-        decision_lineage={"signal_id": signal, "candidate_id": candidate, "cycle_id": "cycle-1"},
+        decision_lineage=lineage,
         decision_context_snapshot={
             "snapshot_id": "ctx-1",
             "captured_at": "2026-07-12T10:00:00+00:00",
@@ -28,9 +31,9 @@ def _candidate(*, signal="sig-1", candidate="cand-1"):
 
 def _rows(*, blocked=False):
     return {
-        "deterministic_review": [{"candidate_id": "cand-1", "signal_id": "sig-1", "symbol": "AAA", "action": "buy", "approved": True}],
-        "adversarial_review": [{"candidate_id": "cand-1", "signal_id": "sig-1", "approved": True}],
-        "entry_quality": [{"candidate_id": "cand-1", "signal_id": "sig-1", "approved": not blocked, "reason": "entry_quality_failed" if blocked else None}],
+        "deterministic_review": [{"candidate_id": "cand-1", "signal_id": "sig-1", "cycle_id": "cycle-1", "symbol": "AAA", "action": "buy", "approved": True}],
+        "adversarial_review": [{"candidate_id": "cand-1", "signal_id": "sig-1", "cycle_id": "cycle-1", "approved": True}],
+        "entry_quality": [{"candidate_id": "cand-1", "signal_id": "sig-1", "cycle_id": "cycle-1", "approved": not blocked, "reason": "entry_quality_failed" if blocked else None}],
     }
 
 
@@ -51,6 +54,189 @@ def test_admitted_requires_final_plan_and_keeps_missing_gates_unavailable():
     assert snap["decision"] == "admitted"
     assert snap["gate_path"][3]["status"] == "unavailable"
     assert snap["identity_status"] == "verified"
+
+
+def test_shared_signal_id_keeps_buy_and_exit_gate_paths_separate():
+    buy = _candidate(signal="daily:AAA", candidate="buy-candidate", action="buy")
+    exit = _candidate(signal="daily:AAA", candidate="exit-candidate", action="exit")
+    rows = {
+        "duplicate_symbol": [{
+            "candidate_id": "buy-candidate",
+            "signal_id": "daily:AAA",
+            "cycle_id": "cycle-1",
+            "action": "buy",
+            "approved": False,
+            "reason": "buy-only",
+        }],
+    }
+    plan = type("Plan", (), {"recommendation": exit})()
+    result = collect_gate_path(
+        cycle_id="cycle-1",
+        candidates=[buy, exit],
+        stage_rows=rows,
+        final_plans=[plan],
+        captured_at="2026-07-12T10:01:00+00:00",
+    )
+
+    buy_snapshot = result["buy-candidate"]
+    exit_snapshot = result["exit-candidate"]
+    buy_duplicate = buy_snapshot["gate_path"][10]
+    exit_duplicate = exit_snapshot["gate_path"][10]
+    assert buy_duplicate["status"] == "blocked"
+    assert buy_snapshot["decision"] == "blocked"
+    assert exit_duplicate["status"] == "unavailable"
+    assert exit_snapshot["decision"] == "admitted"
+
+
+def test_signal_only_gate_row_with_other_action_is_unavailable():
+    candidate = _candidate(signal="daily:AAA", candidate="exit-candidate", action="exit")
+    snapshot = collect_gate_path(
+        cycle_id="cycle-1",
+        candidates=[candidate],
+        stage_rows={
+            "duplicate_symbol": [{
+                "signal_id": "daily:AAA",
+                "action": "buy",
+                "approved": False,
+            }],
+        },
+        captured_at="2026-07-12T10:01:00+00:00",
+    )["exit-candidate"]
+    duplicate = snapshot["gate_path"][10]
+    assert duplicate["status"] == "unavailable"
+    assert duplicate["identity_link_status"] == "unavailable"
+
+
+@pytest.mark.parametrize("field, value", [("signal_capture_id", "capture-other"), ("signal_id", "sig-other")])
+def test_same_candidate_with_conflicting_canonical_id_is_unavailable(field, value):
+    candidate = _candidate(capture="capture-1")
+    row = {
+        "candidate_id": "cand-1",
+        "signal_capture_id": "capture-1",
+        "signal_id": "sig-1",
+        "cycle_id": "cycle-1",
+        "action": "buy",
+        "approved": False,
+    }
+    row[field] = value
+    snapshot = collect_gate_path(
+        cycle_id="cycle-1",
+        candidates=[candidate],
+        stage_rows={"duplicate_symbol": [row]},
+        captured_at="2026-07-12T10:01:00+00:00",
+    )["cand-1"]
+    duplicate = snapshot["gate_path"][10]
+    assert duplicate["status"] == "unavailable"
+    assert duplicate["identity_link_status"] == "conflict"
+
+
+def test_same_capture_with_conflicting_candidate_is_unavailable():
+    candidate = _candidate(capture="capture-1")
+    snapshot = collect_gate_path(
+        cycle_id="cycle-1",
+        candidates=[candidate],
+        stage_rows={
+            "duplicate_symbol": [{
+                "candidate_id": "cand-other",
+                "signal_capture_id": "capture-1",
+                "signal_id": "sig-1",
+                "cycle_id": "cycle-1",
+                "action": "buy",
+                "approved": False,
+            }],
+        },
+        captured_at="2026-07-12T10:01:00+00:00",
+    )["cand-1"]
+    duplicate = snapshot["gate_path"][10]
+    assert duplicate["status"] == "unavailable"
+    assert duplicate["identity_link_status"] == "conflict"
+
+
+def test_same_candidate_without_row_cycle_is_unavailable():
+    candidate = _candidate()
+    snapshot = collect_gate_path(
+        cycle_id="cycle-1",
+        candidates=[candidate],
+        stage_rows={
+            "duplicate_symbol": [{
+                "candidate_id": "cand-1",
+                "signal_id": "sig-1",
+                "action": "buy",
+                "approved": False,
+            }],
+        },
+        captured_at="2026-07-12T10:01:00+00:00",
+    )["cand-1"]
+    duplicate = snapshot["gate_path"][10]
+    assert duplicate["status"] == "unavailable"
+    assert duplicate["identity_link_status"] == "conflict"
+
+
+def test_terminal_rejection_cannot_become_admitted_from_final_plan():
+    candidate = _candidate()
+    snapshot = collect_gate_path(
+        cycle_id="cycle-1",
+        candidates=[candidate],
+        stage_rows={
+            "duplicate_symbol": [{
+                "candidate_id": "cand-1",
+                "signal_id": "sig-1",
+                "cycle_id": "cycle-1",
+                "action": "buy",
+                "approved": False,
+                "reason": "duplicate_symbol",
+            }],
+        },
+        final_plans=[type("Plan", (), {"recommendation": candidate})()],
+        captured_at="2026-07-12T10:01:00+00:00",
+    )["cand-1"]
+    assert snapshot["decision"] == "unavailable"
+    assert snapshot["terminal_gate"] == "duplicate_symbol"
+    assert snapshot["authority_conflict"] is True
+    assert snapshot["gate_path"][10]["status"] == "blocked"
+
+
+def test_duplicate_rows_same_identity_are_conflict_and_cannot_admit():
+    candidate = _candidate()
+    row = {
+        "candidate_id": "cand-1",
+        "signal_id": "sig-1",
+        "cycle_id": "cycle-1",
+        "action": "buy",
+        "approved": False,
+    }
+    snapshot = collect_gate_path(
+        cycle_id="cycle-1",
+        candidates=[candidate],
+        stage_rows={"duplicate_symbol": [dict(row), dict(row)]},
+        final_plans=[type("Plan", (), {"recommendation": candidate})()],
+        captured_at="2026-07-12T10:01:00+00:00",
+    )["cand-1"]
+    duplicate = snapshot["gate_path"][10]
+    assert snapshot["decision"] == "unavailable"
+    assert snapshot["identity_conflict"] is True
+    assert duplicate["status"] == "unavailable"
+    assert duplicate["identity_link_status"] == "conflict"
+
+
+def test_duplicate_rejected_plans_are_conflict_and_do_not_use_first_match():
+    candidate = _candidate()
+    snapshot = collect_gate_path(
+        cycle_id="cycle-1",
+        candidates=[candidate],
+        stage_rows={},
+        rejected_order_plans=[
+            {"stage": "cycle_order_limit", "candidate_id": "cand-1", "signal_id": "sig-1", "cycle_id": "cycle-1", "action": "buy", "reason": "daily_capacity"},
+            {"stage": "cycle_order_limit", "candidate_id": "cand-1", "signal_id": "sig-1", "cycle_id": "cycle-1", "action": "buy", "reason": "daily_capacity_other"},
+        ],
+        final_plans=[type("Plan", (), {"recommendation": candidate})()],
+        captured_at="2026-07-12T10:01:00+00:00",
+    )["cand-1"]
+    capacity = snapshot["gate_path"][14]
+    assert snapshot["decision"] == "unavailable"
+    assert snapshot["identity_conflict"] is True
+    assert capacity["status"] == "unavailable"
+    assert capacity["identity_link_status"] == "conflict"
 
 
 def test_symbol_only_link_is_weak_and_not_verified():
@@ -107,3 +293,24 @@ def test_quality_without_data_is_collecting_with_null_denominators():
     assert report["status"] == "collecting"
     assert report["snapshots"] == 0
     assert report["gates"]["evaluated"] == 0
+
+
+def test_quality_excludes_authority_conflicts_from_learning_denominators():
+    candidate = _candidate()
+    snapshot = collect_gate_path(
+        cycle_id="cycle-1",
+        candidates=[candidate],
+        stage_rows={
+            "duplicate_symbol": [{
+                "candidate_id": "cand-1", "signal_id": "sig-1", "cycle_id": "cycle-1",
+                "action": "buy", "approved": False, "reason": "duplicate_symbol",
+            }],
+        },
+        final_plans=[type("Plan", (), {"recommendation": candidate})()],
+        captured_at="2026-07-12T10:01:00+00:00",
+    )["cand-1"]
+    report = build_gate_effectiveness_quality([snapshot])
+    assert report["snapshots"] == 0
+    assert report["conflicts"] == 1
+    assert report["gates"]["candidates_reaching_gate"] == 0
+    assert report["warnings"] == ["identity_conflicts_excluded"]
