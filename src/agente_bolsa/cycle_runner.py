@@ -2787,12 +2787,12 @@ def _crew_provider_failure_retryable(exc: Exception) -> bool:
         response_status = int(getattr(response, "status_code", 0) or 0)
     except (TypeError, ValueError):
         response_status = 0
-    # HTTP 402 means the provider account cannot fund the request.  CrewAI
-    # wraps this error with text such as "Upstream request failed", which used
+    # HTTP 401/402 cannot be repaired by retrying the same Crew request. CrewAI
+    # wraps these errors with text such as "Upstream request failed", which used
     # to match the transient-provider marker below and launch a slow CrewAI
     # fallback before the existing direct decision fallback.  Preserve the
-    # fallback route, but classify account exhaustion as terminal immediately.
-    if status_code == 402 or response_status == 402:
+    # fallback route, but classify authentication/account failures as terminal.
+    if status_code in {401, 402} or response_status in {401, 402}:
         return False
     if status_code in {408, 429, 500, 502, 503, 504} and response is not None:
         return True
@@ -2802,6 +2802,13 @@ def _crew_provider_failure_retryable(exc: Exception) -> bool:
     if any(
         marker in message
         for marker in (
+            "error code: 401",
+            "error code 401",
+            "http 401",
+            "status code: 401",
+            "status code 401",
+            "status_code=401",
+            "api_key_expired",
             "error code: 402",
             "error code 402",
             "http 402",

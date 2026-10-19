@@ -228,6 +228,20 @@ def collect_gate_path(
 ) -> dict[str, dict[str, Any]]:
     """Seal paths from already-produced rows; no gate is executed here."""
     result: dict[str, dict[str, Any]] = {}
+    collection_keys: list[str] = []
+    collection_counts: dict[str, int] = {}
+    candidate_identity_counts: dict[tuple[str, str, str, str, str], int] = {}
+    for candidate in candidates:
+        candidate_id, signal_id, _ = _identity(candidate, cycle_id)
+        identity_key = gate_identity_key(candidate, cycle_id)
+        key = (
+            next(value for value in identity_key[2:] if value)
+            if identity_key is not None else candidate_id or signal_id or "unavailable"
+        )
+        collection_keys.append(key)
+        collection_counts[key] = collection_counts.get(key, 0) + 1
+        if identity_key is not None:
+            candidate_identity_counts[identity_key] = candidate_identity_counts.get(identity_key, 0) + 1
     observed_rows = {name: list(rows or []) for name, rows in stage_rows.items()}
     rejection_gate = {
         "market_state_guard": "market_state_operational",
@@ -261,19 +275,20 @@ def collect_gate_path(
         if key is not None:
             final_key_counts[key] = final_key_counts.get(key, 0) + 1
     final_keys = {key for key, count in final_key_counts.items() if count == 1}
-    for candidate in candidates:
+    for index, candidate in enumerate(candidates):
         item = _as_dict(candidate)
         candidate_id, signal_id, identity_status = _identity(candidate, cycle_id)
         identity_key = gate_identity_key(candidate, cycle_id)
-        if identity_key is None:
-            # Keep the public result key stable even when identity validation
-            # fails; the failure must affect linkage/decision, not collection.
-            key = candidate_id or signal_id or f"unavailable:{len(result)}"
-        else:
-            key = next(value for value in identity_key[2:] if value)
+        key = collection_keys[index]
+        if collection_counts[key] > 1:
+            # Collection keys are not authority IDs. Preserve every row even
+            # when legacy BUY/EXIT share a signal or candidates repeat an ID.
+            key = f"{key}:row:{index}"
+        while key in result:
+            key += ":row"
         path = []
         terminal = None
-        identity_conflict = False
+        identity_conflict = bool(identity_key and candidate_identity_counts[identity_key] > 1)
         authority_conflict = False
         for order, (gate_name, category) in enumerate(GATE_ORDER, 1):
             if terminal:
@@ -313,7 +328,7 @@ def collect_gate_path(
                     continue
         snapshot = {
             "schema_version": SCHEMA_VERSION,
-            "snapshot_id": f"gate_{_hash({'cycle_id': cycle_id, 'candidate_id': candidate_id, 'signal_id': signal_id, 'symbol': item.get('symbol'), 'action': item.get('action')})}",
+            "snapshot_id": f"gate_{_hash({'cycle_id': cycle_id, 'candidate_id': candidate_id, 'signal_capture_id': _identity_fields(candidate, cycle_id)[3], 'signal_id': signal_id, 'symbol': item.get('symbol'), 'action': item.get('action')})}",
             "candidate_id": candidate_id,
             "signal_id": signal_id,
             "action": _action(candidate),
