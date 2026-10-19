@@ -136,4 +136,5 @@ __all__ = ["__version__"]
 # Oct12: human-gated proportional paper capital; score and adds remain separate.
 # Oct13: compact historical learning carriers and fail-fast CI HTTP402; policy inactive.
 # Oct19: integrated repairs, lossless gate collection and terminal Crew HTTP401.
+# Oct19: retain every decision path in the existing durable audit event.
 __version__ = "0.4.375"
