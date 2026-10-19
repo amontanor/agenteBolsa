@@ -135,5 +135,5 @@ __all__ = ["__version__"]
 # Oct11: stream research cycles and release reconstructed run states.
 # Oct12: human-gated proportional paper capital; score and adds remain separate.
 # Oct13: compact historical learning carriers and fail-fast CI HTTP402; policy inactive.
-# Oct14 N2: preserve gate decision identity when BUY/EXIT share a daily signal ID.
-__version__ = "0.4.370"
+# Oct14: CrewAI HTTP402 fail-fast preserves direct decision fallback (0.4.371).
+__version__ = "0.4.375"

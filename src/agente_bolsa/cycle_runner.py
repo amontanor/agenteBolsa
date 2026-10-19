@@ -2783,12 +2783,34 @@ def _crew_provider_failure_retryable(exc: Exception) -> bool:
     except (TypeError, ValueError):
         status_code = 0
     response = getattr(exc, "response", None)
-    response_status = getattr(response, "status_code", None)
+    try:
+        response_status = int(getattr(response, "status_code", 0) or 0)
+    except (TypeError, ValueError):
+        response_status = 0
+    # HTTP 402 means the provider account cannot fund the request.  CrewAI
+    # wraps this error with text such as "Upstream request failed", which used
+    # to match the transient-provider marker below and launch a slow CrewAI
+    # fallback before the existing direct decision fallback.  Preserve the
+    # fallback route, but classify account exhaustion as terminal immediately.
+    if status_code == 402 or response_status == 402:
+        return False
     if status_code in {408, 429, 500, 502, 503, 504} and response is not None:
         return True
     if response_status in {408, 429, 500, 502, 503, 504}:
         return True
     message = str(exc).lower()
+    if any(
+        marker in message
+        for marker in (
+            "error code: 402",
+            "error code 402",
+            "http 402",
+            "status code: 402",
+            "status code 402",
+            "status_code=402",
+        )
+    ):
+        return False
     # Do not retry arbitrary task/configuration errors merely because their
     # prose contains words such as "rate limit".  The model-unavailable form
     # is the provider error observed on Jetson; the remaining markers are
