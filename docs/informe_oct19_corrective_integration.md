@@ -1,3 +1,46 @@
+## Cierre focal del candidato .375 —19oct, sin despliegue
+
+Dictamen: partially_verified_corrective_rehearsal. Mercado confirmado abierto
+18:03:51Madrid; precondition_not_met para suite/smokes/corte productivo. No
+despliegue ni cambios de configuración, riesgo, credenciales, protección u órdenes.
+
+HEAD funcional final e42d956620e34334cec2e924975c439e153c30f7,
+tree01b07aafb92e755734e1b8e973fec12f30953099, versión0.4.375.
+QA final51passed9.25s con sockets bloqueados, _env_file=None y DATA_DIR temporal;
+Ruff src/tests, NUL576 y diff verdes. Configuración estática23agentes/6tareas
+válida y objetos protegidos idénticos a base. Las95regresiones anteriores no
+se declaran ejecución del árbol final. No fullsuite, smokes ni QA/digest ARM.
+
+Nuevo carrier durable en evento ya existente gate_evaluation_snapshots_captured:
+decision_paths.v1 conserva todos los snapshots, attachment_counts deja visible
+conflict y multi_decision_learning_status=unavailable. Prueba con SQLite temporal
+lee BUY/EXIT y captura exacta de ambos; el attachment original permanece intacto
+al repetir. No nueva tabla, consultas ni autoridad de ejecución. El consumidor
+legacy de aprendizaje sigue parcial: no promover cobertura/control multi-decisión
+sin contrato completo revisado. La pérdida auditable queda mitigada, no se
+presenta el carrier como aprendizaje real incorporado.
+
+Fallos conservados: WinError5 al replace en sandbox (19passed antes de stop;
+reintento motivado fuera del sandbox pasa); un gate de versión falló tras el
+último cambio no anotado aún en __init__ (50passed/1failed). Se completó la
+anotación de la misma versión .375 reservada y la nueva ejecución pasó51.
+Un control NUL lanzado desde EF99 recorrió109archivos y NO cuenta; el control
+final desde el worktree real recorrió576 y pasó. No se ocultaron fallos de base.
+
+Revisión independiente detectó además que --force permite PMR con mercado abierto.
+Se comprobó que existe en base2999414f y no lo usan scheduler/bootstrap normales;
+es deuda de hardening, no regresión .375. No se ejecutó ese job en producción.
+Revisar excepción manual y paridad de laboratorio en lote separado; no usar force
+para fabricar quietud o superar un gate.
+
+Pendientes: renovar clave LLM por canal de secretos del operador (no existe
+refresh automático canónico); coordinación N3 de protección/EXIT con diff
+protegido revisado; aprendizaje multi-decisión; fullsuite única final, smoke
+Windows/ARM, digest ARM completo y preflight de cierre con postmarket terminal,
+sin jobs/reintentos/leases, configuración/kernel válidos y rollback preparado.
+Ninguna promoción de tamaños, score o ampliaciones; producción sigue .369 según
+la captura auditada. Siguiente trabajo condicionado al mercado y a estos gates.
+
 ### Correcciones nuevas y cierre focal del19oct
 
 La revisión reprodujo pérdida silenciosa de filas: dos decisiones legacy BUY/EXIT
