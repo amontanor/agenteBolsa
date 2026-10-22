@@ -53,8 +53,9 @@ release-binding.json
 ## Evidencia y límites
 
 Base exacta: `53c2c9b26012c9f8135e1238e147932fc339031a`.
-Commits funcionales: `b1cdedc0` (`feat`), `59867d0f` (`test`) y `878a1bc4`
-(`fix`). Árbol funcional probado: `ed96cba37bfb14e25380b2be96d051183a6f22c8`.
+Commits funcionales: `b1cdedc0` (`feat`), `59867d0f` (`test`), `878a1bc4`
+(`fix`) y `de26dbed` (`fix`). Árbol funcional probado:
+`06e76383e3d4a7a91b7aecda28f997def4ccacd3`.
 Worktree aislado:
 `oct19-integration/oct22-release-binding`, rama
 `codex/oct22-release-binding`. El checkout coordinador
