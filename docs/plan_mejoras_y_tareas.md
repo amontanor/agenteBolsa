@@ -1,3 +1,50 @@
+### Evidencia de capital recuperada —22oct19:53:46Madrid
+
+Consulta canónica por rango de clave primaria, acotada/deadline, confirma123eventos
+capital_allocation_shadow bajo un único policy_hash dc2810dc3b02e79187f9e74abd174dbb79e10e498f83e7598776938ea3bc7977.
+Ventana13oct14:03UTC–21oct20:45UTC. Denominadores128BUY/128identidades verificadas,
+sin denominadores ausentes y sin saturación. Son registros de recomendaciones,
+no128oportunidades independientes ni compras maduras. Recibo
+EF99/audit_oct22_capital_readiness_1955.json (hora efectiva en observed_at).
+Los recibos de revisión no se escanearon y siguen unavailable, no ausentes.
+El primer SELECT por event_type agotó deadline12s; se sustituyó por rango del
+prefijo canónico indexado, sin añadir índices ni modificar producción.
+No se acredita todavía cobertura de sesiones completas, controles maduros ni
+reconciliación/protección. Conservar evidencia, no reiniciar shadow por defecto.
+
+## Prioridad de capital —22oct19:52Madrid
+
+El operador reitera aumentar el tamaño de las compras y reducir cash. Primer
+escalón acordado: sustituir máximo fijo1000USD por máximo2,5%equity, manteniendo
+15%cartera/3compras por día; después20% y25% con sus gates. Sobre equity de la
+captura anterior69900,59USD,2,5%=1747,51USD (+74,75% sobre el tope fijo).
+Es un techo: target, multiplicador aplicado una vez, stop, cash, reservas y
+riesgo pueden reducirlo. No se garantiza ese importe ni una inversión mínima.
+
+Revisión offline de los ZIP .369 y .376: capital_allocation_policy.py,
+capital_ladder.py,position_sizing.py ytrade_decision.py son idénticos byte a byte.
+Contrato SHA256 d7c56b25ef0930d0bdcc6e0e277c8f253353f9b87cec2904f01e199aa0eaa078.
+Recibo EF99/audit_oct22_capital_contract_identity.json. No invalidar ni reiniciar
+el período de evidencia por este despliegue sin otra causa. Tampoco confundir
+paridad de código con cinco sesiones completas o aprobación económica.
+
+Ruta comprobada: active_stage_limits sustituye el cap fijo de aprendizaje por
+cap proporcional; cap_allocation_notional no vuelve a aplicar multiplicadores.
+La etapa2 exige también20compras maduras/15controles por la escalera existente,
+además de5sesiones completas,linaje>=95%,reconciliación y recibos canónicos.
+El número de sesiones y compras elegibles actuales sigue unavailable: auditoría
+readonly inicial falló en handshake SSH. El reintento schedule-status respondió
+finalmente19:52:29Madrid: XNYS abierto, PID9/token2646 vivo; runtime unavailable
+por WAL no acredita quietud. Se reintenta el colector; sin mutación remota.
+Colector preparado EF99/audit_oct22_capital_readiness.py, SELECT acotado/deadline,
+sin aprobar ni escribir remotamente. Reintentar con recibo timestamp nuevo.
+
+Automatización existente actualizada y ACTIVE para22oct22:45Madrid, intento
+único con pausa al concluir. Incluye recuperación persistente .376, QA restante,
+revisión independiente y comprobación concreta de brecha para tamaño mayor.
+No activa tamaño/adds/score automáticamente ni permite saltar riesgo/protección.
+No se ha desplegado .376 ni activado el cap proporcional en esta continuación.
+
 ## Candidato correctivo .376 — preparación22oct, no desplegado
 
 Usuario autoriza corregir y desplegar después. Causa de .321 confirmada:
