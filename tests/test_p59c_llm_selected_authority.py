@@ -772,4 +772,4 @@ def test_version_policy_requires_bump():
         # Con PYTHONPATH al src del worktree, leemos __init__.py
         import agente_bolsa
         # .362 includes integrated .359/.360 and deterministic QA corrections.
-        assert agente_bolsa.__version__ == "0.4.375"
+        assert agente_bolsa.__version__ == "0.4.376"
