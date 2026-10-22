@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from agente_bolsa.release_binding import (
     prepare_release_binding,
     render_override_compose,
     render_systemd_dropin,
+    validate_compose_parity,
     validate_image_identity,
 )
 from scripts import verify_release_binding
@@ -221,3 +223,48 @@ def test_host_verifier_rejects_stale_image_without_starting_anything(monkeypatch
             image_ref=IMAGE_REF,
             expected_image_id=ROLLBACK_IMAGE_ID,
         )
+
+
+def test_compose_parity_preserves_resources_ports_mounts_and_other_services():
+    source = {
+        "services": {
+            name: {"image": ROLLBACK_REF, "ports": ["8081:8501"],
+                   "volumes": ["/var/lib/agente-bolsa:/data"],
+                   "mem_limit": "2g", "environment": {"PAPER": "true"}}
+            for name in ("scheduler", "web", "auxiliary")
+        },
+        "networks": {"default": {"name": "agente-bolsa"}},
+    }
+    source["services"]["init-db"] = {"image": ROLLBACK_REF}
+    before = deepcopy(source)
+    rendered = deepcopy(source)
+    for name in ("scheduler", "web", "auxiliary"):
+        rendered["services"][name]["image"] = IMAGE_REF
+    validate_compose_parity(source, rendered, image_ref=IMAGE_REF)
+    assert source == before
+    for field in ("ports", "volumes", "mem_limit", "environment"):
+        broken = deepcopy(rendered)
+        broken["services"]["scheduler"].pop(field)
+        with pytest.raises(ReleaseBindingError, match="compose_parity_mismatch"):
+            validate_compose_parity(source, broken, image_ref=IMAGE_REF)
+    broken = deepcopy(rendered)
+    broken["services"]["init-db"]["image"] = IMAGE_REF
+    with pytest.raises(ReleaseBindingError, match="compose_parity_mismatch"):
+        validate_compose_parity(source, broken, image_ref=IMAGE_REF)
+
+
+@pytest.mark.parametrize("path", ["/opt/release%h", "/opt/my release", "/opt/release\tname"])
+def test_systemd_paths_reject_specifiers_and_whitespace(path):
+    with pytest.raises(ReleaseBindingError, match="malformed_path"):
+        render_systemd_dropin(image_ref=IMAGE_REF, image_id=IMAGE_ID, release_dir=path)
+
+
+def test_rollback_requires_independent_image_evidence():
+    with pytest.raises(ImageIdentityError, match="rollback_identity_required"):
+        prepare_release_binding(version="0.4.376", image_id=IMAGE_ID,
+                                inspect_payload=_inspect())
+    with pytest.raises(ImageIdentityError, match="stale_image"):
+        prepare_release_binding(version="0.4.376", image_id=IMAGE_ID,
+                                inspect_payload=_inspect(), rollback_image_id=IMAGE_ID,
+                                rollback_inspect_payload=_inspect(version="0.4.369",
+                                                                  image_id=ROLLBACK_IMAGE_ID))

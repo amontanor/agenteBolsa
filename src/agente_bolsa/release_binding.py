@@ -12,6 +12,7 @@ import json
 import re
 import shlex
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
@@ -293,6 +294,44 @@ def render_override_compose(image_ref: str) -> str:
     for service in CORE_SERVICES:
         lines.extend((f"  {service}:", f"    image: {image_ref}"))
     return "\n".join(lines) + "\n"
+
+
+def validate_compose_parity(
+    source_config: Mapping[str, Any],
+    rendered_config: Mapping[str, Any],
+    *,
+    image_ref: str,
+) -> None:
+    """Check normalized Compose snapshots differ only in core image values.
+
+    Compose rendering itself remains an operator/host gate. This pure check is
+    useful for an offline receipt after the host has rendered all three files.
+    """
+
+    render_override_compose(image_ref)
+    if not isinstance(source_config, Mapping) or not isinstance(rendered_config, Mapping):
+        raise ReleaseBindingError("compose_parity_mismatch", "rendered Compose snapshots must be maps")
+    source = deepcopy(dict(source_config))
+    rendered = deepcopy(dict(rendered_config))
+    source_services = source.get("services")
+    rendered_services = rendered.get("services")
+    if not isinstance(source_services, Mapping) or not isinstance(rendered_services, Mapping):
+        raise ReleaseBindingError("compose_parity_mismatch", "Compose snapshots must contain services maps")
+    for service in CORE_SERVICES:
+        source_service = source_services.get(service)
+        rendered_service = rendered_services.get(service)
+        if not isinstance(source_service, Mapping) or not isinstance(rendered_service, Mapping):
+            raise ReleaseBindingError("compose_parity_mismatch", f"missing service {service}")
+        if rendered_service.get("image") != image_ref:
+            raise ReleaseBindingError("compose_parity_mismatch", f"image mismatch for {service}")
+        source_service = dict(source_service)
+        rendered_service = dict(rendered_service)
+        source_service.pop("image", None)
+        rendered_service.pop("image", None)
+        source_services[service] = source_service
+        rendered_services[service] = rendered_service
+    if source != rendered:
+        raise ReleaseBindingError("compose_parity_mismatch", "rendered Compose changed non-image configuration")
 
 
 def _compose_command(
