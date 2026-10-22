@@ -82,7 +82,7 @@ def test_rendered_override_binds_all_started_services_to_exact_tag():
     assert compose.count(f"image: {IMAGE_REF}") == 3
     for service in ("scheduler", "web", "auxiliary"):
         assert f"  {service}:\n    image: {IMAGE_REF}" in compose
-    assert "${AGENTE_BOLSA_IMAGE}" in compose
+    assert "${AGENTE_BOLSA_IMAGE}" not in compose
 
 
 def test_systemd_dropin_has_explicit_files_and_no_deps_up():
