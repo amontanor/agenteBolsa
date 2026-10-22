@@ -1,3 +1,19 @@
+## Auditoría22oct15:50Madrid — retroceso productivo e incoherencia kernel
+
+Tres servicios .321 imagen8ff2bedce363... con205fuentes exactas del inventario
+archivado; el20corría .369/211fuentes. Causa y autoría pendientes. Contenedor
+creado22oct09:01Madrid y arrancado09:35; Compose apunta release0.4.297.
+Kernel-status posterior: ok=false/status=violation en broker.py y execution.py.
+Kernel y carrier.env coinciden. No resellar ni restaurar a ciegas; resolver
+identidad de imagen y bytes aprobados por procedimiento canónico.
+Mercado abierto; auditoría solo lectura, HTTP200/PID9token2646 coherente. Memoria
+scheduler≈2GiB;0reinicios tras recreación no cierra OOMhistóricos. LLM401persiste.
+Postmarket20failed,21sin terminal observado;último completed19. Resultados20/21
++0,072%/+0,155% frente SPY+0,335%/+0,525%;cash88,76%/exposición11,24% en captura22.
+MAR/CRLsalidas coherentes porIDs/cantidades antes de recreación, no paridad futura.
+Evidencia: EF99/informe_oct22_resultados_mejoras.md y audit_oct22_*.json.
+.375sigue sin fullsuite/smokes/digestARM; no código funcional/protegido ni despliegue.
+
 ## Cierre focal del candidato .375 —19oct, sin despliegue
 
 Dictamen: partially_verified_corrective_rehearsal. Mercado confirmado abierto
