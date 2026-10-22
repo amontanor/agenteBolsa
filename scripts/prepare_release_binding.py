@@ -74,20 +74,27 @@ def _write_new(path: Path, content: str) -> None:
 def _write_plan(output_dir: Path, plan: Any) -> None:
     # Validate identity and all text before this point. Writes are local audit
     # artifacts only; no production path is ever opened by this helper.
-    _write_new(output_dir / plan.override_filename, plan.override_compose)
-    _write_new(
-        output_dir / "systemd" / "agente-bolsa.service.d" / "10-release-binding.conf",
-        plan.systemd_dropin,
-    )
-    _write_new(output_dir / "rollback" / plan.override_filename, plan.rollback_override_compose)
-    _write_new(
-        output_dir / "rollback" / "systemd" / "agente-bolsa.service.d" / "10-release-binding.conf",
-        plan.rollback_systemd_dropin,
+    destinations = (
+        (output_dir / plan.override_filename, plan.override_compose),
+        (
+            output_dir / "systemd" / "agente-bolsa.service.d" / "10-release-binding.conf",
+            plan.systemd_dropin,
+        ),
+        (output_dir / "rollback" / plan.override_filename, plan.rollback_override_compose),
+        (
+            output_dir / "rollback" / "systemd" / "agente-bolsa.service.d" / "10-release-binding.conf",
+            plan.rollback_systemd_dropin,
+        ),
     )
     manifest_path = output_dir / "release-binding.json"
     import json
 
-    _write_new(manifest_path, json.dumps(plan.manifest(), indent=2, sort_keys=True) + "\n")
+    destinations += ((manifest_path, json.dumps(plan.manifest(), indent=2, sort_keys=True) + "\n"),)
+    existing = next((path for path, _ in destinations if path.exists()), None)
+    if existing is not None:
+        raise ReleaseBindingError("output_exists", f"refusing to overwrite {existing}")
+    for path, content in destinations:
+        _write_new(path, content)
 
 
 def main(argv: list[str] | None = None) -> int:
