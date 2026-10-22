@@ -6,6 +6,8 @@ Usage example::
         --version 0.4.376 \
         --image-id sha256:<64-hex> \
         --inspect-json image-inspect.json \
+        --rollback-image-id sha256:<64-hex> \
+        --rollback-inspect-json rollback-image-inspect.json \
         --output-dir release-binding-0.4.376
 
 The inspect payload must come from ``docker image inspect`` collected by an
@@ -40,6 +42,16 @@ def _parser() -> argparse.ArgumentParser:
         "--inspect-json",
         required=True,
         help="path to docker image inspect JSON, or '-' for stdin",
+    )
+    parser.add_argument(
+        "--rollback-image-id",
+        required=True,
+        help="exact approved 0.4.369 Docker ImageID sha256 digest",
+    )
+    parser.add_argument(
+        "--rollback-inspect-json",
+        required=True,
+        help="docker image inspect JSON for approved 0.4.369 image, or '-' for stdin",
     )
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument(
@@ -85,6 +97,14 @@ def _write_plan(output_dir: Path, plan: Any) -> None:
             output_dir / "rollback" / "systemd" / "agente-bolsa.service.d" / "10-release-binding.conf",
             plan.rollback_systemd_dropin,
         ),
+        (
+            output_dir / "verify_release_binding.py",
+            (Path(__file__).with_name("verify_release_binding.py")).read_text(encoding="utf-8"),
+        ),
+        (
+            output_dir / "rollback" / "verify_release_binding.py",
+            (Path(__file__).with_name("verify_release_binding.py")).read_text(encoding="utf-8"),
+        ),
     )
     manifest_path = output_dir / "release-binding.json"
     import json
@@ -105,6 +125,8 @@ def main(argv: list[str] | None = None) -> int:
             version=args.version,
             image_id=args.image_id,
             inspect_payload=inspect_payload,
+            rollback_image_id=args.rollback_image_id,
+            rollback_inspect_payload=_read_inspect(args.rollback_inspect_json),
             release_dir=args.release_dir,
             env_file=args.env_file,
             rollback_version=args.rollback_version,

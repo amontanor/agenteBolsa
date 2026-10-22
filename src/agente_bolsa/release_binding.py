@@ -76,6 +76,7 @@ class ReleaseBindingPlan:
     systemd_dropin: str
     rollback_version: str
     rollback_image_ref: str
+    rollback_identity: ImageIdentity
     rollback_override_compose: str
     rollback_systemd_dropin: str
 
@@ -95,14 +96,20 @@ class ReleaseBindingPlan:
             "release_dir": self.release_dir,
             "env_file": self.env_file,
             "artifacts": {
-                "override_compose": self.override_filename,
+                "base_compose": self.compose_filename,
+                "raspberry_override_compose": "docker-compose.raspberry.override.yml",
+                "release_binding_compose": self.override_filename,
                 "systemd_dropin": "systemd/agente-bolsa.service.d/10-release-binding.conf",
+                "host_verifier": "verify_release_binding.py",
             },
             "rollback": {
                 "release_version": self.rollback_version,
                 "image_ref": self.rollback_image_ref,
-                "override_compose": "rollback/docker-compose.raspberry.override.yml",
+                "image_id": self.rollback_identity.image_id,
+                "registry_repo_digests": list(self.rollback_identity.repo_digests),
+                "release_binding_compose": "rollback/docker-compose.release-binding.yml",
                 "systemd_dropin": "rollback/systemd/agente-bolsa.service.d/10-release-binding.conf",
+                "host_verifier": "rollback/verify_release_binding.py",
                 "verification_required": True,
                 "reason": (
                     "Approved 0.4.369 reference. Current 0.4.321 has a confirmed "
@@ -162,7 +169,7 @@ def _require_posix_path(value: str, field: str) -> str:
         not isinstance(value, str)
         or not value.startswith("/")
         or any(ord(character) < 32 for character in value)
-        or any(character in value for character in ";|&$`'\"\\")
+        or any(character in value for character in "% ;|&$`'\"\\")
     ):
         raise ReleaseBindingError("malformed_path", f"{field} must be an absolute POSIX path")
     path = PurePosixPath(value)
@@ -253,16 +260,26 @@ def validate_image_identity(
     )
 
 
-def _compose_paths(release_dir: str, compose_filename: str, override_filename: str) -> tuple[str, str]:
+def _compose_paths(
+    release_dir: str,
+    compose_filename: str,
+    override_filename: str,
+    binding_filename: str,
+) -> tuple[str, str, str]:
     release_dir = _require_posix_path(release_dir, "release_dir")
     compose_filename = _require_token(compose_filename, "compose_filename")
     override_filename = _require_token(override_filename, "override_filename")
+    binding_filename = _require_token(binding_filename, "binding_filename")
     deploy_dir = PurePosixPath(release_dir) / "deploy"
-    return str(deploy_dir / compose_filename), str(deploy_dir / override_filename)
+    return (
+        str(deploy_dir / compose_filename),
+        str(deploy_dir / override_filename),
+        str(deploy_dir / binding_filename),
+    )
 
 
 def render_override_compose(image_ref: str) -> str:
-    """Render fixed image references for all services started by systemd."""
+    """Render third Compose layer with fixed images for core services."""
 
     if not isinstance(image_ref, str) or not re.fullmatch(
         rf"{re.escape(IMAGE_REPOSITORY)}:[0-9]+\.[0-9]+\.[0-9]+-arm64", image_ref
@@ -285,9 +302,12 @@ def _compose_command(
     env_file: str,
     compose_filename: str,
     override_filename: str,
+    binding_filename: str,
     action: str,
 ) -> str:
-    compose_path, override_path = _compose_paths(release_dir, compose_filename, override_filename)
+    compose_path, override_path, binding_path = _compose_paths(
+        release_dir, compose_filename, override_filename, binding_filename
+    )
     args = [
         "/usr/bin/docker",
         "compose",
@@ -301,6 +321,8 @@ def _compose_command(
         compose_path,
         "-f",
         override_path,
+        "-f",
+        binding_path,
         action,
     ]
     if action == "up":
@@ -316,6 +338,9 @@ def render_systemd_dropin(
     env_file: str = "/etc/agente-bolsa/runtime.env",
     compose_filename: str = "docker-compose.yml",
     override_filename: str = "docker-compose.raspberry.override.yml",
+    binding_filename: str = "docker-compose.release-binding.yml",
+    image_id: str | None = None,
+    verifier_filename: str = "verify_release_binding.py",
 ) -> str:
     """Render systemd command lines with explicit Compose files and services."""
 
@@ -323,15 +348,18 @@ def render_systemd_dropin(
         rf"{re.escape(IMAGE_REPOSITORY)}:[0-9]+\.[0-9]+\.[0-9]+-arm64", image_ref
     ):
         raise ReleaseBindingError("malformed_image_ref", "systemd image reference is unsafe")
-    _compose_paths(release_dir, compose_filename, override_filename)
+    _compose_paths(release_dir, compose_filename, override_filename, binding_filename)
     release_dir = _require_posix_path(release_dir, "release_dir")
     _require_posix_path(env_file, "env_file")
+    image_id = _require_image_id(image_id or "", "image_id")
+    verifier_filename = _require_token(verifier_filename, "verifier_filename")
     start = _compose_command(
         image_ref=image_ref,
         release_dir=release_dir,
         env_file=env_file,
         compose_filename=compose_filename,
         override_filename=override_filename,
+        binding_filename=binding_filename,
         action="up",
     )
     stop = _compose_command(
@@ -340,14 +368,29 @@ def render_systemd_dropin(
         env_file=env_file,
         compose_filename=compose_filename,
         override_filename=override_filename,
+        binding_filename=binding_filename,
         action="stop",
     )
     deploy_dir = str(PurePosixPath(release_dir) / "deploy")
+    verifier_path = str(PurePosixPath(deploy_dir) / verifier_filename)
+    verifier = shlex.join(
+        [
+            "/usr/bin/python3",
+            verifier_path,
+            "--image-ref",
+            image_ref,
+            "--expected-image-id",
+            image_id,
+            "--timeout-seconds",
+            "20",
+        ]
+    )
     return (
         "# Generated by prepare_release_binding.py; preparation only.\n"
         "[Service]\n"
         f"WorkingDirectory={deploy_dir}\n"
         f"EnvironmentFile={env_file}\n"
+        f"ExecStartPre={verifier}\n"
         "ExecStart=\n"
         f"ExecStart={start}\n"
         "ExecStop=\n"
@@ -360,6 +403,8 @@ def prepare_release_binding(
     version: str,
     image_id: str,
     inspect_payload: Any,
+    rollback_image_id: str | None = None,
+    rollback_inspect_payload: Any | None = None,
     release_dir: str | None = None,
     env_file: str = "/etc/agente-bolsa/runtime.env",
     rollback_version: str = DEFAULT_ROLLBACK_VERSION,
@@ -380,10 +425,21 @@ def prepare_release_binding(
         expected_image_id=image_id,
         version=version,
     )
+    if rollback_image_id is None or rollback_inspect_payload is None:
+        raise ImageIdentityError(
+            "rollback_identity_required",
+            "approved rollback requires image ID and docker image inspect evidence",
+        )
+    rollback_image_ref = image_tag(rollback_version)
+    rollback_identity = validate_image_identity(
+        rollback_inspect_payload,
+        image_ref=rollback_image_ref,
+        expected_image_id=rollback_image_id,
+        version=rollback_version,
+    )
     release_dir = release_dir or f"/opt/agente-bolsa/releases/{version}"
     release_dir = _require_posix_path(release_dir, "release_dir")
     _require_posix_path(env_file, "env_file")
-    rollback_image_ref = image_tag(rollback_version)
     return ReleaseBindingPlan(
         version=version,
         image_ref=image_ref,
@@ -391,20 +447,23 @@ def prepare_release_binding(
         release_dir=release_dir,
         env_file=env_file,
         compose_filename="docker-compose.yml",
-        override_filename="docker-compose.raspberry.override.yml",
+        override_filename="docker-compose.release-binding.yml",
         override_compose=render_override_compose(image_ref),
         systemd_dropin=render_systemd_dropin(
             image_ref=image_ref,
             release_dir=release_dir,
             env_file=env_file,
+            image_id=identity.image_id,
         ),
         rollback_version=rollback_version,
         rollback_image_ref=rollback_image_ref,
+        rollback_identity=rollback_identity,
         rollback_override_compose=render_override_compose(rollback_image_ref),
         rollback_systemd_dropin=render_systemd_dropin(
             image_ref=rollback_image_ref,
             release_dir=f"/opt/agente-bolsa/releases/{rollback_version}",
             env_file=env_file,
+            image_id=rollback_identity.image_id,
         ),
     )
 

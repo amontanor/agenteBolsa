@@ -16,19 +16,23 @@ from agente_bolsa.release_binding import (
     render_systemd_dropin,
     validate_image_identity,
 )
+from scripts import verify_release_binding
+from scripts.prepare_release_binding import _write_plan
 
 IMAGE_ID = "sha256:" + "a" * 64
 IMAGE_REF = "agente-bolsa:0.4.376-arm64"
+ROLLBACK_IMAGE_ID = "sha256:" + "c" * 64
+ROLLBACK_REF = "agente-bolsa:0.4.369-arm64"
 
 
-def _inspect(**overrides):
+def _inspect(*, version="0.4.376", image_id=IMAGE_ID, **overrides):
     record = {
-        "Id": IMAGE_ID,
-        "RepoTags": [IMAGE_REF],
+        "Id": image_id,
+        "RepoTags": [f"agente-bolsa:{version}-arm64"],
         "RepoDigests": ["agente-bolsa@sha256:" + "b" * 64],
         "Architecture": "arm64",
         "Os": "linux",
-        "Config": {"Labels": {"org.opencontainers.image.version": "0.4.376"}},
+        "Config": {"Labels": {"org.opencontainers.image.version": version}},
     }
     record.update(overrides)
     return [record]
@@ -88,15 +92,21 @@ def test_rendered_override_binds_all_started_services_to_exact_tag():
 def test_systemd_dropin_has_explicit_files_and_no_deps_up():
     dropin = render_systemd_dropin(
         image_ref=IMAGE_REF,
+        image_id=IMAGE_ID,
         release_dir="/opt/agente-bolsa/releases/0.4.376",
     )
 
     assert "ExecStart=" in dropin
     assert "--project-directory /opt/agente-bolsa/releases/0.4.376/deploy" in dropin
     assert "-f /opt/agente-bolsa/releases/0.4.376/deploy/docker-compose.yml" in dropin
+    assert dropin.count(" -f ") == 6
+    assert dropin.count("docker-compose.release-binding.yml") == 2
     assert "-f /opt/agente-bolsa/releases/0.4.376/deploy/docker-compose.raspberry.override.yml" in dropin
+    assert "-f /opt/agente-bolsa/releases/0.4.376/deploy/docker-compose.release-binding.yml" in dropin
     assert "up -d --no-deps scheduler web auxiliary" in dropin
     assert "stop scheduler web auxiliary" in dropin
+    assert "ExecStartPre=/usr/bin/python3 /opt/agente-bolsa/releases/0.4.376/deploy/verify_release_binding.py" in dropin
+    assert f"--expected-image-id {IMAGE_ID}" in dropin
     assert "AGENTE_BOLSA_IMAGE=" not in dropin
 
 
@@ -105,11 +115,14 @@ def test_preparation_generates_final_and_approved_rollback_without_runtime_effec
         version="0.4.376",
         image_id=IMAGE_ID,
         inspect_payload=_inspect(),
+        rollback_image_id=ROLLBACK_IMAGE_ID,
+        rollback_inspect_payload=_inspect(version="0.4.369", image_id=ROLLBACK_IMAGE_ID),
     )
 
     assert plan.image_ref == IMAGE_REF
     assert "agente-bolsa:0.4.376-arm64" in plan.override_compose
     assert "agente-bolsa:0.4.369-arm64" in plan.rollback_override_compose
+    assert plan.rollback_identity.image_id == ROLLBACK_IMAGE_ID
     manifest = plan.manifest()
     assert manifest["rollback"]["release_version"] == "0.4.369"
     assert manifest["rollback"]["verification_required"] is True
@@ -138,5 +151,73 @@ def test_cli_fixture_shape_is_json_serializable():
         version="0.4.376",
         image_id=IMAGE_ID,
         inspect_payload=_inspect(),
+        rollback_image_id=ROLLBACK_IMAGE_ID,
+        rollback_inspect_payload=_inspect(version="0.4.369", image_id=ROLLBACK_IMAGE_ID),
     )
     assert json.loads(json.dumps(plan.manifest()))["image_id"] == IMAGE_ID
+
+
+def test_output_preserves_original_compose_layers_and_adds_binding_last(tmp_path: Path):
+    plan = prepare_release_binding(
+        version="0.4.376",
+        image_id=IMAGE_ID,
+        inspect_payload=_inspect(),
+        rollback_image_id=ROLLBACK_IMAGE_ID,
+        rollback_inspect_payload=_inspect(version="0.4.369", image_id=ROLLBACK_IMAGE_ID),
+    )
+    _write_plan(tmp_path, plan)
+
+    assert (tmp_path / "docker-compose.release-binding.yml").is_file()
+    assert not (tmp_path / "docker-compose.raspberry.override.yml").exists()
+    assert (tmp_path / "verify_release_binding.py").is_file()
+    manifest = json.loads((tmp_path / "release-binding.json").read_text(encoding="utf-8"))
+    assert manifest["artifacts"]["base_compose"] == "docker-compose.yml"
+    assert manifest["artifacts"]["raspberry_override_compose"] == "docker-compose.raspberry.override.yml"
+    assert manifest["artifacts"]["release_binding_compose"] == "docker-compose.release-binding.yml"
+    dropin = (tmp_path / "systemd/agente-bolsa.service.d/10-release-binding.conf").read_text(
+        encoding="utf-8"
+    )
+    start = next(line for line in dropin.splitlines() if line.startswith("ExecStart=/usr/bin/docker"))
+    assert start.count(" -f ") == 3
+    assert start.endswith("up -d --no-deps scheduler web auxiliary")
+
+
+def test_host_verifier_uses_inspect_argument_list_and_timeout(monkeypatch):
+    calls = []
+
+    class Completed:
+        returncode = 0
+        stdout = json.dumps(_inspect())
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        return Completed()
+
+    monkeypatch.setattr(verify_release_binding.subprocess, "run", fake_run)
+    result = verify_release_binding.verify(image_ref=IMAGE_REF, expected_image_id=IMAGE_ID)
+
+    assert result["image_id"] == IMAGE_ID
+    assert calls == [
+        (
+            ["/usr/bin/docker", "image", "inspect", IMAGE_REF],
+            {
+                "check": False,
+                "capture_output": True,
+                "text": True,
+                "timeout": 20.0,
+            },
+        )
+    ]
+
+
+def test_host_verifier_rejects_stale_image_without_starting_anything(monkeypatch):
+    class Completed:
+        returncode = 0
+        stdout = json.dumps(_inspect())
+
+    monkeypatch.setattr(verify_release_binding.subprocess, "run", lambda *args, **kwargs: Completed())
+    with pytest.raises(ValueError, match="ImageID mismatch"):
+        verify_release_binding.verify(
+            image_ref=IMAGE_REF,
+            expected_image_id=ROLLBACK_IMAGE_ID,
+        )
