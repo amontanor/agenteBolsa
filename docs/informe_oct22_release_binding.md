@@ -20,7 +20,9 @@ Journal EF99/oct22_0376_binding_final_focal.jsonl. Ruff completo src/tests más
 los dos scripts pasa, NUL580 y diff pasan. Un I001 de orden de imports se
 corrigió; solo se repitió lint, sin repetir las pruebas por ese cambio no semántico.
 
-Los seis archivos protegidos siguen idénticos a la base .369. storage.py tiene
+Los cinco archivos de código protegidos siguen idénticos a la base .369. Los
+archivos ENV productivos no se modificaron y sus hashes siguen iguales a la
+captura del20. storage.py tiene
 el mismo objetoGit d695761735b8cbacd74798d6d2fbc5bb86e65a07 que .369; la
 diferencia de hash bruto con el paquete desplegado se debe solo a CRLF/LF,
 comprobada byte a byte al normalizar. No se introduce una migración nueva por
@@ -49,6 +51,37 @@ binding. La clave LLM caducada sigue requiriendo al operador; no la renueva .376
 
 Las secciones posteriores conservan la historia del lote y sus QA anteriores;
 no se suman sus casos ni se hereda su aceptación a una implementación distinta.
+
+### Integración y gates de cierre
+
+Integrado con merge --no-ff en el checkout de ensayo oct19-integration;
+HEAD funcional856740a074f7e6ac314abc1cd8339a834af51a78,
+tree2311d35f47a7ab330d9d5cf2886c08d69162a715. El worktree auxiliar se movió a
+EF99/oct22-release-binding para dejar limpio el candidato; no se borraron datos.
+Paridad de objetos src/tests/scripts contra ca5e0262: el merge añade solo docs
+del coordinador además de los commits revisados. El candidato reserva .376.
+
+Focales correctivas heredadas de .375 ejecutadas sobre .376:51passed8,04s.
+Primer intento19passed/1failed por WinError5 en replace atómico temporal dentro
+del sandbox; recibo fallido preservado, reintento motivado fuera del sandbox
+pasó. No se suman con las68focales de binding: hay solapamiento de versión.
+Ruff completo, NUL580, diff y configuración aislada23agentes/6tareas verdes.
+Fullsuite/smokes y cargaARM no ejecutados con mercado abierto.
+
+El evento exacto pmr:pmr_3447a7786ac6:terminal:failed acredita database is locked
+en postmarket20,1743,632s; no presentar todos los fallos como OOM. La consulta
+inicial por prefijo se interrumpió por deadline10s; se sustituyó por lookup
+exacto indexado y se conservó el fallo. No reparaciones en SQLite productiva.
+
+Recuperación pendiente: el script histórico deploy_oct13_0369_cut.py NO sirve
+sin revisión, pues espera base .364 y kernel activo ok. No eliminar su guard.
+Este incidente tiene autorización específica del operador para resolver la
+violación causada por imagen .321 y desplegar después. La preparación debe
+verificar los bytes del candidato y rollback .369 contra el manifiesto vigente,
+conservar la violación actual en el recibo y usar un procedimiento de recuperación
+revisado. No resellar ni montar datos o secretos productivos en contenedores QA.
+El corte sigue exigiendo XNYS cerrado, postmarket terminal, quietud real y margen;
+la autorización no permite fabricar quietud ni ocultar otro gate fallido.
 
 **Dictamen:** `partially_verified_release_binding_prepared`. XNYS permaneció
 abierto durante el lote. Se preparó un helper offline para la futura ventana

@@ -1,3 +1,21 @@
+## Candidato correctivo .376 — preparación22oct, no desplegado
+
+Usuario autoriza corregir y desplegar después. Causa de .321 confirmada:
+runtime.env fija imagen antigua y systemd la vuelve a resolver al arrancar.
+Lote .376 integrado en ensayo aislado con tercera capaCompose de imagen literal,
+ExecStartPre de ImageID/plataforma/tag, tres servicios explícitos y rollback .369
+con inspect independiente. No se modifican ENV, kernel, broker, execution, riesgo
+ni estrategias. Binding68focales y correctivas51verdes con solapamiento; Ruff,
+NUL580,diff y configuración23agentes/6tareas verdes. No suite/smokes/ARM de cierre.
+Informe único docs/informe_oct22_release_binding.md. Pendiente revisar recuperación
+desde kernel violation sin eludir el guard histórico, fullsuite única del árbol
+final, QA ARM/digest completo y corte cerrado con quietud/terminal y rollback.
+LLM401 requiere secreto del operador. Protección persistente, asignación y nuevos
+scores no activados; paridad digest productor/CLI agent_learning reproducida en
+base .369 y conservada como deuda separada, no ocultada. Ensayo inicial de digest
+con alias DATA_DIR incorrecto invalidado; evidencia local exclusivamente fixture
+preservada y harness corregido con assertion antes de writes. Sin cambios Jetson.
+
 ## Auditoría22oct15:50Madrid — retroceso productivo e incoherencia kernel
 
 Tres servicios .321 imagen8ff2bedce363... con205fuentes exactas del inventario

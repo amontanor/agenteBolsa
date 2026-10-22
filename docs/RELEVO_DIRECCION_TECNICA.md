@@ -1,3 +1,25 @@
+## Relevo de preparación .376 —22oct, sin corte
+
+Candidato integrado con merge --no-ff en oct19-integration,
+HEAD funcional856740a074f7e6ac314abc1cd8339a834af51a78,
+tree2311d35f47a7ab330d9d5cf2886c08d69162a715. Causa del retroceso confirmada en
+audit_oct22_startup_image_binding.json: runtime.env AGENTE_BOLSA_IMAGE=.321.
+Se corrige mediante tercera capaCompose literal y drop-in con ExecStartPre
+host de ImageID/tag/linuxarm64. Preparador puro; no se ha instalado nada remoto.
+Rollback .369 verificado porID, .321 no es rollback seguro. Cinco fuentes de
+código protegidas idénticas .369; storage mismo objetoGit, solo CRLF/LF en bytes.
+QA:68binding+51correctivas, solapadas/no sumables, Ruff/NUL580/diff/config23/6
+verdes. WinError5sandbox conservado y reintento justificado pasó51. Fullsuite,
+smokes y volumenARM pendientes de cierre. Ver informe único de binding y recibos.
+No usar sin cambios el cut.py .369: exige base .364/kernelactivook. Resolver
+violación de imagen actual por recuperación revisada contra sello intacto,
+sinresellar/forzarjobs/borrarlocks. Copia fría solo trasquietud y parada canónica.
+No declarar OOMresuelto ni aprendizajeCLIequivalente al productor; diferencia
+agent_learning reproducida en base369, mismas rutas entre369/376 sí coinciden
+en fixture78señales salvo dos as_of. Primerharness aliasDATA_DIRfalló y queda
+invalidado; localDBconsolo fixtures preservada, Jetson intacto. No usar ese dato
+local en futuros tests. Nueva claveLLM siguependienteoperador.
+
 ## Auditoría22oct15:50Madrid — retroceso productivo e incoherencia kernel
 
 Tres servicios .321 imagen8ff2bedce363... con205fuentes exactas del inventario
