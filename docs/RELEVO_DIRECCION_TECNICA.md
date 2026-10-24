@@ -1,3 +1,68 @@
+## Relevo de coordinación —24oct2026 09:24 Europe/Madrid
+
+Dictamen actual: `needs_integration`, sin despliegue conjunto.
+
+No mezclar directamente `codex/dashboard-perf-p0p1`: se basa en
+`59fbffe4c3f74e148042166e81362504cb299122` (`0.1.7`). La corrección del lote es
+`23047a34a64623ee73d0266f1e24f7bc84ce1590` (`0.1.13`); 414 passed y 1 skipped
+en esa rama no certifican el código moderno `.376`. Revisión independiente
+confirma page_token/after, cobertura parcial ante cursor repetido, cursor
+monotónico, aislamiento de snapshots por credencial y cierre SQLite. P2 no
+garantiza timeout del SDK ni tiene métrica de producción. Port selectivo en
+preparación sobre `.376`; debe mantener intactos los archivos protegidos.
+
+En `oct19-integration` está implementado, aún sin commit ni fullsuite, el recibo
+de despliegue y la fecha visible de versión (`0.4.377` provisional). Focales:
+11 passed; Ruff, NUL 583 y diff pasan. El recibo se escribe tras verificar la
+imagen/servicios, persiste versión, ImageID, HEAD/tree y horas equivalentes
+Europe/Madrid/UTC. Sin recibo válido la UI muestra «Fecha de despliegue no
+disponible».
+
+Al integrar: reservar versión final nueva; revisar identidad y cambios ajenos;
+congelar hashes; focales proporcionales y una fullsuite; smoke Windows;
+configuración/kernel; digest sintético completo ARM bajo 2 GiB sin OOM; smoke
+ARM; revisión independiente. Luego preflight actual desde runbook: XNYS cerrado,
+postmarket terminal, cero jobs/leases/reintentos/tests/despliegues activos,
+paper true, live/auto-apply false, kernel válido, salud y margen operativo.
+Solo entonces un corte conjunto con binding persistente, rollback `.369` y
+verificación de hashes, doble salud separada >=75s, recursos 600s y timestamp en
+web. No activar tamaño/adds/score ni promover estrategias.
+
+## Intento inmediato23oct09:15Madrid —precondition_not_met
+
+El operador autoriza desplegar ahora. Preflight real schedule-status:
+XNYS cerrado,next_open23oct15:30Madrid,schedulerPID7/token7769616 vivo.
+Store.read_connection readonly con deadline10s y cursores/cierre explícitos:
+post_market_coordination:session:2026-10-22 sigue statusactive,stagecoordination,
+runpmr_19afdf738678,iniciado23oct03:46:39UTC. No acredita terminal22oct; el skipped
+23oct market_not_ready no lo sustituye. Un lease registrado activo no demuestra
+que el proceso siga trabajando, pero incumple el gate; no borrarlo para cortar.
+Kernel actual violation broker.py/execution.py,flags papertrue/livefalse/
+autoapplyfalse. Producción sigue .321. No se lanza QA pesada ni corte con gate
+fallido. No paradas/reinicios/órdenes, no resellado ni edición productiva.
+Evidencia EF99/audit_oct23_deploy_preflight.json. Automatización anterior sigue
+PAUSED. Pendientes: diagnóstico explícito del lease/autoridad tras reinicio,
+recuperación revisada con bytes aprobados y QA completa .376; no declarar listo
+por focales. Requisito fecha/hora visible web conservado como aceptación futura.
+
+## Requisito permanente del operador —23 octubre 2026
+
+En cada despliegue la web debe mostrar junto a la versión activa la fecha y hora
+del despliegue verificado, con zona horaria explícita (Europe/Madrid y referencia
+UTC persistida). Usar el recibo canónico del despliegue e identidad de imagen;
+no confundir fecha de build, commit, arranque o reinicio con fecha de despliegue.
+Si no existe recibo verificable, mostrar «Fecha de despliegue no disponible».
+El rollback debe mostrar la identidad y fecha del despliegue restaurado mediante
+su recibo de rollback. Incorporar este requisito al gate de aceptación de cada
+futuro corte. Pendiente de implementación UI/carrier en lote separado: no alterar
+silenciosamente las fuentes congeladas del candidato .376.
+
+Comprobación remota23oct: los tres servicios usan imagen
+sha256:8ff2bedce363751c33e8e0acd37eae4095358a8f4edf65c08f28fcfaf069d1ae;
+paquete web0.4.321. No está desplegado .376. El scheduler arrancó23oct05:09:46UTC;
+eso no acredita un despliegue ni su causa. No consta ejecución del intento22:45
+en el relevo local; no atribuirlo a fallo de QA sin evidencia.
+
 ### Evidencia de capital recuperada —22oct19:53:46Madrid
 
 Consulta canónica por rango de clave primaria, acotada/deadline, confirma123eventos

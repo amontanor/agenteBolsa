@@ -138,4 +138,5 @@ __all__ = ["__version__"]
 # Oct19: integrated repairs, lossless gate collection and terminal Crew HTTP401.
 # Oct19: retain every decision path in the existing durable audit event.
 # Oct22: persist exact release image binding and identity gate for Raspberry preparation.
-__version__ = "0.4.376"
+# Oct24: show only verified deployment time from the durable release receipt.
+__version__ = "0.4.377"

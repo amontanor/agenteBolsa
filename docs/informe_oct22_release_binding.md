@@ -1,3 +1,57 @@
+## Coordinación conjunta —24oct2026 09:24 Europe/Madrid
+
+Dictamen: `needs_integration`. No hay despliegue conjunto verificado.
+
+El lote de rendimiento se revisó en su checkout independiente. Su base exacta es
+`59fbffe4c3f74e148042166e81362504cb299122` (`0.1.7`), no la base moderna `.376`.
+La corrección final local es `23047a34a64623ee73d0266f1e24f7bc84ce1590`, con
+HEAD documental informado `e0abf737`, versión `0.1.13`. Su suite local dio
+414 passed y 1 skipped, más 101 pruebas focales; esos resultados no validan el
+port a `.376` y no se sumarán a la suite del árbol combinado.
+
+La revisión independiente confirmó que las correcciones de paginación siguen el
+contrato de [Retrieve Account Activities de Alpaca](https://docs.alpaca.markets/us/reference/getaccountactivities-2):
+`page_token` lleva el ID de la última actividad y `after` una fecha/hora. La
+cobertura queda parcial ante cursor repetido, cursor incremental no retrocede,
+las credenciales nuevas no hidratan snapshots de otra cuenta y se cierran las
+conexiones SQLite. La rama antigua también modifica `tools/broker.py`, protegido
+en la línea moderna; no se copiará ese archivo. Se está preparando un adaptador
+GET de FILL aislado sobre `.376`, sin tocar fuentes protegidas. El timeout del
+SDK de cartera sigue `unavailable`; la rama no aporta una medición de producción.
+
+El requisito de fecha/hora visible ya tiene una implementación local pendiente
+de integrar: versión provisional `0.4.377`, recibo JSONL durable en `DATA_DIR`,
+identidad de imagen y HEAD/tree, y UI con UTC y Europe/Madrid. Si no hay recibo
+válido para la versión, muestra «Fecha de despliegue no disponible». Sus 11
+pruebas focales pasan con Ruff, NUL y `git diff --check`; la fullsuite final no
+se ha ejecutado porque aún falta el port del dashboard.
+
+Siguiente secuencia: terminar el port selectivo P0/P1/P3 y fills corregidos en
+una rama basada en el HEAD funcional `.376`; combinarlo con recibo de despliegue
+en un sucesor, reservar versión final, revisar el diff y hashes, y ejecutar una
+única fullsuite de ese árbol. Después quedan smoke Windows, configuración/kernel,
+digest completo ARM bajo 2 GiB, smoke ARM, revisión independiente, preflight
+operativo nuevo y verificación visual del timestamp. Producción no se ha vuelto
+a comprobar; el último dato documentado es `.321` del 23oct. Mantener pausada la
+automatización vencida. No activar capital, adds ni score.
+
+## Intento inmediato23oct09:15Madrid —precondition_not_met
+
+El operador autoriza desplegar ahora. Preflight real schedule-status:
+XNYS cerrado,next_open23oct15:30Madrid,schedulerPID7/token7769616 vivo.
+Store.read_connection readonly con deadline10s y cursores/cierre explícitos:
+post_market_coordination:session:2026-10-22 sigue statusactive,stagecoordination,
+runpmr_19afdf738678,iniciado23oct03:46:39UTC. No acredita terminal22oct; el skipped
+23oct market_not_ready no lo sustituye. Un lease registrado activo no demuestra
+que el proceso siga trabajando, pero incumple el gate; no borrarlo para cortar.
+Kernel actual violation broker.py/execution.py,flags papertrue/livefalse/
+autoapplyfalse. Producción sigue .321. No se lanza QA pesada ni corte con gate
+fallido. No paradas/reinicios/órdenes, no resellado ni edición productiva.
+Evidencia EF99/audit_oct23_deploy_preflight.json. Automatización anterior sigue
+PAUSED. Pendientes: diagnóstico explícito del lease/autoridad tras reinicio,
+recuperación revisada con bytes aprobados y QA completa .376; no declarar listo
+por focales. Requisito fecha/hora visible web conservado como aceptación futura.
+
 ### Evidencia de capital recuperada —22oct19:53:46Madrid
 
 Consulta canónica por rango de clave primaria, acotada/deadline, confirma123eventos

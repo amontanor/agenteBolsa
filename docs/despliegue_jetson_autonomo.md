@@ -1,3 +1,21 @@
+## Requisito permanente del operador —23 octubre 2026
+
+En cada despliegue la web debe mostrar junto a la versión activa la fecha y hora
+del despliegue verificado, con zona horaria explícita (Europe/Madrid y referencia
+UTC persistida). Usar el recibo canónico del despliegue e identidad de imagen;
+no confundir fecha de build, commit, arranque o reinicio con fecha de despliegue.
+Si no existe recibo verificable, mostrar «Fecha de despliegue no disponible».
+El rollback debe mostrar la identidad y fecha del despliegue restaurado mediante
+su recibo de rollback. Incorporar este requisito al gate de aceptación de cada
+futuro corte. Pendiente de implementación UI/carrier en lote separado: no alterar
+silenciosamente las fuentes congeladas del candidato .376.
+
+Comprobación remota23oct: los tres servicios usan imagen
+sha256:8ff2bedce363751c33e8e0acd37eae4095358a8f4edf65c08f28fcfaf069d1ae;
+paquete web0.4.321. No está desplegado .376. El scheduler arrancó23oct05:09:46UTC;
+eso no acredita un despliegue ni su causa. No consta ejecución del intento22:45
+en el relevo local; no atribuirlo a fallo de QA sin evidencia.
+
 # Despliegue autonomo en Jetson (procedimiento verificado P-L125)
 
 Destino: `antonio@192.168.1.186` por SSH, Docker. Verificado el 2026-09-17
@@ -50,7 +68,23 @@ con el port 0.4.297 -> 0.4.298.
    HTTP 200, version por `docker exec <scheduler> python3 -c`.
 10. Salud 2 a +75 s y observacion OOM 600 s: `RestartCount=0`,
     `OOMKilled=false`, `free -m` estable, `dmesg` sin OOM, vecinos intactos.
-11. Dictamen `deployed` solo con todo lo anterior. Informe unico del lote.
+11. Después de verificar imagen, versión y salud, registrar recibo duradero desde
+    el contenedor web con el `ImageID` real de `docker inspect` y HEAD/tree
+    congelados del candidato:
+
+    ```bash
+    docker exec <contenedor-web> python /app/scripts/record_verified_deployment.py \
+      --image-id <ImageID-sha256-completo> \
+      --source-head <HEAD-completo> \
+      --source-tree <tree-completo>
+    ```
+
+    El script añade un recibo a `DATA_DIR/deployment_receipts.jsonl`; no cambia
+    configuración ni históricos SQLite. La UI valida esquema, versión, identidad
+    de imagen y hora equivalente en UTC y Europe/Madrid. Sin recibo válido muestra
+    «Fecha de despliegue no disponible». Comprueba la fecha junto a la versión
+    antes del dictamen final.
+12. Dictamen `deployed` solo con todo lo anterior. Informe unico del lote.
 
 ## Lecciones P-L125
 

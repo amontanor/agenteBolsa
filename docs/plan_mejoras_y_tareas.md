@@ -1,3 +1,60 @@
+## Coordinación de los despliegues —24oct2026 09:24 Europe/Madrid
+
+Estado: `needs_integration`; ningún cambio conjunto está desplegado.
+
+La rama dashboard `0.1.13` corrige defectos reales de cobertura y aislamiento,
+pero procede de `.1.7`, no de la línea moderna `.376`. Su QA (414 passed,
+1 skipped, más 101 focales) solo cubre aquella rama. El port conjunto se hará
+sobre `.376`, preservando el broker moderno y sus contratos. Las consultas de
+actividad FILL usarán el contrato oficial de Alpaca; timeout efectivo del SDK y
+métricas de navegador/producción quedan `unavailable`.
+
+El candidato local provisional `0.4.377` añade recibo verificable en
+`DATA_DIR/deployment_receipts.jsonl` y fecha en el sidebar, con hora Madrid y
+UTC. Sus 11 focales pasan. Se combinará con el port dashboard y recibirá una
+versión final nueva antes de la única fullsuite del árbol combinado.
+
+Gates restantes: port selectivo, revisión del diff final, fullsuite, Ruff/NUL/
+diff, configuración/kernel, smoke Windows, digest ARM completo bajo 2 GiB,
+smoke ARM, revisión independiente y preflight de quietud/mercado cerrado. La
+automatización anterior venció el 23oct y sigue pausada. No desplegar hasta
+superar los gates; no activar la política de tamaño, ampliaciones ni score.
+
+## Intento inmediato23oct09:15Madrid —precondition_not_met
+
+El operador autoriza desplegar ahora. Preflight real schedule-status:
+XNYS cerrado,next_open23oct15:30Madrid,schedulerPID7/token7769616 vivo.
+Store.read_connection readonly con deadline10s y cursores/cierre explícitos:
+post_market_coordination:session:2026-10-22 sigue statusactive,stagecoordination,
+runpmr_19afdf738678,iniciado23oct03:46:39UTC. No acredita terminal22oct; el skipped
+23oct market_not_ready no lo sustituye. Un lease registrado activo no demuestra
+que el proceso siga trabajando, pero incumple el gate; no borrarlo para cortar.
+Kernel actual violation broker.py/execution.py,flags papertrue/livefalse/
+autoapplyfalse. Producción sigue .321. No se lanza QA pesada ni corte con gate
+fallido. No paradas/reinicios/órdenes, no resellado ni edición productiva.
+Evidencia EF99/audit_oct23_deploy_preflight.json. Automatización anterior sigue
+PAUSED. Pendientes: diagnóstico explícito del lease/autoridad tras reinicio,
+recuperación revisada con bytes aprobados y QA completa .376; no declarar listo
+por focales. Requisito fecha/hora visible web conservado como aceptación futura.
+
+## Requisito permanente del operador —23 octubre 2026
+
+En cada despliegue la web debe mostrar junto a la versión activa la fecha y hora
+del despliegue verificado, con zona horaria explícita (Europe/Madrid y referencia
+UTC persistida). Usar el recibo canónico del despliegue e identidad de imagen;
+no confundir fecha de build, commit, arranque o reinicio con fecha de despliegue.
+Si no existe recibo verificable, mostrar «Fecha de despliegue no disponible».
+El rollback debe mostrar la identidad y fecha del despliegue restaurado mediante
+su recibo de rollback. Incorporar este requisito al gate de aceptación de cada
+futuro corte. Pendiente de implementación UI/carrier en lote separado: no alterar
+silenciosamente las fuentes congeladas del candidato .376.
+
+Comprobación remota23oct: los tres servicios usan imagen
+sha256:8ff2bedce363751c33e8e0acd37eae4095358a8f4edf65c08f28fcfaf069d1ae;
+paquete web0.4.321. No está desplegado .376. El scheduler arrancó23oct05:09:46UTC;
+eso no acredita un despliegue ni su causa. No consta ejecución del intento22:45
+en el relevo local; no atribuirlo a fallo de QA sin evidencia.
+
 ### Evidencia de capital recuperada —22oct19:53:46Madrid
 
 Consulta canónica por rango de clave primaria, acotada/deadline, confirma123eventos

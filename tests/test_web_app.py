@@ -5,7 +5,9 @@ from typing import Any
 import pandas as pd
 
 from agente_bolsa import __version__
+from agente_bolsa import web_app as web_app_module
 from agente_bolsa.config import Settings
+from agente_bolsa.deployment_receipt import append_verified_deployment_receipt
 from agente_bolsa.eventing import _format_time
 from agente_bolsa.llm_usage import usage_tokens
 from agente_bolsa.models import OrderSnapshot, PortfolioSnapshot, PositionSnapshot
@@ -50,6 +52,7 @@ from agente_bolsa.web_app import (
     _position_evolution_summary,
     _position_purchase_sort_key,
     _position_rows,
+    _render_sidebar_version,
     _sidebar_version_label,
     _single_symbol_price_frame,
     _start_schedule,
@@ -837,6 +840,45 @@ def test_today_pl_metric_payload_reuses_same_display_as_hero():
 
 def test_sidebar_version_label_uses_semantic_version():
     assert _sidebar_version_label() == f"v{__version__}"
+
+
+def test_sidebar_shows_unavailable_when_no_deployment_receipt(monkeypatch, tmp_path):
+    captured: list[str] = []
+    monkeypatch.setattr(
+        web_app_module,
+        "st",
+        SimpleNamespace(sidebar=SimpleNamespace(markdown=lambda value, **_kwargs: captured.append(value))),
+    )
+    monkeypatch.setattr(web_app_module, "_settings", lambda: SimpleNamespace(data_dir=tmp_path))
+
+    _render_sidebar_version()
+
+    assert captured and f"v{__version__}" in captured[0]
+    assert "Fecha de despliegue no disponible" in captured[0]
+
+
+def test_sidebar_shows_verified_deployment_time_for_active_version(monkeypatch, tmp_path):
+    append_verified_deployment_receipt(
+        tmp_path,
+        current_version=__version__,
+        image_id="sha256:" + "a" * 64,
+        source_head="1" * 40,
+        source_tree="2" * 40,
+        verified_at=datetime.fromisoformat("2026-10-24T09:30:05+00:00"),
+    )
+    captured: list[str] = []
+    monkeypatch.setattr(
+        web_app_module,
+        "st",
+        SimpleNamespace(sidebar=SimpleNamespace(markdown=lambda value, **_kwargs: captured.append(value))),
+    )
+    monkeypatch.setattr(web_app_module, "_settings", lambda: SimpleNamespace(data_dir=tmp_path))
+
+    _render_sidebar_version()
+
+    assert captured and f"v{__version__}" in captured[0]
+    assert "2026-10-24 11:30:05 Europe/Madrid" in captured[0]
+    assert "2026-10-24 09:30:05 UTC" in captured[0]
 
 
 def test_local_datetime_renders_spain_dst_from_utc():

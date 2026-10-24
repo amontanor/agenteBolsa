@@ -49,6 +49,10 @@ from agente_bolsa import __version__
 from agente_bolsa.config import get_settings
 from agente_bolsa.continuous_improvement.promotion_readiness import evaluate_promotion_readiness
 from agente_bolsa.continuous_improvement.runtime import ContinuousImprovementLabRuntime
+from agente_bolsa.deployment_receipt import (
+    format_verified_deployment_time,
+    latest_verified_deployment_receipt,
+)
 from agente_bolsa.llm_router import primary_llm_endpoint
 from agente_bolsa.market_calendar import MarketCalendar
 from agente_bolsa.models import AgentEvent, PortfolioSnapshot, TradeRecommendation, new_id
@@ -408,11 +412,16 @@ def _sidebar_version_label() -> str:
 
 
 def _render_sidebar_version() -> None:
+    receipt = latest_verified_deployment_receipt(
+        _settings().data_dir,
+        current_version=__version__,
+    )
     st.sidebar.markdown(
         (
             "<div style='text-align: right; color: #4b5563; font-weight: 700; "
             "font-size: 0.82rem; margin-top: 0.9rem; margin-bottom: 0.15rem;'>"
-            f"{escape(_sidebar_version_label())}"
+            f"{escape(_sidebar_version_label())}<br>"
+            f"{escape(format_verified_deployment_time(receipt))}"
             "</div>"
         ),
         unsafe_allow_html=True,
