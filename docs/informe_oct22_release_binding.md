@@ -1,39 +1,42 @@
-## Coordinación conjunta —24oct2026 09:24 Europe/Madrid
+## Coordinación conjunta —24oct2026 19:31 Europe/Madrid
 
-Dictamen: `needs_integration`. No hay despliegue conjunto verificado.
+Dictamen: `blocked_qa`; cambios integrados localmente en `0.4.378`, sin imagen
+ARM aprobada ni despliegue. La identidad del candidato funcional tras integrar el
+port y ordenar imports es HEAD `032539c56d35e256099ee9f449146cb139bcbfdf`, tree
+`668f6525b27a296c6c8566a992907f04168525a6` antes de esta actualización documental.
+Base exacta `.376`: `856740a074f7e6ac314abc1cd8339a834af51a78`, tree
+`2311d35f47a7ab330d9d5cf2886c08d69162a715`. Recibo/UI: `c3e7b8fb`; port dashboard
+integrado desde `4aa64bcd` y `399a5b3d`; alineación de fixture a `.378`:
+`5efe9582`; imports Ruff: `032539c5`.
 
-El lote de rendimiento se revisó en su checkout independiente. Su base exacta es
-`59fbffe4c3f74e148042166e81362504cb299122` (`0.1.7`), no la base moderna `.376`.
-La corrección final local es `23047a34a64623ee73d0266f1e24f7bc84ce1590`, con
-HEAD documental informado `e0abf737`, versión `0.1.13`. Su suite local dio
-414 passed y 1 skipped, más 101 pruebas focales; esos resultados no validan el
-port a `.376` y no se sumarán a la suite del árbol combinado.
+La rama antigua `0.1.13` parte de `59fbffe4c3f74e148042166e81362504cb299122` y
+su QA 414 passed/1 skipped no valida la línea moderna. El port selectivo quedó
+en `codex/dashboard-port-0376`, tree `497d2117150b268084a5db2916173c64b43a8d7e`;
+mantiene `broker.py`, `execution.py`, `risk.py`, `kernel.py` y `config.py`
+idénticos al blob de `.376`. El informe detallado está en
+`docs/informe_dashboard_port_0376.md`.
 
-La revisión independiente confirmó que las correcciones de paginación siguen el
-contrato de [Retrieve Account Activities de Alpaca](https://docs.alpaca.markets/us/reference/getaccountactivities-2):
-`page_token` lleva el ID de la última actividad y `after` una fecha/hora. La
-cobertura queda parcial ante cursor repetido, cursor incremental no retrocede,
-las credenciales nuevas no hidratan snapshots de otra cuenta y se cierran las
-conexiones SQLite. La rama antigua también modifica `tools/broker.py`, protegido
-en la línea moderna; no se copiará ese archivo. Se está preparando un adaptador
-GET de FILL aislado sobre `.376`, sin tocar fuentes protegidas. El timeout del
-SDK de cartera sigue `unavailable`; la rama no aporta una medición de producción.
+El requisito web de fecha/hora está implementado en `.378`: recibo JSONL durable
+en `DATA_DIR/deployment_receipts.jsonl`, con versión, ImageID, HEAD/tree y horas
+equivalentes UTC/Europe-Madrid; la UI falla cerrada a «Fecha de despliegue no
+disponible» si falta o no coincide. El recibo se escribe solo después de verificar
+imagen y salud. 160 pruebas focales integradas pasan; la auditoría sintética de
+fills/cache no usó red ni datos productivos. La fullsuite no queda verde: cuatro
+corridas se detuvieron tras 1.590 aprobadas en el test multiproceso existente,
+cuyos hijos fallaron dentro del wrapper temporal del sandbox con `NameError:
+__args`. Ese test pasa 1/1 aislado. No se modificó ni omitió para aparentar QA.
 
-El requisito de fecha/hora visible ya tiene una implementación local pendiente
-de integrar: versión provisional `0.4.377`, recibo JSONL durable en `DATA_DIR`,
-identidad de imagen y HEAD/tree, y UI con UTC y Europe/Madrid. Si no hay recibo
-válido para la versión, muestra «Fecha de despliegue no disponible». Sus 11
-pruebas focales pasan con Ruff, NUL y `git diff --check`; la fullsuite final no
-se ha ejecutado porque aún falta el port del dashboard.
-
-Siguiente secuencia: terminar el port selectivo P0/P1/P3 y fills corregidos en
-una rama basada en el HEAD funcional `.376`; combinarlo con recibo de despliegue
-en un sucesor, reservar versión final, revisar el diff y hashes, y ejecutar una
-única fullsuite de ese árbol. Después quedan smoke Windows, configuración/kernel,
-digest completo ARM bajo 2 GiB, smoke ARM, revisión independiente, preflight
-operativo nuevo y verificación visual del timestamp. Producción no se ha vuelto
-a comprobar; el último dato documentado es `.321` del 23oct. Mantener pausada la
-automatización vencida. No activar capital, adds ni score.
+Ruff, NUL (593 archivos), `git diff --check`, import/parser smoke y configuración
+local (23 agentes/6 tareas) pasan. `kernel-status` con `DATA_DIR` temporal informa
+`unsealed` por ausencia deliberada de manifiesto; no describe producción. Aún
+penden fullsuite en un runner compatible con el test spawn, smoke aislado
+`run-once` con proveedores locales, digest/build y smoke ARM, revisión final,
+preflight operativo actual y corte. El último estado productivo documentado es
+`.321` el 23oct; no se volvió a comprobar en esta corrida. No se construyó ni
+instaló imagen, no hubo orden, reinicio ni cambio de capital. La política de tamaño,
+adds y score continúa separada e inactiva. La UI de fecha en rollback `.369` sigue
+sin soporte, pues esa imagen anterior no contiene el lector; resolverlo antes de
+presentar el requisito como universal.
 
 ## Intento inmediato23oct09:15Madrid —precondition_not_met
 

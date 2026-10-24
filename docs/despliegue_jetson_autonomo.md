@@ -5,10 +5,11 @@ del despliegue verificado, con zona horaria explícita (Europe/Madrid y referenc
 UTC persistida). Usar el recibo canónico del despliegue e identidad de imagen;
 no confundir fecha de build, commit, arranque o reinicio con fecha de despliegue.
 Si no existe recibo verificable, mostrar «Fecha de despliegue no disponible».
-El rollback debe mostrar la identidad y fecha del despliegue restaurado mediante
-su recibo de rollback. Incorporar este requisito al gate de aceptación de cada
-futuro corte. Pendiente de implementación UI/carrier en lote separado: no alterar
-silenciosamente las fuentes congeladas del candidato .376.
+El rollback también debe mostrar la identidad y fecha del despliegue restaurado
+mediante su recibo. El lector y el recibo están implementados en el candidato
+local `.378`, aún no desplegado. La imagen `.369` de rollback no incorpora el
+lector; preparar y validar una ruta compatible antes de afirmar que el requisito
+se cumple tras una reversión.
 
 Comprobación remota23oct: los tres servicios usan imagen
 sha256:8ff2bedce363751c33e8e0acd37eae4095358a8f4edf65c08f28fcfaf069d1ae;

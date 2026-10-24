@@ -1,24 +1,42 @@
-## Coordinación de los despliegues —24oct2026 09:24 Europe/Madrid
+## Coordinación de los despliegues —24oct2026 19:31 Europe/Madrid
 
-Estado: `needs_integration`; ningún cambio conjunto está desplegado.
+Estado: `blocked_qa`; candidato integrado `.378`, sin imagen ni despliegue.
+HEAD funcional `032539c56d35e256099ee9f449146cb139bcbfdf`, tree
+`668f6525b27a296c6c8566a992907f04168525a6` antes de esta actualización. Base
+`.376` exacta `856740a074f7e6ac314abc1cd8339a834af51a78`.
 
-La rama dashboard `0.1.13` corrige defectos reales de cobertura y aislamiento,
-pero procede de `.1.7`, no de la línea moderna `.376`. Su QA (414 passed,
-1 skipped, más 101 focales) solo cubre aquella rama. El port conjunto se hará
-sobre `.376`, preservando el broker moderno y sus contratos. Las consultas de
-actividad FILL usarán el contrato oficial de Alpaca; timeout efectivo del SDK y
-métricas de navegador/producción quedan `unavailable`.
+Coordinación entre este chat y `[AgenteBolsa] Carga`: no mezclar la rama histórica
+`0.1.13` completa, basada en `.1.7`. El port moderno `codex/dashboard-port-0376`
+conserva los cinco archivos protegidos byte a byte y se integró como `.378`.
+Añade carga en segundo plano, snapshots por identidad, FILL GET paginado y
+expansores bajo demanda. El informe local registra 113 pruebas, Ruff/NUL y AppTest
+17/17; el lote de origen dio además 414 passed/1 skipped en su rama antigua, sin
+atribuir esa suite al candidato moderno. Timeout del SDK de cartera y p95 real
+siguen `unavailable`.
 
-El candidato local provisional `0.4.377` añade recibo verificable en
-`DATA_DIR/deployment_receipts.jsonl` y fecha en el sidebar, con hora Madrid y
-UTC. Sus 11 focales pasan. Se combinará con el port dashboard y recibirá una
-versión final nueva antes de la única fullsuite del árbol combinado.
+El recibo de despliegue implementa la fecha/hora real junto a la versión y usa
+ImageID más HEAD/tree, UTC y Europe/Madrid. El runbook lo registra tras salud
+verificada. Al no existir recibo válido, la UI muestra «Fecha de despliegue no
+disponible». El rollback a `.369` no tiene lector en la imagen antigua: esa
+compatibilidad queda pendiente antes de afirmar que el requisito aplica también
+a una reversión.
 
-Gates restantes: port selectivo, revisión del diff final, fullsuite, Ruff/NUL/
-diff, configuración/kernel, smoke Windows, digest ARM completo bajo 2 GiB,
-smoke ARM, revisión independiente y preflight de quietud/mercado cerrado. La
-automatización anterior venció el 23oct y sigue pausada. No desplegar hasta
-superar los gates; no activar la política de tamaño, ampliaciones ni score.
+QA integrada: 160 focales pasan; `ruff check src tests`, NUL 593 y diff pasan;
+configuración local 23 agentes/6 tareas válida. Fullsuite bloqueada: cuatro
+intentos acabaron en el test multiproceso sin lock después de 1.590 pasadas; los
+hijos recibieron `NameError: __args` en el wrapper temporal del sandbox. El caso
+pasa aislado dos veces. No se cambia ni omite el test; falta runner compatible.
+El primer `WinError 5` de temporal se reprodujo con `basetemp` del sandbox y pasó
+en el worktree. El `kernel-status` temporal `unsealed` es esperado por ausencia
+de manifiesto; no certifica kernel vivo.
+
+Gates pendientes para despliegue: fullsuite verde en runner normal, smoke
+`run-once` aislado con proveedores locales, digest ARM completo bajo 2 GiB y
+smoke ARM, revisión independiente, preflight real (schedule-status, postmarket
+terminal, cero jobs/leases/reintentos, flags y kernel válidos) y verificación de
+salud/recibo en web. No se construyó imagen ni se accedió a producción en este
+intento. Último estado documentado `.321` de 23oct, no revalidado. La política de
+tamaño permanece inactiva; no se aumentan exposición ni riesgo.
 
 ## Intento inmediato23oct09:15Madrid —precondition_not_met
 

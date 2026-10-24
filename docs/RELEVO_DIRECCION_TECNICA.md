@@ -1,32 +1,43 @@
-## Relevo de coordinación —24oct2026 09:24 Europe/Madrid
+## Relevo de coordinación —24oct2026 19:31 Europe/Madrid
 
-Dictamen actual: `needs_integration`, sin despliegue conjunto.
+Dictamen actual: `blocked_qa`; port de `[AgenteBolsa] Carga` integrado en este
+chat, versión local `.378`, pero sin fullsuite válida, imagen ARM ni despliegue.
+Último HEAD funcional antes de actualizar documentos:
+`032539c56d35e256099ee9f449146cb139bcbfdf`, tree
+`668f6525b27a296c6c8566a992907f04168525a6`.
 
-No mezclar directamente `codex/dashboard-perf-p0p1`: se basa en
-`59fbffe4c3f74e148042166e81362504cb299122` (`0.1.7`). La corrección del lote es
-`23047a34a64623ee73d0266f1e24f7bc84ce1590` (`0.1.13`); 414 passed y 1 skipped
-en esa rama no certifican el código moderno `.376`. Revisión independiente
-confirma page_token/after, cobertura parcial ante cursor repetido, cursor
-monotónico, aislamiento de snapshots por credencial y cierre SQLite. P2 no
-garantiza timeout del SDK ni tiene métrica de producción. Port selectivo en
-preparación sobre `.376`; debe mantener intactos los archivos protegidos.
+La rama histórica `0.1.13` parte de `.1.7`; no se mezcló completa. El port moderno
+parte del `.376` exacto y mantiene `config.py`, `kernel.py`, `tools/broker.py`,
+`tools/execution.py` y `tools/risk.py` idénticos. Se añadieron cache/asynchronous
+dashboard, snapshot local por cuenta y adaptador GET de fills. 160 focales
+integradas pasan; la rama de origen registra 113 pruebas y AppTest 17/17. En
+synthetic review:3 fills disponibles=3 almacenados, cursor repetido=partial,
+cuenta nueva no hidrata la previa, y no hubo red/datos productivos. Timeout
+efectivo del SDK de cartera y p95 de navegador/producción: `unavailable`.
 
-En `oct19-integration` está implementado, aún sin commit ni fullsuite, el recibo
-de despliegue y la fecha visible de versión (`0.4.377` provisional). Focales:
-11 passed; Ruff, NUL 583 y diff pasan. El recibo se escribe tras verificar la
-imagen/servicios, persiste versión, ImageID, HEAD/tree y horas equivalentes
-Europe/Madrid/UTC. Sin recibo válido la UI muestra «Fecha de despliegue no
-disponible».
+El recibo .378 ya muestra fecha/hora de despliegue solo tras verificación real,
+con ImageID, HEAD/tree y UTC/Europe-Madrid. Sin recibo válido, muestra «Fecha de
+despliegue no disponible». La imagen de rollback `.369` no contiene el lector;
+no afirmar compatibilidad de fecha en rollback hasta resolverlo.
 
-Al integrar: reservar versión final nueva; revisar identidad y cambios ajenos;
-congelar hashes; focales proporcionales y una fullsuite; smoke Windows;
-configuración/kernel; digest sintético completo ARM bajo 2 GiB sin OOM; smoke
-ARM; revisión independiente. Luego preflight actual desde runbook: XNYS cerrado,
-postmarket terminal, cero jobs/leases/reintentos/tests/despliegues activos,
-paper true, live/auto-apply false, kernel válido, salud y margen operativo.
-Solo entonces un corte conjunto con binding persistente, rollback `.369` y
-verificación de hashes, doble salud separada >=75s, recursos 600s y timestamp en
-web. No activar tamaño/adds/score ni promover estrategias.
+Fullsuite: no verde. Cuatro corridas dejaron 1.590 tests pasados y fallaron en
+`test_multiprocess_append_only_event_has_one_canonical_without_lock` con
+`NameError: __args` en el lanzador temporal de hijos. La misma prueba pasa aislada
+dos veces (9,91s y 8,81s). No modificar ni omitir el test para pasar. Un intento
+de `WinError 5` en replace del temporal sandbox pasó con basetemp en el worktree.
+Ruff completo, NUL593, diff y config 23 agentes/6 tareas pasan. `kernel-status`
+en DATA_DIR temporal dice `unsealed` de forma esperada, sin manifiesto; no da
+prueba sobre producción.
+
+Siguiente: obtener runner compatible para una fullsuite única válida en el árbol
+funcional exacto; si verde, ejecutar smoke `run-once` con proveedores locales,
+digest completo y smoke ARM bajo límite2GiB, revisión independiente y luego
+preflight productivo actualizado. Exigir XNYS cerrado, postmarket terminal,
+quietud completa, paper true, live/auto-apply false, kernel/config válidos,
+recursos y rollback. No construir ni desplegar con gates fallidos. La producción
+sigue con último dato documentado `.321` del23oct, no revalidado en esta corrida.
+No activar política de tamaño, adds ni score. La automatización vencida sigue
+pausada.
 
 ## Intento inmediato23oct09:15Madrid —precondition_not_met
 
