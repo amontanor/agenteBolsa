@@ -15,7 +15,7 @@ from agente_bolsa.deployment_receipt import (
 IMAGE_ID = "sha256:" + "a" * 64
 GIT_HEAD = "1" * 40
 GIT_TREE = "2" * 40
-VERSION = "0.4.377"
+VERSION = "0.4.378"
 
 
 def test_append_and_read_verified_deployment_receipt_uses_one_instant(tmp_path):
