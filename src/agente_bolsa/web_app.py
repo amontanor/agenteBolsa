@@ -49,11 +49,11 @@ from agente_bolsa import __version__
 from agente_bolsa.config import get_settings
 from agente_bolsa.continuous_improvement.promotion_readiness import evaluate_promotion_readiness
 from agente_bolsa.continuous_improvement.runtime import ContinuousImprovementLabRuntime
+from agente_bolsa.dashboard_loading import DashboardLoadState
 from agente_bolsa.deployment_receipt import (
     format_verified_deployment_time,
     latest_verified_deployment_receipt,
 )
-from agente_bolsa.dashboard_loading import DashboardLoadState
 from agente_bolsa.llm_router import primary_llm_endpoint
 from agente_bolsa.market_calendar import MarketCalendar
 from agente_bolsa.models import AgentEvent, PortfolioSnapshot, TradeRecommendation, new_id
