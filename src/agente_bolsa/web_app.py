@@ -53,6 +53,7 @@ from agente_bolsa.deployment_receipt import (
     format_verified_deployment_time,
     latest_verified_deployment_receipt,
 )
+from agente_bolsa.dashboard_loading import DashboardLoadState
 from agente_bolsa.llm_router import primary_llm_endpoint
 from agente_bolsa.market_calendar import MarketCalendar
 from agente_bolsa.models import AgentEvent, PortfolioSnapshot, TradeRecommendation, new_id
@@ -3232,6 +3233,26 @@ def _auto_refresh_control() -> int:
 
 
 def _render_refreshable_page(page_func: Any, refresh_interval_seconds: int) -> None:
+    if page_func is page_dashboard and hasattr(st, "fragment"):
+        page_func()
+
+        @st.fragment(run_every="2s")
+        def _poll_dashboard() -> None:
+            load = st.session_state.get("dashboard_load_state")
+            if not isinstance(load, DashboardLoadState):
+                return
+            if refresh_interval_seconds:
+                changed = load.update(_settings(), refresh_after=2.0)
+            else:
+                changed = load._collect()
+                changed = load._expire_budgets(load._clock()) or changed
+            if changed:
+                st.session_state["dashboard_completion_render"] = not bool(refresh_interval_seconds)
+                st.rerun()
+
+        _poll_dashboard()
+        return
+
     if refresh_interval_seconds and hasattr(st, "fragment"):
 
         @st.fragment(run_every=f"{refresh_interval_seconds}s")
@@ -5767,12 +5788,24 @@ def _create_manual_opportunity_plan(
     }
 
 
+def _dashboard_store(settings: Any) -> Store:
+    """Reuse local reads; retention and repeated DDL are not render work."""
+    path = str(settings.database_path.resolve())
+    cached = st.session_state.get("dashboard_store")
+    if cached is None or str(cached.database_path.resolve()) != path:
+        cached = Store(settings.database_path, settings.agent_logs_dir)
+        if not settings.database_path.exists():
+            cached.ensure_schema()
+        st.session_state["dashboard_store"] = cached
+    return cached
+
+
 def page_dashboard() -> None:
     timer = _DashboardTimer()
     timer.start("total")
     timer.start("setup")
     settings = _settings()
-    store = _store()
+    store = _dashboard_store(settings)
     runtime = ContinuousImprovementLabRuntime(settings, store)
     market = _cached_market_status()
     timer.start("setup.cached_latest_events")
@@ -5784,30 +5817,43 @@ def page_dashboard() -> None:
     timer.stop("setup")
 
     timer.start("alpaca_snapshot")
-    portfolio = None
-    portfolio_error = None
-    broker_client = BrokerClientFactory(settings)
-    account_read_at = datetime.now(timezone.utc)
-    try:
-        portfolio = _cached_alpaca_portfolio_snapshot(broker_client)
-    except Exception as exc:  # noqa: BLE001
-        portfolio_error = str(exc)
+    load = st.session_state.get("dashboard_load_state")
+    if not isinstance(load, DashboardLoadState):
+        load = DashboardLoadState()
+        st.session_state["dashboard_load_state"] = load
+    if not st.session_state.pop("dashboard_completion_render", False):
+        load.update(settings, refresh_after=2.0)
+    data = load.data or {}
+    portfolio = data.get("portfolio")
+    portfolio_error = load.failed.get("portfolio")
+    observed = load.observed_at.get("account")
+    account_read_at = datetime.fromisoformat(observed.replace("Z", "+00:00")) if observed else datetime.now(timezone.utc)
     db_status = store.status()
     timer.stop("alpaca_snapshot")
-    history: dict[str, Any] = {}
+    history: dict[str, Any] = dict(data.get("history") or {})
     stats: dict[str, Any] = {}
     position_rows: list[dict[str, Any]] = []
-    portfolio_history: dict[str, Any] = {}
-    intraday_portfolio_history: dict[str, Any] = {}
+    portfolio_history = dict(data.get("portfolio_history") or {})
+    intraday_portfolio_history = dict(data.get("intraday_portfolio_history") or {})
+    age = load.resource_ages().get("account")
+    if portfolio is None:
+        st.info("Cargando cartera en segundo plano. El resto del dashboard sigue disponible.")
+    else:
+        age_text = f"{age:.0f} s" if age is not None else "desconocida"
+        st.caption(f"Cartera observada: {account_read_at.astimezone(ZoneInfo(settings.local_timezone)).isoformat()} · Antigüedad: {age_text} · Estado: {load.cache_state}")
+    resource_labels = {"fills": "Fills", "curve": "Curva diaria", "intraday": "Curva intradía"}
+    details = []
+    for resource, label in resource_labels.items():
+        resource_age = load.resource_ages().get(resource)
+        details.append(f"{label}: {resource_age:.0f} s" if resource_age is not None else f"{label}: sin datos")
+    st.caption(" · ".join(details))
+    if load.degraded:
+        st.warning("Actualización parcial: se mantienen los últimos datos disponibles.")
+    coverage = data.get("fills_coverage") or {}
+    if coverage.get("status") != "complete":
+        st.caption("Histórico de fills parcial; el P/L mostrado no garantiza cobertura histórica completa.")
     timer.start("trade_history")
     try:
-        history = build_trade_history(
-            settings,
-            limit=1000,
-            start_date=DEFAULT_START_DATE,
-            portfolio_snapshot=portfolio,
-            broker_client=broker_client,
-        )
         # The UI uses local, filled BUY lots as its only purchase-date source.
         # This is a read-only Store lookup and does not add a broker request.
         history["executed_buy_lots_by_symbol"] = store.executed_buy_lots_by_symbol()
@@ -5830,27 +5876,6 @@ def page_dashboard() -> None:
     except Exception as exc:  # noqa: BLE001
         st.warning(f"No se pudo leer historico/P/L: {exc}")
     timer.stop("trade_history")
-    timer.start("history_daily")
-    try:
-        portfolio_history = _cached_alpaca_portfolio_history(
-            broker_client,
-            period=PORTFOLIO_HISTORY_PERIOD,
-            timeframe="1D",
-        )
-    except Exception as exc:  # noqa: BLE001
-        st.warning(f"No se pudo leer portfolio history de Alpaca para el grafico: {exc}")
-    timer.stop("history_daily")
-    timer.start("history_intraday")
-    try:
-        intraday_portfolio_history = _cached_alpaca_portfolio_history(
-            broker_client,
-            period="2W",
-            timeframe="15Min",
-        )
-    except Exception as exc:  # noqa: BLE001
-        st.warning(f"No se pudo leer la apertura exacta XNYS: {exc}")
-    timer.stop("history_intraday")
-
     if portfolio_error:
         st.warning(f"No se pudo leer cartera Alpaca: {portfolio_error}")
 
@@ -6119,6 +6144,11 @@ def page_dashboard() -> None:
     timer.start("advanced")
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
     _section_title("Detalle avanzado", "Analitica de I+D del agente. Desplegable bajo demanda.")
+    if not st.toggle("Cargar detalle avanzado", value=False, key="dashboard_advanced_enabled"):
+        timer.stop("advanced")
+        timer.stop("total")
+        timer.emit()
+        return
 
     with st.expander("Noticias analizadas"):
         _render_latest_news_panel(settings, limit=20)

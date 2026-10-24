@@ -139,4 +139,5 @@ __all__ = ["__version__"]
 # Oct19: retain every decision path in the existing durable audit event.
 # Oct22: persist exact release image binding and identity gate for Raspberry preparation.
 # Oct24: show only verified deployment time from the durable release receipt.
-__version__ = "0.4.377"
+# Dashboard cache, asynchronous publication and read-only FILL adapter.
+__version__ = "0.4.378"
