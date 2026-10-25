@@ -3,6 +3,8 @@
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from agente_bolsa.config import Settings
 from agente_bolsa.continuous_improvement.codegen import _codegen_model
 from agente_bolsa.llm_model_ids import (
@@ -19,6 +21,46 @@ from agente_bolsa.llm_router import (
 from agente_bolsa.llm_usage import record_llm_response
 from agente_bolsa.storage import Store
 from agente_bolsa.tools.decision_context import build_decision_context_snapshot
+
+
+@pytest.fixture(autouse=True)
+def _isolate_llm_settings_environment(monkeypatch):
+    for name in (
+        "LLM_MODEL_SELECTOR",
+        "OPENCODE_API_KEY",
+        "OPENCODE_API_BASE",
+        "OPENCODE_MODEL",
+        "OPENCODE_GO_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENAI_API_BASE",
+        "OPENAI_BASE_URL",
+        "OPENAI_MODEL_NAME",
+        "LLM_BASE_URL",
+        "MIMO_API_KEY",
+        "MIMO_API_BASE",
+        "MIMO_MODEL",
+        "IMPROVEMENT_LLM_PROVIDER",
+        "IMPROVEMENT_LLM_BASE_URL",
+        "IMPROVEMENT_LLM_API_KEY",
+        "IMPROVEMENT_LLM_MODEL",
+        "IMPROVEMENT_LLM_ORCHESTRATOR_PROVIDER",
+        "IMPROVEMENT_LLM_ORCHESTRATOR_BASE_URL",
+        "IMPROVEMENT_LLM_ORCHESTRATOR_API_KEY",
+        "IMPROVEMENT_LLM_ORCHESTRATOR_MODEL",
+        "LLM_ROLE_FAST_MODEL",
+        "LLM_ROLE_FAST_BASE_URL",
+        "LLM_ROLE_FAST_API_KEY",
+        "LLM_ROLE_SENTIMENT_MODEL",
+        "LLM_ROLE_SENTIMENT_BASE_URL",
+        "LLM_ROLE_SENTIMENT_API_KEY",
+        "LLM_ROLE_DECISION_MODEL",
+        "LLM_ROLE_DECISION_BASE_URL",
+        "LLM_ROLE_DECISION_API_KEY",
+        "LLM_ROLE_DEEP_MODEL",
+        "LLM_ROLE_DEEP_BASE_URL",
+        "LLM_ROLE_DEEP_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 def test_settings_without_environment_use_opencode_zen_v41_defaults():

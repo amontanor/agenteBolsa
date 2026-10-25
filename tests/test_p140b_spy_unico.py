@@ -1,5 +1,9 @@
 ﻿from __future__ import annotations
 
+import sys
+
+import pytest
+
 from agente_bolsa.web_app import _spy_alpha_summary
 
 
@@ -76,3 +80,13 @@ def test_leaderboard_block_enables_submit_with_gain_headless() -> None:
 
     assert not app.exception
     assert app.button(key="leaderboard_submit_gain").disabled is False
+
+
+@pytest.fixture(autouse=True)
+def restore_main_after_apptest():
+    """Streamlit replaces __main__; preserve the caller for Windows spawn."""
+    original_main = sys.modules["__main__"]
+    try:
+        yield
+    finally:
+        sys.modules["__main__"] = original_main

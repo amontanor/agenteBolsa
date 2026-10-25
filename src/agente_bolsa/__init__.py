@@ -140,4 +140,5 @@ __all__ = ["__version__"]
 # Oct22: persist exact release image binding and identity gate for Raspberry preparation.
 # Oct24: show only verified deployment time from the durable release receipt.
 # Dashboard cache, asynchronous publication and read-only FILL adapter.
-__version__ = "0.4.378"
+# QA isolation: restore AppTest main module and isolate inherited LLM settings (0.4.379).
+__version__ = "0.4.379"

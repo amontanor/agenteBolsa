@@ -1,5 +1,6 @@
 """Real Streamlit render against blocked synthetic providers and temporary data."""
 
+import sys
 from threading import Event
 
 import pytest
@@ -61,3 +62,13 @@ def test_dashboard_renders_before_account_provider_finishes(monkeypatch, tmp_pat
         release.set()
         if state:
             state.wait(timeout=5)
+
+
+@pytest.fixture(autouse=True)
+def restore_main_after_apptest():
+    """Streamlit replaces __main__; preserve the caller for Windows spawn."""
+    original_main = sys.modules["__main__"]
+    try:
+        yield
+    finally:
+        sys.modules["__main__"] = original_main

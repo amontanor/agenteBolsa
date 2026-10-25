@@ -4,6 +4,7 @@ from inspect import getsource
 import pandas as pd
 
 import agente_bolsa.web_app as web_app
+from agente_bolsa.dashboard_loading import DashboardLoadState
 from agente_bolsa.web_app import (
     DEFAULT_START_DATE,
     PORTFOLIO_CHART_START_DATE,
@@ -45,9 +46,9 @@ def test_p63_reproduces_april_baseline_exclusion_on_base():
 
 def test_portfolio_history_requests_keep_april_and_opening_contracts_separate():
     assert PORTFOLIO_HISTORY_PERIOD == "all"
-    source = getsource(web_app.page_dashboard)
+    source = getsource(DashboardLoadState._callbacks)
     assert source.count("alpaca_portfolio_history(") == 2
-    assert "period=PORTFOLIO_HISTORY_PERIOD" in source
+    assert 'period="all"' in source
     assert 'period="2W"' in source
     assert 'timeframe="1D"' in source
     assert 'timeframe="15Min"' in source

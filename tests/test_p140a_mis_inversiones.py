@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import sys
+
+import pytest
+
 from agente_bolsa.web_app import _invested_day_metric
 
 
@@ -73,3 +77,13 @@ def test_investments_group_renders_strip_headless() -> None:
     assert "Mis inversiones" in html
     assert "+1.00%" in html
     assert "+0.07% sobre equity" in html
+
+
+@pytest.fixture(autouse=True)
+def restore_main_after_apptest():
+    """Streamlit replaces __main__; preserve the caller for Windows spawn."""
+    original_main = sys.modules["__main__"]
+    try:
+        yield
+    finally:
+        sys.modules["__main__"] = original_main

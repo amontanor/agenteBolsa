@@ -4,6 +4,7 @@ from copy import deepcopy
 from inspect import getsource
 
 import agente_bolsa.web_app as web_app
+from agente_bolsa.dashboard_loading import DashboardLoadState
 from agente_bolsa.models import PortfolioSnapshot, PositionSnapshot
 from agente_bolsa.tools.trade_history import _open_positions_summary
 from agente_bolsa.web_app import (
@@ -175,10 +176,12 @@ def test_open_portfolio_table_shows_total_and_daily_columns(monkeypatch):
 def test_dashboard_reuses_loaded_portfolio_snapshot_without_extra_broker_call():
     dashboard_source = getsource(web_app.page_dashboard)
     portfolio_source = getsource(web_app.page_portfolio)
+    callback_source = getsource(DashboardLoadState._callbacks)
 
-    assert dashboard_source.count("alpaca_portfolio_snapshot(") == 1
-    assert "portfolio_snapshot=portfolio" in dashboard_source
-    assert "broker_client=broker_client" in dashboard_source
+    assert dashboard_source.count("alpaca_portfolio_snapshot(") == 0
+    assert callback_source.count("alpaca_portfolio_snapshot(") == 1
+    assert "portfolio = data.get(\"portfolio\")" in dashboard_source
+    assert "load.update(settings, refresh_after=2.0)" in dashboard_source
     assert portfolio_source.count("alpaca_portfolio_snapshot(") == 1
     assert "portfolio_snapshot=portfolio" in portfolio_source
     assert "broker_client=broker_client" in portfolio_source
