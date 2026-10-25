@@ -141,4 +141,5 @@ __all__ = ["__version__"]
 # Oct24: show only verified deployment time from the durable release receipt.
 # Dashboard cache, asynchronous publication and read-only FILL adapter.
 # QA isolation: restore AppTest main module and isolate inherited LLM settings (0.4.379).
-__version__ = "0.4.379"
+# Stream wide signal rows without retaining a second complete raw payload list.
+__version__ = "0.4.380"
