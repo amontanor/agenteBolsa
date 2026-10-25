@@ -5351,23 +5351,26 @@ class Store:
             params.extend(str(source or "") for source in sources)
         query += " ORDER BY signal_date DESC, created_at DESC LIMIT ?"
         params.append(limit)
-        rows = self.read_connection().execute(query, params).fetchall()
-        return [
-            {
-                "signal_id": row["signal_id"],
-                "source_run_id": row["source_run_id"],
-                "source": row["source"],
-                "symbol": row["symbol"],
-                "signal_date": row["signal_date"],
-                "decision": row["decision"],
-                "features": json.loads(row["features_json"] or "{}"),
-                "gate": json.loads(row["gate_json"] or "{}"),
-                "outcome": json.loads(row["outcome_json"] or "{}"),
-                "created_at": row["created_at"],
-                "updated_at": row["updated_at"],
-            }
-            for row in rows
-        ]
+        # Decode one SQLite row at a time; wide JSON must not coexist as a
+        # complete raw-row list and a complete decoded list. Public data and
+        # ordering are unchanged; the cursor closes even if JSON decoding fails.
+        with closing(self.read_connection().execute(query, params)) as rows:
+            return [
+                {
+                    "signal_id": row["signal_id"],
+                    "source_run_id": row["source_run_id"],
+                    "source": row["source"],
+                    "symbol": row["symbol"],
+                    "signal_date": row["signal_date"],
+                    "decision": row["decision"],
+                    "features": json.loads(row["features_json"] or "{}"),
+                    "gate": json.loads(row["gate_json"] or "{}"),
+                    "outcome": json.loads(row["outcome_json"] or "{}"),
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                }
+                for row in rows
+            ]
 
     def iter_signal_outcomes(
         self,
