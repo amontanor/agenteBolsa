@@ -8,7 +8,7 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
 from contextlib import closing
 from datetime import date, datetime, timezone
-from itertools import groupby
+from itertools import chain, groupby
 from pathlib import Path
 from typing import Any
 
@@ -725,24 +725,39 @@ def _rebuild_signal_cohorts(
         include_learning_experiment=include_learning_experiment,
         sources=sources,
     )
-    buy_orders = _buy_order_rows(store, since_date=since_date, end_date=end_date)
-    recommendations = _trade_recommendation_rows(store, since_date=since_date, end_date=end_date)
-    trade_memory_snapshots = _trade_memory_execution_snapshots(
-        store,
-        since_date=since_date,
-        end_date=end_date,
-    )
-    orders_by_date_symbol, cycle_symbol_counts = _group_buy_orders(buy_orders)
-    recommendations_by_date_symbol: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    for recommendation in recommendations:
-        recommendations_by_date_symbol[(recommendation["created_date"], recommendation["symbol"])].append(recommendation)
-    recommendations_by_signal_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for recommendation in recommendations:
-        if recommendation.get("signal_id"):
-            recommendations_by_signal_id[str(recommendation["signal_id"])].append(recommendation)
+    signal_stream = signals if cohort_spool is not None else None
+    if signal_stream is not None:
+        try:
+            sentinel = object()
+            first = next(signal_stream, sentinel)
+            signals = chain(() if first is sentinel else (first,), signal_stream)
+        except BaseException:
+            signal_stream.close()
+            raise
+    try:
+        buy_orders = _buy_order_rows(store, since_date=since_date, end_date=end_date)
+        recommendations = _trade_recommendation_rows(store, since_date=since_date, end_date=end_date)
+        trade_memory_snapshots = _trade_memory_execution_snapshots(
+            store,
+            since_date=since_date,
+            end_date=end_date,
+        )
+        orders_by_date_symbol, cycle_symbol_counts = _group_buy_orders(buy_orders)
+        recommendations_by_date_symbol: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+        for recommendation in recommendations:
+            recommendations_by_date_symbol[(recommendation["created_date"], recommendation["symbol"])].append(recommendation)
+        recommendations_by_signal_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for recommendation in recommendations:
+            if recommendation.get("signal_id"):
+                recommendations_by_signal_id[str(recommendation["signal_id"])].append(recommendation)
 
-    rows: list[dict[str, Any]] = []
-    by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        rows: list[dict[str, Any]] = []
+        by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
+
+    except BaseException:
+        if signal_stream is not None:
+            signal_stream.close()
+        raise
 
     try:
         for raw in signals:
@@ -849,7 +864,7 @@ def _rebuild_signal_cohorts(
             else:
                 cohort_spool.append(row)
     finally:
-        close = getattr(signals, "close", None)
+        close = getattr(signal_stream if signal_stream is not None else signals, "close", None)
         if close is not None:
             close()
 

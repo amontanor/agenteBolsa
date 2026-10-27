@@ -1,6 +1,7 @@
 import json
 import random
 import sqlite3
+import tempfile
 from datetime import datetime, timezone
 
 import pytest
@@ -129,6 +130,38 @@ def test_spooled_cohort_ranks_match_legacy_with_nan(tmp_path):
         assert [(r["signal_id"], r["rank_context"]) for r in spool] == [
             (r["signal_id"], r["rank_context"]) for r in expected
         ]
+    store.close_read_connection()
+
+
+def test_spooled_cohort_reads_signal_snapshot_before_orders_and_cleans_up_on_error(tmp_path, monkeypatch):
+    from agente_bolsa.tools import counterfactual_analysis
+
+    events = []
+
+    class TrackingStore(Store):
+        def iter_signal_outcomes(self, **kwargs):
+            try:
+                yield from super().iter_signal_outcomes(**kwargs)
+            finally:
+                events.append("signals_closed")
+
+    store = TrackingStore(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    store.save_signal_outcome(
+        signal_id="id", source_run_id="run", source="test", symbol="S",
+        signal_date="2026-10-10", decision="candidate", features={"score": 1},
+    )
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+
+    def fail_reading_orders(*_args, **_kwargs):
+        assert events == ["signals_closed"]
+        raise RuntimeError("orders failed")
+
+    monkeypatch.setattr(counterfactual_analysis, "_buy_order_rows", fail_reading_orders)
+    with LearningSpool(directory=tmp_path) as spool:
+        with pytest.raises(RuntimeError, match="orders failed"):
+            _rebuild_signal_cohorts(store, since_date="2026-10-01", end_date="2026-10-15", cohort_spool=spool)
+    assert not list(tmp_path.glob("learning-spool-*"))
     store.close_read_connection()
 
 
@@ -303,7 +336,7 @@ def test_streamed_observation_matches_legacy_for_varied_groups(tmp_path):
             assert _observation_payload_from_spool(spool, key) == _observation_payload(rows)
 
 
-def test_digest_projection_matches_full_observations():
+def test_digest_projection_matches_full_observations(tmp_path):
     observations = []
     for i in range(48):
         observations.append({
@@ -331,6 +364,12 @@ def test_digest_projection_matches_full_observations():
     projected.pop("as_of")
     assert projected == original
     assert "unknown" not in compact[0]["features"]
+    with LearningSpool(directory=tmp_path) as spool:
+        for row in compact:
+            spool.append(row)
+        streamed = _build_digest(spool, health, [], {"status_line": "ok"})
+        streamed.pop("as_of")
+        assert streamed == original
 
 
 def test_policy_stream_matches_legacy_with_replacements_and_source_order():
@@ -386,6 +425,14 @@ def test_full_daily_spool_matches_legacy_and_persists_unknown_fields(tmp_path, m
     for module in (counterfactual_analysis, daily_learning, rr_cohort):
         monkeypatch.setattr(module, "datetime", Frozen)
     monkeypatch.setattr(daily_learning, "_llm_status_snapshot", lambda _store: {"status_line": "ok"})
+    rr_calls = []
+    rr_stream = daily_learning.sync_rr_cohort_observations_spooled
+
+    def record_rr(*args, **kwargs):
+        rr_calls.append(True)
+        return rr_stream(*args, **kwargs)
+
+    monkeypatch.setattr(daily_learning, "sync_rr_cohort_observations_spooled", record_rr)
     reports = []
     persisted = []
     for use_spool in (False, True):
@@ -413,7 +460,7 @@ def test_full_daily_spool_matches_legacy_and_persists_unknown_fields(tmp_path, m
         report = build_learning_daily_run(
             Settings(DATA_DIR=root / "data", _env_file=None), store, root / "reports", "test",
             since_date="2026-10-01", end_date="2026-10-15", update_result={"updated": 0},
-            use_spool=use_spool,
+            **({"use_spool": False} if not use_spool else {}),
         )
         reports.append(report)
         persisted.append(store.learning_observations(limit=100))
@@ -426,6 +473,7 @@ def test_full_daily_spool_matches_legacy_and_persists_unknown_fields(tmp_path, m
             row.pop("updated_at", None)
     assert persisted[0] == persisted[1]
     assert all(len(row["features"]["unknown"]["payload"]) > 8192 for row in persisted[1])
+    assert rr_calls == [True]
 
 
 def test_digest_stream_matches_legacy_with_learning_experiment(tmp_path, monkeypatch):

@@ -181,6 +181,8 @@ def _decision_error_rates(observations: list[dict[str, Any]], horizon: int) -> d
 
 
 def _feature_bucket_stats(observations: list[dict[str, Any]], horizon: int, *, min_samples: int = 3) -> list[dict[str, Any]]:
+    if isinstance(observations, LearningSpool):
+        return _feature_bucket_stats_stream(observations, horizon, min_samples=min_samples)
     by_tag: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for observation in observations:
         for tag in _indicator_tags({"features": observation.get("features", {}) or {}}):
@@ -209,6 +211,44 @@ def _feature_bucket_stats(observations: list[dict[str, Any]], horizon: int, *, m
         key=lambda item: (
             item["matured"],
             item["avg_return"] if item["avg_return"] is not None else -999,
+            item["win_rate"] if item["win_rate"] is not None else -1,
+        ),
+        reverse=True,
+    )
+
+
+def _feature_bucket_stats_stream(
+    observations: LearningSpool, horizon: int, *, min_samples: int,
+) -> list[dict[str, Any]]:
+    by_tag: dict[str, dict[str, Any]] = {}
+    for observation in observations:
+        tags = _indicator_tags({"features": observation.get("features", {}) or {}})
+        matured = _matured_for_horizon(observation, horizon)
+        value = _horizon_return(observation, horizon) if matured else None
+        for tag in tags:
+            item = by_tag.setdefault(tag, {"signals": 0, "matured": 0, "wins": 0, "losses": 0, "returns": []})
+            item["signals"] += 1
+            if matured:
+                item["matured"] += 1
+                if value is not None:
+                    item["wins"] += value > 0.01
+                    item["losses"] += value < -0.01
+                    item["returns"].append(value)
+    result = []
+    for tag, item in by_tag.items():
+        count = item["matured"]
+        values = item["returns"]
+        if count < min_samples or not values:
+            continue
+        result.append({
+            "tag": tag, "signals": item["signals"], "matured": count,
+            "win_rate": _round(item["wins"] / count, 4), "loss_rate": _round(item["losses"] / count, 4),
+            "avg_return": _round(sum(values) / len(values), 4),
+        })
+    return sorted(
+        result,
+        key=lambda item: (
+            item["matured"], item["avg_return"] if item["avg_return"] is not None else -999,
             item["win_rate"] if item["win_rate"] is not None else -1,
         ),
         reverse=True,
@@ -864,6 +904,8 @@ def _symbol_setup_memory(
     *,
     min_samples: int = 1,
 ) -> list[dict[str, Any]]:
+    if isinstance(observations, LearningSpool):
+        return _symbol_setup_memory_stream(observations, horizon, min_samples=min_samples)
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for observation in observations:
         symbol = str(observation.get("symbol") or "").upper()
@@ -906,6 +948,54 @@ def _symbol_setup_memory(
             item["matured"],
             item["signals"],
         ),
+        reverse=True,
+    )
+
+
+def _symbol_setup_memory_stream(
+    observations: LearningSpool, horizon: int, *, min_samples: int,
+) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for observation in observations:
+        symbol = str(observation.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        setup = _setup_name(observation.get("features", {}) or {})
+        item = grouped.setdefault((symbol, setup), {
+            "signals": 0, "matured": 0, "executed": 0, "blocked": 0, "wins": 0,
+            "false_positive": 0, "false_negative": 0, "returns": [], "last_date": "",
+        })
+        item["signals"] += 1
+        item["last_date"] = max(item["last_date"], str(observation.get("signal_date") or ""))
+        if not _matured_for_horizon(observation, horizon):
+            continue
+        item["matured"] += 1
+        executed = bool(observation.get("executed_buy"))
+        blocked = bool(observation.get("blocked_entry_quality") or observation.get("blocked_backtest"))
+        item["executed"] += executed
+        item["blocked"] += blocked
+        value = _horizon_return(observation, horizon)
+        if value is not None:
+            item["returns"].append(value)
+            item["wins"] += value > 0.01
+            item["false_positive"] += executed and value < -0.01
+            item["false_negative"] += blocked and value > 0.01
+    rows = []
+    for (symbol, setup), item in grouped.items():
+        count = item["matured"]
+        returns = item["returns"]
+        if count < min_samples or not returns:
+            continue
+        rows.append({
+            "symbol": symbol, "setup": setup, "signals": item["signals"], "matured": count,
+            "executed_buys": item["executed"], "blocked_candidates": item["blocked"],
+            "avg_return": _round(sum(returns) / len(returns), 4), "win_rate": _round(item["wins"] / count, 4),
+            "false_positive_losers": item["false_positive"], "false_negative_winners": item["false_negative"],
+            "last_signal_date": item["last_date"],
+        })
+    return sorted(
+        rows,
+        key=lambda item: (abs(item["avg_return"] or 0.0), item["matured"], item["signals"]),
         reverse=True,
     )
 
@@ -1366,7 +1456,7 @@ def _build_learning_experiment_section(
     if not session_date:
         session_date = str(shadow_payload.get("session_date") or "")
     if streaming:
-        with LearningSpool() as cohort_spool, LearningSpool() as observation_spool:
+        with LearningSpool() as cohort_spool, LearningSpool() as observation_spool, LearningSpool() as analytics_spool:
             _rebuild_signal_cohorts(
                 store, since_date=since_date, end_date=end_date,
                 include_learning_experiment=True, sources=[LEARNING_EXPERIMENT_SOURCE],
@@ -1376,7 +1466,12 @@ def _build_learning_experiment_section(
             if cohort_count:
                 _materialize_observations_spooled(store, cohort_spool, observation_spool)
             with closing(observation_spool.rows_in_observation_order()) as source:
-                observations = [_compact_observation_for_digest(row) for row in source]
+                for row in source:
+                    analytics_spool.append(_compact_observation_for_digest(row))
+            return _finish_learning_experiment_section(
+                store, reports_dir, session_date=session_date, shadow_payload=shadow_payload,
+                cohort_count=cohort_count, observations=analytics_spool,
+            )
     else:
         cohort_rows = _rebuild_signal_cohorts(
             store, since_date=since_date, end_date=end_date,
@@ -1384,10 +1479,39 @@ def _build_learning_experiment_section(
         )
         cohort_count = len(cohort_rows)
         observations = _materialize_observations(store, cohort_rows) if cohort_rows else []
+    return _finish_learning_experiment_section(
+        store, reports_dir, session_date=session_date, shadow_payload=shadow_payload,
+        cohort_count=cohort_count, observations=observations,
+    )
+
+
+class _SessionObservationView:
+    def __init__(self, rows: LearningSpool, session_date: str | None) -> None:
+        self._rows = rows
+        self._session_date = session_date
+        self._count = sum(1 for _ in self)
+
+    def __len__(self) -> int:
+        return self._count
+
+    def __iter__(self):
+        with closing(iter(self._rows)) as rows:
+            for row in rows:
+                if not self._session_date or row.get("signal_date") == self._session_date:
+                    yield row
+
+
+def _finish_learning_experiment_section(
+    store: Store, reports_dir: Path, *, session_date: str | None, shadow_payload: dict[str, Any],
+    cohort_count: int, observations: list[dict[str, Any]] | LearningSpool,
+) -> dict[str, Any]:
     if not session_date and observations:
         session_date = max(str(item.get("signal_date") or "") for item in observations)
-    session_rows = [item for item in observations if not session_date or item.get("signal_date") == session_date]
-    matured_3d = [item for item in session_rows if _matured_for_horizon(item, 3)]
+    session_rows = (
+        _SessionObservationView(observations, session_date) if isinstance(observations, LearningSpool)
+        else [item for item in observations if not session_date or item.get("signal_date") == session_date]
+    )
+    matured_3d_count = sum(1 for item in session_rows if _matured_for_horizon(item, 3))
     latest_post_market = _load_json_file(reports_dir / "latest_post_market_learning.json")
     latest_operational = _load_json_file(reports_dir / "latest_operational_learning.json")
     execution_session_date = str((latest_post_market.get("session_date") if latest_post_market else "") or "")
@@ -1484,7 +1608,7 @@ def _build_learning_experiment_section(
         },
         "execution_snapshot": post_market_snapshot.get("positions") or [],
         "matured_outcomes": {
-            "3d": len(matured_3d),
+            "3d": matured_3d_count,
         },
         "shadow": {
             "available": bool(shadow_payload),
@@ -1742,12 +1866,14 @@ def build_learning_daily_run(
         "iter_signal_outcomes", "iter_learning_observations", "upsert_learning_observations_batch",
     ))
     if use_spool and compact and supports_spool:
-        with LearningSpool() as cohort_spool, LearningSpool() as observation_spool:
+        with LearningSpool() as cohort_spool, LearningSpool() as observation_spool, LearningSpool() as analytics_spool:
             _rebuild_signal_cohorts(store, since_date=since_date, end_date=end_date, cohort_spool=cohort_spool)
             materialization_batch = _materialize_observations_spooled(store, cohort_spool, observation_spool)
             rr_cohort_sync = sync_rr_cohort_observations_spooled(store, observation_spool)
             with closing(observation_spool.rows_in_observation_order()) as source:
-                observations = [_compact_observation_for_digest(row) for row in source]
+                for row in source:
+                    analytics_spool.append(_compact_observation_for_digest(row))
+            observations = analytics_spool
             with closing(iter(cohort_spool)) as source:
                 agent_learning = build_agent_learning_scoreboard(
                     [_compact_learning_metric_signal(row, scoreboard_only=True) for row in source]
@@ -1791,7 +1917,7 @@ def _finish_learning_daily_run(
     compact: bool,
     update_result: dict[str, Any],
     rows: list[dict[str, Any]] | _ProjectedCohortView,
-    observations: list[dict[str, Any]],
+    observations: list[dict[str, Any]] | LearningSpool,
     materialization_batch: dict[str, Any],
     rr_cohort_sync: dict[str, Any],
     agent_learning: dict[str, Any] | None = None,
@@ -1931,14 +2057,27 @@ def build_learning_digest_report(
 ) -> dict[str, Any]:
     if callable(getattr(store, "iter_learning_observations", None)):
         incoming = store.iter_learning_observations(since_date=since_date, end_date=end_date, limit=LEDGER_LIMIT)
-        with closing(incoming):
-            observations = [_compact_observation_for_digest(row) for row in incoming]
         streaming = all(callable(getattr(store, name, None)) for name in (
             "iter_signal_outcomes", "upsert_learning_observations_batch",
         ))
-    else:
-        observations = store.learning_observations(since_date=since_date, end_date=end_date, limit=LEDGER_LIMIT)
-        streaming = False
+        with LearningSpool() as analytics_spool, closing(incoming):
+            for row in incoming:
+                analytics_spool.append(_compact_observation_for_digest(row))
+            return _finish_learning_digest_report(
+                store, reports_dir, run_id, since_date=since_date, end_date=end_date,
+                observations=analytics_spool, streaming=streaming,
+            )
+    observations = store.learning_observations(since_date=since_date, end_date=end_date, limit=LEDGER_LIMIT)
+    return _finish_learning_digest_report(
+        store, reports_dir, run_id, since_date=since_date, end_date=end_date,
+        observations=observations, streaming=False,
+    )
+
+
+def _finish_learning_digest_report(
+    store: Store, reports_dir: Path, run_id: str, *, since_date: str, end_date: str | None,
+    observations: list[dict[str, Any]] | LearningSpool, streaming: bool,
+) -> dict[str, Any]:
     health = _build_health(observations, observations)
     candidates = store.learning_policy_candidates(limit=100)
     llm_status = _llm_status_snapshot(store)
@@ -1951,6 +2090,8 @@ def build_learning_digest_report(
         streaming=streaming,
     )
     signal_rows = _digest_scoreboard_rows(store, since_date=since_date, end_date=end_date)
+    agent_learning = build_agent_learning_scoreboard(signal_rows)
+    del signal_rows
     digest = _build_digest(
         observations,
         health,
@@ -1959,7 +2100,7 @@ def build_learning_digest_report(
         pre_earnings_context,
         None,
         learning_experiment_section,
-        build_agent_learning_scoreboard(signal_rows),
+        agent_learning,
     )
     digest["rr_cohort"] = rr_cohort_digest_summary(store)
     digest["execution_quality"] = execution_quality_digest_summary(store)
