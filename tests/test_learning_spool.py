@@ -1,5 +1,6 @@
 import json
 import random
+import sqlite3
 from datetime import datetime, timezone
 
 import pytest
@@ -152,6 +153,70 @@ def test_spooled_materialization_does_not_write_if_later_group_fails(tmp_path, m
         monkeypatch.setattr(daily_learning, "_observation_payload_stream", fail_on_second)
         with pytest.raises(ValueError, match="second group failed"):
             _materialize_observations_spooled(Store(), rows, observations)
+
+
+def test_spooled_materialization_cleans_up_on_disk_full_before_database_write(tmp_path, monkeypatch):
+    from agente_bolsa.tools import daily_learning
+
+    class Store:
+        def upsert_learning_observations_batch(self, _items):
+            raise AssertionError("must not write after disk-full failure")
+
+    paths = []
+
+    class DiskFullSpool(LearningSpool):
+        def __init__(self):
+            super().__init__(directory=tmp_path)
+            paths.append(self.path.parent)
+            self.calls = 0
+
+        def append(self, record, *, group_key=""):
+            self.calls += 1
+            if self.calls == 2:
+                raise sqlite3.OperationalError("database or disk is full")
+            return super().append(record, group_key=group_key)
+
+    with LearningSpool(directory=tmp_path) as rows, LearningSpool(directory=tmp_path) as observations:
+        rows.append({"signal_date": "2026-10-10", "symbol": "A", "source": "test"})
+        rows.append({"signal_date": "2026-10-10", "symbol": "B", "source": "test"})
+        monkeypatch.setattr(daily_learning, "LearningSpool", DiskFullSpool)
+        with pytest.raises(sqlite3.OperationalError, match="disk is full"):
+            _materialize_observations_spooled(Store(), rows, observations)
+    assert paths and all(not path.exists() for path in paths)
+
+
+def test_spooled_materialization_reports_disk_full_after_committed_chunk(tmp_path, monkeypatch):
+    from agente_bolsa import storage
+
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    original = storage._execute_learning_observation_upsert
+    calls = 0
+
+    def fail_in_second_chunk(cursor, parameters):
+        nonlocal calls
+        calls += 1
+        if calls == storage.DEFAULT_LEARNING_OBSERVATION_BATCH_SIZE + 1:
+            raise sqlite3.OperationalError("database or disk is full")
+        return original(cursor, parameters)
+
+    monkeypatch.setattr(storage, "_execute_learning_observation_upsert", fail_in_second_chunk)
+    with LearningSpool(directory=tmp_path) as rows, LearningSpool(directory=tmp_path) as observations:
+        for i in range(storage.DEFAULT_LEARNING_OBSERVATION_BATCH_SIZE + 1):
+            rows.append({
+                "signal_id": f"id-{i}", "signal_date": "2026-10-10", "symbol": f"S{i}",
+                "source": "test", "source_run_id": "run", "created_at": "2026-10-10",
+                "decision": "candidate", "score": 1, "features": {"unknown": i}, "gate": {},
+                "outcome": {}, "flags": {}, "rank_context": {}, "executed_buy": False,
+            })
+        with pytest.raises(storage.LearningObservationBatchError) as raised:
+            _materialize_observations_spooled(store, rows, observations)
+    result = raised.value.result
+    assert result["status"] == "failed"
+    assert result["failed_chunk"] == 1
+    assert result["written"] == storage.DEFAULT_LEARNING_OBSERVATION_BATCH_SIZE
+    assert result["retry_possible"] is False
+    assert len(store.learning_observations(limit=1000)) == storage.DEFAULT_LEARNING_OBSERVATION_BATCH_SIZE
 
 
 def test_streaming_observation_reader_closes_after_invalid_json(tmp_path):
