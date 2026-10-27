@@ -2011,14 +2011,27 @@ def build_learning_health_report(
     since_date: str = DEFAULT_DAILY_LEARNING_START,
     end_date: str | None = None,
 ) -> dict[str, Any]:
-    observations = store.learning_observations(since_date=since_date, end_date=end_date, limit=LEDGER_LIMIT)
-    health = _build_health(observations, observations)
+    if callable(getattr(store, "iter_learning_observations", None)):
+        incoming = store.iter_learning_observations(since_date=since_date, end_date=end_date, limit=LEDGER_LIMIT)
+        with LearningSpool() as analytics, closing(incoming):
+            recent_duplicates = []
+            for row in incoming:
+                if len(recent_duplicates) < 20 and int(row.get("duplicate_count") or 0) > 0:
+                    recent_duplicates.append(row)
+                analytics.append(_compact_observation_for_digest(row))
+            health = _build_health(analytics, analytics)
+            period_end = end_date or max((item["signal_date"] for item in analytics), default=since_date)
+    else:
+        observations = store.learning_observations(since_date=since_date, end_date=end_date, limit=LEDGER_LIMIT)
+        health = _build_health(observations, observations)
+        period_end = end_date or max((item["signal_date"] for item in observations), default=since_date)
+        recent_duplicates = [item for item in observations if int(item.get("duplicate_count") or 0) > 0][:20]
     report = {
         "run_id": run_id,
         "as_of": datetime.now(timezone.utc).isoformat(),
-        "period": {"from": since_date, "to": end_date or max((item["signal_date"] for item in observations), default=since_date)},
+        "period": {"from": since_date, "to": period_end},
         "health": health,
-        "recent_duplicates": [item for item in observations if int(item.get("duplicate_count") or 0) > 0][:20],
+        "recent_duplicates": recent_duplicates,
     }
     return _write_report(report, reports_dir, "learning_health", run_id)
 

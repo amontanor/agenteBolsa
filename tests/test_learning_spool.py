@@ -26,6 +26,7 @@ from agente_bolsa.tools.daily_learning import (
     _observation_payload_from_spool,
     build_learning_daily_run,
     build_learning_digest_report,
+    build_learning_health_report,
 )
 from agente_bolsa.tools.learning_spool import LearningSpool
 
@@ -112,6 +113,20 @@ def test_experimental_spooled_cohorts_match_legacy_with_unknown_fields(tmp_path)
             batch = _materialize_observations_spooled(store, spool, output)
             assert batch["written"] == len(expected_observations)
             assert list(output.rows_in_observation_order()) == expected_observations
+
+    class LegacyStore:
+        def __getattr__(self, name):
+            if name == "iter_learning_observations":
+                raise AttributeError(name)
+            return getattr(store, name)
+
+    baseline_health = build_learning_health_report(LegacyStore(), tmp_path / "legacy-reports", "health")
+    streamed_health = build_learning_health_report(store, tmp_path / "stream-reports", "health")
+    for report in (baseline_health, streamed_health):
+        for key in ("as_of", "path", "manifest_path"):
+            report.pop(key, None)
+    assert streamed_health == baseline_health
+    assert streamed_health["recent_duplicates"][0]["features"]["unknown"]["wide"] == "x" * 8192
     store.close_read_connection()
 
 
@@ -265,6 +280,33 @@ def test_streaming_observation_reader_closes_after_invalid_json(tmp_path):
         list(store.iter_learning_observations())
     with store.connect() as conn:
         conn.execute("UPDATE learning_observations SET features_json = '{}' WHERE observation_id = 'id'")
+
+
+def test_health_stream_preserves_first_twenty_complete_duplicates(tmp_path):
+    store = Store(tmp_path / "state.sqlite3", tmp_path / "logs")
+    store.ensure_schema()
+    for i in range(25):
+        store.upsert_learning_observation({
+            "observation_id": f"id-{i:02}", "signal_date": "2026-10-10", "symbol": f"S{i:02}",
+            "source_family": "test", "duplicate_count": i + 1, "source_run_ids": [f"run-{i}"],
+            "rank_path": [{"unknown": f"rank-{i}"}], "features": {"unknown": "x" * 8192},
+            "gate": {}, "outcome": {}, "execution": {},
+        })
+
+    class LegacyStore:
+        def __getattr__(self, name):
+            if name == "iter_learning_observations":
+                raise AttributeError(name)
+            return getattr(store, name)
+
+    baseline = build_learning_health_report(LegacyStore(), tmp_path / "legacy", "test")
+    actual = build_learning_health_report(store, tmp_path / "stream", "test")
+    for report in (baseline, actual):
+        for key in ("as_of", "path", "manifest_path"):
+            report.pop(key, None)
+    assert actual == baseline
+    assert len(actual["recent_duplicates"]) == 20
+    assert all(item["features"]["unknown"] == "x" * 8192 for item in actual["recent_duplicates"])
 
 
 def test_streamed_observation_keeps_execution_lineage_and_best_features(tmp_path):
