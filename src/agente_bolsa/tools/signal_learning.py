@@ -1772,6 +1772,11 @@ def _compact_learning_metric_signal(
         setup = _setup_key(signal)
     feature_keys = ("direction", "position_direction", "exit_position_direction", "selected_for_llm")
     projected_features = {key: features[key] for key in feature_keys if key in features}
+    if scoreboard_only and "selected_for_llm" in projected_features:
+        selection = projected_features["selected_for_llm"]
+        if type(selection) is not bool:
+            # The scoreboard treats every non-boolean value as unavailable.
+            projected_features["selected_for_llm"] = None
     outcome = signal.get("outcome") or {}
     if scoreboard_only and not isinstance(outcome, dict):
         outcome = {}

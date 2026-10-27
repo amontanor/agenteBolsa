@@ -11,12 +11,14 @@ import json
 import math
 import statistics
 from collections import Counter
+from contextlib import closing
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from agente_bolsa.market_calendar import MarketCalendar
 from agente_bolsa.storage import Store
 
+from .learning_spool import LearningSpool
 from .reporting import write_json_report
 
 SCHEMA_VERSION = "p-l27d.rr-cohort.v2"
@@ -91,6 +93,57 @@ def sync_rr_cohort_observations(store: Store, observations: list[dict[str, Any]]
     return dict(result)
 
 
+def sync_rr_cohort_observations_spooled(store: Store, observations: LearningSpool) -> dict[str, Any]:
+    """Experimental RR sync with bounded wide-record retention and short writes."""
+    controls_by_key: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    incoming = store.iter_learning_observations(since_date=COHORT_START, limit=200_000)
+    with closing(incoming):
+        for item in incoming:
+            features = item.get("features") or {}
+            lineage = features.get("decision_lineage") or {}
+            cycle_id = str(lineage.get("cycle_id") or "")
+            if not cycle_id or not _control_eligible(item):
+                continue
+            # Only fields consumed by _control_sort_key and
+            # _same_gates_and_theory are retained in the control index.
+            compact = {
+                "observation_id": item.get("observation_id"),
+                "features": {
+                    "decision_lineage": {"candidate_rank": lineage.get("candidate_rank")},
+                    **{key: features.get(key) for key in ("entry_price", "stop_loss", "take_profit")},
+                },
+                "gate": {"gate_status": (item.get("gate") or {}).get("gate_status")},
+            }
+            key = (cycle_id, str(item.get("signal_date") or ""))
+            controls = controls_by_key.setdefault(key, [])
+            controls.append(compact)
+            controls.sort(key=_control_sort_key)
+            del controls[MAX_CONTROLS:]
+    result = Counter()
+    with LearningSpool() as pending:
+        with closing(observations.rows_in_observation_order()) as source:
+            for observation in source:
+                if str(observation.get("signal_date") or "") < COHORT_START:
+                    continue
+                card, reason = _cohort_card(observation, controls_by_key)
+                features = dict(observation.get("features") or {})
+                existing = features.get(COHORT_FEATURE_KEY)
+                if existing and isinstance(existing, dict) and existing.get("hypothesis_id") == HYPOTHESIS_ID:
+                    card["observation_id"] = existing.get("observation_id") or card.get("observation_id")
+                features[COHORT_FEATURE_KEY] = card
+                pending.append({**observation, "features": features})
+                result["recorded" if reason is None else f"excluded_{reason}"] += 1
+        if len(pending):
+            with closing(iter(pending)) as items:
+                result["batch"] = {"phase": "rr_sync", **store.upsert_learning_observations_batch(items)}
+        else:
+            result["batch"] = {
+                "phase": "rr_sync", "status": "available", "received": 0,
+                "written": 0, "chunks_completed": 0,
+            }
+    return dict(result)
+
+
 def build_rr_cohort_report(
     store: Store,
     *,
@@ -98,19 +151,37 @@ def build_rr_cohort_report(
     end: str | None = None,
     window: str = "all",
     include_legacy_context: bool = False,
+    _summary_only: bool = False,
 ) -> dict[str, Any]:
     """Read the prospective cards and evaluate only their pre-registered contract."""
     if window not in {"all", "first", "second"}:
         return _unavailable("window_invalid", {"window": window})
     start = start or COHORT_START
-    observations = store.learning_observations(since_date=start, end_date=end, limit=200_000)
-    cards = [dict((item.get("features") or {}).get(COHORT_FEATURE_KEY) or {}) for item in observations]
+    def card_for_report(item: dict[str, Any]) -> dict[str, Any]:
+        card = dict((item.get("features") or {}).get(COHORT_FEATURE_KEY) or {})
+        if not _summary_only:
+            return card
+        keys = (
+            "hypothesis_id", "signal_date", "maturity_status_10d", "eligibility_status", "rr_arm",
+            "return_10d", "symbol", "lineage_status", "comparable_control_available", "exclusion_reason",
+            "schema_version", "data_quality_warnings",
+        )
+        return {key: card[key] for key in keys if key in card}
+
+    if callable(getattr(store, "iter_learning_observations", None)):
+        observations = store.iter_learning_observations(since_date=start, end_date=end, limit=200_000)
+        with closing(observations):
+            cards = [card_for_report(item) for item in observations]
+    else:
+        observations = store.learning_observations(since_date=start, end_date=end, limit=200_000)
+        cards = [card_for_report(item) for item in observations]
     cards = [card for card in cards if card.get("hypothesis_id") == HYPOTHESIS_ID]
     if end:
         cards = [card for card in cards if str(card.get("signal_date") or "") <= end]
     first, second = _split_windows(cards)
     selected = {"all": cards, "first": first, "second": second}[window]
     as_of = _report_as_of(end)
+    calendar_cache: dict[tuple[str, datetime], tuple[int, str | None]] = {}
     report = {
         "schema_version": SCHEMA_VERSION,
         "observational_only": True,
@@ -122,15 +193,15 @@ def build_rr_cohort_report(
         "collection_max_sessions": MAX_SESSIONS,
         "calendar": "XNYS",
         "views": {
-            "selected": _view(selected, as_of=as_of),
-            "first": _view(first, as_of=as_of),
-            "second": _view(second, as_of=as_of),
+            "selected": _view(selected, as_of=as_of, calendar_cache=calendar_cache, summary_only=_summary_only),
+            "first": _view(first, as_of=as_of, calendar_cache=calendar_cache, summary_only=_summary_only),
+            "second": _view(second, as_of=as_of, calendar_cache=calendar_cache, summary_only=_summary_only),
         },
         "exclusions": _exclusions(cards),
-        "criteria": _criteria(first, second, as_of=as_of),
+        "criteria": _criteria(first, second, as_of=as_of, calendar_cache=calendar_cache, summary_only=_summary_only),
         "legacy_context": _legacy_context(store) if include_legacy_context else None,
         "earliest_possible_first_maturity_date": nth_xnys_session_after(COHORT_START, 10),
-        "next_possible_maturity_date": _next_possible_maturity_date(cards),
+        "next_possible_maturity_date": _next_possible_maturity_date(cards, as_of=as_of, calendar_cache=calendar_cache),
         "cohort_evaluation_date": "unavailable",
         "warnings": [
             "Cohorte prospectiva observacional: no modifica geometria, seleccion, gates, ordenes ni ejecucion.",
@@ -154,7 +225,7 @@ def write_rr_cohort_report(store: Store, reports_dir: Any, run_id: str) -> dict[
 
 
 def rr_cohort_digest_summary(store: Store) -> dict[str, Any]:
-    report = build_rr_cohort_report(store)
+    report = build_rr_cohort_report(store, _summary_only=True)
     selected = report["views"]["selected"]
     return {
         "status": report["overall_status"],
@@ -321,8 +392,19 @@ def _split_windows(cards: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], l
     return [card for card in cards if card.get("signal_date") in first_dates], [card for card in cards if card.get("signal_date") not in first_dates]
 
 
-def _view(cards: list[dict[str, Any]], *, as_of: datetime) -> dict[str, Any]:
-    cards = [_temporal_card(card, as_of) for card in cards]
+def _view(
+    cards: list[dict[str, Any]], *, as_of: datetime,
+    calendar_cache: dict[tuple[str, datetime], tuple[int, str | None]] | None = None,
+    summary_only: bool = False,
+) -> dict[str, Any]:
+    if calendar_cache is None:
+        calendar_cache = {}
+    if not summary_only:
+        cards = [_temporal_card(card, as_of, calendar_cache=calendar_cache) for card in cards]
+    else:
+        # Preserve validation/error behavior while discarding per-card maps.
+        for card in cards:
+            _temporal_card(card, as_of, calendar_cache=calendar_cache)
     eligible = [card for card in cards if card.get("eligibility_status") == "eligible"]
     mature = [card for card in eligible if card.get("maturity_status_10d") == "mature"]
     arms = {arm: _arm_metrics([card for card in mature if card.get("rr_arm") == arm]) for arm in ("A", "B")}
@@ -335,10 +417,10 @@ def _view(cards: list[dict[str, Any]], *, as_of: datetime) -> dict[str, Any]:
         "differences_a_minus_b": _differences(arms),
         "lineage_coverage": _ratio(sum(card.get("lineage_status") == "verified" for card in eligible), len(eligible)),
         "control_coverage": _ratio(sum(bool(card.get("comparable_control_available")) for card in eligible), len(eligible)),
-        "post_signal_sessions_completed_by_observation": {
+        "post_signal_sessions_completed_by_observation": {} if summary_only else {
             str(card.get("observation_id")): card.get("post_signal_sessions_completed") for card in eligible
         },
-        "temporal_semantics_by_observation": {
+        "temporal_semantics_by_observation": {} if summary_only else {
             str(card.get("observation_id")): card.get("temporal_semantics") for card in cards
         },
     }
@@ -354,8 +436,13 @@ def _differences(arms: dict[str, dict[str, Any]]) -> dict[str, float | None]:
     return {"mean_return_10d": _difference(arms["A"].get("mean_return_10d"), arms["B"].get("mean_return_10d")), "median_return_10d": _difference(arms["A"].get("median_return_10d"), arms["B"].get("median_return_10d")), "positive_rate": _difference(arms["A"].get("positive_rate"), arms["B"].get("positive_rate"))}
 
 
-def _criteria(first: list[dict[str, Any]], second: list[dict[str, Any]], *, as_of: datetime) -> dict[str, bool | None]:
-    views = [_view(first, as_of=as_of), _view(second, as_of=as_of)]
+def _criteria(
+    first: list[dict[str, Any]], second: list[dict[str, Any]], *, as_of: datetime,
+    calendar_cache: dict[tuple[str, datetime], tuple[int, str | None]] | None = None,
+    summary_only: bool = False,
+) -> dict[str, bool | None]:
+    views = [_view(first, as_of=as_of, calendar_cache=calendar_cache, summary_only=summary_only),
+             _view(second, as_of=as_of, calendar_cache=calendar_cache, summary_only=summary_only)]
     pending = {
         "two_chronological_windows": None,
         "sample_clusters_concentration": None,
@@ -484,14 +571,24 @@ def _post_signal_sessions_completed(signal_date: str, as_of: datetime) -> int:
     return sum(close.to_pydatetime().astimezone(timezone.utc) <= as_of for close in schedule["market_close"])
 
 
-def _temporal_card(card: dict[str, Any], as_of: datetime) -> dict[str, Any]:
+def _temporal_card(
+    card: dict[str, Any], as_of: datetime, *,
+    calendar_cache: dict[tuple[str, datetime], tuple[int, str | None]] | None = None,
+) -> dict[str, Any]:
     result = dict(card)
     signal_date = str(result.get("signal_date") or "")
     if not signal_date:
         return result
-    post_sessions = _post_signal_sessions_completed(signal_date, as_of)
+    cache_key = (signal_date, as_of)
+    if calendar_cache is None or cache_key not in calendar_cache:
+        values = (_post_signal_sessions_completed(signal_date, as_of), nth_xnys_session_after(signal_date, 10))
+        if calendar_cache is not None:
+            calendar_cache[cache_key] = values
+    else:
+        values = calendar_cache[cache_key]
+    post_sessions, maturity_date = values
     result["post_signal_sessions_completed"] = post_sessions
-    result["earliest_possible_maturity_date"] = nth_xnys_session_after(signal_date, 10)
+    result["earliest_possible_maturity_date"] = maturity_date
     if result.get("schema_version") != SCHEMA_VERSION:
         result["temporal_semantics"] = "legacy_semantics"
     warnings = list(result.get("data_quality_warnings") or [])
@@ -501,11 +598,20 @@ def _temporal_card(card: dict[str, Any], as_of: datetime) -> dict[str, Any]:
     return result
 
 
-def _next_possible_maturity_date(cards: list[dict[str, Any]]) -> str | None:
-    dates = [
-        nth_xnys_session_after(str(card.get("signal_date")), 10)
+def _next_possible_maturity_date(
+    cards: list[dict[str, Any]], *, as_of: datetime | None = None,
+    calendar_cache: dict[tuple[str, datetime], tuple[int, str | None]] | None = None,
+) -> str | None:
+    signal_dates = dict.fromkeys(
+        str(card.get("signal_date"))
         for card in cards
         if card.get("eligibility_status") == "eligible" and card.get("maturity_status_10d") == "immature"
+    )
+    dates = [
+        calendar_cache[(signal_date, as_of)][1]
+        if calendar_cache is not None and as_of is not None and (signal_date, as_of) in calendar_cache
+        else nth_xnys_session_after(signal_date, 10)
+        for signal_date in signal_dates
     ]
     return min((value for value in dates if value), default=nth_xnys_session_after(COHORT_START, 10))
 

@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import math
 from collections import Counter, defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
+from contextlib import closing
 from datetime import date, datetime, timezone
+from itertools import groupby
 from pathlib import Path
 from typing import Any
 
@@ -713,8 +715,10 @@ def _rebuild_signal_cohorts(
     end_date: str | None,
     include_learning_experiment: bool = False,
     sources: list[str] | None = None,
-) -> list[dict[str, Any]]:
-    signals = _signal_rows(
+    cohort_spool: LearningSpool | None = None,
+) -> list[dict[str, Any]] | LearningSpool:
+    signal_reader = _iter_signal_rows_spooled if cohort_spool is not None else _signal_rows
+    signals = signal_reader(
         store,
         since_date=since_date,
         end_date=end_date,
@@ -740,106 +744,118 @@ def _rebuild_signal_cohorts(
     rows: list[dict[str, Any]] = []
     by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
-    for raw in signals:
-        signal_date = raw["signal_date"]
-        symbol = raw["symbol"]
-        source_run_id = raw.get("source_run_id") or ""
-        decision = str(raw.get("decision") or "candidate")
-        orders_same_day = orders_by_date_symbol.get((signal_date, symbol), [])
-        signal_id = str(raw.get("signal_id") or "").strip()
-        exact_orders = [
-            order
-            for order in orders_same_day
-            if str(order.get("signal_id") or "").strip() == signal_id
-        ]
-        any_order_with_exact_lineage = any(order.get("signal_id") for order in orders_same_day)
-        _agent_identity, agent_attribution_status, _agent_role = _agent_contract_from_signal(raw)
-        protected_identity = agent_attribution_status in {"verified", "conflict"}
-        source_name = str(raw.get("source") or "").strip().lower()
-        features = raw.get("features", {}) or {}
-        learning_cohort = str(features.get("cohort") or "").strip().lower() == "learning_experiment"
-        matching_learning_orders = [
-            order
-            for order in exact_orders
-            if (
-                str(order.get("recommendation_source") or "").strip().lower() == "learning_experiment"
-                or str(order.get("recommendation_cohort") or "").strip().lower() == "learning_experiment"
-                or str(order.get("plan_cohort") or "").strip().lower() == "learning_experiment"
+    try:
+        for raw in signals:
+            signal_date = raw["signal_date"]
+            symbol = raw["symbol"]
+            source_run_id = raw.get("source_run_id") or ""
+            decision = str(raw.get("decision") or "candidate")
+            orders_same_day = orders_by_date_symbol.get((signal_date, symbol), [])
+            signal_id = str(raw.get("signal_id") or "").strip()
+            exact_orders = [
+                order
+                for order in orders_same_day
+                if str(order.get("signal_id") or "").strip() == signal_id
+            ]
+            any_order_with_exact_lineage = any(order.get("signal_id") for order in orders_same_day)
+            _agent_identity, agent_attribution_status, _agent_role = _agent_contract_from_signal(raw)
+            protected_identity = agent_attribution_status in {"verified", "conflict"}
+            source_name = str(raw.get("source") or "").strip().lower()
+            features = raw.get("features", {}) or {}
+            learning_cohort = str(features.get("cohort") or "").strip().lower() == "learning_experiment"
+            matching_learning_orders = [
+                order
+                for order in exact_orders
+                if (
+                    str(order.get("recommendation_source") or "").strip().lower() == "learning_experiment"
+                    or str(order.get("recommendation_cohort") or "").strip().lower() == "learning_experiment"
+                    or str(order.get("plan_cohort") or "").strip().lower() == "learning_experiment"
+                )
+            ]
+            if exact_orders:
+                execution_link_status = "verified"
+                candidate_orders = matching_learning_orders or exact_orders
+            elif any_order_with_exact_lineage or protected_identity:
+                execution_link_status = "not_matched" if any_order_with_exact_lineage else "unavailable"
+                candidate_orders = []
+            else:
+                # Keep historical rows readable, but expose that their old
+                # date/symbol join is not a verified attribution.
+                execution_link_status = "legacy_unverified"
+                candidate_orders = matching_learning_orders or orders_same_day
+            executed_buy = bool(candidate_orders) and (
+                decision == "approved_buy"
+                or decision == "approved_buy_micro"
+                or decision == "approved_buy_soft_backtest"
+                or (source_name == "learning_experiment" and learning_cohort and bool(matching_learning_orders))
             )
-        ]
-        if exact_orders:
-            execution_link_status = "verified"
-            candidate_orders = matching_learning_orders or exact_orders
-        elif any_order_with_exact_lineage or protected_identity:
-            execution_link_status = "not_matched" if any_order_with_exact_lineage else "unavailable"
-            candidate_orders = []
-        else:
-            # Keep historical rows readable, but expose that their old
-            # date/symbol join is not a verified attribution.
-            execution_link_status = "legacy_unverified"
-            candidate_orders = matching_learning_orders or orders_same_day
-        executed_buy = bool(candidate_orders) and (
-            decision == "approved_buy"
-            or decision == "approved_buy_micro"
-            or decision == "approved_buy_soft_backtest"
-            or (source_name == "learning_experiment" and learning_cohort and bool(matching_learning_orders))
-        )
-        duplicate_execution = False
-        execution_orders: list[dict[str, Any]] = []
-        if executed_buy:
-            execution_orders = candidate_orders
-            duplicate_execution = len(execution_orders) > 1 or cycle_symbol_counts.get((execution_orders[0].get("cycle_id") or "", symbol), 0) > 1
+            duplicate_execution = False
+            execution_orders: list[dict[str, Any]] = []
+            if executed_buy:
+                execution_orders = candidate_orders
+                duplicate_execution = len(execution_orders) > 1 or cycle_symbol_counts.get((execution_orders[0].get("cycle_id") or "", symbol), 0) > 1
 
-        outcome = _outcome_with_maturity(raw.get("outcome", {}) or {}, signal_date)
-        execution_snapshot = (
-            trade_memory_snapshots.get((signal_date, symbol), {}) if executed_buy else {}
-        )
-        features = dict(raw.get("features", {}) or {})
-        features["execution_link_status"] = execution_link_status
-        features["execution_order_ids"] = [
-            str(order.get("broker_order_id"))
-            for order in candidate_orders
-            if order.get("broker_order_id")
-        ]
-        if executed_buy:
-            verified_lineage = next(
-                (
-                    dict(order.get("decision_lineage") or {})
-                    for order in execution_orders
-                    if str((order.get("decision_lineage") or {}).get("lineage_status") or "")
-                    == "verified"
-                ),
-                None,
+            outcome = _outcome_with_maturity(raw.get("outcome", {}) or {}, signal_date)
+            execution_snapshot = (
+                trade_memory_snapshots.get((signal_date, symbol), {}) if executed_buy else {}
             )
-            features["decision_lineage"] = verified_lineage or legacy_unverified_lineage(
-                cycle_id=execution_orders[0].get("cycle_id") if execution_orders else None,
-                signal_id=raw.get("signal_id"),
-            )
-        row = {
-            "signal_id": raw["signal_id"],
-            "source_run_id": source_run_id,
-            "source": raw.get("source"),
-            "signal_date": signal_date,
-            "symbol": symbol,
-            "decision": decision,
-            "features": features,
-            "gate": raw.get("gate", {}) or {},
-            "outcome": outcome,
-            "execution_snapshot": execution_snapshot,
-            "created_at": raw.get("created_at"),
-            "updated_at": raw.get("updated_at"),
-            "selected_for_llm": bool((raw.get("features", {}) or {}).get("selected_for_llm")),
-            "considered_by_llm": decision != "candidate" or bool(recommendations_by_signal_id.get(signal_id)),
-            "executed_buy": executed_buy,
-            "orders_same_day": len(candidate_orders),
-            "recommendations_same_day": len(recommendations_by_signal_id.get(signal_id, [])),
-            "execution_link_status": execution_link_status,
-            "duplicate_execution": duplicate_execution,
-            "explanation": _explanation(raw),
-            "score": _candidate_score(raw),
-        }
-        rows.append(row)
-        by_source[source_run_id].append(row)
+            features = dict(raw.get("features", {}) or {})
+            features["execution_link_status"] = execution_link_status
+            features["execution_order_ids"] = [
+                str(order.get("broker_order_id"))
+                for order in candidate_orders
+                if order.get("broker_order_id")
+            ]
+            if executed_buy:
+                verified_lineage = next(
+                    (
+                        dict(order.get("decision_lineage") or {})
+                        for order in execution_orders
+                        if str((order.get("decision_lineage") or {}).get("lineage_status") or "")
+                        == "verified"
+                    ),
+                    None,
+                )
+                features["decision_lineage"] = verified_lineage or legacy_unverified_lineage(
+                    cycle_id=execution_orders[0].get("cycle_id") if execution_orders else None,
+                    signal_id=raw.get("signal_id"),
+                )
+            row = {
+                "signal_id": raw["signal_id"],
+                "source_run_id": source_run_id,
+                "source": raw.get("source"),
+                "signal_date": signal_date,
+                "symbol": symbol,
+                "decision": decision,
+                "features": features,
+                "gate": raw.get("gate", {}) or {},
+                "outcome": outcome,
+                "execution_snapshot": execution_snapshot,
+                "created_at": raw.get("created_at"),
+                "updated_at": raw.get("updated_at"),
+                "selected_for_llm": bool((raw.get("features", {}) or {}).get("selected_for_llm")),
+                "considered_by_llm": decision != "candidate" or bool(recommendations_by_signal_id.get(signal_id)),
+                "executed_buy": executed_buy,
+                "orders_same_day": len(candidate_orders),
+                "recommendations_same_day": len(recommendations_by_signal_id.get(signal_id, [])),
+                "execution_link_status": execution_link_status,
+                "duplicate_execution": duplicate_execution,
+                "explanation": _explanation(raw),
+                "score": _candidate_score(raw),
+            }
+            if cohort_spool is None:
+                rows.append(row)
+                by_source[source_run_id].append(row)
+            else:
+                cohort_spool.append(row)
+    finally:
+        close = getattr(signals, "close", None)
+        if close is not None:
+            close()
+
+    if cohort_spool is not None:
+        _finish_spooled_signal_cohorts(cohort_spool)
+        return cohort_spool
 
     for source_rows in by_source.values():
         ranked_source_rows = sorted(
@@ -908,6 +924,79 @@ def _rebuild_signal_cohorts(
             }
             row["outcome_label"] = row["outcome"]["label"]
     return rows
+
+
+def _finish_spooled_signal_cohorts(spool: LearningSpool) -> None:
+    """Rank compact keys in one ordered source pass and update one ordered pass."""
+    def ranks() -> Iterator[tuple[int, int, int, int, str, int]]:
+        with closing(spool.source_ordered_rows()) as source_rows:
+            for _source, group in groupby(source_rows, key=lambda item: item[0]):
+                keys: list[tuple[int, float, str]] = []
+                executed_count = 0
+                max_executed_score: float | None = None
+                executed_loser = False
+                for _, ordinal, item in group:
+                    keys.append((ordinal, item["score"], item.get("signal_id", "")))
+                    if item["executed_buy"]:
+                        executed_count += 1
+                        score = _candidate_score(item)
+                        max_executed_score = score if max_executed_score is None else max(max_executed_score, score)
+                        executed_loser = executed_loser or _loser(item["outcome"])
+                # Python sorting preserves legacy tie and NaN behavior. Only
+                # compact keys for one source are retained, never features.
+                keys.sort(key=lambda item: (-item[1], item[2]))
+                count = len(keys)
+                max_score_json = json.dumps(max_executed_score)
+                for rank, (ordinal, _, _) in enumerate(keys, start=1):
+                    yield ordinal, rank, count, executed_count, max_score_json, int(executed_loser)
+
+    rank_rows = ranks()
+    try:
+        spool.install_ranks(rank_rows)
+    finally:
+        rank_rows.close()
+    with closing(spool.ranked_records()) as records:
+        for ordinal, row, rank, source_count, executed_count, max_executed_score, executed_loser in records:
+            features = row["features"]
+            if not _rank_value(row, "score_rank"):
+                features["score_rank"] = rank
+            if not _rank_value(row, "source_candidate_count"):
+                features["source_candidate_count"] = source_count
+            if features.get("score_rank_percentile") is None and source_count:
+                features["score_rank_percentile"] = round(rank / source_count, 4)
+            row["rank_context"] = {
+                "score_rank": _rank_value(row, "score_rank"),
+                "source_rank": _rank_value(row, "source_rank"),
+                "source_candidate_count": _rank_value(row, "source_candidate_count"),
+                "score_rank_percentile": features.get("score_rank_percentile"),
+            }
+            row["regime"] = _regime_context(features)
+            missed_opportunity = (not row["executed_buy"]) and row["outcome"].get("matured") and _winner(row["outcome"])
+            ranking_failure = (
+                missed_opportunity and bool(executed_count) and executed_loser
+                and max_executed_score is not None and row["score"] >= max_executed_score
+            )
+            timing_failure = (
+                missed_opportunity and (row["decision"] == "approved_buy" or executed_count >= 2)
+                and not ranking_failure
+            )
+            risk_failure = row["decision"] in {"blocked_entry_quality", "blocked_backtest"}
+            feature_gap = missed_opportunity and not ranking_failure and not timing_failure and not risk_failure
+            row["cohort"] = (
+                "executed_buy" if row["executed_buy"] else
+                "approved_buy" if row["decision"] == "approved_buy" else
+                "blocked_entry_quality" if row["decision"] == "blocked_entry_quality" else
+                "blocked_backtest" if row["decision"] == "blocked_backtest" else
+                "considered_by_llm" if row["considered_by_llm"] else
+                "selected_for_llm" if row["selected_for_llm"] else "candidate_only"
+            )
+            row["flags"] = {
+                "missed_opportunity": missed_opportunity, "ranking_failure": ranking_failure,
+                "timing_failure": timing_failure, "risk_failure": risk_failure,
+                "feature_gap": feature_gap, "duplicate_execution": row["duplicate_execution"],
+            }
+            row["outcome_label"] = row["outcome"]["label"]
+            spool.replace_payload(ordinal, row)
 
 
 def _summary_from_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1095,6 +1184,68 @@ def _rank_shadow_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _rank_shadow_summary_spooled(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Compute shadow replacements one source at a time using a private spool."""
+    summary: dict[str, Any] = {
+        "candidate_replacements": 0, "positive_replacements": 0, "negative_replacements": 0,
+        "avoided_losers": 0, "missed_winners": 0, "delta_net_opportunity": 0.0, "examples": [],
+    }
+    deltas: list[float] = []
+    with LearningSpool() as grouped:
+        for row in rows:
+            source = str(row.get("source_run_id") or row["signal_date"])
+            grouped.append({
+                "signal_id": row["signal_id"], "source_run_id": source,
+                "signal_date": row["signal_date"], "symbol": row["symbol"], "score": row["score"],
+                "decision": row["decision"], "executed_buy": row["executed_buy"],
+                "features": row.get("features") or {}, "outcome": row["outcome"],
+            }, group_key=source)
+        with closing(grouped.grouped_rows()) as records:
+            for source, group in groupby(records, key=lambda item: item[0]):
+                executed = []
+                candidates = []
+                for _, _, row in group:
+                    if row["executed_buy"]:
+                        executed.append(row)
+                    elif row["decision"] in {"candidate", "hold", "approved_buy"}:
+                        candidates.append(row)
+                if not executed or not candidates:
+                    continue
+                ordered_executed = sorted(executed, key=lambda row: (_shadow_rank_priority(row), row["score"]))
+                ordered_candidates = sorted(
+                    candidates, key=lambda row: (_shadow_rank_priority(row), row["score"]), reverse=True,
+                )
+                for old, new in zip(ordered_executed, ordered_candidates, strict=False):
+                    new_priority = _shadow_rank_priority(new)
+                    old_priority = _shadow_rank_priority(old)
+                    if new_priority <= old_priority:
+                        continue
+                    if not old["outcome"].get("matured") or not new["outcome"].get("matured"):
+                        continue
+                    delta = _reference_return(new) - _reference_return(old)
+                    replacement = {
+                        "source_run_id": source, "signal_date": old["signal_date"],
+                        "replace_symbol": old["symbol"], "with_symbol": new["symbol"],
+                        "replace_score": old["score"], "with_score": new["score"],
+                        "replace_priority": old_priority, "with_priority": new_priority,
+                        "replace_return_5d": old["outcome"].get("return_5d"),
+                        "with_return_5d": new["outcome"].get("return_5d"),
+                        "delta_return": _round(delta, 4), "avoided_loser": _loser(old["outcome"]),
+                        "missed_winner": _winner(old["outcome"]), "new_winner": _winner(new["outcome"]),
+                    }
+                    value = _num(replacement["delta_return"]) or 0.0
+                    summary["candidate_replacements"] += 1
+                    summary["positive_replacements"] += value > 0
+                    summary["negative_replacements"] += value < 0
+                    summary["avoided_losers"] += bool(replacement["avoided_loser"])
+                    summary["missed_winners"] += bool(replacement["missed_winner"])
+                    deltas.append(value)
+                    if len(summary["examples"]) < 20:
+                        summary["examples"].append(replacement)
+    summary["delta_net_opportunity"] = _round(sum(deltas), 4)
+    return summary
+
+
 def _regime_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     by_regime: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -1115,6 +1266,33 @@ def _regime_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "avg_return_5d": _round(sum(_reference_return(row) for row in matured) / len(matured), 4) if matured else None,
             }
         )
+    return sorted(
+        summary,
+        key=lambda item: (item["matured"], item["win_rate"] if item["win_rate"] is not None else -1),
+        reverse=True,
+    )[:20]
+
+
+def _regime_summary_stream(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Aggregate regimes without retaining signal rows."""
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        key = (row.get("regime") or {}).get("key") or "unknown"
+        aggregate = grouped.setdefault(key, {"signals": 0, "matured": 0, "executed": 0, "winners": 0, "returns": []})
+        aggregate["signals"] += 1
+        if row["outcome"].get("matured"):
+            aggregate["matured"] += 1
+            aggregate["executed"] += bool(row["executed_buy"])
+            aggregate["winners"] += bool(_winner(row["outcome"]))
+            aggregate["returns"].append(_reference_return(row))
+    summary = []
+    for regime, item in grouped.items():
+        count = item["matured"]
+        summary.append({
+            "regime": regime, "signals": item["signals"], "matured": count, "executed": item["executed"],
+            "win_rate": _round(item["winners"] / count, 4) if count else None,
+            "avg_return_5d": _round(sum(item["returns"]) / count, 4) if count else None,
+        })
     return sorted(
         summary,
         key=lambda item: (item["matured"], item["win_rate"] if item["win_rate"] is not None else -1),
@@ -1226,9 +1404,13 @@ def _approved_not_executed_calibration(rows: list[dict[str, Any]]) -> dict[str, 
     }
 
 
-def _compare_policy_rows(rows: list[dict[str, Any]], policy: str) -> dict[str, Any]:
+def _compare_policy_rows(
+    rows: list[dict[str, Any]], policy: str, *,
+    rank_shadow: dict[str, Any] | None = None, regime_summary: list[dict[str, Any]] | None = None,
+    streaming: bool = False,
+) -> dict[str, Any]:
     current_rows = _policy_executions(rows, "current")
-    proposed_rows = _policy_executions(rows, policy)
+    proposed_rows = _policy_executions(current_rows if streaming else rows, policy)
     blocked_ids = {row["signal_id"] for row in current_rows} - {row["signal_id"] for row in proposed_rows}
     blocked_rows = [row for row in current_rows if row["signal_id"] in blocked_ids]
 
@@ -1266,8 +1448,12 @@ def _compare_policy_rows(rows: list[dict[str, Any]], policy: str) -> dict[str, A
             }
             for row in blocked_rows[:20]
         ],
-        "rank_shadow": _rank_shadow_summary(rows),
-        "regime_summary": _regime_summary(rows),
+        "rank_shadow": rank_shadow if rank_shadow is not None else (
+            _rank_shadow_summary_spooled(rows) if streaming else _rank_shadow_summary(rows)
+        ),
+        "regime_summary": regime_summary if regime_summary is not None else (
+            _regime_summary_stream(rows) if streaming else _regime_summary(rows)
+        ),
     }
 
 

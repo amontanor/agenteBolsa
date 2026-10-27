@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from agente_bolsa import main
+from agente_bolsa.tools.learning_spool import LearningSpool
 from agente_bolsa.tools.rr_cohort import (
     COHORT_FEATURE_KEY,
     COHORT_START,
@@ -19,7 +20,9 @@ from agente_bolsa.tools.rr_cohort import (
     _temporal_card,
     build_rr_cohort_report,
     nth_xnys_session_after,
+    rr_cohort_digest_summary,
     sync_rr_cohort_observations,
+    sync_rr_cohort_observations_spooled,
 )
 
 
@@ -47,6 +50,18 @@ class FakeStore:
 
     def signal_outcomes(self, *, limit=500_000):
         return []
+
+
+class StreamingBatchStore(FakeStore):
+    def iter_learning_observations(self, **kwargs):
+        yield from self.learning_observations(**kwargs)
+
+    def upsert_learning_observations_batch(self, items):
+        count = 0
+        for item in items:
+            self.upsert_learning_observation(item)
+            count += 1
+        return {"status": "available", "received": count, "written": count, "chunks_completed": 1}
 
 
 def observation(
@@ -104,6 +119,81 @@ def observation(
 
 def cards(store: FakeStore):
     return [row["features"][COHORT_FEATURE_KEY] for row in store.rows if COHORT_FEATURE_KEY in row["features"]]
+
+
+def test_spooled_rr_sync_matches_legacy_and_preserves_unknown_features(tmp_path):
+    rows = [
+        observation(i, decision="approved_buy", capacity_control=True) if i < 5
+        else observation(i, executed=i % 2 == 0, lineage=i != 8)
+        for i in range(1, 11)
+    ]
+    for i, row in enumerate(rows):
+        row["features"]["unknown"] = {"payload": f"{i}-" + "x" * 8192}
+    ordered = sorted(rows, key=lambda row: (row["signal_date"], row["symbol"], row["source_family"]))
+    legacy = StreamingBatchStore(ordered)
+    streamed = StreamingBatchStore(ordered)
+    expected = sync_rr_cohort_observations(legacy, deepcopy(ordered))
+    with LearningSpool(directory=tmp_path) as spool:
+        for row in ordered:
+            spool.append(row)
+        actual = sync_rr_cohort_observations_spooled(streamed, spool)
+    assert actual == expected
+    assert streamed.rows == legacy.rows
+
+
+def test_temporal_card_reuses_calendar_values_only_within_explicit_cache(monkeypatch):
+    from datetime import datetime, timezone
+
+    from agente_bolsa.tools import rr_cohort
+
+    calls = {"sessions": 0, "maturity": 0}
+
+    def sessions(_date, _as_of):
+        calls["sessions"] += 1
+        return 12
+
+    def maturity(_date, _count):
+        calls["maturity"] += 1
+        return "2026-10-27"
+
+    monkeypatch.setattr(rr_cohort, "_post_signal_sessions_completed", sessions)
+    monkeypatch.setattr(rr_cohort, "nth_xnys_session_after", maturity)
+    card = {"signal_date": "2026-10-10", "schema_version": rr_cohort.SCHEMA_VERSION,
+            "maturity_status_10d": "immature"}
+    as_of = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    expected = rr_cohort._temporal_card(card, as_of)
+    calls.update(sessions=0, maturity=0)
+    cache = {}
+    assert rr_cohort._temporal_card(card, as_of, calendar_cache=cache) == expected
+    assert rr_cohort._temporal_card(card, as_of, calendar_cache=cache) == expected
+    assert calls == {"sessions": 1, "maturity": 1}
+
+
+def test_rr_digest_summary_matches_full_report_without_per_observation_maps(monkeypatch):
+    from agente_bolsa.tools import rr_cohort
+
+    monkeypatch.setattr(rr_cohort, "_post_signal_sessions_completed", lambda *_args: 12)
+    monkeypatch.setattr(rr_cohort, "_collection_sessions_completed", lambda *_args: 12)
+    monkeypatch.setattr(rr_cohort, "nth_xnys_session_after", lambda *_args: "2026-10-27")
+    rows = [observation(i, mature=i % 2 == 0, rr=1.2 if i % 2 else 1.7) for i in range(1, 12)]
+    store = StreamingBatchStore(rows)
+    sync_rr_cohort_observations(store, store.learning_observations())
+    full = build_rr_cohort_report(store)
+    selected = full["views"]["selected"]
+    expected = {
+        "status": full["overall_status"], "collection_sessions_completed": full["collection_sessions_completed"],
+        "mature_by_arm": {arm: selected["arms"][arm]["matured_count"] for arm in ("A", "B")},
+        "lineage_coverage": selected["lineage_coverage"], "control_coverage": selected["control_coverage"],
+        "criteria_pending": [key for key, value in full["criteria"].items() if value is not True],
+        "next_possible_maturity_date": full["next_possible_maturity_date"],
+    }
+    assert rr_cohort_digest_summary(store) == expected
+    card = store.rows[0]["features"][COHORT_FEATURE_KEY]
+    card["data_quality_warnings"] = [{}]
+    with pytest.raises(TypeError):
+        build_rr_cohort_report(store)
+    with pytest.raises(TypeError):
+        rr_cohort_digest_summary(store)
 
 
 def test_contract_and_boundaries_are_pre_registered_without_trading_fields():
