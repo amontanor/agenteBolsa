@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from agente_bolsa.storage import Store
 
+from .learning_spool import LearningSpool
 from .reporting import write_json_report
 
 
@@ -22,15 +24,74 @@ def build_autonomous_research_report(
 ) -> dict[str, Any]:
     """Measure the fixed daily research agenda without changing trading policy."""
 
+    if callable(getattr(store, "iter_learning_observations", None)):
+        incoming = store.iter_learning_observations(since_date=since_date, end_date=end_date, limit=200000)
+        with LearningSpool() as rows, closing(incoming):
+            for row in incoming:
+                rows.append(_compact_research_row(row))
+            return _finish_autonomous_research_report(store, reports_dir, run_id, since_date, end_date, rows)
     rows = store.learning_observations(since_date=since_date, end_date=end_date, limit=200000)
-    matured = [row for row in rows if _mature_return(row, 5) is not None]
+    return _finish_autonomous_research_report(store, reports_dir, run_id, since_date, end_date, rows)
+
+
+def _compact_research_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Keep only carriers used by this report; persisted observations stay complete."""
+    result = {key: row[key] for key in ("signal_date", "blocked_entry_quality", "blocked_backtest") if key in row}
+
+    def project_lineage(value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        keys = ("strategy_name", "decision_source", "low_sample_exploration")
+        projected = {key: value[key] for key in keys if key in value}
+        if value and not projected:
+            projected["_present"] = True
+        return projected
+
+    features = row.get("features") or {}
+    if isinstance(features, dict):
+        keys = ("sector", "setup", "setup_name", "regime")
+        projected_features = {key: features[key] for key in keys if key in features}
+        if "decision_lineage" in features:
+            projected_features["decision_lineage"] = project_lineage(features["decision_lineage"])
+        if "market_state" in features:
+            state = features["market_state"]
+            projected_features["market_state"] = (
+                {"market_regime": state["market_regime"]} if isinstance(state, dict) and "market_regime" in state
+                else {} if isinstance(state, dict) else state
+            )
+        result["features"] = projected_features
+    else:
+        result["features"] = features
+    execution = row.get("execution") or {}
+    if isinstance(execution, dict):
+        result["execution"] = (
+            {"decision_lineage": project_lineage(execution["decision_lineage"])}
+            if "decision_lineage" in execution else {}
+        )
+    else:
+        result["execution"] = execution
+    outcome = row.get("outcome") or {}
+    if isinstance(outcome, dict):
+        keys = ("matured_horizons", "return_5d", "return_10d", "excess_vs_spy_5d", "mfe", "mfe_pct",
+                "max_favorable_excursion", "mae", "mae_pct", "max_adverse_excursion")
+        result["outcome"] = {key: outcome[key] for key in keys if key in outcome}
+    else:
+        result["outcome"] = outcome
+    return result
+
+
+def _finish_autonomous_research_report(
+    store: Store, reports_dir: Path, run_id: str, since_date: str, end_date: str | None,
+    rows: list[dict[str, Any]] | LearningSpool,
+) -> dict[str, Any]:
+    matured = sum(1 for row in rows if _mature_return(row, 5) is not None)
     report = {
         "schema_version": 1,
         "run_id": run_id,
         "as_of": datetime.now(timezone.utc).isoformat(),
         "window": {"since": since_date, "to": end_date},
         "policy_frozen": True,
-        "sample": {"observations": len(rows), "matured_5d": len(matured)},
+        "sample": {"observations": len(rows), "matured_5d": matured},
         "strategy_edge": _group_return(rows, _strategy_name),
         "pullback_promotion_gate": _pullback_promotion_gate(rows, end_date=end_date),
         "llm_vs_fallback": _group_return(rows, _decision_source),

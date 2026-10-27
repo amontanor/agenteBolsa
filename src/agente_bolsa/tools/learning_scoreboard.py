@@ -143,8 +143,42 @@ def _cohort_rows(
     dict[str, list[str]],
     list[dict[str, Any]],
 ]:
-    observations = store.learning_observations(since_date=since_date, end_date=end_date, limit=200000)
-    cohort = [row for row in observations if str(row.get("source_family") or "") == LEARNING_EXPERIMENT_SOURCE]
+    iterator = getattr(store, "iter_learning_observations", None)
+    observations = (
+        iterator(since_date=since_date, end_date=end_date, limit=200000)
+        if callable(iterator)
+        else iter(store.learning_observations(since_date=since_date, end_date=end_date, limit=200000))
+    )
+
+    def project(row: dict[str, Any]) -> dict[str, Any]:
+        # The report consumes only these fields. Persisted observations remain intact.
+        result = {key: row[key] for key in (
+            "observation_id", "signal_date", "source_family", "executed_buy",
+            "signal_id", "best_signal_id", "cycle_id", "best_score", "decision", "direction",
+        ) if key in row}
+        fields = {
+            "features": ("signal_id", "best_signal_id", "decision_lineage", "comparable_control_set",
+                         "selection_rank", "score_rank", "score", "direction", "position_direction",
+                         "exit_position_direction", "market_regime"),
+            "outcome": ("source", "matured_horizons", "return_1d", "return_3d", "return_5d", "return_10d"),
+            "gate": ("execution",),
+            "execution": ("execution_snapshot",),
+        }
+        for name, keys in fields.items():
+            value = row.get(name)
+            if isinstance(value, dict):
+                result[name] = {key: value[key] for key in keys if key in value}
+            elif name in row:
+                result[name] = value
+        return result
+
+    try:
+        cohort = [project(row) for row in observations
+                  if str(row.get("source_family") or "") == LEARNING_EXPERIMENT_SOURCE]
+    finally:
+        close = getattr(observations, "close", None)
+        if callable(close):
+            close()
     executed = [row for row in cohort if bool(row.get("executed_buy"))]
     all_control = [row for row in cohort if not bool(row.get("executed_buy"))]
     matches: dict[str, list[str]] = {}
@@ -224,15 +258,23 @@ def _cohort_rows(
         score = _num(row.get("best_score") or features.get("score"))
         return (rank if rank is not None else 1e9, -(score or 0.0), str(row.get("observation_id") or ""))
 
+    control_by_signal: dict[str, list[tuple[int, dict[str, Any]]]] = defaultdict(list)
+    for index, row in enumerate(all_control):
+        signal_id = exact_signal_id(row)
+        if signal_id is not None:
+            control_by_signal[signal_id].append((index, row))
+
     for item in executed:
         control_ids = verified_control_ids(item)
         item_cycle_id = explicit_cycle_id(item)
         item_signal_date = canonical_signal_date(item)
         candidates = [
             row
-            for row in all_control
-            if exact_signal_id(row) in control_ids
-            and item_cycle_id is not None
+            for _index, row in sorted(
+                (pair for signal_id in control_ids for pair in control_by_signal.get(signal_id, [])),
+                key=lambda pair: pair[0],
+            )
+            if item_cycle_id is not None
             and explicit_cycle_id(row) == item_cycle_id
             and item_signal_date is not None
             and canonical_signal_date(row) == item_signal_date

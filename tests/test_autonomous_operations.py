@@ -83,6 +83,36 @@ def test_autonomous_research_uses_only_mature_forward_returns(tmp_path):
     assert report["policy_frozen"] is True
 
 
+def test_autonomous_research_stream_matches_legacy_and_keeps_lineage_precedence(tmp_path):
+    settings = _settings(tmp_path)
+    store = _store(settings)
+    for i in range(30):
+        row = _observation(
+            f"obs_{i:03}", strategy="builtin_pullback" if i % 3 == 0 else "builtin_breakout",
+            source="llm" if i % 2 else "capacity_fill", value=(i % 7 - 3) / 100,
+            matured=i % 5 != 0, blocked=i % 4 == 0,
+        )
+        row["features"]["unknown"] = "x" * 8192
+        row["outcome"]["unknown"] = "y" * 8192
+        if i == 1:
+            row["features"]["decision_lineage"] = {"unknown": "present"}
+            row["execution"] = {"decision_lineage": {"strategy_name": "must_not_override"}}
+        store.upsert_learning_observation(row)
+
+    class LegacyStore:
+        def __getattr__(self, name):
+            if name == "iter_learning_observations":
+                raise AttributeError(name)
+            return getattr(store, name)
+
+    expected = build_autonomous_research_report(LegacyStore(), tmp_path / "legacy", "test", end_date="2026-07-20")
+    actual = build_autonomous_research_report(store, tmp_path / "stream", "test", end_date="2026-07-20")
+    for report in (expected, actual):
+        for key in ("as_of", "path", "manifest_path", "latest_path"):
+            report.pop(key, None)
+    assert actual == expected
+
+
 def test_post_market_measurement_pipeline_publishes_sequence(tmp_path, monkeypatch):
     settings = _settings(tmp_path)
     store = _store(settings)
