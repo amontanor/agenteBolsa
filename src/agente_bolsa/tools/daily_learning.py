@@ -22,6 +22,7 @@ from .rr_cohort import rr_cohort_digest_summary, sync_rr_cohort_observations
 from .signal_learning import (
     HORIZONS,
     _agent_contract_from_signal,
+    _compact_learning_metric_signal,
     _indicator_tags,
     _num,
     build_agent_learning_scoreboard,
@@ -1589,6 +1590,30 @@ def build_learning_health_report(
     return _write_report(report, reports_dir, "learning_health", run_id)
 
 
+def _digest_scoreboard_rows(store: Store, *, since_date: str, end_date: str | None) -> list[dict[str, Any]]:
+    """Build metric-only rows without retaining the wide original carriers."""
+    if hasattr(store, "iter_signal_outcomes"):
+        incoming = store.iter_signal_outcomes(limit=LEDGER_LIMIT, since_date=since_date)
+        try:
+            signal_rows = [
+                _compact_learning_metric_signal(row, scoreboard_only=True)
+                for row in incoming
+                if not end_date or str(row.get("signal_date") or "")[:10] <= str(end_date)[:10]
+            ]
+        finally:
+            close = getattr(incoming, "close", None)
+            if close is not None:
+                close()
+    else:
+        # Compatibility for stores implementing only the legacy list API.
+        signal_rows = store.signal_outcomes(limit=LEDGER_LIMIT, since_date=since_date)
+        if end_date:
+            signal_rows = [
+                row for row in signal_rows if str(row.get("signal_date") or "")[:10] <= str(end_date)[:10]
+            ]
+    return signal_rows
+
+
 def build_learning_digest_report(
     store: Store,
     reports_dir: Path,
@@ -1608,11 +1633,7 @@ def build_learning_digest_report(
         since_date=since_date,
         end_date=end_date,
     )
-    signal_rows = store.signal_outcomes(limit=LEDGER_LIMIT, since_date=since_date)
-    if end_date:
-        signal_rows = [
-            row for row in signal_rows if str(row.get("signal_date") or "")[:10] <= str(end_date)[:10]
-        ]
+    signal_rows = _digest_scoreboard_rows(store, since_date=since_date, end_date=end_date)
     digest = _build_digest(
         observations,
         health,

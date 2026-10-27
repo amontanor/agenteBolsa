@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from collections import Counter, defaultdict
+from collections.abc import Iterator
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from agente_bolsa.models import PortfolioSnapshot, TradeRecommendation
 from agente_bolsa.storage import Store
 
 from .decision_lineage import legacy_unverified_lineage
+from .learning_spool import LearningSpool
 from .reporting import write_json_report
 from .signal_learning import (
     _agent_contract_from_signal,
@@ -368,6 +370,41 @@ def _signal_rows(
     if end_date:
         rows = [row for row in rows if row["signal_date"] <= end_date]
     return sorted(rows, key=lambda item: (item.get("signal_date", ""), item.get("created_at", ""), item.get("signal_id", "")))
+
+
+def _iter_signal_rows_spooled(
+    store: Store,
+    *,
+    since_date: str,
+    end_date: str | None,
+    limit: int = 200000,
+    include_learning_experiment: bool = False,
+    sources: list[str] | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Experimental streaming source; consumers must not retain wide rows.
+
+    This is opt-in and does not change the legacy cohort path. The source
+    limit is applied before the end-date filter, as in ``_signal_rows``.
+    """
+    incoming = store.iter_signal_outcomes(
+        limit=limit, since_date=since_date,
+        include_learning_experiment=include_learning_experiment, sources=sources,
+    )
+    try:
+        with LearningSpool() as spool:
+            for row in incoming:
+                if end_date and row["signal_date"] > end_date:
+                    continue
+                # The persisted schema requires text in all three sort keys.
+                # Reject other types rather than silently changing Python sort.
+                if not all(isinstance(row.get(key, ""), str) for key in ("signal_date", "created_at", "signal_id")):
+                    raise TypeError("signal spool sort keys must be text")
+                spool.append(row)
+            yield from spool.rows_in_signal_order()
+    finally:
+        close = getattr(incoming, "close", None)
+        if close is not None:
+            close()
 
 
 def _buy_order_rows(store: Store, *, since_date: str, end_date: str | None) -> list[dict[str, Any]]:

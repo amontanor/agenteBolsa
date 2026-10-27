@@ -1750,7 +1750,9 @@ class _LearningMetricSignal(dict[str, Any]):
     setup: str
 
 
-def _compact_learning_metric_signal(signal: dict[str, Any]) -> _LearningMetricSignal:
+def _compact_learning_metric_signal(
+    signal: dict[str, Any], *, scoreboard_only: bool = False,
+) -> _LearningMetricSignal:
     # Evaluate original carriers first, including conflicts in unused contract fields.
     contract, status, role = _agent_contract_from_signal(signal)
     lineage = _lineage_for_row(signal)
@@ -1758,12 +1760,21 @@ def _compact_learning_metric_signal(signal: dict[str, Any]) -> _LearningMetricSi
     legacy = _is_legacy_unverified(signal)
     features = signal.get("features", {}) or {}
     # Preserve legacy malformed-feature errors before projecting valid feature maps.
-    indicator_tags = _indicator_tags(signal)
-    combination = _combo_key(signal)
-    setup = _setup_key(signal)
+    if scoreboard_only:
+        # The scoreboard does not consume indicator/setup metrics. Keep its
+        # existing handling of malformed carriers instead of evaluating those
+        # unrelated calculations merely to build a projection.
+        features = features if isinstance(features, dict) else {}
+        indicator_tags, combination, setup = [], "", ""
+    else:
+        indicator_tags = _indicator_tags(signal)
+        combination = _combo_key(signal)
+        setup = _setup_key(signal)
     feature_keys = ("direction", "position_direction", "exit_position_direction", "selected_for_llm")
     projected_features = {key: features[key] for key in feature_keys if key in features}
     outcome = signal.get("outcome") or {}
+    if scoreboard_only and not isinstance(outcome, dict):
+        outcome = {}
     outcome_keys = ("verdict", "source", "mfe_10d", "mae_10d", *(f"return_{h}d" for h in HORIZONS))
     projected_outcome = {key: outcome[key] for key in outcome_keys if key in outcome}
     maturity = outcome.get("matured_horizons")
