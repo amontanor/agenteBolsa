@@ -5136,6 +5136,51 @@ class Store:
             for row in rows
         ]
 
+    def iter_learning_observations(
+        self,
+        *,
+        since_date: str | None = None,
+        end_date: str | None = None,
+        limit: int = 5000,
+        batch_size: int = 64,
+    ) -> Iterator[dict[str, Any]]:
+        """Read observations incrementally using a short-lived read-only connection."""
+        query = """
+            SELECT observation_id, signal_date, symbol, source_family, source_run_ids_json,
+                   first_seen_at, last_seen_at, best_signal_id, best_score, decision,
+                   explanation, llm_considered, approved_buy, blocked_entry_quality,
+                   blocked_backtest, executed_buy, duplicate_count, rank_path_json,
+                   features_json, gate_json, outcome_json, execution_json, created_at, updated_at
+            FROM learning_observations WHERE 1 = 1
+        """
+        params: list[Any] = []
+        if since_date:
+            query += " AND signal_date >= ?"
+            params.append(since_date)
+        if end_date:
+            query += " AND signal_date <= ?"
+            params.append(end_date)
+        query += " ORDER BY signal_date DESC, symbol ASC LIMIT ?"
+        params.append(limit)
+        with closing(self._decision_context_read_connection()) as conn:
+            with closing(conn.execute(query, params)) as cursor:
+                while batch := cursor.fetchmany(max(1, int(batch_size))):
+                    for row in batch:
+                        yield {
+                            **{key: row[key] for key in row.keys() if not key.endswith("_json")},
+                            "source_run_ids": json.loads(row["source_run_ids_json"] or "[]"),
+                            "rank_path": json.loads(row["rank_path_json"] or "[]"),
+                            "features": json.loads(row["features_json"] or "{}"),
+                            "gate": json.loads(row["gate_json"] or "{}"),
+                            "outcome": json.loads(row["outcome_json"] or "{}"),
+                            "execution": json.loads(row["execution_json"] or "{}"),
+                            "llm_considered": bool(row["llm_considered"]),
+                            "approved_buy": bool(row["approved_buy"]),
+                            "blocked_entry_quality": bool(row["blocked_entry_quality"]),
+                            "blocked_backtest": bool(row["blocked_backtest"]),
+                            "executed_buy": bool(row["executed_buy"]),
+                        }
+
     def upsert_learning_daily_summary(
         self,
         *,

@@ -249,3 +249,42 @@ def test_learning_scoreboard_uses_only_same_cycle_eligible_capacity_controls(tmp
     assert coverage["matched_control_observations"] == 1
     assert report["weekly_rows"][0]["control_n"] == 1
     assert report["data_quality"]["blocked_candidates"] == {"blocked_backtest": 1}
+
+
+def test_scoreboard_streams_and_keeps_stable_control_order():
+    from agente_bolsa.tools.learning_scoreboard import _cohort_rows
+
+    treatment = _observation("2026-07-07", "EXEC", executed=True, return_5d=0.03)
+    controls = [_observation("2026-07-07", f"C{i}", executed=False, return_5d=0.01) for i in range(4)]
+    for control in controls:
+        control["best_signal_id"] = "shared"
+        control["observation_id"] = "same"
+        control["decision"] = "approved_buy"
+        control["gate"] = {"execution": {"status": "approved_not_planned"}}
+        control["features"]["decision_lineage"] = {"cycle_id": "cycle"}
+        control["features"]["wide_unknown"] = "x" * 10000
+    _verified_pair(treatment, controls[0], "cycle")
+    treatment["features"]["comparable_control_set"]["controls"] = [
+        {"signal_id": "shared", "gate_eligibility": "verified"}
+    ]
+    closed = []
+
+    class StreamStore:
+        def iter_learning_observations(self, **kwargs):
+            assert kwargs["limit"] == 200000
+            try:
+                yield from [treatment, *controls]
+            finally:
+                closed.append(True)
+
+        def learning_observations(self, **kwargs):
+            raise AssertionError("must use stream")
+
+    executed, matched, matches, all_control = _cohort_rows(
+        StreamStore(), since_date="2026-07-01", end_date="2026-07-31"
+    )
+    assert closed == [True]
+    assert len(executed) == 1 and len(all_control) == 4
+    assert matches[treatment["observation_id"]] == ["same", "same", "same"]
+    assert len(matched) == 1
+    assert "wide_unknown" not in all_control[0]["features"]

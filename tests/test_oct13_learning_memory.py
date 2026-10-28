@@ -116,6 +116,41 @@ def test_metric_projection_preserves_scoreboard_and_drops_large_carriers():
         assert "unused_capture" not in compact.get("outcome", {})
 
 
+def test_scoreboard_only_projection_preserves_malformed_and_unknown_carriers():
+    rows = metric_rows() + [
+        {"signal_id": "malformed", "features": ["bad"], "outcome": ["bad"], "gate": {}},
+        {"signal_id": "wide", "features": {"unknown": "x" * 8192, "chart_patterns": [],
+                                            "selected_for_llm": "y" * 8192}, "outcome": {}},
+    ]
+    compact = [learning._compact_learning_metric_signal(row, scoreboard_only=True) for row in rows]
+    assert learning.build_agent_learning_scoreboard(compact) == learning.build_agent_learning_scoreboard(rows)
+    assert "unknown" not in compact[-1]["features"]
+    assert compact[-1]["features"]["selected_for_llm"] is None
+
+
+def test_digest_scoreboard_stream_applies_date_filter_after_limit_and_closes():
+    from agente_bolsa.tools.daily_learning import _digest_scoreboard_rows
+
+    records = [
+        {"signal_id": "excluded", "signal_date": "2026-10-15", "features": {}, "outcome": {}},
+        {"signal_id": "retained", "signal_date": "2026-10-10", "features": {"unknown": "x" * 8192}, "outcome": {}},
+    ]
+    state = {"closed": False}
+
+    class Store:
+        def iter_signal_outcomes(self, **kwargs):
+            assert kwargs == {"limit": 200000, "since_date": "2026-10-01"}
+            try:
+                yield from records
+            finally:
+                state["closed"] = True
+
+    result = _digest_scoreboard_rows(Store(), since_date="2026-10-01", end_date="2026-10-12")
+    assert state["closed"]
+    assert learning.build_agent_learning_scoreboard(result) == learning.build_agent_learning_scoreboard(records[1:])
+    assert "unknown" not in result[0]["features"]
+
+
 def test_streaming_report_peak_does_not_retain_large_payloads():
     class StreamingStore:
         def signal_outcomes(self, **_):

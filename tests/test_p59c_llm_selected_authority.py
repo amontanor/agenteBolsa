@@ -772,4 +772,4 @@ def test_version_policy_requires_bump():
         # Con PYTHONPATH al src del worktree, leemos __init__.py
         import agente_bolsa
         # .378 integrates the dashboard cache and deployment receipt UI.
-        assert agente_bolsa.__version__ == "0.4.380"
+        assert agente_bolsa.__version__ == "0.4.381"
