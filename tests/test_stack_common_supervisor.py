@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 
 import pytest
@@ -12,7 +13,8 @@ def _powershell(command: str) -> subprocess.CompletedProcess[str]:
 
 
 pytestmark = pytest.mark.skipif(
-    subprocess.run(["powershell.exe", "-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"], capture_output=True).returncode != 0,
+    shutil.which("powershell.exe") is None
+    or subprocess.run(["powershell.exe", "-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"], capture_output=True).returncode != 0,
     reason="powershell no disponible",
 )
 
