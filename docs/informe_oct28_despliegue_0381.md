@@ -96,8 +96,11 @@ declarar salud plena.
    siguiente intento programado; no se reejecutó a mano.
 2. Lease de reconciliación `brkrec_64db6465bc6f`, sesión `2026-10-26`,
    `status=active` desde `2026-10-27T03:50:45Z`, sin terminal. No se forzó.
-3. Doce avisos `database is locked` en `signal_learning` a las 14:26:51Z,
-   durante el primer ciclo tras el arranque. El ciclo terminó `completed`.
+3. Diez avisos `database is locked` en `signal_learning`, en una sola ráfaga
+   a las 14:26:51Z durante el primer ciclo tras el arranque. El ciclo terminó
+   `completed`. La cola reciente de `system.log` (115 MB) contiene 884
+   coincidencias desde septiembre, incluidas del 27-oct; se clasifica como
+   contención preexistente, no como regresión de .381.
 4. LLM con `401 api_key_expired` a las 14:28:27Z y 14:30:33Z. La decisión cayó
    a `deterministic_fallback`; la orden se ejecutó en paper.
 5. Avisos de saturación del scheduler (`maximum number of running instances`,
