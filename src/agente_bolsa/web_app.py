@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import subprocess
+from bisect import bisect_right
 from contextlib import closing
 from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
@@ -2516,9 +2517,14 @@ def _portfolio_value_series_from_alpaca(
         (min(market_dates) - timedelta(days=31)).isoformat(),
         max(market_dates).isoformat(),
     )
+    closes, session_labels = _session_close_index(schedule)
     closed_by_date: dict[str, tuple[datetime, int, float]] = {}
     for index, parsed, equity in parsed_rows:
-        session_date = _portfolio_session_date_for_timestamp(parsed, calendar=calendar, schedule=schedule)
+        session_date = (
+            _session_date_from_close_index(parsed.astimezone(timezone.utc), closes, session_labels)
+            if parsed.year >= 2000
+            else None
+        )
         if not session_date or session_date < start_date:
             continue
         candidate = (parsed, index, equity)
@@ -3830,6 +3836,54 @@ def _parse_utc_timestamp(value: Any) -> datetime | None:
         return None
 
 
+def _session_close_index(schedule: Any) -> tuple[list[datetime], list[str]]:
+    """Build an ordered (market_close, session_date) index from an XNYS schedule.
+
+    P-L158C: the dashboard maps ~190 Alpaca buckets to their completed session.
+    Reading the schedule once and resolving each bucket with a binary search
+    replaces the previous per-bucket ``DataFrame.iterrows()`` walk, which was
+    O(buckets x sessions) and dominated the portfolio chart.
+    """
+
+    if schedule is None or getattr(schedule, "empty", True):
+        return [], []
+    nodes: list[tuple[datetime, int, str]] = []
+    try:
+        session_keys = list(schedule.index)
+        raw_closes = list(schedule["market_close"])
+    except (AttributeError, KeyError, TypeError):
+        return [], []
+    for order, (session_key, raw_close) in enumerate(zip(session_keys, raw_closes, strict=False)):
+        close_utc = _parse_utc_timestamp(
+            raw_close.to_pydatetime() if hasattr(raw_close, "to_pydatetime") else raw_close
+        )
+        if close_utc is None or pd.isna(close_utc):
+            continue
+        session_date = str(session_key.date()) if hasattr(session_key, "date") else str(session_key)[:10]
+        nodes.append((close_utc, order, session_date))
+    if not nodes:
+        return [], []
+    nodes.sort(key=lambda node: (node[0], node[1]))
+    return [node[0] for node in nodes], [node[2] for node in nodes]
+
+
+def _session_date_from_close_index(
+    parsed_utc: datetime,
+    closes: list[datetime],
+    labels: list[str],
+) -> str | None:
+    """Last completed session at or before ``parsed_utc`` (None when unknown)."""
+
+    if not closes or parsed_utc < closes[0]:
+        return None
+    position = bisect_right(closes, parsed_utc) - 1
+    # Ties on the same close keep the first schedule row, as the historical
+    # row-by-row implementation did.
+    while position > 0 and closes[position - 1] == closes[position]:
+        position -= 1
+    return labels[position]
+
+
 def _portfolio_session_date_for_timestamp(
     value: Any,
     *,
@@ -3856,22 +3910,8 @@ def _portfolio_session_date_for_timestamp(
             (market_date - timedelta(days=31)).isoformat(),
             market_date.isoformat(),
         )
-    if schedule is None or schedule.empty:
-        return None
-
-    best: tuple[datetime, str] | None = None
-    for session_key, row in schedule.iterrows():
-        try:
-            market_close = row["market_close"]
-            close_utc = _parse_utc_timestamp(market_close.to_pydatetime() if hasattr(market_close, "to_pydatetime") else market_close)
-            if close_utc is None or close_utc > parsed_utc:
-                continue
-            session_date = str(session_key.date()) if hasattr(session_key, "date") else str(session_key)[:10]
-        except (AttributeError, TypeError, ValueError):
-            continue
-        if best is None or close_utc > best[0]:
-            best = (close_utc, session_date)
-    return best[1] if best else None
+    closes, labels = _session_close_index(schedule)
+    return _session_date_from_close_index(parsed_utc, closes, labels)
 
 
 def _canonical_daily_vs_spy_row(

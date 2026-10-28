@@ -9,7 +9,26 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
+from functools import lru_cache
 from zoneinfo import ZoneInfo
+
+
+@lru_cache(maxsize=128)
+def _cached_session_schedule(calendar_name: str, start_date: str, end_date: str):
+    """Cache the exchange schedule for a closed date range (P-L158C).
+
+    `pandas_market_calendars` rebuilds its holiday calendar on every call, which
+    cost ~0.15 s per schedule and was paid several times per dashboard render.
+    The date range is immutable, so the computed schedule is reusable; callers
+    receive a copy and cannot poison the cache.
+    """
+
+    try:
+        import pandas_market_calendars as mcal
+
+        return mcal.get_calendar(calendar_name).schedule(start_date=start_date, end_date=end_date)
+    except Exception:
+        return None
 
 
 @dataclass(frozen=True)
@@ -136,7 +155,8 @@ class MarketCalendar:
 
         if self._calendar is None:
             return None
-        return self._calendar.schedule(start_date=start_date, end_date=end_date)
+        schedule = _cached_session_schedule(self.calendar_name, start_date, end_date)
+        return None if schedule is None else schedule.copy()
 
     def is_trading_day(self, day: datetime | None = None) -> bool:
         now_utc = (day or datetime.now(timezone.utc)).astimezone(timezone.utc)

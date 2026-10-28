@@ -14,6 +14,7 @@ import math
 from collections.abc import Mapping
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
@@ -50,13 +51,22 @@ def _stable_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _xnys_schedule(start: str, end: str):
+@lru_cache(maxsize=128)
+def _xnys_schedule_cached(start: str, end: str):
     try:
         import pandas_market_calendars as mcal
 
         return mcal.get_calendar("XNYS").schedule(start_date=start, end_date=end)
     except Exception:
         return None
+
+
+def _xnys_schedule(start: str, end: str):
+    # P-L158C: the holiday calendar used to be rebuilt on every call (~0.15 s),
+    # several times per dashboard render. The range is immutable, so cache it
+    # and hand out a copy.
+    schedule = _xnys_schedule_cached(start, end)
+    return None if schedule is None else schedule.copy()
 
 
 def xnys_sessions_between(start: str, end: str) -> list[str]:
