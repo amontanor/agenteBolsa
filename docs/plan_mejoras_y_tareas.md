@@ -4668,3 +4668,13 @@ sizing, política o producción en esta auditoría.
 - P-L158-A propuesto: instrumentar tiempos por seccion en worktree aislado (N1); despues, refactor del tramo que mas segundos explique. Sin codigo aun.
 - P-L158-A `deployed` 0.4.315 (temporizador dashboard, 14 secciones, linea `dashboard_timing`); primera medicion real 25-sep: 4 cargas ~62s (`opening_context` 27.6s + doble conteo de `total` 62.5s).
 - P-L158-B `deployed` 0.4.316 (26-sep-2026, solo-observacional N1): perfil fino opening_context/setup/kpis + `total_seconds` = seccion `total`. Rehearsal `7ad1d2e9` (tree `69be2dc5`) + docs `6aab5028` + validacion `85e28447` en rama `codex/pl158b-integration-rehearsal`; suite roja identica en base (46F/4E, delta +4 tests nuevos), smoke exit 0. Corte por port sobre 0.4.315: imagen `e3fbc6975cb3`, snapshot frio `cold-pre-0.4.316-20260926T130722Z` (integrity ok), selector `0.4.316-arm64`, doble salud verde (HTTP 200, lock, kernel ok, leases 0, 0 ordenes). Informe unico en candidato: `docs/informe_p_l158b_perfil_fino.md`.
+
+## P-L158C — rendimiento real del Dashboard (candidato 0.4.254, listo para revision)
+
+- Rama `codex/perf-dashboard` desde `b411e9a7`/tree `2458213`. N2: persistencia y presentacion, sin trading/riesgo/ejecucion.
+- Medido antes: Dashboard 11,6 s p50 servidor (9,2 s CPU), Decisiones 2,07 s, Configuracion 1,28 s, Mejora continua 1,83 s.
+- Causa: sin indice `agent_events(created_at)` ni `(cycle_id, created_at)`; mapeo de sesion XNYS con `iterrows` O(n2); calendario `pandas_market_calendars` reconstruido 15x por render; panel de autonomia deserializando 5 JSON por fila.
+- Despues: Dashboard 2,53 s p50 (−78%), Decisiones 0,143 s, Configuracion 0,076 s, Mejora continua 0,689 s. Navegador real 2,9–3,1 s por recarga (antes 11,5–12,3 s).
+- QA: 13 focales nuevas + 190 regresiones focales; Ruff/NUL/diff verdes; suite completa registrada en el informe.
+- Informe: `docs/informe_p_l158c_rendimiento_dashboard.md`.
+- Siguiente: P-L158D con el panel de autonomia (0,81 s restantes) y los expanders ansiosos; requiere contrato de conteo con el mismo ORDER BY/LIMIT.

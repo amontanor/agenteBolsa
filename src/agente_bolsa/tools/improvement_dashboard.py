@@ -70,9 +70,23 @@ def _system_vs_spy(store: Any, settings: Any, today: str) -> dict[str, Any]:
     }
 
 
-def _daily_learning(store: Any, today: str) -> dict[str, Any]:
+def _observations_today(store: Any, today: str) -> int:
+    """Count today's observations without deserialising the heavy reader.
+
+    P-L158C: `learning_observations(limit=5000)` decodes five JSON columns per
+    row only to look at `created_at`. The projected reader is opt-in so test
+    doubles that only implement the full reader keep working unchanged.
+    """
+
+    projected = getattr(store, "learning_observation_created_dates", None)
+    if callable(projected):
+        return sum(1 for value in projected(limit=5000) if _is_today(value, today))
     observations = store.learning_observations(limit=5000) or []
-    obs_today = sum(1 for row in observations if _is_today(row.get("created_at"), today))
+    return sum(1 for row in observations if _is_today(row.get("created_at"), today))
+
+
+def _daily_learning(store: Any, today: str) -> dict[str, Any]:
+    obs_today = _observations_today(store, today)
     lessons = store.distilled_lessons(limit=2000) or []
     lessons_today: dict[str, int] = {}
     for row in lessons:

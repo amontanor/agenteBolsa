@@ -21,6 +21,36 @@
    P-L155.
 6. P-L154-A cuando P-L155 devuelva alpha utilizable. P-L148 sigue 0/5.
 
+## P-L158C: Dashboard medido y candidato listo (28-oct-2026)
+
+El stack productivo estaba **parado** (lock `stale_dead_owner`, `pid=62356`,
+`created_at=2026-09-17T10:19:17Z`) y la SQLite sin escribir desde el
+17-sep-2026 23:09:32. El estudio se hizo con una copia y una instancia aislada,
+sin tocar produccion.
+
+Medido: Dashboard 11,6 s p50 de servidor (9,2 s de CPU) y 11,5–12,3 s en
+navegador real; Decisiones 2,07 s; Configuracion 1,28 s; Mejora continua
+1,83 s. Causas: falta de indice por `created_at` y por `cycle_id` en
+`agent_events`, mapeo de sesion XNYS O(n2) con `iterrows`, calendario
+`pandas_market_calendars` reconstruido 15 veces por render y lectura de 5000
+observaciones con 5 JSON por fila solo para contar fechas.
+
+Candidato `codex/perf-dashboard` (0.4.254, N2): Dashboard 2,53 s p50 y
+2,90–3,07 s en navegador; Decisiones 0,143 s; Configuracion 0,076 s. Paridad
+exacta del grafico y de la tabla diaria contra el arbol base con payload
+congelado. Informe: `docs/informe_p_l158c_rendimiento_dashboard.md`.
+
+Secuencia propuesta:
+
+1. Revision del candidato y, si se aprueba, ensayo de integracion `--no-ff`
+   sobre el HEAD productivo en ventana cerrada; el primer `ensure_schema` crea
+   los tres indices (≈0,5 s sobre 1,72 GB).
+2. P-L158D con el panel de autonomia (0,811 s restantes) y el render perezoso
+   de los expanders; necesita replicar el `ORDER BY`/`LIMIT` de cada lector
+   porque las lecciones ya llegan truncadas a 2000.
+3. Antes de cualquier despliegue: decidir si el sistema vuelve a operar; hoy
+   no hay scheduler ni sesion desde el 17-sep-2026.
+
 ## P-L155: el dato de SP500 existe y el lector lo descarta (26-sep-2026)
 
 Dictamen del diagnostico: `needs_fix` con lote minimo definido. Hechos:

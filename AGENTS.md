@@ -27,6 +27,16 @@ versión, árbol, configuración y eventos reales.
 - No presentes correlación, P/L intradía o una sesión como evidencia causal.
 - No uses texto libre como fuente de IDs, scores o estados estructurados.
 
+## Comunicación con el operador
+
+- Antes de cada comando o herramienta que ejecutes, escribe una línea breve
+  con el objetivo: qué quieres comprobar o conseguir y por qué. Esa línea va
+  antes de la llamada, no después.
+- Si encadenas varios comandos, declara el objetivo del bloque completo y, si
+  el resultado cambia el plan, el del siguiente paso.
+- No narres el resultado de forma redundante; el objetivo previo y la evidencia
+  posterior deben leerse como una sola frase técnica.
+
 ## Primeros pasos obligatorios
 
 Antes de cambiar nada:
