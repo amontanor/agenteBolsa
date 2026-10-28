@@ -137,6 +137,7 @@ def _cohort_rows(
     *,
     since_date: str,
     end_date: str | None,
+    compact: bool = False,
 ) -> tuple[
     list[dict[str, Any]],
     list[dict[str, Any]],
@@ -173,7 +174,7 @@ def _cohort_rows(
         return result
 
     try:
-        cohort = [project(row) for row in observations
+        cohort = [project(row) if compact else row for row in observations
                   if str(row.get("source_family") or "") == LEARNING_EXPERIMENT_SOURCE]
     finally:
         close = getattr(observations, "close", None)
@@ -575,6 +576,7 @@ def build_learning_scoreboard(
         store,
         since_date=since_date,
         end_date=resolved_end_date,
+        compact=True,
     )
     calibration = _calibrated_cost(executed)
     weekly_rows = _weekly_rows(
