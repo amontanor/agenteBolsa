@@ -281,7 +281,7 @@ def test_scoreboard_streams_and_keeps_stable_control_order():
             raise AssertionError("must use stream")
 
     executed, matched, matches, all_control = _cohort_rows(
-        StreamStore(), since_date="2026-07-01", end_date="2026-07-31"
+        StreamStore(), since_date="2026-07-01", end_date="2026-07-31", compact=True
     )
     assert closed == [True]
     assert len(executed) == 1 and len(all_control) == 4
