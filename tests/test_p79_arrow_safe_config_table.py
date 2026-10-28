@@ -36,7 +36,7 @@ def test_config_display_frame_is_arrow_safe_and_homogeneous():
         "4",
         "0.125",
         "https://example.invalid/v1",
-        "data\\state\\agente_bolsa.sqlite3",
+        str(Path("data/state/agente_bolsa.sqlite3")),
         "AAPL, MSFT",
         "n/d",
     ]

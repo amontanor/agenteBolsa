@@ -1,5 +1,6 @@
 import hashlib
 import json
+from pathlib import Path
 
 from scripts.raspberry_preflight import _windows_status_script, build_report, parse_args
 
@@ -75,7 +76,7 @@ def test_preflight_accepts_a_validated_cold_snapshot_receipt(tmp_path):
                 "target_host": "Raspberryi5",
                 "target_mount": "/var/lib/agente-bolsa",
                 "target_device_uuid": "1a8cb7c0-3a65-4d72-866f-340db4c6bafc",
-                "source_path": r"C:\data\agente_bolsa.sqlite3",
+                "source_path": str(Path("C:/data") / "agente_bolsa.sqlite3"),
                 "snapshot_path": str(snapshot),
                 "sha256": snapshot_hash,
                 "files": {
@@ -111,7 +112,7 @@ def test_preflight_rejects_receipt_when_snapshot_hash_differs(tmp_path):
                 "target_host": "Raspberryi5",
                 "target_mount": "/var/lib/agente-bolsa",
                 "target_device_uuid": "1a8cb7c0-3a65-4d72-866f-340db4c6bafc",
-                "source_path": r"C:\data\agente_bolsa.sqlite3",
+                "source_path": str(Path("C:/data") / "agente_bolsa.sqlite3"),
                 "snapshot_path": str(snapshot),
                 "sha256": "0" * 64,
                 "files": {
