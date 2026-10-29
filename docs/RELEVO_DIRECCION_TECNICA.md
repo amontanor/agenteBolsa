@@ -4857,3 +4857,43 @@ Evidencia: C:/Users/utopi/.codex/worktrees/ef99/agenteBolsa/audit_validation_230
 - Seis fallos reproducidos en base; final 11 passed (siete nuevos + cuatro regresiones), Ruff/NUL/diff verdes. Revisión independiente sin bloqueantes. Evidencia y límites: docs/informe_oct08_event_reader_lifecycle.md.
 - Encargo aislado nuevo autorizado por usuario; validación operativa permanece precondition_not_met por lease postmarket activo. Sin suites largas, broker/LLM desde tests ni mutaciones productivas.
 - Auditoría adicional: EXPLAIN temporal confirma SCAN agent_events + TEMP B-TREE en consultas H por ciclo; agrupar/indexar requiere lote aparte con legacy e identidad exacta. Optimización de copias de velas en candidato bolsa-outcome-memory-oct08; carrera scheduler y atomicidad/chunks pendientes separados.
+
+## 29-oct — P-L160 cerrado en worktree: `ready_for_closed_market_deployment` (0.4.395)
+
+Worktree `.worktrees/agents-objectives`, rama `codex/agents-objectives`, base
+exacta `11ac8074`/tree `f885b206` (main, 0.4.394, P-L159 integrado). Candidato
+0.4.395 con commits separados de implementación, pruebas, versión y
+documentación. Sin push, sin merge, sin despliegue en el momento de escribir
+este bloque.
+
+Lo desplegado hoy sigue siendo 0.4.393: en producción
+`initiative_owner_from_key('trading:outcome_generation')` devuelve
+`StrategyEvaluatorAgent`, lo que confirma que la corrección de dueños aún no está
+en el Jetson.
+
+Causa raíz corregida: el comité decidía en bloque y contagiaba el rechazo a
+propuestas vivas (2.475 rechazos heredados de 2.946), y `MONITOR` cerraba la
+iniciativa (1.271 de 1.271 en `REJECTED`, 1.256 del Orquestador). El embudo
+productivo queda medido: 2.965 propuestas, admisión 0,57 %, la
+`READY_TO_APPLY` más antigua con 118,85 días.
+
+Gates: focales 20 verdes; regresiones sin cambios (mismos 79 fallos que la base);
+suite completa idéntica en identificadores (858 compartidos, cero regresiones);
+Ruff del lote limpio, NUL 603, diff limpio, configuración válida. Protegidos sin
+diff.
+
+Secuencia siguiente, en este orden: (1) merge `--no-ff` a `main`; (2) preflight
+Jetson read-only con la comprobación completa de precondiciones de mercado
+cerrado; (3) imagen port `0.4.395` desde `agente-bolsa:0.4.393-arm64` con digest
+y verificación byte a byte en contenedor temporal; (4) despliegue con Compose
+completo (base más override Raspberry y `--env-file /etc/agente-bolsa/runtime.env`);
+(5) colocar `agent_objectives.json` en `/data/config` antes de arrancar; (6)
+doble salud a 75 s o más y recibo de despliegue; (7) verificar en producción que
+`agent-funnel --json` entrega objetivos sin `config_missing`; (8) tag
+`prod-jetson-0.4.395`.
+
+Pendiente y bloqueado: pasos 8–11 del plan (ventana de laboratorio en mercado
+cerrado, cuota por dominio, presupuesto LLM en `config.py` y cierre
+`READY_TO_APPLY` a `APPLIED`) son N3 y exigen autorización explícita y ventana
+cerrada verificada. La superficie de objetivos en Config y la inyección de
+`objective_status` en el scoreboard son lotes separados.

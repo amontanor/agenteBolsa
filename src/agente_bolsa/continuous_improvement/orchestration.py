@@ -210,7 +210,7 @@ class LabOrchestrator:
                         proposal={"proposal_type": "MONITORING_CHANGE", "target_component": "outcome_generation"},
                     ),
                     "title": initiative_title_from_key("trading:outcome_generation"),
-                    "owner_agent": AgentName.STRATEGY.value,
+                    "owner_agent": AgentName.VALIDATION.value,
                     "priority": event.get("priority", "MEDIUM"),
                     "target_metric": "outcome_maturity",
                     "baseline_value": outcomes_available,

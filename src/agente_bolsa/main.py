@@ -3804,6 +3804,25 @@ def command_deployment_receipt(args: argparse.Namespace) -> None:
     )
     _print_json({"ok": True, "receipt": receipt})
 
+
+def command_agent_funnel(args: argparse.Namespace) -> None:
+    """Informe read-only del embudo de agentes y del estado de sus objetivos."""
+
+    from .continuous_improvement.agent_funnel import (
+        build_report,
+        format_summary,
+        load_scoreboard,
+        resolve_data_dir,
+    )
+
+    settings = get_settings()
+    data_dir = resolve_data_dir(args.data_dir) if args.data_dir else settings.data_dir
+    report = build_report(data_dir, scoreboard=load_scoreboard(args.scoreboard_json))
+    if args.json:
+        _print_json(report)
+    else:
+        print(format_summary(report))
+
 def command_web(args: argparse.Namespace) -> None:
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
@@ -3908,6 +3927,19 @@ def build_parser() -> argparse.ArgumentParser:
     deployment_receipt.add_argument("--source-head", required=True, help="Commit git de origen (40 hex).")
     deployment_receipt.add_argument("--source-tree", required=True, help="Tree git de origen (40 hex).")
     deployment_receipt.set_defaults(func=command_deployment_receipt)
+
+    agent_funnel = subparsers.add_parser(
+        "agent-funnel",
+        help="Informe read-only del embudo de agentes y del estado de sus objetivos.",
+    )
+    agent_funnel.add_argument(
+        "--data-dir", default=None, help="Directorio de datos (default: DATA_DIR de la configuracion)."
+    )
+    agent_funnel.add_argument(
+        "--scoreboard-json", default=None, help="JSON con agent_learning ya calculado."
+    )
+    agent_funnel.add_argument("--json", action="store_true", help="Salida JSON canonica.")
+    agent_funnel.set_defaults(func=command_agent_funnel)
 
     web = subparsers.add_parser(
         "web",

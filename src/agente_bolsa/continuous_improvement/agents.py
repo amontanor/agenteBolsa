@@ -456,10 +456,10 @@ def initiative_owner_from_key(key: str) -> str:
         "entry_quality_filter": AgentName.TECHNICAL_EDGE.value,
         "analyst_estimates_pipeline": AgentName.PRE_EARNINGS.value,
         "signal_consolidation": AgentName.DATA_QUALITY.value,
-        "outcome_generation": AgentName.STRATEGY.value,
+        "outcome_generation": AgentName.VALIDATION.value,
         "runtime_reliability": AgentName.SOFTWARE_RELIABILITY.value,
         "market_regime": AgentName.MARKET_REGIME.value,
-        "strategy_evaluation": AgentName.STRATEGY.value,
+        "strategy_evaluation": AgentName.VALIDATION.value,
         "continuous_improvement": AgentName.SOFTWARE_RELIABILITY.value,
         "opportunistic_parameters": AgentName.PARAMETER_CALIBRATION.value,
         "risk_manager": AgentName.RISK.value,
@@ -1660,10 +1660,15 @@ class DecisionCommitteeAgent(SpecialistAgent):
         considered = scoped or proposals
         pending = [item for item in considered if item.get("status") in {"PENDING", "REQUIRES_HUMAN_REVIEW"}]
         decision = self._decision_for_proposals(considered)
+        # Cada propuesta se decide por su propia evidencia. Una decision de grupo
+        # no puede contagiar un rechazo a hermanas que su propio guard dejo en
+        # PENDING, ni destruir una que ya estaba READY_TO_APPLY.
         proposal_targets = [
             {
                 "proposal_id": item.get("proposal_id"),
-                "status": self._proposal_status_for_decision(decision, item),
+                "status": self._proposal_status_for_decision(
+                    self._decision_for_proposal(item), item
+                ),
             }
             for item in considered
             if item.get("proposal_id")
@@ -1683,7 +1688,7 @@ class DecisionCommitteeAgent(SpecialistAgent):
             backlog_rank=self._backlog_rank(decision, considered),
             backlog_bucket=bucket,
             required_follow_up=self._follow_up_for_decision(decision),
-            close_initiative=decision in {"REJECT", "MONITOR"},
+            close_initiative=decision == "REJECT",
             actions=[
                 {
                     "action_type": "ESCALATION" if decision == "ESCALATE" else "MONITORING",
@@ -1702,19 +1707,38 @@ class DecisionCommitteeAgent(SpecialistAgent):
             ],
         ).model_dump()
 
+    def _decision_for_proposal(self, proposal: dict[str, Any]) -> str:
+        """Decide one proposal from its own status and its own guard.
+
+        The guard is the authority: a proposal whose guard approved it is not
+        rejected because a sibling in the same initiative was rejected.
+        """
+
+        status = str(proposal.get("status") or "").upper()
+        guard = proposal.get("guard") or {}
+        guard_status = str(guard.get("status") or "").upper()
+        risk_level = str(proposal.get("risk_level") or "").upper()
+        if status == "REJECTED" or guard_status == "REJECTED":
+            return "REJECT"
+        if risk_level == "HIGH" or status in {"REQUIRES_HUMAN_REVIEW", "WAITING_HUMAN_REVIEW"}:
+            return "ESCALATE"
+        if status in {"READY_TO_APPLY", "PASSED"} or guard_status in {"READY_TO_APPLY", "PASSED"}:
+            return "APPROVE"
+        if status == "PENDING":
+            return "REWORK"
+        return "MONITOR"
+
     def _decision_for_proposals(self, proposals: list[dict[str, Any]]) -> str:
         if not proposals:
             return "MONITOR"
-        statuses = {str(item.get("status") or "").upper() for item in proposals}
-        risk_levels = {str(item.get("risk_level") or "").upper() for item in proposals}
-        guards = [item.get("guard") or {} for item in proposals]
-        if "REJECTED" in statuses or any((guard.get("status") == "REJECTED") for guard in guards):
+        decisions = [self._decision_for_proposal(item) for item in proposals]
+        if all(item == "REJECT" for item in decisions):
             return "REJECT"
-        if "HIGH" in risk_levels or "REQUIRES_HUMAN_REVIEW" in statuses or "WAITING_HUMAN_REVIEW" in statuses:
+        if any(item == "ESCALATE" for item in decisions):
             return "ESCALATE"
-        if "READY_TO_APPLY" in statuses or "PASSED" in statuses:
+        if any(item == "APPROVE" for item in decisions):
             return "APPROVE"
-        if "PENDING" in statuses:
+        if any(item == "REWORK" for item in decisions):
             return "REWORK"
         return "MONITOR"
 
