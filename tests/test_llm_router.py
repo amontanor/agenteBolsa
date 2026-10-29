@@ -15,13 +15,13 @@ from agente_bolsa.llm_usage import record_llm_response
 from agente_bolsa.storage import Store
 
 
-def test_default_primary_llm_endpoint_uses_opencode_zen_profile():
-    settings = Settings(LLM_LOCAL_FALLBACK_ENABLED=False)
+def test_default_primary_llm_endpoint_uses_opencode_go_profile():
+    settings = Settings(_env_file=None, LLM_LOCAL_FALLBACK_ENABLED=False)
 
     endpoint = primary_llm_endpoint(settings)
 
-    assert endpoint.name == "primary:opencode-zen"
-    assert endpoint.base_url == "https://opencode.ai/zen/v1"
+    assert endpoint.name == "primary:opencode-go"
+    assert endpoint.base_url == "https://opencode.ai/zen/go/v1"
     # El modelo lo dicta la configuracion (.env puede sobreescribir el default),
     # asi que verificamos el cableado, no un string fijo (evita romper al cambiar de modelo).
     assert endpoint.model == settings.opencode_model
