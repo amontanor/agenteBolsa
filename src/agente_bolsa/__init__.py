@@ -160,4 +160,5 @@ __all__ = ["__version__"]
 # P-L161: la traza del fallo postmarket viaja en el evento durable (0.4.397).
 # P-L169: el health check LLM manda x-opencode-session como la app (0.4.398).
 # P-L169b: presupuesto de probe para modelos con razonamiento (0.4.399).
-__version__ = "0.4.399"
+# P-L171: el semaforo del panel usa las rutas reales de Settings (0.4.400).
+__version__ = "0.4.400"

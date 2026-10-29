@@ -6255,9 +6255,19 @@ def page_dashboard() -> None:
 
 
 
+def _system_status_paths(settings: Any) -> tuple[Path, Path]:
+    """Rutas reales del panel para el semaforo (P-L171)."""
+
+    return Path(settings.database_path), Path(settings.data_dir) / "reports"
+
+
 def page_system_status() -> None:
     _page_header("Estado del sistema", "Semaforo operativo del panel, scheduler, LLM, watchdog, reportes y base de datos.")
-    status = build_status()
+    # P-L171: la pagina usaba las rutas por defecto del modulo
+    # (/app/data/...), asi que en el contenedor la base "no existia" y el
+    # veredicto era DOWN aunque el panel y el scheduler estuvieran sanos.
+    db_path, reports_dir = _system_status_paths(_settings())
+    status = build_status(db_path=db_path, reports_dir=reports_dir)
     verdict = status.get("verdict", "--")
     st.subheader(f"Estado del sistema - {verdict}")
     if st.button("Actualizar", key="system_status_refresh"):
