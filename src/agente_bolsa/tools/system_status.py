@@ -171,8 +171,20 @@ def build_status(db_path: Path | None = None, reports_dir: Path | None = None) -
     dec = _age_min(_last_llm(con, ("trade_decision",)))
     degraded = None
     degraded_severity = None
+    # P-L172: evaluar en vivo. El informe de agents_healthcheck puede tener
+    # hasta 30 minutos y producia un DOWN falso justo despues de restaurar el
+    # LLM o de la primera decision real del ciclo.
+    try:
+        from .llm_degraded_watchdog import evaluate as evaluate_llm_watchdog
+
+        live = evaluate_llm_watchdog(db)
+        degraded = bool(live.get("degraded"))
+        degraded_severity = live.get("severity")
+        dec = _age_min(live.get("last_decision_llm_at")) or dec
+    except Exception as exc:
+        log_swallow(LOGGER, "evaluar watchdog LLM en vivo", exc)
     ahc = reports / "latest_agents_healthcheck.json"
-    if ahc.exists():
+    if degraded is None and ahc.exists():
         try:
             watchdog = json.loads(ahc.read_text(encoding="utf-8")).get("watchdog") or {}
             degraded = watchdog.get("degraded")
