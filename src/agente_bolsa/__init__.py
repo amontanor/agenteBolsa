@@ -165,4 +165,5 @@ __all__ = ["__version__"]
 # P-L173: la etiqueta de frescura coincide con la edad mostrada (0.4.402).
 # P-L178: callback de tarea CrewAI a nivel de modulo; sin warning en stderr cerrado (0.4.403).
 # P-L176: tarjetas operativas nombran el informe ausente y su comando (0.4.404).
-__version__ = "0.4.404"
+# P-L174: el sentimiento declara proveedor agotado o sin noticias (0.4.405).
+__version__ = "0.4.405"

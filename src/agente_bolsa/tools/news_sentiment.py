@@ -113,6 +113,67 @@ def _has_fresh_local_news(settings: Settings, news: list[dict[str, Any]]) -> boo
     return False
 
 
+def fetch_combined_symbol_news_with_metadata(
+    settings: Settings,
+    symbol: str,
+    max_items: int = 5,
+    *,
+    force_web: bool = False,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Descarga noticias y devuelve tambien la calidad de cada proveedor.
+
+    P-L174: sin metadatos, un presupuesto web agotado y una ausencia real de
+    noticias producen el mismo resultado visible (``news_count=0``) y el
+    informe no puede explicar por que el sentimiento no llego al LLM.
+    """
+
+    news: list[dict[str, Any]] = []
+    web_enabled = bool(getattr(settings, "web_search_enabled", False))
+    metadata: dict[str, Any] = {
+        "local": {"provider": "yfinance", "count": 0, "error": None},
+        "web": {
+            "enabled": web_enabled,
+            "attempted": False,
+            "quality": None,
+            "providers": [],
+            "warnings": [],
+            "cache_hits": 0,
+            "provider_calls": 0,
+        },
+        "combined_count": 0,
+        "quality": "empty",
+    }
+    try:
+        local_news = fetch_symbol_news(symbol, max_items=max_items)
+        metadata["local"]["count"] = len(local_news)
+        news.extend(local_news)
+    except Exception as exc:  # noqa: BLE001 - se conserva el contrato previo.
+        metadata["local"]["error"] = type(exc).__name__
+        if not web_enabled:
+            raise
+    should_call_web = force_web or not _has_fresh_local_news(settings, news)
+    if web_enabled and should_call_web:
+        web_result = search_company_news(settings, symbol, max_items=max_items)
+        metadata["web"].update(
+            {
+                "attempted": True,
+                "quality": str(web_result.get("quality") or "unavailable"),
+                "providers": [str(item) for item in list(web_result.get("providers_attempted") or [])],
+                "warnings": [str(item) for item in list(web_result.get("warnings") or [])],
+                "cache_hits": int(web_result.get("cache_hits") or 0),
+                "provider_calls": int(web_result.get("provider_calls") or 0),
+            }
+        )
+        news.extend(list(web_result.get("items") or []))
+    combined = dedupe_news_items(news, limit=max_items)
+    metadata["combined_count"] = len(combined)
+    if combined:
+        metadata["quality"] = "ok"
+    elif metadata["web"].get("quality") == "no_provider":
+        metadata["quality"] = "no_provider"
+    return combined, metadata
+
+
 def fetch_combined_symbol_news(
     settings: Settings,
     symbol: str,
@@ -120,17 +181,10 @@ def fetch_combined_symbol_news(
     *,
     force_web: bool = False,
 ) -> list[dict[str, Any]]:
-    news: list[dict[str, Any]] = []
-    try:
-        news.extend(fetch_symbol_news(symbol, max_items=max_items))
-    except Exception:
-        if not getattr(settings, "web_search_enabled", False):
-            raise
-    should_call_web = force_web or not _has_fresh_local_news(settings, news)
-    if getattr(settings, "web_search_enabled", False) and should_call_web:
-        web_result = search_company_news(settings, symbol, max_items=max_items)
-        news.extend(list(web_result.get("items") or []))
-    return dedupe_news_items(news, limit=max_items)
+    news, _metadata = fetch_combined_symbol_news_with_metadata(
+        settings, symbol, max_items=max_items, force_web=force_web
+    )
+    return news
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -313,16 +367,22 @@ def analyze_news_sentiment_for_candidates(
 ) -> dict[str, Any]:
     results = []
     warnings = []
+    provider_warnings: list[str] = []
+    without_news = 0
     total = len(candidates)
     for index, candidate in enumerate(candidates, start=1):
         symbol = str(candidate.get("symbol", "")).upper()
         if not symbol:
             continue
         news: list[dict[str, Any]] = []
+        news_metadata: dict[str, Any] = {}
         try:
-            news = fetch_combined_symbol_news(settings, symbol, max_items=max_news_items)
+            news, news_metadata = fetch_combined_symbol_news_with_metadata(
+                settings, symbol, max_items=max_news_items
+            )
         except Exception as exc:  # noqa: BLE001 - one symbol must not block the study.
             warnings.append(f"{symbol}: news fetch failed: {exc}")
+            news_metadata = {"quality": "unavailable", "error": type(exc).__name__}
             sentiment = {
                 "sentiment": "unknown",
                 "sentiment_score": 0,
@@ -344,6 +404,14 @@ def analyze_news_sentiment_for_candidates(
                     "summary": f"No se pudo validar sentimiento: {exc}",
                     "risk_flags": ["sentiment_failed"],
                 }
+        local_error = (news_metadata.get("local") or {}).get("error")
+        if local_error:
+            warnings.append(f"{symbol}: local_news_failed:{local_error}")
+        for item in (news_metadata.get("web") or {}).get("warnings") or []:
+            if item not in provider_warnings:
+                provider_warnings.append(item)
+        if not news:
+            without_news += 1
         try:
             material_risk = assess_material_news_risk(symbol, news, sentiment)
             local_news, web_news = split_local_web_news(news)
@@ -367,6 +435,7 @@ def analyze_news_sentiment_for_candidates(
                     "technical_score": candidate.get("score"),
                     "news_count": len(news),
                     "news": news,
+                    "news_source": news_metadata,
                     "sentiment": sentiment,
                     "material_risk": material_risk,
                 }
@@ -380,6 +449,7 @@ def analyze_news_sentiment_for_candidates(
                     "technical_score": candidate.get("score"),
                     "news_count": 0,
                     "news": [],
+                    "news_source": news_metadata or {"quality": "unavailable"},
                     "sentiment": {
                         "sentiment": "unknown",
                         "sentiment_score": 0,
@@ -403,13 +473,34 @@ def analyze_news_sentiment_for_candidates(
         if progress_callback:
             progress_callback(index, total, symbol)
 
+    unavailable_reason = None
+    if not results:
+        unavailable_reason = "no_candidates"
+    elif without_news == len(results):
+        if any("budget_exhausted" in item for item in provider_warnings):
+            unavailable_reason = "web_search_budget_exhausted"
+        elif provider_warnings:
+            unavailable_reason = "news_provider_unavailable"
+        elif any(
+            ((item.get("news_source") or {}).get("web") or {}).get("quality") == "no_provider"
+            for item in results
+        ):
+            unavailable_reason = "news_provider_unavailable"
+        else:
+            unavailable_reason = "no_news_returned"
     report = {
         "run_id": run_id,
         "as_of": datetime.now(timezone.utc).isoformat(),
         "symbols_analyzed": len(results),
         "candidate_symbols": [item.get("symbol") for item in candidates if item.get("symbol")],
         "results": results,
-        "warnings": warnings[:100],
+        "news_sources": {
+            "symbols_with_news": len(results) - without_news,
+            "symbols_without_news": without_news,
+            "provider_warnings": provider_warnings[:20],
+            "unavailable_reason": unavailable_reason,
+        },
+        "warnings": [*warnings, *[f"web_search:{item}" for item in provider_warnings]][:100],
     }
     return write_json_report(
         report,
