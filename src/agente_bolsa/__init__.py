@@ -158,4 +158,5 @@ __all__ = ["__version__"]
 # P-L160: objetivos por agente, embudo auditable y decisiones sin contagio (0.4.395).
 # P-L162: indices junto a su tabla; el SCHEMA crea bases nuevas (0.4.396).
 # P-L161: la traza del fallo postmarket viaja en el evento durable (0.4.397).
-__version__ = "0.4.397"
+# P-L169: el health check LLM manda x-opencode-session como la app (0.4.398).
+__version__ = "0.4.398"
