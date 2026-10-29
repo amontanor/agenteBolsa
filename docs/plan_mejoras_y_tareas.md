@@ -7085,3 +7085,42 @@ Los 5 fallos, clasificados:
 
 Tras los arreglos 1 y 2: `57 passed` en los dos ficheros afectados. Quedan 3
 fallos de entorno/aislamiento, ninguno del código desplegado.
+
+### 29-oct — P-L171 y P-L172 desplegados: panel coherente
+
+Autorización operativa del operador («vamos con todo lo que estimes»), mercado
+abierto. Dos cortes, dos versiones.
+
+**P-L171 (0.4.400)** — la página «Estado del sistema» llamaba `build_status()`
+sin argumentos y usaba las rutas por defecto del módulo (`/app/data/...`); en el
+contenedor eso producía `DOWN: no existe /app/data/state/agente_bolsa.sqlite3`
+aunque el stack estuviera sano. Nuevo helper `_system_status_paths(settings)` y
+tres pruebas. Imagen `sha256:98fe0e2d…`, commit `f9c34c60`, tag
+`prod-jetson-0.4.400`. Primero se recreó solo el contenedor web (el scheduler
+estaba en ciclo) y, al terminar el ciclo, se completó el despliegue con recibo.
+
+**P-L172 (0.4.401)** — el componente «LLM de decision» leía
+`latest_agents_healthcheck.json`, que se refresca cada 30 min, y marcaba
+`DOWN — fallback dominante y sin actividad LLM` justo después de restaurar el
+proveedor o de la primera decisión real. Ahora evalúa en vivo con
+`llm_degraded_watchdog.evaluate(db)` y solo cae al informe si la evaluación
+falla. Verificado en producción: `VERDICT WARN`, `LLM de decision OK (última
+decisión hace 0.2 h)`, único WARN restante `Base de datos 6.3 GB (VACUUM)`.
+Imagen `sha256:a91a0814…`, commit `a02442fd`, tag `prod-jetson-0.4.401`, recibo
+2026-10-29T14:08Z.
+
+Hallazgos del panel que quedan abiertos:
+
+- `Cartera observada … Estado: stale` con antigüedad de segundos: la etiqueta
+  viene del snapshot y no se recalcula con la edad mostrada.
+- `SPY n/d — current_observation_timestamp_unverified`: benchmark intradía sin
+  observación fresca.
+- `Cobertura datos / Live readiness / Bloqueos semana` en `n/d · rancio`: leen
+  informes que no se están generando con esa cadencia.
+- `LLM: sentiment=CAIDO (309.9h sin respuesta real)`: no hay ninguna llamada de
+  sentimiento registrada en 13 días; el rol no está entrando en los ciclos.
+- Base de datos 6,3 GB: VACUUM pendiente de ventana cerrada y autorización.
+
+Nota operativa: el despliegue de 0.4.401 recreó contenedores con un ciclo
+iniciado a las 14:05:24Z, que quedó sin evento terminal. Siguiente ciclo a las
+14:20Z. Se registra como interrupción propia, no como fallo del sistema.

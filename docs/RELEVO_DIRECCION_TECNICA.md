@@ -5016,3 +5016,15 @@ eran pines obsoletos y quedaron corregidos (versión y default `opencode-go`);
 los otros tres son deuda de entorno: multiproceso sensible a carga, contaminación
 de variables entre tests de web research y una caracterización anclada al SQLite
 local. Ninguno afecta al código desplegado en 0.4.399.
+
+### 29-oct — 0.4.401: panel con rutas correctas y LLM evaluado en vivo
+
+`0.4.400` corrigió que la página de estado buscara la base en `/app/data` y
+dictaminara DOWN. `0.4.401` corrigió que el componente LLM leyera un informe de
+hasta 30 minutos y marcara degradación falsa. Estado verificado tras el corte:
+`VERDICT WARN`, LLM OK (0.2 h), único WARN la base de 6,3 GB.
+
+Abiertos: etiqueta `stale` que no se recalcula, SPY intradía sin observación
+fresca, tarjetas de cobertura/readiness sin informe, rol de sentimiento sin
+llamadas en 309,9 h, VACUUM pendiente y un ciclo interrumpido por el propio
+despliegue (14:05Z), que genera un `started` sin terminal.
