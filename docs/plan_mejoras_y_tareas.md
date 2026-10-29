@@ -7034,3 +7034,21 @@ del corte, ni mejor ni peor. La reparación exige añadir la cabecera
 
 Límite declarado: el experimento de sizing arranca hoy con el LLM en fallback
 determinista, como venía ocurriendo; la señal LLM no forma parte del brazo A70.
+
+### Cierre 29-oct — P-L169 desplegado: LLM real en Go, 5/5 roles
+
+`0.4.399` (`sha256:81e97041…`, commit `764c8b5f`, tag `prod-jetson-0.4.399`).
+El health check ya envía `x-opencode-session`, clave nueva instalada también en
+las dos claves de mejora y `improvement.max_tokens` a 4096. Resultado: los cinco
+roles en HTTP 200 con `deepseek-v4.1-flash` sobre `go/v1`, bajo autorización
+operativa expresa con mercado abierto.
+
+Aprendizaje de diagnóstico: el 400 de los roles no era un modelo inexistente sino
+`MissingSessionID` en la sonda; la app ya enviaba la cabecera. Zen está sin fondos
+y su modelo free ya no existe.
+
+Queda abierto y con motivo: P-L170 (aplicación automática) choca con
+`ALLOW_AUTO_APPLY_IMPROVEMENTS=false`; activarlo es decisión de política con
+evidencia, no un arreglo de código. P-L165 (ventana de laboratorio, cuota por
+dominio, presupuesto LLM) sigue N3. P-L166 (superficie de objetivos) pendiente.
+P-L168 esperando la suite. P-L163 depende del postmarket de hoy.

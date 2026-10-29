@@ -4996,3 +4996,15 @@ P-L169 debe añadir la cabecera; cambiar de modelo no arregla nada.
 
 Siguiente: medir el brazo A70 durante 20 sesiones (exposición, drawdown, cola,
 P/L por unidad de exposición) y no promover nada con evidencia inmadura.
+
+### 29-oct — P-L169 desplegado: LLM 5/5 en Go
+
+`0.4.399`, commit `764c8b5f`, tag `prod-jetson-0.4.399`, recibo 13:25:28Z.
+Cabecera `x-opencode-session` en el health check, clave nueva propagada a
+`OPENCODE_API_KEY`, `OPENAI_API_KEY`, `IMPROVEMENT_LLM_API_KEY` y
+`IMPROVEMENT_LLM_ORCHESTRATOR_API_KEY`, y presupuesto del probe `improvement` a
+4096. Los cinco roles responden 200 con `deepseek-v4.1-flash` sobre `go/v1`.
+
+Con esto la sesión de mañana puede correr con LLM real y medir el brazo A70 con
+señal completa, no solo determinista. Prioridad siguiente: P-L168 (suite) y
+P-L163 (postmarket). N3 pendientes de política: P-L170 y P-L165.
