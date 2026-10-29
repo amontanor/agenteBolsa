@@ -16,6 +16,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,27 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
 SRC_PATH = ROOT / "src"
+
+
+def _provider_session_header(base_url: str | None) -> tuple[str, str] | None:
+    """P-L169: cabecera de sesion que exige OpenCode (Go y Zen).
+
+    Sin ella, Go responde ``400 MissingSessionID`` y el chequeo marcaba en rojo
+    los cinco roles aunque la ruta real de la app funcionase. El id es estable
+    por dia y ambito, igual que en ``llm_router.provider_session_id``.
+    """
+
+    base = str(base_url or "").strip().lower()
+    if "opencode.ai/zen/go" in base:
+        provider = "opencode-go"
+    elif "opencode.ai/zen" in base:
+        provider = "opencode-zen"
+    else:
+        return None
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    session_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"agente-bolsa:{provider}:healthcheck:{day}"))
+    return ("x-opencode-session", session_id)
+
 
 def _normalize_model_id(model: str | None) -> str | None:
     if str(SRC_PATH) not in sys.path:
@@ -287,6 +309,11 @@ def ping_provider(spec: ProbeSpec, timeout: float) -> dict[str, Any]:
     req.add_header("Content-Type", "application/json")
     req.add_header("Accept", "application/json")
     req.add_header("User-Agent", "agente-bolsa-healthcheck/2.0 (+openai-compatible)")
+    # P-L169: OpenCode Go exige `x-opencode-session`; sin ella responde 400
+    # MissingSessionID y el chequeo daba un falso negativo en los cinco roles.
+    session_header = _provider_session_header(spec.base_url)
+    if session_header:
+        req.add_header(*session_header)
     if spec.api_key:
         req.add_header("Authorization", f"Bearer {spec.api_key}")
 
