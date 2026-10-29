@@ -23,7 +23,14 @@ operativas viven en `AGENTS.md`; esto explica el porqué y el estado real.
 | `codex/jetson-prod-0.4.393` | 0.4.393 | rama de integracion de la release vigente |
 | `codex/astra` | 0.4.255 | legado: linea Windows, no desplegable en Jetson |
 | `codex/oct19-corrective-integration` | 0.4.381 | base exacta del codigo que corria antes |
-| `origin/main` | 0.4.3xx | 1 commit huerfano (`dashboard_loading`), no integrado |
+| `prod-jetson-0.4.393` | tag | release desplegada |
+| `legacy-windows-0.4.255` | tag | cierre de la linea Windows |
+
+`main` contiene ya el commit huerfano de `origin/main` mediante un merge
+`-s ours`: la historia se conserva y el codigo descartado no vuelve al arbol
+(lo sustituye P-L158C..G). Por eso un futuro `git push origin main` es
+fast-forward, nunca `--force`.
+
 
 ## Como se verifica una release
 
@@ -42,12 +49,10 @@ coinciden con la imagen `sha256:e490c91e...`.
 
 ## Deuda conocida
 
-- `origin/main` (`59fbffe4`, 2026-10-05) contiene un intento anterior de carga
-  del dashboard (`dashboard_loading.py`, `docs/dashboard_loading.md`) que no
-  esta en `main`. Queda preservado como historia; no se integra a ciegas
-  porque P-L158C..G lo sustituye con medicion. Si se publica `main`, este
-  commit debe integrarse con `-s ours` para conservar historia sin reimportar
-  codigo muerto.
+- El commit huerfano de `origin/main` (`59fbffe4`, 2026-10-05, intento anterior
+  de carga del dashboard) ya esta en la historia de `main` mediante merge
+  `-s ours`: se conserva como evidencia y su codigo no se reimporta porque
+  P-L158C..G lo sustituye con medicion.
 - `codex/astra` (0.4.255) y `main` (0.4.393) divergen: no hay merge entre
   lineas. Portar cualquier cambio de una a otra exige lote propio, pruebas y
   nueva imagen.
