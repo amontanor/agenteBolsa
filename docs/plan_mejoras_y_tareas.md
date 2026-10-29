@@ -4679,4 +4679,5 @@ sizing, política o producción en esta auditoría.
 - Informe: `docs/informe_p_l158c_rendimiento_dashboard.md`.
 - Despliegue 29-oct: merge `2f3374bf` en `codex/astra` (0.4.254), kernel sellado y gates verdes. Activacion del dashboard pendiente de shell elevado: `AgenteBolsaWeb` esta `Disabled` y la cuenta no eleva (UAC cancelado). Scheduler sigue parado.
 - Jetson 29-oct: **deployed** `0.4.382-arm64` (build incremental sobre 0.4.381, digest `9f924cbbe4ff`), con el mismo parche portado. `latest_events(400)` 70,58 s -> 0,0015 s; dashboard servidor 6,06 s en caliente (antes >240 s). Tres contenedores healthy, kernel ok, vecinos intactos.
-- Siguiente: P-L158D con `opening_performance_context` en Jetson (5,37 s) y el panel de autonomia (0,81 s en Windows); requiere contrato de conteo con el mismo ORDER BY/LIMIT.
+- P-L158D en Jetson: `0.4.385-arm64` desplegado (digests `3ccbc5eabaf9`, `bc46d3221d60`, `0.4.385`). Indice por `event_type`, prefijo por rango, cache de pickles, indices de ciclos/recomendaciones y limpieza limitada. Dashboard 2,47–2,66 s en caliente, Decisiones 5,82 -> 0,62 s, Mejora continua 12,37 -> 2,46 s.
+- Siguiente: render en frio del dashboard (30,8 s tras arrancar el proceso, por cache de pickles/calendario vacia) y el panel de autonomia en Windows (0,81 s).

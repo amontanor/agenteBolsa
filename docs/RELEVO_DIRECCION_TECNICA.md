@@ -48,11 +48,14 @@ Secuencia propuesta:
    Windows 0.4.254 queda integrado en `codex/astra` pero el dashboard local no
    debe usarse como produccion: la tarea `AgenteBolsaWeb` sigue `Ready` con
    trigger de logon y hay que deshabilitarla desde un shell elevado.
-2. P-L158D: en Jetson el coste dominante ya es `opening_performance_context`
-   (5,37 s); en Windows es el panel de autonomia (0,811 s). Necesita replicar el
-   `ORDER BY`/`LIMIT` de cada lector porque las lecciones llegan truncadas a 2000.
-3. Vigilar el techo de 1 GiB del contenedor web (655 MB en uso) antes de añadir
-   caches o vistas nuevas.
+2. P-L158D **desplegado en Jetson** (`0.4.385-arm64`): indice por
+   `event_type` + prefijo por rango, cache de pickles, indices de ciclos y
+   recomendaciones, limpieza limitada. Decisiones 5,82 -> 0,62 s; Mejora
+   continua 12,37 -> 2,46 s; dashboard 2,47–2,66 s en caliente.
+3. Siguiente cuello: render en frio del dashboard (30,8 s tras arrancar el
+   proceso). Valorar precalentado de pickles/calendario en el arranque del
+   contenedor web, sin tocar la ruta de trading.
+4. Vigilar el techo de 1 GiB del contenedor web antes de añadir caches nuevas.
 
 ## P-L155: el dato de SP500 existe y el lector lo descarta (26-sep-2026)
 

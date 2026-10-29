@@ -208,4 +208,48 @@ replicar siempre la invocacion original de Compose (label
 Pendiente en Jetson: `opening_performance_context` (5,37 s) es el siguiente
 cuello; y el techo de 1 GiB del contenedor web conviene vigilarlo.
 
+## P-L158D en Jetson: consultas por prefijo, pickles e indices de ciclo (0.4.383–0.4.385)
+
+Segunda iteracion sobre la linea 0.4.381, ya con el parche de P-L158C dentro.
+Perfilado de `opening_performance_context` (6,6 s): 4,08 s en
+`load_cached_spy_open_observations`, de los cuales 2,37 s eran un `fetchall` de
+`agent_events WHERE event_type LIKE 'session_open_snapshot%'` sobre 1.036.491
+filas, y 1,04 s leer 59 `pickle` de cache de mercado.
+
+Cambios desplegados:
+
+- `0.4.383-arm64` (digest `3ccbc5eabaf9`): indice
+  `agent_events(event_type, created_at)` y prefijo por rango de bytes
+  (`event_type >= ? AND event_type < ?`) en `agent_events` e
+  `iter_agent_events`; cache de `pickle` por `path+mtime+size` con copia
+  defensiva. Prefijo: 2,25 s -> 0,0013 s. Dashboard servidor 6,06 -> 2,49 s;
+  `opening_performance_context` 5,37 -> 1,80 s.
+- `0.4.384-arm64` (digest `bc46d3221d60`): indices
+  `continuous_improvement_cycles(created_at)` y
+  `trade_recommendations(cycle_id, created_at)`, mas limitador de
+  `cleanup_runtime_data` (900 s) porque recorria 40.215 ficheros por pagina.
+- `0.4.385-arm64`: corrige un `NameError: name 'time' is not defined` que
+  introdujo el limitador (faltaba `import time` en `retention.py`) y dejo dos
+  paginas caidas hasta el redespliegue.
+
+Resultado medido en el contenedor web (misma base real):
+
+- Dashboard en caliente 2,47–2,66 s; en frio de proceso 30,8 s (cache de
+  pickles y calendario aun vacios).
+- `page_cycle_decisions` 5,82 -> 0,62 s (25 ciclos con consultas por `cycle_id`).
+- `page_continuous_improvement` 12,37 -> 2,46 s.
+- `_store()` 1,83 s la primera vez y 0,005 s despues (limpieza limitada).
+
+Incidencias del lote, para no repetirlas:
+
+- Cerrar la tuberia de salida de un `ssh` que ejecuta acciones (`Select-Object
+  -First`) mata el proceso remoto a mitad (SIGPIPE): dejo contenedores
+  `Created`. Las ordenes que mutan estado se redirigen a fichero y se leen
+  despues.
+- Un `python3 -c` de verificacion ejecutado en el host (sin `pydantic`) aborto
+  el script antes del `docker build`; el `up` posterior intento descargar una
+  imagen inexistente y dejo los tres servicios parados. Verificar siempre
+  dentro de la imagen (`docker run --entrypoint python3`).
+
+
 
