@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+import sqlite3
 import time
 from collections import defaultdict
 from datetime import datetime
@@ -851,13 +852,30 @@ def _build_learning_pipeline(
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     if stage_recorder:
         stage_recorder("outcome_update", "started")
+    outcome_update_deferred = False
     try:
         signal_update = update_signal_outcomes(settings, store, since_date="2026-04-01", limit=200000)
+    except sqlite3.OperationalError as exc:
+        # P-L163: una contencion de SQLite no puede tumbar el informe completo.
+        # Los outcomes se recalculan de forma idempotente en la siguiente pasada.
+        if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+            raise
+        outcome_update_deferred = True
+        if stage_recorder:
+            stage_recorder("outcome_update", "failed", error=repr(exc))
+        signal_update = {
+            "updated": 0,
+            "signals": 0,
+            "symbols": 0,
+            "warnings": ["outcome_update_locked"],
+            "deferred": True,
+            "error": type(exc).__name__,
+        }
     except Exception as exc:
         if stage_recorder:
             stage_recorder("outcome_update", "failed", error=repr(exc))
         raise
-    if stage_recorder:
+    if stage_recorder and not outcome_update_deferred:
         stage_recorder("outcome_update", "completed")
     signal_learning = build_learning_status(store, since_date="2026-04-01", limit=200000)
     if stage_recorder:

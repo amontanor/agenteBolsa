@@ -860,6 +860,13 @@ def _dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=True, default=str)
 
 
+def _is_sqlite_busy(exc: sqlite3.OperationalError) -> bool:
+    """Return True for lock/busy contention that may clear on retry."""
+
+    message = str(exc).lower()
+    return "locked" in message or "busy" in message
+
+
 def _snapshot_content_hash(snapshot: dict[str, Any]) -> str:
     encoded = json.dumps(snapshot, ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -4556,18 +4563,48 @@ class Store:
             )
 
     def update_signal_outcomes_bulk(self, outcomes: dict[str, dict[str, Any]]) -> None:
+        """Persist outcome recomputations in short chunks with bounded retries.
+
+        P-L163: un unico ``executemany`` de hasta 128.000 filas mantiene la
+        transaccion abierta demasiado tiempo y cualquier contencion de SQLite
+        aborta el postmarket completo. Los trozos son independientes e
+        idempotentes: un fallo definitivo deja las filas pendientes para la
+        siguiente pasada.
+        """
+
         if not outcomes:
             return
         now = _utc_iso()
-        with self.connect() as conn:
-            conn.executemany(
-                """
-                UPDATE signal_outcomes
-                SET outcome_json = ?, updated_at = ?
-                WHERE signal_id = ?
-                """,
-                [(_dumps(outcome), now, signal_id) for signal_id, outcome in outcomes.items()],
-            )
+        items = list(outcomes.items())
+        for start in range(0, len(items), 500):
+            chunk = items[start : start + 500]
+            rows = [(_dumps(outcome), now, signal_id) for signal_id, outcome in chunk]
+            self._update_signal_outcomes_chunk(rows)
+
+    def _update_signal_outcomes_chunk(
+        self,
+        rows: list[tuple[str, str, str]],
+        *,
+        retries: int = 3,
+    ) -> None:
+        attempt = 0
+        while True:
+            try:
+                with self.connect() as conn:
+                    conn.executemany(
+                        """
+                        UPDATE signal_outcomes
+                        SET outcome_json = ?, updated_at = ?
+                        WHERE signal_id = ?
+                        """,
+                        rows,
+                    )
+                return
+            except sqlite3.OperationalError as exc:
+                if not _is_sqlite_busy(exc) or attempt >= retries:
+                    raise
+                attempt += 1
+                time.sleep(min(0.2 * (2 ** (attempt - 1)), 1.5))
 
     def save_pre_earnings_prediction(self, item: dict[str, Any]) -> None:
         now = _utc_iso()
