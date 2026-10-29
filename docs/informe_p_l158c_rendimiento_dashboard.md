@@ -251,5 +251,42 @@ Incidencias del lote, para no repetirlas:
   imagen inexistente y dejo los tres servicios parados. Verificar siempre
   dentro de la imagen (`docker run --entrypoint python3`).
 
+## P-L158E en Jetson: render en frio (0.4.386–0.4.389)
+
+El primer render tras reiniciar el proceso web costaba 30,8 s (y hasta 75 s en
+una medicion con carga). Perfilado: `opening_performance_context` gastaba 67 s
+en la primera llamada porque `xnys_sessions_between` se invoca con cientos de
+rangos distintos (uno por candidato) y **cada rango reconstruia el calendario**:
+65 construcciones de ~0,35 s. El precalentado inicial no lo cubria.
+
+Cambios:
+
+- `0.4.386` / `0.4.387`: modulo `tools/dashboard_warmup.py` con
+  `ensure_warmup()`; calienta pickles de apertura, calendarios, `latest_events`,
+  snapshots de apertura, ultimo ciclo de mejora y validaciones. Guarda por
+  proceso en el modulo importado (no en `web_app`, que se re-ejecuta en cada
+  rerun).
+- `0.4.388`: el precalentado pasa a sincrono en la primera sesion. Un hilo de
+  fondo no ayudaba al primer usuario: solo calentaba despues de que ese render
+  ya hubiera pagado el coste.
+- `0.4.389`: calendario XNYS cacheado **por ano** (`_xnys_schedule_year`,
+  16 anos) y `xnys_sessions_between` filtra ese calendario. Paridad verificada
+  contra la imagen anterior en 305 rangos (2024–2026, festivos y rangos
+  invertidos): 0 diferencias.
+
+Resultado medido:
+
+- Primer render servidor tras reiniciar: **7,62 s** (antes 30,8–75 s). En
+  navegador, primera carga tras reinicio 19,5 s incluyendo arranque de
+  Streamlit (12,5 s hasta aceptar conexiones) y precalentado.
+- Regimen: 4,0 s servidor y 5,4–5,8 s por recarga en navegador con carga
+  compartida del Jetson (load average 3–4).
+- Precalentado: 6,3 s una sola vez (pickles 4,6 s, calendario por anos 0,8 s,
+  validaciones 0,4 s), registrado como `dashboard_warmup {...}` en el log.
+
+Leccion: el precalentado solo sirve si cubre el coste real; medir la primera
+llamada en un proceso nuevo (`docker exec` fresco) antes de elegir que calentar.
+
+
 
 

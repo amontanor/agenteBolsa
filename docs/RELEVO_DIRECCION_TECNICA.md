@@ -52,10 +52,11 @@ Secuencia propuesta:
    `event_type` + prefijo por rango, cache de pickles, indices de ciclos y
    recomendaciones, limpieza limitada. Decisiones 5,82 -> 0,62 s; Mejora
    continua 12,37 -> 2,46 s; dashboard 2,47–2,66 s en caliente.
-3. Siguiente cuello: render en frio del dashboard (30,8 s tras arrancar el
-   proceso). Valorar precalentado de pickles/calendario en el arranque del
-   contenedor web, sin tocar la ruta de trading.
-4. Vigilar el techo de 1 GiB del contenedor web antes de añadir caches nuevas.
+3. P-L158E **desplegado** (`0.4.389-arm64`): precalentado por proceso (6,3 s) y
+   calendario XNYS por ano. Primer render tras reiniciar 30,8–75 -> 7,62 s.
+   Regimen ~4,0 s servidor con carga compartida del Jetson.
+4. Siguiente: panel de autonomia en Windows (0,81 s) y vigilancia del techo de
+   1 GiB del contenedor web.
 
 ## P-L155: el dato de SP500 existe y el lector lo descarta (26-sep-2026)
 
