@@ -1,3 +1,39 @@
+## P-L159 — modelos unificados a DeepSeek V4.1 Flash via opencode Go — 29-oct-2026
+
+Estado: `ready_for_integration_rehearsal`; candidato `codex/models-v41` en
+`.worktrees/models-v41`, base `b3a1c577`/tree `dea237b9`, version `0.4.394`.
+Sin integracion, imagen ni despliegue.
+
+Objetivo del operador: un solo modelo, `deepseek-v4.1-flash` servido por
+`opencode-go`. `main` ya usaba el ID v4.1 en router, cliente de mejora, scripts
+y `.env.example`; el lote cierra los cuatro huecos restantes: defaults Zen en
+`config.py`, fallback local qwen activo por defecto (alcanzable desde decision y
+sentimiento via `role_endpoints`), catalogo de UI con glm/kimi/mimo/v4-flash
+escribible a `.env`, y `.env.example` desalineado.
+
+Cambios N3: `config.py` (protegido, autorizado) con selector/base/proveedores
+Go y fallbacks locales en `False`; `web_app.py` con catalogo y selector de un
+solo modelo Go/v4.1; `.env.example` alineado; `.env` local con qwen apagado,
+`OPENAI_MODEL_NAME` en v4.1 y `MIMO_MODEL` retirado (backup
+`.env.bak-p159-*`). Test guard nuevo `tests/test_p159_models_v41_only.py`.
+Protegidos de trading sin diff; `llm_router.py` y `llm_client.py` ya eran v4.1.
+
+QA: `116 passed / 48 failed` candidato frente a `106 / 49` base, cero fallos
+nuevos y uno preexistente menos; los 48 restantes son aislamiento SQLite
+preexistente en Windows (`no such table: llm_usage`). UI focales identicas
+candidato/base (`15 failed / 82 passed`). Ruff 3 preexistentes, 0 nuevos;
+NUL OK (598); `git diff --check` limpio.
+
+Limites: Jetson `unavailable` (SSH `Permission denied (publickey,password)`);
+sin uso real de v4.1 en `llm_usage` desde 2026-08-14; suite completa, smoke,
+`validate-agent-config` y `kernel-status` omitidos por mercado abierto (15:30).
+Rotacion de `OPENCODE_API_KEY` pendiente: se imprimio por error en la auditoria.
+Detalle en `docs/informe_p_l159_modelos_v41.md`.
+
+Siguiente: cerrar mercado, ejecutar suite y gates, integrar por `merge --no-ff`
+en la rama de release, replicar el `.env` en el Jetson y verificar una llamada
+real v4.1 antes de afirmar despliegue.
+
 ## Relevo de coordinación —24oct2026 19:31 Europe/Madrid
 
 Dictamen actual: `blocked_qa`; port de `[AgenteBolsa] Carga` integrado en este
