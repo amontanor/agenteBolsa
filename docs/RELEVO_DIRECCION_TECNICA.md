@@ -42,14 +42,16 @@ congelado. Informe: `docs/informe_p_l158c_rendimiento_dashboard.md`.
 
 Secuencia propuesta:
 
-1. Revision del candidato y, si se aprueba, ensayo de integracion `--no-ff`
-   sobre el HEAD productivo en ventana cerrada; el primer `ensure_schema` crea
-   los tres indices (≈0,5 s sobre 1,72 GB).
+1. **P-L158C desplegado en codigo** (`2f3374bf`, 0.4.254): Dashboard 2,5–4,0 s
+   segun carga frente a 11,6 s. La activacion del dashboard esta bloqueada por
+   permisos: `AgenteBolsaWeb` sigue `Disabled` y la cuenta no eleva; hace falta
+   un shell elevado del operador (`Enable-ScheduledTask` + `Start-ScheduledTask`
+   sobre `AgenteBolsaWeb`). El scheduler continua parado.
 2. P-L158D con el panel de autonomia (0,811 s restantes) y el render perezoso
    de los expanders; necesita replicar el `ORDER BY`/`LIMIT` de cada lector
    porque las lecciones ya llegan truncadas a 2000.
-3. Antes de cualquier despliegue: decidir si el sistema vuelve a operar; hoy
-   no hay scheduler ni sesion desde el 17-sep-2026.
+3. Antes de cualquier arranque del scheduler: decidir si el sistema vuelve a
+   operar; hoy no hay sesion desde el 17-sep-2026 y la tarea esta deshabilitada.
 
 ## P-L155: el dato de SP500 existe y el lector lo descarta (26-sep-2026)
 

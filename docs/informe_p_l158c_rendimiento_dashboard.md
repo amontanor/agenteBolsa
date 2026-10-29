@@ -133,3 +133,31 @@ No se toca decision, sizing, gates, ordenes, riesgo ni politica activa.
   `stack_down.ps1 -IncludeScheduled`, merge `--no-ff`, gates y doble salud. El
   primer `ensure_schema` tras el despliegue crea los tres indices (≈0,5 s en
   1,72 GB) dentro del arranque normal.
+
+## Despliegue (29-oct-2026)
+
+- Integrado en la rama productiva `codex/astra` con merge `--no-ff`
+  `2f3374bf`; padres `bf91ccc4` (produccion) y `c37aa697` (candidato).
+  Version productiva `0.4.254`. Arbol productivo limpio salvo artefactos no
+  versionados del operador (`.worktrees/`, tarballs, `.codex-*`), preservados.
+- Kernel sellado (`status=ok`, `sealed_at=2026-09-17T10:28:48Z`): el lote no
+  toca ficheros protegidos.
+- Gates sobre el arbol productivo: Ruff, `check_no_nulls`, `git diff --check`,
+  136 focales/regresiones, `validate-agent-config ok`.
+- Migracion medida sobre copia pristina de la base real: `ensure_schema`
+  0,804 s la primera vez (crea los tres indices) y 0,001 s la segunda;
+  `latest_events(400)` 0,0033 s.
+- Artefacto ya mergeado medido contra copia de la base real: Dashboard
+  3,7–4,0 s por recarga en navegador (antes 11,5–12,3 s), Configuracion
+  0,77 s, Decisiones 1,5 s.
+- Activacion: **bloqueada por permisos**. `AgenteBolsaWeb` y
+  `AgenteBolsaScheduler` estan `Disabled`; la cuenta `WINDOWS-APPGG4T\Antonio`
+  es usuario estandar (grupo Administradores solo-denegar) y el UAC fue
+  cancelado. No se arrancan procesos persistentes a mano (regla del repo).
+- Comandos de activacion, en shell elevado, cuando el operador lo decida:
+  `Enable-ScheduledTask -TaskName AgenteBolsaWeb` y
+  `Start-ScheduledTask -TaskName AgenteBolsaWeb` (solo dashboard, sin
+  scheduler). Para el sistema completo, ademas `AgenteBolsaScheduler`.
+- La tarea `AgenteBolsaDBMaintenance` sigue `Disabled` a proposito: un
+  `-Mode apply` implicaria mantenimiento de la base y no esta autorizado.
+

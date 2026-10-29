@@ -4677,4 +4677,5 @@ sizing, política o producción en esta auditoría.
 - Despues: Dashboard 2,53 s p50 (−78%), Decisiones 0,143 s, Configuracion 0,076 s, Mejora continua 0,689 s. Navegador real 2,9–3,1 s por recarga (antes 11,5–12,3 s).
 - QA: 13 focales nuevas + 190 regresiones focales; Ruff/NUL/diff verdes; suite completa registrada en el informe.
 - Informe: `docs/informe_p_l158c_rendimiento_dashboard.md`.
+- Despliegue 29-oct: merge `2f3374bf` en `codex/astra` (0.4.254), kernel sellado y gates verdes. Activacion del dashboard pendiente de shell elevado: `AgenteBolsaWeb` esta `Disabled` y la cuenta no eleva (UAC cancelado). Scheduler sigue parado.
 - Siguiente: P-L158D con el panel de autonomia (0,81 s restantes) y los expanders ansiosos; requiere contrato de conteo con el mismo ORDER BY/LIMIT.
