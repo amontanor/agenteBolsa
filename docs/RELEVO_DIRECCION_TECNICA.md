@@ -5028,3 +5028,33 @@ Abiertos: etiqueta `stale` que no se recalcula, SPY intradía sin observación
 fresca, tarjetas de cobertura/readiness sin informe, rol de sentimiento sin
 llamadas en 309,9 h, VACUUM pendiente y un ciclo interrumpido por el propio
 despliegue (14:05Z), que genera un `started` sin terminal.
+
+### 29-oct (tarde) — Fase 1 del plan de autonomía: diagnóstico y candidato 0.4.405
+
+XNYS abierto todo el turno; solo lectura en producción y worktrees aislados.
+Producción sigue 0.4.402 (`sha256:182d9f96…`), 3× healthy, kernel `ok`.
+
+Diagnóstico cerrado con evidencia:
+
+- P-L163 `blocked_pending_traceback`: la traza del 27-oct es previa a P-L161; el
+  `TypeError` no se reproduce en el prefijo y la telemetría de etapas es
+  fail-open, así que el frame sigue `unavailable`. Se añadió una batería de 10
+  pruebas de robustez del prefijo en `.worktrees/pl163-postmarket` (sin bump, sin
+  merge).
+- OOM del scheduler (2 GiB de cgroup) el 28-oct, con `anon-rss` ~2 GB, y
+  `signal_outcomes` con 128.441 filas: el postmarket puede morir por memoria
+  además de por el `TypeError`.
+- P-L174: presupuesto web agotado (2000/2000) y ausencia de noticias silenciosa.
+- P-L175: SPY intradía estructuralmente no verificable (sin
+  `provider_observed_at` en la caché diaria).
+- P-L177: `freelist_count = 0`, VACUUM sin efecto de tamaño; `system.log` 20 GB.
+
+Candidato integrado en ensayo `codex/oct29-integration` (0.4.405):
+P-L178 callback de CrewAI, P-L176 tarjetas con comando responsable y P-L174
+metadatos de sentimiento. Protegidos sin diff.
+
+Siguiente: cerrar XNYS, verificar postmarket terminal y leases, ejecutar DoD
+(suite única, Ruff, NUL, diff, config, kernel, smoke) y desplegar en ventana
+cerrada con Compose completo, doble salud, recibo y tag. Después, con la traza
+del postmarket de hoy, cerrar P-L163 y abrir el lote de outcomes acotados por
+memoria.

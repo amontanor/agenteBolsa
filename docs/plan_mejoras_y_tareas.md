@@ -7141,3 +7141,49 @@ Sentimiento: la ?ltima llamada LLM de `news_sentiment` es del **2026-10-16
 la hip?tesis es degradaci?n silenciosa del productor (no del proveedor). Queda
 como lote propio: caracterizar por qu? el job deja de llamar al LLM antes de
 tocar c?digo.
+
+## 29-oct (tarde) — Fase 1 del plan de autonomía: diagnóstico y tres lotes N2/N1
+
+Estado de partida verificado: producción 0.4.402 (`sha256:182d9f96…`), 3×
+healthy, kernel `ok`, flags paper/true/false/false. XNYS abierto durante todo el
+trabajo. Sin mutaciones productivas hasta el cierre.
+
+Diagnóstico con evidencia (read-only sobre producción):
+
+- **P-L163 (postmarket) sigue `blocked_pending_traceback`.** El último
+  `post_market_review_failed` (2026-10-27T03:57:34Z) no trae `traceback` porque
+  es anterior a P-L161. El `TypeError("'<' not supported between instances of
+  'NoneType' and 'int'")` **no se reproduce** en el prefijo del informe: el
+  guard `_metric_number` está en la imagen (sha256 verificado) y las 23
+  comparaciones del prefijo están protegidas. Además, la telemetría de etapas
+  del coordinador es fail-open (`postmarket_coordination.py:207-217`), así que
+  la ausencia de `outcome_update` no acota la búsqueda. Candidatos abiertos:
+  `daily_learning.py` (claves de orden con enteros) y `signal_learning.py`.
+- **OOM del scheduler confirmado**: cgroup de 2 GiB, `oom-kill` los días
+  28-oct 02:47, 03:53, 04:30 y 05:05 con `python anon-rss ~1,96-2,00 GB`.
+  `signal_outcomes` tiene 128.441 filas desde 2026-04-01 y
+  `update_signal_outcomes` las recorre completas: el postmarket puede morir por
+  memoria aunque se corrija el `TypeError`.
+- **P-L174**: causa raíz doble. El presupuesto web está agotado
+  (`calls_used 2000/2000`, `budget_exhaustions 5532`) y sin noticias locales el
+  productor devolvía `no_news` sin warning ni llamada LLM; el 401 histórico de
+  Zen ya lo corrigió P-L169.
+- **P-L175**: `current_observation_timestamp_unverified` es estructural. Los
+  metadatos de caché yfinance no traen `provider_observed_at` ni
+  `market_observed_at`, que es lo único que `_explicit_provider_observed_at`
+  acepta; la comparación SPY intradía es imposible con la autoridad actual.
+- **P-L177**: `freelist_count = 0` en una base de 6,38 GB: VACUUM no recupera
+  espacio real, solo compacta. Añadido de higiene: `/data/logs/system.log`
+  ocupa 20 GB sin rotación.
+- **P-L178**: causa raíz del fallback de crews reproducida (ver informe).
+
+Lotes implementados y ensayados (sin desplegar en esta entrada):
+
+| Lote | Versión | Foco |
+|---|---|---|
+| P-L178 | 0.4.403 | callback de Task CrewAI a nivel de módulo |
+| P-L176 | 0.4.404 | tarjetas operativas nombran informe y comando |
+| P-L174 | 0.4.405 | metadatos y motivo de sentimiento sin noticias |
+
+Ensayo de integración `codex/oct29-integration`: `807e8078` (P-L178),
+`e773d612` (P-L176), `09f042fd` (P-L174), versión 0.4.405, protegidos sin diff.
