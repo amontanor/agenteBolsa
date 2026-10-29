@@ -4979,3 +4979,20 @@ masa, pero necesita una ventana propia para terminar y triarse.
 Durante la sesión: solo lectura. Muestras a las 15:35 y 21:05 para medir
 `inherited_batch` y decisiones por propuesta. Tras el cierre: dictamen del
 postmarket con `postmarket_status.py`; si falla, el `traceback` abre P-L163.
+
+### 29-oct — A70 desplegado (config) y LLM bloqueado por cabecera
+
+Producción sigue en `0.4.397`; el corte es de configuración con resello.
+Sizing activo: 70 % de cartera, 8 % por nombre, riesgo 1,25 %, multiplicador de
+micro-experimento 1,0, 6 órdenes por ciclo y día, pérdida diaria 3 %, drawdown
+15 %, modo aprendizaje 6.000 USD por operación y 6 al día. `kernel-status ok`,
+doble salud verde y cero órdenes nuevas.
+
+LLM: la unificación a `opencode-go` falló con `400 MissingSessionID` porque el
+proveedor exige `x-opencode-session`. `zen/v1` está caducado (`401
+api_key_expired`) y el modelo free no existe (`400 Model is unavailable`). El
+estado es el previo al corte: roles en `go/v1` con 400, fallback determinista.
+P-L169 debe añadir la cabecera; cambiar de modelo no arregla nada.
+
+Siguiente: medir el brazo A70 durante 20 sesiones (exposición, drawdown, cola,
+P/L por unidad de exposición) y no promover nada con evidencia inmadura.

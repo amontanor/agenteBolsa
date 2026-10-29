@@ -6980,3 +6980,57 @@ Pendiente y bloqueado, con motivo:
   empezar.
 - P-L168 (triaje de fallos residuales): necesita una suite completa terminada.
 - Rotación de `OPENCODE_API_KEY`: acción del operador.
+
+## 29-oct — Corte N3 de sizing (A70) y resello; LLM revertido con causa raíz
+
+Autorizado por el operador («tienes mi ok para lanzarlo») y ejecutado en ventana
+cerrada, 14:0x Madrid, antes de la apertura. Imagen sin cambios (`0.4.397`); el
+corte es de configuración, con resello del manifiesto.
+
+Aplicado en `/etc/agente-bolsa/application.env` (backup
+`application.env.bak-n3-*`):
+
+- `MAX_PORTFOLIO_EXPOSURE` 0,50 → **0,70**
+- `MAX_POSITION_EXPOSURE` 0,05 → **0,08**
+- `MAX_RISK_PER_TRADE` 0,01 → **0,0125**
+- `MICRO_EXPERIMENT_SIZE_MULTIPLIER` 0,50 → **1,0**
+- `MAX_ORDERS_PER_CYCLE` 4 → **6**; `MAX_DAILY_BUY_ORDERS` 4 → **6**
+- `MAX_DAILY_LOSS` 0,02 → **0,03**; `MAX_DRAWDOWN` 0,10 → **0,15**
+
+Aplicado en `/var/lib/agente-bolsa/config/learning_mode.json` (backup
+`learning_mode.json.bak-n3-*`): `daily_order_budget` 3 → **6**,
+`per_trade_notional_usd` 1000 → **6000**, `max_portfolio_exposure_pct` 15 → **70**,
+`authorized_by` y `notes` con la autorización de hoy.
+
+Cadena de integridad: hash nuevo de `application.env`
+`a1708392977c0e98…`; actualizados `AGENTE_BOLSA_KERNEL_ENV_SHA256` en
+`/etc/agente-bolsa/runtime.env` y `AGENT_APP_ENV_SHA256` en `jetson-ops` (backups
+`*.bak-n3-*`); despliegue con `jetson-ops deploy-agente-bolsa`; resello del
+manifiesto en contenedor temporal root (el secreto es `root:600` y el contenedor
+corre como `app`, por eso el sellado dentro del contenedor falla). Resultado:
+`kernel-status ok=true`, 0 violaciones, sellado 2026-10-29T13:03:53Z.
+
+Verificación efectiva dentro del contenedor: caps 0,70 / 0,08 / 0,0125 / 1,0;
+6 órdenes por ciclo y por día; pérdida diaria 0,03; drawdown 0,15; modo
+aprendizaje 6 / 6.000 / 70. Salud doble verde, HTTP 200 en tres rutas, flags
+paper/true/false/false, cero `critical`/`traceback`/`database is locked`.
+
+### LLM: intento, causa raíz y reversión
+
+Se incluyó en el mismo corte la unificación a `opencode-go` +
+`deepseek-v4.1-flash`. El chequeo real devolvió **HTTP 400 en los cinco roles**.
+Diagnóstico reproducible con el cliente OpenAI real: `go/v1` responde
+`400 MissingSessionID` («Request is missing x-opencode-session»), es decir el
+proveedor exige la cabecera `x-opencode-session`, que el cliente actual no envía.
+Además `zen/v1` responde `401 api_key_expired` y el modelo free
+`400 Model is unavailable`.
+
+Por tanto el LLM **ya estaba roto antes de este corte**: los roles
+`LLM_ROLE_*` apuntaban a `go/v1` + `deepseek-v4.1-flash` y recibían el mismo 400.
+Las cinco claves LLM se revirtieron a su valor previo, se recalculó hash
+(`a1708392977c0e98…`), se reselló y se redesplegó. Estado final: igual que antes
+del corte, ni mejor ni peor. La reparación exige añadir la cabecera
+`x-opencode-session` en el cliente (lote P-L169), no cambiar modelos.
+
+Límite declarado: el experimento de sizing arranca hoy con el LLM en fallback
+determinista, como venía ocurriendo; la señal LLM no forma parte del brazo A70.
