@@ -7124,3 +7124,20 @@ Hallazgos del panel que quedan abiertos:
 Nota operativa: el despliegue de 0.4.401 recreó contenedores con un ciclo
 iniciado a las 14:05:24Z, que quedó sin evento terminal. Siguiente ciclo a las
 14:20Z. Se registra como interrupción propia, no como fallo del sistema.
+
+
+### 29-oct ? P-L173 (0.4.402): etiqueta de frescura coherente
+
+El caption de cartera mostraba `Estado: stale` con 3 s de antig?edad porque usaba
+`cache_state` del snapshot persistido. Ahora deriva `fresh`/`stale` de la edad
+real con el mismo umbral de 60 s (`_freshness_label`), y conserva el estado
+guardado solo cuando la edad es desconocida. Tres pruebas; `8 passed` con los
+focales de P-L171/P-L172. Imagen `sha256:182d9f96?`, commit `314c2f31`, tag
+`prod-jetson-0.4.402`, recibo verificado, kernel ok.
+
+Sentimiento: la ?ltima llamada LLM de `news_sentiment` es del **2026-10-16
+16:13Z**; desde entonces el job corre a diario y guarda 24 s?mbolos con
+`supportive: []` y sin avisos. El rol responde hoy en el health check, as? que
+la hip?tesis es degradaci?n silenciosa del productor (no del proveedor). Queda
+como lote propio: caracterizar por qu? el job deja de llamar al LLM antes de
+tocar c?digo.
