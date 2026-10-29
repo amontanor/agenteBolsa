@@ -252,7 +252,7 @@ def build_probe_specs(env: dict[str, str]) -> list[ProbeSpec]:
                 {"role": "system", "content": "Devuelve solo JSON valido."},
                 {"role": "user", "content": '{"ok": true, "role": "improvement"}'},
             ],
-            max_tokens=1024,
+            max_tokens=4096,
             response_format={"type": "json_object"},
             required_json_keys=("ok", "role"),
         ),
