@@ -5096,3 +5096,12 @@ recibo 22:06:43Z), portado sobre 0.4.402 para excluir crews. El PMR reintent? a
 las 22:05:15Z, recuper? el lease hu?rfano y qued? en `outcome_update` a las
 22:38Z; el host sigue degradado por I/O. Producci?n 0.4.406; `main` en 0.4.405
 (candidato no desplegado) ? brecha a cerrar cuando crews se desacoplen.
+
+### 29-oct (noche) ? 0.4.406 `partially_verified`
+
+PMR reintent? 22:05:15Z; `outcome_update` desde 22:06:09Z sin terminar a las
+22:38Z y scheduler sin eventos desde 22:18:29Z. El troceado elimina el aborto
+por lock pero no acota el trabajo. Reinicio 22:39Z (0.4.406 healthy).
+Siguiente lote P-L163c: outcomes por s?mbolo/streaming y solo se?ales con
+resultado potencialmente cambiante.
+

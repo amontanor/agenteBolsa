@@ -108,3 +108,19 @@ El postmarket reintent? a las 22:05:15Z (recuper? el lease hu?rfano), complet?
 reconciliaci?n y arranc? `outcome_update` a las 22:06:09Z. A las 22:38Z segu?a en
 esa etapa con el host a?n degradado por I/O. Sin terminal todav?a; el veredicto
 de P-L163 queda pendiente de esa ejecuci?n.
+
+
+### Resultado real de 0.4.406
+
+El reintento de las 22:05:15Z recuper? el lease hu?rfano y complet?
+reconciliaci?n, pero qued? en `outcome_update` desde las 22:06:09Z. A las 22:38Z
+segu?a ah?, con el scheduler sin emitir eventos desde 22:18:29Z (79 minutos).
+El troceado de escritura no basta: el coste dominante es recalcular 128.441
+outcomes y mantener el proceso bloqueado; adem?s cada trozo a?ade su propio
+commit sobre un NVMe degradado.
+
+Se reinici? el scheduler a las 22:39Z para recuperar servicio (healthy,
+0.4.406, HTTP 200). Dictamen del arreglo: `partially_verified` ? elimina el
+aborto por lock, pero no acota el trabajo. Siguiente lote **P-L163c**: procesar
+outcomes solo para se?ales cuyo resultado puede cambiar, por s?mbolo y en
+streaming, sin cargar 128.441 filas; medir tiempo y memoria antes de desplegar.

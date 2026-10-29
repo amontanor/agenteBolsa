@@ -7268,3 +7268,12 @@ reintento acotado y degradaci?n fail-open del outcome update en el informe
 Imagen `sha256:88ef7ae7?`, commit `e37da517`, tag `prod-jetson-0.4.406`, recibo
 22:06:43Z, doble salud verde, kernel ok. El PMR reintent? 22:05:15Z y segu?a en
 `outcome_update` a las 22:38Z con el host degradado por I/O; sin terminal a?n.
+
+### 29-oct (noche) ? 0.4.406 desplegado; el troceado no basta (`partially_verified`)
+
+El PMR reintent? 22:05:15Z y qued? en `outcome_update` desde 22:06:09Z; a las
+22:38Z segu?a ah? y el scheduler no emit?a eventos desde 22:18:29Z. El coste
+real es recalcular 128.441 outcomes, no solo el lock. Reinicio a 22:39Z.
+Siguiente: **P-L163c** (outcomes por s?mbolo y streaming, solo se?ales cuyo
+resultado puede cambiar; medir tiempo/memoria).
+
