@@ -1,0 +1,216 @@
+{
+  "schema_version": 1,
+  "status": "shadow",
+  "notes": "Contrato de objetivos del laboratorio. Solo mide: no decide readiness, no promueve politica y no autoriza cambios. Solo el operador o un lote autorizado pueden modificarlo. Un denominador cero se reporta como collecting, nunca como 0 %.",
+  "agents": [
+    {
+      "agent": "OrchestratorAgent",
+      "primary_metric": "planned_tasks_reaching_decision",
+      "denominator": "proposals",
+      "direction": "higher_is_better",
+      "source": "proposal_funnel",
+      "maturity_horizon": "cycle",
+      "require_control": false,
+      "min_sample": 20,
+      "status": "shadow"
+    },
+    {
+      "agent": "ChiefInvestmentOrchestratorAgent",
+      "primary_metric": "alpha_with_same_cycle_control",
+      "denominator": "matured_with_control",
+      "direction": "higher_is_better",
+      "source": "agent_learning",
+      "maturity_horizon": "10d",
+      "require_control": true,
+      "min_sample": 30,
+      "status": "shadow"
+    },
+    {
+      "agent": "MarketEstimatorAgent",
+      "primary_metric": "regime_error_vs_realized",
+      "denominator": "matured",
+      "direction": "lower_is_better",
+      "source": "agent_learning",
+      "maturity_horizon": "10d",
+      "require_control": false,
+      "min_sample": 30,
+      "status": "shadow"
+    },
+    {
+      "agent": "MarketRegimeAgent",
+      "primary_metric": "regime_stability",
+      "denominator": "matured_with_control",
+      "direction": "higher_is_better",
+      "source": "agent_learning",
+      "maturity_horizon": "10d",
+      "require_control": true,
+      "min_sample": 30,
+      "status": "shadow"
+    },
+    {
+      "agent": "TechnicalAnalystAgent",
+      "primary_metric": "signal_hit_rate_vs_deterministic_baseline",
+      "denominator": "matured_with_control",
+      "direction": "higher_is_better",
+      "source": "agent_learning",
+      "maturity_horizon": "10d",
+      "require_control": true,
+      "min_sample": 30,
+      "status": "shadow"
+    },
+    {
+      "agent": "TechnicalEdgeAgent",
+      "primary_metric": "false_positive_rate",
+      "denominator": "matured_with_control",
+      "direction": "lower_is_better",
+      "source": "agent_learning",
+      "maturity_horizon": "10d",
+      "require_control": true,
+      "min_sample": 30,
+      "status": "shadow"
+    },
+    {
+      "agent": "SentimentAnalystAgent",
+      "primary_metric": "incremental_value_over_no_sentiment_control",
+      "denominator": "matured_with_control",
+      "direction": "higher_is_better",
+      "source": "agent_learning",
+      "maturity_horizon": "10d",
+      "require_control": true,
+      "min_sample": 30,
+      "status": "shadow"
+    },
+    {
+      "agent": "StrategyEvaluatorAgent",
+      "primary_metric": "strategy_design_evaluations_emitted",
+      "denominator": "decisions",
+      "direction": "higher_is_better",
+      "source": "proposal_funnel",
+      "maturity_horizon": "cycle",
+      "require_control": false,
+      "min_sample": 0,
+      "status": "retired"
+    },
+    {
+      "agent": "ParameterCalibrationAgent",
+      "primary_metric": "opportunistic_expectancy",
+      "denominator": "matured_with_control",
+      "direction": "higher_is_better",
+      "source": "agent_learning",
+      "maturity_horizon": "10d",
+      "require_control": true,
+      "min_sample": 30,
+      "status": "shadow"
+    },
+    {
+      "agent": "PreEarningsSpecialistAgent",
+      "primary_metric": "blocked_winners",
+      "denominator": "matured",
+      "direction": "lower_is_better",
+      "source": "agent_learning",
+      "maturity_horizon": "10d",
+      "require_control": false,
+      "min_sample": 20,
+      "status": "shadow"
+    },
+    {
+      "agent": "RiskGuardAgent",
+      "primary_metric": "drawdown_and_tail_loss_with_correct_veto",
+      "denominator": "matured",
+      "direction": "lower_is_better",
+      "source": "agent_learning",
+      "maturity_horizon": "10d",
+      "require_control": false,
+      "min_sample": 30,
+      "status": "shadow"
+    },
+    {
+      "agent": "RiskCapitalAgent",
+      "primary_metric": "exposure_per_unit_of_risk",
+      "denominator": "matured",
+      "direction": "target_range",
+      "source": "agent_learning",
+      "maturity_horizon": "10d",
+      "require_control": false,
+      "min_sample": 30,
+      "status": "shadow"
+    },
+    {
+      "agent": "DataQualityAgent",
+      "primary_metric": "conflicts_and_coverage_per_session",
+      "denominator": "signals",
+      "direction": "lower_is_better",
+      "source": "agent_learning",
+      "maturity_horizon": "session",
+      "require_control": false,
+      "min_sample": 30,
+      "status": "shadow"
+    },
+    {
+      "agent": "ProgrammerAgent",
+      "primary_metric": "code_proposals_passing_tests_without_protected_files",
+      "denominator": "proposals",
+      "direction": "higher_is_better",
+      "source": "proposal_funnel",
+      "maturity_horizon": "cycle",
+      "require_control": false,
+      "min_sample": 10,
+      "status": "shadow"
+    },
+    {
+      "agent": "SoftwareReliabilityAgent",
+      "primary_metric": "incident_recurrence_rate",
+      "denominator": "proposals",
+      "direction": "lower_is_better",
+      "source": "proposal_funnel",
+      "maturity_horizon": "cycle",
+      "require_control": false,
+      "min_sample": 10,
+      "status": "shadow"
+    },
+    {
+      "agent": "ExperimentDesignerAgent",
+      "primary_metric": "preregistration_completeness",
+      "denominator": "proposals",
+      "direction": "higher_is_better",
+      "source": "proposal_funnel",
+      "maturity_horizon": "cycle",
+      "require_control": false,
+      "min_sample": 0,
+      "status": "retired"
+    },
+    {
+      "agent": "DecisionCommitteeAgent",
+      "primary_metric": "per_proposal_decision_convergence",
+      "denominator": "decisions",
+      "direction": "higher_is_better",
+      "source": "proposal_funnel",
+      "maturity_horizon": "cycle",
+      "require_control": false,
+      "min_sample": 20,
+      "status": "shadow"
+    },
+    {
+      "agent": "ValidationAgent",
+      "primary_metric": "approved_proposals_without_regression",
+      "denominator": "admitted",
+      "direction": "higher_is_better",
+      "source": "proposal_funnel",
+      "maturity_horizon": "cycle",
+      "require_control": true,
+      "min_sample": 10,
+      "status": "shadow"
+    },
+    {
+      "agent": "ReportAgent",
+      "primary_metric": "evidence_completeness",
+      "denominator": "proposals",
+      "direction": "higher_is_better",
+      "source": "proposal_funnel",
+      "maturity_horizon": "cycle",
+      "require_control": false,
+      "min_sample": 10,
+      "status": "shadow"
+    }
+  ]
+}
