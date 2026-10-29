@@ -198,7 +198,7 @@ def test_effective_endpoint_identity_survives_response_without_model(tmp_path):
     row = Store(settings.database_path, settings.agent_logs_dir).latest_llm_usage(limit=1)[0]
     identity = json.loads(row["payload_json"])["llm_identity"]
     assert row["model"] == DEEPSEEK_V4_1_FLASH_MODEL_ID
-    assert identity["provider"] == "opencode-zen"
+    assert identity["provider"] == "opencode-go"
     assert identity["requested_model"] == DEEPSEEK_V4_1_FLASH_MODEL_ID
     assert identity["effective_model"] == DEEPSEEK_V4_1_FLASH_MODEL_ID
     assert identity["fallback_used"] is False

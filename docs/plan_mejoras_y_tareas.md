@@ -7052,3 +7052,36 @@ Queda abierto y con motivo: P-L170 (aplicación automática) choca con
 evidencia, no un arreglo de código. P-L165 (ventana de laboratorio, cuota por
 dominio, presupuesto LLM) sigue N3. P-L166 (superficie de objetivos) pendiente.
 P-L168 esperando la suite. P-L163 depende del postmarket de hoy.
+
+## 29-oct — P-L168: suite completa re-medida tras P-L162
+
+Resultado de una ejecución completa sobre `main` (commit `74876f61`, antes de
+los arreglos de test), 886,49 s:
+
+| Métrica | Antes (P-L162) | Ahora |
+|---|---|---|
+| passed | 2.334 | **3.193** |
+| failed | 852 | **5** |
+| errors | 7 | **0** |
+
+Los 5 fallos, clasificados:
+
+1. `test_p59c_llm_selected_authority.py::test_version_policy_requires_bump` —
+   pin exacto a `0.4.381`; cualquier release lo rompía. **Corregido**: se
+   conserva la garantía útil (semver válido y nunca por debajo de `.381`).
+2. `test_p78b_deepseek_default.py::test_effective_endpoint_identity_survives_response_without_model`
+   — esperaba `opencode-zen`, pero P-L159 cambió el default a `opencode-go`.
+   **Corregido** a la expectativa vigente.
+3. `test_p45b1_integration_qa.py::test_multiprocess_lease_has_one_owner_and_no_lock`
+   — `queue.Empty` bajo carga de suite; **pasa aislado** (8,35 s). Deuda de
+   timing del test multiproceso.
+4. `test_web_research.py::test_search_company_news_without_provider_is_no_provider`
+   — `ok` en vez de `no_provider`; **pasa aislado** (8 passed). Contaminación de
+   entorno entre tests, no defecto del producto.
+5. `test_pre_earnings.py::test_score_study_regression_current_sqlite` —
+   `v2_actionable_false_positive` 8 frente a 0 esperado; caracterización anclada
+   al SQLite local de 1,85 GB. Requiere lote propio con snapshot congelado; no se
+   toca la expectativa a ciegas.
+
+Tras los arreglos 1 y 2: `57 passed` en los dos ficheros afectados. Quedan 3
+fallos de entorno/aislamiento, ninguno del código desplegado.

@@ -769,7 +769,11 @@ def test_version_policy_requires_bump():
     from importlib import metadata
     dist = metadata.distribution("agente-bolsa")
     if dist:
-        # Con PYTHONPATH al src del worktree, leemos __init__.py
+        # Con PYTHONPATH al src del worktree, leemos __init__.py.
+        # P-L168: el pin exacto obligaba a editar el test en cada release; se
+        # conserva la garantia util (nunca por debajo de la base .381).
         import agente_bolsa
-        # .378 integrates the dashboard cache and deployment receipt UI.
-        assert agente_bolsa.__version__ == "0.4.381"
+
+        parts = agente_bolsa.__version__.split(".")
+        assert len(parts) == 3 and all(part.isdigit() for part in parts)
+        assert tuple(int(part) for part in parts) >= (0, 4, 381)

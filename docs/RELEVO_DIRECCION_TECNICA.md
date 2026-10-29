@@ -5008,3 +5008,11 @@ Cabecera `x-opencode-session` en el health check, clave nueva propagada a
 Con esto la sesión de mañana puede correr con LLM real y medir el brazo A70 con
 señal completa, no solo determinista. Prioridad siguiente: P-L168 (suite) y
 P-L163 (postmarket). N3 pendientes de política: P-L170 y P-L165.
+
+### 29-oct — Suite re-medida: 3.193 passed, 5 failed, 0 errors
+
+P-L162 hizo caer 847 fallos y los 7 errores de colección. De los 5 restantes, dos
+eran pines obsoletos y quedaron corregidos (versión y default `opencode-go`);
+los otros tres son deuda de entorno: multiproceso sensible a carga, contaminación
+de variables entre tests de web research y una caracterización anclada al SQLite
+local. Ninguno afecta al código desplegado en 0.4.399.
