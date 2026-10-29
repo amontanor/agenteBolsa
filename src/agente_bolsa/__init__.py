@@ -161,4 +161,5 @@ __all__ = ["__version__"]
 # P-L169: el health check LLM manda x-opencode-session como la app (0.4.398).
 # P-L169b: presupuesto de probe para modelos con razonamiento (0.4.399).
 # P-L171: el semaforo del panel usa las rutas reales de Settings (0.4.400).
-__version__ = "0.4.400"
+# P-L172: el semaforo LLM se evalua en vivo, no desde el informe cacheado (0.4.401).
+__version__ = "0.4.401"
