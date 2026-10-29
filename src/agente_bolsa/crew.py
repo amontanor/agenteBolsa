@@ -118,6 +118,29 @@ def _enabled_crew_agents(
     ))
 
 
+def _crew_task_callback(output: Any) -> Any:
+    """Report one completed CrewAI task without capturing a closure.
+
+    P-L178: CrewAI serializes ``Task.callback`` and warns for closures.  That
+    warning is written to ``sys.stderr``, which the cycle redirects to the
+    attempt log and may already be closed, turning the warning into
+    ``ValueError: I/O operation on closed file`` and invalidating the task.
+    A module-level callable removes the warning entirely; the observer and the
+    task identity are resolved from the execution context at call time.
+    """
+
+    context = get_crew_execution_context()
+    observer = context.task_observer if context is not None else None
+    if observer is None:
+        return output
+    task_name = str(getattr(output, "name", "") or "")
+    agent_role = str(getattr(output, "agent", "") or "")
+    resolver = getattr(observer, "resolve_task_identity", None)
+    resolved = resolver(task_name, agent_role) if callable(resolver) else (task_name, agent_role)
+    resolved_task, resolved_agent = resolved
+    return observer.on_task_complete(resolved_task, resolved_agent, output)
+
+
 def _task_description(task_name: str, task: dict[str, object], agent_name: str) -> str:
     layer = str(task.get("layer") or "research")
     return (
@@ -201,15 +224,17 @@ def build_crew(
             if previous:
                 kwargs["context"] = previous
             if task_observer is not None:
-                def callback(output: Any, *, _task=task_name, _agent=agent_name) -> Any:
-                    return task_observer.on_task_complete(_task, _agent, output)
-                kwargs["callback"] = callback
+                kwargs["callback"] = _crew_task_callback
             crew_task = Task(**kwargs)
             if task_observer is not None:
                 task_observer.register_task(
                     task_name, agent_name, layer,
                     task_id=str(crew_task.id) if getattr(crew_task, "id", None) is not None else None,
                 )
+                binder = getattr(task_observer, "bind_task_identity", None)
+                if callable(binder):
+                    # CrewAI reports the agent role, not the catalogue key.
+                    binder(task_name, agent_name, agents[agent_name].role)
             tasks.append(crew_task)
             layer_tasks.setdefault(layer, []).append(crew_task)
     return Crew(
