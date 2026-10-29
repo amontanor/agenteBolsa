@@ -8,7 +8,9 @@ import logging
 import math
 import os
 import sqlite3
+import sys
 import time
+import traceback
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from functools import wraps
@@ -3452,6 +3454,25 @@ def _ensure_postmarket_spy_eod(settings: Settings, session_date: str) -> dict[st
         }
 
 
+def _failure_traceback(max_chars: int = 6000) -> str:
+    """Return the current exception traceback, bounded for a durable event.
+
+    P-L161: the post-market failure event used to carry only ``repr(exc)``, so a
+    ``TypeError`` without a frame could not be attributed to producer, stage or
+    input. The frame is retained as evidence, never as a control signal. Outside
+    an ``except`` block the helper returns an empty string instead of the
+    useless ``"NoneType: None"`` placeholder.
+    """
+
+    exc_type, exc_value, exc_tb = sys.exc_info()
+    if exc_type is None or exc_value is None:
+        return ""
+    text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    if len(text) > max_chars:
+        return text[-max_chars:]
+    return text
+
+
 def post_market_review_job(
     settings: Settings,
     store: Store,
@@ -3816,7 +3837,13 @@ def post_market_review_job(
                 "post_market_review_failed",
                 run_id,
                 f"Revision post-mercado fallida: {exc}",
-                {"error": repr(exc), "session_date": session_date},
+                {
+                    "error": repr(exc),
+                    "session_date": session_date,
+                    # P-L161: el frame durable evita repetir el diagnostico a
+                    # ciegas cuando el fallo solo llega como repr(exc).
+                    "traceback": _failure_traceback(),
+                },
             )
         except Exception:
             pass
