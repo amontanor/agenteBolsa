@@ -120,9 +120,14 @@ que copiar y pegar prompts entre ambas tareas.
 
 ### Modelo y permisos del worker
 
-- En cada envío a `[Luna] Developer`, fija explícitamente el modelo
-  `gpt-5.6-luna` y el razonamiento `xhigh` ("Muy alto"). No confíes en el modelo
-  heredado de un turno anterior.
+- En cada lanzamiento o envío a Luna, fija explícitamente `gpt-6.1-sol` y
+  `model_reasoning_effort=low`. No aceptes un fallback a otra versión/modelo
+  ni a otro nivel de razonamiento. No confíes en el modelo heredado de un turno anterior;
+  si `gpt-6.1-sol/low` no está disponible o no se confirma, detén el envío y
+  reporta el bloqueo.
+- Esta regla se aplica siempre, incluidos reanudaciones, reintentos y encargos
+  de auditoría. En la mensajería de Codex especifica `model="gpt-6.1-sol"` y
+  `thinking="low"` en cada envío; no basta con indicarlo en el texto del prompt.
 - Usa la mensajería y lectura de tareas de Codex para enviar el encargo, seguir
   su progreso y recoger el dictamen desde la tarea principal.
 - Luna conserva los permisos normales disponibles en su tarea para ejecutar
