@@ -7226,3 +7226,32 @@ Pendiente P-L178b (N2): desacoplar el crew de la cadencia de 15 minutos
 demostrar que un ciclo no puede solaparse. P-L176 y P-L174 quedan validados por
 tests y suite, pero no desplegados.
 
+### 29-oct (noche) ? postmarket bloqueado por I/O del host, no por el TypeError
+
+El postmarket de 2026-10-29 arranc? a las 20:07:18Z (coordinaci?n completada,
+reconciliaci?n iniciada) y qued? clavado ah?. No lleg? a la etapa de informe, as?
+que **no hay traza nueva** del `TypeError` de P-L163.
+
+Causa del bloqueo, medida en el host:
+
+- **28 timeouts NVMe** hoy (`nvme nvme0: I/O tag ... timeout, completion polled`)
+  repartidos 6 a las 18h, 9 a las 19h y 13 a las 20h; `pci=nomsi` sigue presente
+  en `/proc/cmdline`.
+- `load average 16,58` con `iowait` del 20-27 % y solo 3,5 GB de memoria
+  disponible.
+- `whale-copy-jetson` (fuera del stack) acumula **722 GB le?dos / 12,2 GB
+  escritos**; el scheduler 4,07 GB / 358 MB.
+- Consecuencia: SQLite devuelve `database is locked` en escrituras
+  (`h_capture.py:664` ? `storage.py:1518`), los jobs de APScheduler salen
+  `missed` o `max_instances`, y el evento m?s reciente se qued? en
+  `2026-10-29T20:42:06Z`.
+
+Intervenci?n aplicada: reinicio del contenedor scheduler a las 20:25:57Z para
+liberar el hilo bloqueado en reconciliaci?n. No corrigi? la causa (I/O); el
+lease `pmr_029529467e4a` sigue `active` con owner muerto y el PMR no vuelve a
+intentarse. No se forz? postmarket ni reconciliaci?n manual, no se limpi? el
+lease y no se toc? `whale-copy`.
+
+Dictamen: `blocked` por infraestructura. La prioridad pasa a liberar I/O del host
+(decisi?n del operador sobre `whale-copy`) antes de reintentar el postmarket.
+

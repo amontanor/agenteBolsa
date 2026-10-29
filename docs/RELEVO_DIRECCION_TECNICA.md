@@ -5074,3 +5074,15 @@ Rollback a 0.4.402 a las 17:19Z, salud 2 verde 17:21:19Z, kernel ok. Tag
 el siguiente lote debe cerrar esa brecha. Siguiente: P-L178b (desacoplar crew de
 la cadencia y garantizar no solape), despu?s P-L163 con la traza del postmarket.
 
+### 29-oct (noche) ? PMR bloqueado por I/O, `blocked`
+
+El postmarket de hoy arranc? 20:07:18Z y qued? clavado en `reconciliation`. No
+hay traza nueva de P-L163. Causa: 28 timeouts NVMe hoy, load 16,58, iowait
+20-27 % y `whale-copy-jetson` acumulando 722 GB le?dos. SQLite responde
+`database is locked`; el ?ltimo evento es de 20:42:06Z. Se reinici? el scheduler
+(20:25:57Z) sin efecto sobre la causa. Lease `pmr_029529467e4a` sigue `active`
+con owner muerto; no se limpi? a mano.
+
+Siguiente: decisi?n del operador sobre `whale-copy`/I/O; despu?s, reintentar el
+postmarket por la ruta normal y capturar la traza de P-L163 o el OOM de P-L163b.
+
