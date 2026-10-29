@@ -4683,4 +4683,5 @@ sizing, política o producción en esta auditoría.
 - P-L158E en Jetson: `0.4.389-arm64` desplegado. Precalentado por proceso (6,3 s) y calendario XNYS cacheado por ano (paridad 305/305). Primer render tras reiniciar 30,8–75 -> 7,62 s servidor; regimen ~4 s.
 - P-L158E5 en Jetson: `0.4.390-arm64` desplegado. Sin copia defensiva de pickles y helpers de sesion cacheados (paridad 876/876). Dashboard 2,54 s en caliente; primer render 13,6 s (incluye 12,4 s de arranque de Streamlit); navegador 3,78–4,66 s.
 - P-L158F: Jetson `0.4.391-arm64` (indice cubridor de observaciones: proyeccion 5,47 -> 0,005 s; panel autonomia 5,92 -> 2,92 s) y Windows `0.4.255` mergeado (`d990aa15`) con los indices que faltaban. Windows cerrado: las tres tareas en `Disabled`, sin listener 8501.
+- P-L158G: Jetson `0.4.393-arm64` con subcomando `deployment-receipt`; recibo verificado escrito (2026-10-29 10:47:40 Europe/Madrid) y el panel ya muestra la fecha de despliegue.
 - Siguiente: vigilar el techo de 1 GiB del contenedor web y el primer ciclo tras la apertura XNYS (15:30 Madrid).

@@ -62,7 +62,10 @@ Secuencia propuesta:
    observaciones: proyeccion 5,47 -> 0,005 s; autonomia 5,92 -> 2,92 s) y
    Windows `0.4.255` mergeado (`d990aa15`). Windows cerrado: las tres tareas en
    `Disabled`, sin listener 8501.
-6. Siguiente: vigilar el techo de 1 GiB del web y el primer ciclo con la
+6. P-L158G **desplegado** (`0.4.393-arm64`): subcomando `deployment-receipt`;
+   recibo verificado escrito y el panel muestra «Despliegue verificado:
+   2026-10-29 10:47:40 Europe/Madrid».
+7. Siguiente: vigilar el techo de 1 GiB del web y el primer ciclo con la
    apertura XNYS (15:30 Madrid).
 
 ## P-L155: el dato de SP500 existe y el lector lo descarta (26-sep-2026)

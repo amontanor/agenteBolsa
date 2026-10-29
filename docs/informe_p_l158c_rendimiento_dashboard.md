@@ -335,6 +335,31 @@ Windows queda cerrado: tarea `AgenteBolsaWeb` en `Disabled`, sin listener en
 8501 y sin proceso web; `AgenteBolsaScheduler` y `AgenteBolsaDBMaintenance`
 tambien `Disabled`. Produccion es el Jetson.
 
+## P-L158G: recibo de despliegue visible en el panel (0.4.392–0.4.393)
+
+El panel mostraba «v0.4.391 / Fecha de despliegue no disponible». La causa no
+era la UI: `deployment_receipt.latest_verified_deployment_receipt` exige una
+linea valida en `data/deployment_receipts.jsonl` (schema
+`agente-bolsa.verified-deployment.v1`, `status=verified`, version exacta,
+`image_id` sha256 completo, `source_head`/`source_tree` de 40 hex y zona
+Europe/Madrid coherente) y **el fichero no existia**: los despliegues por
+`patch` + `docker build` no dejaban recibo.
+
+Cambio: subcomando `deployment-receipt` en `main.py`, que llama al escritor ya
+existente `append_verified_deployment_receipt` (valida antes de escribir y hace
+`fsync`). 0.4.392 introdujo el CLI con el nombre de argumento equivocado
+(`version=` frente a `current_version=`) y fallo con `TypeError`; 0.4.393 lo
+corrige. El recibo se escribe **solo despues** de comprobar imagen, salud y
+kernel.
+
+Recibo registrado (0.4.393, imagen `sha256:e490c91e...`): `verified_at_local`
+2026-10-29T10:47:40+01:00. El panel muestra ahora
+`Despliegue verificado: 2026-10-29 10:47:40 Europe/Madrid · 2026-10-29 09:47:40 UTC`.
+`source_head`/`source_tree` apuntan a `b411e9a7`/`2458213` (base de la que se
+genero el parche P-L158C) porque la imagen es incremental sobre 0.4.381, no un
+checkout; conviene registrar esa procedencia al auditar.
+
+
 
 
 
