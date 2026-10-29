@@ -1,5 +1,10 @@
 # Relevo de direccion tecnica — agenteBolsa
 
+> **Nexo comun: `main`.** Desde el 2026-10-29 `main` apunta a la linea de
+> produccion del Jetson (0.4.393). Esta rama (`codex/astra`, 0.4.255) es la
+> linea Windows y **no** se despliega en el Jetson. Ver
+> `docs/topologia_ramas.md` en `main`. Las tareas nuevas parten de `main`.
+
 ## Secuencia siguiente (26-sep-2026 23:30 Europe/Madrid)
 
 1. **28-sep 15:30** apertura XNYS. Contenedores 0.4.320-arm64 ya en pie desde el
