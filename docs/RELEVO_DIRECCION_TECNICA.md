@@ -4958,3 +4958,24 @@ Madrid y leer la traza si falla; (2) repetir la suite completa sobre `main` para
 medir cuántos de los 858 identificadores caen con P-L162; (3) unificación real de
 modelos en `/etc/agente-bolsa/application.env` (N3, protegido, carrier del kernel
 y resello); (4) pasos 8–11 del plan de agentes (N3, sin autorización todavía).
+
+### 29-oct — Cierre de la ventana pre-apertura
+
+Producción `0.4.397` sana y sin cambios durante la ventana. Limpiadas las tres
+vistas de sesión postmarket atascadas en `active` (22, 23 y 27-oct) con
+coincidencia exacta de `value_json`: 0 vistas `active` residuales y 0 leases
+globales. Objetivos medidos con scoreboard real: 2 `available` (2.289 y 245 de
+denominador), 2 `retired`, 15 `unavailable` con razón (11 sin atribución de
+agente, 2 contratos no medibles, 4 sin estadísticas de propuestas).
+
+Ensayo de modelos confirmado: el override exige `AGENTE_BOLSA_KERNEL_ENV_SHA256`
+y `jetson-ops` lleva la constante `AGENT_APP_ENV_SHA256`; cambiar
+`application.env` obliga a actualizar ambos, resellar y redesplegar. Parche
+preparado y no aplicado.
+
+Suite: parcial al 63 % por timebox de 12 minutos; con P-L162 ya no aborta en
+masa, pero necesita una ventana propia para terminar y triarse.
+
+Durante la sesión: solo lectura. Muestras a las 15:35 y 21:05 para medir
+`inherited_batch` y decisiones por propuesta. Tras el cierre: dictamen del
+postmarket con `postmarket_status.py`; si falla, el `traceback` abre P-L163.

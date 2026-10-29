@@ -6941,3 +6941,42 @@ garantiza diagnóstico si vuelve a fallar. La prueba real es el postmarket de ho
 desde las 22:00 Madrid. Los `started` sin terminal de 21-28 oct quedan
 `unavailable`. La suite completa no se repitió; repetirla es el siguiente gate
 para cuantificar la deuda restante.
+
+## 29-oct — Ventana pre-apertura: limpieza de vistas, medida de objetivos y ensayo de modelos
+
+Mercado cerrado, apertura 14:30 Madrid. Producción `0.4.397` intacta y sin
+reinicios (`RestartCount=0`, `OOMKilled=false`, HTTP 200 en `/` y `/health`,
+kernel `ok`, flags paper/true/false/false, `MAX_EVENT` 12:49:40Z).
+
+Hecho:
+
+- Limpieza de las tres vistas `post_market_coordination:session:*` atascadas en
+  `active` (2026-10-22, 10-23, 10-27). Se leyó el `value_json` exacto, se borró
+  con coincidencia de valor dentro de `BEGIN IMMEDIATE` y se comprobó después:
+  3 borradas, 0 vistas `active` residuales, 0 leases globales creados o
+  destruidos. Sin tocar `agent_events`.
+- Objetivos medidos con scoreboard real (`latest_learning_scoreboard.json`,
+  20-oct): `partial`, 2 `available` (`OrchestratorAgent` denominador 2.289,
+  `SoftwareReliabilityAgent` 245), 2 `retired`, 15 `unavailable` con razones
+  explícitas: 11 `agent_not_attributed`, 2 `contract_not_measurable` y 4
+  `proposal_stats_not_provided`. No es un fallo de carga: es denominador real.
+- Ensayo en seco del cambio de modelos: confirmado que el override exige
+  `AGENTE_BOLSA_KERNEL_ENV_SHA256` y que `jetson-ops` fija
+  `AGENT_APP_ENV_SHA256=4e60333c…`, hoy idéntico al fichero. Cualquier cambio de
+  `application.env` exige actualizar ambos, resellar el manifiesto del kernel y
+  redesplegar. Preparado el parche exacto, sin aplicar.
+- Suite completa: declarada **parcial**. Con el esquema corregido la suite ya no
+  aborta en masa y avanza ejecutando pruebas reales; a los 12 minutos iba por el
+  63 % y se detuvo por presupuesto de ventana, sin totales. No se deja corriendo
+  durante la sesión.
+
+Pendiente y bloqueado, con motivo:
+
+- P-L163 (arreglo del postmarket): depende de la traza del postmarket de hoy.
+- P-L164 (modelos): listo el parche; requiere autorización y resello del kernel,
+  que no ejecuto.
+- P-L165 (pasos 8–11): N3, sin autorización.
+- P-L166 (superficie de objetivos y `objective_status` en scoreboard): sin
+  empezar.
+- P-L168 (triaje de fallos residuales): necesita una suite completa terminada.
+- Rotación de `OPENCODE_API_KEY`: acción del operador.
