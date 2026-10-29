@@ -51,7 +51,7 @@ from agente_bolsa import __version__
 from agente_bolsa.config import get_settings
 from agente_bolsa.continuous_improvement.promotion_readiness import evaluate_promotion_readiness
 from agente_bolsa.continuous_improvement.runtime import ContinuousImprovementLabRuntime
-from agente_bolsa.dashboard_loading import DashboardLoadState
+from agente_bolsa.dashboard_loading import DashboardLoadState, RESOURCE_FRESH_SECONDS
 from agente_bolsa.deployment_receipt import (
     format_verified_deployment_time,
     latest_verified_deployment_receipt,
@@ -5871,7 +5871,10 @@ def page_dashboard() -> None:
         st.info("Cargando cartera en segundo plano. El resto del dashboard sigue disponible.")
     else:
         age_text = f"{age:.0f} s" if age is not None else "desconocida"
-        st.caption(f"Cartera observada: {account_read_at.astimezone(ZoneInfo(settings.local_timezone)).isoformat()} · Antigüedad: {age_text} · Estado: {load.cache_state}")
+        # P-L173: el estado debe derivarse de la edad que se muestra, no del
+        # snapshot persistido (que podia decir "stale" con 3 s de antiguedad).
+        state_text = _freshness_label(age, load.cache_state)
+        st.caption(f"Cartera observada: {account_read_at.astimezone(ZoneInfo(settings.local_timezone)).isoformat()} · Antigüedad: {age_text} · Estado: {state_text}")
     resource_labels = {"fills": "Fills", "curve": "Curva diaria", "intraday": "Curva intradía"}
     details = []
     for resource, label in resource_labels.items():
@@ -6259,6 +6262,14 @@ def _system_status_paths(settings: Any) -> tuple[Path, Path]:
     """Rutas reales del panel para el semaforo (P-L171)."""
 
     return Path(settings.database_path), Path(settings.data_dir) / "reports"
+
+
+def _freshness_label(age: float | None, cache_state: Any, *, threshold: float = RESOURCE_FRESH_SECONDS) -> str:
+    """P-L173: etiqueta coherente con la edad mostrada en el mismo caption."""
+
+    if age is None:
+        return str(cache_state)
+    return "fresh" if age <= threshold else "stale"
 
 
 def page_system_status() -> None:
