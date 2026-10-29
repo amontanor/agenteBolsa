@@ -130,24 +130,14 @@ LLM_PROVIDER_CATALOG = {
     },
     "opencode-go": {
         "base_url": "https://opencode.ai/zen/go/v1",
-        "models": [
-            "glm-5.2",
-            "glm-5.1",
-            "kimi-k2.7",
-            "kimi-k2.6",
-            "deepseek-v4-pro",
-            "deepseek-v4-flash",
-            "deepseek-v4.1-flash",
-            "mimo-v2.5",
-            "mimo-v2.5-pro",
-        ],
-    },
-    "mimo": {
-        "base_url": "https://token-plan-ams.xiaomimimo.com/v1",
-        "models": ["mimo-v2.5", "mimo-v2.5-pro"],
+        "models": ["deepseek-v4.1-flash"],
     },
 }
-PRIMARY_LLM_SELECTORS = ["opencode-zen", "opencode-go", "mimo", "custom"]
+# P-L159: solo DeepSeek V4.1 Flash via opencode Go. El resto de IDs del
+# catalogo anterior (glm, kimi, mimo, v4-pro/v4-flash) queda fuera del selector
+# para que la UI no pueda escribir en `.env` un modelo distinto.
+LLM_PROVIDER_OPTIONS = ["opencode-go"]
+PRIMARY_LLM_SELECTORS = list(LLM_PROVIDER_OPTIONS)
 
 
 def _settings():
@@ -8853,7 +8843,7 @@ def page_config() -> None:
         else:
             primary_model = st.text_input("Modelo primario", value=settings.openai_model)
     with col_agents:
-        agent_provider_options = list(LLM_PROVIDER_CATALOG)
+        agent_provider_options = list(LLM_PROVIDER_OPTIONS)
         agents_provider = st.selectbox(
             "Proveedor agentes",
             agent_provider_options,
@@ -8902,17 +8892,7 @@ def page_config() -> None:
         st.success("Configuracion LLM guardada en .env. Reinicia scheduler si estaba corriendo.")
         st.rerun()
     model_rows = [
-        {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "glm-5.2"},
-        {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "glm-5.1"},
-        {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "kimi-k2.7"},
-        {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "kimi-k2.6"},
-        {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "deepseek-v4-pro"},
-        {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "deepseek-v4-flash"},
         {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "deepseek-v4.1-flash"},
-        {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "mimo-v2.5"},
-        {"proveedor": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1", "modelo": "mimo-v2.5-pro"},
-        {"proveedor": "mimo", "base_url": "https://token-plan-ams.xiaomimimo.com/v1", "modelo": "mimo-v2.5"},
-        {"proveedor": "mimo", "base_url": "https://token-plan-ams.xiaomimimo.com/v1", "modelo": "mimo-v2.5-pro"},
     ]
     st.dataframe(pd.DataFrame(model_rows), width="stretch", hide_index=True)
     st.subheader("Buscadores web")

@@ -63,13 +63,16 @@ def _isolate_llm_settings_environment(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
-def test_settings_without_environment_use_opencode_zen_v41_defaults():
+def test_settings_without_environment_use_opencode_go_v41_defaults():
     settings = Settings(_env_file=None)
 
-    assert settings.llm_model_selector == "opencode-zen"
-    assert settings.opencode_api_base == "https://opencode.ai/zen/v1"
+    assert settings.llm_model_selector == "opencode-go"
+    assert settings.opencode_api_base == "https://opencode.ai/zen/go/v1"
     assert settings.opencode_model == DEEPSEEK_V4_1_FLASH_MODEL_ID
+    assert settings.improvement_llm_provider == "opencode-go"
+    assert settings.improvement_llm_base_url == "https://opencode.ai/zen/go/v1"
     assert settings.improvement_llm_model == DEEPSEEK_V4_1_FLASH_MODEL_ID
+    assert settings.improvement_llm_orchestrator_provider == "opencode-go"
     assert settings.improvement_llm_orchestrator_model == DEEPSEEK_V4_1_FLASH_MODEL_ID
 
 

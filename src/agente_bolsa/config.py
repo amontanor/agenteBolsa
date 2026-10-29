@@ -38,11 +38,11 @@ class Settings(BaseSettings):
         return normalize_model_id(value)
 
     llm_model_selector: Literal["opencode", "opencode-go", "opencode-zen", "mimo", "custom"] = Field(
-        default="opencode-zen",
+        default="opencode-go",
         alias="LLM_MODEL_SELECTOR",
     )
     opencode_api_key: str | None = Field(default=None, alias="OPENCODE_API_KEY")
-    opencode_api_base: str = Field(default="https://opencode.ai/zen/v1", alias="OPENCODE_API_BASE")
+    opencode_api_base: str = Field(default="https://opencode.ai/zen/go/v1", alias="OPENCODE_API_BASE")
     opencode_model: str = Field(default=DEEPSEEK_V4_1_FLASH_MODEL_ID, alias="OPENCODE_MODEL")
     mimo_api_key: str | None = Field(default=None, alias="MIMO_API_KEY")
     mimo_api_base: str = Field(default="https://token-plan-ams.xiaomimimo.com/v1", alias="MIMO_API_BASE")
@@ -58,7 +58,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("OPENAI_MODEL_NAME", "OPENAI_MODEL", "LLM_MODEL"),
     )
     llm_primary_preflight_enabled: bool = Field(default=True, alias="LLM_PRIMARY_PREFLIGHT_ENABLED")
-    llm_local_fallback_enabled: bool = Field(default=True, alias="LLM_LOCAL_FALLBACK_ENABLED")
+    llm_local_fallback_enabled: bool = Field(default=False, alias="LLM_LOCAL_FALLBACK_ENABLED")
     llm_local_fallback_api_key: str | None = Field(default="local-llama", alias="LLM_LOCAL_FALLBACK_API_KEY")
     llm_local_fallback_api_base: str = Field(
         default="http://127.0.0.1:8080/v1",
@@ -807,9 +807,9 @@ class Settings(BaseSettings):
 
     continuous_improvement_enabled: bool = Field(default=True, alias="CONTINUOUS_IMPROVEMENT_ENABLED")
     improvement_llm_enabled: bool = Field(default=False, alias="IMPROVEMENT_LLM_ENABLED")
-    improvement_llm_provider: str = Field(default="opencode-zen", alias="IMPROVEMENT_LLM_PROVIDER")
+    improvement_llm_provider: str = Field(default="opencode-go", alias="IMPROVEMENT_LLM_PROVIDER")
     improvement_llm_base_url: str = Field(
-        default="https://opencode.ai/zen/v1",
+        default="https://opencode.ai/zen/go/v1",
         alias="IMPROVEMENT_LLM_BASE_URL",
     )
     improvement_llm_api_key: str | None = Field(default=None, alias="IMPROVEMENT_LLM_API_KEY")
@@ -818,11 +818,11 @@ class Settings(BaseSettings):
         alias="IMPROVEMENT_LLM_MODEL",
     )
     improvement_llm_orchestrator_provider: str | None = Field(
-        default="opencode-zen",
+        default="opencode-go",
         alias="IMPROVEMENT_LLM_ORCHESTRATOR_PROVIDER",
     )
     improvement_llm_orchestrator_base_url: str | None = Field(
-        default="https://opencode.ai/zen/v1",
+        default="https://opencode.ai/zen/go/v1",
         alias="IMPROVEMENT_LLM_ORCHESTRATOR_BASE_URL",
     )
     improvement_llm_orchestrator_api_key: str | None = Field(
@@ -846,7 +846,7 @@ class Settings(BaseSettings):
     ci_max_open_initiatives: int = Field(default=4, alias="CI_MAX_OPEN_INITIATIVES")
     ci_recurring_cooldown_hours: float = Field(default=24.0, alias="CI_RECURRING_COOLDOWN_HOURS")
     improvement_llm_local_fallback_enabled: bool = Field(
-        default=True,
+        default=False,
         alias="IMPROVEMENT_LLM_LOCAL_FALLBACK_ENABLED",
     )
     improvement_llm_context_target_tokens: int = Field(
