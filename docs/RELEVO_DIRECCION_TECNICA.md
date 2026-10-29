@@ -4933,3 +4933,28 @@ Pendientes inmediatos, por orden:
    scoreboard, como lote de UI separado.
 5. Limpiar vistas `post_market_coordination:session:*` atascadas en `active`
    (2026-10-22, 10-23, 10-27) y decidir si procede retirar `.orig` de la imagen.
+
+### 29-oct — P-L162 + P-L161 desplegados: 0.4.397
+
+Producción: `agente-bolsa:0.4.397-arm64`
+`sha256:1df7c5720c86e817bd312fb1ab4e2a296c9fe04408cb0314c47ec2b4a3a04621`,
+commit `1ff8e4f9ed51ae95deef9265d052079107fe2c9f`, tree
+`d129e2863871b12bebd3885f87fac8c389c17134`, tag `prod-jetson-0.4.397`, recibo
+verificado 12:27:29Z. Corte 12:26Z con XNYS cerrado; doble salud verde, kernel
+`ok` con 0 violaciones, flags paper/true/false/false, cero órdenes y cero
+`critical`/`traceback`/`database is locked`.
+
+Qué cambia: el esquema crea bases nuevas (los índices de ciclos y de
+recomendaciones se declaran junto a su tabla) y el fallo del postmarket deja su
+traza en el evento durable, acotada a 6.000 caracteres.
+
+Qué no cambia: el postmarket continúa sin completar desde 2026-10-19. Este lote
+es diagnóstico, no la cura. Si hoy vuelve a fallar, la traza dirá el frame
+exacto y se convertirá en lote mínimo. Si completa, el hueco queda cerrado por
+la vía normal.
+
+Siguiente secuencia, por orden: (1) observar el postmarket de hoy tras las 22:00
+Madrid y leer la traza si falla; (2) repetir la suite completa sobre `main` para
+medir cuántos de los 858 identificadores caen con P-L162; (3) unificación real de
+modelos en `/etc/agente-bolsa/application.env` (N3, protegido, carrier del kernel
+y resello); (4) pasos 8–11 del plan de agentes (N3, sin autorización todavía).

@@ -6910,3 +6910,34 @@ Límites declarados que sobreviven al despliegue:
 - La imagen base arrastra etiquetas obsoletas (`agente_bolsa_version=0.4.381`,
   base `0.4.321`) y dos ficheros `.orig` en `/app/src`. Higiene de imagen, no
   afecta a la ejecución.
+
+## 29-oct — P-L162 (0.4.396) y P-L161 (0.4.397): esquema en base nueva y traza del fallo postmarket
+
+Ambos N2, desplegados juntos en un solo corte. Imagen
+`agente-bolsa:0.4.397-arm64`
+`sha256:1df7c5720c86e817bd312fb1ab4e2a296c9fe04408cb0314c47ec2b4a3a04621`,
+commit `1ff8e4f9ed51ae95deef9265d052079107fe2c9f`, tree
+`d129e2863871b12bebd3885f87fac8c389c17134`, tag `prod-jetson-0.4.397`, recibo
+verificado 2026-10-29T12:27:29Z. Doble salud verde, kernel `ok`, cero órdenes y
+cero errores desde el corte.
+
+P-L162: `SCHEMA` declaraba `idx_ci_cycles_created` e
+`idx_trade_recommendations_cycle_created` antes de sus `CREATE TABLE`, así que
+`Store.ensure_schema` sobre base nueva fallaba con
+`sqlite3.OperationalError: no such table: main.continuous_improvement_cycles` y
+arrastraba 858 identificadores de la suite (idénticos en `main`). Los dos índices
+se declaran ahora junto a su tabla. Producción no estaba afectada: su base ya
+tenía las tablas. Evidencia: focales `2 passed`; tres ficheros que antes fallaban
+por esta causa `43 passed`.
+
+P-L161: el evento `post_market_review_failed` solo llevaba `repr(exc)`, y los
+fallos del 26-27-oct llegaron como `TypeError("<' not supported between
+instances of 'NoneType' and 'int'")` sin frame. Ahora publica la traza acotada a
+6.000 caracteres como evidencia; no es señal de control ni toca trading.
+Focales y vecinos `78 passed`.
+
+Límites: el postmarket sigue sin completar desde 2026-10-19; este lote solo
+garantiza diagnóstico si vuelve a fallar. La prueba real es el postmarket de hoy
+desde las 22:00 Madrid. Los `started` sin terminal de 21-28 oct quedan
+`unavailable`. La suite completa no se repitió; repetirla es el siguiente gate
+para cuantificar la deuda restante.
