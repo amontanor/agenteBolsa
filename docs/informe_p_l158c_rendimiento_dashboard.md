@@ -161,3 +161,51 @@ No se toca decision, sizing, gates, ordenes, riesgo ni politica activa.
 - La tarea `AgenteBolsaDBMaintenance` sigue `Disabled` a proposito: un
   `-Mode apply` implicaria mantenimiento de la base y no esta autorizado.
 
+## Despliegue real en el Jetson (29-oct-2026, 0.4.382-arm64)
+
+El destino de produccion es el Jetson Orin (`antonio@192.168.1.186`), no
+Windows. El 28-oct el Jetson corria `agente-bolsa:0.4.381-arm64` (tres
+contenedores healthy, 17 h) con otro linaje de version; por eso **no** se
+desplego la rama completa (habria sido un downgrade a 0.4.254): se porto solo
+el parche a la imagen viva.
+
+Estado medido antes del parche, sobre la base real:
+
+- `agent_events` con **1.036.491 filas**; `latest_events(400)` = **70,58 s**
+  con plan `SCAN agent_events` + `USE TEMP B-TREE FOR ORDER BY`.
+- Dashboard sin terminar de renderizar en **240 s** (timeout del navegador).
+
+Port aplicado: diff de `storage.py`, `web_app.py`, `market_calendar.py`,
+`tools/performance_benchmark.py` y `tools/improvement_dashboard.py` sobre el
+codigo extraido de la imagen (`docker create` + `docker cp`), `patch -p1`
+(hunk del import resuelto a mano), `compileall`, bump a `0.4.382` y build
+incremental `FROM agente-bolsa:0.4.381-arm64`
+(digest `sha256:9f924cbbe4ff8f93882ed8daa05f18c428fa8bab0e758c31ca0dbeca15d95681`).
+
+Resultado medido despues, sobre la misma base:
+
+- Los tres indices se crearon en **10 s** al arrancar el scheduler.
+- `latest_events(400)` **0,0015–0,0025 s**; `latest_events(20)` 0,0001 s;
+  la consulta por `cycle_id` pasa a `SEARCH ... USING INDEX`.
+- Dashboard servidor (`dashboard_timing` de la linea 0.4.381): **6,06 s en
+  caliente**, 37,8 s en frio de proceso; `opening_context` 5,37 s es ahora el
+  coste dominante y `portfolio_value_series_from_alpaca` 0,062 s.
+- Contenedores `agente-bolsa-*-1` en `0.4.382-arm64`, `healthy`,
+  `RestartCount=0`, `OOMKilled=false`; HTTP `:8081/` y `/_stcore/health` 200;
+  kernel `ok` (sellado 2026-10-11, cero violaciones); vecinos
+  (`whale-copy`, `terrenos`, `mi-proyecto`) intactos.
+- Memoria del contenedor web: 655 MB de 1 GiB.
+
+Incidencia durante el despliegue: el primer `up` se ejecuto sin
+`-f docker-compose.raspberry.override.yml`, de modo que los contenedores se
+recrearon sin `AGENTE_BOLSA_KERNEL_ENV_PATH/SHA256` y `kernel-status` paso a
+`violation` (`.env`, `env_path`). Se corrigio recreando con los dos ficheros
+(`docker-compose.yml` + `docker-compose.raspberry.override.yml`) y
+`--env-file /etc/agente-bolsa/runtime.env`; el kernel volvio a `ok`. Regla:
+replicar siempre la invocacion original de Compose (label
+`com.docker.compose.project.config_files`), no solo el fichero base.
+
+Pendiente en Jetson: `opening_performance_context` (5,37 s) es el siguiente
+cuello; y el techo de 1 GiB del contenedor web conviene vigilarlo.
+
+

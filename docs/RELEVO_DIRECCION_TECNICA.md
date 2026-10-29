@@ -42,16 +42,17 @@ congelado. Informe: `docs/informe_p_l158c_rendimiento_dashboard.md`.
 
 Secuencia propuesta:
 
-1. **P-L158C desplegado en codigo** (`2f3374bf`, 0.4.254): Dashboard 2,5–4,0 s
-   segun carga frente a 11,6 s. La activacion del dashboard esta bloqueada por
-   permisos: `AgenteBolsaWeb` sigue `Disabled` y la cuenta no eleva; hace falta
-   un shell elevado del operador (`Enable-ScheduledTask` + `Start-ScheduledTask`
-   sobre `AgenteBolsaWeb`). El scheduler continua parado.
-2. P-L158D con el panel de autonomia (0,811 s restantes) y el render perezoso
-   de los expanders; necesita replicar el `ORDER BY`/`LIMIT` de cada lector
-   porque las lecciones ya llegan truncadas a 2000.
-3. Antes de cualquier arranque del scheduler: decidir si el sistema vuelve a
-   operar; hoy no hay sesion desde el 17-sep-2026 y la tarea esta deshabilitada.
+1. **P-L158C desplegado en el Jetson** (`0.4.382-arm64`, digest `9f924cbbe4ff`):
+   `latest_events(400)` 70,58 s -> 0,0015 s y dashboard servidor 6,06 s en
+   caliente (antes >240 s). Tres contenedores healthy, kernel `ok`. El candidato
+   Windows 0.4.254 queda integrado en `codex/astra` pero el dashboard local no
+   debe usarse como produccion: la tarea `AgenteBolsaWeb` sigue `Ready` con
+   trigger de logon y hay que deshabilitarla desde un shell elevado.
+2. P-L158D: en Jetson el coste dominante ya es `opening_performance_context`
+   (5,37 s); en Windows es el panel de autonomia (0,811 s). Necesita replicar el
+   `ORDER BY`/`LIMIT` de cada lector porque las lecciones llegan truncadas a 2000.
+3. Vigilar el techo de 1 GiB del contenedor web (655 MB en uso) antes de añadir
+   caches o vistas nuevas.
 
 ## P-L155: el dato de SP500 existe y el lector lo descarta (26-sep-2026)
 
