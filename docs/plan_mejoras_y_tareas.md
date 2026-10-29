@@ -7255,3 +7255,16 @@ lease y no se toc? `whale-copy`.
 Dictamen: `blocked` por infraestructura. La prioridad pasa a liberar I/O del host
 (decisi?n del operador sobre `whale-copy`) antes de reintentar el postmarket.
 
+
+
+### 29-oct (noche, continuaci?n) ? 0.4.406 desplegado: lock de outcomes
+
+Traza real del PMR (21:20:48Z): `update_signal_outcomes` ->
+`store.update_signal_outcomes_bulk` -> `conn.executemany` ->
+`OperationalError: database is locked`. Lote P-L163b: trozos de 500 filas con
+reintento acotado y degradaci?n fail-open del outcome update en el informe
+(`deferred=True`). Portado sobre 0.4.402 para no incluir el cambio de crews.
+
+Imagen `sha256:88ef7ae7?`, commit `e37da517`, tag `prod-jetson-0.4.406`, recibo
+22:06:43Z, doble salud verde, kernel ok. El PMR reintent? 22:05:15Z y segu?a en
+`outcome_update` a las 22:38Z con el host degradado por I/O; sin terminal a?n.

@@ -5086,3 +5086,13 @@ con owner muerto; no se limpi? a mano.
 Siguiente: decisi?n del operador sobre `whale-copy`/I/O; despu?s, reintentar el
 postmarket por la ruta normal y capturar la traza de P-L163 o el OOM de P-L163b.
 
+
+
+### 29-oct (noche) ? 0.4.406 desplegado y PMR reintentando
+
+Traza del PMR: lock en `update_signal_outcomes_bulk`. P-L163b desplegado como
+0.4.406 (`sha256:88ef7ae7?`, commit `e37da517`, tag `prod-jetson-0.4.406`,
+recibo 22:06:43Z), portado sobre 0.4.402 para excluir crews. El PMR reintent? a
+las 22:05:15Z, recuper? el lease hu?rfano y qued? en `outcome_update` a las
+22:38Z; el host sigue degradado por I/O. Producci?n 0.4.406; `main` en 0.4.405
+(candidato no desplegado) ? brecha a cerrar cuando crews se desacoplen.

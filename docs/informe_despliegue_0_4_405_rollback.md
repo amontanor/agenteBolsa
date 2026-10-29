@@ -75,3 +75,36 @@ rollback y el tag `prod-jetson-0.4.405` se eliminó por inexacto (no se publicó
 asíncrona/shadow con cadencia propia, o conjunto de tareas reducido — y garantía
 demostrable de no solape entre ciclos. Criterio: un ciclo con crew real no puede
 producir dos `cycle_started` sin terminal ni saltar `portfolio_watch`.
+
+
+## 9. 0.4.406 ? arreglo del lock de outcomes desplegado (2026-10-29 23:06 Madrid)
+
+Con la traza real del postmarket (21:20:48Z) se identific? el frame exacto:
+
+```text
+post_market_review.py:855 update_signal_outcomes(...)
+-> signal_learning.py:1640 store.update_signal_outcomes_bulk(...)
+-> storage.py:4563 conn.executemany(...)
+-> sqlite3.OperationalError: database is locked
+```
+
+Lote P-L163b (N2), portado sobre 0.4.402 para no arrastrar el cambio de crews:
+
+- `storage.update_signal_outcomes_bulk` escribe en trozos de 500 filas con
+  reintento acotado (3, backoff 0,2-1,5 s) solo para `locked`/`busy`.
+- `post_market_review._build_learning_pipeline` degrada el outcome update ante
+  lock: registra `outcome_update:failed` y sigue con el informe
+  (`deferred=True`, `warnings=["outcome_update_locked"]`). Los outcomes se
+  recalculan de forma idempotente en la pasada siguiente.
+- Pruebas: base `3 failed` -> candidato `5 passed`; regresiones 26 passed.
+
+Despliegue: `agente-bolsa:0.4.406-arm64`
+`sha256:88ef7ae7391b6ecaf5938f564cc46289bf78cc0809b0f06c19afc8ff6b4d208b`,
+`FROM 0.4.402-arm64`, 223/223 ficheros verificados, commit `e37da517`, tree
+`d32a24cc`, tag `prod-jetson-0.4.406`, recibo 2026-10-29T22:06:43Z. Doble salud
+verde, kernel ok.
+
+El postmarket reintent? a las 22:05:15Z (recuper? el lease hu?rfano), complet?
+reconciliaci?n y arranc? `outcome_update` a las 22:06:09Z. A las 22:38Z segu?a en
+esa etapa con el host a?n degradado por I/O. Sin terminal todav?a; el veredicto
+de P-L163 queda pendiente de esa ejecuci?n.
