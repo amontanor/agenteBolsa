@@ -6851,3 +6851,62 @@ precondiciones productivas de mercado cerrado). Detalle completo en
 `docs/informe_p_l160_agentes_objetivos.md`. Siguiente: lote N3 de los pasos 8–11
 con la foto productiva de este informe; superficie de Config para objetivos como
 lote de UI.
+
+### Cierre 29-oct — P-L160 desplegado (0.4.395)
+
+Dictamen: `deployed`. Imagen `agente-bolsa:0.4.395-arm64`
+`sha256:0b31237635edd8cb51462a1ba084e95b3971e753044ed2138c83e462501f5917`,
+construida como port `FROM agente-bolsa:0.4.393-arm64` con 9 ficheros
+(6 modificados, 3 nuevos), todos verificados byte a byte contra el commit
+`c1e925c702e15332c1ecd177cb34eade65eb716b` / tree
+`f72b091baa213c0bb1176e1d0c62d8b1dc74cf42` en contenedor temporal con
+`--entrypoint python3`.
+
+Despliegue 11:06Z con `jetson-ops deploy-agente-bolsa` (Compose base más
+override Raspberry y `--env-file /etc/agente-bolsa/runtime.env`), previo
+preflight cerrado: XNYS cerrado, leases globales ausentes, cero procesos de
+validación, kernel `ok` sellado con 0 violaciones, flags `paper`/`true`/`false`/
+`false`, 3,6 GB de memoria disponible y 195 GB libres. Salud 1 y salud 2:
+3 contenedores `healthy`, `RestartCount=0`, `OOMKilled=false`, HTTP 200 en `/`,
+`/health`, `/_stcore/health` y `/kindle`. Recibo verificado escrito a las
+11:08:30Z y releído por `latest_verified_deployment_receipt`. Sin órdenes ni
+planes nuevos desde el corte.
+
+Hallazgos y correcciones operativas durante el corte:
+
+- El contrato `agent_objectives.json` se instaló primero en UTF-16LE por
+  redirección de PowerShell y el cargador devolvió `config_unreadable`. Se
+  reinstaló con los bytes exactos del blob (UTF-8, 6.668 B, sha256
+  `717af48674f4b78628a86ceeebb05f6a0f60203a294a35193a22cfcd2be7ae9b`). Error
+  del operador, no del código; el cargador falló en blando como estaba previsto.
+- El selector `/etc/agente-bolsa/runtime.env` apuntaba a `0.4.381-arm64` mientras
+  el stack corría `0.4.393`: un reinicio habría revertido la release. Corregido a
+  `0.4.395-arm64` con copia `runtime.env.bak-pl160-20261029T110601Z`.
+- `agent-funnel --json` en producción devuelve el embudo real (2.965 propuestas,
+  17 admitidas, 5 aplicadas, 2.946 rechazadas, admisión 0,57 %, atribución
+  `own_gate` 468 / `inherited_batch` 2.475 / `invalid_transition` 3) y objetivos
+  `partial`: 19 agentes, 2 `available`, 2 `retired`, 15 `unavailable` por
+  `scoreboard_unavailable` (la CLI se ejecutó sin `--scoreboard-json`).
+
+Límites declarados que sobreviven al despliegue:
+
+- **La unificación de modelos no está activa en producción.**
+  `/etc/agente-bolsa/application.env` fija `LLM_MODEL_SELECTOR=opencode-zen`,
+  `OPENCODE_API_BASE=https://opencode.ai/zen/v1`, `OPENCODE_MODEL=deepseek-v4-flash-free`
+  (normalizado a `deepseek-v4.1-flash`) y `OPENAI_API_BASE` de mimo con
+  `OPENAI_MODEL_NAME=kimi-k2.6`. Los defaults nuevos de `config.py` no aplican
+  mientras el entorno los sobrescriba. Cambiarlo es N3: fichero protegido, hash
+  del carrier del kernel y resello; requiere autorización explícita.
+- **Postmarket sin completar desde el 19-oct.** `post_market_review_last_session`
+  sigue en `2026-10-19`; la sesión 2026-10-28 terminó `skipped` por
+  `market_not_ready` a las 19:54Z (antes del cierre) y el despliegue de 0.4.393 a
+  las 20:14Z consumió la ventana de reintento. La sesión 2026-10-29 arrancó
+  `skipped` antes de la apertura, que es lo esperado. Requiere lote propio: el
+  job corre por intervalo y solo considera la fecha de mercado vigente, así que
+  una sesión que se salta antes del cierre no se reintenta después.
+- Tres vistas `post_market_coordination:session:*` (2026-10-22, 10-23, 10-27)
+  quedaron en `active` sin lease global asociado: fuga cosmética de vistas, sin
+  propietario vivo. Lote aparte.
+- La imagen base arrastra etiquetas obsoletas (`agente_bolsa_version=0.4.381`,
+  base `0.4.321`) y dos ficheros `.orig` en `/app/src`. Higiene de imagen, no
+  afecta a la ejecución.

@@ -221,3 +221,43 @@ evidencia del punto 2, que ya está disponible.
 2. Colocar `agent_objectives.json` en `/data/config` y verificar que el informe
    pasa de `partial` con razón embebida a `partial` por fuente, sin `config_missing`.
 3. Abrir el lote N3 de los pasos 8–11 con la foto productiva de este informe.
+
+## 11. Despliegue (2026-10-29)
+
+Dictamen final: **`deployed`**.
+
+| Dato | Valor |
+|---|---|
+| Imagen | `agente-bolsa:0.4.395-arm64` |
+| Digest | `sha256:0b31237635edd8cb51462a1ba084e95b3971e753044ed2138c83e462501f5917` |
+| Base del port | `agente-bolsa:0.4.393-arm64` |
+| Commit / tree | `c1e925c702e15332c1ecd177cb34eade65eb716b` / `f72b091baa213c0bb1176e1d0c62d8b1dc74cf42` |
+| Ficheros del port | 9 (6 modificados, 3 nuevos), verificación byte a byte OK |
+| Corte | 11:06Z, mercado cerrado, apertura 14:30 local |
+| Salud | 3 `healthy`, `RestartCount=0`, `OOMKilled=false`, HTTP 200 en `/`, `/health`, `/_stcore/health`, `/kindle` |
+| Kernel | `ok`, 0 violaciones, 4/4 hashes, sellado 2026-10-11 |
+| Flags | `TRADING_MODE=paper`, `ALPACA_PAPER=true`, `ALLOW_LIVE_TRADING=false`, `ALLOW_AUTO_APPLY_IMPROVEMENTS=false` |
+| Recibo | verificado a las 11:08:30Z, releído correctamente |
+| Órdenes/planes nuevos | 0 |
+
+Informe real en producción tras el despliegue: 2.965 propuestas, 17 admitidas,
+5 `APPLIED`, 2.946 rechazadas, admisión 0,57 %; atribución `own_gate` 468,
+`inherited_batch` 2.475, `invalid_transition` 3, `unclassified` 0. Objetivos
+`partial` con 19 agentes: 2 `available`, 2 `retired`, 15 `unavailable`
+(`scoreboard_unavailable` al ejecutar la CLI sin `--scoreboard-json`).
+
+Incidencias del corte, corregidas en el momento:
+
+1. El contrato se instaló en UTF-16LE por redirección de PowerShell y el cargador
+   devolvió `config_unreadable`; reinstalado con los bytes del blob (UTF-8,
+   sha256 `717af48674f4b78628a86ceeebb05f6a0f60203a294a35193a22cfcd2be7ae9b`).
+   Fallo del operador; el módulo degradó en blando como estaba diseñado.
+2. `runtime.env` apuntaba a `0.4.381-arm64` con `0.4.393` en ejecución: un
+   reinicio habría revertido la release. Corregido a `0.4.395-arm64` con copia
+   `runtime.env.bak-pl160-20261029T110601Z`.
+
+Límites que el despliegue no resuelve: la unificación de modelos no está activa
+porque `application.env` sigue forzando `opencode-zen`, `zen/v1`,
+`deepseek-v4-flash-free` y mimo; el postmarket no completa desde el 19-oct por
+cadencia; hay tres vistas de sesión atascadas en `active` sin lease global; y la
+imagen base arrastra etiquetas obsoletas y dos `.orig`.

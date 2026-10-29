@@ -4897,3 +4897,39 @@ cerrado, cuota por dominio, presupuesto LLM en `config.py` y cierre
 `READY_TO_APPLY` a `APPLIED`) son N3 y exigen autorización explícita y ventana
 cerrada verificada. La superficie de objetivos en Config y la inyección de
 `objective_status` en el scoreboard son lotes separados.
+
+### 29-oct — P-L160 desplegado: 0.4.395 en producción
+
+Producción: `agente-bolsa:0.4.395-arm64`
+`sha256:0b31237635edd8cb51462a1ba084e95b3971e753044ed2138c83e462501f5917`,
+runtime `0.4.395`, commit `c1e925c702e15332c1ecd177cb34eade65eb716b`, tree
+`f72b091baa213c0bb1176e1d0c62d8b1dc74cf42`, tag `prod-jetson-0.4.395`. Recibo
+verificado 2026-10-29T11:08:30Z. Doble salud verde, cero reinicios, cero OOM,
+HTTP 200 en cuatro rutas, kernel `ok` con 0 violaciones y flags
+`paper`/`true`/`false`/`false`. Sin órdenes ni planes desde el corte.
+
+Estado de mercado en el corte: XNYS cerrado, apertura 14:30 local; margen
+suficiente. Postmarket de la sesión 2026-10-28 `skipped` por `market_not_ready`
+a las 19:54Z, terminal y sin lease vivo: el código de recuperación de leases
+considera `skipped` estado terminal. Se documenta como desviación literal de la
+letra de AGENTS ("completed o failed") y como defecto de producto abierto, no
+como causa del lote.
+
+Pendientes inmediatos, por orden:
+
+1. Revisar por qué el postmarket no se reintenta después del cierre:
+   `post_market_review_job` usa `should_run_daily_study` sobre la fecha de mercado
+   vigente y el ciclo de intervalo se agota; la última revisión completada es
+   `2026-10-19`. Lote N2 propio, con caracterización de cadencia.
+2. Decidir la unificación real de modelos en producción: requiere cambiar
+   `/etc/agente-bolsa/application.env` (protegido, hash del carrier del kernel y
+   resello). Hoy el entorno sigue forzando `opencode-zen`, `zen/v1`,
+   `deepseek-v4-flash-free` y mimo con `kimi-k2.6`, así que P-L159 no surte
+   efecto en el Jetson.
+3. Pasos 8–11 del plan (ventana de laboratorio en mercado cerrado, cuota por
+   dominio, presupuesto LLM en `config.py`, cierre `READY_TO_APPLY` a `APPLIED`)
+   siguen siendo N3 y necesitan autorización explícita.
+4. Superficie de objetivos en Config e inyección de `objective_status` en el
+   scoreboard, como lote de UI separado.
+5. Limpiar vistas `post_market_coordination:session:*` atascadas en `active`
+   (2026-10-22, 10-23, 10-27) y decidir si procede retirar `.orig` de la imagen.
