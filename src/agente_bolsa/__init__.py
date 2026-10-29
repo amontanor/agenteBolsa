@@ -157,4 +157,5 @@ __all__ = ["__version__"]
 # P-L159: un solo modelo, DeepSeek V4.1 Flash via opencode Go (0.4.394).
 # P-L160: objetivos por agente, embudo auditable y decisiones sin contagio (0.4.395).
 # P-L162: indices junto a su tabla; el SCHEMA crea bases nuevas (0.4.396).
-__version__ = "0.4.396"
+# P-L161: la traza del fallo postmarket viaja en el evento durable (0.4.397).
+__version__ = "0.4.397"
