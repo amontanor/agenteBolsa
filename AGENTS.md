@@ -27,6 +27,16 @@ versión, árbol, configuración y eventos reales.
 - No presentes correlación, P/L intradía o una sesión como evidencia causal.
 - No uses texto libre como fuente de IDs, scores o estados estructurados.
 
+## Comunicación con el operador
+
+- Antes de cada comando o herramienta que ejecutes, escribe una línea breve
+  con el objetivo: qué quieres comprobar o conseguir y por qué. Esa línea va
+  antes de la llamada, no después.
+- Si encadenas varios comandos, declara el objetivo del bloque completo y, si
+  el resultado cambia el plan, el del siguiente paso.
+- No narres el resultado de forma redundante; el objetivo previo y la evidencia
+  posterior deben leerse como una sola frase técnica.
+
 ## Primeros pasos obligatorios
 
 Antes de cambiar nada:
@@ -394,26 +404,79 @@ Definition of Done para un cambio funcional:
 
 ## Git, worktrees y versiones
 
-- Desarrollo funcional siempre en un worktree `codex/<lote>` basado en un
-  commit exacto; producción no es área de trabajo.
-- Registra base, rama, HEAD y tree antes y después.
-- Conserva commits separados para caracterización, implementación, QA y
-  documentación.
-- Integra con `merge --no-ff`; no squash, rebase, cherry-pick o amend sobre
-  commits ya validados.
-- Resuelve conflictos campo a campo. No uses `ours`/`theirs` global en archivos
-  compartidos como `storage.py`, `scheduler.py`, versión o plan maestro.
-- Candidatos paralelos reservan patches distintos. Inspecciona el plan antes de
-  asignar versión; no puede haber dos releases con el mismo número.
-- Todo cambio funcional, de comportamiento o UI requiere bump. Tests/docs solos
-  no lo requieren salvo que `test_version_policy` lo exija.
-- No hagas push salvo petición explícita.
-- Rollback productivo mediante `git revert` auditable, nunca reset destructivo.
+- **`main` es el tronco único y el nexo común.** Refleja la versión desplegada
+  en producción (Jetson). Toda tarea nueva parte de `main`; nunca de una rama
+  antigua, de un commit suelto ni del checkout productivo.
+- `codex/jetson-prod-<version>` es la rama de integración de la release en
+  curso. Al cerrar se fast-forwardea a `main`.
+- `codex/astra` es **legado** (línea Windows 0.4.255): no se despliega en el
+  Jetson y no se usa como base.
+- Ramas anteriores a la release vigente (`codex/oct*`,
+  `codex/dashboard-port-*`, `codex/pl*`, etc.) están congeladas: no son base de
+  nada. No se borran sin autorización del operador.
+- Arranque de un hilo nuevo:
+  ```bash
+  git fetch --all --prune
+  git switch main && git pull --ff-only        # si hay remoto
+  git worktree add .worktrees/<lote> -b codex/<lote> main
+  git -C .worktrees/<lote> rev-parse HEAD      # anota base exacta
+  ```
+- Ciclo de vida de un lote: worktree desde `main` con base anotada (HEAD y
+  tree); commits separados de caracterización, implementación, QA y
+  documentación; gates proporcionales (N0–N3) y `git diff --check`; merge
+  `--no-ff` a la rama de integración y fast-forward a `main`; tag anotado
+  `prod-jetson-<version>`; despliegue, doble salud y recibo; por último se
+  retira la rama del lote (solo con autorización; los worktrees ajenos no se
+  tocan).
+- Historial: integra con `merge --no-ff`; no squash, rebase, cherry-pick o
+  amend sobre commits ya validados. Resuelve conflictos campo a campo; nunca
+  `ours`/`theirs` global en `storage.py`, `scheduler.py`, versión o plan maestro.
+- Versión: todo cambio funcional, de comportamiento o UI requiere bump; dos
+  releases no comparten número. Una release se identifica por versión + tag +
+  digest de imagen + commit; si algo no coincide, no está desplegada.
+- Push: solo con petición explícita. `main` se publica por fast-forward, nunca
+  con `--force`.
+- Rollback: relanzar la imagen anterior y `git revert` auditable; nunca reset
+  destructivo.
 - Un árbol productivo sucio bloquea el despliegue. Antes de normalizar cambios
   conocidos, verifica hashes y equivalencia con el candidato y pide autoridad;
   nunca los descartes automáticamente.
 
-## Operación y despliegue en Windows
+## Despliegue en el Jetson (producción)
+
+Destino real: `antonio@192.168.1.186`, Docker ARM64. Windows no es producción.
+
+1. Preflight read-only: `docker ps`, `free -m`, `df -h`, kernel, leases y salud.
+2. Construir imagen incremental `FROM agente-bolsa:<anterior>` con solo lo
+   cambiado y registrar el digest `sha256:...`.
+3. Verificar que el árbol del commit y la imagen coinciden **byte a byte** en
+   los ficheros tocados, con un contenedor temporal y `--entrypoint python3`
+   (nunca arrancando el entrypoint del sistema).
+4. Parar y arrancar con la invocación completa de Compose:
+   ```bash
+   cd /opt/agente-bolsa/releases/<base>/deploy
+   sudo AGENTE_BOLSA_IMAGE=agente-bolsa:<ver>-arm64 docker compose \
+     --env-file /etc/agente-bolsa/runtime.env \
+     -f docker-compose.yml -f docker-compose.raspberry.override.yml \
+     up -d --no-deps scheduler web auxiliary
+   ```
+   Nunca solo `docker-compose.yml`: el override aporta secretos, límites y
+   `AGENTE_BOLSA_KERNEL_ENV_*`; sin él `kernel-status` pasa a `violation`.
+5. Salud 1 y salud 2 (≥75 s): `healthy`, `RestartCount=0`, `OOMKilled=false`,
+   HTTP `:8081/` y `/_stcore/health` 200, kernel `ok` y vecinos intactos.
+6. Recibo de despliegue:
+   ```bash
+   docker exec agente-bolsa-scheduler-1 python3 -m agente_bolsa.main \
+     deployment-receipt --version <ver> --image-id sha256:<id> \
+     --source-head <40hex> --source-tree <40hex>
+   ```
+   y comprobar que el panel muestra «Despliegue verificado».
+7. Tag anotado `prod-jetson-<ver>` sobre el commit desplegado y fast-forward de
+   `main`.
+8. Si falla una precondición, dictamen `precondition_not_met`: no se repara a
+   ciegas ni se arranca "para ver".
+
+## Operación y despliegue en Windows (desarrollo)
 
 Los helpers canónicos prevalecen sobre fragmentos antiguos de runbooks:
 
