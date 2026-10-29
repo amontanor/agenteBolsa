@@ -58,8 +58,12 @@ Secuencia propuesta:
 4. P-L158E5 **desplegado** (`0.4.390-arm64`): sin copia defensiva de pickles y
    helpers de sesion cacheados. Dashboard 2,54 s en caliente; primer render
    13,6 s (incluye 12,4 s de arranque de Streamlit); navegador 3,78–4,66 s.
-5. Siguiente: panel de autonomia en Windows (0,81 s) y vigilancia del techo de
-   1 GiB del contenedor web.
+5. P-L158F **desplegado**: Jetson `0.4.391-arm64` (indice cubridor de
+   observaciones: proyeccion 5,47 -> 0,005 s; autonomia 5,92 -> 2,92 s) y
+   Windows `0.4.255` mergeado (`d990aa15`). Windows cerrado: las tres tareas en
+   `Disabled`, sin listener 8501.
+6. Siguiente: vigilar el techo de 1 GiB del web y el primer ciclo con la
+   apertura XNYS (15:30 Madrid).
 
 ## P-L155: el dato de SP500 existe y el lector lo descarta (26-sep-2026)
 

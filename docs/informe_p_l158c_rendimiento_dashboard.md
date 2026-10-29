@@ -310,6 +310,32 @@ Medido en el Jetson:
 - Estado: `0.4.390-arm64` (digest `2ce39598726d`), tres contenedores `healthy`,
   `restarts=0`, sin OOM, HTTP 200, kernel `ok`.
 
+## P-L158F: indice cubridor de observaciones (0.4.391 Jetson, 0.4.255 Windows)
+
+El panel de autonomía seguía costando 5,9 s en caliente en el Jetson. El
+perfil mostró que el culpable era la propia proyección introducida en P-L158C:
+`learning_observation_created_dates` tardaba **5,47 s** porque ordena por
+`signal_date, symbol` y leía `created_at` de la tabla (5000 lecturas aleatorias
+sobre una tabla con JSON grande en eMMC).
+
+Cambio: índice cubridor
+`idx_learning_observations_cover(signal_date DESC, symbol ASC, created_at)`.
+Plan resultante `SCAN ... USING COVERING INDEX` y la proyección pasa a
+**0,005 s**. `collect_autonomy_state` baja de 5,92 a 2,92 s; el resto es lectura
+de validaciones, decisiones, propuestas y lecciones.
+
+Se replican tambien en la linea Windows (`0.4.255`,
+`codex/astra` merge `d990aa15`) los indices que faltaban respecto a Jetson:
+`idx_agent_events_type_created`, `idx_ci_cycles_created`,
+`idx_trade_recommendations_cycle_created` y el cubridor de observaciones. Cinco
+pruebas nuevas fijan la presencia de indices y el plan de cada lector
+(22 passed con las focales de P-L158C y la politica de version).
+
+Windows queda cerrado: tarea `AgenteBolsaWeb` en `Disabled`, sin listener en
+8501 y sin proceso web; `AgenteBolsaScheduler` y `AgenteBolsaDBMaintenance`
+tambien `Disabled`. Produccion es el Jetson.
+
+
 
 
 
