@@ -156,4 +156,5 @@ __all__ = ["__version__"]
 # P-L158G2: CLI de recibo alineado con el escritor existente (0.4.393).
 # P-L159: un solo modelo, DeepSeek V4.1 Flash via opencode Go (0.4.394).
 # P-L160: objetivos por agente, embudo auditable y decisiones sin contagio (0.4.395).
-__version__ = "0.4.395"
+# P-L162: indices junto a su tabla; el SCHEMA crea bases nuevas (0.4.396).
+__version__ = "0.4.396"

@@ -99,11 +99,8 @@ ON agent_events(event_type, created_at);
 
 -- P-L158D2: el panel pide el ultimo ciclo de mejora y las recomendaciones por
 -- ciclo; sin estos indices eran SCAN + TEMP B-TREE sobre 3.5k/5.6k filas.
-CREATE INDEX IF NOT EXISTS idx_ci_cycles_created
-ON continuous_improvement_cycles(created_at);
-
-CREATE INDEX IF NOT EXISTS idx_trade_recommendations_cycle_created
-ON trade_recommendations(cycle_id, created_at);
+-- P-L162: cada indice se declara junto a su tabla; aqui, antes del CREATE
+-- TABLE, rompian cualquier base nueva al ejecutar el SCHEMA completo.
 
 CREATE TABLE IF NOT EXISTS hypotheses (
     hypothesis_id TEXT PRIMARY KEY,
@@ -166,6 +163,9 @@ CREATE TABLE IF NOT EXISTS trade_recommendations (
     payload_json TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_trade_recommendations_cycle_created
+ON trade_recommendations(cycle_id, created_at);
 
 CREATE TABLE IF NOT EXISTS llm_usage (
     usage_id TEXT PRIMARY KEY,
@@ -455,6 +455,9 @@ CREATE TABLE IF NOT EXISTS continuous_improvement_cycles (
 
 CREATE INDEX IF NOT EXISTS idx_ci_cycles_status_updated
 ON continuous_improvement_cycles(status, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_ci_cycles_created
+ON continuous_improvement_cycles(created_at);
 
 CREATE TABLE IF NOT EXISTS continuous_improvement_llm_responses (
     llm_call_id TEXT PRIMARY KEY,
