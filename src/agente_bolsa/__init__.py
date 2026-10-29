@@ -142,4 +142,16 @@ __all__ = ["__version__"]
 # Dashboard cache, asynchronous publication and read-only FILL adapter.
 # QA isolation: restore AppTest main module and isolate inherited LLM settings (0.4.379).
 # Stream wide signal rows without retaining a second complete raw payload list.
-__version__ = "0.4.381"
+# P-L158C: indices de eventos, calendario cacheado y mapeo XNYS lineal (0.4.382).
+# P-L158D: indice por tipo de evento y cache de pickles de apertura (0.4.383).
+# P-L158D2: indices de ciclos/recomendaciones y limpieza limitada (0.4.384).
+# P-L158D2b: corrige el import de time en retention (0.4.385).
+# P-L158E: precalentado del dashboard en el arranque del proceso web (0.4.386).
+# P-L158E2: guarda de proceso para el precalentado del dashboard (0.4.387).
+# P-L158E3: precalentado sincrono en la primera sesion del panel (0.4.388).
+# P-L158E4: calendario XNYS cacheado por ano (0.4.389).
+# P-L158E5: helpers de sesion cacheados y sin copia de pickles (0.4.390).
+# P-L158F: indice cubridor para la proyeccion de observaciones (0.4.391).
+# P-L158G: recibo de despliegue verificable desde CLI (0.4.392).
+# P-L158G2: CLI de recibo alineado con el escritor existente (0.4.393).
+__version__ = "0.4.393"

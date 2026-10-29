@@ -83,6 +83,28 @@ CREATE TABLE IF NOT EXISTS agent_events (
 CREATE INDEX IF NOT EXISTS idx_agent_events_agent_created
 ON agent_events(agent, created_at);
 
+-- P-L158C: latest_events() ordena por created_at y el lector de decisiones
+-- filtra por cycle_id. Sin estos indices SQLite escanea los 200k+ eventos y
+-- ordena en un B-tree temporal en cada render del panel.
+CREATE INDEX IF NOT EXISTS idx_agent_events_created
+ON agent_events(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_agent_events_cycle_created
+ON agent_events(cycle_id, created_at);
+
+-- P-L158D: los lectores por prefijo de event_type (session_open_snapshot,
+-- agent_run, ...) hacian LIKE + ORDER BY sobre 1M de eventos.
+CREATE INDEX IF NOT EXISTS idx_agent_events_type_created
+ON agent_events(event_type, created_at);
+
+-- P-L158D2: el panel pide el ultimo ciclo de mejora y las recomendaciones por
+-- ciclo; sin estos indices eran SCAN + TEMP B-TREE sobre 3.5k/5.6k filas.
+CREATE INDEX IF NOT EXISTS idx_ci_cycles_created
+ON continuous_improvement_cycles(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_trade_recommendations_cycle_created
+ON trade_recommendations(cycle_id, created_at);
+
 CREATE TABLE IF NOT EXISTS hypotheses (
     hypothesis_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -321,6 +343,11 @@ ON learning_observations(signal_date, symbol, source_family);
 
 CREATE INDEX IF NOT EXISTS idx_learning_observations_date
 ON learning_observations(signal_date);
+
+-- P-L158F: la proyeccion created_at del panel ordena por signal_date, symbol.
+-- Sin indice cubridor hacia 5000 lecturas de tabla por render (5,5 s en Jetson).
+CREATE INDEX IF NOT EXISTS idx_learning_observations_cover
+ON learning_observations(signal_date DESC, symbol ASC, created_at);
 
 CREATE TABLE IF NOT EXISTS learning_daily_summaries (
     summary_id TEXT PRIMARY KEY,
@@ -791,6 +818,9 @@ ON research_evidence(symbol, updated_at);
 
 CREATE INDEX IF NOT EXISTS idx_research_evidence_scope_updated
 ON research_evidence(scope, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_research_evidence_updated
+ON research_evidence(updated_at);
 
 CREATE TABLE IF NOT EXISTS factory_runs (
     run_id TEXT PRIMARY KEY,
@@ -2909,8 +2939,10 @@ class Store:
         """
         params: list[Any] = []
         if event_type_prefix:
-            query += " AND event_type LIKE ?"
-            params.append(f"{event_type_prefix}%")
+            # P-L158D: rango de bytes equivalente a `prefix%` que si usa el
+            # indice (event_type, created_at); LIKE no lo aprovecha en SQLite.
+            query += " AND event_type >= ? AND event_type < ?"
+            params.extend((event_type_prefix, f"{event_type_prefix}\uffff"))
         if cycle_id:
             query += " AND cycle_id = ?"
             params.append(cycle_id)
@@ -2961,8 +2993,10 @@ class Store:
         """
         params: list[Any] = []
         if event_type_prefix:
-            query += " AND event_type LIKE ?"
-            params.append(f"{event_type_prefix}%")
+            # P-L158D: rango de bytes equivalente a `prefix%` que si usa el
+            # indice (event_type, created_at); LIKE no lo aprovecha en SQLite.
+            query += " AND event_type >= ? AND event_type < ?"
+            params.extend((event_type_prefix, f"{event_type_prefix}\uffff"))
         if cycle_id:
             query += " AND cycle_id = ?"
             params.append(cycle_id)
@@ -5180,6 +5214,27 @@ class Store:
                             "blocked_backtest": bool(row["blocked_backtest"]),
                             "executed_buy": bool(row["executed_buy"]),
                         }
+
+    def learning_observation_created_dates(self, *, limit: int = 5000) -> list[str]:
+        """Return ``created_at`` for the same rows as :meth:`learning_observations`.
+
+        P-L158C: the daily improvement panel only needs today's observations
+        count, but the full reader deserialises five JSON columns per row
+        (~0.67 s for 5000 rows). This projection keeps the exact same ORDER BY
+        and LIMIT, so the counted set is identical.
+        """
+
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT created_at
+                FROM learning_observations
+                ORDER BY signal_date DESC, symbol ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [row["created_at"] for row in rows]
 
     def upsert_learning_daily_summary(
         self,

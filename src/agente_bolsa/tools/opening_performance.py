@@ -12,6 +12,7 @@ import math
 from collections.abc import Mapping
 from copy import deepcopy
 from datetime import date, datetime, time, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
@@ -23,6 +24,30 @@ from .performance_benchmark import xnys_sessions_between
 if TYPE_CHECKING:
     from ..config import Settings
     from ..storage import Store
+
+@lru_cache(maxsize=256)
+def _read_pickle_cached(path_str: str, mtime_ns: int, size: int):
+    """Cache local market-data pickles by path+mtime (P-L158D).
+
+    El panel de apertura relee 59 ficheros de cache en cada render (~1 s en
+    Jetson). La cache local es inmutable entre escrituras; la clave incluye
+    mtime y tamano, asi que un fichero reescrito se relee.
+    """
+
+    return pd.read_pickle(path_str)
+
+
+def _read_cached_frame(data_path: Path):
+    try:
+        stat = data_path.stat()
+    except OSError:
+        return None
+    try:
+        frame = _read_pickle_cached(str(data_path), stat.st_mtime_ns, stat.st_size)
+    except Exception:  # noqa: BLE001 - un pickle ilegible no debe romper el panel
+        return None
+    return frame
+
 
 
 SCHEMA_VERSION = "p-l72.session-open-snapshot.v1"
@@ -80,11 +105,22 @@ def _explicit_provider_observed_at(meta: Mapping[str, Any]) -> datetime | None:
     return None
 
 
+@lru_cache(maxsize=4096)
+@lru_cache(maxsize=8192)
+def _parse_created_at(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
 def _session_open_at(session_date: str) -> datetime:
     local = datetime.combine(date.fromisoformat(session_date), time(9, 30), tzinfo=MARKET_TIMEZONE)
     return local.astimezone(timezone.utc)
 
 
+@lru_cache(maxsize=4096)
 def _session_settled_at(session_date: str) -> datetime:
     """End of the regular session plus a capture grace window (P-L153).
 
@@ -105,9 +141,8 @@ def _candidate_settled(session_date: str, candidate: Mapping[str, Any]) -> bool:
     created = provenance.get("cache_created_at") or candidate.get("cache_created_at")
     if not isinstance(created, str) or not created.strip():
         return True
-    try:
-        created_at = datetime.fromisoformat(created.strip().replace("Z", "+00:00"))
-    except ValueError:
+    created_at = _parse_created_at(created.strip())
+    if created_at is None:
         return True
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=timezone.utc)
@@ -252,9 +287,8 @@ def capture_authoritative_spy_open_cache(
         data_path = meta_path.with_suffix(".pkl")
         if not data_path.exists():
             return False
-        try:
-            frame = pd.read_pickle(data_path)
-        except Exception:
+        frame = _read_cached_frame(data_path)
+        if frame is None:
             return False
         expected = _finite(meta.get("open_price"))
         series = _field_series(frame, "SPY", "Open")
@@ -502,9 +536,8 @@ def load_cached_spy_open_observations(
         if created_at is None or created_at > current:
             continue
         data_path = meta_path.with_suffix(".pkl")
-        try:
-            frame = pd.read_pickle(data_path)
-        except Exception:
+        frame = _read_cached_frame(data_path)
+        if frame is None:
             continue
         interval = str(meta.get("interval") or meta.get("timeframe") or "").lower()
         if interval and interval not in {"1d", "daily", "day"}:

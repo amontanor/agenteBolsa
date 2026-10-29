@@ -14,6 +14,7 @@ import math
 from collections.abc import Mapping
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
@@ -50,7 +51,8 @@ def _stable_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _xnys_schedule(start: str, end: str):
+@lru_cache(maxsize=128)
+def _xnys_schedule_cached(start: str, end: str):
     try:
         import pandas_market_calendars as mcal
 
@@ -59,13 +61,50 @@ def _xnys_schedule(start: str, end: str):
         return None
 
 
+def _xnys_schedule(start: str, end: str):
+    # P-L158C: the holiday calendar used to be rebuilt on every call (~0.15 s),
+    # several times per dashboard render. The range is immutable, so cache it
+    # and hand out a copy.
+    schedule = _xnys_schedule_cached(start, end)
+    return None if schedule is None else schedule.copy()
+
+
+@lru_cache(maxsize=16)
+def _xnys_schedule_year(year: int):
+    """Calendario XNYS de un ano completo (P-L158E4).
+
+    `xnys_sessions_between` recibe cientos de rangos distintos (uno por
+    candidato de apertura) y cada uno reconstruia el calendario entero.
+    Cachear por ano reduce el coste a un calendario por ano implicado.
+    """
+
+    try:
+        import pandas_market_calendars as mcal
+
+        return mcal.get_calendar("XNYS").schedule(start_date=f"{year}-01-01", end_date=f"{year}-12-31")
+    except Exception:
+        return None
+
+
 def xnys_sessions_between(start: str, end: str) -> list[str]:
-    schedule = _xnys_schedule(start, end)
-    if schedule is not None:
-        return [str(item.date()) for item in schedule.index]
-    # Fallback solo para mantener el lector determinista si la dependencia no
-    # está instalada; no pretende conocer festivos históricos.
-    first, last = date.fromisoformat(start), date.fromisoformat(end)
+    try:
+        first, last = date.fromisoformat(start), date.fromisoformat(end)
+    except ValueError:
+        return []
+    if last < first:
+        return []
+    sessions: list[str] = []
+    for year in range(first.year, last.year + 1):
+        schedule = _xnys_schedule_year(year)
+        if schedule is None:
+            break
+        for item in schedule.index:
+            day = item.date()
+            if first <= day <= last:
+                sessions.append(str(day))
+    else:
+        return sessions
+    # Fallback determinista solo si la dependencia no esta instalada.
     return [
         (first + timedelta(days=offset)).isoformat()
         for offset in range((last - first).days + 1)

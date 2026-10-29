@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from agente_bolsa.config import Settings
+
+
+# P-L158D2: el panel recorre reports/logs/cache en cada pagina; con 40k ficheros
+# en Jetson costaba ~1-2 s. El limitador evita repetirlo en cada render.
+_LAST_CLEANUP: dict[str, float] = {}
 
 
 @dataclass(frozen=True)
@@ -61,7 +67,19 @@ def _delete_if_old(path: Path, cutoff: datetime | None) -> tuple[bool, bool]:
     return True, False
 
 
-def cleanup_runtime_data(settings: Settings, *, now: datetime | None = None) -> RetentionSummary:
+def cleanup_runtime_data(
+    settings: Settings,
+    *,
+    now: datetime | None = None,
+    min_interval_seconds: float = 0.0,
+) -> RetentionSummary:
+    if min_interval_seconds > 0:
+        key = str(getattr(settings, "data_dir", ""))
+        current = time.monotonic()
+        last = _LAST_CLEANUP.get(key, 0.0)
+        if last and current - last < min_interval_seconds:
+            return RetentionSummary()
+        _LAST_CLEANUP[key] = current
     if not settings.retention_enabled:
         return RetentionSummary()
 

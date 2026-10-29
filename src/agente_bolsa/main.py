@@ -3788,6 +3788,22 @@ def _is_tcp_port_open(host: str, port: int, timeout: float = 1.5) -> bool:
         return False
 
 
+
+def command_deployment_receipt(args: argparse.Namespace) -> None:
+    """Registra un recibo de despliegue verificado tras las comprobaciones."""
+
+    from .deployment_receipt import append_verified_deployment_receipt
+
+    settings = get_settings()
+    receipt = append_verified_deployment_receipt(
+        settings.data_dir,
+        current_version=args.version,
+        image_id=args.image_id,
+        source_head=args.source_head,
+        source_tree=args.source_tree,
+    )
+    _print_json({"ok": True, "receipt": receipt})
+
 def command_web(args: argparse.Namespace) -> None:
     settings = get_settings()
     configure_logging(settings.logs_dir, settings.log_level)
@@ -3882,6 +3898,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Lee cuenta, posiciones y ordenes abiertas en Alpaca paper.",
     )
     portfolio_status.set_defaults(func=command_portfolio_status)
+
+    deployment_receipt = subparsers.add_parser(
+        "deployment-receipt",
+        help="Registra un recibo de despliegue verificado (version, imagen y commits).",
+    )
+    deployment_receipt.add_argument("--version", required=True, help="Version desplegada.")
+    deployment_receipt.add_argument("--image-id", required=True, help="ID de imagen sha256:...")
+    deployment_receipt.add_argument("--source-head", required=True, help="Commit git de origen (40 hex).")
+    deployment_receipt.add_argument("--source-tree", required=True, help="Tree git de origen (40 hex).")
+    deployment_receipt.set_defaults(func=command_deployment_receipt)
 
     web = subparsers.add_parser(
         "web",
