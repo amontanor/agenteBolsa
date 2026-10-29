@@ -91,6 +91,10 @@ ON agent_events(created_at);
 CREATE INDEX IF NOT EXISTS idx_agent_events_cycle_created
 ON agent_events(cycle_id, created_at);
 
+-- P-L158F: lectores por prefijo de event_type (session_open_snapshot, ...).
+CREATE INDEX IF NOT EXISTS idx_agent_events_type_created
+ON agent_events(event_type, created_at);
+
 CREATE TABLE IF NOT EXISTS hypotheses (
     hypothesis_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -152,6 +156,10 @@ CREATE TABLE IF NOT EXISTS trade_recommendations (
     payload_json TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+-- P-L158F: la vista de Decisiones lee las recomendaciones por ciclo.
+CREATE INDEX IF NOT EXISTS idx_trade_recommendations_cycle_created
+ON trade_recommendations(cycle_id, created_at);
 
 CREATE TABLE IF NOT EXISTS llm_usage (
     usage_id TEXT PRIMARY KEY,
@@ -330,6 +338,10 @@ ON learning_observations(signal_date, symbol, source_family);
 CREATE INDEX IF NOT EXISTS idx_learning_observations_date
 ON learning_observations(signal_date);
 
+-- P-L158F: proyeccion created_at ordenada por signal_date, symbol.
+CREATE INDEX IF NOT EXISTS idx_learning_observations_cover
+ON learning_observations(signal_date DESC, symbol ASC, created_at);
+
 CREATE TABLE IF NOT EXISTS learning_daily_summaries (
     summary_id TEXT PRIMARY KEY,
     session_date TEXT NOT NULL UNIQUE,
@@ -436,6 +448,10 @@ CREATE TABLE IF NOT EXISTS continuous_improvement_cycles (
 
 CREATE INDEX IF NOT EXISTS idx_ci_cycles_status_updated
 ON continuous_improvement_cycles(status, updated_at);
+
+-- P-L158F: el panel pide el ultimo ciclo por created_at.
+CREATE INDEX IF NOT EXISTS idx_ci_cycles_created
+ON continuous_improvement_cycles(created_at);
 
 CREATE TABLE IF NOT EXISTS continuous_improvement_llm_responses (
     llm_call_id TEXT PRIMARY KEY,
