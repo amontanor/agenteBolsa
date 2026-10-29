@@ -6783,3 +6783,71 @@ Evidencia: C:/Users/utopi/.codex/worktrees/ef99/agenteBolsa/audit_validation_230
 - Seis fallos reproducidos en base; final 11 passed (siete nuevos + cuatro regresiones), Ruff/NUL/diff verdes. Revisión independiente sin bloqueantes. Evidencia y límites: docs/informe_oct08_event_reader_lifecycle.md.
 - Encargo aislado nuevo autorizado por usuario; validación operativa permanece precondition_not_met por lease postmarket activo. Sin suites largas, broker/LLM desde tests ni mutaciones productivas.
 - Auditoría adicional: EXPLAIN temporal confirma SCAN agent_events + TEMP B-TREE en consultas H por ciclo; agrupar/indexar requiere lote aparte con legacy e identidad exacta. Optimización de copias de velas en candidato bolsa-outcome-memory-oct08; carrera scheduler y atomicidad/chunks pendientes separados.
+
+## 29-oct — P-L160: objetivos por agente, embudo auditable y decisiones sin contagio (0.4.395)
+
+Nivel N2 (contrato, fuente de lectura y telemetría; sin autoridad de trading).
+Pasos 1–7 y 12 del plan aprobado `mejora-agentes-y-objetivos.md`; los pasos 8–11
+son N3 y quedan en lote aparte con autorización explícita.
+
+Hechos productivos verificados hoy, solo lectura (`mode=ro` +
+`query_only=ON`, último ciclo hace 0,62 días): 3.567 ciclos (3.545 terminales),
+2.965 propuestas, 3.827 decisiones, 718 tareas, 1.271 iniciativas. Propuestas:
+2.946 `REJECTED`, 12 `READY_TO_APPLY`, 5 `APPLIED`, 2 `PENDING`; admisión
+0,57 %; la `READY_TO_APPLY` más antigua tiene 118,85 días. Iniciativas:
+1.271 de 1.271 en `REJECTED`, 1.256 propiedad de `OrchestratorAgent`.
+Rechazos atribuidos: `own_gate` 468, `inherited_batch` 2.475,
+`invalid_transition` 3, `unclassified` 0.
+
+Causa raíz doble y reproducible: (a) `DecisionCommitteeAgent._deterministic`
+calculaba una decisión por lote y la aplicaba a todas las propuestas, de modo
+que un rechazo hermano contaminaba propuestas vivas; (b) `close_initiative`
+cerraba la iniciativa también con `MONITOR`, así que observar equivalía a
+enterrar. Evidencia adicional: 22 ciclos sin estado terminal y 87.976 eventos
+`lab_market_window_blocked` frente a 3.567 ciclos, que confirman la ventana del
+laboratorio como el otro cuello (paso 8, N3).
+
+Implementado: `continuous_improvement/agent_objectives.py` (carga y evaluador
+deterministas, fail-soft a `config_missing`/`config_unreadable`, `measurement_only`),
+`continuous_improvement/agent_funnel.py` (núcleo read-only del informe:
+`build_report`, `classify_rejection`, `format_summary`), `data/config/agent_objectives.json`
+(19 agentes: 17 `shadow`, 2 `retired`, 11 `agent_learning` y 8 `proposal_funnel`),
+`scripts/agent_funnel_report.py` y `agent-funnel` en `main.py` (envoltorios finos
+sobre el mismo núcleo), decisión por propuesta con `close_initiative` solo en
+`REJECT`, y `outcome_generation`/`strategy_evaluation` reasignados a
+`ValidationAgent`. Versión 0.4.395.
+
+Paridad: sin diff en `kernel.py`, `tools/broker.py`, `tools/execution.py`,
+`tools/risk.py`, `config.py` ni `.env`; sin órdenes, sizing, riesgo, broker, red
+ni LLM; sin esquema nuevo, backfill ni reescritura (un test comprueba que la
+base y sus sidecars quedan byte a byte idénticas). `0`, `null` y `unavailable`
+siguen siendo distintos: denominador cero es `collecting`.
+
+Validación: focales `20 passed in 1.46s`; regresiones de las 9 rutas tocadas con
+los mismos 79 fallos en candidato y base (delta +19 pruebas nuevas); suite
+completa una vez por árbol, candidato `852 failed, 2334 passed, 1 skipped,
+7 errors in 74.64s` frente a base `853 failed, 2314 passed, 7 errors`; los 858
+identificadores de fallo/error son idénticos y el único test que difiere es
+`test_pre_earnings.py::test_score_study_regression_current_sqlite`, que lee el
+SQLite local de 1,85 GB y se salta en el worktree. Causa única de los 858:
+`sqlite3.OperationalError: no such table: main.continuous_improvement_cycles` en
+`storage.py:1400` (`Store.ensure_schema` sobre base nueva), deuda preexistente
+idéntica en `main`. Ruff del lote limpio (4 errores globales preexistentes),
+`check_no_nulls: OK (603 archivos)`, `git diff --check` limpio,
+`validate-agent-config --json` correcto.
+
+Límites declarados: sin superficie de dashboard (el paso 5 se publica por CLI,
+no se toca `web_app.py` en pleno trabajo de rendimiento); `objective_status` no
+se inyecta en el scoreboard (lote N2 aparte); las propuestas históricas
+conservan su `owner_agent` original; los agentes retirados siguen como
+participantes en siete plantillas (no poseen iniciativas, que era el requisito);
+el contrato no viaja en la imagen (`data` está en `.dockerignore`) y debe
+colocarse en `/data/config/agent_objectives.json`; coste LLM por agente,
+decisiones por agente y edad real de los 22 ciclos no terminales son
+`unavailable`.
+
+Dictamen: `ready_for_closed_market_deployment` (despliegue supeditado a
+precondiciones productivas de mercado cerrado). Detalle completo en
+`docs/informe_p_l160_agentes_objetivos.md`. Siguiente: lote N3 de los pasos 8–11
+con la foto productiva de este informe; superficie de Config para objetivos como
+lote de UI.
