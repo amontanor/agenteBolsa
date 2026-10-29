@@ -5058,3 +5058,19 @@ Siguiente: cerrar XNYS, verificar postmarket terminal y leases, ejecutar DoD
 cerrada con Compose completo, doble salud, recibo y tag. Después, con la traza
 del postmarket de hoy, cerrar P-L163 y abrir el lote de outcomes acotados por
 memoria.
+
+### 29-oct (tarde) ? 0.4.405: crews reales, latencia de 20 min y rollback
+
+Se despleg? 0.4.405 (P-L178+P-L176+P-L174) con autorizaci?n expl?cita y mercado
+abierto. P-L178 qued? demostrado: 12 tareas de crew ejecutadas con LLM real y
+cero fallbacks. El crew completo tarda ~20 min y rompe la cadencia de 15 min:
+dos ciclos solapados (`mkt_7fc5a87df089`, `mkt_cd874763e1ad`), watches saltados y
+`database is locked` en H-capture. Sin ?rdenes, planes ni recomendaciones.
+
+Rollback a 0.4.402 a las 17:19Z, salud 2 verde 17:21:19Z, kernel ok. Tag
+`prod-jetson-0.4.405` eliminado; recibo superado.
+
+`main` queda en `e9bcb657` (candidato 0.4.405) mientras producci?n es 0.4.402;
+el siguiente lote debe cerrar esa brecha. Siguiente: P-L178b (desacoplar crew de
+la cadencia y garantizar no solape), despu?s P-L163 con la traza del postmarket.
+

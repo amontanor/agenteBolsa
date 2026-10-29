@@ -7187,3 +7187,42 @@ Lotes implementados y ensayados (sin desplegar en esta entrada):
 
 Ensayo de integración `codex/oct29-integration`: `807e8078` (P-L178),
 `e773d612` (P-L176), `09f042fd` (P-L174), versión 0.4.405, protegidos sin diff.
+
+## 29-oct (tarde) ? 0.4.405 desplegado y REVERTIDO: crews reales exceden la cadencia
+
+Despliegue autorizado con mercado abierto (autorizaci?n operativa expl?cita del
+operador; desviaci?n declarada: la precondici?n ?postmarket de hoy terminal? se
+sustituye por sesi?n previa terminal, cero leases, cero postmarket/reconciliaci?n
+en curso, kernel ok y flags paper/true/false/false).
+
+Resultado del despliegue 0.4.405 (`sha256:a971e906?`, commit `e9bcb657`, tree
+`3028901a`): imagen construida FROM 0.4.402, 223 ficheros verificados byte a
+byte, selector con backup `runtime.env.bak-pl405-20261029T165226Z`, doble salud
+verde, kernel ok, recibo 2026-10-29T16:55:04Z.
+
+**P-L178 funciona**: el primer ciclo posterior arranc? crew real a las
+16:57:37Z, ejecut? **12 tareas** con `agent_task_execution` succeeded y **cero**
+`agent_run_fallback_started` (antes, 45 `crew_failed` al d?a en 3,6 s).
+
+**Pero el crew completo tarda ~20 minutos** (16:57:46Z ? 17:17:48Z) frente a la
+cadencia de 15 minutos del ciclo de mercado. Consecuencias observadas:
+
+- dos ciclos solapados sin terminal: `mkt_7fc5a87df089` (16:57) y
+  `mkt_cd874763e1ad` (17:13);
+- `portfolio_watch` y `trade_fill_watch` saltados por `maximum number of running
+  instances reached`;
+- tormenta de `database is locked` en `_persist_signal_prediction_captures`
+  (fail-open, preexistente, agravada por la contenci?n);
+- cero ?rdenes, cero planes y cero recomendaciones en la ventana: sin efecto de
+  trading.
+
+**Rollback ejecutado a 0.4.402** a las 17:19Z por riesgo operativo con mercado
+abierto: selector restaurado, `jetson-ops deploy-agente-bolsa`, salud 2 a
+17:21:19Z verde, kernel ok, runtime 0.4.402. Recibo de 0.4.405 emitido y luego
+superado por el rollback; tag `prod-jetson-0.4.405` eliminado por inexacto.
+
+Pendiente P-L178b (N2): desacoplar el crew de la cadencia de 15 minutos
+(ejecuci?n as?ncrona/shadow, cadencia propia o conjunto de tareas menor) y
+demostrar que un ciclo no puede solaparse. P-L176 y P-L174 quedan validados por
+tests y suite, pero no desplegados.
+
