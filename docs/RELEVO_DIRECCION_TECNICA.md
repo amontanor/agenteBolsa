@@ -55,7 +55,10 @@ Secuencia propuesta:
 3. P-L158E **desplegado** (`0.4.389-arm64`): precalentado por proceso (6,3 s) y
    calendario XNYS por ano. Primer render tras reiniciar 30,8–75 -> 7,62 s.
    Regimen ~4,0 s servidor con carga compartida del Jetson.
-4. Siguiente: panel de autonomia en Windows (0,81 s) y vigilancia del techo de
+4. P-L158E5 **desplegado** (`0.4.390-arm64`): sin copia defensiva de pickles y
+   helpers de sesion cacheados. Dashboard 2,54 s en caliente; primer render
+   13,6 s (incluye 12,4 s de arranque de Streamlit); navegador 3,78–4,66 s.
+5. Siguiente: panel de autonomia en Windows (0,81 s) y vigilancia del techo de
    1 GiB del contenedor web.
 
 ## P-L155: el dato de SP500 existe y el lector lo descarta (26-sep-2026)

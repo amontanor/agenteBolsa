@@ -287,6 +287,30 @@ Resultado medido:
 Leccion: el precalentado solo sirve si cubre el coste real; medir la primera
 llamada en un proceso nuevo (`docker exec` fresco) antes de elegir que calentar.
 
+## P-L158E5: sin copia defensiva y helpers de sesion cacheados (0.4.390)
+
+Perfil en caliente con 0.4.389: `opening_performance_context` 1,87–3,63 s, de
+los cuales 0,62 s eran el `.copy()` de cada una de las 59 tramas cacheadas y
+~0,6 s los helpers `_session_open_at` (64.013 llamadas) y `_candidate_settled`
+(42.660 llamadas) recalculando la misma fecha y el mismo `fromisoformat`.
+
+Cambios en `tools/opening_performance.py`: la cache de pickles devuelve la trama
+compartida (consumidores de solo lectura, comprobado en el modulo);
+`_session_open_at`, `_session_settled_at` y un nuevo `_parse_created_at` pasan a
+`lru_cache` (4096/8192). Paridad verificada contra 0.4.389 en 876 casos
+(sesiones aleatorias, con y sin autoridad explicita, con y sin marca de
+tiempo): 0 diferencias.
+
+Medido en el Jetson:
+
+- Dashboard en caliente: 2,54 s (0.4.389: ~4,0 s).
+- Primer render tras reiniciar el proceso web: 13,6 s (0.4.389: 19,5 s;
+  0.4.385: 30,8–75 s), incluyendo 12,4 s de arranque de Streamlit.
+- Navegador: 3,78–4,66 s por recarga.
+- Estado: `0.4.390-arm64` (digest `2ce39598726d`), tres contenedores `healthy`,
+  `restarts=0`, sin OOM, HTTP 200, kernel `ok`.
+
+
 
 
 
