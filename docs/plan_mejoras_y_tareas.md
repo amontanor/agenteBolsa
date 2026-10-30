@@ -7286,3 +7286,25 @@ Imagen `sha256:ea6e9e1a?`, commit `311ab5a8`, tag `prod-jetson-0.4.407`, recibo
 2026-10-30T07:03:26Z, doble salud verde, smoke aislado exit 0. Validaci?n real en
 el PMR de hoy.
 
+
+
+### 30-oct ? P-L178b (dise?o): crews fuera de la cadencia de 15 minutos
+
+Evidencia del fallo de 0.4.405: un crew completo tarda ~20 min (12 tareas de
+40-110 s) frente a ciclos de 15 min; se solapan dos ciclos y se saltan
+`portfolio_watch`/`trade_fill_watch`.
+
+Dise?o m?nimo propuesto (N2):
+
+1. **Cadencia propia para crews**: contador durable en `runtime_state`
+   (`crew_cycle_counter`); el crew corre 1 de cada 4 ciclos (60 min) y el resto
+   usa decisi?n LLM directa. Sin cambios de cartera ni de gates.
+2. **Presupuesto duro**: si el crew supera 10 min de pared, se aborta ese intento
+   y el ciclo cae a decisi?n directa con `fallback_reason=crew_budget_exceeded`
+   (hoy s?lo cae por excepci?n).
+3. **Guarda de solape**: un `cycle_started` sin terminal en la sesi?n impide
+   abrir el siguiente ciclo; se registra `cycle_overlap_skipped`.
+4. **M?trica de aceptaci?n**: 5 sesiones con 0 ciclos solapados, 0 skips de
+   `portfolio_watch` por `max_instances` por encima de la l?nea base, y ?1
+   `crew_completed` por hora. La decisi?n de compra sigue siendo determinista
+   hasta Fase 3.
