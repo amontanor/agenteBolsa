@@ -9,7 +9,6 @@ from pathlib import Path
 
 from agente_bolsa.config import Settings
 
-
 # P-L158D2: el panel recorre reports/logs/cache en cada pagina; con 40k ficheros
 # en Jetson costaba ~1-2 s. El limitador evita repetirlo en cada render.
 _LAST_CLEANUP: dict[str, float] = {}

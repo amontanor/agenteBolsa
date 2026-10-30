@@ -5133,3 +5133,21 @@ Pendiente: tag `prod-jetson-0.4.410` y fast-forward de `main` con el lote;
 observar el PMR de hoy (valida P-L163c, no este lote). `post_market_review_last_session`
 sigue en 2026-10-19: es excepción declarada del despliegue, no un estado
 reparado.
+
+### 30-oct — 0.4.412 desplegado (P-L182)
+
+El panel ya no ejecuta `ensure_schema` en cada render: `Store.status()` usa
+`ensure_schema_once()` y `_safe_db_status` degrada la tarjeta de SQLite si la
+base está bloqueada. Reproducción original: clic en «P/L acumulado (%)» →
+rerun → `database is locked` en `UPDATE order_plans`. Producción `0.4.412`,
+imagen `sha256:580404e3…`, commit `7a6ddf05`, tree `36af7221`, recibo
+10:47:20Z, tag `prod-jetson-0.4.412`; `main` en `7d2c3a5f`.
+
+Ventana del PMR autorizada por el operador: tarea `b99a62c2` para 21:55 detiene
+`whale-copy-jetson`; tarea `9e85a94d` para 23:15 lee el terminal y lo rearranca.
+Tarea `5c20acff` a 22:30 audita el PMR read-only.
+
+Candidato pendiente de desplegar: re-add de P-L176 (tarjetas operativas con su
+comando) en la rama `codex/p180-operational-cards`, commit `b662a85d`, versión
+0.4.411 en el árbol. Esa versión ya la ocupó el lote del esquema, así que al
+desplegarlo hay que subirlo a 0.4.413 y renombrar el lote a P-L181.

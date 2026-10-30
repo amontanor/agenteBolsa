@@ -7,7 +7,6 @@ import logging
 import math
 import os
 import subprocess
-import threading
 import time
 from bisect import bisect_right
 from contextlib import closing
@@ -51,7 +50,7 @@ from agente_bolsa import __version__
 from agente_bolsa.config import get_settings
 from agente_bolsa.continuous_improvement.promotion_readiness import evaluate_promotion_readiness
 from agente_bolsa.continuous_improvement.runtime import ContinuousImprovementLabRuntime
-from agente_bolsa.dashboard_loading import DashboardLoadState, RESOURCE_FRESH_SECONDS
+from agente_bolsa.dashboard_loading import RESOURCE_FRESH_SECONDS, DashboardLoadState
 from agente_bolsa.deployment_receipt import (
     format_verified_deployment_time,
     latest_verified_deployment_receipt,
@@ -340,7 +339,7 @@ def _store() -> Store:
     settings = _settings()
     cleanup_runtime_data(settings, min_interval_seconds=900)
     store = Store(settings.database_path, settings.agent_logs_dir)
-    store.ensure_schema()
+    store.ensure_schema_once()
     return store
 
 
@@ -1115,7 +1114,7 @@ def _operational_report_detail(
 ) -> str:
     """Explica una tarjeta sin informe en vez de mostrar un rancio genérico.
 
-    P-L180 (re-add de P-L176): cobertura, readiness y bloqueos leen informes
+    P-L181 (re-add de P-L176): cobertura, readiness y bloqueos leen informes
     que hoy solo produce la CLI manual. Si el fichero no existe, la tarjeta
     dice qué falta y qué comando lo genera; nunca un ``n/d · rancio`` sin
     responsable.
@@ -1129,6 +1128,21 @@ def _operational_report_detail(
     if extra:
         parts.append(extra)
     return " · ".join(parts) if parts else extra
+
+
+def _safe_db_status(store: Any) -> dict[str, Any]:
+    """Estado de SQLite sin tumbar el render (P-L182).
+
+    La UI no es autoridad de persistencia. Si la base esta bloqueada o el
+    esquema no se puede leer, la pagina sigue con el estado declarado
+    `unavailable` en vez de propagar `OperationalError`.
+    """
+
+    try:
+        status = store.status()
+    except Exception as exc:  # noqa: BLE001 - presentacion fail-open.
+        return {"available": False, "tables": {}, "error": str(exc)}
+    return {**status, "available": True}
 
 
 def _web_search_status(settings: Any, latest_report: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -6255,7 +6269,7 @@ def page_dashboard() -> None:
     portfolio_error = load.failed.get("portfolio")
     observed = load.observed_at.get("account")
     account_read_at = datetime.fromisoformat(observed.replace("Z", "+00:00")) if observed else datetime.now(timezone.utc)
-    db_status = store.status()
+    db_status = _safe_db_status(store)
     timer.stop("alpaca_snapshot")
     history: dict[str, Any] = dict(data.get("history") or {})
     stats: dict[str, Any] = {}
@@ -6457,9 +6471,7 @@ def page_dashboard() -> None:
                     key="portfolio_chart_days",
                     label_visibility="collapsed",
                 )
-            metric_options = (
-                ["Equity ($)", "P/L acumulado (%)"] if cumulative_series else ["Equity ($)"]
-            )
+            metric_options = ["Equity ($)", "P/L acumulado (%)"]
             chart_metric = st.radio(
                 "Métrica de la evolución",
                 metric_options,
@@ -6468,7 +6480,12 @@ def page_dashboard() -> None:
                 label_visibility="collapsed",
             )
             p1, p2 = st.columns(2)
-            if chart_metric == "P/L acumulado (%)":
+            if chart_metric == "P/L acumulado (%)" and not cumulative_series:
+                st.info(
+                    "Sin serie acumulada todavía: performance_daily no tiene filas con "
+                    "cumulative_pnl_pct."
+                )
+            elif chart_metric == "P/L acumulado (%)":
                 window = _cumulative_window(cumulative_series, chart_days)
                 first = window[0]["acumulado"] if window else None
                 last = window[-1]["acumulado"] if window else None
@@ -9480,7 +9497,7 @@ def page_config() -> None:
         summary = (latest_backup.get("payload") or {}).get("summary", {}) if latest_backup.get("available") else {}
         _metric_card("Backup SQLite", summary.get("size_bytes") if summary else "-")
     st.subheader("SQLite")
-    st.json(store.status())
+    st.json(_safe_db_status(store))
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
     st.subheader("LLM Trading Leaderboard")
     st.caption(
