@@ -1,4 +1,4 @@
-﻿"""Agente Bolsa package."""
+"""Agente Bolsa package."""
 
 __all__ = ["__version__"]
 
@@ -164,5 +164,4 @@ __all__ = ["__version__"]
 # P-L172: el semaforo LLM se evalua en vivo, no desde el informe cacheado (0.4.401).
 # P-L173: la etiqueta de frescura coincide con la edad mostrada (0.4.402).
 # P-L178: callback de tarea CrewAI a nivel de modulo; sin warning en stderr cerrado (0.4.403).
-# P-L176: tarjetas operativas nombran el informe ausente y su comando (0.4.404).
-__version__ = "0.4.404"
+__version__ = "0.4.403"

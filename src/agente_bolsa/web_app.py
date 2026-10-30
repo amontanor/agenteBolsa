@@ -1000,31 +1000,6 @@ def _report_age_days(generated_at: str | None) -> float | None:
     return age_days if age_days >= 0 else None
 
 
-def _operational_report_detail(
-    available: bool,
-    age: str,
-    stale: bool,
-    extra: str,
-    *,
-    command: str,
-) -> str:
-    """Explica una tarjeta sin informe en vez de mostrar un rancio genérico.
-
-    P-L176: cobertura, readiness y bloqueos leen informes que hoy solo produce
-    la CLI manual. Si el fichero no existe, la tarjeta debe decir qué falta y
-    qué comando lo genera; nunca un ``n/d · rancio`` sin responsable.
-    """
-
-    if not available:
-        return f"sin informe · ejecuta {command}"
-    parts = [age] if age else []
-    if stale:
-        parts.append("rancio")
-    if extra:
-        parts.append(extra)
-    return " · ".join(parts) if parts else extra
-
-
 def _web_search_status(settings: Any, latest_report: dict[str, Any] | None = None) -> dict[str, Any]:
     latest_report = latest_report or _latest_report_json("latest_web_research.json")
     payload = (latest_report.get("payload") or {}) if latest_report.get("available") else {}
@@ -6135,6 +6110,14 @@ def page_dashboard() -> None:
         _READINESS_STALE_DAYS = 3
         _WEEKLY_STALE_DAYS = 7
 
+        def _metric_detail(age: str, stale: bool, extra: str) -> str:
+            parts = [age] if age else []
+            if stale:
+                parts.append("rancio")
+            if extra:
+                parts.append(extra)
+            return " · ".join(parts) if parts else extra
+
         q_age = _report_age_text(latest_quality.get("generated_at"))
         q_age_d = _report_age_days(latest_quality.get("generated_at"))
         r_age = _report_age_text(latest_readiness.get("generated_at"))
@@ -6159,13 +6142,7 @@ def page_dashboard() -> None:
                 _compact_metric(
                     "Cobertura datos",
                     _pct(coverage) if coverage is not None else "-",
-                    _operational_report_detail(
-                        bool(latest_quality.get("available")),
-                        q_age,
-                        q_stale,
-                        str(q.get("provider_used") or "sin proveedor"),
-                        command="market-data-quality",
-                    ),
+                    _metric_detail(q_age, q_stale, str(q.get("provider_used") or "sin informe")),
                     q_tone,
                 )
             with c2:
@@ -6173,13 +6150,7 @@ def page_dashboard() -> None:
                 _compact_metric(
                     "Live readiness",
                     "OK" if r.get("ready_for_live") else "BLOCK" if latest_readiness.get("available") else "-",
-                    _operational_report_detail(
-                        bool(latest_readiness.get("available")),
-                        r_age,
-                        r_stale,
-                        f"{r.get('blocks', 0)} blocks",
-                        command="live-readiness",
-                    ),
+                    _metric_detail(r_age, r_stale, f"{r.get('blocks', 0)} blocks"),
                     r_tone,
                 )
             with c3:
@@ -6187,13 +6158,7 @@ def page_dashboard() -> None:
                 _compact_metric(
                     "Bloqueos semana",
                     int((w.get("blocked_entry_quality") or 0) + (w.get("blocked_backtest") or 0)) if w else "-",
-                    _operational_report_detail(
-                        bool(latest_weekly.get("available")),
-                        w_age,
-                        w_stale,
-                        str(w.get("benchmark_symbol") or "-"),
-                        command="weekly-review",
-                    ),
+                    _metric_detail(w_age, w_stale, str(w.get("benchmark_symbol") or "-")),
                     w_tone,
                 )
 
