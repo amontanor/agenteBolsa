@@ -25,6 +25,7 @@ from .h_capture import (
     PREDICTION_EVENT_TYPE,
     build_outcome_capture,
     build_prediction_capture,
+    h_capture_batch_item,
     persist_h_capture_event,
     validate_h_capture_event,
 )
@@ -347,6 +348,7 @@ def _persist_signal_prediction_captures(
     report: Mapping[str, Any],
     capture_requests: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]],
 ) -> None:
+    items: list[dict[str, Any]] = []
     for row, candidate, producer_contract in capture_requests:
         try:
             contract = producer_contract or {}
@@ -373,11 +375,25 @@ def _persist_signal_prediction_captures(
                 producer_stage="signal_candidate",
                 calendar_name="XNYS",
             )
-            persist_h_capture_event(store, payload)
+            items.append(h_capture_batch_item(payload))
         except Exception as exc:  # noqa: BLE001 - shadow telemetry never blocks trading.
             if isinstance(report, dict):
                 report.setdefault("warnings", []).append("prospective_capture_persistence_failed")
             LOGGER.warning("No se pudo construir o persistir captura prospectiva: %s", exc, exc_info=True)
+
+    if not items:
+        return
+    try:
+        # P-L183: una sola transaccion (y un solo fsync) por ciclo en vez de
+        # una por captura; fail-open con lock_timeout 0 como el single.
+        results = store.record_append_only_events(items, lock_timeout_seconds=0.0)
+    except Exception as exc:  # noqa: BLE001 - shadow telemetry never blocks trading.
+        if isinstance(report, dict):
+            report.setdefault("warnings", []).append("prospective_capture_persistence_failed")
+        LOGGER.warning("No se pudo persistir el lote de capturas prospectivas: %s", exc, exc_info=True)
+        return
+    if any(result.get("status") == "failed" for result in results) and isinstance(report, dict):
+        report.setdefault("warnings", []).append("prospective_capture_persistence_partial")
 
 
 def _iter_signal_prediction_events(

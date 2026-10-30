@@ -168,4 +168,5 @@ __all__ = ["__version__"]
 # P-L179: resultado de la cartera separado de la variacion de equity (0.4.410).
 # P-L180: el panel aplica el esquema una vez por proceso, no en cada render (0.4.411).
 # P-L182: status() no reescribe el esquema y el panel degrada si SQLite esta bloqueada (0.4.412).
-__version__ = "0.4.412"
+# P-L183: capturas h_capture en una sola transaccion por ciclo (0.4.414).
+__version__ = "0.4.414"

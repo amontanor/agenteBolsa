@@ -1483,20 +1483,11 @@ class Store:
         Es la ruta para contratos nuevos que requieren historial durable. La
         escritura es corta, idempotente para el mismo payload y publica un
         evento de conflicto si el mismo ``event_id`` llega con otro contenido.
-        ``lock_timeout_seconds`` permite a la telemetría shadow fallar abierto
-        sin esperar el timeout de producción cuando SQLite está bloqueado.
+        ``lock_timeout_seconds`` permite a la telemetria shadow fallar abierto
+        sin esperar el timeout de produccion cuando SQLite esta bloqueado.
         ``idempotent_on_content_hash`` se reserva para contratos cuyo hash
-        excluye campos de observación volátiles.
+        excluye campos de observacion volatiles.
         """
-        encoded = _dumps(payload)
-        candidate_hash = str(payload.get("content_hash") or "")
-        now = _utc_iso()
-        def same_payload(existing_payload: dict[str, Any]) -> bool:
-            return _dumps(existing_payload) == encoded or (
-                idempotent_on_content_hash
-                and bool(candidate_hash)
-                and str(existing_payload.get("content_hash") or "") == candidate_hash
-            )
 
         connection = (
             self.connect()
@@ -1504,67 +1495,136 @@ class Store:
             else self.connect(timeout_seconds=lock_timeout_seconds)
         )
         with connection as conn:
-            existing = conn.execute(
-                "SELECT payload_json FROM agent_events WHERE event_id = ?",
-                (event_id,),
-            ).fetchone()
-            if existing is not None:
-                existing_json = str(existing["payload_json"] or "{}")
+            return self._record_append_only_event_on(
+                conn,
+                event_id=event_id,
+                event_type=event_type,
+                cycle_id=cycle_id,
+                payload=payload,
+                idempotent_on_content_hash=idempotent_on_content_hash,
+            )
+
+    def record_append_only_events(
+        self,
+        items: Iterable[dict[str, Any]],
+        *,
+        lock_timeout_seconds: float | None = None,
+    ) -> list[dict[str, Any]]:
+        """Persiste varios eventos en UNA transaccion (P-L183).
+
+        Mantiene la semantica por evento (idempotente/conflicto) y aisla el
+        fallo de un item con SAVEPOINT. La telemetria de capturas escribia
+        ~11k transacciones (y fsync) al dia; con lote son una por ciclo.
+        """
+
+        connection = (
+            self.connect()
+            if lock_timeout_seconds is None
+            else self.connect(timeout_seconds=lock_timeout_seconds)
+        )
+        results: list[dict[str, Any]] = []
+        with connection as conn:
+            for index, item in enumerate(items):
+                savepoint = f"append_event_{index}"
+                conn.execute(f"SAVEPOINT {savepoint}")
                 try:
-                    existing_payload = json.loads(existing_json)
-                except (TypeError, json.JSONDecodeError):
-                    existing_payload = {}
-                if same_payload(existing_payload):
-                    return {"status": "idempotent", "event_id": event_id, "content_hash": candidate_hash}
-                existing_hash = str(existing_payload.get("content_hash") or "")
-                conflict_id = f"{event_id}:conflict:{candidate_hash or 'unknown'}"
-                conflict_payload = {
-                    "schema_version": payload.get("schema_version"),
-                    "event_id": event_id,
-                    "existing_content_hash": existing_hash or None,
-                    "candidate_content_hash": candidate_hash or None,
-                    "status": "conflict",
-                }
-                conn.execute(
-                    """
-                    INSERT OR IGNORE INTO agent_events (
-                        event_id, agent, event_type, cycle_id, payload_json, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (conflict_id, "postmarket_coordinator", f"{event_type}_conflict", cycle_id, _dumps(conflict_payload), now),
-                )
-                return {
-                    "status": "conflict",
-                    "event_id": event_id,
-                    "conflict_event_id": conflict_id,
-                    "existing_content_hash": existing_hash or None,
-                    "candidate_content_hash": candidate_hash or None,
-                }
+                    results.append(self._record_append_only_event_on(conn, **item))
+                    conn.execute(f"RELEASE {savepoint}")
+                except Exception as exc:  # noqa: BLE001 - un item no invalida el lote
+                    conn.execute(f"ROLLBACK TO {savepoint}")
+                    conn.execute(f"RELEASE {savepoint}")
+                    results.append(
+                        {
+                            "status": "failed",
+                            "event_id": item.get("event_id"),
+                            "error": str(exc).replace("\r", " ").replace("\n", " ")[:240],
+                        }
+                    )
+        return results
+
+    def _record_append_only_event_on(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        event_id: str,
+        event_type: str,
+        cycle_id: str | None,
+        payload: dict[str, Any],
+        idempotent_on_content_hash: bool = False,
+    ) -> dict[str, Any]:
+        """Cuerpo compartido del append-only sobre una conexion ya abierta."""
+        encoded = _dumps(payload)
+        candidate_hash = str(payload.get("content_hash") or "")
+        now = _utc_iso()
+
+        def same_payload(existing_payload: dict[str, Any]) -> bool:
+            return _dumps(existing_payload) == encoded or (
+                idempotent_on_content_hash
+                and bool(candidate_hash)
+                and str(existing_payload.get("content_hash") or "") == candidate_hash
+            )
+
+        existing = conn.execute(
+            "SELECT payload_json FROM agent_events WHERE event_id = ?",
+            (event_id,),
+        ).fetchone()
+        if existing is not None:
+            existing_json = str(existing["payload_json"] or "{}")
             try:
-                conn.execute(
-                    """
-                    INSERT INTO agent_events (
-                        event_id, agent, event_type, cycle_id, payload_json, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (event_id, "postmarket_coordinator", event_type, cycle_id, encoded, now),
-                )
-            except sqlite3.IntegrityError:
-                raced = conn.execute("SELECT payload_json FROM agent_events WHERE event_id = ?", (event_id,)).fetchone()
-                raced_json = str(raced["payload_json"] or "{}") if raced else "{}"
-                try:
-                    raced_payload = json.loads(raced_json)
-                except (TypeError, json.JSONDecodeError):
-                    raced_payload = {}
-                if same_payload(raced_payload):
-                    return {"status": "idempotent", "event_id": event_id, "content_hash": candidate_hash}
-                raced_hash = str(raced_payload.get("content_hash") or "")
-                conflict_id = f"{event_id}:conflict:{candidate_hash or 'unknown'}"
-                conn.execute(
-                    "INSERT OR IGNORE INTO agent_events (event_id, agent, event_type, cycle_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    (conflict_id, "postmarket_coordinator", f"{event_type}_conflict", cycle_id, _dumps({"event_id": event_id, "existing_content_hash": raced_hash, "candidate_content_hash": candidate_hash, "status": "conflict"}), now),
-                )
-                return {"status": "conflict", "event_id": event_id, "conflict_event_id": conflict_id, "existing_content_hash": raced_hash, "candidate_content_hash": candidate_hash}
+                existing_payload = json.loads(existing_json)
+            except (TypeError, json.JSONDecodeError):
+                existing_payload = {}
+            if same_payload(existing_payload):
+                return {"status": "idempotent", "event_id": event_id, "content_hash": candidate_hash}
+            existing_hash = str(existing_payload.get("content_hash") or "")
+            conflict_id = f"{event_id}:conflict:{candidate_hash or 'unknown'}"
+            conflict_payload = {
+                "schema_version": payload.get("schema_version"),
+                "event_id": event_id,
+                "existing_content_hash": existing_hash or None,
+                "candidate_content_hash": candidate_hash or None,
+                "status": "conflict",
+            }
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO agent_events (
+                    event_id, agent, event_type, cycle_id, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (conflict_id, "postmarket_coordinator", f"{event_type}_conflict", cycle_id, _dumps(conflict_payload), now),
+            )
+            return {
+                "status": "conflict",
+                "event_id": event_id,
+                "conflict_event_id": conflict_id,
+                "existing_content_hash": existing_hash or None,
+                "candidate_content_hash": candidate_hash or None,
+            }
+        try:
+            conn.execute(
+                """
+                INSERT INTO agent_events (
+                    event_id, agent, event_type, cycle_id, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (event_id, "postmarket_coordinator", event_type, cycle_id, encoded, now),
+            )
+        except sqlite3.IntegrityError:
+            raced = conn.execute("SELECT payload_json FROM agent_events WHERE event_id = ?", (event_id,)).fetchone()
+            raced_json = str(raced["payload_json"] or "{}") if raced else "{}"
+            try:
+                raced_payload = json.loads(raced_json)
+            except (TypeError, json.JSONDecodeError):
+                raced_payload = {}
+            if same_payload(raced_payload):
+                return {"status": "idempotent", "event_id": event_id, "content_hash": candidate_hash}
+            raced_hash = str(raced_payload.get("content_hash") or "")
+            conflict_id = f"{event_id}:conflict:{candidate_hash or 'unknown'}"
+            conn.execute(
+                "INSERT OR IGNORE INTO agent_events (event_id, agent, event_type, cycle_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (conflict_id, "postmarket_coordinator", f"{event_type}_conflict", cycle_id, _dumps({"event_id": event_id, "existing_content_hash": raced_hash, "candidate_content_hash": candidate_hash, "status": "conflict"}), now),
+            )
+            return {"status": "conflict", "event_id": event_id, "conflict_event_id": conflict_id, "existing_content_hash": raced_hash, "candidate_content_hash": candidate_hash}
         return {"status": "inserted", "event_id": event_id, "content_hash": candidate_hash}
 
     def record_time_stop_exit_authority(
