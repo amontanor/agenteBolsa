@@ -5151,3 +5151,21 @@ Candidato pendiente de desplegar: re-add de P-L176 (tarjetas operativas con su
 comando) en la rama `codex/p180-operational-cards`, commit `b662a85d`, versión
 0.4.411 en el árbol. Esa versión ya la ocupó el lote del esquema, así que al
 desplegarlo hay que subirlo a 0.4.413 y renombrar el lote a P-L181.
+
+### 30-oct — 0.4.414 desplegado (P-L181 + P-L183 + P-L184)
+
+Producción `0.4.414`, imagen `sha256:e7d44aba…`, commit `70ba7137`, tree
+`0a241755`, tag `prod-jetson-0.4.414`, recibo 12:12:44Z. Tres lotes: tarjetas
+operativas con su comando, capturas `h_capture` en una transacción por ciclo
+(P-L183, de Tiempos) y panel sin reruns cada 2 s con rango real en «P/L
+acumulado».
+
+Verificado en navegador: tres tarjetas con `sin informe · ejecuta <comando>`;
+`-0,14 % · 7 sesiones con dato · 30/09/2026 → 19/10/2026` y pie de rango real;
+un solo `dashboard_timing` en dos minutos; cero `traceback`/`database is locked`.
+
+Pendiente: ventana 21:55–23:15 (parar `whale-copy`, auditar PMR, rearrancar).
+Si el PMR completa, `performance_daily` gana la fila del 30-oct y la serie de
+cartera avanza; si falla, P-L185 con la traza. Después: LLM/credenciales,
+P-L178b, límite permanente de `whale-copy`, backfill de fills y PMR colgado del
+29-oct.

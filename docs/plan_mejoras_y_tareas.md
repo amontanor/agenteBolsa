@@ -7362,3 +7362,23 @@ Producción: `0.4.412`, imagen `sha256:580404e3…`, commit `7a6ddf05`, tree
 Verificado en navegador: el toggle muestra `Resultado del periodo -0,14 % · 7
 sesiones`, `Acumulado actual -0,72 %` y cero `traceback` en los logs tras el
 clic. Gates: 114 focales, Ruff limpio, NUL 614, diff limpio, imagen byte a byte.
+
+### 30-oct — 0.4.414 desplegado: tarjetas, h_capture por lote y panel sin reruns
+
+Release con tres lotes. P-L181 re-add de P-L176: las tarjetas operativas dicen
+qué informe falta y qué comando lo genera. P-L183 (propuesta de
+`[agenteBolsa] Tiempos`, revisada por dirección): `h_capture_prediction` eran
+11.462 de 17.638 eventos/día (65 %), cada uno con conexión y fsync propios;
+ahora `record_append_only_events` usa una conexión y una transacción con
+`SAVEPOINT` por item, y el productor persiste una vez por ciclo. P-L184: el
+dashboard reejecutaba la página entera cada 2 s al arrancar cualquier refresco;
+ahora sondea cada 10 s y solo repinta con dato nuevo, y «P/L acumulado (%)»
+muestra el rango real de sesiones con baseline en vez de un «Últimos 7 días»
+que aplicaba a 7 filas.
+
+Producción: `0.4.414`, imagen `sha256:e7d44aba…`, commit `70ba7137`, tree
+`0a241755`, recibo 2026-10-30T12:12:44Z, doble salud verde, kernel `ok`,
+navegador verificado (toggle con rango real y sin bucle de reruns). Gates: 189
+focales; suite 3255 passed/2 failed preexistentes (`web_research` por entorno y
+`pre_earnings` por deriva de la SQLite local, reproducido con 0.4.412); Ruff
+limpio; NUL 616; imagen byte a byte. Smoke omitido por red/broker, declarado.
