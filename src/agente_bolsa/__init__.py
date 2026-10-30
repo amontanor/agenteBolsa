@@ -163,4 +163,6 @@ __all__ = ["__version__"]
 # P-L171: el semaforo del panel usa las rutas reales de Settings (0.4.400).
 # P-L172: el semaforo LLM se evalua en vivo, no desde el informe cacheado (0.4.401).
 # P-L173: la etiqueta de frescura coincide con la edad mostrada (0.4.402).
-__version__ = "0.4.402"
+# P-L163: outcomes por trozos con reintento y postmarket fail-open ante lock (0.4.406).
+# P-L163c: ventana de outcomes acotada y learning diario fail-open ante lock (0.4.407).
+__version__ = "0.4.407"

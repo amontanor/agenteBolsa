@@ -860,6 +860,13 @@ def _dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=True, default=str)
 
 
+def _is_sqlite_busy(exc: sqlite3.OperationalError) -> bool:
+    """Return True for lock/busy contention that may clear on retry."""
+
+    message = str(exc).lower()
+    return "locked" in message or "busy" in message
+
+
 def _snapshot_content_hash(snapshot: dict[str, Any]) -> str:
     encoded = json.dumps(snapshot, ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -4556,18 +4563,48 @@ class Store:
             )
 
     def update_signal_outcomes_bulk(self, outcomes: dict[str, dict[str, Any]]) -> None:
+        """Persist outcome recomputations in short chunks with bounded retries.
+
+        P-L163: un unico ``executemany`` de hasta 128.000 filas mantiene la
+        transaccion abierta demasiado tiempo y cualquier contencion de SQLite
+        aborta el postmarket completo. Los trozos son independientes e
+        idempotentes: un fallo definitivo deja las filas pendientes para la
+        siguiente pasada.
+        """
+
         if not outcomes:
             return
         now = _utc_iso()
-        with self.connect() as conn:
-            conn.executemany(
-                """
-                UPDATE signal_outcomes
-                SET outcome_json = ?, updated_at = ?
-                WHERE signal_id = ?
-                """,
-                [(_dumps(outcome), now, signal_id) for signal_id, outcome in outcomes.items()],
-            )
+        items = list(outcomes.items())
+        for start in range(0, len(items), 500):
+            chunk = items[start : start + 500]
+            rows = [(_dumps(outcome), now, signal_id) for signal_id, outcome in chunk]
+            self._update_signal_outcomes_chunk(rows)
+
+    def _update_signal_outcomes_chunk(
+        self,
+        rows: list[tuple[str, str, str]],
+        *,
+        retries: int = 3,
+    ) -> None:
+        attempt = 0
+        while True:
+            try:
+                with self.connect() as conn:
+                    conn.executemany(
+                        """
+                        UPDATE signal_outcomes
+                        SET outcome_json = ?, updated_at = ?
+                        WHERE signal_id = ?
+                        """,
+                        rows,
+                    )
+                return
+            except sqlite3.OperationalError as exc:
+                if not _is_sqlite_busy(exc) or attempt >= retries:
+                    raise
+                attempt += 1
+                time.sleep(min(0.2 * (2 ** (attempt - 1)), 1.5))
 
     def save_pre_earnings_prediction(self, item: dict[str, Any]) -> None:
         now = _utc_iso()
@@ -5078,51 +5115,60 @@ class Store:
                 non_strict_values for _, non_strict_values in prepared_chunk
             )
             chunk_started = time.perf_counter()
-            conn: sqlite3.Connection | None = None
-            cursor: sqlite3.Cursor | None = None
-            try:
-                conn = self.connect()
-                result["connections_opened"] += 1
-                cursor = conn.cursor()
-                conn.execute("BEGIN IMMEDIATE")
-                for parameters, _ in prepared_chunk:
-                    _execute_learning_observation_upsert(cursor, parameters)
-                conn.commit()
-                result["commits"] += 1
-                result["written"] += len(chunk)
-                result["rows_written"] = result["written"]
-                result["chunks_completed"] += 1
-            except Exception as exc:
-                if conn is not None:
-                    conn.rollback()
-                cause = str(exc).replace("\r", " ").replace("\n", " ")[:240]
-                result["status"] = "failed"
-                result["failed_chunk"] = chunk_index
-                result["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 3)
-                result["rows_written"] = result["written"]
-                retry_possible = isinstance(exc, sqlite3.OperationalError) and "locked" in cause.lower()
-                result["error"] = cause
-                result["retry_possible"] = retry_possible
-                error = LearningObservationBatchError(
-                    f"fallo persistiendo learning_observations en chunk {chunk_index}: {cause}",
-                    result=result,
-                    failed_chunk=chunk_index,
-                    cause=cause,
-                    retry_possible=retry_possible,
-                )
-                raise error from exc
-            finally:
-                duration_ms = round((time.perf_counter() - chunk_started) * 1000, 3)
-                result["chunk_durations_ms"].append(duration_ms)
-                result["max_chunk_duration_ms"] = max(result["max_chunk_duration_ms"], duration_ms)
-                if cursor is not None:
-                    try:
-                        cursor.close()
-                    finally:
-                        if conn is not None:
-                            conn.close()
-                elif conn is not None:
-                    conn.close()
+            attempt = 0
+            while True:
+                conn: sqlite3.Connection | None = None
+                cursor: sqlite3.Cursor | None = None
+                try:
+                    conn = self.connect()
+                    result["connections_opened"] += 1
+                    cursor = conn.cursor()
+                    conn.execute("BEGIN IMMEDIATE")
+                    for parameters, _ in prepared_chunk:
+                        _execute_learning_observation_upsert(cursor, parameters)
+                    conn.commit()
+                    result["commits"] += 1
+                    result["written"] += len(chunk)
+                    result["rows_written"] = result["written"]
+                    result["chunks_completed"] += 1
+                    break
+                except Exception as exc:
+                    if conn is not None:
+                        conn.rollback()
+                    # P-L163c: una contencion transitoria de SQLite no invalida
+                    # el lote; se reintenta solo el chunk actual.
+                    if _is_sqlite_busy(exc) and attempt < 3:
+                        attempt += 1
+                        time.sleep(min(0.2 * (2 ** (attempt - 1)), 1.5))
+                        continue
+                    cause = str(exc).replace("\r", " ").replace("\n", " ")[:240]
+                    result["status"] = "failed"
+                    result["failed_chunk"] = chunk_index
+                    result["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 3)
+                    result["rows_written"] = result["written"]
+                    retry_possible = isinstance(exc, sqlite3.OperationalError) and "locked" in cause.lower()
+                    result["error"] = cause
+                    result["retry_possible"] = retry_possible
+                    error = LearningObservationBatchError(
+                        f"fallo persistiendo learning_observations en chunk {chunk_index}: {cause}",
+                        result=result,
+                        failed_chunk=chunk_index,
+                        cause=cause,
+                        retry_possible=retry_possible,
+                    )
+                    raise error from exc
+                finally:
+                    if cursor is not None:
+                        try:
+                            cursor.close()
+                        finally:
+                            if conn is not None:
+                                conn.close()
+                    elif conn is not None:
+                        conn.close()
+            duration_ms = round((time.perf_counter() - chunk_started) * 1000, 3)
+            result["chunk_durations_ms"].append(duration_ms)
+            result["max_chunk_duration_ms"] = max(result["max_chunk_duration_ms"], duration_ms)
             chunk_index += 1
         result["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 3)
         result["rows_written"] = result["written"]
