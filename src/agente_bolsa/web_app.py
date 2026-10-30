@@ -2069,8 +2069,10 @@ def _render_today_breakdown(
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
         detail = f"abiertas {cartera['open_text']} · realizadas {cartera['realized_text']}"
-        if cartera["estimated"] or cartera["partial"]:
-            detail += " · estimado, base parcial"
+        if cartera["estimated"]:
+            detail += " · % estimado sobre invertido + ventas de hoy"
+        if cartera["partial"]:
+            detail += " · cobertura parcial"
         _compact_metric(
             "Cartera de acciones hoy",
             f"{cartera['amount']} {cartera['primary_pct']}",
@@ -3188,11 +3190,12 @@ def _estimated_portfolio_value_series(
     return pd.DataFrame(rows)
 
 
-def _performance_daily_cumulative(store: Any) -> list[dict[str, Any]]:
-    """P/L acumulado por sesion desde ``performance_daily`` (solo lectura).
+def _performance_daily_series(store: Any) -> list[dict[str, Any]]:
+    """Serie por sesion desde ``performance_daily`` (solo lectura).
 
-    No reproyecta ni escribe nada: consume la columna ya persistida. Si la
-    tabla o el campo no estan, devuelve lista vacia y la UI oculta la opcion.
+    ``cumulative_pnl_pct``, ``pnl_pct`` y ``avg_exposure`` viven en
+    ``payload_json``, no en columnas de la tabla. No reproyecta ni escribe
+    nada: si falta el payload o el campo, la fila se omite.
     """
 
     try:
@@ -3201,12 +3204,77 @@ def _performance_daily_cumulative(store: Any) -> list[dict[str, Any]]:
         return []
     series = []
     for row in rows:
-        pct = _num(row.get("cumulative_pnl_pct"))
         date_text = str(row.get("session_date") or "")[:10]
-        if pct is None or not date_text:
+        if not date_text:
             continue
-        series.append({"fecha": date_text, "acumulado": pct})
+        payload: dict[str, Any] = {}
+        raw = row.get("payload_json")
+        if raw:
+            try:
+                parsed = json.loads(raw)
+            except (TypeError, ValueError):
+                parsed = None
+            if isinstance(parsed, dict):
+                payload = parsed
+        cumulative = _num(payload.get("cumulative_pnl_pct"))
+        equity_pct = _num(payload.get("pnl_pct")) if payload.get("pnl_pct") is not None else _num(row.get("pnl_pct"))
+        exposure = _num(payload.get("avg_exposure"))
+        portfolio_pct = None
+        if equity_pct is not None and exposure is not None and 0 < exposure <= 1:
+            portfolio_pct = equity_pct / exposure
+        series.append(
+            {
+                "fecha": date_text,
+                "acumulado": cumulative,
+                "equity_pct": equity_pct,
+                "exposure": exposure,
+                "cartera": portfolio_pct,
+            }
+        )
     return series
+
+
+def _performance_daily_cumulative(store: Any) -> list[dict[str, Any]]:
+    """Filas con ``cumulative_pnl_pct`` para el selector de metrica."""
+
+    return [
+        {"fecha": row["fecha"], "acumulado": row["acumulado"]}
+        for row in _performance_daily_series(store)
+        if row["acumulado"] is not None
+    ]
+
+
+def _portfolio_session_rows(series: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Cartera por sesion: P/L de equity sobre la exposicion registrada."""
+
+    return [
+        {
+            "fecha": row["fecha"],
+            "cartera": row["cartera"],
+            "exposicion": row["exposure"],
+            "equity_pct": row["equity_pct"],
+        }
+        for row in series
+        if row.get("cartera") is not None
+    ]
+
+
+def _portfolio_session_chart(rows: list[dict[str, Any]]) -> Any:
+    if not rows or alt is None:
+        return None
+    frame = pd.DataFrame(rows)
+    bars = alt.Chart(frame).mark_bar(size=12, color="#7c3aed", opacity=0.85).encode(
+        x=alt.X("fecha:N", title=None, axis=alt.Axis(labelAngle=0, labelOverlap=True)),
+        y=alt.Y("cartera:Q", title="cartera", axis=alt.Axis(format="+.1%")),
+        tooltip=[
+            alt.Tooltip("fecha:N", title="Sesión"),
+            alt.Tooltip("cartera:Q", title="Cartera", format="+.2%"),
+            alt.Tooltip("equity_pct:Q", title="Equity", format="+.2%"),
+            alt.Tooltip("exposicion:Q", title="Exposición", format=".1%"),
+        ],
+    )
+    zero = alt.Chart(pd.DataFrame({"cero": [0.0]})).mark_rule(color="#9ca3af").encode(y="cero:Q")
+    return (bars + zero).properties(height=180)
 
 
 def _cumulative_window(series: list[dict[str, Any]], days: int | str | None) -> list[dict[str, Any]]:
@@ -5032,44 +5100,30 @@ def _spy_hero_reason_text(verdict: dict[str, Any]) -> str | None:
     return f"SPY n/d: {reason}"
 
 
-def _portfolio_exposure_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Filas con `exposure_pct` valido: P/L de equity sobre el invertido."""
+def _render_portfolio_sessions(series: list[dict[str, Any]]) -> None:
+    """Cartera por sesion desde ``performance_daily``, fuera de la tabla SPY.
 
-    result = []
-    for row in rows:
-        pct = _num(row.get("exposure_pct"))
-        if pct is None:
-            continue
-        result.append(
-            {
-                "sesion": str(row.get("session_date") or "")[:10],
-                "cartera": pct,
-                "base": _num(row.get("exposure_basis")),
-                "estado": "Final" if row.get("status") == "final" else "En curso",
-            }
-        )
-    return result
+    Es una ventana distinta (cierre a cierre) y por eso vive en su propio
+    bloque: no comparte fila con la comparativa apertura->apertura y no entra
+    en ganador ni alpha (P-L65B).
+    """
 
-
-def _portfolio_exposure_chart(rows: list[dict[str, Any]]) -> Any:
-    """Cartera por sesion: descriptivo, fuera del ganador y del alpha (P-L65B)."""
-
-    data = _portfolio_exposure_rows(rows)
-    if not data or alt is None:
-        return None
-    df = pd.DataFrame(data)
-    bars = alt.Chart(df).mark_bar(size=14, color="#7c3aed", opacity=0.85).encode(
-        x=alt.X("sesion:N", title=None, axis=alt.Axis(labelAngle=0, labelOverlap=True)),
-        y=alt.Y("cartera:Q", title="cartera sobre invertido", axis=alt.Axis(format="+.1%")),
-        tooltip=[
-            alt.Tooltip("sesion:N", title="Sesión"),
-            alt.Tooltip("cartera:Q", title="Cartera", format="+.2%"),
-            alt.Tooltip("base:Q", title="Base invertida", format="$,.2f"),
-            alt.Tooltip("estado:N", title="Estado"),
-        ],
+    rows = _portfolio_session_rows(series)
+    _section_title(
+        "Cartera por sesión (cierre a cierre)",
+        "P/L de equity de la sesión dividido por la exposición registrada. "
+        "Estimación descriptiva: no entra en el comparativo con SPY.",
     )
-    zero = alt.Chart(pd.DataFrame({"cero": [0.0]})).mark_rule(color="#9ca3af").encode(y="cero:Q")
-    return (bars + zero).properties(height=180)
+    if not rows:
+        st.info("Sin sesiones con exposición registrada; no se estima la serie.")
+        return
+    chart = _portfolio_session_chart(_cumulative_window(rows, None))
+    if chart is not None:
+        st.altair_chart(chart, width="stretch")
+    st.caption(
+        f"{len(rows)} de {len(series)} sesiones con exposición válida. "
+        "La base es la exposición de la foto de cada sesión, no una media intradía."
+    )
 
 
 def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
@@ -5132,21 +5186,6 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
             f"Cobertura exacta: {opening_context.get('exact_comparison_count', 0)} comparaciones; "
             f"{opening_context.get('omitted_session_count', 0)} sesiones omitidas por falta de una apertura exacta."
         )
-        exposure_data = _portfolio_exposure_rows(visible_rows)
-        if exposure_data:
-            st.markdown(
-                "<div class='section-subtitle' style='margin-top:10px;'>Cartera sobre capital invertido "
-                f"({len(exposure_data)} de {len(visible_rows)} sesiones con exposición)</div>",
-                unsafe_allow_html=True,
-            )
-            exposure_chart = _portfolio_exposure_chart(visible_rows)
-            if exposure_chart is not None:
-                st.altair_chart(exposure_chart, width="stretch")
-            st.caption(
-                "Estimación: P/L de equity de la sesión / exposición de la sesión. "
-                "No entra en ganador ni alpha: el % de «Sistema» sigue siendo sobre equity, "
-                "así que con poca exposición se queda corto frente a una cartera al 100 %."
-            )
         _render_opening_omissions(opening_context)
         html_rows = []
         for row in reversed(visible_rows):
@@ -5182,10 +5221,6 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
                 if item
             )
             spy_text = f"{spy_text}<span>{escape(source_detail)}</span>"
-            exposure_text = _pct_signed_or_na(row.get("exposure_pct"))
-            exposure_base = _num(row.get("exposure_basis"))
-            if exposure_base is not None:
-                exposure_text = f"{exposure_text}<span>base {_money(exposure_base)}</span>"
             state = "Final" if row["status"] == "final" else "En curso"
             if state == "En curso" and comparison_status != "comparable":
                 state = f"En curso ({comparison_status})"
@@ -5193,14 +5228,12 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
             html_rows.append(
                 "<tr>"
                 f"<td><strong>{row['session_date']}</strong></td><td>{interval}</td>"
-                f"<td>{system_text}</td><td>{spy_text}</td><td>{exposure_text}</td>"
-                f"<td>{state}</td><td>{winner}</td>"
+                f"<td>{system_text}</td><td>{spy_text}</td><td>{state}</td><td>{winner}</td>"
                 "</tr>"
             )
         st.markdown(
             "<table class='portfolio-table'><thead><tr><th>Sesión iniciada</th><th>Intervalo</th><th>Sistema (equity)</th>"
-            "<th>SPY (ETF S&amp;P 500)</th><th>Cartera (sobre invertido)</th><th>Estado</th><th>Superior</th>"
-            "</tr></thead>"
+            "<th>SPY (ETF S&amp;P 500)</th><th>Estado</th><th>Superior</th></tr></thead>"
             f"<tbody>{''.join(html_rows)}</tbody></table>",
             unsafe_allow_html=True,
         )
@@ -6283,7 +6316,12 @@ def page_dashboard() -> None:
     today_breakdown = _today_breakdown(history, opening_context)
     timer.stop("opening_context.today_breakdown")
     timer.start("opening_context.performance_daily_series")
-    cumulative_series = _performance_daily_cumulative(store)
+    performance_series = _performance_daily_series(store)
+    cumulative_series = [
+        {"fecha": row["fecha"], "acumulado": row["acumulado"]}
+        for row in performance_series
+        if row["acumulado"] is not None
+    ]
     timer.stop("opening_context.performance_daily_series")
     timer.start("opening_context.portfolio_value_series_from_alpaca")
     full_equity_df = _portfolio_value_series_from_alpaca(
@@ -6560,6 +6598,11 @@ def page_dashboard() -> None:
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
     _render_daily_vs_spy_table(opening_context)
     timer.stop("spy_table")
+
+    timer.start("portfolio_sessions")
+    st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+    _render_portfolio_sessions(performance_series)
+    timer.stop("portfolio_sessions")
 
     timer.start("sales")
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)

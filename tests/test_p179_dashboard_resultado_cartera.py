@@ -163,20 +163,68 @@ def test_position_rows_totals_empty_is_not_zero() -> None:
     assert totals["complete"] is False
 
 
-def test_exposure_rows_skip_sessions_without_exposure() -> None:
-    rows = [
+def test_portfolio_session_rows_skip_sessions_without_cartera() -> None:
+    series = [
         {
-            "session_date": "2026-10-29",
-            "exposure_pct": 0.0138,
-            "exposure_basis": 2200.0,
-            "status": "final",
+            "fecha": "2026-10-29",
+            "acumulado": 0.012,
+            "equity_pct": 0.0005,
+            "exposure": 0.4,
+            "cartera": 0.00125,
         },
-        {"session_date": "2026-10-28"},
+        {
+            "fecha": "2026-10-28",
+            "acumulado": None,
+            "equity_pct": 0.001,
+            "exposure": None,
+            "cartera": None,
+        },
     ]
 
-    assert web_app._portfolio_exposure_rows(rows) == [
-        {"sesion": "2026-10-29", "cartera": 0.0138, "base": 2200.0, "estado": "Final"}
+    assert web_app._portfolio_session_rows(series) == [
+        {
+            "fecha": "2026-10-29",
+            "cartera": 0.00125,
+            "exposicion": 0.4,
+            "equity_pct": 0.0005,
+        }
     ]
+
+
+def test_performance_series_reads_payload_and_derives_cartera() -> None:
+    import json
+
+    payload = json.dumps(
+        {
+            "equity": 70000.0,
+            "pnl_pct": 0.004,
+            "cumulative_pnl_pct": 0.012,
+            "avg_exposure": 0.4,
+        }
+    )
+    store = _Store(
+        [
+            {"session_date": "2026-10-29", "payload_json": payload, "pnl_pct": None},
+            {"session_date": "2026-10-28", "payload_json": "", "pnl_pct": None},
+            {
+                "session_date": "2026-10-27",
+                "payload_json": json.dumps({"pnl_pct": 0.01, "avg_exposure": 1.4}),
+            },
+        ]
+    )
+
+    series = web_app._performance_daily_series(store)
+
+    assert series[0] == {
+        "fecha": "2026-10-29",
+        "acumulado": 0.012,
+        "equity_pct": 0.004,
+        "exposure": 0.4,
+        "cartera": 0.004 / 0.4,
+    }
+    assert series[1]["acumulado"] is None
+    assert series[1]["cartera"] is None
+    assert series[2]["cartera"] is None  # exposicion fuera de (0, 1]
 
 
 def test_cumulative_window_respects_each_range_kind() -> None:
@@ -208,10 +256,18 @@ class _Store:
 
 
 def test_cumulative_series_reads_only_persisted_pct() -> None:
+    import json
+
     store = _Store(
         [
-            {"session_date": "2026-10-29", "cumulative_pnl_pct": 0.012},
-            {"session_date": "2026-10-28", "cumulative_pnl_pct": None},
+            {
+                "session_date": "2026-10-29",
+                "payload_json": json.dumps({"cumulative_pnl_pct": 0.012}),
+            },
+            {
+                "session_date": "2026-10-28",
+                "payload_json": json.dumps({"cumulative_pnl_pct": None}),
+            },
         ]
     )
 
