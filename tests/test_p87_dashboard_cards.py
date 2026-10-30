@@ -28,10 +28,10 @@ def test_account_group_exposes_position_intraday_amount_and_coverage(monkeypatch
     )
 
     rendered = "".join(captured)
-    assert "Ganancia/pérdida de la cartera actual hoy" in rendered
+    assert "Resultado de la cartera hoy (posiciones abiertas)" in rendered
     assert "$4.25" in rendered
     assert "2/3 posiciones" in rendered
-    assert "%" not in rendered.split("Ganancia/pérdida de la cartera actual hoy", 1)[1].split("Posiciones", 1)[0]
+    assert "%" not in rendered.split("Resultado de la cartera hoy (posiciones abiertas)", 1)[1].split("Posiciones", 1)[0]
 
 
 def test_sales_since_open_keeps_one_row_per_sell_fill_and_missing_realized_pl():
