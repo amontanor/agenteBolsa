@@ -167,4 +167,5 @@ __all__ = ["__version__"]
 # P-L163c: ventana de outcomes acotada y learning diario fail-open ante lock (0.4.407).
 # P-L179: resultado de la cartera separado de la variacion de equity (0.4.410).
 # P-L180: el panel aplica el esquema una vez por proceso, no en cada render (0.4.411).
-__version__ = "0.4.411"
+# P-L182: status() no reescribe el esquema y el panel degrada si SQLite esta bloqueada (0.4.412).
+__version__ = "0.4.412"

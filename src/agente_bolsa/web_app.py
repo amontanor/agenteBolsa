@@ -1104,6 +1104,21 @@ def _report_age_days(generated_at: str | None) -> float | None:
     return age_days if age_days >= 0 else None
 
 
+def _safe_db_status(store: Any) -> dict[str, Any]:
+    """Estado de SQLite sin tumbar el render (P-L182).
+
+    La UI no es autoridad de persistencia. Si la base esta bloqueada o el
+    esquema no se puede leer, la pagina sigue con el estado declarado
+    `unavailable` en vez de propagar `OperationalError`.
+    """
+
+    try:
+        status = store.status()
+    except Exception as exc:  # noqa: BLE001 - presentacion fail-open.
+        return {"available": False, "tables": {}, "error": str(exc)}
+    return {**status, "available": True}
+
+
 def _web_search_status(settings: Any, latest_report: dict[str, Any] | None = None) -> dict[str, Any]:
     latest_report = latest_report or _latest_report_json("latest_web_research.json")
     payload = (latest_report.get("payload") or {}) if latest_report.get("available") else {}
@@ -6228,7 +6243,7 @@ def page_dashboard() -> None:
     portfolio_error = load.failed.get("portfolio")
     observed = load.observed_at.get("account")
     account_read_at = datetime.fromisoformat(observed.replace("Z", "+00:00")) if observed else datetime.now(timezone.utc)
-    db_status = store.status()
+    db_status = _safe_db_status(store)
     timer.stop("alpaca_snapshot")
     history: dict[str, Any] = dict(data.get("history") or {})
     stats: dict[str, Any] = {}
@@ -6430,9 +6445,7 @@ def page_dashboard() -> None:
                     key="portfolio_chart_days",
                     label_visibility="collapsed",
                 )
-            metric_options = (
-                ["Equity ($)", "P/L acumulado (%)"] if cumulative_series else ["Equity ($)"]
-            )
+            metric_options = ["Equity ($)", "P/L acumulado (%)"]
             chart_metric = st.radio(
                 "Métrica de la evolución",
                 metric_options,
@@ -6441,7 +6454,12 @@ def page_dashboard() -> None:
                 label_visibility="collapsed",
             )
             p1, p2 = st.columns(2)
-            if chart_metric == "P/L acumulado (%)":
+            if chart_metric == "P/L acumulado (%)" and not cumulative_series:
+                st.info(
+                    "Sin serie acumulada todavía: performance_daily no tiene filas con "
+                    "cumulative_pnl_pct."
+                )
+            elif chart_metric == "P/L acumulado (%)":
                 window = _cumulative_window(cumulative_series, chart_days)
                 first = window[0]["acumulado"] if window else None
                 last = window[-1]["acumulado"] if window else None
@@ -9443,7 +9461,7 @@ def page_config() -> None:
         summary = (latest_backup.get("payload") or {}).get("summary", {}) if latest_backup.get("available") else {}
         _metric_card("Backup SQLite", summary.get("size_bytes") if summary else "-")
     st.subheader("SQLite")
-    st.json(store.status())
+    st.json(_safe_db_status(store))
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
     st.subheader("LLM Trading Leaderboard")
     st.caption(
