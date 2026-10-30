@@ -124,3 +124,32 @@ Se reinici? el scheduler a las 22:39Z para recuperar servicio (healthy,
 aborto por lock, pero no acota el trabajo. Siguiente lote **P-L163c**: procesar
 outcomes solo para se?ales cuyo resultado puede cambiar, por s?mbolo y en
 streaming, sin cargar 128.441 filas; medir tiempo y memoria antes de desplegar.
+
+
+## 10. 0.4.407 ? ventana acotada y learning diario fail-open (2026-10-30 08:03)
+
+Con 0.4.406 el PMR ya super? el lock de outcomes (degrad?) y muri? m?s adelante:
+
+```text
+daily_learning.py:1871 build_learning_daily_run
+-> _materialize_observations_spooled
+-> storage.upsert_learning_observations_batch (BEGIN IMMEDIATE)
+-> LearningObservationBatchError: database is locked   (23:10:55Z)
+```
+
+Lote P-L163c:
+
+- outcomes: ventana de 45 d?as desde `session_date` (los horizontes m?ximos son
+  10 sesiones) en lugar de recalcular 128.441 filas desde abril;
+- `upsert_learning_observations_batch`: reintento acotado por chunk (3 intentos,
+  backoff 0,2-1,5 s) solo para `locked`/`busy`;
+- `_build_learning_pipeline`: si la materializaci?n sigue bloqueada, degrada con
+  `daily_learning_deferred` (declarado, sin inventar datos) y el informe cierra.
+
+Imagen `agente-bolsa:0.4.407-arm64`
+`sha256:ea6e9e1a1b5b4ceeb23f7d837943fba12f8774bed97f7b3a81f1da6ea11349d0`,
+`FROM 0.4.406`, 223/223 ficheros byte a byte, commit `311ab5a8`, tree `780e8265`,
+tag `prod-jetson-0.4.407`, recibo 2026-10-30T07:03:26Z. Doble salud verde
+(07:01:11Z y 07:02:52Z), kernel ok, runtime 0.4.407, smoke aislado exit 0.
+
+Validaci?n pendiente: el PMR de la sesi?n 2026-10-30, tras el cierre.

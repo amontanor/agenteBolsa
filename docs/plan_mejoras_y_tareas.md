@@ -7277,3 +7277,12 @@ real es recalcular 128.441 outcomes, no solo el lock. Reinicio a 22:39Z.
 Siguiente: **P-L163c** (outcomes por s?mbolo y streaming, solo se?ales cuyo
 resultado puede cambiar; medir tiempo/memoria).
 
+### 30-oct (madrugada) ? 0.4.407 desplegado: ventana y materializaci?n
+
+Con 0.4.406 el PMR super? el lock de outcomes y fall? en
+`upsert_learning_observations_batch` (`BEGIN IMMEDIATE`). P-L163c: ventana de
+outcomes de 45 d?as, reintento por chunk y degradaci?n `daily_learning_deferred`.
+Imagen `sha256:ea6e9e1a?`, commit `311ab5a8`, tag `prod-jetson-0.4.407`, recibo
+2026-10-30T07:03:26Z, doble salud verde, smoke aislado exit 0. Validaci?n real en
+el PMR de hoy.
+

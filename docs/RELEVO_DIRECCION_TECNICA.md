@@ -5105,3 +5105,10 @@ por lock pero no acota el trabajo. Reinicio 22:39Z (0.4.406 healthy).
 Siguiente lote P-L163c: outcomes por s?mbolo/streaming y solo se?ales con
 resultado potencialmente cambiante.
 
+### 30-oct (madrugada) ? 0.4.407 desplegado
+
+P-L163c portado sobre 0.4.406: ventana de outcomes (45 d?as), reintento por chunk
+en learning_observations y degradaci?n `daily_learning_deferred`. Imagen
+`sha256:ea6e9e1a?`, commit `311ab5a8`, tag `prod-jetson-0.4.407`, recibo
+07:03:26Z, doble salud verde. Queda validar con el PMR de hoy.
+
