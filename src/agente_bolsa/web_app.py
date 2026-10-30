@@ -7,7 +7,6 @@ import logging
 import math
 import os
 import subprocess
-import threading
 import time
 from bisect import bisect_right
 from contextlib import closing
@@ -51,7 +50,7 @@ from agente_bolsa import __version__
 from agente_bolsa.config import get_settings
 from agente_bolsa.continuous_improvement.promotion_readiness import evaluate_promotion_readiness
 from agente_bolsa.continuous_improvement.runtime import ContinuousImprovementLabRuntime
-from agente_bolsa.dashboard_loading import DashboardLoadState, RESOURCE_FRESH_SECONDS
+from agente_bolsa.dashboard_loading import RESOURCE_FRESH_SECONDS, DashboardLoadState
 from agente_bolsa.deployment_receipt import (
     format_verified_deployment_time,
     latest_verified_deployment_receipt,
@@ -340,7 +339,7 @@ def _store() -> Store:
     settings = _settings()
     cleanup_runtime_data(settings, min_interval_seconds=900)
     store = Store(settings.database_path, settings.agent_logs_dir)
-    store.ensure_schema()
+    store.ensure_schema_once()
     return store
 
 

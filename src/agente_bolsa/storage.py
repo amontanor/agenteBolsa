@@ -23,6 +23,12 @@ from .tools.learning_mode import excluded_signal_sources
 from .tools.signal_identity import merge_signal_identity_blocks
 
 ORDER_PLAN_STATUS_PENDING = "PENDING"
+
+# P-L180: el panel ejecutaba `ensure_schema` (escritura: executescript + UPDATE)
+# en cada `_store()`, varias veces por render. Bajo contencion con el scheduler
+# eso produce `database is locked` y esperas de hasta el busy_timeout. Se
+# ejecuta una vez por proceso y ruta, que es lo unico necesario para el lector.
+_SCHEMA_READY_PATHS: set[str] = set()
 ORDER_PLAN_STATUS_SUBMITTED = "SUBMITTED"
 ORDER_PLAN_STATUS_EXPIRED = "EXPIRED"
 DEFAULT_LEARNING_OBSERVATION_BATCH_SIZE = 250
@@ -1422,6 +1428,19 @@ class Store:
                 """,
                 (ORDER_PLAN_STATUS_PENDING,),
             )
+
+    def ensure_schema_once(self) -> None:
+        """Aplica el esquema como maximo una vez por proceso y base (P-L180).
+
+        El scheduler conserva `ensure_schema` en su arranque; el panel solo
+        necesita que el esquema exista, no reescribirlo en cada render.
+        """
+
+        key = str(self.database_path)
+        if key in _SCHEMA_READY_PATHS:
+            return
+        self.ensure_schema()
+        _SCHEMA_READY_PATHS.add(key)
 
     @staticmethod
     def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
