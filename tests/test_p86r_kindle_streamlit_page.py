@@ -178,7 +178,7 @@ def test_kindle_html_is_basic_escaped_and_contains_only_requested_content():
     )
     html = web_app._kindle_html(model)
     assert "&lt;AAPL&gt;" in html
-    assert "Ganancia/pérdida global de hoy" in html
+    assert "Variación de equity hoy (incluye caja)" in html
     assert "S&amp;P 500 de hoy" in html
     assert "Cantidad" in html and "P/L hoy" in html
     assert "<script" not in html.lower()

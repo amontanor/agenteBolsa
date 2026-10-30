@@ -470,11 +470,18 @@ def _today_pl_display(
     *,
     period_caption: str | None = None,
 ) -> dict[str, str | None]:
+    """Display del P/L de hoy: equity total, nunca rentabilidad de acciones.
+
+    P-L65B mantiene `equity_pct` como primario. La rentabilidad de la cartera
+    vive en `_invested_day_metric`; mezclarlas en la misma tarjeta es lo que
+    impedia distinguir "cartera +5%" de "equity +0,16%".
+    """
+
     del today_pl
     display = {
         "primary_pct": _pct(equity_pct) if equity_pct is not None else "n/d",
     }
-    display["period_caption"] = period_caption or "P/L diario de cartera · cierre XNYS anterior → ahora"
+    display["period_caption"] = period_caption or "equity total · cierre XNYS previo → ahora"
     return display
 
 
@@ -485,33 +492,131 @@ def _invested_day_metric(
     *,
     known: int = 0,
     total: int = 0,
+    market_open: bool | None = None,
+    all_zero: bool = False,
 ) -> dict[str, Any]:
     """P/L del dia sobre capital invertido (primario) + equity (secundario).
 
     P-L140A: el primario responde "son rentables mis inversiones" con la
     misma fuente que la tarjeta intradia existente (snapshot Alpaca).
     Sin invertido o sin dato, primario "n/d", nunca division por cero.
+    P-L152: fuera de sesion Alpaca puede devolver 0.00 en todas las posiciones.
+    Eso es "no medido", no "cero ganado": la tarjeta devuelve n/d en lugar de
+    un 0,00 % falso.
     """
 
     amount = _num(intraday_pl)
     base = _num(invested)
+    closed_zero = bool(all_zero) and market_open is not True
+    partial = int(total) > known
+    coverage = f"{known}/{total} posiciones"
+    secondary = f"{_pct_signed_or_na(equity_pct)} sobre equity"
+    if closed_zero:
+        return {
+            "amount": "n/d",
+            "primary_pct": "n/d",
+            "secondary": secondary,
+            "tone": "neutral",
+            "coverage": coverage,
+            "partial": partial,
+            "note": "mercado cerrado",
+        }
     if amount is None or base is None or base <= 0:
         return {
             "amount": _money_or_na(amount),
             "primary_pct": "n/d",
-            "secondary": f"{_pct_signed_or_na(equity_pct)} sobre equity",
+            "secondary": secondary,
             "tone": "neutral",
-            "coverage": f"{known}/{total} posiciones",
+            "coverage": coverage,
+            "partial": partial,
+            "note": None,
         }
     pct = amount / base
     tone = "good" if amount > 0 else "bad" if amount < 0 else "neutral"
     return {
         "amount": _money(amount),
         "primary_pct": _pct_signed(pct),
-        "secondary": f"{_pct_signed_or_na(equity_pct)} sobre equity",
+        "secondary": secondary,
         "tone": tone,
-        "coverage": f"{known}/{total} posiciones",
+        "coverage": coverage,
+        "partial": partial,
+        "note": None,
     }
+
+
+def _dilution_note(equity: Any, invested: Any, *, sample_pct: float = 0.05) -> str:
+    """Traduce un movimiento de cartera a su efecto sobre el equity total.
+
+    Con la mayor parte del capital en caja, un +5% de cartera mueve el equity
+    una fraccion pequena. Decirlo en la propia tarjeta evita confundir ambos
+    numeros sin inventar ninguna serie.
+    """
+
+    equity_value = _num(equity)
+    invested_value = _num(invested)
+    if equity_value is None or invested_value is None or equity_value <= 0 or invested_value <= 0:
+        return "sin exposicion calculable"
+    weight = invested_value / equity_value
+    return (
+        f"con {_pct(weight)} invertido, un {_pct(sample_pct)} de cartera mueve el equity "
+        f"{_pct_signed(sample_pct * weight)}"
+    )
+
+
+def _portfolio_day_result(
+    intraday_pl: Any,
+    realized_pl: Any,
+    invested: Any,
+    sell_notional: Any,
+    *,
+    intraday_known: int = 0,
+    intraday_total: int = 0,
+    sell_count: int = 0,
+    realized_known: int = 0,
+    realized_unknown: int = 0,
+    market_open: bool | None = None,
+    all_zero: bool = False,
+) -> dict[str, Any]:
+    """Resultado de acciones de hoy: posiciones abiertas + ventas cerradas.
+
+    El importe solo es exacto si ambos componentes estan medidos. El
+    porcentaje usa como base el invertido actual mas el notional vendido hoy y
+    se marca como estimado: no existe base historica por posicion cerrada.
+    Missing sigue siendo n/d y cobertura parcial, nunca cero.
+    """
+
+    intraday = _num(intraday_pl)
+    if bool(all_zero) and market_open is not True:
+        intraday = None
+    realized = _num(realized_pl) if int(sell_count) > 0 else 0.0
+    amount = None if intraday is None or realized is None else intraday + realized
+    invested_value = _num(invested)
+    sold = _num(sell_notional) or 0.0
+    base = invested_value + sold if invested_value is not None and invested_value > 0 else None
+    pct = (amount / base) if amount is not None and base else None
+    partial = (
+        (int(intraday_total) > int(intraday_known))
+        or (int(sell_count) > 0 and int(realized_unknown) > 0)
+        or intraday is None
+        or realized is None
+    )
+    tone = "neutral" if amount is None else "good" if amount > 0 else "bad" if amount < 0 else "neutral"
+    open_text = _money_or_na(intraday)
+    realized_text = _money_or_na(realized) if int(sell_count) > 0 else _money(0.0)
+    return {
+        "amount": _money_or_na(amount),
+        "primary_pct": _pct_signed(pct) if pct is not None else "n/d",
+        "tone": tone,
+        "amount_value": amount,
+        "pct_value": pct,
+        "base": base,
+        "partial": partial,
+        "estimated": int(sell_count) > 0,
+        "open_text": open_text,
+        "realized_text": realized_text,
+        "coverage": f"{intraday_known}/{intraday_total} posiciones · {realized_known}/{sell_count} ventas",
+    }
+
 
 
 def _today_pl_metric_payload(
@@ -554,12 +659,12 @@ def _daily_equity_session_display_date(value: Any) -> str | None:
 def _daily_equity_detail(metric: dict[str, Any]) -> str:
     if metric.get("status") != "available":
         reason = str(metric.get("reason") or "datos no disponibles")
-        return f"P/L diario de cartera · n/d · {reason}"
+        return f"variación de equity · n/d · {reason}"
     start = _daily_equity_session_display_date(metric.get("window_start")) or "último cierre Alpaca"
     end = _daily_equity_display_date(metric.get("window_end")) or "ahora"
     if _outside_trading_session(metric.get("window_end")):
-        return f"Equity actual − último cierre Alpaca · cierre {start} · leído {end} (mercado cerrado)"
-    return f"Equity actual − último cierre Alpaca · {start} → {end}"
+        return f"equity total (incluye caja) · cierre {start} · leído {end} (mercado cerrado)"
+    return f"equity total (incluye caja) · {start} → {end}"
 
 
 def _json(value: Any) -> str:
@@ -1537,6 +1642,7 @@ def _account_group(
     today_tone = "good" if (today_pl or 0.0) > 0 else "bad" if (today_pl or 0.0) < 0 else "neutral"
     today_metric = _today_pl_metric_payload(today_pl, exposure, today_pct, period_caption=today_detail)
     today_display = today_metric["display"]
+    dilution_note = _dilution_note(current_equity, exposure)
     intraday_amount, intraday_coverage = _intraday_metric_display(
         position_intraday,
         market_open=market_open,
@@ -1616,14 +1722,14 @@ def _account_group(
             </div>
             <div class="account-kpis">
                 <div class="{today_class}">
-                    <span>Ganancia/pérdida global (desde cierre anterior)</span>
+                    <span>Variación de equity hoy (incluye caja)</span>
                     <strong>{today_metric["amount"]}</strong>
                     <em>
                         <span>{today_display["primary_pct"]} {today_display["period_caption"]}</span>
-                        <small>&nbsp;</small>
+                        <small>{escape(dilution_note)}</small>
                     </em>
                 </div>
-                <div class="account-kpi"><span>Ganancia/pérdida de la cartera actual hoy</span><strong>{intraday_amount}</strong><em>{intraday_coverage}</em></div>
+                <div class="account-kpi"><span>Resultado de la cartera hoy (posiciones abiertas)</span><strong>{intraday_amount}</strong><em>{intraday_coverage}</em></div>
                 <div class="account-kpi"><span>Posiciones</span><strong>{positions_count}</strong><em>&nbsp;</em></div>
                 <div class="account-kpi"><span>Ordenes</span><strong>{orders_count}</strong><em>&nbsp;</em></div>
             </div>
@@ -1643,25 +1749,49 @@ def _investments_group(
     open_pl: float | None,
     cash: float | None,
     today_equity_pct: float | None,
+    market_open: bool | None = None,
+    intraday_all_zero: bool = False,
+    realized_pl: float | None = None,
+    realized_known: int = 0,
+    realized_unknown: int = 0,
+    sell_count: int = 0,
 ) -> None:
     """Franja "Mis inversiones": una fuente, un denominador (P-L140A)."""
 
     day = _invested_day_metric(
         intraday_pl, invested, today_equity_pct,
         known=intraday_known, total=intraday_total,
+        market_open=market_open, all_zero=intraday_all_zero,
     )
     base = _num(invested)
     open_pct = (open_pl / base) if (_num(open_pl) is not None and base) else None
     open_tone = "good" if (_num(open_pl) or 0.0) > 0 else "bad" if (_num(open_pl) or 0.0) < 0 else "neutral"
+    realized_text = None
+    if int(sell_count) > 0:
+        if _num(realized_pl) is not None and int(realized_unknown) == 0:
+            realized_text = f"realizadas hoy {_money(realized_pl)}"
+        else:
+            realized_text = f"realizadas hoy n/d ({realized_unknown} ventas sin P/L)"
+    day_detail = " · ".join(
+        part
+        for part in (
+            "parcial" if day["partial"] else None,
+            day["secondary"],
+            day["coverage"],
+            day["note"],
+            realized_text,
+        )
+        if part
+    )
     st.markdown(
         f"""
         <div class="account-strip">
             <div class="account-title">
-                <span>Mis inversiones · misma fuente que la tabla de posiciones</span>
+                <span>Mis inversiones · resultado sobre el capital invertido</span>
             </div>
             <div class="account-kpis">
+                <div class="account-kpi {day["tone"]}"><span>Resultado de la cartera hoy</span><strong>{day["amount"]} {day["primary_pct"]}</strong><em>{escape(day_detail)}</em></div>
                 <div class="account-kpi"><span>Invertido</span><strong>{_money_or_na(invested)}</strong><em>{_pct(invested_pct) if _num(invested_pct) is not None else "n/d"} del equity</em></div>
-                <div class="account-kpi {day["tone"]}"><span>P/L día sobre invertido</span><strong>{day["amount"]} {day["primary_pct"]}</strong><em>{escape(day["secondary"])} · {escape(day["coverage"])}</em></div>
                 <div class="account-kpi {open_tone}"><span>P/L total abiertas</span><strong>{_money_or_na(open_pl)} {_pct_signed_or_na(open_pct)}</strong><em>sobre invertido · desde entrada</em></div>
                 <div class="account-kpi"><span>Cash</span><strong>{_money_or_na(cash)}</strong><em>&nbsp;</em></div>
             </div>
@@ -1905,24 +2035,49 @@ def _render_today_breakdown(
     *,
     today_pl: float | None,
     today_pct: float | None,
+    invested: float | None = None,
+    intraday_pl: float | None = None,
+    intraday_known: int = 0,
+    intraday_total: int = 0,
+    market_open: bool | None = None,
+    intraday_all_zero: bool = False,
+    breakdown: dict[str, Any] | None = None,
 ) -> None:
-    breakdown = _today_breakdown(history, opening_context)
+    breakdown = breakdown or _today_breakdown(history, opening_context)
     _section_title(
         "Hoy",
-        "Sesón en curso desde la última apertura XNYS. Reutiliza el histórico ya cargado; sin lectura extra del broker.",
+        "Sesión en curso desde la última apertura XNYS. Cartera = posiciones abiertas + "
+        "ventas cerradas; equity = cuenta completa, incluida la caja. Sin lectura extra del broker.",
     )
     if breakdown["status"] != "available":
         st.info("n/d — apertura XNYS no disponible")
         return
     realized = breakdown["realized_pl"]
-    c1, c2, c3, c4 = st.columns(4)
+    cartera = _portfolio_day_result(
+        intraday_pl,
+        realized,
+        invested,
+        breakdown.get("sell_notional"),
+        intraday_known=intraday_known,
+        intraday_total=intraday_total,
+        sell_count=int(breakdown.get("sell_count") or 0),
+        realized_known=int(breakdown.get("realized_known") or 0),
+        realized_unknown=int(breakdown.get("realized_unknown") or 0),
+        market_open=market_open,
+        all_zero=intraday_all_zero,
+    )
+    c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
-        tone = "good" if (today_pl or 0.0) > 0 else "bad" if (today_pl or 0.0) < 0 else "neutral"
+        detail = f"abiertas {cartera['open_text']} · realizadas {cartera['realized_text']}"
+        if cartera["estimated"]:
+            detail += " · % estimado sobre invertido + ventas de hoy"
+        if cartera["partial"]:
+            detail += " · cobertura parcial"
         _compact_metric(
-            "Variación de equity hoy",
-            _money_or_na(today_pl),
-            _pct_signed_or_na(today_pct),
-            tone,
+            "Cartera de acciones hoy",
+            f"{cartera['amount']} {cartera['primary_pct']}",
+            detail,
+            cartera["tone"],
         )
     with c2:
         tone = "good" if (realized or 0.0) > 0 else "bad" if (realized or 0.0) < 0 else "neutral"
@@ -1933,12 +2088,20 @@ def _render_today_breakdown(
             tone,
         )
     with c3:
+        tone = "good" if (today_pl or 0.0) > 0 else "bad" if (today_pl or 0.0) < 0 else "neutral"
+        _compact_metric(
+            "Variación de equity hoy (incluye caja)",
+            _money_or_na(today_pl),
+            _pct_signed_or_na(today_pct),
+            tone,
+        )
+    with c4:
         _compact_metric(
             "Compras hoy",
             _money(breakdown["buy_notional"]),
             f"{breakdown['buy_count']} fills",
         )
-    with c4:
+    with c5:
         _compact_metric(
             "Ventas hoy",
             _money(breakdown["sell_notional"]),
@@ -2075,9 +2238,9 @@ def _kindle_html(model: dict[str, Any]) -> str:
   <h1>Cartera</h1>
   <p class="kindle-muted">Actualizado {escape(str(model.get('as_of_label') or 'n/d'))}</p>
   <section class="kindle-summary">
-    <h2>Ganancia/pérdida global de hoy</h2>
+    <h2>Variación de equity hoy (incluye caja)</h2>
     <p class="kindle-value">{escape(daily_amount)} ({escape(daily_pct)})</p>
-    <p class="kindle-muted">Equity actual − último cierre Alpaca · account.last_equity</p>
+    <p class="kindle-muted">Equity total − último cierre Alpaca · account.last_equity</p>
   </section>
   <section class="kindle-summary">
     <h2>S&amp;P 500 de hoy</h2>
@@ -2254,6 +2417,42 @@ def _portfolio_table(rows: list[dict[str, Any]]) -> None:
     )
 
 
+def _position_rows_totals(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Totales de la tabla de posiciones, calculados de las mismas filas.
+
+    Misma fuente y mismo denominador que las celdas de la tabla: no hay
+    lectura adicional ni reconciliacion distinta. Missing sigue n/d.
+    """
+
+    invested = 0.0
+    invested_known = 0
+    day_values: list[float | None] = []
+    open_values: list[float | None] = []
+    for item in rows:
+        value = _num(item.get("Valor"))
+        if value is not None:
+            invested += value
+            invested_known += 1
+        day_values.append(_num(item.get("P/L día $")))
+        open_values.append(_num(item.get("P/L $")))
+    day_known = [value for value in day_values if value is not None]
+    open_known = [value for value in open_values if value is not None]
+    day_pl = round(sum(day_known), 4) if day_known else None
+    open_pl = round(sum(open_known), 4) if open_known else None
+    base = invested if invested_known == len(rows) and invested > 0 else None
+    return {
+        "positions": len(rows),
+        "invested": round(invested, 2) if invested_known else None,
+        "day_pl": day_pl,
+        "day_pct": (day_pl / base) if day_pl is not None and base else None,
+        "day_known": len(day_known),
+        "open_pl": open_pl,
+        "open_pct": (open_pl / base) if open_pl is not None and base else None,
+        "open_known": len(open_known),
+        "complete": bool(rows) and len(day_known) == len(rows) and invested_known == len(rows),
+    }
+
+
 def _portfolio_action_table(rows: list[dict[str, Any]], *, key_prefix: str = "portfolio_symbol") -> str | None:
     if not rows:
         st.markdown("<div class='empty-box'>No hay posiciones abiertas.</div>", unsafe_allow_html=True)
@@ -2300,6 +2499,31 @@ def _portfolio_action_table(rows: list[dict[str, Any]], *, key_prefix: str = "po
         )
         c7.markdown(f"<div class='portfolio-native-cell'>{_money(item.get('Stop'))}</div>", unsafe_allow_html=True)
         c8.markdown(f"<div class='portfolio-native-cell'>{_money(item.get('Take'))}</div>", unsafe_allow_html=True)
+    totals = _position_rows_totals(rows)
+    coverage = f"{totals['day_known']}/{totals['positions']} con P/L día"
+    if totals["day_known"] < totals["positions"]:
+        coverage = f"parcial · {coverage}"
+    total_cols = st.columns([0.8, 1.15, 1.0, 1.0, 1.15, 1.15, 0.8, 0.8])
+    total_cols[0].markdown(
+        "<div class='portfolio-native-header'>Total</div>", unsafe_allow_html=True
+    )
+    total_cols[2].markdown(
+        f"<div class='portfolio-native-cell'><b>{_money_or_na(totals['invested'])}</b>"
+        f"<span>{escape(coverage)}</span></div>",
+        unsafe_allow_html=True,
+    )
+    total_cols[4].markdown(
+        f"<div class='portfolio-native-cell'>{_position_pl_chip(totals['open_pl'], totals['open_pct'])}</div>",
+        unsafe_allow_html=True,
+    )
+    total_cols[5].markdown(
+        f"<div class='portfolio-native-cell'>{_position_pl_chip(totals['day_pl'], totals['day_pct'])}</div>",
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Total sobre el invertido de las mismas filas"
+        + (f" · {_money(totals['invested'])}" if totals["invested"] is not None else " · base n/d")
+    )
     return clicked_symbol
 
 
@@ -2964,6 +3188,126 @@ def _estimated_portfolio_value_series(
             }
         )
     return pd.DataFrame(rows)
+
+
+def _performance_daily_series(store: Any) -> list[dict[str, Any]]:
+    """Serie por sesion desde ``performance_daily`` (solo lectura).
+
+    ``cumulative_pnl_pct``, ``pnl_pct`` y ``avg_exposure`` viven en
+    ``payload_json``, no en columnas de la tabla. No reproyecta ni escribe
+    nada: si falta el payload o el campo, la fila se omite.
+    """
+
+    try:
+        rows = store.performance_daily(limit=0, readonly=True)
+    except Exception:  # noqa: BLE001 - presentacion fail-open.
+        return []
+    series = []
+    for row in rows:
+        date_text = str(row.get("session_date") or "")[:10]
+        if not date_text:
+            continue
+        payload: dict[str, Any] = {}
+        candidate = row.get("payload")
+        if isinstance(candidate, dict):
+            payload = candidate
+        elif row.get("payload_json"):
+            try:
+                parsed = json.loads(row["payload_json"])
+            except (TypeError, ValueError):
+                parsed = None
+            if isinstance(parsed, dict):
+                payload = parsed
+        cumulative = _num(payload.get("cumulative_pnl_pct"))
+        equity_pct = _num(payload.get("pnl_pct")) if payload.get("pnl_pct") is not None else _num(row.get("pnl_pct"))
+        exposure = _num(payload.get("avg_exposure"))
+        portfolio_pct = None
+        if equity_pct is not None and exposure is not None and 0 < exposure <= 1:
+            portfolio_pct = equity_pct / exposure
+        series.append(
+            {
+                "fecha": date_text,
+                "acumulado": cumulative,
+                "equity_pct": equity_pct,
+                "exposure": exposure,
+                "cartera": portfolio_pct,
+            }
+        )
+    return series
+
+
+def _performance_daily_cumulative(store: Any) -> list[dict[str, Any]]:
+    """Filas con ``cumulative_pnl_pct`` para el selector de metrica."""
+
+    return [
+        {"fecha": row["fecha"], "acumulado": row["acumulado"]}
+        for row in _performance_daily_series(store)
+        if row["acumulado"] is not None
+    ]
+
+
+def _portfolio_session_rows(series: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Cartera por sesion: P/L de equity sobre la exposicion registrada."""
+
+    return [
+        {
+            "fecha": row["fecha"],
+            "cartera": row["cartera"],
+            "exposicion": row["exposure"],
+            "equity_pct": row["equity_pct"],
+        }
+        for row in series
+        if row.get("cartera") is not None
+    ]
+
+
+def _portfolio_session_chart(rows: list[dict[str, Any]]) -> Any:
+    if not rows or alt is None:
+        return None
+    frame = pd.DataFrame(rows)
+    bars = alt.Chart(frame).mark_bar(size=12, color="#7c3aed", opacity=0.85).encode(
+        x=alt.X("fecha:N", title=None, axis=alt.Axis(labelAngle=0, labelOverlap=True)),
+        y=alt.Y("cartera:Q", title="cartera", axis=alt.Axis(format="+.1%")),
+        tooltip=[
+            alt.Tooltip("fecha:N", title="Sesión"),
+            alt.Tooltip("cartera:Q", title="Cartera", format="+.2%"),
+            alt.Tooltip("equity_pct:Q", title="Equity", format="+.2%"),
+            alt.Tooltip("exposicion:Q", title="Exposición", format=".1%"),
+        ],
+    )
+    zero = alt.Chart(pd.DataFrame({"cero": [0.0]})).mark_rule(color="#9ca3af").encode(y="cero:Q")
+    return (bars + zero).properties(height=180)
+
+
+def _cumulative_window(series: list[dict[str, Any]], days: int | str | None) -> list[dict[str, Any]]:
+    """Misma ventana que el selector de rango, aplicada a la serie acumulada."""
+
+    if not series:
+        return []
+    if days is None:
+        return list(series)
+    if isinstance(days, str):
+        return [row for row in series if row["fecha"] >= days]
+    return series[-max(int(days), 1) :]
+
+
+def _cumulative_pnl_chart(rows: list[dict[str, Any]]) -> Any:
+    if not rows or alt is None:
+        return None
+    frame = pd.DataFrame(rows)
+    return (
+        alt.Chart(frame)
+        .mark_line(color="#0e7a47", strokeWidth=3)
+        .encode(
+            x=alt.X("fecha:N", title=None, axis=alt.Axis(labelAngle=0, labelOverlap=True)),
+            y=alt.Y("acumulado:Q", title="P/L acumulado", axis=alt.Axis(format="+.1%")),
+            tooltip=[
+                alt.Tooltip("fecha:N", title="Sesión"),
+                alt.Tooltip("acumulado:Q", title="Acumulado", format="+.2%"),
+            ],
+        )
+        .properties(height=292)
+    )
 
 
 def _portfolio_value_chart(
@@ -4758,6 +5102,32 @@ def _spy_hero_reason_text(verdict: dict[str, Any]) -> str | None:
     return f"SPY n/d: {reason}"
 
 
+def _render_portfolio_sessions(series: list[dict[str, Any]]) -> None:
+    """Cartera por sesion desde ``performance_daily``, fuera de la tabla SPY.
+
+    Es una ventana distinta (cierre a cierre) y por eso vive en su propio
+    bloque: no comparte fila con la comparativa apertura->apertura y no entra
+    en ganador ni alpha (P-L65B).
+    """
+
+    rows = _portfolio_session_rows(series)
+    _section_title(
+        "Cartera por sesión (cierre a cierre)",
+        "P/L de equity de la sesión dividido por la exposición registrada. "
+        "Estimación descriptiva: no entra en el comparativo con SPY.",
+    )
+    if not rows:
+        st.info("Sin sesiones con exposición registrada; no se estima la serie.")
+        return
+    chart = _portfolio_session_chart(_cumulative_window(rows, None))
+    if chart is not None:
+        st.altair_chart(chart, width="stretch")
+    st.caption(
+        f"{len(rows)} de {len(series)} sesiones con exposición válida. "
+        "La base es la exposición de la foto de cada sesión, no una media intradía."
+    )
+
+
 def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
     """Render one exact opening-to-opening rowset without pending rows."""
 
@@ -4864,7 +5234,7 @@ def _render_daily_vs_spy_table(opening_context: dict[str, Any]) -> None:
                 "</tr>"
             )
         st.markdown(
-            "<table class='portfolio-table'><thead><tr><th>Sesión iniciada</th><th>Intervalo</th><th>Sistema</th>"
+            "<table class='portfolio-table'><thead><tr><th>Sesión iniciada</th><th>Intervalo</th><th>Sistema (equity)</th>"
             "<th>SPY (ETF S&amp;P 500)</th><th>Estado</th><th>Superior</th></tr></thead>"
             f"<tbody>{''.join(html_rows)}</tbody></table>",
             unsafe_allow_html=True,
@@ -5944,6 +6314,17 @@ def page_dashboard() -> None:
     today_total = _num(daily_equity_metric.get("daily_equity_pl"))
     today_pct = _num(daily_equity_metric.get("daily_equity_return"))
     today_detail = _daily_equity_detail(daily_equity_metric)
+    timer.start("opening_context.today_breakdown")
+    today_breakdown = _today_breakdown(history, opening_context)
+    timer.stop("opening_context.today_breakdown")
+    timer.start("opening_context.performance_daily_series")
+    performance_series = _performance_daily_series(store)
+    cumulative_series = [
+        {"fecha": row["fecha"], "acumulado": row["acumulado"]}
+        for row in performance_series
+        if row["acumulado"] is not None
+    ]
+    timer.stop("opening_context.performance_daily_series")
     timer.start("opening_context.portfolio_value_series_from_alpaca")
     full_equity_df = _portfolio_value_series_from_alpaca(
         portfolio_history,
@@ -6018,6 +6399,12 @@ def page_dashboard() -> None:
         open_pl=_portfolio_open_pl(portfolio, stats.get("unrealized_pl") if stats else None),
         cash=current_cash,
         today_equity_pct=today_pct,
+        market_open=bool(market.get("is_open")),
+        intraday_all_zero=bool(position_intraday.get("all_zero")),
+        realized_pl=today_breakdown.get("realized_pl"),
+        realized_known=int(today_breakdown.get("realized_known") or 0),
+        realized_unknown=int(today_breakdown.get("realized_unknown") or 0),
+        sell_count=int(today_breakdown.get("sell_count") or 0),
     )
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
     timer.stop("kpis")
@@ -6032,8 +6419,9 @@ def page_dashboard() -> None:
             chart_title, chart_control = st.columns([3, 1])
             with chart_title:
                 _section_title(
-                    "Valor de cartera",
-                    "Cambio entre el primer y el ultimo valor del rango seleccionado.",
+                    "Evolución de la cuenta",
+                    "Equity absoluto o P/L acumulado del mismo rango. La cartera de acciones "
+                    "se mide aparte, sobre el capital invertido.",
                 )
             with chart_control:
                 chart_days = st.selectbox(
@@ -6043,26 +6431,63 @@ def page_dashboard() -> None:
                     key="portfolio_chart_days",
                     label_visibility="collapsed",
                 )
-            period_summary = _portfolio_value_chart(
-                history,
-                portfolio.portfolio_value if portfolio else None,
-                portfolio_history,
-                days=chart_days,
-                equity_df=full_equity_df,
+            metric_options = (
+                ["Equity ($)", "P/L acumulado (%)"] if cumulative_series else ["Equity ($)"]
             )
-            period_metric = _portfolio_period_metric_payload(period_summary)
+            chart_metric = st.radio(
+                "Métrica de la evolución",
+                metric_options,
+                horizontal=True,
+                key="portfolio_chart_metric",
+                label_visibility="collapsed",
+            )
             p1, p2 = st.columns(2)
-            with p1:
-                _compact_metric(
-                    "Resultado del periodo",
-                    period_metric["amount"],
-                    period_metric["detail"],
-                    period_metric["tone"],
+            if chart_metric == "P/L acumulado (%)":
+                window = _cumulative_window(cumulative_series, chart_days)
+                first = window[0]["acumulado"] if window else None
+                last = window[-1]["acumulado"] if window else None
+                delta = (last - first) if first is not None and last is not None else None
+                tone = "good" if (delta or 0.0) > 0 else "bad" if (delta or 0.0) < 0 else "neutral"
+                with p1:
+                    _compact_metric(
+                        "Resultado del periodo",
+                        _pct_signed_or_na(delta),
+                        f"{len(window)} sesiones · acumulado sobre equity",
+                        tone,
+                    )
+                with p2:
+                    _compact_metric(
+                        "Acumulado actual",
+                        _pct_signed_or_na(last),
+                        "desde el inicio de la serie",
+                        tone,
+                    )
+                chart_pct = _cumulative_pnl_chart(window)
+                if chart_pct is not None:
+                    st.altair_chart(chart_pct, width="stretch")
+                else:
+                    st.info("Sin serie acumulada para el rango seleccionado.")
+            else:
+                period_summary = _portfolio_value_chart(
+                    history,
+                    portfolio.portfolio_value if portfolio else None,
+                    portfolio_history,
+                    days=chart_days,
+                    equity_df=full_equity_df,
                 )
-            with p2:
-                open_pl = _portfolio_open_pl(portfolio, stats.get("unrealized_pl") if stats else None)
-                open_tone = "good" if (open_pl or 0.0) > 0 else "bad" if (open_pl or 0.0) < 0 else "neutral"
-                _compact_metric("P/L abierto", _money(open_pl), tone=open_tone)
+                period_metric = _portfolio_period_metric_payload(period_summary)
+                with p1:
+                    _compact_metric(
+                        "Resultado del periodo",
+                        period_metric["amount"],
+                        period_metric["detail"],
+                        period_metric["tone"],
+                    )
+                with p2:
+                    open_pl = _portfolio_open_pl(portfolio, stats.get("unrealized_pl") if stats else None)
+                    open_tone = "good" if (open_pl or 0.0) > 0 else "bad" if (open_pl or 0.0) < 0 else "neutral"
+                    _compact_metric("P/L abierto", _money(open_pl), tone=open_tone)
+                st.caption(escape(_dilution_note(current_equity, _num(exposure))))
 
         st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
         with st.container(border=True):
@@ -6071,6 +6496,13 @@ def page_dashboard() -> None:
                 opening_context,
                 today_pl=today_total,
                 today_pct=today_pct,
+                invested=_num(exposure),
+                intraday_pl=_num(position_intraday.get("amount")),
+                intraday_known=int(position_intraday.get("known") or 0),
+                intraday_total=int(position_intraday.get("total") or 0),
+                market_open=bool(market.get("is_open")),
+                intraday_all_zero=bool(position_intraday.get("all_zero")),
+                breakdown=today_breakdown,
             )
 
         st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
@@ -6168,6 +6600,11 @@ def page_dashboard() -> None:
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
     _render_daily_vs_spy_table(opening_context)
     timer.stop("spy_table")
+
+    timer.start("portfolio_sessions")
+    st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
+    _render_portfolio_sessions(performance_series)
+    timer.stop("portfolio_sessions")
 
     timer.start("sales")
     st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)
@@ -6338,7 +6775,28 @@ def page_portfolio() -> None:
         )
 
     st.subheader("Posiciones abiertas")
-    st.caption("P/L día usa los campos intradía de la misma posición Alpaca; si no están disponibles se muestra n/d.")
+    st.caption(
+        "P/L día usa los campos intradía de la misma posición Alpaca; si no están disponibles "
+        "se muestra n/d. El total usa el mismo invertido que las filas."
+    )
+    totals = _position_rows_totals(position_rows)
+    t1, t2, t3, t4 = st.columns(4)
+    with t1:
+        _metric_card("Invertido", _money_or_na(totals["invested"]))
+    with t2:
+        _metric_card(
+            "P/L día cartera",
+            f"{_money_or_na(totals['day_pl'])} {_pct_signed_or_na(totals['day_pct'])}",
+            f"{totals['day_known']}/{totals['positions']} con P/L día",
+        )
+    with t3:
+        _metric_card(
+            "P/L abierto",
+            f"{_money_or_na(totals['open_pl'])} {_pct_signed_or_na(totals['open_pct'])}",
+            "desde entrada · sobre invertido",
+        )
+    with t4:
+        _metric_card("Cash", _money(portfolio.cash))
     if positions:
         st.dataframe(pd.DataFrame(positions), width="stretch", hide_index=True)
         st.markdown("<div class='dashboard-divider'></div>", unsafe_allow_html=True)

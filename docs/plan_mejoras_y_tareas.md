@@ -7308,3 +7308,34 @@ Dise?o m?nimo propuesto (N2):
    `portfolio_watch` por `max_instances` por encima de la l?nea base, y ?1
    `crew_completed` por hora. La decisi?n de compra sigue siendo determinista
    hasta Fase 3.
+
+### 30-oct — P-L179 desplegado: resultado de la cartera separado del equity (0.4.410)
+
+El panel mezclaba dos preguntas en un solo número: «cuánto gana mi cartera» y
+«cuánto cambia mi equity». Con el 41 % invertido, una cartera +5 % mueve el
+equity +2,07 %; con el 3 %, +0,16 %. El número grande era equity y su caption
+decía «cartera».
+
+Cambios (N1, solo `web_app.py`): variación de equity rotulada y con nota de
+dilución dinámica; «Resultado de la cartera hoy» como primera tarjeta de «Mis
+inversiones»; guardia de mercado cerrado (`all_zero` → n/d); «Cartera de
+acciones hoy» = abiertas + realizadas con porcentaje estimado declarado;
+totales de la tabla de posiciones y tarjetas equivalentes en «Cartera»;
+bloque «Cartera por sesión (cierre a cierre)» desde `performance_daily`;
+selector `Equity ($)` / `P/L acumulado (%)`; Kindle alineado. P-L65B, P-L140A,
+P-L140B y P-L152 intactos.
+
+Verificación en producción encontró dos defectos que se corrigieron antes de
+cerrar: copy «estimado, base parcial» con cobertura completa (0.4.409) y
+lectura de la serie desde `payload_json` cuando `Store` ya devuelve `payload`
+(0.4.410). Además, las filas apertura→apertura no traen `avg_exposure`, así que
+la columna prevista en la tabla SPY se retiró y la serie pasó a su propio
+bloque.
+
+Producción: `0.4.410`, imagen `sha256:63fc007f…`, commit `e5781988`, tree
+`e259e692`, recibo 2026-10-30T08:22:34Z, doble salud verde, kernel `ok`, flags
+paper, navegador verificado. Excepción declarada: PMR no terminal desde
+2026-10-19; el despliegue se ejecutó por orden expresa del operador sin reparar
+nada. Gates: focales 170 passed; suite 3236 passed/1 skipped/1 failed
+(`web_research`, contaminación de entorno preexistente); Ruff sin errores
+nuevos; NUL 612; diff limpio; imagen byte a byte.
