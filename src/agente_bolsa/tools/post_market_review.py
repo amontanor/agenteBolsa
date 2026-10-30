@@ -8,7 +8,7 @@ import math
 import sqlite3
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -17,7 +17,7 @@ from agente_bolsa.config import Settings
 from agente_bolsa.llm_router import chat_completion_with_fallback
 from agente_bolsa.llm_usage import record_llm_response
 from agente_bolsa.models import PortfolioSnapshot
-from agente_bolsa.storage import Store
+from agente_bolsa.storage import LearningObservationBatchError, Store
 
 from .adaptive_tuning import promote_post_market_improvements
 from .broker import BrokerClientFactory
@@ -853,8 +853,13 @@ def _build_learning_pipeline(
     if stage_recorder:
         stage_recorder("outcome_update", "started")
     outcome_update_deferred = False
+    # P-L163c: los horizontes maximos son 10 sesiones; una ventana de 45 dias
+    # cubre cualquier outcome que aun pueda cambiar y evita recalcular 128k filas.
+    outcome_since = (date.fromisoformat(target_date) - timedelta(days=45)).isoformat()
     try:
-        signal_update = update_signal_outcomes(settings, store, since_date="2026-04-01", limit=200000)
+        signal_update = update_signal_outcomes(
+            settings, store, since_date=outcome_since, limit=200000
+        )
     except sqlite3.OperationalError as exc:
         # P-L163: una contencion de SQLite no puede tumbar el informe completo.
         # Los outcomes se recalculan de forma idempotente en la siguiente pasada.
@@ -880,6 +885,7 @@ def _build_learning_pipeline(
     signal_learning = build_learning_status(store, since_date="2026-04-01", limit=200000)
     if stage_recorder:
         stage_recorder("daily_learning", "started")
+    daily_learning_deferred = False
     try:
         daily_learning = build_learning_daily_run(
             settings,
@@ -891,11 +897,29 @@ def _build_learning_pipeline(
             compact=True,
             update_result=signal_update,
         )
+    except LearningObservationBatchError as exc:
+        # P-L163c: si la materializacion choca con SQLite tras los reintentos,
+        # el informe cierra igual y las observaciones se rematerializan en la
+        # siguiente pasada. Nunca se inventan datos: queda declarado.
+        if not getattr(exc, "retry_possible", False):
+            raise
+        daily_learning_deferred = True
+        if stage_recorder:
+            stage_recorder("daily_learning", "failed", error=repr(exc))
+        daily_learning = {
+            "path": None,
+            "health": {"status": "deferred"},
+            "digest": {},
+            "policy_candidates": [],
+            "warnings": ["daily_learning_deferred"],
+            "deferred": True,
+            "error": type(exc).__name__,
+        }
     except Exception as exc:
         if stage_recorder:
             stage_recorder("daily_learning", "failed", error=repr(exc))
         raise
-    if stage_recorder:
+    if stage_recorder and not daily_learning_deferred:
         stage_recorder("daily_learning", "completed")
     return signal_update, signal_learning, daily_learning
 

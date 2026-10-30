@@ -5115,51 +5115,60 @@ class Store:
                 non_strict_values for _, non_strict_values in prepared_chunk
             )
             chunk_started = time.perf_counter()
-            conn: sqlite3.Connection | None = None
-            cursor: sqlite3.Cursor | None = None
-            try:
-                conn = self.connect()
-                result["connections_opened"] += 1
-                cursor = conn.cursor()
-                conn.execute("BEGIN IMMEDIATE")
-                for parameters, _ in prepared_chunk:
-                    _execute_learning_observation_upsert(cursor, parameters)
-                conn.commit()
-                result["commits"] += 1
-                result["written"] += len(chunk)
-                result["rows_written"] = result["written"]
-                result["chunks_completed"] += 1
-            except Exception as exc:
-                if conn is not None:
-                    conn.rollback()
-                cause = str(exc).replace("\r", " ").replace("\n", " ")[:240]
-                result["status"] = "failed"
-                result["failed_chunk"] = chunk_index
-                result["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 3)
-                result["rows_written"] = result["written"]
-                retry_possible = isinstance(exc, sqlite3.OperationalError) and "locked" in cause.lower()
-                result["error"] = cause
-                result["retry_possible"] = retry_possible
-                error = LearningObservationBatchError(
-                    f"fallo persistiendo learning_observations en chunk {chunk_index}: {cause}",
-                    result=result,
-                    failed_chunk=chunk_index,
-                    cause=cause,
-                    retry_possible=retry_possible,
-                )
-                raise error from exc
-            finally:
-                duration_ms = round((time.perf_counter() - chunk_started) * 1000, 3)
-                result["chunk_durations_ms"].append(duration_ms)
-                result["max_chunk_duration_ms"] = max(result["max_chunk_duration_ms"], duration_ms)
-                if cursor is not None:
-                    try:
-                        cursor.close()
-                    finally:
-                        if conn is not None:
-                            conn.close()
-                elif conn is not None:
-                    conn.close()
+            attempt = 0
+            while True:
+                conn: sqlite3.Connection | None = None
+                cursor: sqlite3.Cursor | None = None
+                try:
+                    conn = self.connect()
+                    result["connections_opened"] += 1
+                    cursor = conn.cursor()
+                    conn.execute("BEGIN IMMEDIATE")
+                    for parameters, _ in prepared_chunk:
+                        _execute_learning_observation_upsert(cursor, parameters)
+                    conn.commit()
+                    result["commits"] += 1
+                    result["written"] += len(chunk)
+                    result["rows_written"] = result["written"]
+                    result["chunks_completed"] += 1
+                    break
+                except Exception as exc:
+                    if conn is not None:
+                        conn.rollback()
+                    # P-L163c: una contencion transitoria de SQLite no invalida
+                    # el lote; se reintenta solo el chunk actual.
+                    if _is_sqlite_busy(exc) and attempt < 3:
+                        attempt += 1
+                        time.sleep(min(0.2 * (2 ** (attempt - 1)), 1.5))
+                        continue
+                    cause = str(exc).replace("\r", " ").replace("\n", " ")[:240]
+                    result["status"] = "failed"
+                    result["failed_chunk"] = chunk_index
+                    result["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 3)
+                    result["rows_written"] = result["written"]
+                    retry_possible = isinstance(exc, sqlite3.OperationalError) and "locked" in cause.lower()
+                    result["error"] = cause
+                    result["retry_possible"] = retry_possible
+                    error = LearningObservationBatchError(
+                        f"fallo persistiendo learning_observations en chunk {chunk_index}: {cause}",
+                        result=result,
+                        failed_chunk=chunk_index,
+                        cause=cause,
+                        retry_possible=retry_possible,
+                    )
+                    raise error from exc
+                finally:
+                    if cursor is not None:
+                        try:
+                            cursor.close()
+                        finally:
+                            if conn is not None:
+                                conn.close()
+                    elif conn is not None:
+                        conn.close()
+            duration_ms = round((time.perf_counter() - chunk_started) * 1000, 3)
+            result["chunk_durations_ms"].append(duration_ms)
+            result["max_chunk_duration_ms"] = max(result["max_chunk_duration_ms"], duration_ms)
             chunk_index += 1
         result["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 3)
         result["rows_written"] = result["written"]
