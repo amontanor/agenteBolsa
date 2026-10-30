@@ -163,5 +163,4 @@ __all__ = ["__version__"]
 # P-L171: el semaforo del panel usa las rutas reales de Settings (0.4.400).
 # P-L172: el semaforo LLM se evalua en vivo, no desde el informe cacheado (0.4.401).
 # P-L173: la etiqueta de frescura coincide con la edad mostrada (0.4.402).
-# P-L178: callback de tarea CrewAI a nivel de modulo; sin warning en stderr cerrado (0.4.403).
-__version__ = "0.4.403"
+__version__ = "0.4.402"

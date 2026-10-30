@@ -62,19 +62,10 @@ class CrewTaskObserver:
         self.candidate_ids = {str(item) for item in (candidate_ids or set()) if str(item).strip()}
         self._tasks: dict[tuple[str, str], dict[str, Any]] = {}
         self._task_ids: dict[str, tuple[str, str]] = {}
-        self._task_roles: dict[tuple[str, str], tuple[str, str]] = {}
         self._contributions: list[dict[str, Any]] = []
 
     def _task_key(self, task_name: str, agent_name: str) -> tuple[str, str]:
         return str(task_name), str(agent_name)
-
-    def bind_task_identity(self, task_name: str, agent_name: str, agent_role: str) -> None:
-        """Map the CrewAI agent role back to the catalogue agent key (P-L178)."""
-
-        self._task_roles[(str(task_name), str(agent_role))] = (str(task_name), str(agent_name))
-
-    def resolve_task_identity(self, task_name: str, agent_role: str) -> tuple[str, str]:
-        return self._task_roles.get((str(task_name), str(agent_role)), (str(task_name), str(agent_role)))
 
     def _record_event(self, task: dict[str, Any], status: str, **extra: Any) -> None:
         payload = {
