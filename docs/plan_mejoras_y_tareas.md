@@ -7339,3 +7339,26 @@ paper, navegador verificado. Excepción declarada: PMR no terminal desde
 nada. Gates: focales 170 passed; suite 3236 passed/1 skipped/1 failed
 (`web_research`, contaminación de entorno preexistente); Ruff sin errores
 nuevos; NUL 612; diff limpio; imagen byte a byte.
+
+### 30-oct — 0.4.412: el panel deja de reescribir el esquema y sobrevive a un lock
+
+Síntoma reportado: pulsar «P/L acumulado (%)» en «Evolución de la cuenta»
+rompía el panel. Reproducido en navegador con la traza exacta:
+`sqlite3.OperationalError: database is locked` en `page_dashboard:6231`
+`store.status()` → `storage.py:8538` `ensure_schema()` → `storage.py:1422`
+`UPDATE order_plans`. Cualquier rerun del dashboard ejecutaba
+`executescript(SCHEMA)` más una escritura; con el host bajo I/O y el scheduler
+escribiendo, la página moría. No era el selector: era la ruta de escritura de
+la presentación.
+
+P-L180 (0.4.411) solo cambió `dashboard_warmup`; el render seguía llamando
+`status()`. P-L182: `Store.status()` usa `ensure_schema_once()`, el dashboard y
+la página «Estado del sistema» leen con `_safe_db_status` (fail-open: `tables`
+vacío y `error` visible, sin propagar), y el selector mantiene opciones
+estables para no romper el `session_state` si la serie desaparece.
+
+Producción: `0.4.412`, imagen `sha256:580404e3…`, commit `7a6ddf05`, tree
+`36af7221`, recibo 2026-10-30T10:47:20Z, doble salud verde, kernel `ok`.
+Verificado en navegador: el toggle muestra `Resultado del periodo -0,14 % · 7
+sesiones`, `Acumulado actual -0,72 %` y cero `traceback` en los logs tras el
+clic. Gates: 114 focales, Ruff limpio, NUL 614, diff limpio, imagen byte a byte.
