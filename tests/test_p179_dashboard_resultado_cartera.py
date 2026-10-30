@@ -317,6 +317,27 @@ def test_investments_group_shows_portfolio_result_first_with_realized() -> None:
     assert "realizadas hoy $39.00" in html
 
 
+def test_cumulative_chart_marks_discrete_sessions() -> None:
+    chart = web_app._cumulative_pnl_chart(
+        [
+            {"fecha": "2026-09-30", "acumulado": -0.006},
+            {"fecha": "2026-10-19", "acumulado": -0.0072},
+        ]
+    )
+
+    assert chart is not None
+    assert len(chart.layer) == 2  # linea + puntos: la serie no es diaria continua
+
+
+def test_dashboard_poll_does_not_rerun_every_two_seconds() -> None:
+    import inspect
+
+    source = inspect.getsource(web_app._render_refreshable_page)
+
+    assert 'run_every="10s"' in source
+    assert 'run_every="2s"' not in source
+
+
 def test_investments_group_closed_market_never_paints_zero_percent() -> None:
     from streamlit.testing.v1 import AppTest
 

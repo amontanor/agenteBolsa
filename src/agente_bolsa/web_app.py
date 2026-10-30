@@ -3335,7 +3335,7 @@ def _cumulative_pnl_chart(rows: list[dict[str, Any]]) -> Any:
     if not rows or alt is None:
         return None
     frame = pd.DataFrame(rows)
-    return (
+    line = (
         alt.Chart(frame)
         .mark_line(color="#0e7a47", strokeWidth=3)
         .encode(
@@ -3346,8 +3346,15 @@ def _cumulative_pnl_chart(rows: list[dict[str, Any]]) -> Any:
                 alt.Tooltip("acumulado:Q", title="Acumulado", format="+.2%"),
             ],
         )
-        .properties(height=292)
     )
+    # P-L184: puntos visibles para que se vea que solo hay sesion con baseline,
+    # no una serie continua diaria.
+    points = (
+        alt.Chart(frame)
+        .mark_circle(size=42, color="#0e7a47")
+        .encode(x="fecha:N", y="acumulado:Q")
+    )
+    return (line + points).properties(height=292)
 
 
 def _portfolio_value_chart(
@@ -3617,16 +3624,19 @@ def _render_refreshable_page(page_func: Any, refresh_interval_seconds: int) -> N
     if page_func is page_dashboard and hasattr(st, "fragment"):
         page_func()
 
-        @st.fragment(run_every="2s")
+        @st.fragment(run_every="10s")
         def _poll_dashboard() -> None:
             load = st.session_state.get("dashboard_load_state")
             if not isinstance(load, DashboardLoadState):
                 return
             if refresh_interval_seconds:
-                changed = load.update(_settings(), refresh_after=2.0)
+                changed = load.update(_settings(), refresh_after=10.0)
             else:
                 changed = load._collect()
                 changed = load._expire_budgets(load._clock()) or changed
+            # P-L184: un refresco lanzado (`started`) no cambia lo visible; solo
+            # se repinta cuando llega dato nuevo. Antes cada peticion forzaba un
+            # rerun completo cada 2 s y el panel parpadeaba en blanco.
             if changed:
                 st.session_state["dashboard_completion_render"] = not bool(refresh_interval_seconds)
                 st.rerun()
@@ -6489,13 +6499,15 @@ def page_dashboard() -> None:
                 window = _cumulative_window(cumulative_series, chart_days)
                 first = window[0]["acumulado"] if window else None
                 last = window[-1]["acumulado"] if window else None
+                first_date = _portfolio_display_date(window[0]["fecha"]) if window else "n/d"
+                last_date = _portfolio_display_date(window[-1]["fecha"]) if window else "n/d"
                 delta = (last - first) if first is not None and last is not None else None
                 tone = "good" if (delta or 0.0) > 0 else "bad" if (delta or 0.0) < 0 else "neutral"
                 with p1:
                     _compact_metric(
                         "Resultado del periodo",
                         _pct_signed_or_na(delta),
-                        f"{len(window)} sesiones · acumulado sobre equity",
+                        f"{len(window)} sesiones con dato · {first_date} → {last_date}",
                         tone,
                     )
                 with p2:
@@ -6508,6 +6520,11 @@ def page_dashboard() -> None:
                 chart_pct = _cumulative_pnl_chart(window)
                 if chart_pct is not None:
                     st.altair_chart(chart_pct, width="stretch")
+                    st.caption(
+                        f"Rango real {first_date} → {last_date}: {len(window)} sesiones con baseline. "
+                        "El selector cuenta sesiones con dato, no días naturales; los huecos son "
+                        "sesiones sin fila en performance_daily (PMR no completado)."
+                    )
                 else:
                     st.info("Sin serie acumulada para el rango seleccionado.")
             else:

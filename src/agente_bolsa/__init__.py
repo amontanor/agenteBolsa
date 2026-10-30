@@ -170,4 +170,5 @@ __all__ = ["__version__"]
 # P-L181: las tarjetas operativas nombran el informe ausente y su comando (0.4.413).
 # P-L182: status() no reescribe el esquema y el panel degrada si SQLite esta bloqueada (0.4.412).
 # P-L183: capturas h_capture en una sola transaccion por ciclo (0.4.414).
+# P-L184: panel sin reruns cada 2 s y rango real en P/L acumulado (0.4.414).
 __version__ = "0.4.414"
