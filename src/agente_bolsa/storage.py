@@ -8535,7 +8535,8 @@ class Store:
         return merged
 
     def status(self) -> dict[str, Any]:
-        self.ensure_schema()
+        # P-L182: la introspeccion no debe reescribir el esquema en cada render.
+        self.ensure_schema_once()
         with self.connect() as conn:
             tables = {}
             for table in (
