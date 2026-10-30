@@ -643,8 +643,8 @@ def build_outcome_capture(
     return _finish_payload(payload)
 
 
-def persist_h_capture_event(store: Any, payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Persist through existing append-only Store semantics."""
+def h_capture_batch_item(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Valida una captura y devuelve el item para `record_append_only_events`."""
 
     event = dict(payload)
     event_id = _text(event.get("event_id"))
@@ -661,11 +661,24 @@ def persist_h_capture_event(store: Any, payload: Mapping[str, Any]) -> dict[str,
         expected_event_type=event_type,
     ):
         raise ValueError("invalid_h_capture_event")
+    return {
+        "event_id": event_id,
+        "event_type": event_type,
+        "cycle_id": _text(event.get("cycle_id")),
+        "payload": event,
+        "idempotent_on_content_hash": True,
+    }
+
+
+def persist_h_capture_event(store: Any, payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Persist through existing append-only Store semantics."""
+
+    item = h_capture_batch_item(payload)
     return store.record_append_only_event(
-        event_id=event_id,
-        event_type=event_type,
-        cycle_id=_text(event.get("cycle_id")),
-        payload=event,
+        event_id=item["event_id"],
+        event_type=item["event_type"],
+        cycle_id=item["cycle_id"],
+        payload=item["payload"],
         lock_timeout_seconds=0.0,
         idempotent_on_content_hash=True,
     )

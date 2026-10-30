@@ -169,4 +169,5 @@ __all__ = ["__version__"]
 # P-L180: el panel aplica el esquema una vez por proceso, no en cada render (0.4.411).
 # P-L181: las tarjetas operativas nombran el informe ausente y su comando (0.4.413).
 # P-L182: status() no reescribe el esquema y el panel degrada si SQLite esta bloqueada (0.4.412).
-__version__ = "0.4.413"
+# P-L183: capturas h_capture en una sola transaccion por ciclo (0.4.414).
+__version__ = "0.4.414"
