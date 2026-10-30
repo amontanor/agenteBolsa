@@ -3208,10 +3208,12 @@ def _performance_daily_series(store: Any) -> list[dict[str, Any]]:
         if not date_text:
             continue
         payload: dict[str, Any] = {}
-        raw = row.get("payload_json")
-        if raw:
+        candidate = row.get("payload")
+        if isinstance(candidate, dict):
+            payload = candidate
+        elif row.get("payload_json"):
             try:
-                parsed = json.loads(raw)
+                parsed = json.loads(row["payload_json"])
             except (TypeError, ValueError):
                 parsed = None
             if isinstance(parsed, dict):

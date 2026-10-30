@@ -260,19 +260,17 @@ def test_cumulative_series_reads_only_persisted_pct() -> None:
 
     store = _Store(
         [
-            {
-                "session_date": "2026-10-29",
-                "payload_json": json.dumps({"cumulative_pnl_pct": 0.012}),
-            },
+            {"session_date": "2026-10-29", "payload": {"cumulative_pnl_pct": 0.012}},
             {
                 "session_date": "2026-10-28",
-                "payload_json": json.dumps({"cumulative_pnl_pct": None}),
+                "payload_json": json.dumps({"cumulative_pnl_pct": 0.004}),
             },
         ]
     )
 
     assert web_app._performance_daily_cumulative(store) == [
-        {"fecha": "2026-10-29", "acumulado": 0.012}
+        {"fecha": "2026-10-29", "acumulado": 0.012},
+        {"fecha": "2026-10-28", "acumulado": 0.004},
     ]
     assert store.calls == [{"limit": 0, "readonly": True}]
 
