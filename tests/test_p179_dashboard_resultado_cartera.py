@@ -336,6 +336,16 @@ def test_dashboard_poll_does_not_rerun_every_two_seconds() -> None:
 
     assert 'run_every="10s"' in source
     assert 'run_every="2s"' not in source
+    assert "dashboard_last_paint_at" in source
+    assert "time.monotonic() - last_paint < interval" in source
+
+
+def test_dashboard_marks_last_paint_on_render() -> None:
+    import inspect
+
+    source = inspect.getsource(web_app.page_dashboard)
+
+    assert 'st.session_state["dashboard_last_paint_at"] = time.monotonic()' in source
 
 
 def test_investments_group_closed_market_never_paints_zero_percent() -> None:

@@ -3634,10 +3634,17 @@ def _render_refreshable_page(page_func: Any, refresh_interval_seconds: int) -> N
             else:
                 changed = load._collect()
                 changed = load._expire_budgets(load._clock()) or changed
-            # P-L184: un refresco lanzado (`started`) no cambia lo visible; solo
-            # se repinta cuando llega dato nuevo. Antes cada peticion forzaba un
-            # rerun completo cada 2 s y el panel parpadeaba en blanco.
+            # P-L184/P-L185: un refresco lanzado, un presupuesto agotado o un
+            # fallo de fondo no deben repintar la pagina. Se actualiza en
+            # segundo plano y solo se repinta al ritmo elegido (10 min por
+            # defecto del operador) o al interactuar.
             if changed:
+                interval = int(refresh_interval_seconds or 0)
+                if interval:
+                    last_paint = float(st.session_state.get("dashboard_last_paint_at") or 0.0)
+                    if time.monotonic() - last_paint < interval:
+                        return
+                st.session_state["dashboard_last_paint_at"] = time.monotonic()
                 st.session_state["dashboard_completion_render"] = not bool(refresh_interval_seconds)
                 st.rerun()
 
@@ -6254,6 +6261,9 @@ def _dashboard_store(settings: Any) -> Store:
 def page_dashboard() -> None:
     timer = _DashboardTimer()
     timer.start("total")
+    # P-L185: marca de repintado. El sondeo de fondo actualiza datos sin
+    # repintar la pagina; el repintado completo se limita al intervalo elegido.
+    st.session_state["dashboard_last_paint_at"] = time.monotonic()
     timer.start("setup")
     settings = _settings()
     store = _dashboard_store(settings)
