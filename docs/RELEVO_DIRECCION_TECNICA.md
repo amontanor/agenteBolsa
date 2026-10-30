@@ -5169,3 +5169,19 @@ Si el PMR completa, `performance_daily` gana la fila del 30-oct y la serie de
 cartera avanza; si falla, P-L185 con la traza. Después: LLM/credenciales,
 P-L178b, límite permanente de `whale-copy`, backfill de fills y PMR colgado del
 29-oct.
+
+### 30-oct — 0.4.415 desplegado (P-L185)
+
+Producción `0.4.415`, imagen `sha256:6e5b39db…`, commit `9b882ad5`, tree
+`6c1e5f07`, tag `prod-jetson-0.4.415`, recibo 14:29:52Z. El dashboard ya no se
+repinta por fallos o presupuestos del loader: el fondo se actualiza y el
+repintado completo se limita al intervalo de «Refresco automatico».
+
+Verificado en navegador: 0 repintados en 3 min sin interacción (antes ~1 cada
+19 s). Corte en mercado abierto con autorización: el scan en vuelo
+`agent_run_077e7044c905` cerró `failed` por `database is locked`; los ciclos
+siguen degradados por I/O del host (0 compras, 8 ventas de riesgo hoy).
+
+Pendiente: ventana 21:55-23:15 con `whale-copy` parado, auditoría del PMR y
+rearranque; después LLM/credenciales, P-L178b, límite permanente de
+`whale-copy`, backfill de fills y PMR colgado del 29-oct.

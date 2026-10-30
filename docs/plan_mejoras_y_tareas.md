@@ -7382,3 +7382,21 @@ navegador verificado (toggle con rango real y sin bucle de reruns). Gates: 189
 focales; suite 3255 passed/2 failed preexistentes (`web_research` por entorno y
 `pre_earnings` por deriva de la SQLite local, reproducido con 0.4.412); Ruff
 limpio; NUL 616; imagen byte a byte. Smoke omitido por red/broker, declarado.
+
+### 30-oct — 0.4.415 desplegado: el panel deja de repintarse por fallos de fondo
+
+Con 10 min de refresco el dashboard seguía reejecutándose cada 10-20 s:
+`_poll_dashboard` marcaba `changed` también por presupuestos agotados y por
+errores del loader (`database is locked`, timeouts), y cada cambio lanzaba un
+`st.rerun()` completo de 4-7 s. Medido: 64 `dashboard_timing` en 20 min.
+
+P-L185 sella `dashboard_last_paint_at` en cada render y limita el repintado al
+intervalo elegido; el sondeo sigue actualizando datos en segundo plano. Tras el
+corte: 5 repintados en 7 min (cargas mías) y 0 en 3 min sin interacción.
+
+Producción: `0.4.415`, imagen `sha256:6e5b39db…`, commit `9b882ad5`, tree
+`6c1e5f07`, recibo 2026-10-30T14:29:52Z, doble salud verde, navegador
+verificado. Corte con XNYS abierto por autorización explícita; el reinicio
+interrumpió un scan en vuelo (`agent_run_077e7044c905`, `failed` 13:41:08Z por
+`database is locked`). Los scans siguen fallando por I/O del host, no por el
+cambio. Gates: 114 focales, Ruff limpio, NUL 616, imagen byte a byte.
