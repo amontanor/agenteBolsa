@@ -5112,3 +5112,24 @@ en learning_observations y degradaci?n `daily_learning_deferred`. Imagen
 `sha256:ea6e9e1a?`, commit `311ab5a8`, tag `prod-jetson-0.4.407`, recibo
 07:03:26Z, doble salud verde. Queda validar con el PMR de hoy.
 
+### 30-oct — P-L179 desplegado (0.4.410)
+
+Contrato nuevo del panel: «Variación de equity hoy (incluye caja)» es el número
+grande y lleva nota de dilución; la rentabilidad de acciones vive en
+«Resultado de la cartera hoy» (`_invested_day_metric`, denominador = invertido)
+y en «Cartera de acciones hoy» (abiertas + realizadas, % estimado declarado).
+`_position_rows_totals` da los totales de tabla y de la página Cartera desde
+las mismas filas. La serie «Cartera por sesión (cierre a cierre)» usa
+`performance_daily` (`payload` normalizado por `Store`) y queda fuera del
+ganador y del alpha; el selector `Equity ($)` / `P/L acumulado (%)` lee
+`cumulative_pnl_pct` en modo readonly.
+
+Producción: `0.4.410`, imagen `sha256:63fc007f…`, commit `e5781988`, tree
+`e259e692`, recibo 08:22:34Z, doble salud verde, navegador verificado (toggle y
+página Cartera). Dos imágenes intermedias (0.4.408/0.4.409) se sustituyeron
+tras la verificación y no se etiquetan.
+
+Pendiente: tag `prod-jetson-0.4.410` y fast-forward de `main` con el lote;
+observar el PMR de hoy (valida P-L163c, no este lote). `post_market_review_last_session`
+sigue en 2026-10-19: es excepción declarada del despliegue, no un estado
+reparado.
