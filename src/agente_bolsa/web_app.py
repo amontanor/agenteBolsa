@@ -1954,6 +1954,7 @@ def _position_rows(
         rows.append(
             {
                 "Simbolo": symbol,
+                "Direccion": "Corto" if str(item.get("side") or "long").lower() == "short" else "Largo",
                 "Compra ISO": purchase_time,
                 "Compra fecha": purchase_date,
                 "Compra hora": purchase_clock,
@@ -2206,6 +2207,7 @@ def _kindle_view_model(
         positions.append(
             {
                 "symbol": str(getattr(position, "symbol", "") or "").upper(),
+                "direction": "short" if str(getattr(position, "side", "") or "long").lower() == "short" else "long",
                 "qty": _num(getattr(position, "qty", None)),
                 "entry": _num(getattr(position, "avg_entry_price", None)),
                 "current": _num(getattr(position, "current_price", None)),

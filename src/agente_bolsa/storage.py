@@ -6557,6 +6557,66 @@ class Store:
             }
         return result
 
+    def latest_entry_plans_by_symbol(self) -> dict[str, dict[str, Any]]:
+        """Return the latest executed entry plan per symbol, both directions.
+
+        P-L186: an entry is ``open_long`` or ``open_short``. Legacy rows without
+        ``position_effect`` are accepted only as long entries (``side=buy``);
+        a legacy ``sell`` is always a close and never an entry.
+        """
+
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT symbol, side, payload_json, created_at
+                FROM broker_orders
+                ORDER BY created_at DESC, broker_order_id DESC
+                """
+            ).fetchall()
+        result: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            symbol = str(row["symbol"]).upper()
+            if symbol in result:
+                continue
+            try:
+                payload = json.loads(row["payload_json"])
+            except (TypeError, ValueError):
+                continue
+            plan = payload.get("plan", {}) or {}
+            effect = str(
+                plan.get("position_effect")
+                or (plan.get("payload") or {}).get("position_effect")
+                or ""
+            ).strip().lower()
+            if not effect:
+                effect = "open_long" if str(row["side"]).lower() in {"buy", "orderside.buy"} else "close_long"
+            if effect not in {"open_long", "open_short"}:
+                continue
+            result[symbol] = {
+                "symbol": symbol,
+                "created_at": row["created_at"],
+                "plan": plan,
+                "broker_order": payload.get("broker_order", {}),
+                "position_effect": effect,
+                "direction": "short" if effect.endswith("_short") else "long",
+            }
+        return result
+
+    def count_short_entries_since(self, since_iso: str) -> int:
+        """Count submitted short entries since an ISO timestamp (P-L186)."""
+
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM broker_orders
+                WHERE created_at >= ?
+                  AND json_extract(payload_json, '$.plan.payload.position_effect') = 'open_short'
+                """,
+                (since_iso,),
+            ).fetchone()
+        return int(row["total"] if row is not None else 0)
+
     def executed_buy_lots_by_symbol(self) -> dict[str, list[dict[str, Any]]]:
         """Return buy lots with fill evidence, without selecting the latest lot.
 
