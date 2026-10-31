@@ -641,6 +641,7 @@ def _short_submission_plan() -> dict:
 
 def test_submit_short_plan_verifies_borrow_and_sends_sell(tmp_path, monkeypatch) -> None:
     from alpaca.trading.enums import OrderSide
+
     from agente_bolsa.tools import execution as execution_module
 
     settings = _settings(tmp_path)
