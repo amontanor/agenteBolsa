@@ -1662,6 +1662,8 @@ def _account_group(
     cash: float | None,
     exposure: float | None,
     exposure_pct: float | None,
+    short_exposure: float | None = None,
+    short_exposure_pct: float | None = None,
     total_pl: float | None,
     total_pct: float | None,
     today_pl: float | None,
@@ -1734,6 +1736,12 @@ def _account_group(
         )
         if item
     )
+    short_exposure_item = ""
+    if short_exposure is not None and short_exposure > 0:
+        short_exposure_item = (
+            f'<div><span>Corto</span><strong>{_money(short_exposure)}</strong>'
+            f'<em>{_pct(short_exposure_pct)}</em></div>'
+        )
     st.markdown(
         f"""
         <div class="account-strip">
@@ -1747,6 +1755,7 @@ def _account_group(
                 <div><span>Equity actual</span><strong>{_money(current_equity)}</strong></div>
                 <div><span>Cash</span><strong>{_money(cash)}</strong></div>
                 <div><span>Invertido</span><strong>{_money(exposure)}</strong><em>{_pct(exposure_pct)}</em></div>
+                {short_exposure_item}
             </div>
             <div class="account-kpis opening-kpis">
                 <div class="account-kpi {opening_tone}">
@@ -6436,6 +6445,8 @@ def page_dashboard() -> None:
         cash=current_cash,
         exposure=_num(exposure),
         exposure_pct=_num(exposure_pct),
+        short_exposure=_num(stats.get("short_exposure")) if stats else None,
+        short_exposure_pct=_num(stats.get("short_exposure_pct")) if stats else None,
         total_pl=account_total_pl,
         total_pct=account_total_pct,
         today_pl=today_total,

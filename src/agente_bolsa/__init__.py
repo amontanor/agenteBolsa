@@ -176,4 +176,5 @@ __all__ = ["__version__"]
 # P-L186B: la direccion de la recomendacion se deriva de la accion (0.4.417).
 # P-L186C: exposicion bruta con cortos en la contabilidad de cartera (0.4.418).
 # P-L186D: fallback determinista short con cupo propio (0.4.419).
-__version__ = "0.4.419"
+# P-L186F: tarjeta de exposicion corta en la cuenta (0.4.420).
+__version__ = "0.4.420"
