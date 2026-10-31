@@ -167,3 +167,15 @@ El kernel ya no devuelve `True` por `side=sell`: distingue cierre de apertura.
 - Suite completa: 3.282 passed, 1 skipped, 1 fallo ambiental aislado
   (`test_web_research`). Focales P-L186: 24 passed. Ruff/NUL/diff limpios.
 - Salud: 3 contenedores healthy, HTTP 200 x3, kernel ok, cero ordenes.
+
+
+## P-L186H (0.4.422): shadow book observacional de cortos
+
+- Nuevo `tools/short_shadow_book.py`: entradas virtuales de setups short strong
+  con stop/take/tiempo, cierre por `stop_loss`, `take_profit` o `time_stop`,
+  P/L porcentual y resumen (win rate, media, conteo por motivo). Se persiste en
+  `data/reports/latest_short_shadow_book.json` con escritura atomica.
+- No crea ordenes, no toca broker ni Store, no alimenta la decision. Se ejecuta
+  en el ciclo de mercado y cualquier fallo se registra sin bloquear.
+- Un simbolo cerrado no se reabre en la misma sesion.
+- Tests: apertura y cierre por stop, y disabled sin escritura.

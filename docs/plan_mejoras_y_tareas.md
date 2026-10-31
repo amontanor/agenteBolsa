@@ -7458,3 +7458,10 @@ Produccion `agente-bolsa:0.4.421-arm64` `sha256:0c8c6998...`, commit `048657bf`,
 tree `df850f29`, tag `prod-jetson-0.4.421`, recibo 19:49:29Z. Migracion
 `executed_short` aplicada sobre 69.145 observaciones; vinculacion de fills
 cortos activa. Pendiente shadow book y validacion real el lunes.
+
+
+### P-L186H: shadow book de cortos (0.4.422)
+
+`tools/short_shadow_book.py` registra entradas virtuales short y las cierra por
+stop/take/tiempo sin ordenes ni broker. Hook fail-open en `market_cycle_job`.
+Pendiente suite completa, despliegue y recibo.
