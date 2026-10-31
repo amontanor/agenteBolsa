@@ -517,3 +517,18 @@ def test_build_order_plans_creates_short_and_cover(tmp_path: Path, monkeypatch) 
     assert len(covers) == 1
     assert covers[0].side == "buy" and covers[0].qty == 10
 
+
+def test_current_statistics_exposure_is_gross_with_shorts() -> None:
+    from agente_bolsa.tools.trade_history import _current_statistics
+
+    summary = {"equity": 100_000.0, "cash": 50_000.0, "realized_pl": 0.0, "unrealized_pl": 0.0, "open_positions": 2}
+    positions = [
+        {"symbol": "AAPL", "side": "long", "qty": 10, "market_value": 1_000.0, "unrealized_pl": 0.0, "unrealized_plpc": 0.0},
+        {"symbol": "MSFT", "side": "short", "qty": -10, "market_value": -500.0, "unrealized_pl": 0.0, "unrealized_plpc": 0.0},
+    ]
+    stats = _current_statistics(summary, [], positions)
+    assert stats["exposure"] == 1_500.0
+    assert stats["short_exposure"] == 500.0
+    assert stats["net_exposure"] == 500.0
+    assert stats["exposure_pct"] == 0.015
+    assert stats["short_exposure_pct"] == 0.005
