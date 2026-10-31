@@ -173,4 +173,5 @@ __all__ = ["__version__"]
 # P-L184: panel sin reruns cada 2 s y rango real en P/L acumulado (0.4.414).
 # P-L185: el fondo se actualiza sin repintar; repintado al ritmo elegido (0.4.415).
 # P-L186: paridad long/short de primera clase, guarded caps y borrow verificado (0.4.416).
-__version__ = "0.4.416"
+# P-L186B: la direccion de la recomendacion se deriva de la accion (0.4.417).
+__version__ = "0.4.417"
