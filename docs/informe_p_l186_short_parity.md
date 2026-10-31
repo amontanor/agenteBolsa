@@ -44,8 +44,8 @@ El kernel ya no devuelve `True` por `side=sell`: distingue cierre de apertura.
 ## Cambios por fichero
 
 - `models.py`: `direction` y `position_effect` en `OrderPlan` y recomendacion.
-- `config.py`: settings de la linea corta; `shorts_shadow_enabled` pasa a tener
-  consumidor real.
+- `config.py`: settings de la linea corta; `shorts_shadow_enabled` queda
+  reservado al shadow book del siguiente lote (hoy sin consumidor).
 - `kernel.py`: gates por efecto, caps absolutos de corto y bruto, borrow
   obligatorio, geometria invertida.
 - `tools/risk.py`: geometria por direccion, caps por lado y bruto, riesgo corto.
@@ -80,3 +80,30 @@ El kernel ya no devuelve `True` por `side=sell`: distingue cierre de apertura.
   la superficie completa de metricas por direccion quedan como siguiente lote
   P-L186B; no bloquean la ejecucion ni el riesgo.
 - Sin datos reales de borrow/fee en el entorno local: `unavailable`.
+
+
+## Despliegue 0.4.416/0.4.417 (2026-10-31)
+
+- 0.4.416 imagen `sha256:ff5e95d8ea84f2d4708dafa899af69267d4da5c02cc1078a9422a2bb2cedaba2`,
+  commit `7b2c6623`, tree `ce7eca2f`, recibo 19:03:11Z. Detectado en smoke que
+  `_recommendation_from_dict` dejaba `direction="long"` en short/cover; corregido
+  en 0.4.417.
+- 0.4.417 imagen `sha256:29aec1c72cd08af611ab425982a50ab805e9f047596457f49283138d9c8d9a9d`,
+  commit `4a173d7f`, tree `48452fb6`, tag `prod-jetson-0.4.417`, recibo
+  19:07:02Z. Version runtime 0.4.417.
+- Salud doble: 3 contenedores healthy, RestartCount 0, OOM false, HTTP 200 en
+  `/`, `/health`, `/_stcore/health`; kernel `ok` 0 violaciones con manifiesto
+  resellado 18:59:50Z; flags paper/true/false/false; cero ordenes y planes.
+- Entorno activo guarded: corto 10% cartera, 3% por nombre, 2 posiciones, 1/dia,
+  riesgo 0.5%, bruto 80%. `application.env` hash `48904fdd...`; selector
+  `agente-bolsa:0.4.417-arm64`.
+- Snapshot pre-corte `cold-pre-0.4.416-20261031T183409Z`, db sha256
+  `9a4db105...`; `quick_check`/`integrity_check` `unavailable` por timeout de
+  120 s bajo los timeouts NVMe conocidos. Copia con escritores parados.
+- Lease stale del PMR 2026-10-30 recuperado por `stale_lease_recovered` al
+  reiniciar; sin limpieza manual.
+- Smoke funcional en produccion: `short`/`cover` derivan direccion correcta;
+  risk aprueba corto acotado; kernel aprueba con borrow verificado y bloquea sin
+  el.
+- Pendiente: shadow book de cortos, linkage `executed_short`, metricas completas
+  por direccion y validacion de una orden corta real (apertura 2026-11-02).

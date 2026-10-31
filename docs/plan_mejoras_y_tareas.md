@@ -7414,3 +7414,13 @@ corto 60%, por nombre 15%, bruto 120%, R:R 1.5. Borrow verificado obligatorio
 `docs/informe_p_l186_short_parity.md`. Pendiente: validacion completa en mercado
 cerrado, despliegue, doble salud y recibo. Siguiente: P-L186B (linkage de
 aprendizaje y metricas por direccion).
+
+
+### P-L186 desplegado (0.4.416 y 0.4.417)
+
+Produccion `agente-bolsa:0.4.417-arm64` `sha256:29aec1c7...`, commit `4a173d7f`,
+tree `48452fb6`, tag `prod-jetson-0.4.417`, recibo 2026-10-31T19:07:02Z.
+Contrato por efecto, acciones short/cover, riesgo/kernel/ejecucion/monitor con
+caps guarded y borrow verificado. 0.4.416 se sustituyo el mismo dia por el fix
+de `direction`. Kernel resellado 18:59:50Z, HTTP 200 x3, cero ordenes.
+Siguiente: P-L186B (shadow book, linkage executed_short y metricas por lado).

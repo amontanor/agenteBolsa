@@ -5199,3 +5199,15 @@ rearranque; después LLM/credenciales, P-L178b, límite permanente de
   51 passed, Ruff limpio. Pendiente: suite completa, gates N3, merge, tag,
   despliegue, doble salud y recibo.
 - Siguiente: P-L186B (linkage de aprendizaje de cortos y metricas por lado).
+
+
+## P-L186 desplegado (0.4.417) - paridad long/short guarded
+
+- Imagen `sha256:29aec1c7...`, commit `4a173d7f`, tree `48452fb6`, tag
+  `prod-jetson-0.4.417`, recibo 19:07:02Z. 0.4.416 desplegado y sustituido por
+  el fix de `direction` en short/cover.
+- Caps guarded activos; kernel resellado con hashes nuevos y env `48904fdd...`;
+  doble salud verde, cero ordenes. Lease stale del PMR recuperado por ruta
+  normal al reiniciar.
+- Pendiente: P-L186B (shadow book real, linkage executed_short, metricas por
+  direccion) y primera validacion de orden corta el lunes 2026-11-02.
