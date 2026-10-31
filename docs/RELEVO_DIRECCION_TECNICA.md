@@ -5247,3 +5247,9 @@ rearranque; después LLM/credenciales, P-L178b, límite permanente de
   `prod-jetson-0.4.421`, recibo 19:49:29Z. Migracion aditiva sobre 69.145
   observaciones; reconciliacion enlaza fills cortos.
 - Pendiente: shadow book de cortos y primera orden corta real (2026-11-02).
+
+
+## P-L186H - shadow book de cortos (0.4.422)
+
+- Reporte `latest_short_shadow_book.json` con entradas virtuales y cierres
+  stop/take/tiempo; hook observacional en el ciclo. Pendiente suite y despliegue.

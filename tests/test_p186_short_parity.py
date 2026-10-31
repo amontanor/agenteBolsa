@@ -749,3 +749,40 @@ def test_short_execution_links_signal_and_learning(tmp_path) -> None:
     assert observation["executed_short"] is True
     assert observation["executed_buy"] is False
     assert observation["execution"]["direction"] == "short"
+
+def test_short_shadow_book_opens_and_closes(tmp_path) -> None:
+    from agente_bolsa.tools.short_shadow_book import update_short_shadow_book
+
+    settings = _settings(tmp_path, SHORTS_SHADOW_ENABLED=True)
+    candidate = {
+        "symbol": "AAPL",
+        "direction": "short",
+        "setup_quality": "strong",
+        "score": 9,
+        "risk_plan": {"entry_price": 100.0, "stop_loss": 110.0, "take_profit": 80.0},
+        "technical_state": {"close": 100.0, "return_20d": -0.1},
+    }
+    report = {"as_of": "2026-11-02T15:30:00+00:00", "top_shorts": [candidate], "all_candidates": [candidate]}
+    first = update_short_shadow_book(settings, report, session_date="2026-11-02")
+    assert first["summary"]["open_count"] == 1
+    assert first["summary"]["added"] == 1
+    assert first["authority"] == "observational_only_no_orders"
+    assert (tmp_path / "reports" / "latest_short_shadow_book.json").exists()
+
+    stopped = {**candidate, "technical_state": {"close": 111.0, "return_20d": -0.1}}
+    report2 = {"as_of": "2026-11-03T15:30:00+00:00", "top_shorts": [stopped], "all_candidates": [stopped]}
+    second = update_short_shadow_book(settings, report2, session_date="2026-11-03")
+    assert second["summary"]["open_count"] == 0
+    assert second["summary"]["closed_count"] == 1
+    assert second["closed"][0]["reason"] == "stop_loss"
+    assert second["closed"][0]["pnl_pct"] < 0
+    assert second["summary"]["by_reason"]["stop_loss"] == 1
+
+
+def test_short_shadow_book_disabled_does_not_write(tmp_path) -> None:
+    from agente_bolsa.tools.short_shadow_book import update_short_shadow_book
+
+    settings = _settings(tmp_path, SHORTS_SHADOW_ENABLED=False)
+    result = update_short_shadow_book(settings, {"top_shorts": [], "all_candidates": []})
+    assert result["status"] == "disabled"
+    assert not (tmp_path / "reports" / "latest_short_shadow_book.json").exists()

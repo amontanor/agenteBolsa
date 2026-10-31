@@ -2422,6 +2422,21 @@ def market_cycle_job(
                 },
             )
             technical_context = _compact_scan_context(report, selected_candidates)
+            # P-L186H: shadow book observacional de cortos; nunca bloquea el ciclo.
+            try:
+                from .tools.short_shadow_book import update_short_shadow_book
+
+                update_short_shadow_book(
+                    settings,
+                    report,
+                    session_date=getattr(status, "session_date", None),
+                )
+            except Exception as exc:  # noqa: BLE001 - shadow is observational only.
+                log_system_event(
+                    settings.logs_dir,
+                    "short_shadow_book_failed",
+                    {"error": repr(exc)[:240]},
+                )
 
             try:
                 breakout_symbols = merge_breakout_universe(symbols, settings.breakout_watchlist)
