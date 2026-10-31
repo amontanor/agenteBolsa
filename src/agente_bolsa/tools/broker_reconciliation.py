@@ -150,8 +150,14 @@ def _mark_signal_execution(
     order_created_at: str | None,
     plan_created_at: str | None,
     now: str,
+    position_effect: str = "open_long",
 ) -> int:
-    if side.lower() != "buy" or status != "filled":
+    is_short_entry = str(position_effect).lower() == "open_short"
+    if status != "filled":
+        return 0
+    if not is_short_entry and side.lower() != "buy":
+        return 0
+    if is_short_entry and side.lower() != "sell":
         return 0
     row = match_signal_row_for_buy_order(
         conn,
@@ -163,10 +169,12 @@ def _mark_signal_execution(
     if not row:
         return 0
     gate = dict(row.get("gate") or {})
-    if gate.get("executed_buy") and gate.get("broker_order_id") == snapshot.get("id"):
+    executed_key = "executed_short" if is_short_entry else "executed_buy"
+    if gate.get(executed_key) and gate.get("broker_order_id") == snapshot.get("id"):
         return 0
     execution = {
-        "executed_buy": True,
+        executed_key: True,
+        "direction": "short" if is_short_entry else "long",
         "broker_order_id": snapshot.get("id"),
         "plan_id": plan_id,
         "filled_qty": snapshot.get("filled_qty"),
@@ -198,8 +206,14 @@ def _mark_learning_execution(
     order_created_at: str | None,
     plan_created_at: str | None,
     now: str,
+    position_effect: str = "open_long",
 ) -> int:
-    if side.lower() != "buy" or status != "filled":
+    is_short_entry = str(position_effect).lower() == "open_short"
+    if status != "filled":
+        return 0
+    if not is_short_entry and side.lower() != "buy":
+        return 0
+    if is_short_entry and side.lower() != "sell":
         return 0
     signal = match_signal_row_for_buy_order(
         conn,
@@ -219,8 +233,11 @@ def _mark_learning_execution(
     if not row:
         return 0
     execution = dict(row.get("execution") or {})
+    executed_column = "executed_short" if is_short_entry else "executed_buy"
     execution.update(
         {
+            "direction": "short" if is_short_entry else "long",
+            executed_column: True,
             "broker_order_id": snapshot.get("id"),
             "plan_id": plan_id,
             "status": status,
@@ -230,9 +247,9 @@ def _mark_learning_execution(
         }
     )
     conn.execute(
-        """
+        f"""
         UPDATE learning_observations
-        SET executed_buy = 1, execution_json = ?, updated_at = ?
+        SET {executed_column} = 1, execution_json = ?, updated_at = ?
         WHERE observation_id = ?
         """,
         (_json_dumps(execution), now, row["observation_id"]),
@@ -406,6 +423,10 @@ def reconcile_broker_orders(
                     fill = change["fill"]
                     new_status = change["new"]
             plan_created_at = str(((change["payload"].get("plan") or {}).get("created_at")) or "").strip() or None
+            plan_payload = ((change["payload"].get("plan") or {}).get("payload") or {})
+            position_effect = str(plan_payload.get("position_effect") or "").strip().lower()
+            if not position_effect:
+                position_effect = "open_long" if str(change["side"]).lower() == "buy" else "close_long"
             conn.execute(
                 """
                 UPDATE broker_orders
@@ -424,6 +445,7 @@ def reconcile_broker_orders(
                 order_created_at=change.get("created_at"),
                 plan_created_at=plan_created_at,
                 now=now,
+                position_effect=position_effect,
             )
             learning_delta = _mark_learning_execution(
                 conn,
@@ -435,6 +457,7 @@ def reconcile_broker_orders(
                 order_created_at=change.get("created_at"),
                 plan_created_at=plan_created_at,
                 now=now,
+                position_effect=position_effect,
             )
             signal_updates += signal_delta
             learning_updates += learning_delta

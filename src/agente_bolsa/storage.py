@@ -334,6 +334,7 @@ CREATE TABLE IF NOT EXISTS learning_observations (
     blocked_entry_quality INTEGER NOT NULL,
     blocked_backtest INTEGER NOT NULL,
     executed_buy INTEGER NOT NULL,
+    executed_short INTEGER NOT NULL DEFAULT 0,
     duplicate_count INTEGER NOT NULL,
     rank_path_json TEXT NOT NULL,
     features_json TEXT NOT NULL,
@@ -911,6 +912,7 @@ def _prepare_learning_observation_parameters(
         int(bool(item.get("blocked_entry_quality"))),
         int(bool(item.get("blocked_backtest"))),
         int(bool(item.get("executed_buy"))),
+        int(bool(item.get("executed_short"))),
         int(item.get("duplicate_count") or 0),
         _dumps(item.get("rank_path", [])),
         _dumps(item.get("features", {})),
@@ -935,10 +937,10 @@ def _execute_learning_observation_upsert(cursor: sqlite3.Cursor, parameters: tup
             observation_id, signal_date, symbol, source_family, source_run_ids_json,
             first_seen_at, last_seen_at, best_signal_id, best_score, decision,
             explanation, llm_considered, approved_buy, blocked_entry_quality,
-            blocked_backtest, executed_buy, duplicate_count, rank_path_json,
+            blocked_backtest, executed_buy, executed_short, duplicate_count, rank_path_json,
             features_json, gate_json, outcome_json, execution_json, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(observation_id) DO UPDATE SET
             signal_date=excluded.signal_date,
             symbol=excluded.symbol,
@@ -955,6 +957,7 @@ def _execute_learning_observation_upsert(cursor: sqlite3.Cursor, parameters: tup
             blocked_entry_quality=excluded.blocked_entry_quality,
             blocked_backtest=excluded.blocked_backtest,
             executed_buy=excluded.executed_buy,
+            executed_short=excluded.executed_short,
             duplicate_count=excluded.duplicate_count,
             rank_path_json=excluded.rank_path_json,
             features_json=excluded.features_json,
@@ -1193,6 +1196,7 @@ class Store:
             "blocked_entry_quality": bool(row["blocked_entry_quality"]),
             "blocked_backtest": bool(row["blocked_backtest"]),
             "executed_buy": bool(row["executed_buy"]),
+            "executed_short": bool(row["executed_short"]),
         }
 
     @staticmethod
@@ -1268,7 +1272,7 @@ class Store:
                 SELECT observation_id, signal_date, symbol, source_family, source_run_ids_json,
                        first_seen_at, last_seen_at, best_signal_id, best_score, decision,
                        explanation, llm_considered, approved_buy, blocked_entry_quality,
-                       blocked_backtest, executed_buy, duplicate_count, rank_path_json,
+                       blocked_backtest, executed_buy, executed_short, duplicate_count, rank_path_json,
                        features_json, gate_json, outcome_json, execution_json, created_at, updated_at
                 FROM learning_observations
                 WHERE 1 = 1
@@ -1416,6 +1420,7 @@ class Store:
             conn.executescript(SCHEMA)
             # Migraciones defensivas e idempotentes para bases preexistentes.
             self._ensure_column(conn, "llm_usage", "role", "TEXT")
+            self._ensure_column(conn, "learning_observations", "executed_short", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(conn, "order_plans", "status", f"TEXT NOT NULL DEFAULT '{ORDER_PLAN_STATUS_PENDING}'")
             self._ensure_column(conn, "order_plans", "status_reason", "TEXT")
             self._ensure_column(conn, "order_plans", "status_updated_at", "TEXT")
@@ -5264,7 +5269,7 @@ class Store:
             SELECT observation_id, signal_date, symbol, source_family, source_run_ids_json,
                    first_seen_at, last_seen_at, best_signal_id, best_score, decision,
                    explanation, llm_considered, approved_buy, blocked_entry_quality,
-                   blocked_backtest, executed_buy, duplicate_count, rank_path_json,
+                   blocked_backtest, executed_buy, executed_short, duplicate_count, rank_path_json,
                    features_json, gate_json, outcome_json, execution_json, created_at, updated_at
             FROM learning_observations
             WHERE 1 = 1
@@ -5294,6 +5299,7 @@ class Store:
                 "blocked_entry_quality": bool(row["blocked_entry_quality"]),
                 "blocked_backtest": bool(row["blocked_backtest"]),
                 "executed_buy": bool(row["executed_buy"]),
+                "executed_short": bool(row["executed_short"]),
             }
             for row in rows
         ]
@@ -5311,7 +5317,7 @@ class Store:
             SELECT observation_id, signal_date, symbol, source_family, source_run_ids_json,
                    first_seen_at, last_seen_at, best_signal_id, best_score, decision,
                    explanation, llm_considered, approved_buy, blocked_entry_quality,
-                   blocked_backtest, executed_buy, duplicate_count, rank_path_json,
+                   blocked_backtest, executed_buy, executed_short, duplicate_count, rank_path_json,
                    features_json, gate_json, outcome_json, execution_json, created_at, updated_at
             FROM learning_observations WHERE 1 = 1
         """
@@ -5341,6 +5347,7 @@ class Store:
                             "blocked_entry_quality": bool(row["blocked_entry_quality"]),
                             "blocked_backtest": bool(row["blocked_backtest"]),
                             "executed_buy": bool(row["executed_buy"]),
+                "executed_short": bool(row["executed_short"]),
                         }
 
     def learning_observation_created_dates(self, *, limit: int = 5000) -> list[str]:
