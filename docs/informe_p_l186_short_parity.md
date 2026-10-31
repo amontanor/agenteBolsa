@@ -142,3 +142,17 @@ El kernel ya no devuelve `True` por `side=sell`: distingue cierre de apertura.
   19:27:13Z. La franja de cuenta muestra `Corto` con importe y porcentaje
   cuando hay exposicion corta, ademas de la direccion en la tabla de posiciones.
 - Tests web/UI+P186: 110 passed; Ruff/NUL limpios.
+
+
+## P-L186G (0.4.421): ejecucion corta enlazada al aprendizaje
+
+- `learning_observations` incorpora `executed_short` mediante migracion
+  idempotente (`ALTER TABLE ... ADD COLUMN ... DEFAULT 0`), sin reescritura ni
+  backfill.
+- `broker_reconciliation` resuelve el `position_effect` del plan y marca
+  `executed_short` (senal y learning) cuando el fill es `open_short`; los
+  cierres y compras conservan `executed_buy`.
+- La UI lee `executed_short` en el contexto LLM y en el cruce por señal.
+- Test de extremo a extremo: fill SELL de corto deja `executed_short=True`,
+  `executed_buy=False` y `execution.direction="short"`.
+- Pendiente de despliegue y validacion cerrada en el momento de escribir.

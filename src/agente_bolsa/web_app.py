@@ -1348,7 +1348,7 @@ def _latest_llm_context_by_symbol(store: Store, symbols: list[str]) -> dict[str,
                 """
                 SELECT symbol, signal_date, decision, explanation, llm_considered,
                        approved_buy, blocked_entry_quality, blocked_backtest,
-                       executed_buy, gate_json, updated_at
+                       executed_buy, executed_short, gate_json, updated_at
                 FROM learning_observations
                 WHERE symbol = ?
                 ORDER BY signal_date DESC, updated_at DESC
@@ -1369,6 +1369,7 @@ def _latest_llm_context_by_symbol(store: Store, symbols: list[str]) -> dict[str,
                     "blocked_entry_quality": bool(learning_row["blocked_entry_quality"]),
                     "blocked_backtest": bool(learning_row["blocked_backtest"]),
                     "executed_buy": bool(learning_row["executed_buy"]),
+                    "executed_short": bool(learning_row["executed_short"]),
                     "llm_gate": gate.get("llm", {}) if isinstance(gate, dict) else {},
                     "updated_at": learning_row["updated_at"],
                 }
@@ -5943,7 +5944,7 @@ def _company_study_decision_context(store: Store, signals: list[dict[str, Any]])
                     f"""
                     SELECT observation_id, signal_date, symbol, source_family, best_signal_id,
                            decision, explanation, llm_considered, approved_buy,
-                           blocked_entry_quality, blocked_backtest, executed_buy,
+                           blocked_entry_quality, blocked_backtest, executed_buy, executed_short,
                            gate_json, outcome_json, execution_json, updated_at
                     FROM learning_observations
                     WHERE best_signal_id IN ({placeholders})

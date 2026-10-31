@@ -673,3 +673,79 @@ def test_submit_short_plan_blocks_hard_to_borrow(tmp_path, monkeypatch) -> None:
     with pytest.raises(RuntimeError, match="easy_to_borrow"):
         execution_module.submit_paper_order_plan(settings, _short_submission_plan(), client_order_id="cid")
     assert factory.client.requests == []
+
+def test_short_execution_links_signal_and_learning(tmp_path) -> None:
+    from agente_bolsa.tools.broker_reconciliation import (
+        _mark_learning_execution,
+        _mark_signal_execution,
+    )
+
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    now = "2026-10-31T19:00:00+00:00"
+    store.save_signal_outcome(
+        signal_id="sig-short-1",
+        source_run_id="run-short-1",
+        source="closed_market_technical_study",
+        symbol="AAPL",
+        signal_date="2026-10-31",
+        decision="candidate",
+        features={"direction": "short", "setup_quality": "strong"},
+        gate={},
+        outcome={},
+    )
+    store.upsert_learning_observation(
+        {
+            "observation_id": "obs-short-1",
+            "signal_date": "2026-10-31",
+            "symbol": "AAPL",
+            "source_family": "closed_market_technical_study",
+            "decision": "candidate",
+            "explanation": "",
+            "llm_considered": True,
+            "approved_buy": False,
+            "blocked_entry_quality": False,
+            "blocked_backtest": False,
+            "executed_buy": False,
+            "executed_short": False,
+            "created_at": now,
+        }
+    )
+    snapshot = {
+        "id": "bo-short-1",
+        "filled_qty": 10,
+        "filled_avg_price": 100.0,
+        "filled_at": now,
+    }
+    with store.connect() as conn:
+        signal_delta = _mark_signal_execution(
+            conn,
+            symbol="AAPL",
+            side="sell",
+            plan_id="plan-short-1",
+            status="filled",
+            snapshot=snapshot,
+            order_created_at=now,
+            plan_created_at=now,
+            now=now,
+            position_effect="open_short",
+        )
+        learning_delta = _mark_learning_execution(
+            conn,
+            symbol="AAPL",
+            side="sell",
+            plan_id="plan-short-1",
+            status="filled",
+            snapshot=snapshot,
+            order_created_at=now,
+            plan_created_at=now,
+            now=now,
+            position_effect="open_short",
+        )
+    assert signal_delta == 1
+    assert learning_delta == 1
+    observation = store.learning_observations(since_date="2026-10-31", limit=10)[0]
+    assert observation["executed_short"] is True
+    assert observation["executed_buy"] is False
+    assert observation["execution"]["direction"] == "short"
