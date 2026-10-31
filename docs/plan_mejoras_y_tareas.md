@@ -7431,3 +7431,10 @@ Produccion `agente-bolsa:0.4.418-arm64` `sha256:20749531...`, commit `d322c416`,
 tree `e60c1fcc`, tag `prod-jetson-0.4.418`, recibo 19:13:17Z. Exposicion bruta
 con cortos y metricas short/net en la contabilidad. Pendiente P-L186B (shadow
 book y linkage executed_short).
+
+### P-L186D desplegado (0.4.419)
+
+Produccion `agente-bolsa:0.4.419-arm64` `sha256:adf6df62...`, commit `e3f3d5eb`,
+tree `06083f6a`, tag `prod-jetson-0.4.419`, recibo 19:19:14Z. Fallback
+determinista short con cupo propio; la senal corta ya no depende solo del LLM.
+Pendiente: shadow book, linkage executed_short y validacion real el lunes.

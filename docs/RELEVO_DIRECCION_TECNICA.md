@@ -5219,3 +5219,11 @@ rearranque; después LLM/credenciales, P-L178b, límite permanente de
   `|market_value|` y publica short/net exposure; smoke en produccion OK.
 - Pendiente: shadow book de cortos, linkage executed_short y validacion de una
   orden corta real en la apertura 2026-11-02.
+
+## 0.4.419 desplegado - fallback determinista short
+
+- Imagen `sha256:adf6df62...`, commit `e3f3d5eb`, tree `06083f6a`, tag
+  `prod-jetson-0.4.419`, recibo 19:19:14Z. Fallback short strong con cupo 1 y
+  caps guarded; smoke en produccion OK, cero ordenes.
+- Pendiente: shadow book real, linkage executed_short y primera orden corta en
+  la apertura 2026-11-02.

@@ -119,3 +119,17 @@ El kernel ya no devuelve `True` por `side=sell`: distingue cierre de apertura.
 - Smoke en produccion: exposicion 1500 (largo 1000 + corto 500), short 500,
   net 500, short_pct 0.005; `short`/`cover` derivan direccion correcta; caps
   guarded activos; cero ordenes y leases activos.
+
+
+## Cierre 0.4.419 (fallback determinista short)
+
+- 0.4.419 imagen `sha256:adf6df62259fa1f988a8073064b500aa5396e930192258d77f6114170efd18fc`,
+  commit `e3f3d5eb`, tree `06083f6a`, tag `prod-jetson-0.4.419`, recibo
+  19:19:14Z. Anade `deterministic_short_fallback_recommendations`: un setup
+  short strong valido puede convertirse en recomendacion operable con cupo
+  propio (1 por ciclo) cuando el LLM no propone ninguno, igual que el fallback
+  de compras.
+- Smoke en produccion: el fallback devuelve 1 short, direccion short y source
+  `deterministic_fallback_short`; caps guarded activos; cero ordenes y leases.
+- Con esto la senal corta no depende solo del LLM. La primera orden real sigue
+  pendiente de la apertura del lunes 2026-11-02.
