@@ -5185,3 +5185,17 @@ siguen degradados por I/O del host (0 compras, 8 ventas de riesgo hoy).
 Pendiente: ventana 21:55-23:15 con `whale-copy` parado, auditoría del PMR y
 rearranque; después LLM/credenciales, P-L178b, límite permanente de
 `whale-copy`, backfill de fills y PMR colgado del 29-oct.
+
+
+## P-L186 (0.4.416) - linea corta implementada, pendiente de validacion y corte
+
+- Worktree `pl186-short-parity`, rama `codex/pl186-short-parity`, base
+  `05f8d79b`. Contrato por efecto, acciones `short`/`cover`, riesgo/kernel con
+  caps de corto y bruto, ejecucion SELL/BUY por efecto, monitor invertido,
+  storage con planes de entrada por direccion, FIFO corto, replay y UI.
+- Escalon guarded: 10% corto, 3% por nombre, 2 posiciones, 1/dia, 0.5% riesgo,
+  bruto 80%. Kernel absoluto 60/15/120 y R:R 1.5. Borrow verificado.
+- Gates ejecutados en el worktree: focales P-L186 17 passed, regresiones
+  51 passed, Ruff limpio. Pendiente: suite completa, gates N3, merge, tag,
+  despliegue, doble salud y recibo.
+- Siguiente: P-L186B (linkage de aprendizaje de cortos y metricas por lado).
