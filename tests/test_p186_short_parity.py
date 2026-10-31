@@ -577,3 +577,98 @@ def test_augment_adds_short_when_llm_proposed_none(tmp_path) -> None:
     )
     assert any(item.action == "short" and item.symbol == "MSFT" for item in merged)
     assert report["short_added"] == ["MSFT"]
+
+class _FakeTradingClient:
+    def __init__(self) -> None:
+        self.requests = []
+
+    def submit_order(self, order_data):
+        self.requests.append(order_data)
+        return {
+            "id": "bo-short-1",
+            "client_order_id": "cid",
+            "symbol": "AAPL",
+            "side": "sell",
+            "type": "market",
+            "order_class": "",
+            "status": "accepted",
+            "qty": 10,
+            "notional": None,
+            "submitted_at": "2026-10-31T19:00:00Z",
+        }
+
+
+class _FakeFactory:
+    def __init__(self, *, easy_to_borrow: bool = True) -> None:
+        self.easy_to_borrow = easy_to_borrow
+        self.client = _FakeTradingClient()
+
+    def alpaca_shorting_enabled(self) -> bool:
+        return True
+
+    def alpaca_asset_shortability(self, symbol: str) -> dict:
+        return {
+            "status": "verified",
+            "symbol": symbol,
+            "tradable": True,
+            "marginable": True,
+            "shortable": True,
+            "easy_to_borrow": self.easy_to_borrow,
+            "fractionable": True,
+        }
+
+    def alpaca_trading_client(self):
+        return self.client
+
+
+def _short_submission_plan() -> dict:
+    return {
+        "symbol": "AAPL",
+        "side": "sell",
+        "notional": 1_000.0,
+        "position_effect": "open_short",
+        "direction": "short",
+        "payload": {
+            "qty": 10,
+            "entry_price": 100.0,
+            "stop_loss": 110.0,
+            "take_profit": 80.0,
+            "portfolio_equity": 100_000.0,
+            "risk_decision": {"approved": True, "checks": {"reward_risk": 2.0}},
+        },
+    }
+
+
+def test_submit_short_plan_verifies_borrow_and_sends_sell(tmp_path, monkeypatch) -> None:
+    from alpaca.trading.enums import OrderSide
+    from agente_bolsa.tools import execution as execution_module
+
+    settings = _settings(tmp_path)
+    portfolio = _portfolio()
+    factory = _FakeFactory()
+    monkeypatch.setattr(execution_module, "BrokerClientFactory", lambda _settings: factory)
+    monkeypatch.setattr(execution_module, "_kernel_portfolio_snapshot", lambda _settings: portfolio)
+    plan = _short_submission_plan()
+
+    order = execution_module.submit_paper_order_plan(settings, plan, client_order_id="cid")
+
+    assert order["id"] == "bo-short-1"
+    assert len(factory.client.requests) == 1
+    request = factory.client.requests[0]
+    assert request.side == OrderSide.SELL
+    assert request.qty == 10.0
+    assert plan["payload"]["risk_decision"]["checks"]["borrow"]["status"] == "verified"
+
+
+def test_submit_short_plan_blocks_hard_to_borrow(tmp_path, monkeypatch) -> None:
+    from agente_bolsa.tools import execution as execution_module
+
+    settings = _settings(tmp_path)
+    portfolio = _portfolio()
+    factory = _FakeFactory(easy_to_borrow=False)
+    monkeypatch.setattr(execution_module, "BrokerClientFactory", lambda _settings: factory)
+    monkeypatch.setattr(execution_module, "_kernel_portfolio_snapshot", lambda _settings: portfolio)
+
+    with pytest.raises(RuntimeError, match="easy_to_borrow"):
+        execution_module.submit_paper_order_plan(settings, _short_submission_plan(), client_order_id="cid")
+    assert factory.client.requests == []
