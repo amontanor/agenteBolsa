@@ -7438,3 +7438,9 @@ Produccion `agente-bolsa:0.4.419-arm64` `sha256:adf6df62...`, commit `e3f3d5eb`,
 tree `06083f6a`, tag `prod-jetson-0.4.419`, recibo 19:19:14Z. Fallback
 determinista short con cupo propio; la senal corta ya no depende solo del LLM.
 Pendiente: shadow book, linkage executed_short y validacion real el lunes.
+
+### P-L186F desplegado (0.4.420)
+
+Produccion `agente-bolsa:0.4.420-arm64` `sha256:8376e260...`, commit `14ac4021`,
+tree `69c0de9d`, tag `prod-jetson-0.4.420`, recibo 19:27:13Z. UI muestra
+exposicion corta junto a invertido y direccion en posiciones.

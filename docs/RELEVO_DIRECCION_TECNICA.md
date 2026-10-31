@@ -5227,3 +5227,10 @@ rearranque; después LLM/credenciales, P-L178b, límite permanente de
   caps guarded; smoke en produccion OK, cero ordenes.
 - Pendiente: shadow book real, linkage executed_short y primera orden corta en
   la apertura 2026-11-02.
+
+## 0.4.420 desplegado - UI de exposicion corta
+
+- Imagen `sha256:8376e260...`, commit `14ac4021`, tree `69c0de9d`, tag
+  `prod-jetson-0.4.420`, recibo 19:27:13Z. Franja de cuenta con `Corto`.
+- Pendiente: shadow book de cortos, linkage executed_short y validacion de una
+  orden corta real en la apertura 2026-11-02.

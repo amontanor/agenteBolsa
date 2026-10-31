@@ -133,3 +133,12 @@ El kernel ya no devuelve `True` por `side=sell`: distingue cierre de apertura.
   `deterministic_fallback_short`; caps guarded activos; cero ordenes y leases.
 - Con esto la senal corta no depende solo del LLM. La primera orden real sigue
   pendiente de la apertura del lunes 2026-11-02.
+
+
+## Cierre 0.4.420 (UI de exposicion corta)
+
+- 0.4.420 imagen `sha256:8376e260c7d294393d553b1a6129b404f7d40192c68c8044fc842cbffa70fcc7`,
+  commit `14ac4021`, tree `69c0de9d`, tag `prod-jetson-0.4.420`, recibo
+  19:27:13Z. La franja de cuenta muestra `Corto` con importe y porcentaje
+  cuando hay exposicion corta, ademas de la direccion en la tabla de posiciones.
+- Tests web/UI+P186: 110 passed; Ruff/NUL limpios.
