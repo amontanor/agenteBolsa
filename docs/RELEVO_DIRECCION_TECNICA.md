@@ -5234,3 +5234,9 @@ rearranque; después LLM/credenciales, P-L178b, límite permanente de
   `prod-jetson-0.4.420`, recibo 19:27:13Z. Franja de cuenta con `Corto`.
 - Pendiente: shadow book de cortos, linkage executed_short y validacion de una
   orden corta real en la apertura 2026-11-02.
+
+
+## P-L186G - ejecucion corta enlazada al aprendizaje (0.4.421)
+
+- Migracion aditiva `executed_short`; reconciliacion marca cortos por efecto;
+  UI lee el campo. Pendiente suite completa, build, despliegue y recibo.

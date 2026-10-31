@@ -7444,3 +7444,10 @@ Pendiente: shadow book, linkage executed_short y validacion real el lunes.
 Produccion `agente-bolsa:0.4.420-arm64` `sha256:8376e260...`, commit `14ac4021`,
 tree `69c0de9d`, tag `prod-jetson-0.4.420`, recibo 19:27:13Z. UI muestra
 exposicion corta junto a invertido y direccion en posiciones.
+
+
+### P-L186G: ejecucion corta en learning_observations (0.4.421)
+
+Migracion aditiva `executed_short`, vinculacion desde reconciliacion por
+`position_effect` y lectura en UI. Test focal senal+learning 29 passed.
+Pendiente suite completa, despliegue y recibo.
