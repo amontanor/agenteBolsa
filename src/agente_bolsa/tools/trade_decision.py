@@ -4763,6 +4763,109 @@ def deterministic_trade_fallback_recommendations(
     return recommendations
 
 
+def deterministic_short_fallback_recommendations(
+    settings: Settings,
+    portfolio: PortfolioSnapshot,
+    technical_context: dict[str, Any],
+    *,
+    limit: int = 1,
+    market_state: dict[str, Any] | None = None,
+    learning_mode_config: dict[str, Any] | None = None,
+) -> list[TradeRecommendation]:
+    """P-L186D: espejo corto del fallback determinista de compras.
+
+    Sin LLM, un setup short strong puede convertirse en una recomendacion
+    operable con la misma prevalidacion que un largo. Cupo propio y cap guarded.
+    """
+
+    if not settings.allow_short_selling:
+        return []
+    learning_mode = learning_mode_config if learning_mode_config is not None else active_learning_mode(settings)
+    block_reason = (
+        _effective_market_state_block_reason(settings, market_state)
+        if learning_mode
+        else _fallback_market_state_block_reason(market_state)
+    )
+    if block_reason:
+        return []
+    position_symbols = {
+        position.symbol.upper()
+        for position in portfolio.positions
+        if abs(float(position.qty or 0.0)) > 0
+    }
+    open_order_symbols = {order.symbol.upper() for order in portfolio.open_orders}
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for bucket in ("top_shorts", "all_candidates"):
+        for candidate in list((technical_context or {}).get(bucket, []) or []):
+            if not isinstance(candidate, dict):
+                continue
+            symbol = str(candidate.get("symbol") or "").upper().strip()
+            if not symbol or symbol in seen:
+                continue
+            if str(candidate.get("direction") or "").lower() != "short":
+                continue
+            seen.add(symbol)
+            candidates.append(candidate)
+    candidates.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
+
+    recommendations: list[TradeRecommendation] = []
+    for candidate in candidates:
+        if len(recommendations) >= max(1, int(limit)):
+            break
+        symbol = str(candidate.get("symbol") or "").upper().strip()
+        if symbol in position_symbols or symbol in open_order_symbols:
+            continue
+        if bool(candidate.get("blocked_auto_buy")):
+            continue
+        eligible, _reason = _short_selection_eligible(candidate)
+        if not eligible:
+            continue
+        score = _float(candidate.get("score")) or 0.0
+        if score < 7.0:
+            continue
+        risk = candidate.get("risk_plan", {}) or {}
+        entry = _float(risk.get("entry_price"))
+        stop = _float(risk.get("stop_loss"))
+        take = _float(risk.get("take_profit"))
+        if entry is None or stop is None or take is None:
+            continue
+        if entry < float(settings.short_min_price):
+            continue
+        recommendation = TradeRecommendation(
+            symbol=symbol,
+            action="short",
+            confidence=float(settings.min_llm_confidence_to_trade),
+            reason=(
+                "Fallback determinista short: setup strong "
+                f"score={score}, return_20d={_technical_value(candidate, 'return_20d')}."
+            ),
+            entry_price=entry,
+            stop_loss=stop,
+            take_profit=take,
+            target_exposure_pct=float(settings.max_short_position_exposure),
+            time_horizon="3d",
+            invalidation="Stop por encima de la entrada o recuperacion tecnica.",
+            source="deterministic_fallback_short",
+            aggressiveness_profile=settings.trade_aggressiveness_profile,
+            cohort=LEARNING_EXPERIMENT_SOURCE if learning_mode else None,
+            decision_origin="deterministic_fallback_short",
+            llm_selected=False,
+            direction="short",
+        )
+        approved, _entry_reason, _checks = validate_entry_quality(
+            settings,
+            recommendation,
+            technical_context,
+            {"results": []},
+            learning_mode_config=learning_mode_config,
+        )
+        if not approved:
+            continue
+        recommendations.append(recommendation)
+    return recommendations
+
+
 def augment_recommendations_with_deterministic_fallback(
     settings: Settings,
     portfolio: PortfolioSnapshot,
@@ -4801,8 +4904,16 @@ def augment_recommendations_with_deterministic_fallback(
         operational_response_context=operational_response_context,
         selection_report=fallback_selection_report,
     )
-    if not fallback_recommendations:
-        return recommendations, {"added": [], "replaced_holds": [], "fallback_candidates": 0}
+    short_fallbacks = deterministic_short_fallback_recommendations(
+        settings,
+        portfolio,
+        technical_context,
+        limit=1,
+        market_state=market_state,
+        learning_mode_config=learning_mode_config,
+    )
+    if not fallback_recommendations and not short_fallbacks:
+        return recommendations, {"added": [], "replaced_holds": [], "fallback_candidates": 0, "short_added": []}
 
     by_symbol: dict[str, TradeRecommendation] = {}
     hold_symbols: set[str] = set()
@@ -4865,9 +4976,26 @@ def augment_recommendations_with_deterministic_fallback(
         added.append(symbol)
         remaining_capacity -= 1
 
+    # P-L186D: una entrada corta determinista por ciclo si el LLM no propuso
+    # ninguna y hay un setup short strong valido. Cupo independiente del largo.
+    short_added: list[str] = []
+    if short_fallbacks and not any(str(item.action).lower() == "short" for item in merged):
+        used_symbols = {
+            item.symbol.upper()
+            for item in merged
+            if str(item.action).lower() in {"buy", "short"}
+        }
+        for fallback in short_fallbacks:
+            if fallback.symbol.upper() in used_symbols:
+                continue
+            merged.append(fallback)
+            short_added.append(fallback.symbol.upper())
+            break
+
     return merged, {
         "added": added,
         "replaced_holds": replaced_holds,
+        "short_added": short_added,
         "fallback_candidates": len(fallback_recommendations),
         "original_recommendations": len(recommendations),
         "merged_recommendations": len(merged),
