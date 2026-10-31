@@ -532,3 +532,48 @@ def test_current_statistics_exposure_is_gross_with_shorts() -> None:
     assert stats["net_exposure"] == 500.0
     assert stats["exposure_pct"] == 0.015
     assert stats["short_exposure_pct"] == 0.005
+
+def test_short_deterministic_fallback_creates_one_short(tmp_path) -> None:
+    from agente_bolsa.tools import trade_decision as td
+
+    settings = _settings(tmp_path)
+    candidate = {
+        "symbol": "AAPL",
+        "direction": "short",
+        "setup_quality": "strong",
+        "score": 9,
+        "risk_plan": {"entry_price": 100.0, "stop_loss": 110.0, "take_profit": 80.0},
+        "technical_state": {"return_20d": -0.12, "close": 100.0},
+    }
+    context = {"top_shorts": [candidate], "selected_candidates": [], "all_candidates": [candidate]}
+    recs = td.deterministic_short_fallback_recommendations(settings, _portfolio(), context)
+    assert len(recs) == 1
+    assert recs[0].action == "short" and recs[0].direction == "short"
+    assert recs[0].source == "deterministic_fallback_short"
+    assert recs[0].entry_price == 100.0 and recs[0].stop_loss == 110.0
+
+    disabled = _settings(tmp_path, ALLOW_SHORT_SELLING=False)
+    assert td.deterministic_short_fallback_recommendations(disabled, _portfolio(), context) == []
+
+
+def test_augment_adds_short_when_llm_proposed_none(tmp_path) -> None:
+    from agente_bolsa.tools import trade_decision as td
+
+    settings = _settings(tmp_path)
+    candidate = {
+        "symbol": "MSFT",
+        "direction": "short",
+        "setup_quality": "strong",
+        "score": 10,
+        "risk_plan": {"entry_price": 200.0, "stop_loss": 220.0, "take_profit": 160.0},
+        "technical_state": {"return_20d": -0.15, "close": 200.0},
+    }
+    context = {"top_shorts": [candidate], "selected_candidates": [], "all_candidates": [candidate]}
+    merged, report = td.augment_recommendations_with_deterministic_fallback(
+        settings,
+        _portfolio(),
+        context,
+        [],
+    )
+    assert any(item.action == "short" and item.symbol == "MSFT" for item in merged)
+    assert report["short_added"] == ["MSFT"]
