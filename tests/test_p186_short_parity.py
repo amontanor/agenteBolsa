@@ -138,6 +138,7 @@ def test_action_contract_accepts_short_and_cover() -> None:
         }
     )
     assert short is not None and short.action == "short"
+    assert short.direction == "short"
     cover = _recommendation_from_dict(
         {"symbol": "MSFT", "action": "cover", "confidence": 0.7, "reason": "cerrar"}
     )

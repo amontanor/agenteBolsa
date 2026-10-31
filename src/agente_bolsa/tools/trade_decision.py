@@ -3828,6 +3828,7 @@ def _recommendation_from_dict(item: dict[str, Any]) -> TradeRecommendation | Non
         backtest_soft_override=bool(item.get("backtest_soft_override")),
         soft_override_reasons=[str(value) for value in list(item.get("soft_override_reasons") or [])],
         llm_selected=True,
+        direction="short" if action in {"short", "cover"} else "long",
     )
 
 
