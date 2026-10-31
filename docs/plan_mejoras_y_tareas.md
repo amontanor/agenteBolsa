@@ -7424,3 +7424,10 @@ Contrato por efecto, acciones short/cover, riesgo/kernel/ejecucion/monitor con
 caps guarded y borrow verificado. 0.4.416 se sustituyo el mismo dia por el fix
 de `direction`. Kernel resellado 18:59:50Z, HTTP 200 x3, cero ordenes.
 Siguiente: P-L186B (shadow book, linkage executed_short y metricas por lado).
+
+### P-L186C desplegado (0.4.418)
+
+Produccion `agente-bolsa:0.4.418-arm64` `sha256:20749531...`, commit `d322c416`,
+tree `e60c1fcc`, tag `prod-jetson-0.4.418`, recibo 19:13:17Z. Exposicion bruta
+con cortos y metricas short/net en la contabilidad. Pendiente P-L186B (shadow
+book y linkage executed_short).

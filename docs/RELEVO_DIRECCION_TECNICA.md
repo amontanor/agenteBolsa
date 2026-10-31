@@ -5211,3 +5211,11 @@ rearranque; después LLM/credenciales, P-L178b, límite permanente de
   normal al reiniciar.
 - Pendiente: P-L186B (shadow book real, linkage executed_short, metricas por
   direccion) y primera validacion de orden corta el lunes 2026-11-02.
+
+## 0.4.418 desplegado - exposicion bruta con cortos
+
+- Imagen `sha256:20749531...`, commit `d322c416`, tree `e60c1fcc`, tag
+  `prod-jetson-0.4.418`, recibo 19:13:17Z. `_current_statistics` usa
+  `|market_value|` y publica short/net exposure; smoke en produccion OK.
+- Pendiente: shadow book de cortos, linkage executed_short y validacion de una
+  orden corta real en la apertura 2026-11-02.

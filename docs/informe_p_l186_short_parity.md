@@ -107,3 +107,15 @@ El kernel ya no devuelve `True` por `side=sell`: distingue cierre de apertura.
   el.
 - Pendiente: shadow book de cortos, linkage `executed_short`, metricas completas
   por direccion y validacion de una orden corta real (apertura 2026-11-02).
+
+
+## Cierre 0.4.418 (exposicion bruta)
+
+- 0.4.418 imagen `sha256:20749531c71a5554139bb66c6659aaccf1e7c77432d88a915fd1ae9156e60575`,
+  commit `d322c416`, tree `e60c1fcc`, tag `prod-jetson-0.4.418`, recibo
+  19:13:17Z. Corrige `_current_statistics`: la exposicion es bruta
+  (`|market_value|`) y publica `short_exposure`, `short_exposure_pct` y
+  `net_exposure`; una posicion corta ya no reduce el capital invertido.
+- Smoke en produccion: exposicion 1500 (largo 1000 + corto 500), short 500,
+  net 500, short_pct 0.005; `short`/`cover` derivan direccion correcta; caps
+  guarded activos; cero ordenes y leases activos.
