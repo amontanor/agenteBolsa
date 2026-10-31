@@ -55,13 +55,36 @@ def _alpaca_price(value: Any) -> float:
     return float(price.quantize(increment, rounding=ROUND_HALF_UP))
 
 
+def _plan_effect(plan: dict[str, Any]) -> str:
+    """Resolve the semantic order effect, keeping legacy plans long-only."""
+
+    effect = str(plan.get("position_effect") or plan.get("payload", {}).get("position_effect") or "").strip().lower()
+    if effect:
+        return effect
+    return "close_long" if str(plan.get("side", "")).lower() == "sell" else "open_long"
+
+
+def _plan_direction(plan: dict[str, Any]) -> str:
+    direction = str(plan.get("direction") or plan.get("payload", {}).get("direction") or "").strip().lower()
+    if direction:
+        return direction
+    return "short" if _plan_effect(plan).endswith("_short") else "long"
+
+
+def _broker_side_for_effect(effect: str) -> str:
+    if effect in {"open_long", "add_long", "close_short", "reduce_short"}:
+        return "buy"
+    return "sell"
+
+
 def _is_fractional_qty(value: Any) -> bool:
     qty = Decimal(str(value))
     return qty != qty.to_integral_value()
 
 
 def _is_full_position_exit(plan: dict[str, Any]) -> bool:
-    if str(plan.get("side", "")).lower() != "sell":
+    effect = _plan_effect(plan)
+    if effect not in {"close_long", "close_short"}:
         return False
     payload = plan.get("payload", {}) or {}
     recommendation = payload.get("recommendation", {}) or {}
@@ -70,7 +93,7 @@ def _is_full_position_exit(plan: dict[str, Any]) -> bool:
     if checks.get("trigger") == "partial_take_profit_v2":
         return False
     action = str(recommendation.get("action") or checks.get("action") or "").lower()
-    return action in {"sell", "exit"}
+    return action in {"sell", "exit", "cover"}
 
 
 def build_market_order_request(
@@ -93,7 +116,10 @@ def build_market_order_request(
         raise RuntimeError("Instala alpaca-py con `pip install -r requirements.txt`.") from exc
 
     payload = plan["payload"]
-    side = OrderSide.BUY if plan["side"].lower() == "buy" else OrderSide.SELL
+    effect = _plan_effect(plan)
+    direction = _plan_direction(plan)
+    desired_side = _broker_side_for_effect(effect)
+    side = OrderSide.BUY if desired_side == "buy" else OrderSide.SELL
     qty = payload.get("qty")
     notional = plan.get("notional")
     if not qty:
@@ -105,9 +131,12 @@ def build_market_order_request(
         "time_in_force": TimeInForce.DAY,
         "client_order_id": client_order_id,
     }
+    is_long_entry = effect in {"open_long", "add_long"}
+    # Los cortos no admiten fracciones ni notional y su proteccion la gestiona
+    # el monitor de posiciones (no se envia bracket de apertura).
     use_bracket = (
         use_bracket_orders
-        and plan["side"].lower() == "buy"
+        and is_long_entry
         and not _is_fractional_qty(qty)
     )
     if use_bracket:
@@ -124,7 +153,7 @@ def build_market_order_request(
             }
         )
     elif (
-        plan["side"].lower() == "buy"
+        is_long_entry
         and use_limit_entries
         and payload.get("entry_price")
         and not _is_fractional_qty(qty)
@@ -136,9 +165,11 @@ def build_market_order_request(
             float(payload["entry_price"]) * (1.0 + float(max_entry_gap_pct))
         )
         return LimitOrderRequest(**request_kwargs)
-    elif plan["side"].lower() == "buy" and notional:
+    elif is_long_entry and notional:
         request_kwargs["notional"] = float(notional)
     else:
+        if direction == "short" and _is_fractional_qty(qty):
+            raise RuntimeError("Los cortos exigen cantidad entera; no se admite fraccion.")
         request_kwargs["qty"] = float(qty)
     return MarketOrderRequest(**request_kwargs)
 
@@ -153,12 +184,27 @@ def submit_paper_order_plan(
         raise RuntimeError("La ejecucion automatica solo esta permitida en Alpaca paper.")
     if (
         settings.operational_kill_switch_enabled
-        and str(plan.get("side", "")).lower() == "buy"
+        and _plan_effect(plan) in {"open_long", "add_long", "open_short", "add_short"}
     ):
         operational_block = load_operational_block_context(settings.data_dir)
         if operational_block.get("block_buy_execution"):
             reason = "; ".join(operational_block.get("reasons", [])[:3]) or "critical_operational_alerts_active"
             raise RuntimeError(f"Compra bloqueada por operational kill switch: {reason}")
+
+    effect = _plan_effect(plan)
+    if effect in {"open_short", "add_short"}:
+        factory = BrokerClientFactory(settings)
+        if not factory.alpaca_shorting_enabled():
+            raise RuntimeError("Broker sin shorting_enabled: apertura de cortos bloqueada.")
+        borrow = factory.alpaca_asset_shortability(str(plan.get("symbol") or ""))
+        if str(borrow.get("status") or "") != "verified":
+            raise RuntimeError(f"Borrow no verificable: {borrow.get('reason') or 'unavailable'}")
+        if not borrow.get("tradable") or not borrow.get("marginable") or not borrow.get("shortable"):
+            raise RuntimeError("Activo no apto para corto (tradable/marginable/shortable).")
+        if settings.short_require_easy_to_borrow and not borrow.get("easy_to_borrow"):
+            raise RuntimeError("Activo no easy_to_borrow: corto bloqueado por politica.")
+        checks = plan.setdefault("payload", {}).setdefault("risk_decision", {}).setdefault("checks", {})
+        checks["borrow"] = borrow
 
     # Ultima validacion inmutable: el kernel es el suelo absoluto, adicional a risk.py.
     kernel_portfolio = _kernel_portfolio_snapshot(settings)

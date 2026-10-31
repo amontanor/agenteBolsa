@@ -117,6 +117,10 @@ class TradeRecommendation:
     gate_evaluation_snapshot: dict[str, Any] = field(default_factory=dict)
     recommendation_id: str | None = None
     llm_selected: bool | None = None
+    # P-L186: direccion de la tesis. ``action`` sigue siendo el contrato
+    # canonico (buy/sell/short/cover) y ``direction`` la transporta para
+    # consumidores que solo necesitan el signo.
+    direction: str = "long"
 
 
 @dataclass(frozen=True)
@@ -130,6 +134,11 @@ class OrderPlan:
     take_profit: float
     recommendation: TradeRecommendation
     risk_decision: RiskDecision
+    # P-L186: efecto semantico de la orden. ``side`` es el lado bruto que
+    # entiende el broker; el efecto distingue abrir/cerrar y largo/corto.
+    # None = plan legacy; se deriva de side+action solo para largos.
+    position_effect: str | None = None
+    direction: str = "long"
     dry_run: bool = True
     aggressiveness_profile: str | None = None
     micro_experiment: bool = False

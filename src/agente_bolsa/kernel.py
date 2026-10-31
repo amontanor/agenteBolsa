@@ -43,6 +43,11 @@ class KernelLimits:
     absolute_max_daily_loss_pct: float = 0.05
     absolute_max_position_exposure: float = 0.15
     absolute_max_portfolio_exposure: float = 1.0
+    # P-L186: techos absolutos de la linea corta. Nunca dependen de Settings.
+    absolute_max_short_exposure: float = 0.60
+    absolute_max_short_position_exposure: float = 0.15
+    absolute_max_gross_exposure: float = 1.20
+    absolute_min_short_reward_risk: float = 1.5
     live_trading_locked: bool = True
     min_reward_risk: float = 1.2
 
@@ -118,6 +123,23 @@ def _portfolio_exposure(portfolio: Any) -> float | None:
     return total / equity
 
 
+def _portfolio_short_exposure(portfolio: Any) -> float | None:
+    """Exposicion del libro corto (valor absoluto de posiciones short / equity)."""
+
+    equity = _portfolio_equity(portfolio)
+    if not equity or equity <= 0:
+        return None
+    total = 0.0
+    for position in getattr(portfolio, "positions", None) or []:
+        side = str(getattr(position, "side", "") or "").lower()
+        qty = _as_float(getattr(position, "qty", None))
+        market_value = _as_float(getattr(position, "market_value", None))
+        if side == "short" or (qty is not None and qty < 0):
+            if market_value is not None:
+                total += abs(market_value)
+    return total / equity
+
+
 def kernel_check_order(
     plan: dict[str, Any],
     portfolio: Any,
@@ -173,18 +195,96 @@ def kernel_check_order(
             ),
         )
 
-    # Las ventas/salidas reducen riesgo: pasados los cerrojos globales, no se
-    # bloquean por gates de exposicion ni de reward/risk.
-    if side == "sell":
-        return True, "kernel: venta dentro de los limites absolutos."
+    effect = str(plan.get("position_effect") or payload.get("position_effect") or "").strip().lower()
+    direction = str(plan.get("direction") or payload.get("direction") or "").strip().lower()
+    if not effect:
+        # Legacy: solo existian largos. Un sell historico cerraba un largo.
+        effect = "close_long" if side == "sell" else "open_long"
+    if not direction:
+        direction = "short" if effect.endswith("_short") else "long"
 
-    # 3) Exposicion por posicion (notional / equity).
+    # Cierres y reducciones reducen riesgo: pasados los cerrojos globales de
+    # live, drawdown y perdida diaria, no se bloquean por exposicion ni R:R.
+    if effect in {"close_long", "close_short", "reduce_long", "reduce_short"}:
+        return True, "kernel: cierre/reduccion dentro de los limites absolutos."
+
     notional = _first_float(plan.get("notional"), payload.get("notional"))
     equity = _first_float(
         payload.get("portfolio_equity"),
         checks.get("portfolio_equity"),
         _portfolio_equity(portfolio),
     )
+    entry = _first_float(payload.get("entry_price"), checks.get("entry_price"))
+    stop = _first_float(payload.get("stop_loss"), checks.get("stop_loss"))
+    take = _first_float(payload.get("take_profit"), checks.get("take_profit"))
+
+    if direction == "short":
+        # 3) Stop y take obligatorios y con geometria de corto.
+        if entry is None or stop is None or take is None:
+            return False, "kernel: corto sin entry/stop/take definidos."
+        if not take < entry < stop:
+            return False, "kernel: geometria de corto invalida (take < entrada < stop)."
+        borrow = checks.get("borrow") if isinstance(checks.get("borrow"), dict) else {}
+        if str(borrow.get("status") or "").strip().lower() != "verified":
+            return False, "kernel: corto sin evidencia de borrow verificada."
+        if notional is None or not equity or equity <= 0:
+            return False, "kernel: corto sin notional o equity verificables."
+
+        position_exposure = notional / equity
+        if position_exposure > limits.absolute_max_short_position_exposure:
+            return (
+                False,
+                (
+                    f"kernel: corto por posicion {position_exposure:.4f} supera el maximo "
+                    f"absoluto {limits.absolute_max_short_position_exposure:.4f}."
+                ),
+            )
+        projected_short = _first_float(
+            checks.get("projected_short_exposure"),
+            _portfolio_short_exposure(portfolio),
+        )
+        if projected_short is None:
+            projected_short = position_exposure
+        elif checks.get("projected_short_exposure") is None:
+            projected_short += position_exposure
+        if projected_short > limits.absolute_max_short_exposure:
+            return (
+                False,
+                (
+                    f"kernel: libro corto proyectado {projected_short:.4f} supera el maximo "
+                    f"absoluto {limits.absolute_max_short_exposure:.4f}."
+                ),
+            )
+        projected_gross = _first_float(checks.get("projected_gross_exposure"))
+        if projected_gross is None:
+            projected_gross = (
+                (_portfolio_exposure(portfolio) or 0.0)
+                + (_portfolio_short_exposure(portfolio) or 0.0)
+                + position_exposure
+            )
+        if projected_gross > limits.absolute_max_gross_exposure:
+            return (
+                False,
+                (
+                    f"kernel: exposicion bruta proyectada {projected_gross:.4f} supera el maximo "
+                    f"absoluto {limits.absolute_max_gross_exposure:.4f}."
+                ),
+            )
+        downside = stop - entry
+        upside = entry - take
+        reward_risk = upside / downside if downside > 0 else 0.0
+        minimum = max(limits.min_reward_risk, limits.absolute_min_short_reward_risk)
+        if reward_risk + 1e-9 < minimum:
+            return (
+                False,
+                (
+                    f"kernel: ratio beneficio/riesgo de corto {reward_risk:.4f} inferior al "
+                    f"minimo absoluto {minimum:.4f}."
+                ),
+            )
+        return True, "kernel: corto dentro de los limites absolutos."
+
+    # 3) Exposicion por posicion (notional / equity), largo.
     if notional is not None and equity and equity > 0:
         position_exposure = notional / equity
         if position_exposure > limits.absolute_max_position_exposure:
@@ -215,11 +315,21 @@ def kernel_check_order(
                         f"maximo absoluto {limits.absolute_max_portfolio_exposure:.4f}."
                     ),
                 )
+        gross = (
+            (_portfolio_exposure(portfolio) or 0.0)
+            + (_portfolio_short_exposure(portfolio) or 0.0)
+            + position_exposure
+        )
+        if gross > limits.absolute_max_gross_exposure:
+            return (
+                False,
+                (
+                    f"kernel: exposicion bruta proyectada {gross:.4f} supera el maximo "
+                    f"absoluto {limits.absolute_max_gross_exposure:.4f}."
+                ),
+            )
 
     # 5) Ratio beneficio/riesgo minimo absoluto.
-    entry = _first_float(payload.get("entry_price"), checks.get("entry_price"))
-    stop = _first_float(payload.get("stop_loss"), checks.get("stop_loss"))
-    take = _first_float(payload.get("take_profit"), checks.get("take_profit"))
     reward_risk = _first_float(checks.get("reward_risk"))
     if reward_risk is None and entry is not None and stop is not None and take is not None:
         downside = entry - stop

@@ -493,6 +493,7 @@ def replay_portfolio_dataset(
     last_fill_price: dict[str, float] = {}
     last_fill_at: dict[str, str] = {}
     lots: dict[str, list[list[float]]] = defaultdict(list)
+    short_lots: dict[str, list[list[float]]] = defaultdict(list)
     order_counts = Counter(row["order_id"] for row in fills)
     total_fill_notional = 0.0
     total_fill_fees = 0.0
@@ -532,16 +533,24 @@ def replay_portfolio_dataset(
             last_fill_price[symbol] = float(row["fill_price"])
             last_fill_at[symbol] = row["filled_at"]
             if row["side"] == "buy":
-                positions[symbol] += quantity
-                lots[symbol].append([quantity, float(row["fill_price"])])
+                remaining_buy = quantity
+                while remaining_buy > _EPSILON and short_lots[symbol]:
+                    lot_quantity, lot_price = short_lots[symbol][0]
+                    matched = min(remaining_buy, lot_quantity)
+                    realized_gross += matched * (lot_price - float(row["fill_price"]))
+                    closed_trade_count += 1
+                    remaining_buy -= matched
+                    lot_quantity -= matched
+                    if lot_quantity <= _EPSILON:
+                        short_lots[symbol].pop(0)
+                    else:
+                        short_lots[symbol][0][0] = lot_quantity
+                if remaining_buy > _EPSILON:
+                    positions[symbol] += remaining_buy
+                    lots[symbol].append([remaining_buy, float(row["fill_price"])])
             else:
-                if positions[symbol] + _EPSILON < quantity:
-                    raise PortfolioContractError("portfolio_short_not_supported")
-                positions[symbol] -= quantity
                 remaining = quantity
-                while remaining > _EPSILON:
-                    if not lots[symbol]:
-                        raise PortfolioContractError("portfolio_fifo_lot_missing")
+                while remaining > _EPSILON and lots[symbol]:
                     lot_quantity, lot_price = lots[symbol][0]
                     matched = min(remaining, lot_quantity)
                     realized_gross += matched * (float(row["fill_price"]) - lot_price)
@@ -552,6 +561,9 @@ def replay_portfolio_dataset(
                         lots[symbol].pop(0)
                     else:
                         lots[symbol][0][0] = lot_quantity
+                if remaining > _EPSILON:
+                    positions[symbol] -= remaining
+                    short_lots[symbol].append([remaining, float(row["fill_price"])])
         else:
             marks[row["symbol"]] = float(row["price"])
 

@@ -7,6 +7,7 @@ mode unless the global safety settings allow it.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 from urllib.parse import urlencode
@@ -53,6 +54,19 @@ def _str_attr(obj: Any, attr: str, default: str = "") -> str:
 class BrokerClientFactory:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        # P-L186: cache por proceso de la evidencia de borrow. Se consulta una
+        # vez por simbolo y sesion de ejecucion; nunca se inventa el resultado.
+        self._asset_cache: dict[str, dict[str, Any]] = {}
+        self._shorting_enabled: bool | None = None
+
+    def alpaca_shorting_enabled(self) -> bool:
+        """Whether the paper account allows shorting (broker authority)."""
+
+        if self._shorting_enabled is not None:
+            return self._shorting_enabled
+        account = self.alpaca_trading_client().get_account()
+        self._shorting_enabled = bool(getattr(account, "shorting_enabled", False))
+        return self._shorting_enabled
 
     def alpaca_trading_client(self) -> Any:
         self.settings.assert_trading_safety()
@@ -89,7 +103,41 @@ class BrokerClientFactory:
             "trading_blocked": bool(getattr(account, "trading_blocked", False)),
             "transfers_blocked": bool(getattr(account, "transfers_blocked", False)),
             "account_blocked": bool(getattr(account, "account_blocked", False)),
+            "shorting_enabled": bool(getattr(account, "shorting_enabled", False)),
         }
+
+    def alpaca_asset_shortability(self, symbol: str) -> dict[str, Any]:
+        """Return broker-side shortability evidence for one symbol.
+
+        The payload is the only authority the plan builder and kernel accept for
+        ``borrow.status == "verified"``. Any failure is reported as
+        ``unavailable`` and blocks new shorts; it never degrades to "assume yes".
+        """
+
+        key = str(symbol or "").upper().strip()
+        if not key:
+            return {"status": "unavailable", "reason": "symbol_missing"}
+        if key in self._asset_cache:
+            return dict(self._asset_cache[key])
+        try:
+            asset = self.alpaca_trading_client().get_asset(key)
+        except Exception as exc:  # noqa: BLE001 - borrow lookup never raises upstream.
+            result = {"status": "unavailable", "reason": f"asset_lookup_failed:{type(exc).__name__}"}
+            self._asset_cache[key] = result
+            return dict(result)
+        result = {
+            "status": "verified",
+            "as_of": datetime.now(timezone.utc).isoformat(),
+            "symbol": key,
+            "tradable": bool(getattr(asset, "tradable", False)),
+            "marginable": bool(getattr(asset, "marginable", False)),
+            "shortable": bool(getattr(asset, "shortable", False)),
+            "easy_to_borrow": bool(getattr(asset, "easy_to_borrow", False)),
+            "fractionable": bool(getattr(asset, "fractionable", False)),
+            "asset_status": _str_attr(asset, "status"),
+        }
+        self._asset_cache[key] = result
+        return dict(result)
 
     def alpaca_trade_activities(self, *, limit: int = 100) -> list[dict[str, Any]]:
         """Fetch trade fill activities from Alpaca paper REST API."""

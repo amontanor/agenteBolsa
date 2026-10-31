@@ -133,10 +133,16 @@ def _filter_fills_from_date(
 
 
 def realized_pl_from_fills(fills: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Calculate realized P/L using FIFO lots from fill activities."""
+    """Calculate realized P/L using FIFO lots, long and short (P-L186).
+
+    Lots are direction-aware: a sell with no long lot opens a short lot; a buy
+    with a short lot covers it FIFO and realises ``entry - cover``. Legacy
+    histories (long only) produce exactly the same rows as before.
+    """
 
     chronological = sorted(fills, key=_activity_time)
     lots: dict[str, deque[dict[str, float]]] = defaultdict(deque)
+    short_lots: dict[str, deque[dict[str, float]]] = defaultdict(deque)
     rows: list[dict[str, Any]] = []
     total_realized_pl = 0.0
     total_buy_notional = 0.0
@@ -152,12 +158,34 @@ def realized_pl_from_fills(fills: list[dict[str, Any]]) -> tuple[list[dict[str, 
         notional = round(qty * price, 2)
         realized_pl = None
         realized_plpc = None
+        position_effect = None
 
         if not symbol or qty <= 0 or price <= 0:
             continue
 
         if side == "buy":
-            lots[symbol].append({"qty": qty, "price": price})
+            remaining = qty
+            matched_qty = 0.0
+            entry_credit = 0.0
+            while remaining > 1e-9 and short_lots[symbol]:
+                lot = short_lots[symbol][0]
+                matched = min(remaining, lot["qty"])
+                matched_qty += matched
+                entry_credit += matched * lot["price"]
+                lot["qty"] -= matched
+                remaining -= matched
+                if lot["qty"] <= 1e-9:
+                    short_lots[symbol].popleft()
+            if matched_qty > 0:
+                cost = matched_qty * price
+                realized_pl = round(entry_credit - cost, 2)
+                realized_plpc = round((entry_credit - cost) / entry_credit, 4) if entry_credit else None
+                position_effect = "close_short"
+                total_realized_pl += realized_pl
+                realized_trades += 1
+            if remaining > 1e-9:
+                lots[symbol].append({"qty": remaining, "price": price})
+                position_effect = position_effect or "open_long"
             total_buy_notional += notional
         elif side == "sell":
             remaining = qty
@@ -173,12 +201,17 @@ def realized_pl_from_fills(fills: list[dict[str, Any]]) -> tuple[list[dict[str, 
                 if lot["qty"] <= 1e-9:
                     lots[symbol].popleft()
             proceeds = matched_qty * price
-            realized_pl = round(proceeds - cost_basis, 2) if matched_qty > 0 and cost_basis else None
-            realized_plpc = round((proceeds - cost_basis) / cost_basis, 4) if cost_basis else None
-            if realized_pl is not None:
-                total_realized_pl += realized_pl
-                realized_trades += 1
+            if matched_qty > 0:
+                realized_pl = round(proceeds - cost_basis, 2) if cost_basis else None
+                realized_plpc = round((proceeds - cost_basis) / cost_basis, 4) if cost_basis else None
+                position_effect = "close_long"
+                if realized_pl is not None:
+                    total_realized_pl += realized_pl
+                    realized_trades += 1
             if remaining > 1e-9:
+                short_lots[symbol].append({"qty": remaining, "price": price})
+                position_effect = "open_short"
+            if matched_qty > 0 and realized_pl is None:
                 unknown_realized_trades += 1
             total_sell_notional += notional
 
@@ -188,12 +221,13 @@ def realized_pl_from_fills(fills: list[dict[str, Any]]) -> tuple[list[dict[str, 
                 "date": _date_key(_activity_time(fill)),
                 "symbol": symbol,
                 "side": side,
+                "position_effect": position_effect,
                 "qty": round(qty, 6),
                 "price": round(price, 4),
                 "notional": notional,
                 "realized_pl": realized_pl,
                 "realized_plpc": realized_plpc,
-                "realized_pl_known": realized_pl is not None or side == "buy",
+                "realized_pl_known": realized_pl is not None or position_effect == "open_long",
                 "order_id": str(fill.get("order_id") or fill.get("id") or ""),
             }
         )
@@ -213,6 +247,7 @@ def _open_positions_summary(portfolio: PortfolioSnapshot) -> list[dict[str, Any]
     return [
         {
             "symbol": position.symbol,
+            "side": str(position.side or "long"),
             "qty": position.qty,
             "market_value": round(position.market_value, 2),
             "avg_entry_price": round(position.avg_entry_price, 4),

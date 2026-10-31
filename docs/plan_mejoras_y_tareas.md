@@ -7400,3 +7400,17 @@ verificado. Corte con XNYS abierto por autorización explícita; el reinicio
 interrumpió un scan en vuelo (`agent_run_077e7044c905`, `failed` 13:41:08Z por
 `database is locked`). Los scans siguen fallando por I/O del host, no por el
 cambio. Gates: 114 focales, Ruff limpio, NUL 616, imagen byte a byte.
+
+
+## 31-oct-2026 - P-L186: paridad long/short de primera clase (0.4.416)
+
+Contrato `position_effect` (open/close x long/short); acciones `short`/`cover`;
+riesgo, kernel, ejecucion, monitor, storage, FIFO, replay y UI con dos
+direcciones. Escalon guarded por defecto: corto 10% cartera, 3% por nombre, 2
+posiciones, 1 al dia, riesgo 0.5% por operacion, bruto 80%. Kernel absoluto:
+corto 60%, por nombre 15%, bruto 120%, R:R 1.5. Borrow verificado obligatorio
+(shortable/easy_to_borrow/marginable) y blackout de earnings. Worktree
+`pl186-short-parity`, rama `codex/pl186-short-parity`. Informe:
+`docs/informe_p_l186_short_parity.md`. Pendiente: validacion completa en mercado
+cerrado, despliegue, doble salud y recibo. Siguiente: P-L186B (linkage de
+aprendizaje y metricas por direccion).

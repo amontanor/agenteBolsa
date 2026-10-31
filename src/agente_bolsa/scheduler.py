@@ -1110,6 +1110,8 @@ def _risk_exit_plan(
     time_stop_evidence: dict[str, Any] | None = None,
     open_buy_lots: list[dict[str, Any]] | None = None,
     exit_lot_allocations: list[dict[str, Any]] | None = None,
+    position_effect: str = "close_long",
+    direction: str = "long",
 ) -> dict[str, Any]:
     exit_policy_payload: dict[str, Any] = {
         "enabled": trigger in {"time_stop_v2", "trailing_stop_v2", "partial_take_profit_v2"},
@@ -1127,18 +1129,23 @@ def _risk_exit_plan(
         "plan_id": new_id("risk_exit"),
         "cycle_id": new_id("watch_exit"),
         "symbol": symbol,
-        "side": "sell",
+        "side": "buy" if position_effect == "close_short" else "sell",
+        "position_effect": position_effect,
+        "direction": direction,
         "notional": round(notional, 2),
         "approved": True,
         "dry_run": True,
         "payload": {
             "qty": qty,
+            "position_effect": position_effect,
+            "direction": direction,
             "entry_price": current_price,
             "stop_loss": source_plan.get("payload", {}).get("stop_loss", 0.0),
             "take_profit": source_plan.get("payload", {}).get("take_profit", 0.0),
             "recommendation": {
                 "symbol": symbol,
-                "action": "exit",
+                "action": "cover" if position_effect == "close_short" else "exit",
+                "direction": direction,
                 "confidence": 1.0,
                 "reason": f"Salida automatica por {trigger}: precio {current_price:.4f} vs nivel {level:.4f}.",
                 "entry_price": current_price,
@@ -1153,7 +1160,8 @@ def _risk_exit_plan(
                 "approved": True,
                 "reason": f"Salida automatica aprobada por {trigger}.",
                 "checks": {
-                    "action": "exit",
+                    "action": "cover" if position_effect == "close_short" else "exit",
+                    "position_effect": position_effect,
                     "trigger": trigger,
                     "trigger_level": level,
                     "current_price": current_price,
@@ -1576,6 +1584,15 @@ def _execute_stop_take_exits(
 
     open_order_symbols = {order.symbol.upper() for order in portfolio.open_orders}
     buy_plans = store.latest_executed_buy_plans_by_symbol()
+    # P-L186: anadir las entradas cortas sin romper el contrato legacy de los
+    # planes largos (algunos consumidores y fakes solo implementan el lector buy).
+    try:
+        entry_plans = store.latest_entry_plans_by_symbol()
+    except Exception:  # noqa: BLE001 - el lector corto es aditivo y fail-open.
+        entry_plans = {}
+    for symbol_key, info in entry_plans.items():
+        if str(info.get("direction") or "").lower() == "short":
+            buy_plans.setdefault(symbol_key, info)
     if observation is not None:
         try:
             observation.clear()
@@ -1593,6 +1610,10 @@ def _execute_stop_take_exits(
         LOGGER.warning("time_stop_v2 lot evidence unavailable: %s", exc)
         buy_lots = {}
     temporal_evaluation_at = evaluation_at or datetime.now(timezone.utc)
+    try:
+        earnings_days = _earnings_days_by_symbol(settings)
+    except Exception:  # noqa: BLE001 - el calendario es aditivo y fail-open.
+        earnings_days = {}
     exits = []
     for position in portfolio.positions:
         symbol = position.symbol.upper()
@@ -1603,16 +1624,26 @@ def _execute_stop_take_exits(
             continue
         source_plan = source.get("plan", {}) or {}
         payload = source_plan.get("payload", {}) or {}
+        is_short_position = (
+            str(getattr(position, "side", "") or "").lower() == "short"
+            or float(getattr(position, "qty", 0.0) or 0.0) < 0
+        )
         stop_loss = float(payload.get("stop_loss") or 0)
         take_profit = float(payload.get("take_profit") or 0)
         trigger = None
         level = 0.0
         qty_fraction = 1.0
         exit_policy_state: dict[str, Any] | None = None
-        if stop_loss > 0 and position.current_price <= stop_loss:
+        if is_short_position:
+            stop_hit = stop_loss > 0 and position.current_price >= stop_loss
+            take_hit = take_profit > 0 and position.current_price <= take_profit
+        else:
+            stop_hit = stop_loss > 0 and position.current_price <= stop_loss
+            take_hit = take_profit > 0 and position.current_price >= take_profit
+        if stop_hit:
             trigger = "stop_loss"
             level = stop_loss
-        elif take_profit > 0 and position.current_price >= take_profit:
+        elif take_hit:
             trigger = "take_profit"
             level = take_profit
         else:
@@ -1631,11 +1662,31 @@ def _execute_stop_take_exits(
                 level = float(exit_policy_trigger["level"])
                 qty_fraction = float(exit_policy_trigger.get("qty_fraction") or 1.0)
                 exit_policy_state = exit_policy_trigger
+        if not trigger and is_short_position:
+            days_to_earnings = earnings_days.get(symbol)
+            if (
+                days_to_earnings is not None
+                and days_to_earnings <= int(settings.short_earnings_blackout_days)
+            ):
+                trigger = "short_earnings_blackout"
+                level = float(position.current_price or 0.0)
+            else:
+                created_at = str(source.get("created_at") or "")
+                try:
+                    opened_at = datetime.fromisoformat(created_at)
+                    if opened_at.tzinfo is None:
+                        opened_at = opened_at.replace(tzinfo=timezone.utc)
+                    held_days = (temporal_evaluation_at - opened_at).days
+                except ValueError:
+                    held_days = None
+                if held_days is not None and held_days >= int(settings.short_max_days_held):
+                    trigger = "short_max_days_held"
+                    level = float(position.current_price or 0.0)
         if not trigger:
             continue
 
-        exit_qty = position.qty * qty_fraction
-        exit_notional = position.market_value * qty_fraction
+        exit_qty = abs(float(position.qty or 0.0)) * qty_fraction
+        exit_notional = abs(float(position.market_value or 0.0)) * qty_fraction
         plan = _risk_exit_plan(
             symbol=symbol,
             notional=exit_notional,
@@ -1646,6 +1697,8 @@ def _execute_stop_take_exits(
             source_plan=source_plan,
             time_stop_evidence=(exit_policy_state or {}).get("time_stop_evidence"),
             open_buy_lots=buy_lots.get(symbol, []),
+            position_effect="close_short" if is_short_position else "close_long",
+            direction="short" if is_short_position else "long",
         )
         client_order_id = f"agente-{plan['plan_id'][:20]}"
         authority_capture = None
@@ -1672,7 +1725,7 @@ def _execute_stop_take_exits(
             "operation": "close_position",
             "method": "close_position",
             "symbol": symbol,
-            "side": "sell",
+            "side": plan["side"],
             "client_order_id": client_order_id,
             "qty": exit_qty,
         }
@@ -1691,7 +1744,7 @@ def _execute_stop_take_exits(
                     plan_id=plan["plan_id"],
                     cycle_id=plan["cycle_id"],
                     symbol=symbol,
-                    side="sell",
+                    side=plan["side"],
                     notional=plan["notional"],
                     approved=bool(plan["approved"]),
                     dry_run=bool(plan["dry_run"]),
@@ -1719,7 +1772,7 @@ def _execute_stop_take_exits(
                 plan_id=plan["plan_id"],
                 cycle_id=run_id,
                 symbol=symbol,
-                side="sell",
+                side=plan["side"],
                 status=order["status"],
                 payload={"plan": plan, "broker_order": order},
             )

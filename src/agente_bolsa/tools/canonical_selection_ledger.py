@@ -25,7 +25,7 @@ SCHEMA_VERSION = "p-l53b.canonical-selection-ledger.v2"
 V1_SCHEMA_VERSION = "p-l53b.canonical-selection-ledger.v1"
 EVENT_TYPE = "canonical_selection_ledger"
 EVENT_ID_PREFIX = "canonical_selection_ledger:"
-VALID_ACTIONS = {"buy", "exit"}
+VALID_ACTIONS = {"buy", "exit", "short", "cover"}
 DECISION_ROW_LIMIT = 600
 _DECISION_SOURCES = {
     "llm": "llm",
@@ -94,14 +94,20 @@ def _action(value: Any) -> str | None:
     row = _mapping(value)
     lineage = _mapping(row.get("decision_lineage"))
     raw = _text(row.get("action") or lineage.get("action"))
+    direction = str(row.get("direction") or lineage.get("direction") or "").lower()
     if raw is None:
-        direction = str(row.get("direction") or "").lower()
         if direction in {"long", "buy", "entry"}:
             raw = "buy"
-        elif direction in {"short", "sell", "exit", "reduce"}:
+        elif direction in {"short"}:
+            raw = "short"
+        elif direction in {"sell", "exit", "reduce"}:
             raw = "exit"
     raw = raw.lower() if raw else None
-    return "exit" if raw == "sell" else raw if raw in VALID_ACTIONS else None
+    if raw == "sell":
+        return "cover" if direction == "short" else "exit"
+    if raw in {"reduce", "exit"}:
+        return "cover" if direction == "short" else "exit"
+    return raw if raw in VALID_ACTIONS else None
 
 def _identity(value: Any, cycle_id: str) -> tuple[str, str, str] | None:
     row = _mapping(value)

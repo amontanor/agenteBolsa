@@ -31,13 +31,14 @@ from agente_bolsa.tools.capital_allocation_policy import (
 from agente_bolsa.tools.capital_ladder import cap_notional_for_ladder, load_capital_ladder
 from agente_bolsa.tools.challenger_policy import score_challenger_candidate
 from agente_bolsa.tools.daily_learning import load_daily_learning_context
+from agente_bolsa.tools.earnings_window import earnings_blackout, earnings_days_by_symbol
 from agente_bolsa.tools.learning_mode import LEARNING_EXPERIMENT_SOURCE, active_learning_mode
 from agente_bolsa.tools.operational_health import (
     load_operational_block_context,
     load_operational_response_context,
 )
 from agente_bolsa.tools.operational_learning import load_operational_learning_context
-from agente_bolsa.tools.position_sizing import recommended_notional
+from agente_bolsa.tools.position_sizing import recommended_notional, recommended_short_notional
 from agente_bolsa.tools.post_market_review import load_post_market_learning_context
 from agente_bolsa.tools.reporting import write_json_report
 from agente_bolsa.tools.research_evidence import (
@@ -53,7 +54,7 @@ from agente_bolsa.tools.signal_learning import _indicator_tags
 
 LOGGER = logging.getLogger(__name__)
 
-VALID_ACTIONS = {"buy", "sell", "hold", "reduce", "exit"}
+VALID_ACTIONS = {"buy", "sell", "short", "cover", "hold", "reduce", "exit"}
 
 
 def _buy_plan_risk_amount(plan: dict[str, Any]) -> float:
@@ -681,6 +682,12 @@ def _llm_prompt_payload(
             "allow_position_adds": settings.allow_position_adds,
             "min_confidence_to_trade": settings.min_llm_confidence_to_trade,
             "allow_short_selling": settings.allow_short_selling,
+            "max_short_exposure": settings.max_short_exposure,
+            "max_short_position_exposure": settings.max_short_position_exposure,
+            "max_gross_exposure": settings.max_gross_exposure,
+            "max_open_short_positions": settings.max_open_short_positions,
+            "max_daily_short_orders": settings.max_daily_short_orders,
+            "max_short_risk_per_trade": settings.max_short_risk_per_trade,
         },
         "lecciones_validadas": _lessons_block_for_prompt(settings, technical_context),
         "market_thesis": _market_thesis_for_prompt(settings),
@@ -1154,6 +1161,19 @@ def _entry_reward_risk(recommendation: TradeRecommendation) -> float | None:
         return None
     risk = entry - stop
     reward = take - entry
+    if risk <= 0 or reward <= 0:
+        return None
+    return reward / risk
+
+
+def _short_reward_risk(recommendation: TradeRecommendation) -> float | None:
+    entry = _float(recommendation.entry_price)
+    stop = _float(recommendation.stop_loss)
+    take = _float(recommendation.take_profit)
+    if entry is None or stop is None or take is None or entry <= 0 or stop <= 0 or take <= 0:
+        return None
+    risk = stop - entry
+    reward = entry - take
     if risk <= 0 or reward <= 0:
         return None
     return reward / risk
@@ -1883,6 +1903,35 @@ def _valid_risk_plan(candidate: dict[str, Any]) -> bool:
     stop = _float(risk.get("stop_loss"))
     take = _float(risk.get("take_profit"))
     return bool(entry and stop and take and 0 < stop < entry < take)
+
+
+def _valid_short_risk_plan(candidate: dict[str, Any]) -> bool:
+    risk = candidate.get("risk_plan", {}) or {}
+    entry = _float(risk.get("entry_price"))
+    stop = _float(risk.get("stop_loss"))
+    take = _float(risk.get("take_profit"))
+    return bool(entry and stop and take and 0 < take < entry < stop)
+
+
+def _short_selection_eligible(candidate: dict[str, Any]) -> tuple[bool, str]:
+    """P-L186: espejo corto de ``_selection_eligible``.
+
+    Un corto operable exige la misma calidad de setup que un largo, tendencia
+    bajista verificable y geometria invertida valida.
+    """
+
+    direction = str(candidate.get("direction") or "").lower()
+    setup_quality = str(candidate.get("setup_quality") or "").lower()
+    return_20d = _float(_technical_value(candidate, "return_20d"))
+    if direction != "short":
+        return False, "direction_not_short"
+    if setup_quality != "strong":
+        return False, "setup_not_strong"
+    if return_20d is None or return_20d >= 0:
+        return False, "return_20d_not_negative"
+    if not _valid_short_risk_plan(candidate):
+        return False, "invalid_short_risk_plan"
+    return True, "eligible"
 
 
 def _selection_eligible(candidate: dict[str, Any]) -> tuple[bool, str]:
@@ -2789,7 +2838,7 @@ def validate_entry_quality(
     daily_learning_digest: dict[str, Any] | None = None,
     operational_response_context: dict[str, Any] | None = None,
 ) -> tuple[bool, str, dict[str, Any]]:
-    if not settings.entry_quality_gate_enabled or recommendation.action != "buy":
+    if not settings.entry_quality_gate_enabled or recommendation.action not in {"buy", "short"}:
         return True, "entry-quality desactivado o no aplica", {}
 
     candidate = _candidate_for_symbol(technical_context or {}, recommendation.symbol)
@@ -3089,6 +3138,17 @@ def validate_entry_quality(
         "min_volume_zscore_20": settings.entry_quality_low_score_volume_rebound_min_volume_z,
     }
 
+    if direction == "short":
+        if not settings.allow_short_selling:
+            return False, "short_selling_disabled", checks
+        if setup_quality != "strong":
+            return False, f"setup corto no es strong ({setup_quality or 'desconocido'})", checks
+        if recommendation.entry_price is None or recommendation.entry_price < float(settings.short_min_price):
+            return False, "short_entry_below_min_price", checks
+        reward_risk = _short_reward_risk(recommendation)
+        if reward_risk is None or reward_risk < 1.5:
+            return False, "short_reward_risk_below_minimum", checks
+        return True, "setup corto aprobado", checks
     if direction != "long":
         return False, f"direccion tecnica no es long ({direction or 'desconocida'})", checks
     if setup_quality != "strong":
@@ -3851,6 +3911,12 @@ def request_trade_recommendations(
         "No recomiendes ampliar una posicion existente salvo que allow_position_adds=true. "
         "Respeta max_daily_buy_orders y max_orders_per_cycle: pocas entradas de alta calidad. "
         "Si allow_short_selling=false, ignora setups short como candidatos operables y no gastes recomendaciones en ellos. "
+        "Si allow_short_selling=true, trata largos y cortos como dos direcciones normales: "
+        "usa action='short' para abrir un corto y action='cover' para cerrarlo; "
+        "en un corto entry_price debe estar entre take_profit (abajo) y stop_loss (arriba), "
+        "con take_profit < entry_price < stop_loss y ratio beneficio/riesgo >= 1.5. "
+        "No abras un corto si el simbolo ya tiene posicion larga o abierta; no mezcles direcciones. "
+        "Un corto exige tesis bajista con evidencia tecnica y de sentimiento; no lo uses como cobertura generica. "
         "Si risk_limits.prefer_full_long_only_capacity=true y hay varios largos claros en selected_candidates, "
         "prioriza hasta llenar esa capacidad efectiva con compras distintas antes de devolver hold por exceso de conservadurismo. "
         "No compres solo porque haya cash. "
@@ -5368,12 +5434,35 @@ def _is_exceptional_llm_exit(
         checks["blocked_by"] = "ordinary_rotation_or_capital_release"
         return False, "Salida LLM bloqueada: rotacion/liberar capital no es motivo suficiente.", checks
 
+    is_short_position = (
+        str(getattr(position, "side", "") or "").lower() == "short"
+        or float(getattr(position, "qty", 0.0) or 0.0) < 0
+    )
+    checks["position_direction"] = "short" if is_short_position else "long"
     stop = recommendation.stop_loss
     take = recommendation.take_profit
-    if stop is not None and stop > 0 and position.current_price <= stop:
+    stop_hit = (
+        stop is not None
+        and stop > 0
+        and (
+            position.current_price >= stop
+            if is_short_position
+            else position.current_price <= stop
+        )
+    )
+    if stop_hit:
         checks["trigger"] = "recommendation_stop_loss"
         return True, "Salida permitida: stop_loss de la recomendacion ya esta tocado.", checks
-    if take is not None and take > 0 and position.current_price >= take:
+    take_hit = (
+        take is not None
+        and take > 0
+        and (
+            position.current_price <= take
+            if is_short_position
+            else position.current_price >= take
+        )
+    )
+    if take_hit:
         checks["trigger"] = "recommendation_take_profit"
         return True, "Salida permitida: take_profit de la recomendacion ya esta tocado.", checks
 
@@ -5430,6 +5519,282 @@ def _is_exceptional_llm_exit(
         "Salida LLM bloqueada: esperar stop_loss/take_profit salvo excepcion objetiva.",
         checks,
     )
+
+def _short_entry_cutoff_reached(settings: Settings) -> tuple[bool, dict[str, Any]]:
+    """P-L186: no abrir cortos en los ultimos minutos de la sesion."""
+
+    minutes = int(settings.short_entry_cutoff_minutes or 0)
+    if minutes <= 0:
+        return False, {"cutoff_minutes": minutes, "status": "disabled"}
+    try:
+        from agente_bolsa.market_calendar import MarketCalendar
+
+        status = MarketCalendar().status()
+        close_text = status.market_close
+        if not close_text:
+            return False, {"cutoff_minutes": minutes, "status": "market_close_unavailable"}
+        close_at = datetime.fromisoformat(str(close_text))
+        now = datetime.now(timezone.utc)
+        remaining = (close_at.astimezone(timezone.utc) - now).total_seconds()
+        return remaining <= minutes * 60, {
+            "cutoff_minutes": minutes,
+            "seconds_to_close": round(remaining, 1),
+            "market_close": str(close_text),
+            "status": "evaluated",
+        }
+    except Exception as exc:  # noqa: BLE001 - the cutoff fails open only for telemetry.
+        return False, {"cutoff_minutes": minutes, "status": f"unavailable:{type(exc).__name__}"}
+
+
+def _short_portfolio_context(settings: Settings, portfolio: PortfolioSnapshot) -> dict[str, Any]:
+    equity = float(portfolio.portfolio_value or 0.0)
+    short_positions = [
+        position
+        for position in portfolio.positions
+        if str(position.side or "").lower() == "short" or float(position.qty or 0.0) < 0
+    ]
+    current_short_exposure = (
+        sum(abs(float(position.market_value or 0.0)) for position in short_positions) / equity
+        if equity > 0
+        else 0.0
+    )
+    open_risk = 0.0
+    try:
+        store = Store(settings.database_path, settings.agent_logs_dir)
+        entry_plans = store.latest_entry_plans_by_symbol()
+    except Exception:  # noqa: BLE001 - risk context degrades to zero only for telemetry.
+        entry_plans = {}
+    for position in short_positions:
+        info = entry_plans.get(position.symbol.upper()) or {}
+        plan = info.get("plan") or {}
+        entry = _float(plan.get("entry_price"))
+        stop = _float(plan.get("stop_loss"))
+        qty = abs(float(position.qty or 0.0))
+        if entry and stop and stop > entry:
+            open_risk += qty * (stop - entry)
+    return {
+        "current_short_exposure": max(0.0, current_short_exposure),
+        "short_positions": short_positions,
+        "open_short_positions": len(short_positions),
+        "short_open_risk_amount": max(0.0, open_risk),
+    }
+
+
+def build_short_order_plans(
+    settings: Settings,
+    portfolio: PortfolioSnapshot,
+    recommendations: list[TradeRecommendation],
+    *,
+    dry_run: bool = True,
+    rejected: list[dict[str, Any]] | None = None,
+    market_state: dict[str, Any] | None = None,
+    ignore_operational_kill_switch: bool = False,
+) -> list[OrderPlan]:
+    """P-L186: build risk-checked short entry plans.
+
+    Mirrors the long entry path: same confidence, kill-switch, market-state,
+    duplicate and open-order guards, plus the short-specific borrow/caps that
+    are finalised against the broker immediately before submission.
+    """
+
+    if not settings.allow_short_selling:
+        return []
+
+    def record(recommendation: TradeRecommendation, stage: str, reason: str, checks: dict[str, Any]) -> None:
+        if rejected is None:
+            return
+        row = {
+            "symbol": recommendation.symbol,
+            "action": recommendation.action,
+            "stage": stage,
+            "reason": reason,
+            "checks": checks,
+        }
+        lineage = dict(recommendation.decision_lineage or {})
+        for key in ("candidate_id", "signal_capture_id", "signal_id", "recommendation_id", "cycle_id"):
+            value = str(lineage.get(key) or "").strip()
+            if value:
+                row[key] = value
+        rejected.append(row)
+
+    plans: list[OrderPlan] = []
+    market_state_block_reason = _effective_market_state_block_reason(settings, market_state)
+    cutoff_reached, cutoff_checks = _short_entry_cutoff_reached(settings)
+    open_order_symbols = {order.symbol.upper() for order in portfolio.open_orders}
+    position_symbols = {
+        position.symbol.upper()
+        for position in portfolio.positions
+        if abs(float(position.qty or 0.0)) > 0
+    }
+    context = _short_portfolio_context(settings, portfolio)
+    equity = float(portfolio.portfolio_value or 0.0)
+    if equity <= 0:
+        return []
+    try:
+        store = Store(settings.database_path, settings.agent_logs_dir)
+        today_utc = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        daily_short_entries = store.count_short_entries_since(today_utc.isoformat())
+    except Exception:  # noqa: BLE001 - unknown daily count blocks new shorts conservatively.
+        daily_short_entries = int(settings.max_daily_short_orders)
+    earnings_days = earnings_days_by_symbol(settings.data_dir)
+    risk_manager = RiskManager(settings)
+    latest_technical_context = _annotate_technical_context_with_learning(
+        load_latest_technical_candidates(settings.data_dir, per_side=50),
+        load_daily_learning_context(settings.data_dir),
+        load_operational_response_context(settings.data_dir),
+        settings.data_dir,
+        settings=settings,
+    )
+    planned_short_symbols: set[str] = set()
+
+    for recommendation in recommendations:
+        if str(recommendation.action).lower() != "short":
+            continue
+        if len(plans) >= max(1, int(settings.max_daily_short_orders)):
+            record(recommendation, "cycle_order_limit", "max_short_orders_per_cycle_reached", {
+                "max_daily_short_orders": settings.max_daily_short_orders,
+            })
+            continue
+        candidate = _candidate_for_symbol(latest_technical_context, recommendation.symbol)
+        if candidate is None:
+            record(recommendation, "short_candidate_guard", "symbol_absent_from_current_scan", {})
+            continue
+        eligible, eligibility_reason = _short_selection_eligible(candidate)
+        if not eligible:
+            record(recommendation, "short_candidate_guard", eligibility_reason, {
+                "direction": candidate.get("direction"),
+                "setup_quality": candidate.get("setup_quality"),
+            })
+            continue
+        if market_state_block_reason:
+            record(recommendation, "market_state_guard", market_state_block_reason, {})
+            continue
+        if settings.operational_kill_switch_enabled and not ignore_operational_kill_switch:
+            try:
+                operational_block = load_operational_block_context(settings.data_dir)
+            except Exception:  # noqa: BLE001
+                operational_block = {}
+            if operational_block.get("block_new_buys"):
+                record(recommendation, "operational_kill_switch", "critical_operational_alerts_active", {
+                    "blocking_alerts": operational_block.get("blocking_alerts", []),
+                })
+                continue
+        if cutoff_reached:
+            record(recommendation, "short_entry_cutoff", "short_entry_cutoff_reached", cutoff_checks)
+            continue
+        if recommendation.confidence < settings.min_llm_confidence_to_trade:
+            record(recommendation, "llm_confidence", "below_min_llm_confidence_to_trade", {
+                "confidence": recommendation.confidence,
+                "min_llm_confidence_to_trade": settings.min_llm_confidence_to_trade,
+            })
+            continue
+        if recommendation.symbol.upper() in open_order_symbols:
+            record(recommendation, "open_order_guard", "symbol_has_open_order", {})
+            continue
+        if recommendation.symbol.upper() in position_symbols:
+            record(recommendation, "direction_guard", "symbol_already_has_position", {})
+            continue
+        if recommendation.symbol.upper() in planned_short_symbols:
+            record(recommendation, "duplicate_symbol_cycle_guard", "symbol_already_has_short_plan_in_cycle", {})
+            continue
+        if int(context["open_short_positions"]) + len(plans) >= int(settings.max_open_short_positions):
+            record(recommendation, "short_exposure_guard", "max_open_short_positions_reached", {
+                "open_short_positions": context["open_short_positions"],
+                "max_open_short_positions": settings.max_open_short_positions,
+            })
+            continue
+        if daily_short_entries + len(plans) >= int(settings.max_daily_short_orders):
+            record(recommendation, "short_daily_limit", "max_daily_short_orders_reached", {
+                "daily_short_entries": daily_short_entries,
+                "max_daily_short_orders": settings.max_daily_short_orders,
+            })
+            continue
+        earnings = earnings_blackout(
+            recommendation.symbol,
+            days_by_symbol=earnings_days,
+            blackout_days=int(settings.short_earnings_blackout_days),
+        )
+        if earnings.get("blackout"):
+            record(recommendation, "earnings_blackout", "earnings_within_short_blackout", earnings)
+            continue
+
+        notional, sizing_checks = recommended_short_notional(
+            settings,
+            portfolio,
+            recommendation,
+        )
+        if notional <= 0:
+            record(recommendation, "short_sizing", "short_notional_not_available", sizing_checks)
+            continue
+        qty = int(sizing_checks.get("qty") or 0)
+        if qty <= 0:
+            record(recommendation, "short_sizing", "short_qty_below_one_share", sizing_checks)
+            continue
+
+        risk_decision = risk_manager.validate_order(
+            OrderProposal(
+                symbol=recommendation.symbol,
+                side="sell",
+                notional=notional,
+                portfolio_equity=equity,
+                strategy_name=str(recommendation.strategy_name or "short"),
+                entry_price=recommendation.entry_price,
+                stop_loss=recommendation.stop_loss,
+                take_profit=recommendation.take_profit,
+                direction="short",
+                position_effect="open_short",
+                current_portfolio_exposure=_portfolio_long_exposure(portfolio),
+                current_short_exposure=float(context["current_short_exposure"]),
+                open_short_positions=int(context["open_short_positions"]) + len(plans),
+                short_open_risk_amount=float(context["short_open_risk_amount"]),
+            )
+        )
+        if not risk_decision.approved:
+            record(recommendation, "short_risk", risk_decision.reason, risk_decision.checks)
+            continue
+
+        checks = dict(risk_decision.checks)
+        checks["borrow"] = {"status": "pending_broker_verification"}
+        checks["earnings_window"] = earnings
+        decision = RiskDecision(
+            approved=risk_decision.approved,
+            reason=risk_decision.reason,
+            checks=checks,
+        )
+        plans.append(
+            OrderPlan(
+                symbol=recommendation.symbol,
+                side="sell",
+                notional=notional,
+                qty=float(qty),
+                entry_price=float(recommendation.entry_price or 0.0),
+                stop_loss=float(recommendation.stop_loss or 0.0),
+                take_profit=float(recommendation.take_profit or 0.0),
+                recommendation=recommendation,
+                risk_decision=decision,
+                position_effect="open_short",
+                direction="short",
+                dry_run=dry_run,
+                decision_lineage=dict(recommendation.decision_lineage or {}),
+            )
+        )
+        planned_short_symbols.add(recommendation.symbol.upper())
+
+    return plans
+
+
+def _portfolio_long_exposure(portfolio: PortfolioSnapshot) -> float:
+    equity = float(portfolio.portfolio_value or 0.0)
+    if equity <= 0:
+        return 0.0
+    total = 0.0
+    for position in portfolio.positions:
+        side = str(position.side or "long").lower()
+        qty = float(position.qty or 0.0)
+        if side == "long" and qty > 0:
+            total += float(position.market_value or 0.0)
+    return max(0.0, total / equity)
+
 
 def build_order_plans(
     settings: Settings,
@@ -5491,7 +5856,7 @@ def build_order_plans(
                         "exit_policy_evaluated": False,
                     })
             break
-        if recommendation.action not in {"sell", "reduce", "exit"}:
+        if recommendation.action not in {"sell", "reduce", "exit", "cover"}:
             continue
         if recommendation.symbol in open_order_symbols:
             record_exit_rejection(recommendation, "symbol_has_open_order", {})
@@ -5503,7 +5868,20 @@ def build_order_plans(
             })
             continue
         position = _position_for_symbol(portfolio, recommendation.symbol)
-        if position is None or position.qty <= 0:
+        if position is None:
+            record_exit_rejection(recommendation, "position_unavailable_or_not_positive", {})
+            continue
+        is_short_position = (
+            str(position.side or "").lower() == "short" or float(position.qty or 0.0) < 0
+        )
+        if is_short_position and recommendation.action in {"sell", "exit", "reduce"}:
+            # Normalizacion: sobre un corto, sell/exit/reduce significan cubrir.
+            recommendation = replace(recommendation, action="cover", direction="short")
+        elif not is_short_position and recommendation.action == "cover":
+            record_exit_rejection(recommendation, "cover_on_long_position", {})
+            continue
+        position_qty = abs(float(position.qty or 0.0))
+        if position_qty <= 0:
             record_exit_rejection(recommendation, "position_unavailable_or_not_positive", {})
             continue
 
@@ -5515,14 +5893,15 @@ def build_order_plans(
         if recommendation.action == "reduce":
             target_exposure = recommendation.target_exposure_pct or 0.0
             target_value = portfolio.portfolio_value * max(0.0, target_exposure)
-            sell_value = max(0.0, position.market_value - target_value)
+            held_value = abs(float(position.market_value or 0.0))
+            reduce_value = max(0.0, held_value - target_value)
             qty = (
-                min(position.qty, sell_value / position.current_price)
+                min(position_qty, reduce_value / position.current_price)
                 if position.current_price
                 else 0
             )
         else:
-            qty = position.qty
+            qty = position_qty
 
         if qty <= 0:
             record_exit_rejection(recommendation, "no_reduction_required", {
@@ -5538,10 +5917,16 @@ def build_order_plans(
             })
             continue
 
+        effect = "close_short" if is_short_position else "close_long"
+        plan_side = "buy" if is_short_position else "sell"
         notional = round(safe_qty * position.current_price, 2)
         decision = RiskDecision(
             approved=True,
-            reason=f"Venta/reduccion aprobada: {exit_reason}",
+            reason=(
+                f"Cobertura/reduccion de corto aprobada: {exit_reason}"
+                if is_short_position
+                else f"Venta/reduccion aprobada: {exit_reason}"
+            ),
             checks={
                 "action": recommendation.action,
                 "held_qty": position.qty,
@@ -5550,12 +5935,14 @@ def build_order_plans(
                 "notional": notional,
                 "allow_short_selling": settings.allow_short_selling,
                 "exit_policy": exit_checks,
+                "position_direction": "short" if is_short_position else "long",
+                "position_effect": effect,
             },
         )
         plans.append(
             OrderPlan(
                 symbol=recommendation.symbol,
-                side="sell",
+                side=plan_side,
                 notional=notional,
                 qty=safe_qty,
                 entry_price=position.current_price,
@@ -5563,9 +5950,24 @@ def build_order_plans(
                 take_profit=0.0,
                 recommendation=recommendation,
                 risk_decision=decision,
+                position_effect=effect,
+                direction="short" if is_short_position else "long",
                 dry_run=dry_run,
                 decision_lineage=dict(recommendation.decision_lineage or {}),
             )
         )
 
+    # P-L186: las entradas cortas se anaden DESPUES del cupo de compras y
+    # salidas, para no consumir ni desplazar el cupo del libro largo.
+    plans.extend(
+        build_short_order_plans(
+            settings,
+            portfolio,
+            recommendations,
+            dry_run=dry_run,
+            rejected=rejected,
+            market_state=market_state,
+            ignore_operational_kill_switch=ignore_operational_kill_switch,
+        )
+    )
     return plans
