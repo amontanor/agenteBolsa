@@ -174,4 +174,5 @@ __all__ = ["__version__"]
 # P-L185: el fondo se actualiza sin repintar; repintado al ritmo elegido (0.4.415).
 # P-L186: paridad long/short de primera clase, guarded caps y borrow verificado (0.4.416).
 # P-L186B: la direccion de la recomendacion se deriva de la accion (0.4.417).
-__version__ = "0.4.417"
+# P-L186C: exposicion bruta con cortos en la contabilidad de cartera (0.4.418).
+__version__ = "0.4.418"

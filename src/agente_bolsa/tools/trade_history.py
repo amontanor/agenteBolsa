@@ -465,7 +465,19 @@ def _current_statistics(
     ]
     all_candidates = realized_candidates + open_candidates
     equity = float(summary.get("equity") or 0)
-    exposure = round(sum(float(item.get("market_value") or 0) for item in open_positions), 2)
+    # P-L186: la exposicion es bruta (|market_value|). Una posicion corta no
+    # reduce el capital invertido ni abre hueco para compras.
+    exposure = round(sum(abs(float(item.get("market_value") or 0)) for item in open_positions), 2)
+    short_exposure = round(
+        sum(
+            abs(float(item.get("market_value") or 0))
+            for item in open_positions
+            if str(item.get("side") or "long").lower() == "short"
+            or float(item.get("qty") or 0) < 0
+        ),
+        2,
+    )
+    net_exposure = round(sum(float(item.get("market_value") or 0) for item in open_positions), 2)
     total_pl = round(float(summary.get("realized_pl") or 0) + float(summary.get("unrealized_pl") or 0), 2)
     return {
         "equity": summary.get("equity", 0.0),
@@ -474,6 +486,9 @@ def _current_statistics(
         "open_positions": summary.get("open_positions", 0),
         "exposure": exposure,
         "exposure_pct": round(exposure / equity, 4) if equity else 0.0,
+        "short_exposure": short_exposure,
+        "net_exposure": net_exposure,
+        "short_exposure_pct": round(short_exposure / equity, 4) if equity else 0.0,
         "buy_notional": summary.get("buy_notional", 0.0),
         "sell_notional": summary.get("sell_notional", 0.0),
         "realized_pl": summary.get("realized_pl", 0.0),
