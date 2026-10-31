@@ -7451,3 +7451,10 @@ exposicion corta junto a invertido y direccion en posiciones.
 Migracion aditiva `executed_short`, vinculacion desde reconciliacion por
 `position_effect` y lectura en UI. Test focal senal+learning 29 passed.
 Pendiente suite completa, despliegue y recibo.
+
+### P-L186G desplegado (0.4.421)
+
+Produccion `agente-bolsa:0.4.421-arm64` `sha256:0c8c6998...`, commit `048657bf`,
+tree `df850f29`, tag `prod-jetson-0.4.421`, recibo 19:49:29Z. Migracion
+`executed_short` aplicada sobre 69.145 observaciones; vinculacion de fills
+cortos activa. Pendiente shadow book y validacion real el lunes.

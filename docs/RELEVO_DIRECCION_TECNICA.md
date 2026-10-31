@@ -5240,3 +5240,10 @@ rearranque; después LLM/credenciales, P-L178b, límite permanente de
 
 - Migracion aditiva `executed_short`; reconciliacion marca cortos por efecto;
   UI lee el campo. Pendiente suite completa, build, despliegue y recibo.
+
+## 0.4.421 desplegado - executed_short
+
+- Imagen `sha256:0c8c6998...`, commit `048657bf`, tree `df850f29`, tag
+  `prod-jetson-0.4.421`, recibo 19:49:29Z. Migracion aditiva sobre 69.145
+  observaciones; reconciliacion enlaza fills cortos.
+- Pendiente: shadow book de cortos y primera orden corta real (2026-11-02).

@@ -156,3 +156,14 @@ El kernel ya no devuelve `True` por `side=sell`: distingue cierre de apertura.
 - Test de extremo a extremo: fill SELL de corto deja `executed_short=True`,
   `executed_buy=False` y `execution.direction="short"`.
 - Pendiente de despliegue y validacion cerrada en el momento de escribir.
+
+
+## Despliegue 0.4.421 (executed_short)
+
+- 0.4.421 imagen `sha256:0c8c69983d26c45d041a335651cbdc28caabca94378f13a702167f46d79aa7b8`,
+  commit `048657bf`, tree `df850f29`, tag `prod-jetson-0.4.421`, recibo
+  19:49:29Z. `init-db` aplico la migracion aditiva sobre 69.145 observaciones
+  (exit 0); `executed_short` presente y 0 filas marcadas aun.
+- Suite completa: 3.282 passed, 1 skipped, 1 fallo ambiental aislado
+  (`test_web_research`). Focales P-L186: 24 passed. Ruff/NUL/diff limpios.
+- Salud: 3 contenedores healthy, HTTP 200 x3, kernel ok, cero ordenes.
