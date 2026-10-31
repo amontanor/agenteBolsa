@@ -98,6 +98,7 @@ def test_kindle_view_model_uses_daily_equity_contract_and_minimal_position_field
     assert model["positions"] == [
         {
             "symbol": "<AAPL>",
+            "direction": "long",
             "qty": 2.0,
             "entry": 100.0,
             "current": 105.0,

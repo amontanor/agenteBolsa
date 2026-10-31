@@ -49,7 +49,9 @@ def test_realized_pl_from_fills_uses_fifo_lots():
     assert [item["side"] for item in trades] == ["buy", "buy", "sell"]
 
 
-def test_realized_pl_marks_sell_unknown_without_prior_buy():
+def test_realized_pl_treats_first_sell_as_open_short():
+    """P-L186: sin lote largo previo, un sell abre un corto (no P/L cerrado)."""
+
     trades, summary = realized_pl_from_fills(
         [
             {
@@ -65,9 +67,10 @@ def test_realized_pl_marks_sell_unknown_without_prior_buy():
 
     assert trades[0]["realized_pl"] is None
     assert trades[0]["realized_pl_known"] is False
+    assert trades[0]["position_effect"] == "open_short"
     assert summary["realized_pl"] == 0.0
     assert summary["realized_trades"] == 0
-    assert summary["unknown_realized_trades"] == 1
+    assert summary["unknown_realized_trades"] == 0
 
 
 def test_attach_risk_levels_to_trades_and_positions():
