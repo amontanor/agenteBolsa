@@ -7465,3 +7465,10 @@ cortos activa. Pendiente shadow book y validacion real el lunes.
 `tools/short_shadow_book.py` registra entradas virtuales short y las cierra por
 stop/take/tiempo sin ordenes ni broker. Hook fail-open en `market_cycle_job`.
 Pendiente suite completa, despliegue y recibo.
+
+### P-L186H desplegado (0.4.422)
+
+Produccion `agente-bolsa:0.4.422-arm64` `sha256:9fe1aad6...`, commit `597466c8`,
+tree `b79fef05`, tag `prod-jetson-0.4.422`, recibo 2026-11-01T00:02:12Z.
+Shadow book observacional de cortos con cierres stop/take/tiempo. Pendiente:
+primera orden corta real en la apertura del lunes.

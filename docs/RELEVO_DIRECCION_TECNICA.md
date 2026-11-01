@@ -5253,3 +5253,11 @@ rearranque; después LLM/credenciales, P-L178b, límite permanente de
 
 - Reporte `latest_short_shadow_book.json` con entradas virtuales y cierres
   stop/take/tiempo; hook observacional en el ciclo. Pendiente suite y despliegue.
+
+## 0.4.422 desplegado - shadow book de cortos
+
+- Imagen `sha256:9fe1aad6...`, commit `597466c8`, tree `b79fef05`, tag
+  `prod-jetson-0.4.422`, recibo 2026-11-01T00:02:12Z. Shadow book activo y
+  fail-open; suite 3.284 passed con 1 fallo ambiental.
+- Pendiente unico: validar una orden corta real con mercado abierto (lunes
+  2026-11-02 15:30).

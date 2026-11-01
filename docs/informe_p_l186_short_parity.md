@@ -179,3 +179,15 @@ El kernel ya no devuelve `True` por `side=sell`: distingue cierre de apertura.
   en el ciclo de mercado y cualquier fallo se registra sin bloquear.
 - Un simbolo cerrado no se reabre en la misma sesion.
 - Tests: apertura y cierre por stop, y disabled sin escritura.
+
+
+## Despliegue 0.4.422 (shadow book)
+
+- 0.4.422 imagen `sha256:9fe1aad610fa668ea4c91e4704b4ea03269264cb3738ee60780507c52df8cba5`,
+  commit `597466c8`, tree `b79fef05`, tag `prod-jetson-0.4.422`, recibo
+  2026-11-01T00:02:12Z. Suite completa: 3.284 passed, 1 skipped, 1 fallo
+  ambiental aislado. Smoke en produccion: shadow book crea una entrada virtual,
+  escribe `latest_short_shadow_book.json` y declara
+  `observational_only_no_orders`.
+- Con esto el flag `SHORTS_SHADOW_ENABLED` tiene consumidor real y la linea
+  corta acumula evidencia stop/take/tiempo sin tocar ordenes.
