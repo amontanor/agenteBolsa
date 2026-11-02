@@ -3146,7 +3146,7 @@ def validate_entry_quality(
         if recommendation.entry_price is None or recommendation.entry_price < float(settings.short_min_price):
             return False, "short_entry_below_min_price", checks
         reward_risk = _short_reward_risk(recommendation)
-        if reward_risk is None or reward_risk < 1.5:
+        if reward_risk is None or reward_risk + 1e-9 < 1.5:
             return False, "short_reward_risk_below_minimum", checks
         return True, "setup corto aprobado", checks
     if direction != "long":

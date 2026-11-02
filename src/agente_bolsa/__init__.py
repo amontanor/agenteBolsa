@@ -179,4 +179,5 @@ __all__ = ["__version__"]
 # P-L186F: tarjeta de exposicion corta en la cuenta (0.4.420).
 # P-L186G: ejecucion corta enlazada a senal y learning_observations (0.4.421).
 # P-L186H: shadow book observacional de cortos por stop/take/tiempo (0.4.422).
-__version__ = "0.4.422"
+# P-L186I: hotfix fallback_reason y R:R exacto en el ciclo corto (0.4.423).
+__version__ = "0.4.423"

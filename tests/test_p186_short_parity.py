@@ -786,3 +786,56 @@ def test_short_shadow_book_disabled_does_not_write(tmp_path) -> None:
     result = update_short_shadow_book(settings, {"top_shorts": [], "all_candidates": []})
     assert result["status"] == "disabled"
     assert not (tmp_path / "reports" / "latest_short_shadow_book.json").exists()
+
+def test_short_entry_quality_accepts_exact_rr_boundary(tmp_path) -> None:
+    from agente_bolsa.tools.trade_decision import validate_entry_quality
+
+    settings = _settings(tmp_path)
+    recommendation = _short_recommendation(
+        symbol="TTWO",
+        entry_price=190.825,
+        stop_loss=201.9064,
+        take_profit=174.2029,
+        confidence=0.66,
+    )
+    candidate = {
+        "symbol": "TTWO",
+        "direction": "short",
+        "setup_quality": "strong",
+        "score": 16,
+        "risk_plan": {
+            "entry_price": 190.825,
+            "stop_loss": 201.9064,
+            "take_profit": 174.2029,
+        },
+        "technical_state": {"close": 190.825, "return_20d": -0.0621, "rsi_14": 36.73},
+    }
+    approved, reason, _checks = validate_entry_quality(
+        settings,
+        recommendation,
+        {"selected_candidates": [candidate], "all_candidates": [candidate], "top_shorts": [candidate]},
+        {"results": []},
+    )
+    assert approved is True, reason
+
+
+def test_fallback_short_snapshot_has_reason(tmp_path) -> None:
+    from agente_bolsa.cycle_runner import _decision_context_snapshot_for_recommendation
+    from agente_bolsa.storage import Store
+
+    settings = _settings(tmp_path)
+    store = Store(settings.database_path, settings.agent_logs_dir)
+    store.ensure_schema()
+    recommendation = _short_recommendation(
+        source="deterministic_fallback_short",
+        decision_origin="deterministic_fallback_short",
+    )
+    snapshot = _decision_context_snapshot_for_recommendation(
+        store,
+        recommendation,
+        cycle_id="cycle-fallback-short",
+        source_run_id="run-fallback-short",
+        market_state={},
+        agent_run_id="agent-run-fallback-short",
+    )
+    assert snapshot["fallback_reason"]
