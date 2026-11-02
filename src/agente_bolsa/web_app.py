@@ -1755,8 +1755,7 @@ def _account_group(
                 <div><span>Equity inicial</span><strong>{_money(initial_equity)}</strong><em>{equity_start_label}</em></div>
                 <div><span>Equity actual</span><strong>{_money(current_equity)}</strong></div>
                 <div><span>Cash</span><strong>{_money(cash)}</strong></div>
-                <div><span>Invertido</span><strong>{_money(exposure)}</strong><em>{_pct(exposure_pct)}</em></div>
-                {short_exposure_item}
+                <div><span>Invertido</span><strong>{_money(exposure)}</strong><em>{_pct(exposure_pct)}</em></div>{short_exposure_item}
             </div>
             <div class="account-kpis opening-kpis">
                 <div class="account-kpi {opening_tone}">
