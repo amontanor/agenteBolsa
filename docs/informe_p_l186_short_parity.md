@@ -205,3 +205,19 @@ El kernel ya no devuelve `True` por `side=sell`: distingue cierre de apertura.
   autorizacion del operador; 3 healthy, HTTP 200 x3, kernel ok, 0 reinicios.
 - Gates ejecutados: 169 focales, Ruff, NUL, diff. Suite completa omitida por
   mercado abierto y presupuesto de validacion; se declara.
+
+
+## 0.4.424: fix visual y primer corto real
+
+- La franja de cuenta insertaba `{short_exposure_item}` en una linea propia; con
+  la exposicion corta a cero, Markdown la trataba como linea en blanco y el
+  resto del HTML salia como bloque de codigo. Se mueve inline y se elimina el
+  HTML crudo. Verificado en navegador: `Corto $1.191,10 1,71%` renderizado.
+- Primer corto real: APP, plan `open_short` 5 acciones, entrada 238,45, stop
+  261,3766, take 204,0601, orden SELL filled 2026-11-02T16:53:22Z
+  (`broker_order_id=7d783471-2605-4079-880f-31de00bb50af`). Posicion -5.
+- 0.4.424 imagen `sha256:a86dd49c...`, commit `9b4e54e2`, tree `56020c06`,
+  tag `prod-jetson-0.4.424`, recibo 17:02:37Z. UI/validacion: 115 focales.
+- `executed_short` aun en 0: la reconciliacion de fills no habia procesado el
+  corto en el momento de la comprobacion; queda pendiente verificarlo tras el
+  postmarket.

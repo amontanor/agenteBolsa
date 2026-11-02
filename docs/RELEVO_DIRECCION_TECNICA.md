@@ -5269,3 +5269,11 @@ rearranque; después LLM/credenciales, P-L178b, límite permanente de
   corregidos. El ciclo 16:00Z se aborto en escaneo para cortar fallos.
 - Siguiente: observar el primer ciclo completo con el hotfix y abrir Fase 1
   (latencia/cadencia) en worktree aislado.
+
+## 0.4.424 desplegado - fix visual y primer corto
+
+- Imagen `sha256:a86dd49c...`, commit `9b4e54e2`, tree `56020c06`, tag
+  `prod-jetson-0.4.424`, recibo 17:02:37Z. HTML crudo corregido y verificado en
+  navegador.
+- Primer corto real APP: plan open_short 5 @ 238,45, filled 16:53:22Z. Pendiente
+  `executed_short` en reconciliacion y seguimiento del stop/take.

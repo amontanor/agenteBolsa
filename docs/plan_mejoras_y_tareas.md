@@ -7479,3 +7479,10 @@ Produccion `agente-bolsa:0.4.423-arm64` `sha256:09af880b...`, commit `dc05c45c`,
 tree `d5c93257`, tag `prod-jetson-0.4.423`, recibo 16:03:04Z. Corrige
 `fallback_reason_required` en ciclos con fallback short y el R:R exacto 1,5.
 Suite completa omitida por mercado abierto; focales 169 passed.
+
+### P-L186J desplegado (0.4.424)
+
+Produccion `agente-bolsa:0.4.424-arm64` `sha256:a86dd49c...`, commit `9b4e54e2`,
+tree `56020c06`, tag `prod-jetson-0.4.424`, recibo 17:02:37Z. Corrige HTML crudo
+en la franja de cuenta. Primer corto real APP filled (5 @ 238,45). Pendiente
+verificar `executed_short` tras reconciliacion.
