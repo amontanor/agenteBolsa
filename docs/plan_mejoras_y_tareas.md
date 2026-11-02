@@ -7472,3 +7472,10 @@ Produccion `agente-bolsa:0.4.422-arm64` `sha256:9fe1aad6...`, commit `597466c8`,
 tree `b79fef05`, tag `prod-jetson-0.4.422`, recibo 2026-11-01T00:02:12Z.
 Shadow book observacional de cortos con cierres stop/take/tiempo. Pendiente:
 primera orden corta real en la apertura del lunes.
+
+### P-L186I hotfix desplegado (0.4.423)
+
+Produccion `agente-bolsa:0.4.423-arm64` `sha256:09af880b...`, commit `dc05c45c`,
+tree `d5c93257`, tag `prod-jetson-0.4.423`, recibo 16:03:04Z. Corrige
+`fallback_reason_required` en ciclos con fallback short y el R:R exacto 1,5.
+Suite completa omitida por mercado abierto; focales 169 passed.

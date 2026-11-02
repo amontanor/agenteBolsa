@@ -191,3 +191,17 @@ El kernel ya no devuelve `True` por `side=sell`: distingue cierre de apertura.
   `observational_only_no_orders`.
 - Con esto el flag `SHORTS_SHADOW_ENABLED` tiene consumidor real y la linea
   corta acumula evidencia stop/take/tiempo sin tocar ordenes.
+
+
+## Hotfix 0.4.423 (fallback_reason y R:R exacto)
+
+- Ciclo `mkt_80f57b0fc5e9` fallo con `fallback_reason_required` tras 1.828 s:
+  una recomendacion `deterministic_fallback_short` normaliza a `fallback` y el
+  snapshot exigia razon aunque el LLM hubiera respondido.
+- TTWO quedo sin plan por R:R exacto 1,5 (`1.4999999999999987`) contra un gate
+  sin epsilon.
+- 0.4.423 imagen `sha256:09af880b...`, commit `dc05c45c`, tree `d5c93257`, tag
+  `prod-jetson-0.4.423`, recibo 16:03:04Z. Desplegado con mercado abierto y
+  autorizacion del operador; 3 healthy, HTTP 200 x3, kernel ok, 0 reinicios.
+- Gates ejecutados: 169 focales, Ruff, NUL, diff. Suite completa omitida por
+  mercado abierto y presupuesto de validacion; se declara.

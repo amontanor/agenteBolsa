@@ -5261,3 +5261,11 @@ rearranque; después LLM/credenciales, P-L178b, límite permanente de
   fail-open; suite 3.284 passed con 1 fallo ambiental.
 - Pendiente unico: validar una orden corta real con mercado abierto (lunes
   2026-11-02 15:30).
+
+## 0.4.423 desplegado - hotfix ciclo corto
+
+- Imagen `sha256:09af880b...`, commit `dc05c45c`, tree `d5c93257`, tag
+  `prod-jetson-0.4.423`, recibo 16:03:04Z. Fallback short y R:R exacto
+  corregidos. El ciclo 16:00Z se aborto en escaneo para cortar fallos.
+- Siguiente: observar el primer ciclo completo con el hotfix y abrir Fase 1
+  (latencia/cadencia) en worktree aislado.
