@@ -714,7 +714,7 @@ def _decision_context_snapshot_for_recommendation(
         llm_requested_model=identity.get("requested_model"),
         llm_effective_model=identity.get("effective_model") or llm_model,
         llm_fallback_used=identity.get("fallback_used"),
-        fallback_reason=fallback_error,
+        fallback_reason=fallback_error or (raw if "fallback" in raw_lower else None),
         identity_key=identity_key,
     )
     if signal_id and signal_link_status == "verified":
