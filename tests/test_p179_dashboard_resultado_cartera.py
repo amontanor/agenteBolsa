@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import sys
 
 import pytest
@@ -240,6 +241,26 @@ def test_cumulative_window_respects_each_range_kind() -> None:
     ]
     assert web_app._cumulative_window(series, "2026-06-09")[0]["fecha"] == "2026-06-09"
     assert web_app._cumulative_window([], 7) == []
+
+
+def test_cumulative_window_uses_calendar_days_on_sparse_sessions() -> None:
+    series = [
+        {"fecha": "2026-06-01", "acumulado": -0.006},
+        {"fecha": "2026-06-10", "acumulado": -0.002},
+    ]
+
+    assert [row["fecha"] for row in web_app._cumulative_window(series, 3)] == ["2026-06-10"]
+    assert [row["fecha"] for row in web_app._cumulative_window(series, 7)] == ["2026-06-10"]
+    assert [row["fecha"] for row in web_app._cumulative_window(series, 10)] == [
+        "2026-06-01",
+        "2026-06-10",
+    ]
+
+
+def test_dashboard_defaults_to_cumulative_metric() -> None:
+    source = inspect.getsource(web_app.page_dashboard)
+    assert 'key="portfolio_chart_metric"' in source
+    assert "index=1" in source
 
 
 class _Store:
