@@ -7533,3 +7533,11 @@ Salida corta con plan propio y geometria, espejo largo, bootstrap de esquema
 fuera de reconciliacion, guard de telemetria del crew y grafica con ventana
 calendario + P/L por defecto. Suite 3.306 passed. Pendiente PMR 22:00 y deuda
 P1 de contencion SQLite.
+
+
+### P-L186M: bootstrap de esquema una vez por proceso (0.4.427)
+
+`ensure_schema` marcaba la base como lista y las rutas calientes (lab, LLM,
+decision, ciclo, scoreboard, readiness) usan `ensure_schema_once`. Elimina DDL
+completo recurrente sobre 7 GB. Sin cambio de politica ni esquema. Pendiente
+suite, despliegue y medicion de locks/PMR.
