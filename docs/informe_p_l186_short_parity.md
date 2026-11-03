@@ -251,3 +251,47 @@ El kernel ya no devuelve `True` por `side=sell`: distingue cierre de apertura.
   reproduce `_holidays`.
 - Verificacion pendiente: PMR de la sesion 2026-11-03 al cierre; no se ejecuta
   manualmente. APP sigue corto (-5, 231,87, +31,85).
+
+
+## P-L186L (0.4.426): salida corta con plan propio y geometria valida
+
+- Causa raiz del cierre de ADM: `_execute_stop_take_exits` leia
+  `latest_executed_buy_plans_by_symbol` y añadia el plan corto con
+  `setdefault`. ADM conservaba un plan largo legado (`plan_6d4ae4b73011`,
+  2026-09-02) con stop 79,1801 y take 92,5928; el plan corto real
+  (`plan_608d63c46dc9`, stop 76,7186 / take 67,1971) no sustituyo al largo.
+  El trigger corto `precio <= take` se cumplio al instante (71,60 <= 92,5928)
+  y cerro 28 titulos a 71,60. P/L bruto +36,68 USD, positivo por azar y no por
+  la estrategia.
+- Fix: una posicion corta usa exclusivamente
+  `latest_entry_plans_by_symbol` con `direction=short`; nunca un plan largo
+  legado. Guarda de geometria: el take debe quedar por debajo del precio de
+  referencia y el stop por encima; los niveles invalidos se ignoran y no se
+  copian al plan de salida. Los largos conservan el lector legacy.
+- `_stop_take_observation` se alinea con la direccion de la posicion.
+- `reconcile_broker_orders` deja de ejecutar `ensure_schema` sobre una base
+  existente; solo hace bootstrap si la base no existe. Cierra el hueco que
+  quedaba tras 0.4.425, porque el PMR llama a esta funcion.
+- Evidencia de produccion antes del fix: APP corto abierto (-5, entrada
+  238,24, precio 231,87 a las 16:40, +31,85) con geometria correcta
+  (stop 261,3766 / take 204,0601). ADM ya cerrado.
+- Tests: 6 focales nuevos, 124 focales relacionados y 45 de reconciliacion en
+  verde. Suite completa y despliegue en curso.
+
+
+### P-L186L: espejo largo y grafica de evolucion
+
+- Espejo del mismo defecto: `latest_executed_buy_plans_by_symbol` devuelve
+  cualquier compra, incluida una cobertura de corto. Un largo abierto despues
+  de una cobertura podia heredar stop/take invertidos. Ahora la fuente se elige
+  por direccion: corto exige plan `open_short`; largo prefiere `open_long` y
+  solo acepta el lector legacy si el plan no es una cobertura.
+- Grafica "Evolucion de la cuenta": ultima fila de `performance_daily`
+  2026-10-30 (acumulado -0,19 %). Faltan 2026-11-02 (PMR fallo 21:22Z por
+  `database is locked`) y 2026-11-03 (PMR aun no ejecutado). La ventana
+  acumulada tomaba las ultimas 7 filas con dato, no 7 dias naturales; por eso
+  "Ultimos 7 dias" mostraba 10-01 a 10-30.
+- Fix UI: ventana calendario anclada a la ultima sesion con baseline, metrica
+  P/L acumulado por defecto y copy que declara cuantos dias cubre la ventana.
+  No se rellena ningun hueco ni se inventan sesiones; el PMR sigue siendo la
+  unica fuente de filas.

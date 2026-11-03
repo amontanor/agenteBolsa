@@ -5290,3 +5290,15 @@ rearranque; después LLM/credenciales, P-L178b, límite permanente de
   `prod-jetson-0.4.425`, recibo 10:39:59Z. Gate merge y calendario verificados
   en produccion; PMR con retry pendiente de la sesion de hoy.
 - APP corto sigue abierto (-5, 231,87, +31,85). Sin ordenes nuevas.
+
+
+## P-L186L - salida corta con plan propio (0.4.426)
+
+- ADM cerro por un take invertido heredado de un plan largo. Fix: plan corto
+  propio, geometria validada y bootstrap de esquema fuera de la reconciliacion
+  caliente. Pendiente suite, despliegue y PMR de la sesion.
+
+
+- P-L186L amplia: plan de entrada por direccion tambien para largos y grafica
+  acumulada con ventana calendario + P/L por defecto. La serie sigue dependiendo
+  del PMR; sin fila no hay punto.
