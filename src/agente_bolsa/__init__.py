@@ -181,4 +181,5 @@ __all__ = ["__version__"]
 # P-L186H: shadow book observacional de cortos por stop/take/tiempo (0.4.422).
 # P-L186I: hotfix fallback_reason y R:R exacto en el ciclo corto (0.4.423).
 # P-L186J: corrige HTML crudo en la franja de cuenta (0.4.424).
-__version__ = "0.4.424"
+# P-L186K: P0 gate merge, PMR sin ensure_schema/retry y calendario resiliente (0.4.425).
+__version__ = "0.4.425"

@@ -3541,6 +3541,52 @@ def _failure_traceback(max_chars: int = 6000) -> str:
     return text
 
 
+def _build_post_market_review_with_lock_retry(
+    settings: Settings,
+    reports_dir: Path,
+    run_id: str,
+    *,
+    session_date: str,
+    use_llm: bool,
+    portfolio_snapshot: Any,
+    broker_client: Any,
+    stage_recorder: Any,
+    reporter: Any = None,
+) -> dict[str, Any]:
+    """Build the PMR with bounded retries only for SQLite lock contention."""
+
+    delays = (30, 60, 120)
+    for attempt in range(len(delays) + 1):
+        try:
+            return build_post_market_review(
+                settings,
+                reports_dir,
+                run_id,
+                session_date=session_date,
+                use_llm=use_llm,
+                portfolio_snapshot=portfolio_snapshot,
+                broker_client=broker_client,
+                stage_recorder=stage_recorder,
+            )
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower() or attempt >= len(delays):
+                raise
+            delay = delays[attempt]
+            if reporter is not None:
+                try:
+                    reporter.emit(
+                        "post_market_review_agent",
+                        "postmarket_lock_retry",
+                        run_id,
+                        f"Postmarket bloqueado por SQLite; reintento {attempt + 1} en {delay}s.",
+                        {"attempt": attempt + 1, "delay_seconds": delay, "error": str(exc)[:240]},
+                    )
+                except Exception:  # noqa: BLE001 - telemetria no impide el reintento.
+                    pass
+            time.sleep(delay)
+    raise RuntimeError("post_market_review_retry_exhausted")
+
+
 def post_market_review_job(
     settings: Settings,
     store: Store,
@@ -3653,7 +3699,7 @@ def post_market_review_job(
             log_system_event(settings.logs_dir, "post_market_portfolio_unavailable", {"error": repr(exc)})
         current_stage = "postmarket_report"
         coordinator.stage(lease, current_stage, "started")
-        report = build_post_market_review(
+        report = _build_post_market_review_with_lock_retry(
             settings,
             settings.data_dir / "reports",
             run_id,
@@ -3662,6 +3708,7 @@ def post_market_review_job(
             portfolio_snapshot=portfolio,
             broker_client=broker_client,
             stage_recorder=lambda stage, status, error=None: coordinator.stage(lease, stage, status, error=error),
+            reporter=reporter,
         )
         # Build once from local, already reconciled sources.  This is
         # observational and intentionally precedes performance/digest while

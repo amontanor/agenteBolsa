@@ -77,6 +77,29 @@ class MarketCalendar:
         except Exception:
             return None
 
+    def _safe_schedule(self, start_date: str, end_date: str):
+        """Return a schedule, rebuilding the calendar once if it is broken.
+
+        ``pandas_market_calendars`` can lose internal holiday state or raise a
+        pandas ``DateOffset`` error when its instance is reused. A broken
+        instance must not kill the market watch; rebuild once and then fall
+        back to the conservative weekday/time status.
+        """
+
+        if self._calendar is None:
+            return None
+        try:
+            return self._calendar.schedule(start_date=start_date, end_date=end_date)
+        except Exception:
+            self._calendar = self._load_calendar(self.calendar_name)
+            if self._calendar is None:
+                return None
+            try:
+                return self._calendar.schedule(start_date=start_date, end_date=end_date)
+            except Exception:
+                self._calendar = None
+                return None
+
     def status(self, now: datetime | None = None) -> MarketStatus:
         now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         now_local = now_utc.astimezone(self.local_tz)
@@ -87,7 +110,9 @@ class MarketCalendar:
 
         start = (now_market.date() - timedelta(days=7)).isoformat()
         end = (now_market.date() + timedelta(days=14)).isoformat()
-        schedule = self._calendar.schedule(start_date=start, end_date=end)
+        schedule = self._safe_schedule(start, end)
+        if schedule is None:
+            return self._fallback_status(now_utc, now_local, now_market)
 
         current_session = None
         next_session = None
@@ -163,7 +188,9 @@ class MarketCalendar:
         market_day = now_utc.astimezone(self.market_tz).date()
         if self._calendar is None:
             return market_day.weekday() < 5
-        schedule = self._calendar.schedule(start_date=market_day.isoformat(), end_date=market_day.isoformat())
+        schedule = self._safe_schedule(market_day.isoformat(), market_day.isoformat())
+        if schedule is None:
+            return market_day.weekday() < 5
         return not schedule.empty
 
     def should_run_daily_study(self, now: datetime | None = None) -> tuple[bool, MarketStatus]:
@@ -180,9 +207,10 @@ class MarketCalendar:
             return after_close, status
 
         start = market_now.date().isoformat()
-        schedule = self._calendar.schedule(start_date=start, end_date=start)
-        if schedule.empty:
-            return False, status
+        schedule = self._safe_schedule(start, start)
+        if schedule is None or schedule.empty:
+            after_close = market_now.time() >= time(16, 0)
+            return after_close, status
         close_utc = schedule.iloc[0]["market_close"].to_pydatetime().astimezone(timezone.utc)
         return now_utc >= close_utc, status
 
