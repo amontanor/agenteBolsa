@@ -184,4 +184,5 @@ __all__ = ["__version__"]
 # P-L186K: P0 gate merge, PMR sin ensure_schema/retry y calendario resiliente (0.4.425).
 # P-L186L: salida corta con plan propio, geometria valida y ventana calendario (0.4.426).
 # P-L186M: bootstrap de esquema una vez por proceso en rutas calientes (0.4.427).
-__version__ = "0.4.427"
+# P-L186N: niveles de cartera por direccion y aviso de posicion sin plan (0.4.428).
+__version__ = "0.4.428"

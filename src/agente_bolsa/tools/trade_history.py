@@ -269,7 +269,40 @@ def _open_positions_summary(portfolio: PortfolioSnapshot) -> list[dict[str, Any]
     ]
 
 
-def _local_buy_risk_plans(database_path: Path) -> dict[str, dict[str, Any]]:
+def _entry_risk_plan(row: Any) -> tuple[str | None, dict[str, Any]]:
+    payload = json.loads(row["payload_json"])
+    plan = payload.get("plan", {}) or {}
+    plan_payload = plan.get("payload", {}) or {}
+    recommendation = plan_payload.get("recommendation", {}) or {}
+    effect = str(
+        plan_payload.get("position_effect")
+        or plan.get("position_effect")
+        or ""
+    ).strip().lower()
+    side = str(row["side"] or "").strip().lower()
+    if not effect:
+        # Legacy rows: a buy was an entry; a sell was always a close.
+        effect = "open_long" if side in {"buy", "orderside.buy"} else "close_long"
+    if effect not in {"open_long", "open_short"}:
+        return None, {}
+    return effect, {
+        "source_plan_id": plan.get("plan_id"),
+        "source_order_time": row["created_at"],
+        "entry_price": plan_payload.get("entry_price"),
+        "stop_loss": plan_payload.get("stop_loss"),
+        "take_profit": plan_payload.get("take_profit"),
+        "confidence": recommendation.get("confidence"),
+        "reason": recommendation.get("reason"),
+    }
+
+
+def _local_entry_risk_plans(database_path: Path) -> dict[str, dict[str, dict[str, Any]]]:
+    """Return latest local entry risk per symbol and direction.
+
+    P-L186N: the display reader must not use any buy (a short cover is a buy
+    with inverted levels) and must expose short entries too.
+    """
+
     import sqlite3
 
     if not database_path.exists():
@@ -278,45 +311,62 @@ def _local_buy_risk_plans(database_path: Path) -> dict[str, dict[str, Any]]:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
-            SELECT symbol, payload_json, created_at
+            SELECT symbol, side, payload_json, created_at
             FROM broker_orders
-            WHERE lower(side) = 'buy'
             ORDER BY created_at DESC
             """
         ).fetchall()
-    result: dict[str, dict[str, Any]] = {}
+    result: dict[str, dict[str, dict[str, Any]]] = {}
     for row in rows:
         symbol = str(row["symbol"]).upper()
-        if symbol in result:
+        effect, risk = _entry_risk_plan(row)
+        if effect is None:
             continue
-        payload = json.loads(row["payload_json"])
-        plan = payload.get("plan", {}) or {}
-        plan_payload = plan.get("payload", {}) or {}
-        recommendation = plan_payload.get("recommendation", {}) or {}
-        result[symbol] = {
-            "source_plan_id": plan.get("plan_id"),
-            "source_order_time": row["created_at"],
-            "entry_price": plan_payload.get("entry_price"),
-            "stop_loss": plan_payload.get("stop_loss"),
-            "take_profit": plan_payload.get("take_profit"),
-            "confidence": recommendation.get("confidence"),
-            "reason": recommendation.get("reason"),
-        }
+        direction = "short" if effect == "open_short" else "long"
+        result.setdefault(symbol, {}).setdefault(direction, risk)
     return result
+
+
+def _local_buy_risk_plans(database_path: Path) -> dict[str, dict[str, Any]]:
+    """Legacy long-only view kept for callers that still consume it."""
+
+    entries = _local_entry_risk_plans(database_path)
+    return {
+        symbol: data["long"]
+        for symbol, data in entries.items()
+        if isinstance(data, dict) and "long" in data
+    }
+
+
+def _risk_for_direction(
+    risk_map: dict[str, Any],
+    symbol: str,
+    direction: str,
+) -> dict[str, Any]:
+    data = risk_map.get(str(symbol).upper(), {})
+    if not isinstance(data, dict):
+        return {}
+    if "long" in data or "short" in data:
+        return data.get("short" if direction == "short" else "long") or {}
+    # Legacy flat map: only long entries were exposed.
+    return data if direction == "long" else {}
 
 
 def _attach_risk_levels(
     trades: list[dict[str, Any]],
     open_positions: list[dict[str, Any]],
-    risk_by_symbol: dict[str, dict[str, Any]],
+    risk_by_symbol: dict[str, Any],
 ) -> None:
     for trade in trades:
-        risk = risk_by_symbol.get(str(trade["symbol"]).upper(), {})
+        effect = str(trade.get("position_effect") or "").lower()
+        direction = "short" if effect.endswith("_short") else "long"
+        risk = _risk_for_direction(risk_by_symbol, str(trade["symbol"]), direction)
         trade["stop_loss"] = risk.get("stop_loss")
         trade["take_profit"] = risk.get("take_profit")
         trade["risk_entry_price"] = risk.get("entry_price")
     for position in open_positions:
-        risk = risk_by_symbol.get(str(position["symbol"]).upper(), {})
+        direction = "short" if str(position.get("side") or "long").lower() == "short" else "long"
+        risk = _risk_for_direction(risk_by_symbol, str(position["symbol"]), direction)
         position["stop_loss"] = risk.get("stop_loss")
         position["take_profit"] = risk.get("take_profit")
         position["risk_entry_price"] = risk.get("entry_price")
@@ -412,6 +462,7 @@ def _local_broker_orders(database_path: Path, limit: int, start_date: str | None
             continue
         payload = json.loads(row["payload_json"])
         plan = payload.get("plan", {})
+        plan_payload = plan.get("payload", {}) or {}
         result.append(
             {
                 "time": row["created_at"],
@@ -420,9 +471,10 @@ def _local_broker_orders(database_path: Path, limit: int, start_date: str | None
                 "side": row["side"],
                 "status": row["status"],
                 "notional": plan.get("notional"),
-                "qty": plan.get("payload", {}).get("qty"),
-                "stop_loss": plan.get("payload", {}).get("stop_loss"),
-                "take_profit": plan.get("payload", {}).get("take_profit"),
+                "qty": plan_payload.get("qty"),
+                "stop_loss": plan_payload.get("stop_loss"),
+                "take_profit": plan_payload.get("take_profit"),
+                "position_effect": plan_payload.get("position_effect"),
                 "broker_order_id": row["broker_order_id"],
                 "plan_id": row["plan_id"],
                 "cycle_id": row["cycle_id"],
@@ -539,8 +591,13 @@ def build_trade_history(
     if scope == "agent":
         local_symbols = agent_scope.get("symbols", set())
         open_positions = [item for item in open_positions if str(item["symbol"]).upper() in local_symbols]
-    risk_by_symbol = _local_buy_risk_plans(settings.database_path)
-    _attach_risk_levels(trades, open_positions, risk_by_symbol)
+    entry_risks = _local_entry_risk_plans(settings.database_path)
+    risk_by_symbol = {
+        symbol: data["long"]
+        for symbol, data in entry_risks.items()
+        if isinstance(data, dict) and "long" in data
+    }
+    _attach_risk_levels(trades, open_positions, entry_risks)
     unrealized_pl = round(sum(item["unrealized_pl"] for item in open_positions), 2)
     summary = {
         **summary,
@@ -568,6 +625,7 @@ def build_trade_history(
         "days": daily,
         "open_positions": open_positions,
         "risk_levels": risk_by_symbol,
+        "risk_levels_by_direction": entry_risks,
         "local_broker_orders": _local_broker_orders(settings.database_path, limit, start_date),
         "warnings": warnings,
     }
