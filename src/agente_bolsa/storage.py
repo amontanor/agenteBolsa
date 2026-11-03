@@ -4359,13 +4359,17 @@ class Store:
             conn.execute("BEGIN IMMEDIATE")
             incoming_features = json.loads(json.dumps(features or {}, default=str))
             existing_row = conn.execute(
-                "SELECT features_json FROM signal_outcomes WHERE signal_id = ?",
+                "SELECT features_json, gate_json FROM signal_outcomes WHERE signal_id = ?",
                 (signal_id,),
             ).fetchone()
             existing_features = {}
+            existing_gate = {}
             if existing_row:
                 existing_features = json.loads(existing_row["features_json"] or "{}")
+                existing_gate = json.loads(existing_row["gate_json"] or "{}")
             normalized_features = _merge_json_dicts(existing_features, incoming_features)
+            incoming_gate = json.loads(json.dumps(gate or {}, default=str))
+            normalized_gate = _merge_json_dicts(existing_gate, incoming_gate)
             if existing_row:
                 merged_identity, merge_status = merge_signal_identity_blocks(
                     existing_features.get("signal_identity"),
@@ -4403,7 +4407,7 @@ class Store:
                     signal_date,
                     decision,
                     _dumps(normalized_features),
-                    _dumps(gate or {}),
+                    _dumps(normalized_gate),
                     _dumps(outcome or {}),
                     now,
                     now,
@@ -4421,18 +4425,24 @@ class Store:
             signal_ids = [str(item["signal_id"]) for item in items]
             placeholders = ",".join("?" for _ in signal_ids)
             existing_rows = conn.execute(
-                f"SELECT signal_id, features_json FROM signal_outcomes WHERE signal_id IN ({placeholders})",
+                f"SELECT signal_id, features_json, gate_json FROM signal_outcomes WHERE signal_id IN ({placeholders})",
                 signal_ids,
             ).fetchall()
             existing_by_id = {
-                row["signal_id"]: json.loads(row["features_json"] or "{}")
+                row["signal_id"]: {
+                    "features": json.loads(row["features_json"] or "{}"),
+                    "gate": json.loads(row["gate_json"] or "{}"),
+                }
                 for row in existing_rows
             }
             payload = []
             for item in items:
                 incoming_features = json.loads(json.dumps(item.get("features") or {}, default=str))
-                existing_features = existing_by_id.get(str(item["signal_id"]))
+                existing = existing_by_id.get(str(item["signal_id"]))
+                existing_features = (existing or {}).get("features")
                 normalized_features = _merge_json_dicts(existing_features or {}, incoming_features)
+                incoming_gate = json.loads(json.dumps(item.get("gate") or {}, default=str))
+                normalized_gate = _merge_json_dicts((existing or {}).get("gate") or {}, incoming_gate)
                 if existing_features is not None:
                     merged_identity, merge_status = merge_signal_identity_blocks(
                         existing_features.get("signal_identity"),
@@ -4451,7 +4461,7 @@ class Store:
                         item["signal_date"],
                         item["decision"],
                         _dumps(normalized_features),
-                        _dumps(item.get("gate") or {}),
+                        _dumps(normalized_gate),
                         _dumps(item.get("outcome") or {}),
                         now,
                         now,
