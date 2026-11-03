@@ -168,6 +168,12 @@ class AgentRunTracker:
                 self.fail(reason=exc)
         return False
 
+    @property
+    def terminal(self) -> str | None:
+        """Terminal status already set, if any."""
+
+        return self._terminal
+
     def add_outputs(
         self,
         *,

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agente_bolsa import scheduler
+from agente_bolsa import cycle_runner, scheduler
 from agente_bolsa.config import Settings
 from agente_bolsa.tools import broker_reconciliation
 
@@ -251,6 +251,12 @@ def test_long_uses_long_entry_after_short_cover(tmp_path, monkeypatch):
     assert exits == []
     assert audit["positions"][0]["stop_loss"] == pytest.approx(70.0)
     assert audit["positions"][0]["take_profit"] == pytest.approx(85.0)
+
+
+def test_crew_success_is_not_downgraded_by_late_telemetry_failure():
+    source = inspect.getsource(cycle_runner.run_observable_cycle)
+    assert 'attempt_run.terminal == "succeeded"' in source
+    assert "telemetry cannot fail a completed crew" in source
 
 
 def test_long_ignores_cover_plan_without_long_entry(tmp_path, monkeypatch):

@@ -3205,20 +3205,25 @@ def run_observable_cycle(
                 attempt_run.add_outputs(output_refs=[f"data/logs/{crew_stdout_path.name}"])
                 attempt_run.succeed()
                 crew_execution_parent_id = attempt_run.agent_run_id
-                reporter.emit(
-                    "orchestrator",
-                    "crew_completed",
-                    run_id,
-                    "CrewAI completo el ciclo de razonamiento.",
-                    {
-                        "result_preview": crew_result[:1000],
-                        "crew_stdout_path": str(crew_stdout_path),
-                        "attempt": attempt_index,
-                        "fallback": attempt_index > 1,
-                        "llm_identity": build_llm_identity(attempt_endpoint),
-                        "crew_observability": crew_observability,
-                    },
-                )
+                try:
+                    reporter.emit(
+                        "orchestrator",
+                        "crew_completed",
+                        run_id,
+                        "CrewAI completo el ciclo de razonamiento.",
+                        {
+                            "result_preview": crew_result[:1000],
+                            "crew_stdout_path": str(crew_stdout_path),
+                            "attempt": attempt_index,
+                            "fallback": attempt_index > 1,
+                            "llm_identity": build_llm_identity(attempt_endpoint),
+                            "crew_observability": crew_observability,
+                        },
+                    )
+                except Exception as exc:  # noqa: BLE001 - telemetry cannot fail a completed crew.
+                    logging.getLogger(__name__).debug(
+                        "crew_completed telemetry skipped after success: %s", exc
+                    )
                 break
             except Exception as exc:
                 crew_observability = task_observer.finalize(failed=True, reason="crew_failed")
@@ -3226,6 +3231,15 @@ def run_observable_cycle(
                 attempted_endpoints.append(
                     build_llm_identity(attempt_endpoint, status="failed", reason="crew_failed")
                 )
+                if attempt_run.terminal == "succeeded":
+                    # The crew already succeeded; a telemetry or audit failure
+                    # after that point must not turn success into a cycle
+                    # failure (agent_run_terminal_conflict:succeeded->failed).
+                    logging.getLogger(__name__).warning(
+                        "crew run already succeeded; keeping result despite telemetry failure: %s",
+                        exc,
+                    )
+                    break
                 attempt_run.fail(reason=exc, error_code="crew_failed")
                 next_endpoint_available = attempt_index < len(crew_endpoints)
                 if next_endpoint_available and _crew_provider_failure_retryable(exc):
