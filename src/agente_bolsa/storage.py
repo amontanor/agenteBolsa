@@ -1433,6 +1433,9 @@ class Store:
                 """,
                 (ORDER_PLAN_STATUS_PENDING,),
             )
+        # P-L186M: any caller that already applied the schema marks this path as
+        # ready, so later ensure_schema_once calls in hot paths are cheap.
+        _SCHEMA_READY_PATHS.add(str(self.database_path))
 
     def ensure_schema_once(self) -> None:
         """Aplica el esquema como maximo una vez por proceso y base (P-L180).

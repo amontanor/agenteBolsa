@@ -945,7 +945,7 @@ class ContinuousImprovementLabRuntime:
         trigger_event_type: str = "manual_trigger",
         trigger_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        self.store.ensure_schema()
+        self.store.ensure_schema_once()
         if not self.settings.continuous_improvement_enabled:
             return {"ok": False, "status": "DISABLED", "reason": "CONTINUOUS_IMPROVEMENT_ENABLED=false"}
         cooldown_active, cooldown_payload = self._cooldown_state()

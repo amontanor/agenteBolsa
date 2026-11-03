@@ -5314,3 +5314,10 @@ rearranque; después LLM/credenciales, P-L178b, límite permanente de
   `prod-jetson-0.4.426`, recibo 16:37:03Z. Salud verde, kernel ok, cero ordenes.
 - Siguiente: PMR 22:00 (terminal + fila performance_daily 11-03 + executed_short
   de ADM). P1: locks SQLite (14 en 6 h), 217 skips y 1,09 M eventos/7 GB.
+
+
+## P-L186M - bootstrap de esquema una vez (0.4.427)
+
+- DDL completo por minuto, por respuesta LLM y por decision eliminado con
+  `ensure_schema_once`. N2 sin cambio de trading. Pendiente suite, despliegue y
+  medicion de `database is locked` + PMR 22:00.

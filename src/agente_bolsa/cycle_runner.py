@@ -2906,7 +2906,7 @@ def run_observable_cycle(
     """Run one cycle and make every phase visible in the console and logs."""
 
     settings.assert_trading_safety()
-    store.ensure_schema()
+    store.ensure_schema_once()
     run_id = run_id or cycle_id()
     timing = timing or MarketCycleTiming(settings.data_dir / "reports", run_id)
     reporter = EventReporter(store, verbose=verbose)

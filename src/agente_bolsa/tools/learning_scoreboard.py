@@ -570,7 +570,7 @@ def build_learning_scoreboard(
     since_date: str = "2026-07-07",
     end_date: str | None = None,
 ) -> dict[str, Any]:
-    store.ensure_schema()
+    store.ensure_schema_once()
     resolved_end_date = _resolved_end_date(end_date)
     executed, control, matches, all_control = _cohort_rows(
         store,

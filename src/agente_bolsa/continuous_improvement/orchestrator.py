@@ -24,7 +24,7 @@ class ContinuousImprovementOrchestrator:
         dedupe_key: str | None = None,
         force: bool = False,
     ) -> dict[str, Any]:
-        self.store.ensure_schema()
+        self.store.ensure_schema_once()
         if not self.settings.continuous_improvement_enabled:
             return {"ok": False, "status": "DISABLED", "reason": "CONTINUOUS_IMPROVEMENT_ENABLED=false"}
         if dedupe_key and not force:
