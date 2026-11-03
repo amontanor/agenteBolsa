@@ -102,7 +102,7 @@ def _portfolio_risk_context(
     )
 
     store = Store(settings.database_path, settings.agent_logs_dir)
-    store.ensure_schema()
+    store.ensure_schema_once()
     latest_buy_plans = store.latest_executed_buy_plans_by_symbol()
     existing_open_risk_amount = sum(
         _position_risk_amount(position, (latest_buy_plans.get(position.symbol.upper()) or {}).get("plan"))
@@ -570,7 +570,7 @@ def _build_research_context(
         return load_research_evidence_context(settings.data_dir)
     try:
         store = Store(settings.database_path, settings.agent_logs_dir)
-        store.ensure_schema()
+        store.ensure_schema_once()
         return build_research_evidence_report(
             store,
             settings,
@@ -989,7 +989,7 @@ def _same_session_intraday_context(
         return {}
     settings = Settings(DATA_DIR=data_dir)
     store = Store(settings.database_path, settings.agent_logs_dir)
-    store.ensure_schema()
+    store.ensure_schema_once()
     return store.same_session_intraday_signal_summary(session_date=session_date, symbols=symbols)
 
 

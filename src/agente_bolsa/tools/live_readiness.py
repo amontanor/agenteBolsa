@@ -187,7 +187,7 @@ def build_live_readiness_report(
     *,
     since_date: str = "2026-04-01",
 ) -> dict[str, Any]:
-    store.ensure_schema()
+    store.ensure_schema_once()
     reports_dir.mkdir(parents=True, exist_ok=True)
     checks: list[dict[str, Any]] = []
     reports_root = settings.data_dir / "reports"

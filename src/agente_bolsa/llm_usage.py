@@ -120,7 +120,7 @@ def today_llm_spend(settings: Settings, *, role: str | None = None) -> float:
     today = datetime.now(timezone.utc).date().isoformat()
     try:
         store = Store(settings.database_path, settings.agent_logs_dir)
-        store.ensure_schema()
+        store.ensure_schema_once()
         rows = store.latest_llm_usage(limit=5000)
     except (OSError, sqlite3.Error):
         return 0.0
@@ -153,7 +153,7 @@ def record_llm_response(
     }
     try:
         store = Store(settings.database_path, settings.agent_logs_dir)
-        store.ensure_schema()
+        store.ensure_schema_once()
         store.record_llm_usage(
             usage_id=new_id("llm_usage"),
             source=source,
