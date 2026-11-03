@@ -7523,3 +7523,13 @@ la grafica; no se backfillea.
 `crew_completed` fail-open y guard de terminal en `cycle_runner`; un fallo de
 escritura tras `agent_run_succeeded` ya no convierte el run en `failed` ni
 aborta el ciclo. Evidencia: `mkt_53b092604b78`.
+
+
+### P-L186L desplegado (0.4.426)
+
+Produccion `agente-bolsa:0.4.426-arm64` `sha256:66e2afce...`, commit
+`8ee6274f`, tree `2b1f9cd9`, tag `prod-jetson-0.4.426`, recibo 16:37:03Z.
+Salida corta con plan propio y geometria, espejo largo, bootstrap de esquema
+fuera de reconciliacion, guard de telemetria del crew y grafica con ventana
+calendario + P/L por defecto. Suite 3.306 passed. Pendiente PMR 22:00 y deuda
+P1 de contencion SQLite.

@@ -5306,3 +5306,11 @@ rearranque; después LLM/credenciales, P-L178b, límite permanente de
 
 - P-L186L incluye el guard de terminal del crew: un fallo de telemetria tras
   `succeeded` ya no aborta el ciclo (`mkt_53b092604b78`).
+
+
+## 0.4.426 desplegado - P-L186L
+
+- Imagen `sha256:66e2afce...`, commit `8ee6274f`, tree `2b1f9cd9`, tag
+  `prod-jetson-0.4.426`, recibo 16:37:03Z. Salud verde, kernel ok, cero ordenes.
+- Siguiente: PMR 22:00 (terminal + fila performance_daily 11-03 + executed_short
+  de ADM). P1: locks SQLite (14 en 6 h), 217 skips y 1,09 M eventos/7 GB.

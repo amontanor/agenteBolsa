@@ -311,3 +311,22 @@ El kernel ya no devuelve `True` por `side=sell`: distingue cierre de apertura.
   real sigue auditandose con `agent_run_conflict`.
 - Coste observado: 34 min de ciclo y cero recomendaciones en esa pasada. El
   siguiente ciclo arranco a las 16:11:43Z.
+
+
+## Despliegue 0.4.426 (P-L186L)
+
+- Imagen `agente-bolsa:0.4.426-arm64`
+  `sha256:66e2afce17252d0e689bcac0a57bb486fa7774fd0f3923c5fe4073da7f9f4761`,
+  commit `8ee6274f`, tree `2b1f9cd9`, tag `prod-jetson-0.4.426`, recibo
+  verificado 2026-11-03T16:37:03Z.
+- 3 contenedores healthy, RestartCount 0, OOM false, HTTP 200 en `/`, `/health`
+  y `/_stcore/health`, kernel `ok` con 0 violaciones, runtime 0.4.426.
+- Verificacion funcional en la imagen: corto ADM devuelve stop 76,7186 / take
+  67,1971; largo tras cobertura usa su plan largo; sin plan largo valido no hay
+  salida automatica; `reconcile_broker_orders` ya no ejecuta `ensure_schema`
+  sobre base existente; `_cumulative_window` usa calendario; P/L acumulado es
+  la metrica por defecto.
+- Suite final: 3.306 passed, 1 skipped, 1 fallo ambiental aislado
+  (`test_web_research`). Focales del lote: 114 passed.
+- Cero ordenes desde el corte. APP sigue corto (-5, entrada 238,24, precio
+  241,96 a las 16:40Z, P/L abierto -18,60). ADM quedo cerrado antes del fix.
