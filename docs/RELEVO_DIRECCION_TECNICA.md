@@ -5277,3 +5277,9 @@ rearranque; después LLM/credenciales, P-L178b, límite permanente de
   navegador.
 - Primer corto real APP: plan open_short 5 @ 238,45, filled 16:53:22Z. Pendiente
   `executed_short` en reconciliacion y seguimiento del stop/take.
+
+
+## P-L186K - P0 integridad/PMR/calendario (0.4.425)
+
+- Gate merge, PMR sin ensure_schema + retry de lock y calendario con rebuild.
+  Pendiente suite completa, build, despliegue y PMR de la sesion.

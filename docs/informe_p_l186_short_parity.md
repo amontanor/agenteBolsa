@@ -221,3 +221,17 @@ El kernel ya no devuelve `True` por `side=sell`: distingue cierre de apertura.
 - `executed_short` aun en 0: la reconciliacion de fills no habia procesado el
   corto en el momento de la comprobacion; queda pendiente verificarlo tras el
   postmarket.
+
+
+## P-L186K (0.4.425): P0 de integridad, PMR y calendario
+
+- `save_signal_outcome` y bulk fusionan `gate_json`; una captura posterior con
+  `{}` ya no borra `executed_short`, `broker_order_id` ni evidencia de fill.
+- `post_market_review` y `operational_learning` dejan de llamar
+  `ensure_schema()` en la ruta del PMR; el esquema queda para arranque/init-db.
+- El PMR reintenta hasta 3 veces solo ante `database is locked` (30/60/120 s),
+  con evento `postmarket_lock_retry`; otros errores fallan igual.
+- `MarketCalendar` reconstruye la instancia una vez si `pandas_market_calendars`
+  pierde `_holidays` o lanza `DateOffset`; si falla, usa fallback conservador y
+  no mata `portfolio_watch`.
+- Tests P0: 8 passed; regresiones focales: 86 passed.

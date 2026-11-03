@@ -7486,3 +7486,10 @@ Produccion `agente-bolsa:0.4.424-arm64` `sha256:a86dd49c...`, commit `9b4e54e2`,
 tree `56020c06`, tag `prod-jetson-0.4.424`, recibo 17:02:37Z. Corrige HTML crudo
 en la franja de cuenta. Primer corto real APP filled (5 @ 238,45). Pendiente
 verificar `executed_short` tras reconciliacion.
+
+
+### P-L186K: P0 integridad/PMR/calendario (0.4.425)
+
+Gate merge en `signal_outcomes`, PMR sin `ensure_schema` con retry acotado y
+calendario resiliente. Pendiente suite completa, despliegue y verificacion del
+PMR de hoy.
