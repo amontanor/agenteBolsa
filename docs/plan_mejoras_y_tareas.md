@@ -7557,3 +7557,12 @@ Lector de stop/take por direccion, cortos visibles y `sin_plan_local` explicito.
 Dataset canonico en `tests/fixtures/p186n_portfolio_cases.py`. Sin trading ni
 backfill. APO/WAT siguen huerfanas y fuera del monitor hasta decision operativa.
 Pendiente suite y despliegue.
+
+
+### P-L186N desplegado (0.4.428)
+
+Imagen `sha256:f355ed06...`, commit `b3968819`, tree `6387620e`, tag
+`prod-jetson-0.4.428`, recibo 17:52:19Z. Cortos visibles, huérfanas marcadas y
+dataset canonico en `tests/fixtures/p186n_portfolio_cases.py`. Suite 3.312
+passed, 2 fallos ambientales que pasan aislados. APO/WAT siguen sin proteccion
+local por decision; no se opera sin autorizacion. Pendiente PMR 22:00.

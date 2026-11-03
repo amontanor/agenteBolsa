@@ -66,3 +66,27 @@ las pruebas de cartera.
 - No se hace backfill de las ordenes del 17-ago: requiere autorizacion.
 - Mientras no se adopten, APO/WAT siguen fuera del monitor automatico y se
   muestran como `sin_plan_local`.
+
+
+## Despliegue 0.4.428
+
+- Imagen `agente-bolsa:0.4.428-arm64`
+  `sha256:f355ed060cf3e9870082380ea9aa4a9dc8848aeba0707dcb9938581e697e3372`,
+  commit `b3968819`, tree `6387620e`, tag `prod-jetson-0.4.428`, recibo
+  verificado 2026-11-03T17:52:19Z.
+- 3 contenedores healthy, RestartCount 0, OOM false, HTTP 200, kernel `ok`,
+  runtime 0.4.428.
+- Suite final: 3.312 passed, 1 skipped, 2 fallos ambientales
+  (`test_p172_llm_status_live`, `test_web_research`); ambos pasan aislados.
+- Validacion con filas reales copiadas a base temporal: APP corto devuelve
+  261,3766/204,0601; EVRG, GILD, KDP, MO, VEEV y VTRS devuelven sus niveles
+  largos; APO y WAT quedan sin plan.
+- Cero ordenes, cero `scheduler_job_skipped` y cero `database is locked` en los
+  primeros minutos post-corte.
+
+## Decision operativa sobre APO/WAT
+
+No se colocan stops/takes ni se cierran. Son posiciones de un bracket manual
+del 17-ago cuyas patas expiraron; no existe plan local que el monitor pueda
+usar. Se muestran como `sin_plan_local`. Cualquier proteccion o cierre requiere
+autorizacion explicita y una accion de trading separada.

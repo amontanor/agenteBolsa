@@ -5335,3 +5335,12 @@ rearranque; después LLM/credenciales, P-L178b, límite permanente de
 - Stop/take de cortos visibles; coberturas no contaminan largos; aviso
   `sin_plan_local` para APO/WAT. Dataset de pruebas en
   `tests/fixtures/p186n_portfolio_cases.py`. Sin trading ni backfill.
+
+
+## 0.4.428 desplegado - P-L186N
+
+- Imagen `sha256:f355ed06...`, commit `b3968819`, tree `6387620e`, tag
+  `prod-jetson-0.4.428`, recibo 17:52:19Z. APP corto ya muestra stop/take;
+  APO/WAT marcadas `sin_plan_local`. Dataset de pruebas en fixture. Sin trading.
+- Siguiente: PMR 22:00; decision explicita para proteger/cerrar APO/WAT o
+  autorizar su adopcion con niveles.
