@@ -1946,17 +1946,33 @@ def _position_purchase_sort_key(item: dict[str, Any]) -> tuple[int, float, str, 
     return (0, -parsed.timestamp(), broker_order_id, symbol)
 
 
+def _position_risk_for_display(
+    history: dict[str, Any],
+    symbol: str,
+    side: Any,
+) -> dict[str, Any]:
+    """Pick the entry risk that matches the position direction."""
+
+    direction = "short" if str(side or "long").lower() == "short" else "long"
+    by_direction = history.get("risk_levels_by_direction")
+    if isinstance(by_direction, dict):
+        data = by_direction.get(symbol) or {}
+        if isinstance(data, dict) and ("long" in data or "short" in data):
+            return data.get(direction) or {}
+    flat = history.get("risk_levels") or {}
+    return flat.get(symbol, {}) if direction == "long" else {}
+
+
 def _position_rows(
     history: dict[str, Any],
     *,
     local_timezone: str = "Europe/Madrid",
     blank_intraday: bool = False,
 ) -> list[dict[str, Any]]:
-    risk_levels = history.get("risk_levels", {})
     rows = []
     for item in history.get("open_positions", []):
         symbol = str(item.get("symbol", "")).upper()
-        risk = risk_levels.get(symbol, {})
+        risk = _position_risk_for_display(history, symbol, item.get("side"))
         purchase = resolve_position_purchase(history, symbol, item.get("qty"))
         purchase_time = purchase.get("purchase_timestamp")
         purchase_date, purchase_clock = _position_purchase_display(purchase_time, local_timezone)
@@ -1981,8 +1997,9 @@ def _position_rows(
                 "P/L día $": None if blank_intraday else item.get("unrealized_intraday_pl"),
                 "P/L día %": None if blank_intraday else item.get("unrealized_intraday_plpc"),
                 "P/L fuente": "alpaca_position_snapshot",
-                "Stop": item.get("stop_loss"),
-                "Take": item.get("take_profit"),
+                "Stop": item.get("stop_loss") if item.get("stop_loss") is not None else risk.get("stop_loss"),
+                "Take": item.get("take_profit") if item.get("take_profit") is not None else risk.get("take_profit"),
+                "Riesgo estado": "plan_local" if risk else "sin_plan_local",
                 "Motivo": risk.get("reason"),
             }
         )
@@ -2466,6 +2483,15 @@ def _portfolio_table(rows: list[dict[str, Any]]) -> None:
         "</table>",
         unsafe_allow_html=True,
     )
+    missing_plan = sorted(
+        str(item.get("Simbolo")) for item in rows if item.get("Riesgo estado") == "sin_plan_local"
+    )
+    if missing_plan:
+        st.caption(
+            "Sin plan de entrada local: "
+            + ", ".join(missing_plan)
+            + ". Sin stop/take y fuera del monitor automático."
+        )
 
 
 def _position_rows_totals(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2575,6 +2601,15 @@ def _portfolio_action_table(rows: list[dict[str, Any]], *, key_prefix: str = "po
         "Total sobre el invertido de las mismas filas"
         + (f" · {_money(totals['invested'])}" if totals["invested"] is not None else " · base n/d")
     )
+    missing_plan = sorted(
+        str(item.get("Simbolo")) for item in rows if item.get("Riesgo estado") == "sin_plan_local"
+    )
+    if missing_plan:
+        st.caption(
+            "Sin plan de entrada local: "
+            + ", ".join(missing_plan)
+            + ". Sin stop/take y fuera del monitor automático."
+        )
     return clicked_symbol
 
 

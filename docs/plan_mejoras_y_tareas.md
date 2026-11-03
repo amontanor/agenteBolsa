@@ -7549,3 +7549,11 @@ Imagen `sha256:24e951e1...`, commit `d777cba8`, tree `60bda700`, tag
 `prod-jetson-0.4.427`, recibo 17:07:57Z. Suite 3.309 passed. Primeros 8 min:
 0 locks, portfolio watch 6,4 s, cero ordenes. Pendiente PMR 22:00 y medicion
 a 60 min.
+
+
+### P-L186N: niveles de cartera por direccion (0.4.428)
+
+Lector de stop/take por direccion, cortos visibles y `sin_plan_local` explicito.
+Dataset canonico en `tests/fixtures/p186n_portfolio_cases.py`. Sin trading ni
+backfill. APO/WAT siguen huerfanas y fuera del monitor hasta decision operativa.
+Pendiente suite y despliegue.
