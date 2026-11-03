@@ -1524,13 +1524,53 @@ def _exit_policy_v2_runtime_trigger(
     return None
 
 
-def _stop_take_observation(portfolio: Any, buy_plans: dict[str, Any]) -> dict[str, Any]:
+def _entry_source_for_position(
+    position: Any,
+    buy_plans: dict[str, Any],
+    entry_plans: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return the entry plan that matches the position direction.
+
+    P-L186L: ``latest_executed_buy_plans_by_symbol`` returns any buy, including
+    a short cover. A long position must not inherit that cover's inverted
+    levels; prefer the direction-aware entry reader and accept the legacy buy
+    reader only while it still represents an ``open_long`` (or has no effect).
+    """
+
+    symbol = str(position.symbol).upper()
+    is_short = (
+        str(getattr(position, "side", "") or "").lower() == "short"
+        or float(getattr(position, "qty", 0.0) or 0.0) < 0
+    )
+    entry = entry_plans.get(symbol) or {}
+    entry_direction = str(entry.get("direction") or "").lower()
+    if is_short:
+        return entry if entry_direction == "short" else None
+    if entry_direction == "long":
+        return entry
+    legacy = buy_plans.get(symbol)
+    if not legacy:
+        return None
+    legacy_plan = legacy.get("plan") or {}
+    legacy_effect = str(
+        legacy_plan.get("position_effect")
+        or (legacy_plan.get("payload") or {}).get("position_effect")
+        or ""
+    ).lower()
+    return legacy if legacy_effect in {"", "open_long"} else None
+
+
+def _stop_take_observation(
+    portfolio: Any,
+    buy_plans: dict[str, Any],
+    entry_plans: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Describe the existing local lookup; never certify broker protection."""
     open_symbols = {order.symbol.upper() for order in portfolio.open_orders}
     rows = []
     for position in portfolio.positions:
         symbol = position.symbol.upper()
-        source = buy_plans.get(symbol)
+        source = _entry_source_for_position(position, buy_plans, entry_plans or {})
         levels: dict[str, float | None] = {"stop_loss": None, "take_profit": None}
         invalid = False
         if source:
@@ -1596,7 +1636,7 @@ def _execute_stop_take_exits(
     if observation is not None:
         try:
             observation.clear()
-            observation.update(_stop_take_observation(portfolio, buy_plans))
+            observation.update(_stop_take_observation(portfolio, buy_plans, entry_plans))
         except Exception as exc:  # noqa: BLE001 - diagnostic evidence cannot block exits.
             observation.update({"status": "unavailable", "reason": type(exc).__name__, "positions": None})
     try:
@@ -1619,17 +1659,36 @@ def _execute_stop_take_exits(
         symbol = position.symbol.upper()
         if symbol in open_order_symbols:
             continue
-        source = buy_plans.get(symbol)
-        if not source:
-            continue
-        source_plan = source.get("plan", {}) or {}
-        payload = source_plan.get("payload", {}) or {}
         is_short_position = (
             str(getattr(position, "side", "") or "").lower() == "short"
             or float(getattr(position, "qty", 0.0) or 0.0) < 0
         )
+        source = _entry_source_for_position(position, buy_plans, entry_plans)
+        if not source:
+            continue
+        source_plan = source.get("plan", {}) or {}
+        payload = source_plan.get("payload", {}) or {}
         stop_loss = float(payload.get("stop_loss") or 0)
         take_profit = float(payload.get("take_profit") or 0)
+        if is_short_position:
+            # Defense in depth: ignore levels that are geometrically invalid
+            # for a short (take must sit below the reference, stop above it).
+            reference_price = float(getattr(position, "avg_entry_price", 0.0) or 0.0)
+            if reference_price <= 0:
+                reference_price = float(getattr(position, "current_price", 0.0) or 0.0)
+            if reference_price > 0:
+                if stop_loss > 0 and stop_loss <= reference_price:
+                    stop_loss = 0.0
+                if take_profit > 0 and take_profit >= reference_price:
+                    take_profit = 0.0
+        exit_payload = payload
+        exit_source_plan = source_plan
+        if is_short_position and (
+            stop_loss != float(payload.get("stop_loss") or 0)
+            or take_profit != float(payload.get("take_profit") or 0)
+        ):
+            exit_payload = {**payload, "stop_loss": stop_loss, "take_profit": take_profit}
+            exit_source_plan = {**source_plan, "payload": exit_payload}
         trigger = None
         level = 0.0
         qty_fraction = 1.0
@@ -1653,7 +1712,7 @@ def _execute_stop_take_exits(
                 symbol=symbol,
                 position=position,
                 source={**source, "lots": buy_lots.get(symbol, [])},
-                payload=payload,
+                payload=exit_payload,
                 calendar=calendar,
                 evaluation_at=temporal_evaluation_at,
             )
@@ -1694,7 +1753,7 @@ def _execute_stop_take_exits(
             current_price=position.current_price,
             trigger=trigger,
             level=level,
-            source_plan=source_plan,
+            source_plan=exit_source_plan,
             time_stop_evidence=(exit_policy_state or {}).get("time_stop_evidence"),
             open_buy_lots=buy_lots.get(symbol, []),
             position_effect="close_short" if is_short_position else "close_long",
@@ -1715,7 +1774,7 @@ def _execute_stop_take_exits(
                     trigger=trigger,
                     time_stop_evidence=evidence,
                     lots=list(buy_lots.get(symbol, [])),
-                    source_plan=source_plan,
+                    source_plan=exit_source_plan,
                     decided_at=temporal_evaluation_at.isoformat(),
                 )
                 attach_time_stop_exit_authority_reference(plan, authority_capture)

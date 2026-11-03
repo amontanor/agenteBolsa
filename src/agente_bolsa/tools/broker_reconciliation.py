@@ -265,7 +265,12 @@ def reconcile_broker_orders(
     limit: int = 200,
     update_learning: bool = True,
 ) -> dict[str, Any]:
-    store.ensure_schema()
+    # P-L186L: schema bootstrap only for a brand-new database. Production
+    # databases are initialized by the scheduler/init-db; running the full DDL
+    # script on every reconciliation poll holds the write lock and starves the
+    # other jobs.
+    if not settings.database_path.exists():
+        store.ensure_schema()
     now = datetime.now(timezone.utc).isoformat()
     result: dict[str, Any] = {
         "checked": 0,
