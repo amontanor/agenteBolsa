@@ -68,3 +68,25 @@ watch, 53 lab) y 1.621 `h_capture_prediction`.
 - No se cambia la cadencia del laboratorio ni su evento de bloqueo; solo se
   elimina el DDL que lo acompañaba.
 - No se hace backfill de `performance_daily`.
+
+
+## Despliegue 0.4.427
+
+- Imagen `agente-bolsa:0.4.427-arm64`
+  `sha256:24e951e1248cddd85fe983366ddb8033b69b39ef58dc92d437e925aae9da05e1`,
+  commit `d777cba8`, tree `60bda700`, tag `prod-jetson-0.4.427`, recibo
+  verificado 2026-11-03T17:07:57Z.
+- 3 contenedores healthy, RestartCount 0, OOM false, HTTP 200 en `/` y
+  `/health`, kernel `ok` con 0 violaciones, runtime 0.4.427.
+- Verificacion en imagen: `ensure_schema` marca la ruta lista y
+  `ensure_schema_once` tarda 0,00001 s tras el bootstrap (0,51 s en base
+  temporal); `llm_usage` y `trade_decision` usan la variante once.
+- Primeros 8 minutos post-corte: 0 `database is locked`, 0
+  `terminal_conflict`, 0 tracebacks; `portfolio_watch` completo en 6,424 s
+  frente a ejecuciones de ~3 min antes del corte; cero ordenes nuevas.
+- Suite final: 3.309 passed, 1 skipped, 1 fallo ambiental aislado
+  (`test_web_research`). Focales del lote: 3; regresiones: 470.
+- APP sigue corto (-5, entrada 238,24, precio 241,905 a las 17:08Z, P/L
+  -18,325).
+- Pendiente decisivo: PMR 22:00, fila `performance_daily` 11-03 y
+  `executed_short` de ADM. La medicion de locks a 60 minutos queda abierta.

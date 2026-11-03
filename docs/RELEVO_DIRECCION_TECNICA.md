@@ -5321,3 +5321,10 @@ rearranque; después LLM/credenciales, P-L178b, límite permanente de
 - DDL completo por minuto, por respuesta LLM y por decision eliminado con
   `ensure_schema_once`. N2 sin cambio de trading. Pendiente suite, despliegue y
   medicion de `database is locked` + PMR 22:00.
+
+
+## 0.4.427 desplegado - P-L186M
+
+- Imagen `sha256:24e951e1...`, commit `d777cba8`, tree `60bda700`, tag
+  `prod-jetson-0.4.427`, recibo 17:07:57Z. 0 locks y portfolio watch 6,4 s en
+  los primeros 8 min. Siguiente: PMR 22:00 y medicion de 60 min.
