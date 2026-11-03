@@ -5328,3 +5328,10 @@ rearranque; después LLM/credenciales, P-L178b, límite permanente de
 - Imagen `sha256:24e951e1...`, commit `d777cba8`, tree `60bda700`, tag
   `prod-jetson-0.4.427`, recibo 17:07:57Z. 0 locks y portfolio watch 6,4 s en
   los primeros 8 min. Siguiente: PMR 22:00 y medicion de 60 min.
+
+
+## P-L186N - niveles de cartera por direccion (0.4.428)
+
+- Stop/take de cortos visibles; coberturas no contaminan largos; aviso
+  `sin_plan_local` para APO/WAT. Dataset de pruebas en
+  `tests/fixtures/p186n_portfolio_cases.py`. Sin trading ni backfill.
