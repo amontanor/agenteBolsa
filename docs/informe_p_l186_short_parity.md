@@ -235,3 +235,19 @@ El kernel ya no devuelve `True` por `side=sell`: distingue cierre de apertura.
   pierde `_holidays` o lanza `DateOffset`; si falla, usa fallback conservador y
   no mata `portfolio_watch`.
 - Tests P0: 8 passed; regresiones focales: 86 passed.
+
+
+## Despliegue 0.4.425 (P0)
+
+- 0.4.425 imagen `sha256:38047f6f7381438b3ec21945ff7ecee21baf3c3b55135d5959f4e2dc527c686f`,
+  commit `5d785695`, tree `01756a4e`, tag `prod-jetson-0.4.425`, recibo
+  2026-11-03T10:39:59Z. 3 healthy, HTTP 200, kernel ok, 0 reinicios.
+- Suite completa: 3.294 passed, 1 skipped, 1 fallo ambiental aislado
+  (`test_web_research`). Focales P0: 8 passed; regresiones focales: 86 passed.
+- Smoke de produccion: gate merge conserva `executed_short` y `broker_order_id`
+  tras una segunda captura con `{}`; helper de reintento importable; PMR solo
+  crea esquema si la base no existe.
+- `portfolio_watch` publica `portfolio_watch_sleeping` con mercado cerrado y no
+  reproduce `_holidays`.
+- Verificacion pendiente: PMR de la sesion 2026-11-03 al cierre; no se ejecuta
+  manualmente. APP sigue corto (-5, 231,87, +31,85).

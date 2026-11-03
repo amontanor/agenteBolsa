@@ -7493,3 +7493,10 @@ verificar `executed_short` tras reconciliacion.
 Gate merge en `signal_outcomes`, PMR sin `ensure_schema` con retry acotado y
 calendario resiliente. Pendiente suite completa, despliegue y verificacion del
 PMR de hoy.
+
+### P-L186K desplegado (0.4.425)
+
+Produccion `agente-bolsa:0.4.425-arm64` `sha256:38047f6f...`, commit `5d785695`,
+tree `01756a4e`, tag `prod-jetson-0.4.425`, recibo 10:39:59Z. Gate merge, PMR
+sin ensure_schema + retry y calendario resiliente. Suite 3.294 passed. Pendiente
+verificar PMR de hoy al cierre.

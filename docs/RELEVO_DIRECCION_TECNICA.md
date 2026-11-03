@@ -5283,3 +5283,10 @@ rearranque; después LLM/credenciales, P-L178b, límite permanente de
 
 - Gate merge, PMR sin ensure_schema + retry de lock y calendario con rebuild.
   Pendiente suite completa, build, despliegue y PMR de la sesion.
+
+## 0.4.425 desplegado - P0 integridad/PMR/calendario
+
+- Imagen `sha256:38047f6f...`, commit `5d785695`, tree `01756a4e`, tag
+  `prod-jetson-0.4.425`, recibo 10:39:59Z. Gate merge y calendario verificados
+  en produccion; PMR con retry pendiente de la sesion de hoy.
+- APP corto sigue abierto (-5, 231,87, +31,85). Sin ordenes nuevas.
