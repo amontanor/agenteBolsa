@@ -182,4 +182,5 @@ __all__ = ["__version__"]
 # P-L186I: hotfix fallback_reason y R:R exacto en el ciclo corto (0.4.423).
 # P-L186J: corrige HTML crudo en la franja de cuenta (0.4.424).
 # P-L186K: P0 gate merge, PMR sin ensure_schema/retry y calendario resiliente (0.4.425).
-__version__ = "0.4.425"
+# P-L186L: salida corta con plan propio, geometria valida y ventana calendario (0.4.426).
+__version__ = "0.4.426"

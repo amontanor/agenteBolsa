@@ -81,6 +81,16 @@ def test_manual_terminal_is_idempotent_and_conflict_is_audited(tmp_path):
     assert store.agent_events(event_type_prefix="agent_run_conflict")
 
 
+def test_terminal_property_exposes_committed_status(tmp_path):
+    _, store = make_store(tmp_path)
+    tracker = AgentRunTracker(
+        store, role="role", task_name="task", execution_kind="deterministic"
+    )
+    assert tracker.terminal is None
+    tracker.succeed()
+    assert tracker.terminal == "succeeded"
+
+
 def test_same_run_is_idempotent_after_tracker_recreation(tmp_path):
     _, store = make_store(tmp_path)
     first = AgentRunTracker(

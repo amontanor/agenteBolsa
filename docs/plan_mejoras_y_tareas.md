@@ -7500,3 +7500,26 @@ Produccion `agente-bolsa:0.4.425-arm64` `sha256:38047f6f...`, commit `5d785695`,
 tree `01756a4e`, tag `prod-jetson-0.4.425`, recibo 10:39:59Z. Gate merge, PMR
 sin ensure_schema + retry y calendario resiliente. Suite 3.294 passed. Pendiente
 verificar PMR de hoy al cierre.
+
+
+### P-L186L: salida corta con plan propio (0.4.426)
+
+Corrige el falso `take_profit` de ADM: la posicion corta uso niveles de un plan
+largo legado. Seleccion por direccion, guarda de geometria y bootstrap de
+esquema solo para base nueva en `reconcile_broker_orders`. Pendiente suite
+completa, despliegue y verificacion del PMR de hoy.
+
+
+#### P-L186L ampliado: espejo largo y grafica
+
+Fuente de entrada por direccion para evitar que un largo herede la cobertura
+de un corto. La grafica acumulada usa ventana calendario (no ultimas N filas)
+y P/L acumulado por defecto. La ausencia de sesiones 11-02/11-03 es PMR, no
+la grafica; no se backfillea.
+
+
+#### P-L186L: telemetria tardia no tumba el ciclo
+
+`crew_completed` fail-open y guard de terminal en `cycle_runner`; un fallo de
+escritura tras `agent_run_succeeded` ya no convierte el run en `failed` ni
+aborta el ciclo. Evidencia: `mkt_53b092604b78`.
