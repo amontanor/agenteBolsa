@@ -7516,3 +7516,10 @@ Fuente de entrada por direccion para evitar que un largo herede la cobertura
 de un corto. La grafica acumulada usa ventana calendario (no ultimas N filas)
 y P/L acumulado por defecto. La ausencia de sesiones 11-02/11-03 es PMR, no
 la grafica; no se backfillea.
+
+
+#### P-L186L: telemetria tardia no tumba el ciclo
+
+`crew_completed` fail-open y guard de terminal en `cycle_runner`; un fallo de
+escritura tras `agent_run_succeeded` ya no convierte el run en `failed` ni
+aborta el ciclo. Evidencia: `mkt_53b092604b78`.

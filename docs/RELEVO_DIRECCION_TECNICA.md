@@ -5302,3 +5302,7 @@ rearranque; después LLM/credenciales, P-L178b, límite permanente de
 - P-L186L amplia: plan de entrada por direccion tambien para largos y grafica
   acumulada con ventana calendario + P/L por defecto. La serie sigue dependiendo
   del PMR; sin fila no hay punto.
+
+
+- P-L186L incluye el guard de terminal del crew: un fallo de telemetria tras
+  `succeeded` ya no aborta el ciclo (`mkt_53b092604b78`).

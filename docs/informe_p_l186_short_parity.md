@@ -295,3 +295,19 @@ El kernel ya no devuelve `True` por `side=sell`: distingue cierre de apertura.
   P/L acumulado por defecto y copy que declara cuantos dias cubre la ventana.
   No se rellena ningun hueco ni se inventan sesiones; el PMR sigue siendo la
   unica fuente de filas.
+
+
+### P-L186L: un exito de crew no se degrada por telemetria tardia
+
+- Evidencia: `mkt_53b092604b78` (inicio 15:23:31Z, `cycle_started` 15:26:29Z)
+  termino `failed` a las 15:57:40Z con
+  `agent_run_terminal_conflict:succeeded->failed`, sin evento `cycle_failed`.
+  El run `agent_run_b53a0d456587` (`crew_orchestrator`/`crew_cycle`) ya habia
+  emitido `agent_run_succeeded`; el `reporter.emit(crew_completed)` posterior
+  fallo y el `except` llamo `fail()` sobre un run terminal. El `ValueError`
+  aborto el ciclo completo.
+- Fix: el `crew_completed` de exito es fail-open y el manejador de excepcion
+  no degrada un run ya `succeeded`; conserva el resultado del crew. Un conflicto
+  real sigue auditandose con `agent_run_conflict`.
+- Coste observado: 34 min de ciclo y cero recomendaciones en esa pasada. El
+  siguiente ciclo arranco a las 16:11:43Z.
