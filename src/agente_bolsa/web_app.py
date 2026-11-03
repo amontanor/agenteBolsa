@@ -3331,15 +3331,28 @@ def _portfolio_session_chart(rows: list[dict[str, Any]]) -> Any:
 
 
 def _cumulative_window(series: list[dict[str, Any]], days: int | str | None) -> list[dict[str, Any]]:
-    """Misma ventana que el selector de rango, aplicada a la serie acumulada."""
+    """Misma ventana calendario que el selector de rango.
+
+    P-L186L: antes tomaba las ultimas N filas con dato, asi que "Ultimos 7
+    dias" podia mostrar un mes de sesiones antiguas cuando el PMR llevaba
+    dias sin completar. La ventana se ancla a la ultima sesion con baseline
+    y descarta cualquier fila anterior al inicio calendario.
+    """
 
     if not series:
         return []
+    ordered = sorted(series, key=lambda row: str(row.get("fecha") or ""))
     if days is None:
-        return list(series)
+        return ordered
     if isinstance(days, str):
-        return [row for row in series if row["fecha"] >= days]
-    return series[-max(int(days), 1) :]
+        return [row for row in ordered if str(row.get("fecha") or "") >= days]
+    window_days = max(int(days), 1)
+    try:
+        end = date.fromisoformat(str(ordered[-1]["fecha"])[:10])
+    except (KeyError, TypeError, ValueError):
+        return ordered[-window_days:]
+    start = (end - timedelta(days=window_days - 1)).isoformat()
+    return [row for row in ordered if str(row.get("fecha") or "")[:10] >= start]
 
 
 def _cumulative_pnl_chart(rows: list[dict[str, Any]]) -> Any:
@@ -6508,6 +6521,7 @@ def page_dashboard() -> None:
             chart_metric = st.radio(
                 "Métrica de la evolución",
                 metric_options,
+                index=1,
                 horizontal=True,
                 key="portfolio_chart_metric",
                 label_visibility="collapsed",
@@ -6544,9 +6558,9 @@ def page_dashboard() -> None:
                 if chart_pct is not None:
                     st.altair_chart(chart_pct, width="stretch")
                     st.caption(
-                        f"Rango real {first_date} → {last_date}: {len(window)} sesiones con baseline. "
-                        "El selector cuenta sesiones con dato, no días naturales; los huecos son "
-                        "sesiones sin fila en performance_daily (PMR no completado)."
+                        f"Rango real {first_date} → {last_date}: {len(window)} sesiones con baseline "
+                        "en la ventana seleccionada. Los huecos son sesiones sin fila en "
+                        "performance_daily (PMR no completado)."
                     )
                 else:
                     st.info("Sin serie acumulada para el rango seleccionado.")
