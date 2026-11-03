@@ -5344,3 +5344,8 @@ rearranque; después LLM/credenciales, P-L178b, límite permanente de
   APO/WAT marcadas `sin_plan_local`. Dataset de pruebas en fixture. Sin trading.
 - Siguiente: PMR 22:00; decision explicita para proteger/cerrar APO/WAT o
   autorizar su adopcion con niveles.
+
+
+- APO/WAT cerradas en paper con plan local: APO 113,15 (-170,80), WAT 466,85
+  (+114,46), neto -56,34. Eventos completados; sin huerfanas. Lock puntual en el
+  snapshot final, recuperado por fill_watch.

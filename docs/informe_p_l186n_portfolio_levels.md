@@ -90,3 +90,25 @@ No se colocan stops/takes ni se cierran. Son posiciones de un bracket manual
 del 17-ago cuyas patas expiraron; no existe plan local que el monitor pueda
 usar. Se muestran como `sin_plan_local`. Cualquier proteccion o cierre requiere
 autorizacion explicita y una accion de trading separada.
+
+
+## Cierre operativo de APO y WAT (2026-11-03)
+
+Decision: cerrar ambas posiciones huerfanas en paper, a mercado, con plan local
+y evento auditable. No se inventaron niveles ni se hizo backfill.
+
+- APO: 7 titulos, entrada 137,55, fill **113,15** a las 18:03:39Z. Realizado
+  **-170,80 USD**. Plan `risk_exit_1e35a4889046`, orden
+  `6feca326-af93-4d76-ac6d-cbabb69e076a`.
+- WAT: 2 titulos, entrada 409,62, fill **466,85** a las 18:07:07Z. Realizado
+  **+114,46 USD**. Plan `risk_exit_516f0baf87a7`, orden
+  `f30007b9-ab1d-4381-b494-fc8fe83234c0`.
+- Neto realizado: **-56,34 USD**. Ambas posiciones desaparecen de la cartera;
+  quedan APP corto, EVRG, GILD, KDP, MO, VEEV y VTRS.
+- Persistencia: `broker_orders` quedo `filled` para ambas; eventos
+  `orphan_position_exit_submitted/completed` con fill y P/L. El snapshot final
+  de APO y WAT choco con `database is locked` durante el ciclo activo; el
+  estado `filled` ya estaba persistido y `fill_watch` reconcilio el resto.
+- Leccion P1: el lock sigue apareciendo bajo ciclo activo y escrituras
+  puntuales; 0.4.427 redujo DDL, pero no elimina toda contencion de escritor.
+  No se fuerza ninguna reparacion.

@@ -7566,3 +7566,10 @@ Imagen `sha256:f355ed06...`, commit `b3968819`, tree `6387620e`, tag
 dataset canonico en `tests/fixtures/p186n_portfolio_cases.py`. Suite 3.312
 passed, 2 fallos ambientales que pasan aislados. APO/WAT siguen sin proteccion
 local por decision; no se opera sin autorizacion. Pendiente PMR 22:00.
+
+
+#### Cierre APO/WAT (2026-11-03)
+
+Cierre operativo paper con plan local y eventos: APO 113,15 (-170,80), WAT
+466,85 (+114,46), neto -56,34. Sin backfill; cartera limpia de huerfanas. El
+lock durante el snapshot final se recupero por fill_watch.
