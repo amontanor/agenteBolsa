@@ -1018,7 +1018,6 @@ def build_operational_learning_review(
     since_date: str = DEFAULT_HISTORY_START_DATE,
     use_llm: bool = False,
 ) -> dict[str, Any]:
-    store.ensure_schema()
     reports_dir.mkdir(parents=True, exist_ok=True)
     memory_sync = sync_trade_memory(settings, store, since_date=since_date)
     traceability_audit = audit_trade_memory_traceability(store, since_date=since_date)

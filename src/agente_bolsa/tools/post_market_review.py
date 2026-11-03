@@ -969,7 +969,10 @@ def build_post_market_review(
     timings["trade_evaluation_seconds"] = round(time.perf_counter() - started, 3)
     proposed = _learning_candidates(evaluations, day, portfolio)
     store = Store(settings.database_path, settings.agent_logs_dir)
-    store.ensure_schema()
+    # Bounded bootstrap only for a brand-new database (CLI/tests). Existing
+    # production databases never run schema migrations inside the PMR.
+    if not settings.database_path.exists():
+        store.ensure_schema()
     execution_attribution = _execution_metrics_from_canonical(evaluations)
     session_ledger = _session_candidate_attribution(store, target_date, evaluations)
     started = time.perf_counter()
