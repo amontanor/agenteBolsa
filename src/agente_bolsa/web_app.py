@@ -9663,7 +9663,7 @@ def _render_manual_navigation() -> None:
         "Estado del sistema": page_system_status,
         "Configuracion": page_config,
     }
-    _render_refreshable_page(pages[page], refresh_interval_seconds)
+    _render_timed_page(pages[page], refresh_interval_seconds)
 
 
 def _setup_page() -> None:
