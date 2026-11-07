@@ -185,5 +185,5 @@ __all__ = ["__version__"]
 # P-L186L: salida corta con plan propio, geometria valida y ventana calendario (0.4.426).
 # P-L186M: bootstrap de esquema una vez por proceso en rutas calientes (0.4.427).
 # P-L186N: niveles de cartera por direccion y aviso de posicion sin plan (0.4.428).
-# P-L187: mensajes de error completos, skips deduplicados, guard de reloj y timing de paginas (0.4.429).
-__version__ = "0.4.429"
+# P-L187: mensajes de error completos, skips deduplicados, guard de reloj y timing de paginas (0.4.430).
+__version__ = "0.4.430"
