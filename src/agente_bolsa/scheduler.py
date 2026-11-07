@@ -542,6 +542,16 @@ def _skip_delay_seconds(scheduled: Any) -> float | None:
     return round(max(0.0, delay), 1)
 
 
+_CONTROL_EVENT_LAST: dict[tuple[str, str], float] = {}
+_CONTROL_EVENT_MIN_INTERVAL_SECONDS = 3600.0
+
+
+def _reset_control_event_throttle() -> None:
+    """Solo para tests: limpia la ventana de deduplicacion."""
+
+    _CONTROL_EVENT_LAST.clear()
+
+
 def _persist_scheduler_control_event(settings: Settings, store: Store, event: Any) -> None:
     """Hace duraderos los skips que APScheduler emite antes de ejecutar el job."""
 
@@ -556,6 +566,14 @@ def _persist_scheduler_control_event(settings: Settings, store: Store, event: An
     if scheduled_values is None:
         scheduled_values = [getattr(event, "scheduled_run_time", None)]
     job_id = str(getattr(event, "job_id", "unknown") or "unknown")
+    # P-L187: un skip repetido del mismo job/motivo no necesita una fila por
+    # ejecucion; se conserva uno por hora y se evita el ruido de escritura.
+    throttle_key = (job_id, reason)
+    now_monotonic = time.monotonic()
+    last_emit = _CONTROL_EVENT_LAST.get(throttle_key)
+    if last_emit is not None and (now_monotonic - last_emit) < _CONTROL_EVENT_MIN_INTERVAL_SECONDS:
+        return
+    _CONTROL_EVENT_LAST[throttle_key] = now_monotonic
     for scheduled in scheduled_values:
         if scheduled is None:
             continue

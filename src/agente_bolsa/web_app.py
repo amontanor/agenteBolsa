@@ -3679,6 +3679,32 @@ def _auto_refresh_control() -> int:
     return int(interval)
 
 
+def _emit_page_timing(page: str, started_at: float) -> None:
+    """Una linea por render de pagina (P-L187); el dashboard ya tiene la suya."""
+
+    if page in {"page_dashboard"}:
+        return
+    try:
+        print(
+            "page_timing "
+            + json.dumps(
+                {"page": page, "seconds": round(time.monotonic() - started_at, 3)},
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+    except Exception:  # noqa: BLE001 - medir jamas rompe el panel
+        pass
+
+
+def _render_timed_page(page_func: Any, refresh_interval_seconds: int) -> None:
+    started = time.monotonic()
+    try:
+        _render_refreshable_page(page_func, refresh_interval_seconds)
+    finally:
+        _emit_page_timing(getattr(page_func, "__name__", "page"), started)
+
+
 def _render_refreshable_page(page_func: Any, refresh_interval_seconds: int) -> None:
     if page_func is page_dashboard and hasattr(st, "fragment"):
         page_func()

@@ -12,6 +12,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
+from ._utils import require_sane_clock
 from .agent_config import load_agent_config, load_task_config, validate_agent_task_config
 from .agent_registry import AGENTS
 from .config import Settings, get_settings
@@ -3597,6 +3598,7 @@ def command_daemon(args: argparse.Namespace) -> None:
 
 def command_schedule(args: argparse.Namespace) -> None:
     settings = get_settings()
+    require_sane_clock()
     configure_logging(settings.logs_dir, settings.log_level)
     store = Store(settings.database_path, settings.agent_logs_dir)
     run_scheduler_forever(settings, store, use_crew=not args.skip_crew, verbose=not args.quiet)
@@ -3825,6 +3827,7 @@ def command_agent_funnel(args: argparse.Namespace) -> None:
 
 def command_web(args: argparse.Namespace) -> None:
     settings = get_settings()
+    require_sane_clock()
     configure_logging(settings.logs_dir, settings.log_level)
     if _is_tcp_port_open(args.host, args.port):
         print(f"Panel web ya corriendo en http://{args.host}:{args.port}; no se lanza otra instancia.")

@@ -20,6 +20,7 @@ __all__ = [
     "to_float",
     "parse_iso",
     "utc_now",
+    "require_sane_clock",
     "human_bytes",
     "sqlite_connect_ro",
     "table_exists",
@@ -100,3 +101,35 @@ def log_swallow(logger: logging.Logger, context: str, exc: BaseException, *, lev
         logger.log(level, "swallow [%s]: %s: %s", context, type(exc).__name__, exc)
     except Exception:  # noqa: BLE001 - el logging nunca debe romper al caller
         pass
+
+def require_sane_clock(
+    *,
+    wait_seconds: float = 30.0,
+    _now: Any = None,
+    _sleep: Any = None,
+    _monotonic: Any = None,
+) -> None:
+    """Espera a que el reloj del sistema sea fiable antes de arrancar (P-L187).
+
+    Un arranque con el RTC en 1970 (antes de NTP) escribio 24 eventos con fecha
+    1970 en `agent_events`. Este guard espera a que el ano sea >= 2020 y, si no
+    llega, aborta el arranque con un error explicito en vez de contaminar la
+    historia.
+    """
+
+    import time as _time
+
+    now = _now or (lambda: datetime.now(timezone.utc))
+    sleep = _sleep or _time.sleep
+    monotonic = _monotonic or _time.monotonic
+    started = monotonic()
+    while True:
+        current = now()
+        if current.year >= 2020:
+            return
+        if (monotonic() - started) >= wait_seconds:
+            raise SystemExit(
+                f"reloj del sistema no fiable ({current.isoformat()}); "
+                "espera sincronizacion NTP antes de arrancar"
+            )
+        sleep(1.0)
