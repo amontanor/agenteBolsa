@@ -838,7 +838,7 @@ class DashboardLoadState:
                 max_pages=FILLS_SYNC_MAX_PAGES,
             )
         except Exception as exc:  # noqa: BLE001 - local cache is fail-open.
-            LOGGER.warning("dashboard_fills_sync_failed error=%s", type(exc).__name__)
+            LOGGER.warning("dashboard_fills_sync_failed error=%s: %s", type(exc).__name__, exc)
             raise
         if result.status == "degraded":
             # Published as a failure so the previous fills stay untouched and
@@ -1078,7 +1078,7 @@ class DashboardLoadState:
                         error_code=type(exc).__name__,
                     )
                 except Exception:  # noqa: BLE001 - observability only.
-                    LOGGER.warning("dashboard_snapshot_attempt_failed")
+                    LOGGER.warning("dashboard_snapshot_attempt_failed error=%s: %s", type(exc).__name__, exc)
         self._rebuild()
 
     def _append_error(self, message: str) -> None:
