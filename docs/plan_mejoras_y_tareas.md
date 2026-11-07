@@ -7573,3 +7573,10 @@ local por decision; no se opera sin autorizacion. Pendiente PMR 22:00.
 Cierre operativo paper con plan local y eventos: APO 113,15 (-170,80), WAT
 466,85 (+114,46), neto -56,34. Sin backfill; cartera limpia de huerfanas. El
 lock durante el snapshot final se recupero por fill_watch.
+
+## P-L187 - observabilidad operativa (0.4.430, desplegado)
+
+- Rama `codex/pl187-observability`; imagen `sha256:d14dfc9a342c`; tag `prod-jetson-0.4.430`.
+- Mensajes completos en errores del panel; skips de scheduler deduplicados 1/h; guard de reloj >=2020 en arranque; `page_timing` en todas las vistas.
+- Periodo 30-oct/7-nov: 0 locks, 0 OOM, PMR terminal 3 sesiones, 27 fills. Pendiente: PMR ruidoso, memoria scheduler 81 %, retencion de eventos y Cartera/Decisiones (9,8/11,9 s).
+- Informe: `docs/informe_p_l187_observabilidad.md`.
